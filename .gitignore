@@ -1,5 +1,6 @@
-.DS_Store
-.pipeline-workspace/
-.pipeline-last-run-summary.json
-.codegraph
-.codewhale
+.gocache/
+.codegraph/
+.idea/
+/agent
+.ccagent/
+.env.local
