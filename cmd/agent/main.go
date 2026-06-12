@@ -16,6 +16,7 @@ import (
 	uiiface "gocode/internal/ui"
 	bubbleui "gocode/internal/ui/bubble"
 	"gocode/internal/ui/headless"
+	"io"
 	"log"
 	"os"
 )
@@ -65,6 +66,8 @@ func runSingleTurnMode(ctx context.Context, opts options) error {
 }
 
 func runInteractiveMode(ctx context.Context, opts options) error {
+	clearTerminalWindow(os.Stdout)
+
 	output := bubbleui.New()
 	runner, sessionID, client, settingsController, subagentManager, err := buildRunner(ctx, opts.sessionID, output)
 	if err != nil {
@@ -74,8 +77,14 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	output.SetModelConfigController(client)
 	output.SetSettingsController(settingsController)
 	output.SetSubagentController(subagentManager)
-	fmt.Fprintf(os.Stderr, "session: %s\n", sessionID)
 	return output.Run(ctx, runner, sessionID)
+}
+
+func clearTerminalWindow(w io.Writer) {
+	if w == nil {
+		return
+	}
+	_, _ = io.WriteString(w, "\x1b[H\x1b[2J\x1b[3J")
 }
 
 func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI) (*loop.Runner, string, *model.Client, *settings.Controller, *subagent.Manager, error) {
