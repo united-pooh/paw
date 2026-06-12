@@ -5,7 +5,10 @@ import (
 	"context"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
+	"gocode/internal/loop"
 	"gocode/internal/model"
+	"gocode/internal/settings"
+	"gocode/internal/subagent"
 	"gocode/internal/ui"
 	"time"
 )
@@ -49,6 +52,9 @@ type toolCallMsg ui.ToolCallEvent
 // toolResultMsg 表示工具结果事件。
 type toolResultMsg ui.ToolResultEvent
 
+// systemEventMsg 表示后台任务等系统事件。
+type systemEventMsg ui.SystemEvent
+
 // doneMsg 表示当前 assistant 输出已经结束。
 type doneMsg struct{}
 
@@ -61,6 +67,11 @@ type shellFinishedMsg struct {
 	stdout  string
 	stderr  string
 	err     error
+}
+
+type subagentFinishedMsg struct {
+	result subagent.Result
+	err    error
 }
 
 // cursorFrameMsg 驱动自定义光标动画更新一帧。
@@ -105,6 +116,29 @@ type modelWizard struct {
 	err           string
 }
 
+type settingWizardStep int
+
+const (
+	settingWizardContext settingWizardStep = iota
+	settingWizardRunMode
+	settingWizardMeterLocation
+	settingWizardLimit
+	settingWizardConfirm
+)
+
+type settingOption struct {
+	label       string
+	description string
+	apply       func(*settings.Config)
+}
+
+type settingWizard struct {
+	step     settingWizardStep
+	selected map[settingWizardStep]int
+	draft    settings.Config
+	err      string
+}
+
 // newModelWizard 根据当前配置创建 provider 选择向导，并默认选中当前 provider。
 func newModelWizard(current model.Config) *modelWizard {
 	selected := 0
@@ -137,6 +171,8 @@ type appModel struct {
 	runner          Runner
 	sessionID       string
 	modelConfig     ModelConfigController
+	settingsConfig  SettingsController
+	subagents       SubagentController
 	commandRegistry *CommandRegistry
 	queryGuard      QueryGuard
 	chatQueue       CommandQueue
@@ -163,4 +199,9 @@ type appModel struct {
 	transcript      []transcriptEntry
 	activeAssistant int
 	modelWizard     *modelWizard
+	settingWizard   *settingWizard
+}
+
+type contextStatsProvider interface {
+	ContextStats(limitTokens int, draft string) loop.ContextStats
 }

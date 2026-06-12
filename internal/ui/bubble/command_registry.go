@@ -16,6 +16,7 @@ type Command struct {
 	Name              string
 	Aliases           []string
 	Description       string
+	ArgumentHint      string
 	AllowWhileRunning bool
 	Handler           CommandHandler
 }
@@ -41,10 +42,47 @@ func NewCommandRegistry() *CommandRegistry {
 	registry.Register(Command{
 		Name:              "/model",
 		Description:       "open the model switcher",
+		ArgumentHint:      "[status|custom|deepseek]",
 		AllowWhileRunning: false,
 		Handler: func(m *appModel, invocation string) tea.Cmd {
-			m.modelWizard = newModelWizard(m.currentModelConfig())
+			return m.handleModelCommand(invocation)
+		},
+	})
+	registry.Register(Command{
+		Name:              "/export",
+		Description:       "export the current conversation",
+		ArgumentHint:      "[filename]",
+		AllowWhileRunning: true,
+		Handler: func(m *appModel, invocation string) tea.Cmd {
+			m.handleExportCommand(invocation)
+			return nil
+		},
+	})
+	registry.Register(Command{
+		Name:              "/setting",
+		Description:       "open settings wizard",
+		AllowWhileRunning: false,
+		Handler: func(m *appModel, invocation string) tea.Cmd {
+			m.settingWizard = newSettingWizard(m.currentSettings())
 			m.pending = nil
+			return nil
+		},
+	})
+	registry.Register(Command{
+		Name:              "/subagent",
+		Description:       "launch a subagent",
+		ArgumentHint:      "[--fork|--empty] [--background|--sync] <prompt>",
+		AllowWhileRunning: false,
+		Handler: func(m *appModel, invocation string) tea.Cmd {
+			return m.handleSubagentCommand(invocation)
+		},
+	})
+	registry.Register(Command{
+		Name:              "/tasks",
+		Description:       "show background subagent tasks",
+		AllowWhileRunning: true,
+		Handler: func(m *appModel, invocation string) tea.Cmd {
+			m.handleTasksCommand()
 			return nil
 		},
 	})
@@ -57,7 +95,7 @@ func NewCommandRegistry() *CommandRegistry {
 			if sessionID == "" {
 				sessionID = "<none>"
 			}
-			m.addEntry(transcriptEntry{kind: entrySystem, title: "status", body: fmt.Sprintf("session: %s", sessionID)})
+			m.addEntry(transcriptEntry{kind: entrySystem, title: "status", body: m.statusText(sessionID)})
 			return nil
 		},
 	})
@@ -161,6 +199,9 @@ func (r *CommandRegistry) HelpText() string {
 			continue
 		}
 		label := command.Name
+		if strings.TrimSpace(command.ArgumentHint) != "" {
+			label += " " + strings.TrimSpace(command.ArgumentHint)
+		}
 		if len(command.Aliases) > 0 {
 			aliases := append([]string(nil), command.Aliases...)
 			sort.Strings(aliases)

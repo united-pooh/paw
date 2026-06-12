@@ -43,6 +43,9 @@ const (
 	colorWizardBorder           colorRole = "wizard.border"
 	colorSelectionBackground    colorRole = "selection.background"
 	colorSelectionForeground    colorRole = "selection.foreground"
+	colorContextCache           colorRole = "context.cache"
+	colorContextUsed            colorRole = "context.used"
+	colorContextFree            colorRole = "context.free"
 	colorCursorNormalBright     colorRole = "cursor.normal.bright"
 	colorCursorTerminalBright   colorRole = "cursor.terminal.bright"
 )
@@ -88,6 +91,9 @@ func NewColorManager() ColorManager {
 			colorWizardBorder:           "62",
 			colorSelectionBackground:    "237",
 			colorSelectionForeground:    "255",
+			colorContextCache:           "214",
+			colorContextUsed:            "111",
+			colorContextFree:            "240",
 			colorCursorNormalBright:     "#9fffd3",
 			colorCursorTerminalBright:   "#ff8ddd",
 		},

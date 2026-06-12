@@ -9,6 +9,7 @@ import (
 	"gocode/internal/tool"
 	"gocode/internal/ui"
 	"strings"
+	"sync"
 )
 
 const (
@@ -30,6 +31,7 @@ type HistoryStore interface {
 
 // Runner 负责单轮工具闭环调度。
 type Runner struct {
+	mu        sync.RWMutex
 	model     ModelStreamer
 	ui        ui.UI
 	registry  *tool.Registry
@@ -39,7 +41,15 @@ type Runner struct {
 	// history 保存“已经成功完成”的多轮对话消息。
 	// 当前调用路径是串行的，因此这里先不引入锁。
 	// TODO: 如果后续要把 Runner 暴露给并发调用方，需要为 history 增加互斥保护。
-	history []message.Message
+	history    []message.Message
+	usage      model.Usage
+	usageKnown bool
+}
+
+type ContextStats struct {
+	UsedTokens  int
+	CacheTokens int
+	LimitTokens int
 }
 
 type outputMode int
@@ -86,13 +96,15 @@ func (runner *Runner) RunTurn(ctx context.Context, input string) (message.Messag
 	if err := runner.validate(); err != nil {
 		return message.Message{}, err
 	}
+	runner.clearTurnUsage()
+	defer runner.clearTurnUsage()
 
-	if runner.history == nil && runner.store != nil {
+	if runner.historyIsNil() && runner.store != nil {
 		messages, err := runner.store.LoadResolvedHistory(ctx, runner.sessionID)
 		if err != nil {
 			return message.Message{}, err
 		}
-		runner.history = messages
+		runner.setHistoryIfNil(messages)
 	}
 
 	// 每一轮都基于“已提交的历史副本”工作。
@@ -151,7 +163,9 @@ func buildUserMessages(input string) []message.Message {
 // buildTurnHistory 复制已完成历史，并在尾部追加当前用户输入。
 // 这样单轮执行可以安全地在本地 history 上反复追加 tool_use / tool_result。
 func (runner *Runner) buildTurnHistory(input string) []message.Message {
+	runner.mu.RLock()
 	history := append([]message.Message(nil), runner.history...)
+	runner.mu.RUnlock()
 	history = append(history, buildUserMessages(input)...)
 	return history
 }
@@ -162,7 +176,9 @@ func (runner *Runner) commitHistory(ctx context.Context, history []message.Messa
 	if runner.store != nil {
 		// 在更新 runner.history 之前，先用旧长度算出本轮新增的消息。
 		// runner.history 是上一轮结束时的状态，history 是本轮完整状态。
+		runner.mu.RLock()
 		prevLen := len(runner.history)
+		runner.mu.RUnlock()
 		newMsgs := history[prevLen:]
 		if len(newMsgs) > 0 {
 			if err := runner.store.Append(ctx, runner.sessionID, newMsgs...); err != nil {
@@ -172,7 +188,9 @@ func (runner *Runner) commitHistory(ctx context.Context, history []message.Messa
 	}
 
 	// 持久化成功后再更新内存副本。
+	runner.mu.Lock()
 	runner.history = append([]message.Message(nil), history...)
+	runner.mu.Unlock()
 	return nil
 }
 
@@ -180,7 +198,59 @@ func (runner *Runner) commitHistory(ctx context.Context, history []message.Messa
 // 交互式 REPL 可以用它实现 /clear 这类命令。
 // TODO: 接入会话持久化后，这里还需要同步清理对应的 session 数据。
 func (runner *Runner) ResetHistory() {
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
 	runner.history = []message.Message{}
+}
+
+func (runner *Runner) ContextStats(limitTokens int, draft string) ContextStats {
+	if limitTokens <= 0 {
+		limitTokens = 1024 * 1024
+	}
+	if runner == nil {
+		return ContextStats{LimitTokens: limitTokens}
+	}
+
+	runner.mu.RLock()
+	history := append([]message.Message(nil), runner.history...)
+	usage := runner.usage
+	usageKnown := runner.usageKnown
+	runner.mu.RUnlock()
+
+	if strings.TrimSpace(draft) != "" {
+		history = append(history, buildUserMessages(draft)...)
+	}
+	messages := runner.buildModelMessages(history)
+	used := estimateMessagesTokens(messages)
+	cache := 0
+	if usageKnown {
+		cache = usage.CacheReadInputTokens
+		if cache < 0 {
+			cache = 0
+		}
+		if cache > used {
+			cache = used
+		}
+	}
+	return ContextStats{
+		UsedTokens:  used,
+		CacheTokens: cache,
+		LimitTokens: limitTokens,
+	}
+}
+
+func (runner *Runner) historyIsNil() bool {
+	runner.mu.RLock()
+	defer runner.mu.RUnlock()
+	return runner.history == nil
+}
+
+func (runner *Runner) setHistoryIfNil(history []message.Message) {
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if runner.history == nil {
+		runner.history = append([]message.Message(nil), history...)
+	}
 }
 
 func buildSystemMessage(content string) message.Message {
@@ -283,6 +353,12 @@ func (runner *Runner) handleEvent(state *turnState, ev model.StreamEvent) (messa
 	if ev.Err != nil {
 		return message.Message{}, false, runner.failAfterPartialOutput(state.wroteOutput, ev.Err)
 	}
+	if ev.Usage != nil {
+		runner.mu.Lock()
+		runner.usage = *ev.Usage
+		runner.usageKnown = true
+		runner.mu.Unlock()
+	}
 
 	if err := runner.appendDelta(state, ev.Delta); err != nil {
 		return message.Message{}, false, err
@@ -294,6 +370,13 @@ func (runner *Runner) handleEvent(state *turnState, ev model.StreamEvent) (messa
 
 	msg, err := runner.finalizeAssistantMessage(state)
 	return msg, true, err
+}
+
+func (runner *Runner) clearTurnUsage() {
+	runner.mu.Lock()
+	runner.usage = model.Usage{}
+	runner.usageKnown = false
+	runner.mu.Unlock()
 }
 
 func (runner *Runner) appendDelta(state *turnState, delta string) error {
@@ -662,4 +745,31 @@ func (runner *Runner) executeToolCall(ctx context.Context, call *message.ToolCal
 	}
 
 	return buildToolResultMessage(call.ID, output, false)
+}
+
+func estimateMessagesTokens(messages []message.Message) int {
+	total := 0
+	for _, msg := range messages {
+		total += estimateTextTokens(string(msg.Role))
+		total += estimateTextTokens(msg.Content)
+		if msg.ToolUse != nil {
+			total += estimateTextTokens(msg.ToolUse.ID)
+			total += estimateTextTokens(msg.ToolUse.Name)
+			total += estimateTextTokens(string(msg.ToolUse.Input))
+		}
+		if msg.ToolResult != nil {
+			total += estimateTextTokens(msg.ToolResult.ToolUseID)
+			total += estimateTextTokens(msg.ToolResult.Content)
+		}
+		total += 4
+	}
+	return total
+}
+
+func estimateTextTokens(text string) int {
+	runes := len([]rune(text))
+	if runes == 0 {
+		return 0
+	}
+	return (runes + 3) / 4
 }

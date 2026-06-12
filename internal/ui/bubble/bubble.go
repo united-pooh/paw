@@ -8,6 +8,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"gocode/internal/message"
 	"gocode/internal/model"
+	"gocode/internal/settings"
+	"gocode/internal/subagent"
 	"gocode/internal/ui"
 	"os"
 	"sync"
@@ -30,11 +32,26 @@ type ModelConfigSaver interface {
 	SaveModelConfig(model.Config) error
 }
 
+// SettingsController 描述运行时读取和保存 UI/agent 设置的控制器。
+type SettingsController interface {
+	CurrentSettings() settings.Config
+	SaveSettings(settings.Config) error
+}
+
+// SubagentController 描述 TUI 手动启动和查看 subagent 所需的能力。
+type SubagentController interface {
+	Run(context.Context, subagent.Request) (subagent.Result, error)
+	Launch(context.Context, subagent.Request) (subagent.TaskSnapshot, error)
+	ListTasks() []subagent.TaskSnapshot
+}
+
 // UI 是基于 Bubble Tea 的交互式终端界面实现。
 type UI struct {
 	mu                    sync.Mutex
 	program               *tea.Program
 	modelConfigController ModelConfigController
+	settingsController    SettingsController
+	subagentController    SubagentController
 }
 
 // 确保 UI 满足通用终端 UI 接口。
@@ -52,14 +69,30 @@ func (u *UI) SetModelConfigController(controller ModelConfigController) {
 	u.modelConfigController = controller
 }
 
+// SetSettingsController 注入 settings 控制器，供 /setting 和状态栏读取。
+func (u *UI) SetSettingsController(controller SettingsController) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.settingsController = controller
+}
+
+// SetSubagentController 注入 subagent 控制器，供 /subagent 和 /tasks 使用。
+func (u *UI) SetSubagentController(controller SubagentController) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.subagentController = controller
+}
+
 // Run 启动 Bubble Tea 主循环，并把输出写入带光标锚点修正的终端流。
 func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 	u.mu.Lock()
 	controller := u.modelConfigController
+	settingsController := u.settingsController
+	subagentController := u.subagentController
 	u.mu.Unlock()
 
 	anchor := newTerminalCursorAnchor()
-	appModel := newModel(ctx, runner, sessionID, controller, anchor)
+	appModel := newModel(ctx, runner, sessionID, controller, settingsController, subagentController, anchor)
 	program := tea.NewProgram(
 		appModel,
 		tea.WithContext(ctx),
@@ -106,6 +139,11 @@ func (u *UI) OnToolResult(event ui.ToolResultEvent) error {
 // OnDone 通知 TUI 当前 assistant 响应已经结束。
 func (u *UI) OnDone() error {
 	return u.send(doneMsg{})
+}
+
+// OnSystemMessage 接收后台任务等系统事件，并转发给 Bubble Tea 状态机展示。
+func (u *UI) OnSystemMessage(event ui.SystemEvent) error {
+	return u.send(systemEventMsg(event))
 }
 
 // send 将外部事件安全地投递到正在运行的 Bubble Tea program。

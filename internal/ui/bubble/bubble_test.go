@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,8 +15,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"gocode/internal/loop"
 	"gocode/internal/message"
 	modelcfg "gocode/internal/model"
+	"gocode/internal/settings"
+	"gocode/internal/subagent"
 	"gocode/internal/ui"
 )
 
@@ -24,6 +28,9 @@ type fakeRunner struct {
 	inputs     []string
 	resetCalls int
 	err        error
+	stats      loop.ContextStats
+	lastDraft  string
+	lastLimit  int
 }
 
 // RunTurn 记录输入并返回固定 assistant 消息。
@@ -37,6 +44,17 @@ func (r *fakeRunner) ResetHistory() {
 	r.resetCalls++
 }
 
+// ContextStats returns deterministic context-usage data for meter tests.
+func (r *fakeRunner) ContextStats(limitTokens int, draft string) loop.ContextStats {
+	r.lastLimit = limitTokens
+	r.lastDraft = draft
+	stats := r.stats
+	if stats.LimitTokens == 0 {
+		stats.LimitTokens = limitTokens
+	}
+	return stats
+}
+
 // fakeModelConfigController 模拟模型配置控制器的读取、保存和应用行为。
 type fakeModelConfigController struct {
 	current modelcfg.Config
@@ -44,6 +62,77 @@ type fakeModelConfigController struct {
 	saved   []modelcfg.Config
 	err     error
 	saveErr error
+}
+
+type fakeSettingsController struct {
+	current settings.Config
+	saved   []settings.Config
+	err     error
+}
+
+func (c *fakeSettingsController) CurrentSettings() settings.Config {
+	return c.current
+}
+
+func (c *fakeSettingsController) SaveSettings(cfg settings.Config) error {
+	if c.err != nil {
+		return c.err
+	}
+	c.saved = append(c.saved, cfg)
+	c.current = cfg
+	return nil
+}
+
+type fakeSubagentController struct {
+	runResult      subagent.Result
+	runErr         error
+	launchTask     subagent.TaskSnapshot
+	launchErr      error
+	tasks          []subagent.TaskSnapshot
+	runRequests    []subagent.Request
+	launchRequests []subagent.Request
+}
+
+func (c *fakeSubagentController) Run(ctx context.Context, req subagent.Request) (subagent.Result, error) {
+	c.runRequests = append(c.runRequests, req)
+	if c.runErr != nil {
+		return subagent.Result{}, c.runErr
+	}
+	return c.runResult, nil
+}
+
+func (c *fakeSubagentController) Launch(ctx context.Context, req subagent.Request) (subagent.TaskSnapshot, error) {
+	c.launchRequests = append(c.launchRequests, req)
+	if c.launchErr != nil {
+		return subagent.TaskSnapshot{}, c.launchErr
+	}
+	task := c.launchTask
+	if task.ID == "" {
+		task.ID = "task-1"
+	}
+	if task.SessionID == "" {
+		task.SessionID = task.ID
+	}
+	if task.TranscriptPath == "" {
+		task.TranscriptPath = "/tmp/" + task.ID + ".jsonl"
+	}
+	if task.Status == "" {
+		task.Status = subagent.TaskRunning
+	}
+	if task.ContextMode == "" {
+		task.ContextMode = req.ContextMode
+	}
+	if task.RunMode == "" {
+		task.RunMode = settings.RunModeBackground
+	}
+	task.Prompt = req.Prompt
+	task.Description = req.Description
+	c.tasks = append([]subagent.TaskSnapshot(nil), append(c.tasks, task)...)
+	return task, nil
+}
+
+func (c *fakeSubagentController) ListTasks() []subagent.TaskSnapshot {
+	return append([]subagent.TaskSnapshot(nil), c.tasks...)
 }
 
 // CurrentModelConfig 返回测试控制器中的当前配置。
@@ -82,7 +171,7 @@ func newTestModel(runner Runner) appModel {
 			Model:         modelcfg.CustomDefaultModel,
 			Timeout:       time.Minute,
 		},
-	}, newTerminalCursorAnchor())
+	}, nil, nil, newTerminalCursorAnchor())
 }
 
 func equalStrings(a, b []string) bool {
@@ -157,9 +246,176 @@ func TestHelpComesFromCommandRegistry(t *testing.T) {
 		t.Fatalf("/help handled/cmd = %v/%v", handled, cmd)
 	}
 	body := model.transcript[len(model.transcript)-1].body
-	for _, want := range []string{"/help", "/model", "/status", "/clear", "/exit (/quit)"} {
+	for _, want := range []string{
+		"/help - show available commands",
+		"/model [status|custom|deepseek] - open the model switcher",
+		"/export [filename] - export the current conversation",
+		"/setting - open settings wizard",
+		"/subagent [--fork|--empty] [--background|--sync] <prompt> - launch a subagent",
+		"/tasks - show background subagent tasks",
+		"/exit (/quit) - quit the TUI",
+	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("help body = %q, want %q", body, want)
+		}
+	}
+}
+
+// TestModelCommandVariantsKeepWizardAndShortcuts verifies wizard and direct subcommands coexist.
+func TestModelCommandVariantsKeepWizardAndShortcuts(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+	controller := &fakeModelConfigController{
+		current: modelcfg.Config{
+			Provider:      modelcfg.ProviderCustom,
+			APIBaseURL:    modelcfg.CustomAPIBaseURL,
+			APIPath:       modelcfg.CustomChatPath,
+			APIKey:        "custom-secret",
+			APIKeyEnvName: modelcfg.CustomAPIKeyEnvName,
+			Model:         modelcfg.CustomDefaultModel,
+			Timeout:       time.Minute,
+		},
+	}
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", controller, nil, nil, newTerminalCursorAnchor())
+
+	handled, cmd := model.handleCommand("/model status")
+	if !handled || cmd != nil {
+		t.Fatalf("/model status handled/cmd = %v/%v", handled, cmd)
+	}
+	if got := model.transcript[len(model.transcript)-1].body; !strings.Contains(got, "provider=custom") {
+		t.Fatalf("status body = %q", got)
+	}
+
+	handled, cmd = model.handleCommand("/model custom")
+	if !handled || cmd != nil {
+		t.Fatalf("/model custom handled/cmd = %v/%v", handled, cmd)
+	}
+	if len(controller.applied) != 1 || controller.applied[0].Provider != modelcfg.ProviderCustom {
+		t.Fatalf("custom applied configs = %#v", controller.applied)
+	}
+
+	handled, cmd = model.handleCommand("/model deepseek")
+	if !handled || cmd != nil {
+		t.Fatalf("/model deepseek handled/cmd = %v/%v", handled, cmd)
+	}
+	if len(controller.applied) != 2 || controller.applied[1].Provider != modelcfg.ProviderDeepSeek {
+		t.Fatalf("applied configs = %#v", controller.applied)
+	}
+}
+
+// TestExportCommandWritesExplicitAndDefaultTranscriptFiles verifies /export paths and content.
+func TestExportCommandWritesExplicitAndDefaultTranscriptFiles(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+
+	model := newTestModel(&fakeRunner{})
+	model.transcript = []transcriptEntry{
+		{kind: entryUser, title: "you", body: "hello"},
+		{kind: entryAssistant, title: "assistant", body: "world"},
+	}
+	explicitPath := filepath.Join(root, "notes.txt")
+	if err := os.WriteFile(explicitPath, []byte("old"), 0o644); err != nil {
+		t.Fatalf("seed export file: %v", err)
+	}
+
+	handled, cmd := model.handleCommand("/export notes")
+	if !handled || cmd != nil {
+		t.Fatalf("/export notes handled/cmd = %v/%v", handled, cmd)
+	}
+	data, err := os.ReadFile(explicitPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", explicitPath, err)
+	}
+	if got := string(data); !strings.Contains(got, "you:\nhello") || !strings.Contains(got, "assistant:\nworld") {
+		t.Fatalf("exported content = %q", got)
+	}
+	info, err := os.Stat(explicitPath)
+	if err != nil {
+		t.Fatalf("Stat(%q) error = %v", explicitPath, err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("explicit export mode = %#o, want 0600", got)
+	}
+
+	handled, cmd = model.handleCommand("/export")
+	if !handled || cmd != nil {
+		t.Fatalf("/export handled/cmd = %v/%v", handled, cmd)
+	}
+	exports, err := filepath.Glob(filepath.Join(root, ".ccagent", "exports", "conversation-*.txt"))
+	if err != nil {
+		t.Fatalf("Glob() error = %v", err)
+	}
+	if len(exports) != 1 {
+		t.Fatalf("exports = %#v, want 1 generated transcript", exports)
+	}
+	info, err = os.Stat(exports[0])
+	if err != nil {
+		t.Fatalf("Stat(%q) error = %v", exports[0], err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("generated export mode = %#o, want 0600", got)
+	}
+	last := model.transcript[len(model.transcript)-1]
+	if last.title != "export" || !strings.Contains(last.body, exports[0]) {
+		t.Fatalf("last transcript entry = %#v, want generated export path", last)
+	}
+}
+
+// TestSettingCommandPersistsWizardSelections verifies /setting saves normalized config through the controller.
+func TestSettingCommandPersistsWizardSelections(t *testing.T) {
+	settingsController := &fakeSettingsController{current: settings.DefaultConfig()}
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, settingsController, nil, newTerminalCursorAnchor())
+
+	handled, cmd := model.handleCommand("/setting")
+	if !handled || cmd != nil {
+		t.Fatalf("/setting handled/cmd = %v/%v", handled, cmd)
+	}
+	if model.settingWizard == nil {
+		t.Fatalf("/setting should open wizard")
+	}
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = next.(appModel)
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = next.(appModel)
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = next.(appModel)
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+
+	if model.settingWizard != nil {
+		t.Fatalf("settingWizard = %#v, want nil after save", model.settingWizard)
+	}
+	if len(settingsController.saved) != 1 {
+		t.Fatalf("saved settings = %#v", settingsController.saved)
+	}
+	got := settingsController.saved[0]
+	if got.Subagent.DefaultContextMode != settings.ContextModeEmpty ||
+		got.Subagent.DefaultRunMode != settings.RunModeBackground ||
+		got.UI.ContextMeterLocation != settings.MeterLocationHeader ||
+		got.UI.ContextLimitTokens != 200000 {
+		t.Fatalf("saved config = %#v", got)
+	}
+	body := model.transcript[len(model.transcript)-1].body
+	for _, want := range []string{
+		"subagent.context=empty",
+		"subagent.run=background",
+		"ui.context_limit=200000",
+		"ui.context_meter=header",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("settings summary = %q, want %q", body, want)
 		}
 	}
 }
@@ -316,6 +572,36 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered transcript = %q, want %q", rendered, want)
 		}
+	}
+}
+
+func TestSystemEventDoesNotSplitActiveAssistantStream(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+
+	next, _ := model.Update(assistantDeltaMsg("he"))
+	model = next.(appModel)
+	next, _ = model.Update(systemEventMsg(ui.SystemEvent{Title: "subagent", Body: "background task finished"}))
+	model = next.(appModel)
+	next, _ = model.Update(assistantDeltaMsg("llo"))
+	model = next.(appModel)
+	next, _ = model.Update(doneMsg{})
+	model = next.(appModel)
+
+	assistantBodies := make([]string, 0, len(model.transcript))
+	for _, entry := range model.transcript {
+		if entry.kind == entryAssistant {
+			assistantBodies = append(assistantBodies, entry.body)
+		}
+	}
+	if got := len(assistantBodies); got != 1 {
+		t.Fatalf("assistant entry count = %d, want 1: %#v", got, assistantBodies)
+	}
+	if assistantBodies[0] != "hello" {
+		t.Fatalf("assistant body = %q, want hello", assistantBodies[0])
+	}
+	last := model.transcript[len(model.transcript)-1]
+	if last.kind != entrySystem || last.title != "subagent" {
+		t.Fatalf("last transcript entry = %#v, want subagent system event", last)
 	}
 }
 
@@ -511,9 +797,14 @@ func TestViewFramesTranscriptHistoryPanel(t *testing.T) {
 	model.relayout()
 
 	rendered := model.View()
-	for _, want := range []string{"╭", "╰", "Interactive mode is running", "Input"} {
+	for _, want := range []string{"╭", "╰", "Interactive mode is running", "0%(0.0%)", "100%"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("view = %q, want %q", rendered, want)
+		}
+	}
+	for _, unwanted := range []string{"Input", "Waiting", "Terminal"} {
+		if strings.Contains(rendered, unwanted) {
+			t.Fatalf("view = %q, should not contain %q", rendered, unwanted)
 		}
 	}
 }
@@ -532,6 +823,29 @@ func TestRelayoutReservesSpaceForTranscriptFrame(t *testing.T) {
 	}
 	if model.viewport.Width != model.width-transcriptPanelHorizontalFrame {
 		t.Fatalf("viewport width = %d, want %d", model.viewport.Width, model.width-transcriptPanelHorizontalFrame)
+	}
+}
+
+func TestRelayoutAccountsForInputAboveMeterHeight(t *testing.T) {
+	settingsController := &fakeSettingsController{current: settings.Config{
+		Subagent: settings.SubagentConfig{
+			DefaultContextMode: settings.ContextModeEmpty,
+			DefaultRunMode:     settings.RunModeSync,
+		},
+		UI: settings.UIConfig{
+			ContextLimitTokens:   settings.DefaultContextLimitTokens,
+			ContextMeterLocation: settings.MeterLocationInputAbove,
+		},
+	}}
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, settingsController, nil, newTerminalCursorAnchor())
+	model.ready = true
+	model.width = 80
+	model.height = 10
+	model.relayout()
+
+	want := maxInt(1, model.height-model.headerHeight()-lipgloss.Height(model.renderInputAboveMeter())-lipgloss.Height(model.renderInputBox())-transcriptPanelVerticalFrame)
+	if model.viewport.Height != want {
+		t.Fatalf("viewport height = %d, want %d", model.viewport.Height, want)
 	}
 }
 
@@ -580,15 +894,121 @@ func TestBangValuePreviewsTerminalPanel(t *testing.T) {
 	model.applyCursorAnimation()
 
 	rendered := model.renderInputBox()
-	if !strings.Contains(rendered, "Terminal") {
-		t.Fatalf("input box = %q", rendered)
+	for _, want := range []string{"0%(0.0%)", "100%", "!"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("input box = %q, want %q", rendered, want)
+		}
+	}
+	if strings.Contains(rendered, "Terminal") {
+		t.Fatalf("input box = %q, should not contain legacy terminal label", rendered)
+	}
+}
+
+// TestSubagentCommandUsesDefaultsAndTasksRender verifies /subagent defaults and /tasks output.
+func TestSubagentCommandUsesDefaultsAndTasksRender(t *testing.T) {
+	settingsController := &fakeSettingsController{current: settings.Config{
+		Subagent: settings.SubagentConfig{
+			DefaultContextMode: settings.ContextModeFork,
+			DefaultRunMode:     settings.RunModeBackground,
+		},
+		UI: settings.UIConfig{
+			ContextLimitTokens:   settings.DefaultContextLimitTokens,
+			ContextMeterLocation: settings.MeterLocationInputTitle,
+		},
+	}}
+	subagents := &fakeSubagentController{
+		launchTask: subagent.TaskSnapshot{
+			ID:             "task-42",
+			SessionID:      "task-42",
+			Status:         subagent.TaskRunning,
+			ContextMode:    settings.ContextModeFork,
+			RunMode:        settings.RunModeBackground,
+			TranscriptPath: "/tmp/task-42.jsonl",
+		},
+	}
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, settingsController, subagents, newTerminalCursorAnchor())
+
+	handled, cmd := model.handleCommand("/subagent summarize recent changes")
+	if !handled || cmd != nil {
+		t.Fatalf("/subagent handled/cmd = %v/%v", handled, cmd)
+	}
+	if len(subagents.launchRequests) != 1 {
+		t.Fatalf("launch requests = %#v", subagents.launchRequests)
+	}
+	req := subagents.launchRequests[0]
+	if req.ContextMode != settings.ContextModeFork || req.RunMode != settings.RunModeBackground || req.ParentSessionID != "session-1" || req.Prompt != "summarize recent changes" {
+		t.Fatalf("launch request = %#v", req)
+	}
+	if got := model.transcript[len(model.transcript)-1].body; !strings.Contains(got, "task-42 status=running context=fork") {
+		t.Fatalf("launch transcript = %q", got)
+	}
+
+	handled, cmd = model.handleCommand("/tasks")
+	if !handled || cmd != nil {
+		t.Fatalf("/tasks handled/cmd = %v/%v", handled, cmd)
+	}
+	if got := model.transcript[len(model.transcript)-1].body; !strings.Contains(got, "task-42 status=running context=fork") {
+		t.Fatalf("tasks transcript = %q", got)
+	}
+}
+
+// TestSyncSubagentCompletionStartsQueuedTurn verifies sync subagent completion drains queued chat work.
+func TestSyncSubagentCompletionStartsQueuedTurn(t *testing.T) {
+	runner := &fakeRunner{}
+	subagents := &fakeSubagentController{
+		runResult: subagent.Result{
+			AgentID:        "agent-7",
+			SessionID:      "agent-7",
+			ContextMode:    settings.ContextModeEmpty,
+			RunMode:        settings.RunModeSync,
+			TranscriptPath: "/tmp/agent-7.jsonl",
+			Content:        "subagent complete",
+		},
+	}
+	model := newModel(context.Background(), runner, "session-1", &fakeModelConfigController{}, nil, subagents, newTerminalCursorAnchor())
+
+	handled, cmd := model.handleCommand("/subagent inspect this")
+	if !handled || cmd == nil {
+		t.Fatalf("/subagent handled/cmd = %v/%v", handled, cmd)
+	}
+	if !model.running {
+		t.Fatalf("model.running = false, want true after sync subagent starts")
+	}
+
+	model.input.SetValue("queued follow-up")
+	next, queuedCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if queuedCmd != nil {
+		t.Fatalf("queued chat returned cmd")
+	}
+
+	msg := cmd()
+	next, followCmd := model.Update(msg)
+	model = next.(appModel)
+	if followCmd == nil {
+		t.Fatalf("sync subagent completion should start queued turn")
+	}
+	last := model.transcript[len(model.transcript)-1]
+	if last.title != "subagent" || !strings.Contains(last.body, "agent=agent-7") || !strings.Contains(last.body, "/tmp/agent-7.jsonl") {
+		t.Fatalf("subagent transcript = %#v", last)
+	}
+
+	finished, ok := followCmd().(turnFinishedMsg)
+	if !ok {
+		t.Fatalf("followCmd() = %#v, want turnFinishedMsg", followCmd())
+	}
+	if finished.err != nil {
+		t.Fatalf("queued turn err = %v", finished.err)
+	}
+	if len(runner.inputs) != 1 || runner.inputs[0] != "queued follow-up" {
+		t.Fatalf("runner.inputs = %#v", runner.inputs)
 	}
 }
 
 // TestViewAnchorsTerminalCursorOnInputCell 验证 View 会把真实终端光标锚定到输入单元格。
 func TestViewAnchorsTerminalCursorOnInputCell(t *testing.T) {
 	anchor := newTerminalCursorAnchor()
-	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, anchor)
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, nil, nil, anchor)
 	model.ready = true
 	model.width = 80
 	model.height = 24
@@ -612,7 +1032,7 @@ func TestViewAnchorsTerminalCursorOnInputCell(t *testing.T) {
 // TestViewClearsTerminalCursorAnchorWhenWizardOpen 验证打开模型向导时会清除输入光标锚点。
 func TestViewClearsTerminalCursorAnchorWhenWizardOpen(t *testing.T) {
 	anchor := newTerminalCursorAnchor()
-	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, anchor)
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, nil, nil, anchor)
 	model.ready = true
 	model.width = 80
 	model.height = 24
@@ -693,10 +1113,12 @@ func TestTranscriptMouseDragSelectsAndCopiesAcrossScroll(t *testing.T) {
 	}
 	model.refreshViewport()
 	model.viewport.GotoTop()
+	topY := model.headerHeight() + 1
+	bottomY := model.headerHeight() + maxInt(1, model.viewport.Height)
 
 	next, _ := model.Update(tea.MouseMsg{
 		X:      1,
-		Y:      2,
+		Y:      topY,
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
 	})
@@ -707,7 +1129,7 @@ func TestTranscriptMouseDragSelectsAndCopiesAcrossScroll(t *testing.T) {
 
 	next, _ = model.Update(tea.MouseMsg{
 		X:      1,
-		Y:      4,
+		Y:      bottomY,
 		Action: tea.MouseActionMotion,
 		Button: tea.MouseButtonLeft,
 	})
@@ -718,7 +1140,7 @@ func TestTranscriptMouseDragSelectsAndCopiesAcrossScroll(t *testing.T) {
 
 	next, _ = model.Update(tea.MouseMsg{
 		X:      1,
-		Y:      4,
+		Y:      bottomY,
 		Action: tea.MouseActionRelease,
 		Button: tea.MouseButtonLeft,
 	})
@@ -727,7 +1149,7 @@ func TestTranscriptMouseDragSelectsAndCopiesAcrossScroll(t *testing.T) {
 		t.Fatalf("selecting = true, want false after release")
 	}
 	if !strings.Contains(copied, "line 00") || !strings.Contains(copied, "assistant") {
-		t.Fatalf("copied selection = %q", copied)
+		t.Fatalf("copied selection = %q start=%+v end=%+v active=%v yOffset=%d viewportHeight=%d lines=%d", copied, model.selectionStart, model.selectionEnd, model.selectionActive, model.viewport.YOffset, model.viewport.Height, len(model.transcriptLineSnapshots()))
 	}
 }
 
@@ -926,7 +1348,7 @@ func TestModelWizardAppliesDeepSeekConfig(t *testing.T) {
 			Timeout:       time.Minute,
 		},
 	}
-	model := newModel(context.Background(), &fakeRunner{}, "session-1", controller, newTerminalCursorAnchor())
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", controller, nil, nil, newTerminalCursorAnchor())
 	model.modelWizard = newModelWizard(controller.current)
 	model.modelWizard.selectedIndex = 1
 
@@ -963,7 +1385,7 @@ func TestModelWizardAllowsCustomConfigWithoutAPIKey(t *testing.T) {
 			Timeout:       time.Minute,
 		},
 	}
-	model := newModel(context.Background(), &fakeRunner{}, "session-1", controller, newTerminalCursorAnchor())
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", controller, nil, nil, newTerminalCursorAnchor())
 	model.modelWizard = newModelWizard(controller.current)
 	model.modelWizard.selectedIndex = 0
 
@@ -998,7 +1420,7 @@ func TestModelWizardDoesNotApplyConfigWhenSaveFails(t *testing.T) {
 		},
 		saveErr: errors.New("disk full"),
 	}
-	model := newModel(context.Background(), &fakeRunner{}, "session-1", controller, newTerminalCursorAnchor())
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", controller, nil, nil, newTerminalCursorAnchor())
 	model.modelWizard = newModelWizard(controller.current)
 	model.modelWizard.selectedIndex = 1
 
@@ -1022,22 +1444,94 @@ func TestRenderInputBoxShowsStatefulPanel(t *testing.T) {
 	model.input.SetValue("hello")
 
 	rendered := model.renderInputBox()
-	for _, want := range []string{"Input", "hello"} {
+	for _, want := range []string{"0%(0.0%)", "100%", "hello"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("input box = %q, want %q", rendered, want)
+		}
+	}
+	for _, unwanted := range []string{"Input", "Waiting", "Terminal"} {
+		if strings.Contains(rendered, unwanted) {
+			t.Fatalf("input box = %q, should not contain %q", rendered, unwanted)
 		}
 	}
 
 	model.pending = []string{"first"}
 	rendered = model.renderInputBox()
-	if !strings.Contains(rendered, "Multiline") {
+	if !strings.Contains(rendered, "0%(0.0%)") || !strings.Contains(rendered, "hello") {
 		t.Fatalf("multiline input box = %q", rendered)
 	}
 
 	model.running = true
 	rendered = model.renderInputBox()
-	if !strings.Contains(rendered, "Waiting") || !strings.Contains(rendered, "waiting for assistant") {
+	if !strings.Contains(rendered, "waiting for assistant") || !strings.Contains(rendered, "0%(0.0%)") {
 		t.Fatalf("waiting input box = %q", rendered)
+	}
+}
+
+// TestContextMeterUsesDefaultLimitAndStableSegments verifies default limit, colors, and 40-cell math.
+func TestContextMeterUsesDefaultLimitAndStableSegments(t *testing.T) {
+	runner := &fakeRunner{
+		stats: loop.ContextStats{
+			UsedTokens:  262144,
+			CacheTokens: 104858,
+		},
+	}
+	model := newTestModel(runner)
+	model.input.SetValue("draft prompt")
+
+	title := model.contextMeterTitle()
+	if runner.lastLimit != settings.DefaultContextLimitTokens {
+		t.Fatalf("lastLimit = %d, want %d", runner.lastLimit, settings.DefaultContextLimitTokens)
+	}
+	if runner.lastDraft != "draft prompt" {
+		t.Fatalf("lastDraft = %q, want draft prompt", runner.lastDraft)
+	}
+	for _, want := range []string{"25%(10.0%)", "75%"} {
+		if !strings.Contains(title, want) {
+			t.Fatalf("contextMeterTitle() = %q, want %q", title, want)
+		}
+	}
+	bar := renderContextBar(runner.stats.UsedTokens, runner.stats.CacheTokens, settings.DefaultContextLimitTokens)
+	if strings.Count(bar, "▰") != 10 || strings.Count(bar, "▱") != 30 {
+		t.Fatalf("renderContextBar() = %q, want 10 filled and 30 free cells", bar)
+	}
+	for role, want := range map[string]string{
+		fmt.Sprint(contextCacheStyle.GetForeground()): "214",
+		fmt.Sprint(contextUsedStyle.GetForeground()):  "111",
+		fmt.Sprint(contextFreeStyle.GetForeground()):  "240",
+	} {
+		if role != want {
+			t.Fatalf("context style foreground = %q, want %q", role, want)
+		}
+	}
+}
+
+// TestNarrowLayoutKeepsMeterOnlyInputTitle verifies compact layouts still render the meter without legacy labels.
+func TestNarrowLayoutKeepsMeterOnlyInputTitle(t *testing.T) {
+	runner := &fakeRunner{
+		stats: loop.ContextStats{
+			UsedTokens:  settings.DefaultContextLimitTokens / 2,
+			CacheTokens: 0,
+		},
+	}
+	model := newTestModel(runner)
+	model.ready = true
+	model.width = 36
+	model.height = 10
+	model.input.SetValue("narrow")
+	model.relayout()
+
+	rendered := model.View()
+	if got := lipgloss.Height(rendered); got > model.height {
+		t.Fatalf("rendered height = %d, want <= %d", got, model.height)
+	}
+	if strings.Count(rendered, "▰")+strings.Count(rendered, "▱") < contextMeterCells {
+		t.Fatalf("view = %q, want complete context meter", rendered)
+	}
+	for _, unwanted := range []string{"Input", "Waiting", "Terminal"} {
+		if strings.Contains(rendered, unwanted) {
+			t.Fatalf("view = %q, should not contain %q", rendered, unwanted)
+		}
 	}
 }
 

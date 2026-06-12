@@ -21,6 +21,7 @@ type StreamEvent struct {
 	Delta string
 	Done  bool
 	Err   error
+	Usage *Usage
 }
 
 // chatCompletionsStreamResponse 只建模流式响应里当前需要的字段。
@@ -32,6 +33,7 @@ type chatCompletionsStreamResponse struct {
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
+	Usage *Usage `json:"usage,omitempty"`
 	Error *struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
@@ -148,6 +150,11 @@ func decodeStreamChunk(payload string) (chatCompletionsStreamResponse, error) {
 }
 
 func emitChunkEvents(ctx context.Context, chunk chatCompletionsStreamResponse, events chan<- StreamEvent) (done bool) {
+	if chunk.Usage != nil {
+		if !emitStreamEvent(ctx, events, StreamEvent{Usage: chunk.Usage}) {
+			return true
+		}
+	}
 	if len(chunk.Choices) == 0 {
 		return false
 	}

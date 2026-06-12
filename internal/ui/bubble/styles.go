@@ -58,6 +58,14 @@ var (
 	inputLabelStyle = lipgloss.NewStyle().
 			Foreground(colorManager.LipglossColor(colorLabelUser)).
 			Bold(true)
+	contextCacheStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorContextCache)).
+				Bold(true)
+	contextUsedStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorContextUsed)).
+				Bold(true)
+	contextFreeStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorContextFree))
 	terminalInputLabelStyle = lipgloss.NewStyle().
 				Foreground(colorManager.LipglossColor(colorInputTerminal)).
 				Bold(true)

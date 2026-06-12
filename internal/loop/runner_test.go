@@ -46,6 +46,26 @@ func (m *fakeModel) StreamMessage(ctx context.Context, messages []message.Messag
 	return ch, nil
 }
 
+type blockingModel struct {
+	streams []chan model.StreamEvent
+	started chan int
+	calls   [][]message.Message
+}
+
+func (m *blockingModel) StreamMessage(ctx context.Context, messages []message.Message) (<-chan model.StreamEvent, error) {
+	copied := append([]message.Message(nil), messages...)
+	m.calls = append(m.calls, copied)
+
+	index := len(m.calls) - 1
+	if index >= len(m.streams) {
+		return nil, errors.New("unexpected model call")
+	}
+	if m.started != nil {
+		m.started <- index
+	}
+	return m.streams[index], nil
+}
+
 type fakeUI struct {
 	deltas      []string
 	toolCalls   []ui.ToolCallEvent
@@ -258,6 +278,52 @@ func TestRunTurnAllowsEmptyAssistantContent(t *testing.T) {
 	}
 	if ui.doneCount != 1 {
 		t.Fatalf("ui.doneCount = %d, want 1", ui.doneCount)
+	}
+}
+
+func TestContextStatsClearsCacheForTurnWithoutUsageEvent(t *testing.T) {
+	ui := &fakeUI{}
+	first := make(chan model.StreamEvent, 1)
+	first <- model.StreamEvent{
+		Usage: &model.Usage{CacheReadInputTokens: 48},
+		Done:  true,
+	}
+	close(first)
+	second := make(chan model.StreamEvent, 1)
+	streamer := &blockingModel{
+		streams: []chan model.StreamEvent{first, second},
+		started: make(chan int, 2),
+	}
+	runner := NewRunner(streamer, ui, tool.NewRegistry(), nil, "")
+
+	if _, err := runner.RunTurn(context.Background(), "first"); err != nil {
+		t.Fatalf("first RunTurn() error = %v", err)
+	}
+	if got := <-streamer.started; got != 0 {
+		t.Fatalf("first turn started index = %d, want 0", got)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := runner.RunTurn(context.Background(), "second")
+		errCh <- err
+	}()
+	if got := <-streamer.started; got != 1 {
+		t.Fatalf("second turn started index = %d, want 1", got)
+	}
+
+	stats := runner.ContextStats(1024, "draft")
+	if stats.CacheTokens != 0 {
+		t.Fatalf("ContextStats().CacheTokens = %d, want 0 without current-turn usage", stats.CacheTokens)
+	}
+	if stats.UsedTokens == 0 {
+		t.Fatalf("ContextStats().UsedTokens = 0, want local estimate")
+	}
+
+	second <- model.StreamEvent{Done: true}
+	close(second)
+	if err := <-errCh; err != nil {
+		t.Fatalf("second RunTurn() error = %v", err)
 	}
 }
 

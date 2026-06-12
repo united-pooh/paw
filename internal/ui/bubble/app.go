@@ -11,11 +11,12 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"strings"
 	"time"
 )
 
 // newModel 创建完整的 TUI 状态模型，并初始化输入框、滚动区和系统消息。
-func newModel(ctx context.Context, runner Runner, sessionID string, controller ModelConfigController, anchor *terminalCursorAnchor) appModel {
+func newModel(ctx context.Context, runner Runner, sessionID string, controller ModelConfigController, settingsController SettingsController, subagentController SubagentController, anchor *terminalCursorAnchor) appModel {
 	input := textarea.New()
 	input.Prompt = ""
 	input.Placeholder = ">"
@@ -39,6 +40,8 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 		runner:          runner,
 		sessionID:       sessionID,
 		modelConfig:     controller,
+		settingsConfig:  settingsController,
+		subagents:       subagentController,
 		commandRegistry: NewCommandRegistry(),
 		cursorAnchor:    anchor,
 		input:           input,
@@ -120,6 +123,17 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			body:  body,
 		})
 		return m, nil
+	case systemEventMsg:
+		title := strings.TrimSpace(msg.Title)
+		if title == "" {
+			title = "system"
+		}
+		m.addEntry(transcriptEntry{
+			kind:  entrySystem,
+			title: title,
+			body:  strings.TrimSpace(msg.Body),
+		})
+		return m, nil
 	case doneMsg:
 		m.activeAssistant = -1
 		m.refreshViewport()
@@ -151,7 +165,30 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			body:  shellResultBody(msg),
 		})
 		cmds = append(cmds, m.input.Focus())
+	case subagentFinishedMsg:
+		m.queryGuard.FinishModel()
+		m.syncRunningFlags()
+		if msg.err != nil {
+			m.addEntry(transcriptEntry{
+				kind:  entryError,
+				title: "subagent",
+				body:  msg.err.Error(),
+			})
+		} else {
+			m.addEntry(transcriptEntry{
+				kind:  entrySystem,
+				title: "subagent",
+				body:  renderSubagentResult(msg.result),
+			})
+		}
+		cmds = append(cmds, m.input.Focus())
+		if queuedCmd := m.startNextQueuedTurn(); queuedCmd != nil {
+			cmds = append(cmds, queuedCmd)
+		}
 	case tea.KeyMsg:
+		if m.settingWizard != nil {
+			return m.handleSettingWizardKey(msg)
+		}
 		if m.modelWizard != nil {
 			return m.handleModelWizardKey(msg)
 		}

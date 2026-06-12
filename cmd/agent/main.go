@@ -7,6 +7,8 @@ import (
 	"gocode/internal/loop"
 	"gocode/internal/model"
 	"gocode/internal/session"
+	"gocode/internal/settings"
+	"gocode/internal/subagent"
 	"gocode/internal/tool"
 	toolexec "gocode/internal/tool/exec"
 	toolfile "gocode/internal/tool/file"
@@ -52,7 +54,7 @@ func main() {
 
 func runSingleTurnMode(ctx context.Context, opts options) error {
 	output := headless.New(os.Stdout)
-	runner, sessionID, _, err := buildRunner(ctx, opts.sessionID, output)
+	runner, sessionID, _, _, _, err := buildRunner(ctx, opts.sessionID, output)
 	if err != nil {
 		return err
 	}
@@ -64,38 +66,55 @@ func runSingleTurnMode(ctx context.Context, opts options) error {
 
 func runInteractiveMode(ctx context.Context, opts options) error {
 	output := bubbleui.New()
-	runner, sessionID, client, err := buildRunner(ctx, opts.sessionID, output)
+	runner, sessionID, client, settingsController, subagentManager, err := buildRunner(ctx, opts.sessionID, output)
 	if err != nil {
 		return err
 	}
 
 	output.SetModelConfigController(client)
+	output.SetSettingsController(settingsController)
+	output.SetSubagentController(subagentManager)
 	fmt.Fprintf(os.Stderr, "session: %s\n", sessionID)
 	return output.Run(ctx, runner, sessionID)
 }
 
-func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI) (*loop.Runner, string, *model.Client, error) {
+func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI) (*loop.Runner, string, *model.Client, *settings.Controller, *subagent.Manager, error) {
 	cfg, err := model.LoadConfigFromEnv()
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, nil, nil, err
 	}
 
 	root, err := os.Getwd()
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, nil, nil, err
 	}
 
 	store, err := session.NewJSONLStoreInCwd()
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("初始化 session store 失败: %w", err)
+		return nil, "", nil, nil, nil, fmt.Errorf("初始化 session store 失败: %w", err)
 	}
 
 	sessionID, err := resolveSessionID(ctx, store, sessionIDFlag, root)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, nil, nil, err
 	}
 
 	client := model.NewClient(cfg)
+	settingsController, err := settings.NewControllerInCwd()
+	if err != nil {
+		return nil, "", nil, nil, nil, err
+	}
+	var notifier subagent.Notifier
+	if n, ok := output.(subagent.Notifier); ok {
+		notifier = n
+	}
+	subagentManager := subagent.NewManager(subagent.Config{
+		Model:    client,
+		Store:    store,
+		Root:     root,
+		Settings: settingsController,
+		Notifier: notifier,
+	})
 	registry := tool.NewRegistry()
 	registry.Register(&toolfile.LSTool{Root: root})
 	registry.Register(&toolfile.ReadTool{Root: root})
@@ -104,8 +123,10 @@ func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI) (
 	registry.Register(&toolfile.GlobTool{Root: root})
 	registry.Register(&toolexec.BashTool{Root: root})
 	registry.Register(&toolwebfetch.Tool{})
+	registry.Register(subagent.NewTool(subagentManager, sessionID))
+	registry.Register(subagent.NewStatusTool(subagentManager))
 
-	return loop.NewRunnerWithInstructionRoot(client, output, registry, store, sessionID, root), sessionID, client, nil
+	return loop.NewRunnerWithInstructionRoot(client, output, registry, store, sessionID, root), sessionID, client, settingsController, subagentManager, nil
 }
 
 func resolveSessionID(ctx context.Context, store *session.JSONLStore, sessionIDFlag, cwd string) (string, error) {

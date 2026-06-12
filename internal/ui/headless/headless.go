@@ -94,6 +94,22 @@ func (u *UI) OnToolResult(event ui.ToolResultEvent) error {
 	return err
 }
 
+// OnSystemMessage 输出后台任务等系统事件。
+func (u *UI) OnSystemMessage(event ui.SystemEvent) error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	if err := u.startEventLineLocked(); err != nil {
+		return err
+	}
+	title := strings.TrimSpace(event.Title)
+	if title == "" {
+		title = "system"
+	}
+	_, err := fmt.Fprintf(u.out, "[system] %s: %s\n", title, strings.TrimSpace(event.Body))
+	return err
+}
+
 // OnDone 在一轮流式输出结束后补一个换行。
 // 这样下一次日志/提示不会紧贴在模型输出后面。
 func (u *UI) OnDone() error {

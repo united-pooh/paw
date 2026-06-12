@@ -4,6 +4,7 @@ package bubble
 import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/lipgloss"
+	"gocode/internal/settings"
 )
 
 // View 根据当前状态渲染 header、聊天历史面板和输入面板。
@@ -19,12 +20,19 @@ func (m appModel) View() string {
 	if m.modelWizard != nil {
 		input = m.renderModelWizardBox()
 	}
+	if m.settingWizard != nil {
+		input = m.renderSettingWizardBox()
+	}
 
 	var parts []string
 	if header := m.renderHeader(); header != "" {
 		parts = append(parts, header)
 	}
-	parts = append(parts, m.renderTranscriptBox(), input)
+	parts = append(parts, m.renderTranscriptBox())
+	if meter := m.renderInputAboveMeter(); meter != "" {
+		parts = append(parts, meter)
+	}
+	parts = append(parts, input)
 	view := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	m.updateTerminalCursorAnchor(input)
 	return view
@@ -44,7 +52,7 @@ func (m appModel) updateTerminalCursorAnchor(inputPanel string) {
 
 // shouldAnchorTextInputCursor 判断当前是否应该把终端真实光标移动到输入单元格。
 func (m appModel) shouldAnchorTextInputCursor() bool {
-	return m.ready && !m.running && m.modelWizard == nil
+	return m.ready && !m.running && m.modelWizard == nil && m.settingWizard == nil
 }
 
 // inputCursorTerminalPosition 计算输入框光标相对当前帧底部的位置。
@@ -78,40 +86,36 @@ func visibleTextareaCursorColumn(input textarea.Model) int {
 // renderInputBox 渲染普通输入、多行输入、终端输入和等待状态的输入面板。
 func (m appModel) renderInputBox() string {
 	width := maxInt(28, m.width-2)
-	title := "Input"
+	title := ""
 	content := m.input.View()
 	style := inputPanelFocusedStyle
 	titleStyle := inputLabelStyle
+	if m.currentSettings().UI.ContextMeterLocation == settings.MeterLocationInputTitle {
+		title = m.contextMeterTitle()
+	}
 
 	if m.isTerminalInputActive() {
-		title = "Terminal"
 		style = inputPanelTerminalStyle
-		titleStyle = terminalInputLabelStyle
 	}
 	if m.hasMultilineInput() {
-		title = "Multiline"
 		style = inputPanelMultilineStyle
-		titleStyle = inputLabelStyle
 		if m.isTerminalInputActive() {
-			title = "Terminal multiline"
 			style = inputPanelTerminalStyle
-			titleStyle = terminalInputLabelStyle
 		}
 	}
 	if m.running {
-		title = "Waiting"
 		content = inputWaitingStyle.Render("waiting for assistant...")
 		style = inputPanelWaitingStyle
-		titleStyle = inputLabelStyle
 		if m.runningTerminal {
-			title = "Running"
 			content = inputWaitingStyle.Render("running shell command...")
 			style = inputPanelTerminalStyle
-			titleStyle = terminalInputLabelStyle
 		}
 	}
 
-	body := lipgloss.JoinVertical(lipgloss.Left, titleStyle.Render(title), content)
+	body := content
+	if title != "" {
+		body = lipgloss.JoinVertical(lipgloss.Left, titleStyle.Render(title), content)
+	}
 	return style.Width(width).Render(body)
 }
 
@@ -138,7 +142,17 @@ func (m appModel) headerHeight() int {
 // headerText 生成顶部状态栏文本。
 // TODO: 后期希望改成显示时间或者用标签页方式展示 agent 的状态。
 func (m appModel) headerText() string {
+	if m.currentSettings().UI.ContextMeterLocation == settings.MeterLocationHeader {
+		return m.contextMeterTitle()
+	}
 	return ""
+}
+
+func (m appModel) renderInputAboveMeter() string {
+	if m.currentSettings().UI.ContextMeterLocation != settings.MeterLocationInputAbove {
+		return ""
+	}
+	return inputLabelStyle.Width(maxInt(28, m.width-2)).Render(m.contextMeterTitle())
 }
 
 // relayout 根据终端尺寸和输入高度重新计算 viewport 与 textarea 尺寸。
@@ -149,5 +163,7 @@ func (m *appModel) relayout() {
 	m.input.SetHeight(inputVisibleLineCount(m.input))
 	headerHeight := m.headerHeight()
 	inputHeight := lipgloss.Height(m.renderInputBox())
-	m.viewport.Height = maxInt(3, m.height-headerHeight-inputHeight-transcriptPanelVerticalFrame)
+	inputAboveHeight := lipgloss.Height(m.renderInputAboveMeter())
+	availableTranscriptHeight := m.height - headerHeight - inputAboveHeight - inputHeight - transcriptPanelVerticalFrame
+	m.viewport.Height = maxInt(1, availableTranscriptHeight)
 }

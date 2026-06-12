@@ -19,6 +19,12 @@ type ToolResultEvent struct {
 	IsError   bool
 }
 
+// SystemEvent 描述由后台任务或控制器产生的系统消息。
+type SystemEvent struct {
+	Title string
+	Body  string
+}
+
 // UI 定义 loop 层依赖的最小输出接口。
 // 当前既要支持纯文本流式渲染，也要支持工具调用/结果事件展示。
 type UI interface {
@@ -26,4 +32,9 @@ type UI interface {
 	OnToolCall(event ToolCallEvent) error
 	OnToolResult(event ToolResultEvent) error
 	OnDone() error
+}
+
+// SystemNotifier 是 UI 的可选扩展，用于接收后台任务完成等系统事件。
+type SystemNotifier interface {
+	OnSystemMessage(event SystemEvent) error
 }

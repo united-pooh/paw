@@ -326,6 +326,11 @@ func (s *JSONLStore) transcriptPath(sessionID string) string {
 	return filepath.Join(s.sessionDir(sessionID), "transcript.jsonl")
 }
 
+// TranscriptPath 返回指定 session 的 transcript 文件路径。
+func (s *JSONLStore) TranscriptPath(sessionID string) string {
+	return s.transcriptPath(sessionID)
+}
+
 // GenerateSessionID 生成一个随机的 session ID（16 字节 hex 字符串）。
 func GenerateSessionID() (string, error) {
 	buf := make([]byte, 16)

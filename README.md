@@ -33,24 +33,39 @@ internal/tool/file/glob.go
 internal/tool/exec/bash.go
 internal/tool/webfetch/webfetch.go
 
+internal/session/jsonl_store.go
+internal/settings/settings.go
+internal/subagent/manager.go
+
 internal/ui/ui.go
 internal/ui/headless/headless.go
+internal/ui/bubble/
 
 internal/loop/runner.go
 ```
+
+## 快速使用
+
+```bash
+go run ./cmd/agent -p "hello"
+go run ./cmd/agent
+go run ./cmd/agent -s <session-id>
+```
+
+当前运行目录会作为工作区 root，同时也是 `.ccagent/` 状态目录的基准路径。
 
 ## 入口
 
 ### 程序入口
 
-文件: [cmd/agent/main.go](/Users/united_pooh/python project/claude-code-sourcemap-main/go-code/cmd/agent/main.go)
+文件: [cmd/agent/main.go](/Users/united_pooh/PyProjects/go-code/cmd/agent/main.go)
 
 #### `main()`
 
 职责:
 - 解析命令行参数
 - 构造 `Runner`
-- 选择单轮模式或 REPL 模式
+- 选择单轮模式或 Bubble Tea 交互模式
 
 不负责:
 - 直接调用模型
@@ -61,60 +76,93 @@ internal/loop/runner.go
 
 职责:
 - 读取 `-p`
+- 读取 `-s`
 
 行为:
 - `-p` 有值: 执行单轮
-- `-p` 为空: 进入交互式对话 loop
+- `-p` 为空: 进入交互式对话界面
+- `-s` 有值: 绑定到指定 session
+- `-s` 为空: 按当前工作目录自动打开或创建 session
 
-#### `buildRunner() (*loop.Runner, error)`
+#### `buildRunner(ctx, sessionIDFlag, output) (*loop.Runner, string, *model.Client, *settings.Controller, *subagent.Manager, error)`
 
 职责:
 - 加载模型配置
-- 创建模型客户端
-- 创建 UI
-- 注册工具
-- 返回 `Runner`
+- 创建模型客户端和会话存储
+- 装配 settings 控制器和 subagent 管理器
+- 注册文件、shell、webfetch、subagent 相关工具
+- 返回 `Runner`、sessionID 和运行时控制器
 
 这是当前的依赖装配点。
 
-#### `run(ctx, runner, opts) error`
+当前会注册的持久化目录:
+- `.ccagent/model.json`
+- `.ccagent/settings.json`
+- `.ccagent/exports/`
+- `.ccagent/sessions/<sessionID>/`
+
+#### `runSingleTurnMode(ctx, opts) error`
 
 职责:
-- 模式分发
+- 在 headless UI 中执行一次 `runner.RunTurn`
 
-分支:
-- `runSingleTurn`
-- `runREPL`
+输出:
+- assistant 最终结果写 stdout
+- 当前 sessionID 写 stderr
 
-#### `runSingleTurn(ctx, runner, prompt) error`
-
-职责:
-- 调一次 `runner.RunTurn`
-
-#### `runREPL(ctx, runner, in, out) error`
+#### `runInteractiveMode(ctx, opts) error`
 
 职责:
-- 提供最小交互式对话循环
+- 启动 Bubble Tea 主界面
+- 注入模型配置、settings、subagent 控制器
+- 以当前 session 进入可恢复的交互式对话
 
-步骤:
-1. 打印帮助
-2. 读取用户输入
-3. 处理本地命令
-4. 调用 `runner.RunTurn`
+#### 当前交互命令
 
-#### `handleREPLCommand(out, runner, line) (bool, error)`
+当前 slash command 由 `internal/ui/bubble/command_registry.go` 统一注册，`/help` 会显示参数提示。
 
-当前支持:
 - `/help`
+- `/model [status|custom|deepseek]`
+- `/export [filename]`
+- `/setting`
+- `/subagent [--fork|--empty] [--background|--sync] <prompt>`
+- `/tasks`
+- `/status`
 - `/clear`
+- `/exit` / `/quit`
 
-退出命令在 `runREPL` 中直接处理:
-- `/exit`
-- `/quit`
+当前行为:
+- `/model` 无参数时打开 provider 向导；`status` 只输出当前配置；`custom`、`deepseek` 直接切换并持久化到 `.ccagent/model.json`；`deepseek` 需要 `DEEPSEEK_API_KEY`
+- `/export` 默认导出到 `.ccagent/exports/conversation-YYYY-MM-DD-HHMMSS.txt`，也支持工作区内显式路径；导出文件权限为 `0600`
+- `/setting` 通过向导保存默认 subagent context/run mode，以及 context meter 的位置和 token limit
+- `/subagent` 支持 `empty` 与 `fork` 两种上下文模式，以及 `sync` 与 `background` 两种运行模式；后台任务完成后会发 UI 系统通知，但结果不会自动插回主对话
+- `/tasks` 展示当前后台 subagent 任务及 transcript 路径
+
+#### 当前输入区状态
+
+输入面板标题默认展示 context meter，不再显示 `Input`、`Waiting`、`Terminal` 标签。
+
+当前默认 settings:
+
+```json
+{
+  "subagent": {
+    "default_context_mode": "empty",
+    "default_run_mode": "sync"
+  },
+  "ui": {
+    "context_limit_tokens": 1048576,
+    "context_meter_location": "input-title"
+  }
+}
+```
 
 ## 分层
 
 当前分为 5 层。
+
+补充:
+- `session`、`settings`、`subagent` 是新增的运行时支撑模块，负责 `.ccagent/` 持久化、用户默认配置和子代理调度；主对话链路仍按下面的 5 层理解即可。
 
 ### 1. `message`
 
@@ -260,16 +308,28 @@ main
 职责:
 - 从环境变量构造 `Config`
 - 启动时按顺序尝试加载当前目录下的 `.env`、`.env.local`
+- 读取并合并 `.ccagent/model.json` 中的持久化 provider 配置
 - `.env.local` 会覆盖 `.env` 和外部 shell 继承进来的同名变量
 
 当前环境变量:
-- `NEWAPI_API_KEY`（优先）
+- `NEWAPI_API_KEY`
 - `DEEPSEEK_API_KEY`
 
-当前默认值:
-- base url: `http://localhost:9000`
-- path: `/v1/chat/completions`
+当前 provider:
+- `custom`
+- `deepseek`
+
+当前默认值（`custom`）:
+- base url: `http://localhost:8317/v1`
+- path: `/chat/completions`
+- model: `gpt-5.5`
+- 缺省 key: `sk-dummy`
+
+当前默认值（`deepseek`）:
+- base url: `https://api.deepseek.com`
+- path: `/chat/completions`
 - model: `deepseek-chat`
+- 缺少 `DEEPSEEK_API_KEY` 时启动会报错
 
 #### 请求/响应类型
 

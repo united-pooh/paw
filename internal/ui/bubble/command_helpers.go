@@ -1,0 +1,261 @@
+package bubble
+
+import (
+	"context"
+	"fmt"
+	tea "github.com/charmbracelet/bubbletea"
+	"gocode/internal/model"
+	"gocode/internal/settings"
+	"gocode/internal/subagent"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+func commandArgs(invocation string) string {
+	token := commandToken(invocation)
+	return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(invocation), token))
+}
+
+func (m *appModel) handleModelCommand(invocation string) tea.Cmd {
+	args := strings.TrimSpace(commandArgs(invocation))
+	switch args {
+	case "":
+		m.modelWizard = newModelWizard(m.currentModelConfig())
+		m.pending = nil
+	case "status":
+		cfg := m.currentModelConfig()
+		m.addEntry(transcriptEntry{
+			kind:  entrySystem,
+			title: "model",
+			body:  fmt.Sprintf("provider=%s base=%s path=%s model=%s key=%s", cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, cfg.APIKeyEnvName),
+		})
+	case model.ProviderCustom, model.ProviderDeepSeek:
+		cfg, err := m.configForProvider(args)
+		if err != nil {
+			m.addEntry(transcriptEntry{kind: entryError, title: "model", body: err.Error()})
+			return nil
+		}
+		m.applyModelConfigFromCommand(cfg)
+	default:
+		m.addEntry(transcriptEntry{kind: entryError, title: "model", body: fmt.Sprintf("unknown model command: %s", args)})
+	}
+	return nil
+}
+
+func (m *appModel) applyModelConfigFromCommand(cfg model.Config) {
+	if m.modelConfig == nil {
+		m.addEntry(transcriptEntry{kind: entryError, title: "model", body: "model config controller is unavailable"})
+		return
+	}
+	if saver, ok := m.modelConfig.(ModelConfigSaver); ok {
+		if err := saver.SaveModelConfig(cfg); err != nil {
+			m.addEntry(transcriptEntry{kind: entryError, title: "model", body: err.Error()})
+			return
+		}
+	}
+	if err := m.modelConfig.ApplyModelConfig(cfg); err != nil {
+		m.addEntry(transcriptEntry{kind: entryError, title: "model", body: err.Error()})
+		return
+	}
+	m.addEntry(transcriptEntry{
+		kind:  entrySystem,
+		title: "model",
+		body:  fmt.Sprintf("provider=%s base=%s path=%s model=%s key=%s", cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, cfg.APIKeyEnvName),
+	})
+}
+
+func (m *appModel) handleExportCommand(invocation string) {
+	path, err := m.exportPath(commandArgs(invocation))
+	if err != nil {
+		m.addEntry(transcriptEntry{kind: entryError, title: "export", body: err.Error()})
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		m.addEntry(transcriptEntry{kind: entryError, title: "export", body: err.Error()})
+		return
+	}
+	content := exportTranscriptText(m.transcript)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		m.addEntry(transcriptEntry{kind: entryError, title: "export", body: err.Error()})
+		return
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		m.addEntry(transcriptEntry{kind: entryError, title: "export", body: err.Error()})
+		return
+	}
+	m.addEntry(transcriptEntry{kind: entrySystem, title: "export", body: "conversation exported to " + path})
+}
+
+func (m appModel) exportPath(arg string) (string, error) {
+	root, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	arg = strings.TrimSpace(arg)
+	if arg == "" {
+		name := "conversation-" + time.Now().Format("2006-01-02-150405") + ".txt"
+		return filepath.Join(root, ".ccagent", "exports", name), nil
+	}
+	if !strings.HasSuffix(arg, ".txt") {
+		arg = strings.TrimSuffix(arg, filepath.Ext(arg)) + ".txt"
+	}
+	target := arg
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(root, target)
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(absRoot, absTarget)
+	if err != nil {
+		return "", err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("export path escapes workspace root: %s", arg)
+	}
+	return absTarget, nil
+}
+
+func exportTranscriptText(entries []transcriptEntry) string {
+	var out strings.Builder
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.body) == "" {
+			continue
+		}
+		out.WriteString(entry.title)
+		out.WriteString(":\n")
+		out.WriteString(strings.TrimRight(entry.body, "\n"))
+		out.WriteString("\n\n")
+	}
+	return out.String()
+}
+
+func (m *appModel) handleSubagentCommand(invocation string) tea.Cmd {
+	req, err := m.parseSubagentCommand(invocation)
+	if err != nil {
+		m.addEntry(transcriptEntry{kind: entryError, title: "subagent", body: err.Error()})
+		return nil
+	}
+	if m.subagents == nil {
+		m.addEntry(transcriptEntry{kind: entryError, title: "subagent", body: "subagent controller is unavailable"})
+		return nil
+	}
+	if req.RunMode == settings.RunModeBackground {
+		task, err := m.subagents.Launch(m.ctx, req)
+		if err != nil {
+			m.addEntry(transcriptEntry{kind: entryError, title: "subagent", body: err.Error()})
+			return nil
+		}
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "subagent", body: renderTask(task)})
+		return nil
+	}
+	if !m.queryGuard.StartModel() {
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "busy", body: "assistant is already running"})
+		return nil
+	}
+	m.syncRunningFlags()
+	m.addEntry(transcriptEntry{kind: entrySystem, title: "subagent", body: "started sync subagent"})
+	return runSubagentCmd(m.ctx, m.subagents, req)
+}
+
+func (m appModel) parseSubagentCommand(invocation string) (subagent.Request, error) {
+	cfg := m.currentSettings()
+	req := subagent.Request{
+		ParentSessionID: m.sessionID,
+		ContextMode:     cfg.Subagent.DefaultContextMode,
+		RunMode:         cfg.Subagent.DefaultRunMode,
+	}
+	fields := strings.Fields(commandArgs(invocation))
+	var prompt []string
+	for _, field := range fields {
+		switch field {
+		case "--fork":
+			req.ContextMode = settings.ContextModeFork
+		case "--empty":
+			req.ContextMode = settings.ContextModeEmpty
+		case "--background":
+			req.RunMode = settings.RunModeBackground
+		case "--sync":
+			req.RunMode = settings.RunModeSync
+		default:
+			prompt = append(prompt, field)
+		}
+	}
+	req.Prompt = strings.Join(prompt, " ")
+	req.Description = summarizeToolContent(req.Prompt)
+	if strings.TrimSpace(req.Prompt) == "" {
+		return req, fmt.Errorf("prompt is required")
+	}
+	return req, nil
+}
+
+func runSubagentCmd(ctx context.Context, controller SubagentController, req subagent.Request) tea.Cmd {
+	return func() tea.Msg {
+		result, err := controller.Run(ctx, req)
+		return subagentFinishedMsg{result: result, err: err}
+	}
+}
+
+func (m *appModel) handleTasksCommand() {
+	if m.subagents == nil {
+		m.addEntry(transcriptEntry{kind: entryError, title: "tasks", body: "subagent controller is unavailable"})
+		return
+	}
+	tasks := m.subagents.ListTasks()
+	if len(tasks) == 0 {
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "tasks", body: "no subagent tasks"})
+		return
+	}
+	lines := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		lines = append(lines, renderTask(task))
+	}
+	m.addEntry(transcriptEntry{kind: entrySystem, title: "tasks", body: strings.Join(lines, "\n\n")})
+}
+
+func (m appModel) statusText(sessionID string) string {
+	cfg := m.currentSettings()
+	modelCfg := m.currentModelConfig()
+	taskCount := 0
+	if m.subagents != nil {
+		taskCount = len(m.subagents.ListTasks())
+	}
+	stats := m.contextStats()
+	return fmt.Sprintf(
+		"session: %s\nmodel: %s/%s\nsettings: context=%s run=%s meter=%s limit=%d\nqueue: %d\nsubagent tasks: %d\ncontext: used=%d cache=%d limit=%d",
+		sessionID,
+		modelCfg.Provider,
+		modelCfg.Model,
+		cfg.Subagent.DefaultContextMode,
+		cfg.Subagent.DefaultRunMode,
+		cfg.UI.ContextMeterLocation,
+		cfg.UI.ContextLimitTokens,
+		m.chatQueue.Len(),
+		taskCount,
+		stats.UsedTokens,
+		stats.CacheTokens,
+		stats.LimitTokens,
+	)
+}
+
+func renderSubagentResult(result subagent.Result) string {
+	return fmt.Sprintf("agent=%s transcript=%s\n%s", result.AgentID, result.TranscriptPath, strings.TrimSpace(result.Content))
+}
+
+func renderTask(task subagent.TaskSnapshot) string {
+	line := fmt.Sprintf("%s status=%s context=%s transcript=%s", task.ID, task.Status, task.ContextMode, task.TranscriptPath)
+	if task.Error != "" {
+		line += "\nerror: " + task.Error
+	}
+	if task.Content != "" {
+		line += "\nresult: " + summarizeToolContent(task.Content)
+	}
+	return line
+}
