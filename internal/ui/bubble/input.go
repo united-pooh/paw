@@ -1,17 +1,15 @@
+// 本文件定义输入框提交、斜杠命令、终端模式和历史输入导航行为。
 package bubble
 
 import (
-	"fmt"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"strings"
 )
 
+// handleSubmit 处理 Enter 提交，根据输入内容分派到聊天、命令或终端执行路径。
 func (m appModel) handleSubmit() (tea.Model, tea.Cmd) {
-	if m.running {
-		return m, nil
-	}
-
+	m.reconcileLegacyRunningState()
 	line := strings.TrimSpace(m.input.Value())
 	if line == "" {
 		return m, nil
@@ -43,6 +41,10 @@ func (m appModel) handleSubmit() (tea.Model, tea.Cmd) {
 		return m.submitShellCommand(line)
 	}
 	if command, ok := shellCommandFromBang(line); ok {
+		if m.isWorkRunning() {
+			m.addEntry(transcriptEntry{kind: entrySystem, title: "busy", body: "terminal commands are unavailable while a turn is running"})
+			return m, nil
+		}
 		m.rememberInputHistory(line)
 		return m.submitShellCommand(command)
 	}
@@ -51,62 +53,30 @@ func (m appModel) handleSubmit() (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	if m.isModelWorkRunning() {
+		return m.queueChatInput(line), nil
+	}
+	if m.isTerminalWorkRunning() {
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "busy", body: "chat is unavailable while a terminal command is running"})
+		return m, nil
+	}
+
 	m.rememberInputHistory(line)
-	m.addEntry(transcriptEntry{
-		kind:  entryUser,
-		title: "you",
-		body:  line,
-	})
-	m.running = true
-	m.activeAssistant = -1
-	return m, runTurnCmd(m.ctx, m.runner, line)
+	return m.startChatTurn(line)
 }
 
+// handleCommand 处理以斜杠开头的内置 TUI 命令。
 func (m *appModel) handleCommand(line string) (bool, tea.Cmd) {
-	switch line {
-	case "/exit", "/quit":
-		return true, tea.Quit
-	case "/help":
-		m.addEntry(transcriptEntry{
-			kind:  entrySystem,
-			title: "help",
-			body:  "Commands: /model opens the model switcher, /status shows session, /clear resets in-process history, /exit quits. Type ! to toggle terminal mode or !<command> to run bash once.",
-		})
-		return true, nil
-	case "/model":
-		m.modelWizard = newModelWizard(m.currentModelConfig())
-		m.pending = nil
-		return true, nil
-	case "/status":
-		sessionID := m.sessionID
-		if sessionID == "" {
-			sessionID = "<none>"
-		}
-		m.addEntry(transcriptEntry{
-			kind:  entrySystem,
-			title: "status",
-			body:  fmt.Sprintf("session: %s", sessionID),
-		})
-		return true, nil
-	case "/clear":
-		if m.runner != nil {
-			m.runner.ResetHistory()
-		}
-		m.transcript = nil
-		m.pending = nil
-		m.activeAssistant = -1
-		m.syncInputMode()
-		m.addEntry(transcriptEntry{
-			kind:  entrySystem,
-			title: "system",
-			body:  "history cleared",
-		})
-		return true, nil
-	default:
+	if !strings.HasPrefix(strings.TrimSpace(line), "/") {
 		return false, nil
 	}
+	if m.commandRegistry == nil {
+		m.commandRegistry = NewCommandRegistry()
+	}
+	return m.commandRegistry.Dispatch(m, line)
 }
 
+// toggleTerminalMode 切换持续终端模式，并在 transcript 中写入状态提示。
 func (m *appModel) toggleTerminalMode() {
 	m.terminalMode = !m.terminalMode
 	m.pending = nil
@@ -123,18 +93,22 @@ func (m *appModel) toggleTerminalMode() {
 	})
 }
 
+// isTerminalInputActive 判断当前输入框是否需要展示终端模式视觉状态。
 func (m appModel) isTerminalInputActive() bool {
 	return m.terminalMode || m.terminalPreview
 }
 
+// hasMultilineInput 判断当前输入是否处于多行输入或续行状态。
 func (m appModel) hasMultilineInput() bool {
 	return len(m.pending) > 0 || strings.Contains(m.input.Value(), "\n")
 }
 
+// syncInputMode 根据当前文本同步一次性终端预览状态。
 func (m *appModel) syncInputMode() {
 	m.terminalPreview = hasBangPrefix(m.input.Value())
 }
 
+// handleInputVerticalNavigation 让上下键先在多行文本内移动，抵达边界后再切换历史输入。
 func (m appModel) handleInputVerticalNavigation(direction int) (tea.Model, tea.Cmd) {
 	if m.running {
 		return m, nil
@@ -170,6 +144,49 @@ func (m appModel) handleInputVerticalNavigation(direction int) (tea.Model, tea.C
 	return m.handleHistoryNavigation(1)
 }
 
+// startChatTurn records and starts a model turn when the guard is idle.
+func (m appModel) startChatTurn(line string) (appModel, tea.Cmd) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return m, nil
+	}
+	if !m.queryGuard.StartModel() {
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "busy", body: "assistant is already running"})
+		return m, nil
+	}
+	m.addEntry(transcriptEntry{
+		kind:  entryUser,
+		title: "you",
+		body:  line,
+	})
+	m.syncRunningFlags()
+	m.activeAssistant = -1
+	return m, runTurnCmd(m.ctx, m.runner, line)
+}
+
+// queueChatInput records a chat input for FIFO execution after the active turn.
+func (m appModel) queueChatInput(line string) appModel {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return m
+	}
+	m.rememberInputHistory(line)
+	if m.chatQueue.Enqueue(line) {
+		m.addEntry(transcriptEntry{
+			kind:  entryUser,
+			title: "you (queued)",
+			body:  line,
+		})
+		m.addEntry(transcriptEntry{
+			kind:  entrySystem,
+			title: "queued",
+			body:  "queued for next turn",
+		})
+	}
+	return m
+}
+
+// updateInputWithKey 将按键交给 textarea 处理，并同步输入模式、布局和光标动画。
 func (m appModel) updateInputWithKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	input, cmd := m.input.Update(msg)
 	m.input = input
@@ -179,16 +196,19 @@ func (m appModel) updateInputWithKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// canMoveTextareaUp 判断 textarea 光标是否还能向上移动到上一行或上方可视行。
 func canMoveTextareaUp(input textarea.Model) bool {
 	lineInfo := input.LineInfo()
 	return input.Line() > 0 || lineInfo.RowOffset > 0
 }
 
+// canMoveTextareaDown 判断 textarea 光标是否还能向下移动到下一行或下方可视行。
 func canMoveTextareaDown(input textarea.Model) bool {
 	lineInfo := input.LineInfo()
 	return input.Line() < input.LineCount()-1 || lineInfo.RowOffset < lineInfo.Height-1
 }
 
+// textareaCursorAtStart 判断 textarea 光标是否位于当前输入的逻辑开头。
 func textareaCursorAtStart(input textarea.Model) bool {
 	if canMoveTextareaUp(input) {
 		return false
@@ -203,6 +223,7 @@ func textareaCursorAtStart(input textarea.Model) bool {
 		lineInfo.ColumnOffset == startInfo.ColumnOffset
 }
 
+// textareaCursorAtEnd 判断 textarea 光标是否位于当前输入的逻辑末尾。
 func textareaCursorAtEnd(input textarea.Model) bool {
 	if canMoveTextareaDown(input) {
 		return false
@@ -217,6 +238,7 @@ func textareaCursorAtEnd(input textarea.Model) bool {
 		lineInfo.ColumnOffset == endInfo.ColumnOffset
 }
 
+// handleHistoryNavigation 在输入边界处切换历史记录，并保留进入历史前的草稿。
 func (m appModel) handleHistoryNavigation(direction int) (tea.Model, tea.Cmd) {
 	if m.running || len(m.inputHistory) == 0 {
 		return m, nil
@@ -258,6 +280,7 @@ func (m appModel) handleHistoryNavigation(direction int) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// rememberInputHistory 记录一条非空且不重复的用户输入历史。
 func (m *appModel) rememberInputHistory(line string) {
 	line = strings.TrimSpace(line)
 	if line == "" {
@@ -269,15 +292,21 @@ func (m *appModel) rememberInputHistory(line string) {
 	m.inputHistory = append(m.inputHistory, line)
 }
 
+// resetHistoryNavigation 清除当前历史浏览状态，回到普通编辑模式。
 func (m *appModel) resetHistoryNavigation() {
 	m.historyIndex = -1
 	m.historyDraft = ""
 	m.historyDownLock = false
 }
 
+// submitShellCommand 提交终端命令，先写入 transcript，再异步执行 bash。
 func (m appModel) submitShellCommand(command string) (tea.Model, tea.Cmd) {
 	command = strings.TrimSpace(command)
 	if command == "" {
+		return m, nil
+	}
+	if !m.queryGuard.StartTerminal() {
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "busy", body: "terminal command is already running"})
 		return m, nil
 	}
 	m.addEntry(transcriptEntry{
@@ -285,8 +314,7 @@ func (m appModel) submitShellCommand(command string) (tea.Model, tea.Cmd) {
 		title: "terminal",
 		body:  "$ " + command,
 	})
-	m.running = true
-	m.runningTerminal = true
+	m.syncRunningFlags()
 	m.activeAssistant = -1
 	return m, runShellCmd(m.ctx, command)
 }

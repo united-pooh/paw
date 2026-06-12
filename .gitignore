@@ -4,3 +4,4 @@
 /agent
 .ccagent/
 .env.local
+.pipeline-workspace/

@@ -35,6 +35,7 @@ type Runner struct {
 	registry  *tool.Registry
 	store     HistoryStore
 	sessionID string
+	prompt    *PromptBuilder
 	// history 保存“已经成功完成”的多轮对话消息。
 	// 当前调用路径是串行的，因此这里先不引入锁。
 	// TODO: 如果后续要把 Runner 暴露给并发调用方，需要为 history 增加互斥保护。
@@ -65,12 +66,18 @@ type toolUseEnvelope struct {
 
 // NewRunner 创建调度器。
 func NewRunner(model ModelStreamer, output ui.UI, registry *tool.Registry, store HistoryStore, sessionID string) *Runner {
+	return NewRunnerWithInstructionRoot(model, output, registry, store, sessionID, "")
+}
+
+// NewRunnerWithInstructionRoot 创建带项目指令根目录的调度器。
+func NewRunnerWithInstructionRoot(model ModelStreamer, output ui.UI, registry *tool.Registry, store HistoryStore, sessionID, instructionRoot string) *Runner {
 	return &Runner{
 		model:     model,
 		ui:        output,
 		registry:  registry,
 		store:     store,
 		sessionID: sessionID,
+		prompt:    NewPromptBuilder(NewInstructionManager(instructionRoot)),
 	}
 }
 
@@ -218,37 +225,14 @@ func (runner *Runner) buildModelMessages(history []message.Message) []message.Me
 
 // 构建系统提示词
 func (runner *Runner) buildSystemPrompt() string {
-	// TODO: 后续工具多了以后肯定需要优化的
-	var prompt strings.Builder
-	prompt.WriteString("You are a helpful coding assistant.\n")
-
 	descriptions := []string{}
 	if runner.registry != nil {
 		descriptions = runner.registry.Describe()
 	}
-
-	if len(descriptions) == 0 {
-		prompt.WriteString("Answer with plain text.\n")
-		return prompt.String()
+	if runner.prompt == nil {
+		runner.prompt = NewPromptBuilder(NewInstructionManager(""))
 	}
-
-	prompt.WriteString("You can use tools.\n")
-	prompt.WriteString("Available tools:\n")
-	for _, description := range descriptions {
-		prompt.WriteString("- ")
-		prompt.WriteString(description)
-		prompt.WriteByte('\n')
-	}
-	prompt.WriteString("When you need a tool, respond with ONLY a JSON object in this format:\n")
-	prompt.WriteString(`{"type":"tool_use","id":"call_1","name":"tool_name","input":{}}`)
-	prompt.WriteByte('\n')
-	prompt.WriteString("Make sure the input object matches the tool input_schema exactly.\n")
-	prompt.WriteString("Do not wrap the JSON in markdown fences.\n")
-	prompt.WriteString("After you receive a TOOL_RESULT message:\n")
-	prompt.WriteString("- If the result contains useful information, use it to continue reasoning or call another tool.\n")
-	prompt.WriteString("- If the result shows an error or failure (e.g. test failures, compile errors), analyze it and try to fix the problem by calling more tools.\n")
-	prompt.WriteString("- Only provide a plain-text final answer when you have fully resolved the task or determined it cannot be completed.\n")
-	return prompt.String()
+	return runner.prompt.Build(descriptions)
 }
 
 func renderMessageForModel(msg message.Message) message.Message {

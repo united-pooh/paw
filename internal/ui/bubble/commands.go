@@ -1,3 +1,4 @@
+// 本文件定义 Bubble Tea 中异步执行模型调用、终端命令和动画帧的命令。
 package bubble
 
 import (
@@ -10,6 +11,7 @@ import (
 	"time"
 )
 
+// runTurnCmd 把一次模型对话运行封装成 Bubble Tea 命令。
 func runTurnCmd(ctx context.Context, runner Runner, input string) tea.Cmd {
 	return func() tea.Msg {
 		if runner == nil {
@@ -20,6 +22,7 @@ func runTurnCmd(ctx context.Context, runner Runner, input string) tea.Cmd {
 	}
 }
 
+// runShellCmd 在 bash 中执行终端命令，并把 stdout、stderr 和错误汇总为消息。
 func runShellCmd(ctx context.Context, command string) tea.Cmd {
 	return func() tea.Msg {
 		if ctx == nil {
@@ -40,12 +43,63 @@ func runShellCmd(ctx context.Context, command string) tea.Cmd {
 	}
 }
 
+// syncRunningFlags keeps legacy view flags in step with QueryGuard.
+func (m *appModel) syncRunningFlags() {
+	m.running = m.queryGuard.IsRunning()
+	m.runningTerminal = m.queryGuard.IsTerminalRunning()
+}
+
+func (m appModel) isWorkRunning() bool {
+	return m.queryGuard.IsRunning() || m.running
+}
+
+func (m appModel) isModelWorkRunning() bool {
+	return m.queryGuard.IsModelRunning() || (m.running && !m.runningTerminal)
+}
+
+func (m appModel) isTerminalWorkRunning() bool {
+	return m.queryGuard.IsTerminalRunning() || (m.running && m.runningTerminal)
+}
+
+func (m *appModel) reconcileLegacyRunningState() {
+	if m == nil || m.running {
+		return
+	}
+	if m.queryGuard.IsModelRunning() {
+		m.queryGuard.FinishModel()
+	}
+	if m.queryGuard.IsTerminalRunning() {
+		m.queryGuard.FinishTerminal()
+	}
+}
+
+// startNextQueuedTurn starts the oldest queued model turn when completion
+// leaves the guard idle and the UI context has not been canceled.
+func (m *appModel) startNextQueuedTurn() tea.Cmd {
+	if m == nil || !m.queryGuard.CanStartQueued() || m.ctx.Err() != nil {
+		return nil
+	}
+	line, ok := m.chatQueue.Dequeue()
+	if !ok {
+		return nil
+	}
+	if !m.queryGuard.StartModel() {
+		_ = m.chatQueue.Enqueue(line)
+		return nil
+	}
+	m.syncRunningFlags()
+	m.activeAssistant = -1
+	return runTurnCmd(m.ctx, m.runner, line)
+}
+
+// cursorFrameTick 安排下一次光标动画帧更新。
 func cursorFrameTick() tea.Cmd {
 	return tea.Tick(cursorFrameInterval, func(t time.Time) tea.Msg {
 		return cursorFrameMsg(t)
 	})
 }
 
+// shellResultBody 把终端命令执行结果转换为适合 transcript 展示的文本。
 func shellResultBody(msg shellFinishedMsg) string {
 	var parts []string
 	if stdout := strings.TrimRight(msg.stdout, "\n"); stdout != "" {

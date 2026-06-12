@@ -105,7 +105,7 @@ func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI) (
 	registry.Register(&toolexec.BashTool{Root: root})
 	registry.Register(&toolwebfetch.Tool{})
 
-	return loop.NewRunner(client, output, registry, store, sessionID), sessionID, client, nil
+	return loop.NewRunnerWithInstructionRoot(client, output, registry, store, sessionID, root), sessionID, client, nil
 }
 
 func resolveSessionID(ctx context.Context, store *session.JSONLStore, sessionIDFlag, cwd string) (string, error) {

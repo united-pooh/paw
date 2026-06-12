@@ -1,3 +1,4 @@
+// 本文件集中定义 Bubble Tea TUI 的状态类型、内部消息和模型切换向导数据结构。
 package bubble
 
 import (
@@ -9,48 +10,81 @@ import (
 	"time"
 )
 
+// entryKind 表示 transcript 中一条消息的来源类别。
 type entryKind int
 
+// transcript 条目类型常量。
 const (
+	// entrySystem 表示系统状态或命令提示消息。
 	entrySystem entryKind = iota
+	// entryUser 表示用户输入消息。
 	entryUser
+	// entryAssistant 表示 assistant 的模型输出消息。
 	entryAssistant
+	// entryTool 表示工具调用、工具结果或终端命令消息。
 	entryTool
+	// entryError 表示错误消息。
 	entryError
 )
 
+// transcriptEntry 是聊天历史区的一条可渲染记录。
 type transcriptEntry struct {
 	kind  entryKind
 	title string
 	body  string
 }
 
+// selectionPoint 表示 transcript 渲染结果中的一个显示单元格坐标。
+type selectionPoint struct {
+	row int
+	col int
+}
+
+// assistantDeltaMsg 表示模型流式输出的一段文本增量。
 type assistantDeltaMsg string
+
+// toolCallMsg 表示工具调用事件。
 type toolCallMsg ui.ToolCallEvent
+
+// toolResultMsg 表示工具结果事件。
 type toolResultMsg ui.ToolResultEvent
+
+// doneMsg 表示当前 assistant 输出已经结束。
 type doneMsg struct{}
+
+// turnFinishedMsg 表示一轮模型调用已经结束，并携带可能的错误。
 type turnFinishedMsg struct{ err error }
+
+// shellFinishedMsg 表示一次终端命令执行完成后的结果。
 type shellFinishedMsg struct {
 	command string
 	stdout  string
 	stderr  string
 	err     error
 }
+
+// cursorFrameMsg 驱动自定义光标动画更新一帧。
 type cursorFrameMsg time.Time
 
+// modelWizardStep 表示 /model 向导当前所处的步骤。
 type modelWizardStep int
 
+// /model 向导步骤常量。
 const (
+	// modelWizardProvider 表示正在选择 provider。
 	modelWizardProvider modelWizardStep = iota
+	// modelWizardConfirm 表示正在确认将要应用的模型配置。
 	modelWizardConfirm
 )
 
+// modelProviderOption 描述 /model 向导中的一个 provider 选项。
 type modelProviderOption struct {
 	id          string
 	label       string
 	description string
 }
 
+// modelProviderOptions 是当前 TUI 支持切换的 provider 列表。
 var modelProviderOptions = []modelProviderOption{
 	{
 		id:          model.ProviderCustom,
@@ -64,12 +98,14 @@ var modelProviderOptions = []modelProviderOption{
 	},
 }
 
+// modelWizard 保存 /model 交互向导的临时 UI 状态。
 type modelWizard struct {
 	step          modelWizardStep
 	selectedIndex int
 	err           string
 }
 
+// newModelWizard 根据当前配置创建 provider 选择向导，并默认选中当前 provider。
 func newModelWizard(current model.Config) *modelWizard {
 	selected := 0
 	for i, option := range modelProviderOptions {
@@ -81,6 +117,7 @@ func newModelWizard(current model.Config) *modelWizard {
 	return &modelWizard{step: modelWizardProvider, selectedIndex: selected}
 }
 
+// selectedProvider 返回当前选中的 provider，并在索引越界时进行纠正。
 func (w *modelWizard) selectedProvider() modelProviderOption {
 	if w == nil || len(modelProviderOptions) == 0 {
 		return modelProviderOption{}
@@ -94,11 +131,15 @@ func (w *modelWizard) selectedProvider() modelProviderOption {
 	return modelProviderOptions[w.selectedIndex]
 }
 
+// appModel 是 Bubble Tea TUI 的唯一状态中心。
 type appModel struct {
 	ctx             context.Context
 	runner          Runner
 	sessionID       string
 	modelConfig     ModelConfigController
+	commandRegistry *CommandRegistry
+	queryGuard      QueryGuard
+	chatQueue       CommandQueue
 	cursorAnchor    *terminalCursorAnchor
 	input           textarea.Model
 	viewport        viewport.Model
@@ -109,6 +150,10 @@ type appModel struct {
 	runningTerminal bool
 	terminalMode    bool
 	terminalPreview bool
+	selecting       bool
+	selectionActive bool
+	selectionStart  selectionPoint
+	selectionEnd    selectionPoint
 	cursorFrameAt   time.Time
 	pending         []string
 	inputHistory    []string

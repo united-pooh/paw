@@ -8,6 +8,8 @@ import (
 	"gocode/internal/model"
 	"gocode/internal/tool"
 	"gocode/internal/ui"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -146,6 +148,41 @@ func TestRunTurnStreamsAndReturnsFinalMessage(t *testing.T) {
 	}
 	if ui.doneCount != 1 {
 		t.Fatalf("ui.doneCount = %d, want 1", ui.doneCount)
+	}
+}
+
+func TestRunTurnUsesPromptBuilderWithProjectInstructions(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, projectInstructionFile), []byte("prefer concise answers"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ui := &fakeUI{}
+	model := &fakeModel{
+		rounds: []fakeRound{
+			{
+				events: []model.StreamEvent{
+					{Delta: "ok"},
+					{Done: true},
+				},
+			},
+		},
+	}
+	runner := NewRunnerWithInstructionRoot(model, ui, tool.NewRegistry(), nil, "", root)
+
+	if _, err := runner.RunTurn(context.Background(), "hello"); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if len(model.calls) != 1 || len(model.calls[0]) == 0 {
+		t.Fatalf("model.calls = %#v", model.calls)
+	}
+	system := model.calls[0][0]
+	if system.Role != message.RoleSystem {
+		t.Fatalf("first role = %q, want system", system.Role)
+	}
+	for _, want := range []string{"Project instructions from AGENTS.md", "prefer concise answers", "Answer with plain text."} {
+		if !strings.Contains(system.Content, want) {
+			t.Fatalf("system prompt = %q, want %q", system.Content, want)
+		}
 	}
 }
 

@@ -1,3 +1,4 @@
+// 本文件定义 /model provider 切换向导的配置生成、按键处理和渲染。
 package bubble
 
 import (
@@ -9,6 +10,7 @@ import (
 	"time"
 )
 
+// currentModelConfig 返回当前模型配置；没有控制器时使用 custom 默认配置兜底。
 func (m appModel) currentModelConfig() model.Config {
 	if m.modelConfig == nil {
 		return model.Config{
@@ -24,6 +26,7 @@ func (m appModel) currentModelConfig() model.Config {
 	return m.modelConfig.CurrentModelConfig()
 }
 
+// configForProvider 根据目标 provider 生成可应用的模型配置。
 func (m appModel) configForProvider(provider string) (model.Config, error) {
 	current := m.currentModelConfig()
 	switch provider {
@@ -63,6 +66,7 @@ func (m appModel) configForProvider(provider string) (model.Config, error) {
 	}
 }
 
+// handleModelWizardKey 处理 /model 向导中的方向键、确认键和取消键。
 func (m appModel) handleModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.modelWizard == nil {
 		return m, nil
@@ -107,6 +111,7 @@ func (m appModel) handleModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// applyModelWizardSelection 持久化并应用当前选中的 provider 配置。
 func (m appModel) applyModelWizardSelection() appModel {
 	if m.modelWizard == nil {
 		return m
@@ -142,6 +147,7 @@ func (m appModel) applyModelWizardSelection() appModel {
 	return m
 }
 
+// renderModelWizardBox 渲染 /model 向导面板。
 func (m appModel) renderModelWizardBox() string {
 	if m.modelWizard == nil {
 		return ""
@@ -159,6 +165,7 @@ func (m appModel) renderModelWizardBox() string {
 	return wizardPanelStyle.Width(width).Render(body)
 }
 
+// renderProviderStep 渲染 provider 列表选择步骤。
 func (m appModel) renderProviderStep() string {
 	lines := []string{
 		wizardTitleStyle.Render("Model provider"),
@@ -176,6 +183,7 @@ func (m appModel) renderProviderStep() string {
 	return strings.Join(lines, "\n")
 }
 
+// renderModelConfirmStep 渲染 provider 配置确认步骤和错误提示。
 func (m appModel) renderModelConfirmStep() string {
 	option := m.modelWizard.selectedProvider()
 	cfg, err := m.configForProvider(option.id)

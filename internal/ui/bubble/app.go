@@ -1,3 +1,4 @@
+// 本文件定义 Bubble Tea 应用模型的创建、初始化和事件更新逻辑。
 package bubble
 
 import (
@@ -9,9 +10,11 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"time"
 )
 
+// newModel 创建完整的 TUI 状态模型，并初始化输入框、滚动区和系统消息。
 func newModel(ctx context.Context, runner Runner, sessionID string, controller ModelConfigController, anchor *terminalCursorAnchor) appModel {
 	input := textarea.New()
 	input.Prompt = ""
@@ -27,6 +30,7 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 		key.WithHelp("ctrl+j", "newline"),
 	)
 	input.Cursor.SetMode(cursor.CursorStatic)
+	applyTextareaPlainBackground(&input)
 	input.Focus()
 
 	vp := viewport.New(80, 20)
@@ -35,6 +39,7 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 		runner:          runner,
 		sessionID:       sessionID,
 		modelConfig:     controller,
+		commandRegistry: NewCommandRegistry(),
 		cursorAnchor:    anchor,
 		input:           input,
 		viewport:        vp,
@@ -54,10 +59,25 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 	return model
 }
 
+// applyTextareaPlainBackground 移除 textarea 默认的当前行背景色，让输入文字保持透明背景。
+func applyTextareaPlainBackground(input *textarea.Model) {
+	plain := lipgloss.NewStyle()
+	input.FocusedStyle.Base = plain
+	input.FocusedStyle.CursorLine = plain
+	input.FocusedStyle.Text = plain
+	input.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorMarkdownRule))
+	input.BlurredStyle.Base = plain
+	input.BlurredStyle.CursorLine = plain
+	input.BlurredStyle.Text = plain
+	input.BlurredStyle.Placeholder = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorMarkdownRule))
+}
+
+// Init 返回 Bubble Tea 启动时需要执行的初始命令。
 func (m appModel) Init() tea.Cmd {
 	return tea.Batch(m.input.Focus(), cursorFrameTick())
 }
 
+// Update 是 Bubble Tea 的核心状态机，负责把输入事件、模型事件和工具事件规约为新状态。
 func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -105,8 +125,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, nil
 	case turnFinishedMsg:
-		m.running = false
-		m.runningTerminal = false
+		m.queryGuard.FinishModel()
+		m.syncRunningFlags()
 		if msg.err != nil {
 			m.addEntry(transcriptEntry{
 				kind:  entryError,
@@ -115,9 +135,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		}
 		cmds = append(cmds, m.input.Focus())
+		if queuedCmd := m.startNextQueuedTurn(); queuedCmd != nil {
+			cmds = append(cmds, queuedCmd)
+		}
 	case shellFinishedMsg:
-		m.running = false
-		m.runningTerminal = false
+		m.queryGuard.FinishTerminal()
+		m.syncRunningFlags()
 		kind := entryTool
 		if msg.err != nil {
 			kind = entryError
@@ -142,13 +165,17 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			return m.handleSubmit()
 		}
+	case tea.MouseMsg:
+		if next, handled, cmd := m.handleTranscriptMouse(msg); handled {
+			return next, cmd
+		}
 	}
 
 	var viewportCmd tea.Cmd
 	m.viewport, viewportCmd = m.viewport.Update(msg)
 	cmds = append(cmds, viewportCmd)
 
-	if !m.running {
+	if !m.isTerminalWorkRunning() {
 		var inputCmd tea.Cmd
 		m.input, inputCmd = m.input.Update(msg)
 		if isTextEditingKey(msg) {

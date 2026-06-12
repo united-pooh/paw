@@ -1,3 +1,4 @@
+// 本文件实现面向终端聊天区的轻量 Markdown 渲染器。
 package bubble
 
 import (
@@ -6,6 +7,7 @@ import (
 	"unicode"
 )
 
+// renderMarkdown 将 assistant 返回的 Markdown 文本转换为带样式的终端文本。
 func renderMarkdown(markdown string, width int) string {
 	width = maxInt(20, width)
 	lines := strings.Split(strings.TrimRight(markdown, "\n"), "\n")
@@ -51,6 +53,7 @@ func renderMarkdown(markdown string, width int) string {
 	return compactBlankLines(strings.TrimRight(strings.Join(parts, "\n"), "\n"))
 }
 
+// fencedCodeStart 判断一行是否开启 fenced code block，并返回语言标签。
 func fencedCodeStart(line string) (string, bool) {
 	lang, ok := strings.CutPrefix(line, "```")
 	if !ok {
@@ -59,6 +62,7 @@ func fencedCodeStart(line string) (string, bool) {
 	return strings.TrimSpace(lang), true
 }
 
+// collectFencedCodeLines 收集代码块内容，并对 markdown 代码块中的嵌套 fence 做特殊处理。
 func collectFencedCodeLines(lines []string, start int, lang string) ([]string, int) {
 	if start >= len(lines) {
 		return nil, start
@@ -90,11 +94,13 @@ func collectFencedCodeLines(lines []string, start int, lang string) ([]string, i
 	return codeLines, len(lines) - 1
 }
 
+// isMarkdownFenceLanguage 判断当前代码块是否是 markdown/md，需要允许内部嵌套 fence。
 func isMarkdownFenceLanguage(lang string) bool {
 	lang = strings.ToLower(strings.TrimSpace(lang))
 	return lang == "markdown" || lang == "md"
 }
 
+// renderCodeBlock 渲染代码块，并把语言标签放在代码块外部。
 func renderCodeBlock(lang, code string, width int) string {
 	label := "code"
 	if lang != "" {
@@ -108,6 +114,7 @@ func renderCodeBlock(lang, code string, width int) string {
 	return markdownBulletStyle.Render(label) + "\n" + block
 }
 
+// isMarkdownTableStart 判断指定行是否是 Markdown 表格的表头行。
 func isMarkdownTableStart(lines []string, index int) bool {
 	if index+1 >= len(lines) {
 		return false
@@ -125,6 +132,7 @@ func isMarkdownTableStart(lines []string, index int) bool {
 	return true
 }
 
+// collectMarkdownTableLines 从表头开始收集连续的 Markdown 表格行。
 func collectMarkdownTableLines(lines []string, start int) ([]string, int) {
 	tableLines := []string{lines[start], lines[start+1]}
 	end := start + 1
@@ -138,6 +146,7 @@ func collectMarkdownTableLines(lines []string, start int) ([]string, int) {
 	return tableLines, end
 }
 
+// renderMarkdownTable 将 Markdown 表格渲染为终端中对齐的文本表格。
 func renderMarkdownTable(lines []string, width int) string {
 	if len(lines) < 2 {
 		return ""
@@ -163,6 +172,7 @@ func renderMarkdownTable(lines []string, width int) string {
 	return strings.Join(renderedRows, "\n")
 }
 
+// parseMarkdownTableRow 将一行 Markdown 表格拆成单元格。
 func parseMarkdownTableRow(line string) []string {
 	line = strings.TrimSpace(line)
 	if !strings.Contains(line, "|") {
@@ -178,6 +188,7 @@ func parseMarkdownTableRow(line string) []string {
 	return cells
 }
 
+// isMarkdownTableSeparatorCell 判断单元格是否属于表头分隔线。
 func isMarkdownTableSeparatorCell(cell string) bool {
 	cell = strings.TrimSpace(cell)
 	if cell == "" {
@@ -195,6 +206,7 @@ func isMarkdownTableSeparatorCell(cell string) bool {
 	return true
 }
 
+// markdownTableColumnCount 返回表格中需要渲染的最大列数。
 func markdownTableColumnCount(rows [][]string) int {
 	count := 0
 	for _, row := range rows {
@@ -203,6 +215,7 @@ func markdownTableColumnCount(rows [][]string) int {
 	return count
 }
 
+// normalizeMarkdownTableRows 将所有表格行修正到相同列数。
 func normalizeMarkdownTableRows(rows [][]string, columnCount int) {
 	for i := range rows {
 		for len(rows[i]) < columnCount {
@@ -214,6 +227,7 @@ func normalizeMarkdownTableRows(rows [][]string, columnCount int) {
 	}
 }
 
+// markdownTableColumnWidths 根据内容和最大宽度计算每列展示宽度。
 func markdownTableColumnWidths(rows [][]string, columnCount, maxWidth int) []int {
 	widths := make([]int, columnCount)
 	for _, row := range rows {
@@ -240,6 +254,7 @@ func markdownTableColumnWidths(rows [][]string, columnCount, maxWidth int) []int
 	return widths
 }
 
+// markdownTableTotalWidth 计算所有列宽之和，不包含列间分隔符。
 func markdownTableTotalWidth(widths []int) int {
 	total := 0
 	for _, width := range widths {
@@ -248,6 +263,7 @@ func markdownTableTotalWidth(widths []int) int {
 	return total
 }
 
+// renderMarkdownTableRow 渲染一行表格，并对表头应用强调样式。
 func renderMarkdownTableRow(row []string, widths []int, header bool) string {
 	cells := make([]string, 0, len(widths))
 	for i, width := range widths {
@@ -265,6 +281,7 @@ func renderMarkdownTableRow(row []string, widths []int, header bool) string {
 	return strings.Join(cells, markdownRuleStyle.Render(" │ "))
 }
 
+// renderMarkdownTableRule 渲染表头和正文之间的横向分隔线。
 func renderMarkdownTableRule(widths []int) string {
 	parts := make([]string, 0, len(widths))
 	for _, width := range widths {
@@ -273,6 +290,7 @@ func renderMarkdownTableRule(widths []int) string {
 	return strings.Join(parts, "─┼─")
 }
 
+// truncateDisplayWidth 按终端显示宽度截断文本，并在末尾添加省略号。
 func truncateDisplayWidth(text string, width int) string {
 	if lipgloss.Width(text) <= width {
 		return text
@@ -287,6 +305,7 @@ func truncateDisplayWidth(text string, width int) string {
 	return string(runes) + "…"
 }
 
+// markdownHeading 解析 Markdown 标题等级和标题文本。
 func markdownHeading(line string) (int, string, bool) {
 	level := 0
 	for level < len(line) && level < 6 && line[level] == '#' {
@@ -298,6 +317,7 @@ func markdownHeading(line string) (int, string, bool) {
 	return level, strings.TrimSpace(line[level+1:]), true
 }
 
+// renderMarkdownHeading 根据标题等级渲染标题，一级标题会额外带下划线。
 func renderMarkdownHeading(level int, text string, width int) string {
 	text = renderInlineMarkdown(text)
 	if level == 1 {
@@ -308,6 +328,7 @@ func renderMarkdownHeading(level int, text string, width int) string {
 	return markdownHeadingStyle.Render(prefix + " " + text)
 }
 
+// markdownListItem 解析无序和有序列表项，并统一转换为终端 bullet。
 func markdownListItem(line string) (string, string, bool) {
 	for _, prefix := range []string{"- ", "* "} {
 		if text, ok := strings.CutPrefix(line, prefix); ok {
@@ -326,6 +347,7 @@ func markdownListItem(line string) (string, string, bool) {
 	return "•", strings.TrimSpace(line[dot+2:]), true
 }
 
+// renderInlineMarkdown 渲染行内 Markdown，目前重点处理反引号代码片段。
 func renderInlineMarkdown(line string) string {
 	var rendered strings.Builder
 	for {
@@ -347,6 +369,7 @@ func renderInlineMarkdown(line string) string {
 	}
 }
 
+// compactBlankLines 合并连续空行，避免终端历史区出现过大的空洞。
 func compactBlankLines(text string) string {
 	lines := strings.Split(text, "\n")
 	compacted := make([]string, 0, len(lines))
