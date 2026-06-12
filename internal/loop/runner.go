@@ -8,6 +8,8 @@ import (
 	"gocode/internal/model"
 	"gocode/internal/tool"
 	"gocode/internal/ui"
+	"html"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -97,7 +99,6 @@ func (runner *Runner) RunTurn(ctx context.Context, input string) (message.Messag
 		return message.Message{}, err
 	}
 	runner.clearTurnUsage()
-	defer runner.clearTurnUsage()
 
 	if runner.historyIsNil() && runner.store != nil {
 		messages, err := runner.store.LoadResolvedHistory(ctx, runner.sessionID)
@@ -224,7 +225,7 @@ func (runner *Runner) ContextStats(limitTokens int, draft string) ContextStats {
 	used := estimateMessagesTokens(messages)
 	cache := 0
 	if usageKnown {
-		cache = usage.CacheReadInputTokens
+		cache = usage.CacheHitTokens()
 		if cache < 0 {
 			cache = 0
 		}
@@ -440,13 +441,21 @@ func looksLikeToolPreamble(trimmed string) bool {
 	hints := []string{
 		"我将",
 		"我会",
+		"我来",
+		"好的，我来",
 		"让我",
 		"先使用",
 		"首先使用",
+		"读取",
+		"读出",
+		"遍历",
+		"列出",
+		"查看",
 		"i will",
 		"i'll",
 		"let me",
 		"tool_use",
+		"<invoke",
 		"工具",
 		"调用",
 		"使用",
@@ -522,10 +531,11 @@ func parseAssistantMessage(content string) message.Message {
 }
 
 // extractToolUseEnvelope 从 assistant 输出中提取第一个合法的 tool_use 对象。
-// 当前兼容三类格式：
+// 当前兼容四类格式：
 // 1) 整段内容就是裸 JSON
 // 2) 整段内容就是 fenced JSON
 // 3) 说明文字中嵌入 fenced JSON 或裸 JSON
+// 4) Claude/DeepSeek 兼容的 <invoke> + DSML 参数块
 func extractToolUseEnvelope(trimmed string) (toolUseEnvelope, bool) {
 	if envelope, ok := decodeToolUseEnvelope(trimmed); ok {
 		return envelope, true
@@ -537,6 +547,10 @@ func extractToolUseEnvelope(trimmed string) (toolUseEnvelope, bool) {
 
 	if payload, ok := extractEmbeddedJSONObject(trimmed); ok {
 		return decodeToolUseEnvelope(payload)
+	}
+
+	if envelope, ok := extractInvokeToolUseEnvelope(trimmed); ok {
+		return envelope, true
 	}
 
 	return toolUseEnvelope{}, false
@@ -683,6 +697,155 @@ func extractBalancedJSONObject(content string, start int) (string, int, bool) {
 	}
 
 	return "", len(content), false
+}
+
+func extractInvokeToolUseEnvelope(content string) (toolUseEnvelope, bool) {
+	lower := strings.ToLower(content)
+	start := strings.Index(lower, "<invoke")
+	if start == -1 {
+		return toolUseEnvelope{}, false
+	}
+
+	tagEnd := strings.Index(content[start:], ">")
+	if tagEnd == -1 {
+		return toolUseEnvelope{}, false
+	}
+	tagEnd += start
+
+	openTag := content[start : tagEnd+1]
+	name := extractTagAttribute(openTag, "name")
+	if name == "" {
+		return toolUseEnvelope{}, false
+	}
+
+	bodyStart := tagEnd + 1
+	closeRel := strings.Index(strings.ToLower(content[bodyStart:]), "</invoke>")
+	if closeRel == -1 {
+		return toolUseEnvelope{}, false
+	}
+
+	input := decodeInvokeInput(content[bodyStart : bodyStart+closeRel])
+	return toolUseEnvelope{
+		Type:  toolUseResponseType,
+		Name:  name,
+		Input: input,
+	}, true
+}
+
+func decodeInvokeInput(body string) json.RawMessage {
+	body = strings.TrimSpace(body)
+	if strings.HasPrefix(body, "{") && json.Valid([]byte(body)) {
+		return json.RawMessage(body)
+	}
+
+	params := make(map[string]any)
+	searchFrom := 0
+	for searchFrom < len(body) {
+		openRel := strings.Index(body[searchFrom:], "<")
+		if openRel == -1 {
+			break
+		}
+		open := searchFrom + openRel
+		if open+1 < len(body) && body[open+1] == '/' {
+			searchFrom = open + 2
+			continue
+		}
+
+		tagEndRel := strings.Index(body[open:], ">")
+		if tagEndRel == -1 {
+			break
+		}
+		tagEnd := open + tagEndRel
+		openTag := body[open : tagEnd+1]
+		paramName := extractTagAttribute(openTag, "name")
+		tagName := extractTagName(openTag)
+		if paramName == "" || tagName == "" {
+			searchFrom = tagEnd + 1
+			continue
+		}
+
+		closeTag := "</" + tagName + ">"
+		valueStart := tagEnd + 1
+		closeRel := strings.Index(body[valueStart:], closeTag)
+		if closeRel == -1 {
+			searchFrom = tagEnd + 1
+			continue
+		}
+		valueEnd := valueStart + closeRel
+		params[paramName] = decodeInvokeParamValue(openTag, body[valueStart:valueEnd])
+		searchFrom = valueEnd + len(closeTag)
+	}
+
+	if len(params) == 0 {
+		return json.RawMessage(`{}`)
+	}
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return raw
+}
+
+func decodeInvokeParamValue(openTag, body string) any {
+	value := extractTagAttribute(openTag, "value")
+	if value == "" {
+		value = html.UnescapeString(strings.TrimSpace(body))
+	}
+
+	stringAttr := strings.ToLower(strings.TrimSpace(extractTagAttribute(openTag, "string")))
+	if stringAttr != "false" {
+		return value
+	}
+
+	if value == "" {
+		return ""
+	}
+	var decoded any
+	if err := json.Unmarshal([]byte(value), &decoded); err == nil {
+		return decoded
+	}
+	if intValue, err := strconv.Atoi(value); err == nil {
+		return intValue
+	}
+	if floatValue, err := strconv.ParseFloat(value, 64); err == nil {
+		return floatValue
+	}
+	if boolValue, err := strconv.ParseBool(value); err == nil {
+		return boolValue
+	}
+	return value
+}
+
+func extractTagName(tag string) string {
+	tag = strings.TrimSpace(strings.TrimPrefix(tag, "<"))
+	tag = strings.TrimSuffix(tag, ">")
+	tag = strings.TrimSpace(tag)
+	if tag == "" || strings.HasPrefix(tag, "/") {
+		return ""
+	}
+	for i, r := range tag {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == '/' {
+			return tag[:i]
+		}
+	}
+	return tag
+}
+
+func extractTagAttribute(tag, name string) string {
+	for _, quote := range []byte{'"', '\''} {
+		prefix := name + "=" + string(quote)
+		start := strings.Index(tag, prefix)
+		if start == -1 {
+			continue
+		}
+		valueStart := start + len(prefix)
+		valueEndRel := strings.IndexByte(tag[valueStart:], quote)
+		if valueEndRel == -1 {
+			return ""
+		}
+		return html.UnescapeString(tag[valueStart : valueStart+valueEndRel])
+	}
+	return ""
 }
 
 func (runner *Runner) finishWithoutDone(ctx context.Context, state turnState) (message.Message, error) {

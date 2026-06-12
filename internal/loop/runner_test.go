@@ -97,6 +97,7 @@ type fakeTool struct {
 	name   string
 	output string
 	err    error
+	input  json.RawMessage
 }
 
 type fakeStore struct {
@@ -132,6 +133,7 @@ func (t *fakeTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 	if t.err != nil {
 		return "", t.err
 	}
+	t.input = append(json.RawMessage(nil), input...)
 	return t.output, nil
 }
 
@@ -285,7 +287,7 @@ func TestContextStatsClearsCacheForTurnWithoutUsageEvent(t *testing.T) {
 	ui := &fakeUI{}
 	first := make(chan model.StreamEvent, 1)
 	first <- model.StreamEvent{
-		Usage: &model.Usage{CacheReadInputTokens: 48},
+		Usage: &model.Usage{PromptCacheHitTokens: 12},
 		Done:  true,
 	}
 	close(first)
@@ -301,6 +303,10 @@ func TestContextStatsClearsCacheForTurnWithoutUsageEvent(t *testing.T) {
 	}
 	if got := <-streamer.started; got != 0 {
 		t.Fatalf("first turn started index = %d, want 0", got)
+	}
+	firstStats := runner.ContextStats(1024, "")
+	if firstStats.CacheTokens != 12 {
+		t.Fatalf("first ContextStats().CacheTokens = %d, want 12", firstStats.CacheTokens)
 	}
 
 	errCh := make(chan error, 1)
@@ -470,6 +476,139 @@ func TestRunTurnExecutesToolUseWrappedInMarkdownFenceWithPreamble(t *testing.T) 
 	}
 	if len(ui.toolResults) != 1 || ui.toolResults[0].Name != "LS" {
 		t.Fatalf("ui.toolResults = %#v, want single LS result", ui.toolResults)
+	}
+}
+
+func TestRunTurnExecutesInvokeDSMLToolUseWithPreamble(t *testing.T) {
+	ui := &fakeUI{}
+	model := &fakeModel{
+		rounds: []fakeRound{
+			{
+				events: []model.StreamEvent{
+					{Delta: "好的，我来读出所有代码文件的内容。\n\n"},
+					{Delta: `<invoke name="Bash">`},
+					{Delta: "\n<｜｜DSML｜｜ name=\"command\" string=\"true\">cd . && find . -type f -name '*.go' | sort</｜｜DSML｜｜>\n"},
+					{Delta: `</invoke>`},
+					{Done: true},
+				},
+			},
+			{
+				events: []model.StreamEvent{
+					{Delta: "代码文件列表已读取"},
+					{Done: true},
+				},
+			},
+		},
+	}
+	registry := tool.NewRegistry()
+	bash := &fakeTool{name: "Bash", output: "internal/loop/runner.go"}
+	registry.Register(bash)
+	runner := NewRunner(model, ui, registry, nil, "")
+
+	msg, err := runner.RunTurn(context.Background(), "读代码文件内容并cat 输出")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if msg.Content != "代码文件列表已读取" {
+		t.Fatalf("msg.Content = %q, want final answer", msg.Content)
+	}
+	if got := len(model.calls); got != 2 {
+		t.Fatalf("len(model.calls) = %d, want 2", got)
+	}
+	if len(ui.toolCalls) != 1 || ui.toolCalls[0].Name != "Bash" {
+		t.Fatalf("ui.toolCalls = %#v, want single Bash call", ui.toolCalls)
+	}
+
+	var input struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(bash.input, &input); err != nil {
+		t.Fatalf("Bash input unmarshal error = %v; input=%s", err, bash.input)
+	}
+	if input.Command != "cd . && find . -type f -name '*.go' | sort" {
+		t.Fatalf("input.Command = %q", input.Command)
+	}
+	if len(ui.deltas) != 1 || ui.deltas[0] != "代码文件列表已读取" {
+		t.Fatalf("ui.deltas = %#v, want only final answer output", ui.deltas)
+	}
+}
+
+func TestRunTurnParsesInvokeDSMLNonStringParameters(t *testing.T) {
+	ui := &fakeUI{}
+	model := &fakeModel{
+		rounds: []fakeRound{
+			{
+				events: []model.StreamEvent{
+					{Delta: `<invoke name="Grep">`},
+					{Delta: `<parameter name="pattern" string="true">cache|Cache</parameter>`},
+					{Delta: `<parameter name="path" string="true">internal</parameter>`},
+					{Delta: `<parameter name="max_results" string="false">80</parameter>`},
+					{Delta: `</invoke>`},
+					{Done: true},
+				},
+			},
+			{
+				events: []model.StreamEvent{{Delta: "search complete"}, {Done: true}},
+			},
+		},
+	}
+	registry := tool.NewRegistry()
+	grep := &fakeTool{name: "Grep", output: "match"}
+	registry.Register(grep)
+	runner := NewRunner(model, ui, registry, nil, "")
+
+	if _, err := runner.RunTurn(context.Background(), "查找 cache"); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	var input struct {
+		Pattern    string `json:"pattern"`
+		Path       string `json:"path"`
+		MaxResults int    `json:"max_results"`
+	}
+	if err := json.Unmarshal(grep.input, &input); err != nil {
+		t.Fatalf("Grep input unmarshal error = %v; input=%s", err, grep.input)
+	}
+	if input.Pattern != "cache|Cache" || input.Path != "internal" || input.MaxResults != 80 {
+		t.Fatalf("input = %#v", input)
+	}
+}
+
+func TestRunTurnParsesInvokeDSMLValueAttribute(t *testing.T) {
+	ui := &fakeUI{}
+	model := &fakeModel{
+		rounds: []fakeRound{
+			{
+				events: []model.StreamEvent{
+					{Delta: `<invoke name="Grep">`},
+					{Delta: `<parameter name="pattern">cache</parameter>`},
+					{Delta: `<parameter name="max_results" string="false" value="80"></parameter>`},
+					{Delta: `</invoke>`},
+					{Done: true},
+				},
+			},
+			{
+				events: []model.StreamEvent{{Delta: "search complete"}, {Done: true}},
+			},
+		},
+	}
+	registry := tool.NewRegistry()
+	grep := &fakeTool{name: "Grep", output: "match"}
+	registry.Register(grep)
+	runner := NewRunner(model, ui, registry, nil, "")
+
+	if _, err := runner.RunTurn(context.Background(), "查找 cache"); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	var input struct {
+		MaxResults int `json:"max_results"`
+	}
+	if err := json.Unmarshal(grep.input, &input); err != nil {
+		t.Fatalf("Grep input unmarshal error = %v; input=%s", err, grep.input)
+	}
+	if input.MaxResults != 80 {
+		t.Fatalf("input.MaxResults = %d, want 80", input.MaxResults)
 	}
 }
 

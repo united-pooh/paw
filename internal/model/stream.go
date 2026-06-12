@@ -55,9 +55,10 @@ func (c *Client) StreamMessage(ctx context.Context, messages []message.Message) 
 
 	// 启用 stream=true，让服务端按 SSE 增量返回。
 	reqBody := ChatCompletionsRequest{
-		Model:    cfg.Model,
-		Messages: messages,
-		Stream:   true,
+		Model:         cfg.Model,
+		Messages:      messages,
+		Stream:        true,
+		StreamOptions: &StreamOptions{IncludeUsage: true},
 	}
 
 	// 组装 JSON 请求体。
