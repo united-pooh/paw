@@ -28,22 +28,69 @@ type ChatCompletionsResponse struct {
 }
 
 type Usage struct {
-	InputTokens              int `json:"input_tokens"`
-	OutputTokens             int `json:"output_tokens"`
-	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	InputTokens              int          `json:"input_tokens"`
+	OutputTokens             int          `json:"output_tokens"`
+	CacheCreationInputTokens int          `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int          `json:"cache_read_input_tokens"`
+	PromptTokens             int          `json:"prompt_tokens"`
+	CompletionTokens         int          `json:"completion_tokens"`
+	TotalTokens              int          `json:"total_tokens"`
+	PromptCacheHitTokens     int          `json:"prompt_cache_hit_tokens"`
+	PromptCacheMissTokens    int          `json:"prompt_cache_miss_tokens"`
+	PromptTokensDetails      TokenDetails `json:"prompt_tokens_details"`
+	InputTokensDetails       TokenDetails `json:"input_tokens_details"`
+}
+
+type TokenDetails struct {
+	CachedTokens             int `json:"cached_tokens"`
+	CacheReadTokens          int `json:"cache_read_tokens"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-	PromptTokens             int `json:"prompt_tokens"`
-	CompletionTokens         int `json:"completion_tokens"`
-	TotalTokens              int `json:"total_tokens"`
-	PromptCacheHitTokens     int `json:"prompt_cache_hit_tokens"`
-	PromptCacheMissTokens    int `json:"prompt_cache_miss_tokens"`
+	CacheCreationTokens      int `json:"cache_creation_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 }
 
 func (u Usage) CacheHitTokens() int {
 	if u.PromptCacheHitTokens != 0 {
 		return u.PromptCacheHitTokens
 	}
+	if u.PromptTokensDetails.CachedTokens != 0 {
+		return u.PromptTokensDetails.CachedTokens
+	}
+	if u.InputTokensDetails.CachedTokens != 0 {
+		return u.InputTokensDetails.CachedTokens
+	}
+	if u.PromptTokensDetails.CacheReadTokens != 0 {
+		return u.PromptTokensDetails.CacheReadTokens
+	}
+	if u.InputTokensDetails.CacheReadTokens != 0 {
+		return u.InputTokensDetails.CacheReadTokens
+	}
+	if u.PromptTokensDetails.CacheReadInputTokens != 0 {
+		return u.PromptTokensDetails.CacheReadInputTokens
+	}
+	if u.InputTokensDetails.CacheReadInputTokens != 0 {
+		return u.InputTokensDetails.CacheReadInputTokens
+	}
 	return u.CacheReadInputTokens
+}
+
+func (u Usage) CacheCreationTokens() int {
+	if u.CacheCreationInputTokens != 0 {
+		return u.CacheCreationInputTokens
+	}
+	if u.PromptTokensDetails.CacheCreationTokens != 0 {
+		return u.PromptTokensDetails.CacheCreationTokens
+	}
+	if u.InputTokensDetails.CacheCreationTokens != 0 {
+		return u.InputTokensDetails.CacheCreationTokens
+	}
+	if u.PromptTokensDetails.CacheCreationInputTokens != 0 {
+		return u.PromptTokensDetails.CacheCreationInputTokens
+	}
+	if u.InputTokensDetails.CacheCreationInputTokens != 0 {
+		return u.InputTokensDetails.CacheCreationInputTokens
+	}
+	return u.PromptCacheMissTokens
 }
 
 func (u Usage) PromptTokenCount() int {
@@ -58,4 +105,14 @@ func (u Usage) CompletionTokenCount() int {
 		return u.CompletionTokens
 	}
 	return u.OutputTokens
+}
+
+func (u Usage) ContextTokenCount() int {
+	if u.TotalTokens != 0 {
+		return u.TotalTokens
+	}
+	if u.PromptTokens != 0 || u.CompletionTokens != 0 {
+		return u.PromptTokens + u.CompletionTokens
+	}
+	return u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens + u.OutputTokens
 }

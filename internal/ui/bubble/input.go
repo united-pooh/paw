@@ -5,6 +5,7 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"strings"
+	"time"
 )
 
 // handleSubmit 处理 Enter 提交，根据输入内容分派到聊天、命令或终端执行路径。
@@ -159,6 +160,7 @@ func (m appModel) startChatTurn(line string) (appModel, tea.Cmd) {
 		title: "you",
 		body:  line,
 	})
+	m.turnStartedAt = time.Now()
 	m.syncRunningFlags()
 	m.activeAssistant = -1
 	return m, runTurnCmd(m.ctx, m.runner, line)

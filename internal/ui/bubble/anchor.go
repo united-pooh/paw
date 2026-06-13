@@ -122,6 +122,7 @@ func (w *anchoredOutput) Write(p []byte) (int, error) {
 // moveTerminalCursorToAnchor 生成从帧底部移动到输入光标位置的 ANSI 序列。
 func moveTerminalCursorToAnchor(position terminalCursorPosition) string {
 	var builder strings.Builder
+	builder.WriteByte('\r')
 	if position.upFromBottom > 0 {
 		builder.WriteString(fmt.Sprintf("\x1b[%dA", position.upFromBottom))
 	}

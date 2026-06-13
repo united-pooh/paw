@@ -34,6 +34,11 @@ type UI interface {
 	OnDone() error
 }
 
+// ThinkingDeltaReceiver 是 UI 的可选扩展，用于接收模型 thinking 流。
+type ThinkingDeltaReceiver interface {
+	OnThinkingDelta(text string) error
+}
+
 // SystemNotifier 是 UI 的可选扩展，用于接收后台任务完成等系统事件。
 type SystemNotifier interface {
 	OnSystemMessage(event SystemEvent) error

@@ -18,9 +18,17 @@ var (
 	labelAssistantStyle = lipgloss.NewStyle().
 				Foreground(colorManager.LipglossColor(colorLabelAssistant)).
 				Bold(true)
+	labelThinkingStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorMarkdownQuote)).
+				Italic(true)
 	labelToolStyle = lipgloss.NewStyle().
 			Foreground(colorManager.LipglossColor(colorLabelTool)).
 			Bold(true)
+	toolHeaderStyle = lipgloss.NewStyle().
+			Foreground(colorManager.LipglossColor(colorLabelTool)).
+			Bold(true)
+	toolDetailStyle = lipgloss.NewStyle().
+			Foreground(colorManager.LipglossColor(colorBody))
 	labelSystemStyle = lipgloss.NewStyle().
 				Foreground(colorManager.LipglossColor(colorLabelSystem)).
 				Bold(true)
@@ -29,6 +37,9 @@ var (
 			Bold(true)
 	bodyStyle = lipgloss.NewStyle().
 			Foreground(colorManager.LipglossColor(colorBody))
+	thinkingBodyStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorMarkdownQuote)).
+				Italic(true)
 	markdownHeadingStyle = lipgloss.NewStyle().
 				Foreground(colorManager.LipglossColor(colorMarkdownHeading)).
 				Bold(true)
@@ -66,6 +77,9 @@ var (
 				Bold(true)
 	contextFreeStyle = lipgloss.NewStyle().
 				Foreground(colorManager.LipglossColor(colorContextFree))
+	contextThinkingStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorBody)).
+				Bold(true)
 	terminalInputLabelStyle = lipgloss.NewStyle().
 				Foreground(colorManager.LipglossColor(colorInputTerminal)).
 				Bold(true)
@@ -108,6 +122,8 @@ const (
 	cursorCycleDuration            = 3 * time.Second
 	cursorHiddenThreshold          = 0.03
 	inputMaxVisibleLines           = 5
+	contextMeterDefaultWidth       = 80
+	contextMeterMinimumBarCells    = 1
 	transcriptPanelHorizontalFrame = 4
 	transcriptPanelVerticalFrame   = 2
 )

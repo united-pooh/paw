@@ -16,13 +16,7 @@ func (m appModel) View() string {
 		return "Starting Bubble Tea..."
 	}
 
-	input := m.renderInputBox()
-	if m.modelWizard != nil {
-		input = m.renderModelWizardBox()
-	}
-	if m.settingWizard != nil {
-		input = m.renderSettingWizardBox()
-	}
+	input := m.renderActiveInputPanel()
 
 	var parts []string
 	if header := m.renderHeader(); header != "" {
@@ -36,6 +30,16 @@ func (m appModel) View() string {
 	view := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	m.updateTerminalCursorAnchor(input)
 	return view
+}
+
+func (m appModel) renderActiveInputPanel() string {
+	if m.modelWizard != nil {
+		return m.renderModelWizardBox()
+	}
+	if m.settingWizard != nil {
+		return m.renderSettingWizardBox()
+	}
+	return m.renderInputBox()
 }
 
 // updateTerminalCursorAnchor 根据输入框在画面中的位置更新终端真实光标锚点。
@@ -58,7 +62,7 @@ func (m appModel) shouldAnchorTextInputCursor() bool {
 // inputCursorTerminalPosition 计算输入框光标相对当前帧底部的位置。
 func (m appModel) inputCursorTerminalPosition(inputPanel string) terminalCursorPosition {
 	inputHeight := maxInt(1, lipgloss.Height(inputPanel))
-	row := minInt(2+visibleTextareaCursorRow(m.input), inputHeight-1)
+	row := minInt(1+m.inputEmbeddedTitleHeight()+visibleTextareaCursorRow(m.input), inputHeight-1)
 	upFromBottom := maxInt(0, inputHeight-row-1)
 	column := 2 + visibleTextareaCursorColumn(m.input)
 	if m.width > 0 {
@@ -69,6 +73,16 @@ func (m appModel) inputCursorTerminalPosition(inputPanel string) terminalCursorP
 		upFromBottom: upFromBottom,
 		column:       maxInt(0, column),
 	}
+}
+
+// inputEmbeddedTitleHeight 返回输入框内部 title 区域的行高。
+func (m appModel) inputEmbeddedTitleHeight() int {
+	if m.currentSettings().UI.ContextMeterLocation != settings.MeterLocationInputTitle {
+		return 0
+	}
+	width := maxInt(28, m.width-2)
+	title := m.contextMeterLine(maxInt(28, width-2))
+	return lipgloss.Height(inputLabelStyle.Render(title))
 }
 
 // visibleTextareaCursorRow 返回 textarea 光标在当前可视输入区域中的行号。
@@ -91,7 +105,7 @@ func (m appModel) renderInputBox() string {
 	style := inputPanelFocusedStyle
 	titleStyle := inputLabelStyle
 	if m.currentSettings().UI.ContextMeterLocation == settings.MeterLocationInputTitle {
-		title = m.contextMeterTitle()
+		title = m.contextMeterLine(maxInt(28, width-2))
 	}
 
 	if m.isTerminalInputActive() {
@@ -122,7 +136,7 @@ func (m appModel) renderInputBox() string {
 // renderTranscriptBox 渲染带边框的聊天历史滚动面板。
 func (m appModel) renderTranscriptBox() string {
 	width := maxInt(28, m.width-2)
-	return transcriptPanelStyle.Width(width).Render(m.viewport.View())
+	return transcriptPanelStyle.Width(width).Height(maxInt(1, m.viewport.Height)).Render(m.viewport.View())
 }
 
 // renderHeader 渲染顶部状态栏。空 header 文本表示当前不展示状态栏。
@@ -143,7 +157,7 @@ func (m appModel) headerHeight() int {
 // TODO: 后期希望改成显示时间或者用标签页方式展示 agent 的状态。
 func (m appModel) headerText() string {
 	if m.currentSettings().UI.ContextMeterLocation == settings.MeterLocationHeader {
-		return m.contextMeterTitle()
+		return m.contextMeterLine(maxInt(28, m.width))
 	}
 	return ""
 }
@@ -152,7 +166,8 @@ func (m appModel) renderInputAboveMeter() string {
 	if m.currentSettings().UI.ContextMeterLocation != settings.MeterLocationInputAbove {
 		return ""
 	}
-	return inputLabelStyle.Width(maxInt(28, m.width-2)).Render(m.contextMeterTitle())
+	width := maxInt(28, m.width-2)
+	return inputLabelStyle.Width(width).Render(m.contextMeterLine(width))
 }
 
 // relayout 根据终端尺寸和输入高度重新计算 viewport 与 textarea 尺寸。
@@ -162,8 +177,28 @@ func (m *appModel) relayout() {
 	m.input.SetWidth(maxInt(20, width-4))
 	m.input.SetHeight(inputVisibleLineCount(m.input))
 	headerHeight := m.headerHeight()
-	inputHeight := lipgloss.Height(m.renderInputBox())
+	inputHeight := lipgloss.Height(m.renderActiveInputPanel())
 	inputAboveHeight := lipgloss.Height(m.renderInputAboveMeter())
 	availableTranscriptHeight := m.height - headerHeight - inputAboveHeight - inputHeight - transcriptPanelVerticalFrame
 	m.viewport.Height = maxInt(1, availableTranscriptHeight)
+	m.expandTranscriptToFillHeight()
+}
+
+func (m *appModel) expandTranscriptToFillHeight() {
+	if m.height <= 0 {
+		return
+	}
+	input := m.renderActiveInputPanel()
+	var parts []string
+	if header := m.renderHeader(); header != "" {
+		parts = append(parts, header)
+	}
+	parts = append(parts, m.renderTranscriptBox())
+	if meter := m.renderInputAboveMeter(); meter != "" {
+		parts = append(parts, meter)
+	}
+	parts = append(parts, input)
+	if deficit := m.height - lipgloss.Height(lipgloss.JoinVertical(lipgloss.Left, parts...)); deficit > 0 {
+		m.viewport.Height += deficit
+	}
 }

@@ -43,15 +43,27 @@ type Runner struct {
 	// history 保存“已经成功完成”的多轮对话消息。
 	// 当前调用路径是串行的，因此这里先不引入锁。
 	// TODO: 如果后续要把 Runner 暴露给并发调用方，需要为 history 增加互斥保护。
-	history    []message.Message
-	usage      model.Usage
-	usageKnown bool
+	history           []message.Message
+	usage             model.Usage
+	usageKnown        bool
+	sessionUsage      model.Usage
+	sessionUsageKnown bool
+}
+
+type tokenUsageTotals struct {
+	used   int
+	cache  int
+	output int
 }
 
 type ContextStats struct {
-	UsedTokens  int
-	CacheTokens int
-	LimitTokens int
+	UsedTokens          int
+	CacheTokens         int
+	OutputTokens        int
+	SessionUsedTokens   int
+	SessionCacheTokens  int
+	SessionOutputTokens int
+	LimitTokens         int
 }
 
 type outputMode int
@@ -67,6 +79,8 @@ type turnState struct {
 	pending     strings.Builder
 	wroteOutput bool
 	outputMode  outputMode
+	usage       model.Usage
+	usageKnown  bool
 }
 
 type toolUseEnvelope struct {
@@ -98,7 +112,6 @@ func (runner *Runner) RunTurn(ctx context.Context, input string) (message.Messag
 	if err := runner.validate(); err != nil {
 		return message.Message{}, err
 	}
-	runner.clearTurnUsage()
 
 	if runner.historyIsNil() && runner.store != nil {
 		messages, err := runner.store.LoadResolvedHistory(ctx, runner.sessionID)
@@ -202,9 +215,13 @@ func (runner *Runner) ResetHistory() {
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
 	runner.history = []message.Message{}
+	runner.usage = model.Usage{}
+	runner.usageKnown = false
+	runner.sessionUsage = model.Usage{}
+	runner.sessionUsageKnown = false
 }
 
-func (runner *Runner) ContextStats(limitTokens int, draft string) ContextStats {
+func (runner *Runner) ContextStats(limitTokens int, _ string) ContextStats {
 	if limitTokens <= 0 {
 		limitTokens = 1024 * 1024
 	}
@@ -213,30 +230,22 @@ func (runner *Runner) ContextStats(limitTokens int, draft string) ContextStats {
 	}
 
 	runner.mu.RLock()
-	history := append([]message.Message(nil), runner.history...)
 	usage := runner.usage
 	usageKnown := runner.usageKnown
+	sessionUsage := runner.sessionUsage
+	sessionUsageKnown := runner.sessionUsageKnown
 	runner.mu.RUnlock()
 
-	if strings.TrimSpace(draft) != "" {
-		history = append(history, buildUserMessages(draft)...)
-	}
-	messages := runner.buildModelMessages(history)
-	used := estimateMessagesTokens(messages)
-	cache := 0
-	if usageKnown {
-		cache = usage.CacheHitTokens()
-		if cache < 0 {
-			cache = 0
-		}
-		if cache > used {
-			cache = used
-		}
-	}
+	current := usageTotalsFromUsage(usage, usageKnown)
+	session := usageTotalsFromUsage(sessionUsage, sessionUsageKnown)
 	return ContextStats{
-		UsedTokens:  used,
-		CacheTokens: cache,
-		LimitTokens: limitTokens,
+		UsedTokens:          current.used,
+		CacheTokens:         current.cache,
+		OutputTokens:        current.output,
+		SessionUsedTokens:   session.used,
+		SessionCacheTokens:  session.cache,
+		SessionOutputTokens: session.output,
+		LimitTokens:         limitTokens,
 	}
 }
 
@@ -355,10 +364,10 @@ func (runner *Runner) handleEvent(state *turnState, ev model.StreamEvent) (messa
 		return message.Message{}, false, runner.failAfterPartialOutput(state.wroteOutput, ev.Err)
 	}
 	if ev.Usage != nil {
-		runner.mu.Lock()
-		runner.usage = *ev.Usage
-		runner.usageKnown = true
-		runner.mu.Unlock()
+		runner.recordUsageEvent(state, *ev.Usage)
+	}
+	if err := runner.appendThinking(ev.Thinking); err != nil {
+		return message.Message{}, false, err
 	}
 
 	if err := runner.appendDelta(state, ev.Delta); err != nil {
@@ -373,11 +382,165 @@ func (runner *Runner) handleEvent(state *turnState, ev model.StreamEvent) (messa
 	return msg, true, err
 }
 
-func (runner *Runner) clearTurnUsage() {
+func (runner *Runner) recordUsageEvent(state *turnState, usage model.Usage) {
+	previous := usageTotalsFromUsage(state.usage, state.usageKnown)
+	state.usage = mergeUsageSnapshot(state.usage, usage)
+	state.usageKnown = true
+	current := usageTotalsFromUsage(state.usage, true)
+	runner.setCurrentUsage(state.usage)
+	runner.addSessionUsage(current.delta(previous))
+}
+
+func (runner *Runner) setCurrentUsage(usage model.Usage) {
 	runner.mu.Lock()
-	runner.usage = model.Usage{}
-	runner.usageKnown = false
-	runner.mu.Unlock()
+	defer runner.mu.Unlock()
+	runner.usage = usage
+	runner.usageKnown = true
+}
+
+func (runner *Runner) addSessionUsage(delta tokenUsageTotals) {
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+
+	current := usageTotalsFromUsage(runner.sessionUsage, runner.sessionUsageKnown)
+	current = current.add(delta)
+	runner.sessionUsage = usageFromTotals(current)
+	runner.sessionUsageKnown = true
+}
+
+func mergeUsageSnapshot(current, next model.Usage) model.Usage {
+	if next.InputTokens != 0 {
+		current.InputTokens = next.InputTokens
+	}
+	if next.OutputTokens != 0 {
+		current.OutputTokens = next.OutputTokens
+	}
+	if next.CacheCreationInputTokens != 0 {
+		current.CacheCreationInputTokens = next.CacheCreationInputTokens
+	}
+	if next.CacheReadInputTokens != 0 {
+		current.CacheReadInputTokens = next.CacheReadInputTokens
+	}
+	if next.PromptTokens != 0 {
+		current.PromptTokens = next.PromptTokens
+	}
+	if next.CompletionTokens != 0 {
+		current.CompletionTokens = next.CompletionTokens
+	}
+	if next.TotalTokens != 0 {
+		current.TotalTokens = next.TotalTokens
+	}
+	if next.PromptCacheHitTokens != 0 {
+		current.PromptCacheHitTokens = next.PromptCacheHitTokens
+	}
+	if next.PromptCacheMissTokens != 0 {
+		current.PromptCacheMissTokens = next.PromptCacheMissTokens
+	}
+	current.PromptTokensDetails = mergeTokenDetails(current.PromptTokensDetails, next.PromptTokensDetails)
+	current.InputTokensDetails = mergeTokenDetails(current.InputTokensDetails, next.InputTokensDetails)
+	return current
+}
+
+func mergeTokenDetails(current, next model.TokenDetails) model.TokenDetails {
+	if next.CachedTokens != 0 {
+		current.CachedTokens = next.CachedTokens
+	}
+	if next.CacheReadTokens != 0 {
+		current.CacheReadTokens = next.CacheReadTokens
+	}
+	if next.CacheReadInputTokens != 0 {
+		current.CacheReadInputTokens = next.CacheReadInputTokens
+	}
+	if next.CacheCreationTokens != 0 {
+		current.CacheCreationTokens = next.CacheCreationTokens
+	}
+	if next.CacheCreationInputTokens != 0 {
+		current.CacheCreationInputTokens = next.CacheCreationInputTokens
+	}
+	return current
+}
+
+func usageTotalsFromUsage(usage model.Usage, known bool) tokenUsageTotals {
+	if !known {
+		return tokenUsageTotals{}
+	}
+	used := usage.ContextTokenCount()
+	cache := usage.CacheHitTokens()
+	output := usage.CompletionTokenCount()
+	if used < 0 {
+		used = 0
+	}
+	if cache < 0 {
+		cache = 0
+	}
+	if output < 0 {
+		output = 0
+	}
+	if used < cache {
+		used = cache
+	}
+	if cache > used {
+		cache = used
+	}
+	if used < output {
+		used = output
+	}
+	return tokenUsageTotals{used: used, cache: cache, output: output}
+}
+
+func usageFromTotals(t tokenUsageTotals) model.Usage {
+	t = t.normalized()
+	return model.Usage{
+		PromptTokens:         maxInt(0, t.used-t.output),
+		CompletionTokens:     t.output,
+		TotalTokens:          t.used,
+		PromptCacheHitTokens: t.cache,
+	}
+}
+
+func (t tokenUsageTotals) add(other tokenUsageTotals) tokenUsageTotals {
+	return tokenUsageTotals{
+		used:   maxInt(0, t.used) + maxInt(0, other.used),
+		cache:  maxInt(0, t.cache) + maxInt(0, other.cache),
+		output: maxInt(0, t.output) + maxInt(0, other.output),
+	}.normalized()
+}
+
+func (t tokenUsageTotals) delta(previous tokenUsageTotals) tokenUsageTotals {
+	return tokenUsageTotals{
+		used:   maxInt(0, t.used-previous.used),
+		cache:  maxInt(0, t.cache-previous.cache),
+		output: maxInt(0, t.output-previous.output),
+	}
+}
+
+func (t tokenUsageTotals) normalized() tokenUsageTotals {
+	if t.used < 0 {
+		t.used = 0
+	}
+	if t.cache < 0 {
+		t.cache = 0
+	}
+	if t.output < 0 {
+		t.output = 0
+	}
+	if t.used < t.cache {
+		t.used = t.cache
+	}
+	if t.cache > t.used {
+		t.cache = t.used
+	}
+	if t.used < t.output {
+		t.used = t.output
+	}
+	return t
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func (runner *Runner) appendDelta(state *turnState, delta string) error {
@@ -474,6 +637,18 @@ func looksLikeToolPreamble(trimmed string) bool {
 		}
 	}
 	return false
+}
+
+func (runner *Runner) appendThinking(thinking string) error {
+	if thinking == "" {
+		return nil
+	}
+	if sink, ok := runner.ui.(ui.ThinkingDeltaReceiver); ok {
+		if err := sink.OnThinkingDelta(thinking); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (runner *Runner) writeDelta(state *turnState, delta string) error {
@@ -908,31 +1083,4 @@ func (runner *Runner) executeToolCall(ctx context.Context, call *message.ToolCal
 	}
 
 	return buildToolResultMessage(call.ID, output, false)
-}
-
-func estimateMessagesTokens(messages []message.Message) int {
-	total := 0
-	for _, msg := range messages {
-		total += estimateTextTokens(string(msg.Role))
-		total += estimateTextTokens(msg.Content)
-		if msg.ToolUse != nil {
-			total += estimateTextTokens(msg.ToolUse.ID)
-			total += estimateTextTokens(msg.ToolUse.Name)
-			total += estimateTextTokens(string(msg.ToolUse.Input))
-		}
-		if msg.ToolResult != nil {
-			total += estimateTextTokens(msg.ToolResult.ToolUseID)
-			total += estimateTextTokens(msg.ToolResult.Content)
-		}
-		total += 4
-	}
-	return total
-}
-
-func estimateTextTokens(text string) int {
-	runes := len([]rune(text))
-	if runes == 0 {
-		return 0
-	}
-	return (runes + 3) / 4
 }

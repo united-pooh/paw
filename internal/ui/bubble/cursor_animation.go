@@ -56,3 +56,9 @@ func easeInOutSine(t float64) float64 {
 	t = clamp01(t)
 	return t * t * (3 - 2*t)
 }
+
+// easeOutCubic 提供快速展开、末尾放缓的曲线，用于短时 UI 展开动画。
+func easeOutCubic(t float64) float64 {
+	t = 1 - clamp01(t)
+	return 1 - t*t*t
+}

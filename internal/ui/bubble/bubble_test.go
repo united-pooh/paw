@@ -14,6 +14,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"gocode/internal/loop"
 	"gocode/internal/message"
@@ -383,6 +384,8 @@ func TestSettingCommandPersistsWizardSelections(t *testing.T) {
 
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
 	model = next.(appModel)
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = next.(appModel)
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
 
@@ -567,11 +570,74 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{Name: "Read", Content: "module gocode"}))
 	model = next.(appModel)
 
-	rendered := renderTranscript(model.transcript, 80)
+	rendered := renderTranscript(model.transcript, 80, model.showThinking)
 	for _, want := range []string{"Read", "file_path", "module gocode"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered transcript = %q, want %q", rendered, want)
 		}
+	}
+}
+
+func TestToolEntryRevealsDetailsWithExpandAnimation(t *testing.T) {
+	started := time.Unix(20, 0)
+	entry := transcriptEntry{
+		kind:      entryTool,
+		title:     "tool",
+		body:      "Read {\n  \"file_path\": \"go.mod\"\n}",
+		createdAt: started,
+	}
+
+	early := renderEntryAt(entry, 80, started)
+	if !strings.Contains(early, "Read {") {
+		t.Fatalf("early tool entry = %q, want summary", early)
+	}
+	if strings.Contains(early, "file_path") {
+		t.Fatalf("early tool entry = %q, should hide details at animation start", early)
+	}
+
+	late := renderEntryAt(entry, 80, started.Add(toolExpandDuration))
+	for _, want := range []string{"Read {", "file_path", "╰─"} {
+		if !strings.Contains(late, want) {
+			t.Fatalf("late tool entry = %q, want %q", late, want)
+		}
+	}
+}
+
+func TestCtrlOTogglesThinkingTranscriptRendering(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 20
+	model.relayout()
+
+	next, _ := model.Update(thinkingDeltaMsg("hidden thought"))
+	model = next.(appModel)
+	next, _ = model.Update(assistantDeltaMsg("answer"))
+	model = next.(appModel)
+
+	if len(model.transcript) < 2 || model.transcript[len(model.transcript)-2].kind != entryThinking {
+		t.Fatalf("transcript = %#v, want thinking entry before answer", model.transcript)
+	}
+	if strings.Contains(model.viewport.View(), "hidden thought") {
+		t.Fatalf("viewport = %q, should hide thinking by default", model.viewport.View())
+	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+	model = next.(appModel)
+	if !model.showThinking {
+		t.Fatalf("showThinking = false, want true")
+	}
+	if !strings.Contains(model.viewport.View(), "hidden thought") {
+		t.Fatalf("viewport = %q, want expanded thinking", model.viewport.View())
+	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+	model = next.(appModel)
+	if model.showThinking {
+		t.Fatalf("showThinking = true, want false")
+	}
+	if strings.Contains(model.viewport.View(), "hidden thought") {
+		t.Fatalf("viewport = %q, should hide thinking after second ctrl+o", model.viewport.View())
 	}
 }
 
@@ -797,7 +863,7 @@ func TestViewFramesTranscriptHistoryPanel(t *testing.T) {
 	model.relayout()
 
 	rendered := model.View()
-	for _, want := range []string{"╭", "╰", "Interactive mode is running", "0%(0.0%)", "100%"} {
+	for _, want := range []string{"╭", "╰", "Interactive mode is running", "0↑", "free(100%)"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("view = %q, want %q", rendered, want)
 		}
@@ -826,6 +892,24 @@ func TestRelayoutReservesSpaceForTranscriptFrame(t *testing.T) {
 	}
 }
 
+func TestViewFillsTerminalHeightAndPinsInputToBottom(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 18
+	model.input.SetValue("bottom")
+	model.relayout()
+
+	rendered := model.View()
+	if got := lipgloss.Height(rendered); got != model.height {
+		t.Fatalf("rendered height = %d, want %d\n%s", got, model.height, rendered)
+	}
+	lines := strings.Split(rendered, "\n")
+	if len(lines) < 2 || !strings.Contains(lines[len(lines)-2], "bottom") {
+		t.Fatalf("last input content line = %q, want bottom", lines[maxInt(0, len(lines)-2)])
+	}
+}
+
 func TestRelayoutAccountsForInputAboveMeterHeight(t *testing.T) {
 	settingsController := &fakeSettingsController{current: settings.Config{
 		Subagent: settings.SubagentConfig{
@@ -843,9 +927,12 @@ func TestRelayoutAccountsForInputAboveMeterHeight(t *testing.T) {
 	model.height = 10
 	model.relayout()
 
-	want := maxInt(1, model.height-model.headerHeight()-lipgloss.Height(model.renderInputAboveMeter())-lipgloss.Height(model.renderInputBox())-transcriptPanelVerticalFrame)
-	if model.viewport.Height != want {
-		t.Fatalf("viewport height = %d, want %d", model.viewport.Height, want)
+	minimum := maxInt(1, model.height-model.headerHeight()-lipgloss.Height(model.renderInputAboveMeter())-lipgloss.Height(model.renderInputBox())-transcriptPanelVerticalFrame)
+	if model.viewport.Height < minimum {
+		t.Fatalf("viewport height = %d, want at least %d", model.viewport.Height, minimum)
+	}
+	if got := lipgloss.Height(model.View()); got != model.height {
+		t.Fatalf("rendered height = %d, want %d", got, model.height)
 	}
 }
 
@@ -894,13 +981,15 @@ func TestBangValuePreviewsTerminalPanel(t *testing.T) {
 	model.applyCursorAnimation()
 
 	rendered := model.renderInputBox()
-	for _, want := range []string{"0%(0.0%)", "100%", "!"} {
+	for _, want := range []string{"!"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("input box = %q, want %q", rendered, want)
 		}
 	}
-	if strings.Contains(rendered, "Terminal") {
-		t.Fatalf("input box = %q, should not contain legacy terminal label", rendered)
+	for _, unwanted := range []string{"0%(0.0%)", "100%", "Terminal"} {
+		if strings.Contains(rendered, unwanted) {
+			t.Fatalf("input box = %q, should not contain %q", rendered, unwanted)
+		}
 	}
 }
 
@@ -1024,8 +1113,38 @@ func TestViewAnchorsTerminalCursorOnInputCell(t *testing.T) {
 	if !position.active {
 		t.Fatalf("cursor position = %#v", position)
 	}
+	if position.upFromBottom != 1 {
+		t.Fatalf("upFromBottom = %d, want input content row", position.upFromBottom)
+	}
 	if position.column <= 2 {
 		t.Fatalf("column = %d, want input cell position", position.column)
+	}
+}
+
+// TestViewAnchorsTerminalCursorWithEmbeddedInputTitle 验证 context 位于输入框 title 时仍锚定到内容行。
+func TestViewAnchorsTerminalCursorWithEmbeddedInputTitle(t *testing.T) {
+	anchor := newTerminalCursorAnchor()
+	settingsController := &fakeSettingsController{current: settings.Config{
+		UI: settings.UIConfig{
+			ContextLimitTokens:   1000,
+			ContextMeterLocation: settings.MeterLocationInputTitle,
+		},
+	}}
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, settingsController, nil, anchor)
+	model.ready = true
+	model.width = 80
+	model.height = 24
+	model.relayout()
+	model.input.SetValue("hello")
+
+	_ = model.View()
+
+	position, ok := anchor.consume()
+	if !ok || !position.active {
+		t.Fatalf("anchor = %#v/%v, want active", position, ok)
+	}
+	if position.upFromBottom != 1 {
+		t.Fatalf("upFromBottom = %d, want input content row below embedded title", position.upFromBottom)
 	}
 }
 
@@ -1444,36 +1563,46 @@ func TestRenderInputBoxShowsStatefulPanel(t *testing.T) {
 	model.input.SetValue("hello")
 
 	rendered := model.renderInputBox()
-	for _, want := range []string{"0%(0.0%)", "100%", "hello"} {
+	for _, want := range []string{"hello"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("input box = %q, want %q", rendered, want)
 		}
 	}
-	for _, unwanted := range []string{"Input", "Waiting", "Terminal"} {
+	for _, unwanted := range []string{"0%(0.0%)", "100%", "Input", "Waiting", "Terminal"} {
 		if strings.Contains(rendered, unwanted) {
 			t.Fatalf("input box = %q, should not contain %q", rendered, unwanted)
+		}
+	}
+	meter := model.renderInputAboveMeter()
+	for _, want := range []string{"0↑", "free(100%)"} {
+		if !strings.Contains(meter, want) {
+			t.Fatalf("input-above meter = %q, want %q", meter, want)
 		}
 	}
 
 	model.pending = []string{"first"}
 	rendered = model.renderInputBox()
-	if !strings.Contains(rendered, "0%(0.0%)") || !strings.Contains(rendered, "hello") {
+	if !strings.Contains(rendered, "hello") || strings.Contains(rendered, "0%(0.0%)") {
 		t.Fatalf("multiline input box = %q", rendered)
 	}
 
 	model.running = true
 	rendered = model.renderInputBox()
-	if !strings.Contains(rendered, "waiting for assistant") || !strings.Contains(rendered, "0%(0.0%)") {
+	if !strings.Contains(rendered, "waiting for assistant") || strings.Contains(rendered, "0%(0.0%)") {
 		t.Fatalf("waiting input box = %q", rendered)
 	}
 }
 
-// TestContextMeterUsesDefaultLimitAndStableSegments verifies default limit, colors, and 40-cell math.
+// TestContextMeterUsesDefaultLimitAndStableSegments verifies default limit, colors, and bar math.
 func TestContextMeterUsesDefaultLimitAndStableSegments(t *testing.T) {
 	runner := &fakeRunner{
 		stats: loop.ContextStats{
-			UsedTokens:  262144,
-			CacheTokens: 104858,
+			UsedTokens:          262144,
+			CacheTokens:         104858,
+			OutputTokens:        2048,
+			SessionUsedTokens:   262144,
+			SessionCacheTokens:  104858,
+			SessionOutputTokens: 2048,
 		},
 	}
 	model := newTestModel(runner)
@@ -1486,12 +1615,12 @@ func TestContextMeterUsesDefaultLimitAndStableSegments(t *testing.T) {
 	if runner.lastDraft != "draft prompt" {
 		t.Fatalf("lastDraft = %q, want draft prompt", runner.lastDraft)
 	}
-	for _, want := range []string{"25%(10.0%)", "75%"} {
+	for _, want := range []string{"260k↑", "2.05k↓", "25%(10%)", "free(75%)"} {
 		if !strings.Contains(title, want) {
 			t.Fatalf("contextMeterTitle() = %q, want %q", title, want)
 		}
 	}
-	bar := renderContextBar(runner.stats.UsedTokens, runner.stats.CacheTokens, settings.DefaultContextLimitTokens)
+	bar := renderContextBar(runner.stats.UsedTokens, runner.stats.CacheTokens, settings.DefaultContextLimitTokens, 40, "")
 	if strings.Count(bar, "▰") != 10 || strings.Count(bar, "▱") != 30 {
 		t.Fatalf("renderContextBar() = %q, want 10 filled and 30 free cells", bar)
 	}
@@ -1506,12 +1635,147 @@ func TestContextMeterUsesDefaultLimitAndStableSegments(t *testing.T) {
 	}
 }
 
-// TestNarrowLayoutKeepsMeterOnlyInputTitle verifies compact layouts still render the meter without legacy labels.
-func TestNarrowLayoutKeepsMeterOnlyInputTitle(t *testing.T) {
+func TestContextMeterShowsCumulativeCountsBeyondLimit(t *testing.T) {
 	runner := &fakeRunner{
 		stats: loop.ContextStats{
-			UsedTokens:  settings.DefaultContextLimitTokens / 2,
+			UsedTokens:          800,
+			CacheTokens:         100,
+			OutputTokens:        100,
+			SessionUsedTokens:   1500,
+			SessionCacheTokens:  300,
+			SessionOutputTokens: 200,
+			LimitTokens:         1000,
+		},
+	}
+	model := newTestModel(runner)
+
+	meter := model.contextMeterLine(48)
+	for _, want := range []string{"1.3k↑", "200↓", "80%(10%)", "free(20%)"} {
+		if !strings.Contains(meter, want) {
+			t.Fatalf("meter = %q, want %q", meter, want)
+		}
+	}
+}
+
+func TestContextMeterLineStretchesAndAlignsLabels(t *testing.T) {
+	runner := &fakeRunner{
+		stats: loop.ContextStats{
+			UsedTokens:  settings.DefaultContextLimitTokens / 4,
 			CacheTokens: 0,
+		},
+	}
+	model := newTestModel(runner)
+	model.width = 64
+
+	meter := model.renderInputAboveMeter()
+	if got, want := lipgloss.Width(meter), maxInt(28, model.width-2); got != want {
+		t.Fatalf("meter width = %d, want %d: %q", got, want, meter)
+	}
+	usedIndex := strings.Index(meter, "↑")
+	freeIndex := strings.LastIndex(meter, "free(")
+	if usedIndex == -1 || freeIndex == -1 || usedIndex > freeIndex {
+		t.Fatalf("meter = %q, want used token label before free token label", meter)
+	}
+}
+
+func TestFormatCompactTokenCountUsesThreeDigitsAndUnits(t *testing.T) {
+	tests := map[int]string{
+		0:       "0",
+		999:     "999",
+		1000:    "1k",
+		1234:    "1.23k",
+		12345:   "12.3k",
+		123456:  "123k",
+		999000:  "999k",
+		1000000: "1M",
+		1234567: "1.23M",
+	}
+	for value, want := range tests {
+		if got := formatCompactTokenCount(value); got != want {
+			t.Fatalf("formatCompactTokenCount(%d) = %q, want %q", value, got, want)
+		}
+	}
+}
+
+func TestContextMeterAnimatesBarButKeepsTokenLabelsImmediate(t *testing.T) {
+	started := time.Unix(30, 0)
+	runner := &fakeRunner{
+		stats: loop.ContextStats{
+			LimitTokens:         1000,
+			UsedTokens:          100,
+			CacheTokens:         0,
+			SessionUsedTokens:   100,
+			SessionCacheTokens:  0,
+			SessionOutputTokens: 0,
+		},
+	}
+	model := newTestModel(runner)
+	model.cursorFrameAt = started
+	model.updateContextMeterAnimation()
+
+	runner.stats.UsedTokens = 400
+	runner.stats.OutputTokens = 40
+	runner.stats.SessionUsedTokens = 400
+	runner.stats.SessionOutputTokens = 40
+	model.cursorFrameAt = started.Add(100 * time.Millisecond)
+	model.updateContextMeterAnimation()
+
+	model.cursorFrameAt = started.Add(260 * time.Millisecond)
+	animatedUsed, _, pulse := model.animatedContextTokens(400, 0, 1000)
+	if animatedUsed <= 100 || animatedUsed >= 400 {
+		t.Fatalf("animatedUsed = %d, want nonlinear value between old and new target", animatedUsed)
+	}
+	if pulse <= 0 {
+		t.Fatalf("pulse = %f, want active pulse during animation", pulse)
+	}
+	meter := model.contextMeterLine(48)
+	for _, want := range []string{"360↑", "40↓", "40%(0%)", "free(60%)"} {
+		if !strings.Contains(meter, want) {
+			t.Fatalf("meter = %q, want immediate label %q", meter, want)
+		}
+	}
+
+	model.cursorFrameAt = started.Add(time.Second)
+	animatedUsed, _, pulse = model.animatedContextTokens(400, 0, 1000)
+	if animatedUsed != 400 || pulse != 0 {
+		t.Fatalf("animation end = used %d pulse %f, want target and no pulse", animatedUsed, pulse)
+	}
+}
+
+func TestContextMeterShowsThinkingTimerCenteredInLine(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.width = 80
+	model.running = true
+	model.runningTerminal = false
+	model.turnStartedAt = time.Unix(10, 0)
+	model.cursorFrameAt = time.Unix(11, 500*int64(time.Millisecond))
+
+	meter := model.renderInputAboveMeter()
+	if !strings.Contains(meter, "<thinking 1s>") {
+		t.Fatalf("meter = %q, want thinking timer", meter)
+	}
+	thinkingIndex := strings.Index(meter, "<thinking 1s>")
+	usedIndex := strings.Index(meter, "↑")
+	freeIndex := strings.LastIndex(meter, "free(")
+	if thinkingIndex == -1 || usedIndex == -1 || freeIndex == -1 || thinkingIndex < usedIndex || thinkingIndex > freeIndex {
+		t.Fatalf("meter = %q, want thinking timer between token labels", meter)
+	}
+	plain := ansi.Strip(meter)
+	thinkingLeft := strings.Index(plain, "<thinking 1s>")
+	thinkingCenter := lipgloss.Width(plain[:thinkingLeft]) + lipgloss.Width("<thinking 1s>")/2
+	lineCenter := lipgloss.Width(plain) / 2
+	if delta := thinkingCenter - lineCenter; delta < -1 || delta > 1 {
+		t.Fatalf("meter = %q, want thinking timer centered in line", meter)
+	}
+}
+
+// TestNarrowLayoutKeepsMeterAboveBottomInput verifies compact layouts render the meter between transcript and input.
+func TestNarrowLayoutKeepsMeterAboveBottomInput(t *testing.T) {
+	runner := &fakeRunner{
+		stats: loop.ContextStats{
+			UsedTokens:        settings.DefaultContextLimitTokens / 2,
+			CacheTokens:       0,
+			SessionUsedTokens: settings.DefaultContextLimitTokens / 2,
 		},
 	}
 	model := newTestModel(runner)
@@ -1525,8 +1789,13 @@ func TestNarrowLayoutKeepsMeterOnlyInputTitle(t *testing.T) {
 	if got := lipgloss.Height(rendered); got > model.height {
 		t.Fatalf("rendered height = %d, want <= %d", got, model.height)
 	}
-	if strings.Count(rendered, "▰")+strings.Count(rendered, "▱") < contextMeterCells {
-		t.Fatalf("view = %q, want complete context meter", rendered)
+	if strings.Count(rendered, "▰")+strings.Count(rendered, "▱") == 0 {
+		t.Fatalf("view = %q, want context meter bar", rendered)
+	}
+	meterIndex := strings.Index(rendered, "524k↑")
+	inputIndex := strings.LastIndex(rendered, "narrow")
+	if meterIndex == -1 || inputIndex == -1 || meterIndex > inputIndex {
+		t.Fatalf("view = %q, want context meter before bottom input", rendered)
 	}
 	for _, unwanted := range []string{"Input", "Waiting", "Terminal"} {
 		if strings.Contains(rendered, unwanted) {
@@ -1660,7 +1929,7 @@ func TestAnchoredOutputRestoresBeforeNextWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "frame1\r\x1b[1A\x1b[7C\x1b[1B\rframe2\r\x1b[2A\x1b[3C"
+	want := "frame1\r\r\x1b[1A\x1b[7C\x1b[1B\rframe2\r\r\x1b[2A\x1b[3C"
 	if got := string(data); got != want {
 		t.Fatalf("anchored output = %q, want %q", got, want)
 	}

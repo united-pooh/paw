@@ -68,6 +68,7 @@ func (m *blockingModel) StreamMessage(ctx context.Context, messages []message.Me
 
 type fakeUI struct {
 	deltas      []string
+	thinking    []string
 	toolCalls   []ui.ToolCallEvent
 	toolResults []ui.ToolResultEvent
 	doneCount   int
@@ -75,6 +76,11 @@ type fakeUI struct {
 
 func (u *fakeUI) OnAssistantDelta(text string) error {
 	u.deltas = append(u.deltas, text)
+	return nil
+}
+
+func (u *fakeUI) OnThinkingDelta(text string) error {
+	u.thinking = append(u.thinking, text)
 	return nil
 }
 
@@ -283,11 +289,33 @@ func TestRunTurnAllowsEmptyAssistantContent(t *testing.T) {
 	}
 }
 
-func TestContextStatsClearsCacheForTurnWithoutUsageEvent(t *testing.T) {
+func TestRunnerForwardsThinkingEventsToUI(t *testing.T) {
+	streamer := &fakeModel{rounds: []fakeRound{
+		{events: []model.StreamEvent{
+			{Thinking: "plan"},
+			{Delta: "answer"},
+			{Done: true},
+		}},
+	}}
+	output := &fakeUI{}
+	runner := NewRunner(streamer, output, tool.NewRegistry(), nil, "")
+
+	if _, err := runner.RunTurn(context.Background(), "hello"); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if got := strings.Join(output.thinking, ""); got != "plan" {
+		t.Fatalf("thinking = %q, want plan", got)
+	}
+	if got := strings.Join(output.deltas, ""); got != "answer" {
+		t.Fatalf("deltas = %q, want answer", got)
+	}
+}
+
+func TestContextStatsUsesOnlyRealUsageAndKeepsLastKnownDuringNextTurn(t *testing.T) {
 	ui := &fakeUI{}
 	first := make(chan model.StreamEvent, 1)
 	first <- model.StreamEvent{
-		Usage: &model.Usage{PromptCacheHitTokens: 12},
+		Usage: &model.Usage{PromptTokens: 100, CompletionTokens: 5, PromptCacheHitTokens: 12},
 		Done:  true,
 	}
 	close(first)
@@ -305,8 +333,11 @@ func TestContextStatsClearsCacheForTurnWithoutUsageEvent(t *testing.T) {
 		t.Fatalf("first turn started index = %d, want 0", got)
 	}
 	firstStats := runner.ContextStats(1024, "")
-	if firstStats.CacheTokens != 12 {
-		t.Fatalf("first ContextStats().CacheTokens = %d, want 12", firstStats.CacheTokens)
+	if firstStats.UsedTokens != 105 || firstStats.CacheTokens != 12 || firstStats.OutputTokens != 5 {
+		t.Fatalf("first ContextStats() = %#v, want real usage 105/cache 12/output 5", firstStats)
+	}
+	if firstStats.SessionUsedTokens != 105 || firstStats.SessionCacheTokens != 12 || firstStats.SessionOutputTokens != 5 {
+		t.Fatalf("first ContextStats() = %#v, want cumulative session usage 105/cache 12/output 5", firstStats)
 	}
 
 	errCh := make(chan error, 1)
@@ -319,17 +350,175 @@ func TestContextStatsClearsCacheForTurnWithoutUsageEvent(t *testing.T) {
 	}
 
 	stats := runner.ContextStats(1024, "draft")
-	if stats.CacheTokens != 0 {
-		t.Fatalf("ContextStats().CacheTokens = %d, want 0 without current-turn usage", stats.CacheTokens)
+	if stats.UsedTokens != 105 || stats.CacheTokens != 12 || stats.OutputTokens != 5 {
+		t.Fatalf("ContextStats() = %#v, want last real usage without draft estimate", stats)
 	}
-	if stats.UsedTokens == 0 {
-		t.Fatalf("ContextStats().UsedTokens = 0, want local estimate")
+	if stats.SessionUsedTokens != 105 || stats.SessionCacheTokens != 12 || stats.SessionOutputTokens != 5 {
+		t.Fatalf("ContextStats() = %#v, want last cumulative session usage while next request has no usage", stats)
 	}
 
 	second <- model.StreamEvent{Done: true}
 	close(second)
 	if err := <-errCh; err != nil {
 		t.Fatalf("second RunTurn() error = %v", err)
+	}
+}
+
+func TestContextStatsAccumulatesSessionUsageAcrossModelRequests(t *testing.T) {
+	ui := &fakeUI{}
+	model := &fakeModel{
+		rounds: []fakeRound{
+			{
+				events: []model.StreamEvent{
+					{Usage: &model.Usage{InputTokens: 100, CacheReadInputTokens: 40}},
+					{Usage: &model.Usage{OutputTokens: 5}},
+					{Done: true},
+				},
+			},
+			{
+				events: []model.StreamEvent{
+					{Usage: &model.Usage{PromptTokens: 150, CompletionTokens: 7, TotalTokens: 157, PromptCacheHitTokens: 30}},
+					{Done: true},
+				},
+			},
+		},
+	}
+	runner := NewRunner(model, ui, tool.NewRegistry(), nil, "")
+
+	if _, err := runner.RunTurn(context.Background(), "first"); err != nil {
+		t.Fatalf("first RunTurn() error = %v", err)
+	}
+	if _, err := runner.RunTurn(context.Background(), "second"); err != nil {
+		t.Fatalf("second RunTurn() error = %v", err)
+	}
+
+	stats := runner.ContextStats(1024, "")
+	if stats.UsedTokens != 157 || stats.CacheTokens != 30 || stats.OutputTokens != 7 {
+		t.Fatalf("ContextStats() = %#v, want latest context usage 157/cache 30/output 7", stats)
+	}
+	if stats.SessionUsedTokens != 302 || stats.SessionCacheTokens != 70 || stats.SessionOutputTokens != 12 {
+		t.Fatalf("ContextStats() = %#v, want cumulative session usage 302/cache 70/output 12", stats)
+	}
+}
+
+func TestContextStatsDoesNotDoubleCountCumulativeStreamUsageUpdates(t *testing.T) {
+	ui := &fakeUI{}
+	model := &fakeModel{
+		rounds: []fakeRound{
+			{
+				events: []model.StreamEvent{
+					{Usage: &model.Usage{InputTokens: 100, CacheReadInputTokens: 10}},
+					{Usage: &model.Usage{OutputTokens: 2}},
+					{Usage: &model.Usage{OutputTokens: 5}},
+					{Done: true},
+				},
+			},
+		},
+	}
+	runner := NewRunner(model, ui, tool.NewRegistry(), nil, "")
+
+	if _, err := runner.RunTurn(context.Background(), "hello"); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	stats := runner.ContextStats(1024, "")
+	if stats.UsedTokens != 115 || stats.CacheTokens != 10 || stats.OutputTokens != 5 {
+		t.Fatalf("ContextStats() = %#v, want one request usage 115/cache 10/output 5", stats)
+	}
+	if stats.SessionUsedTokens != 115 || stats.SessionCacheTokens != 10 || stats.SessionOutputTokens != 5 {
+		t.Fatalf("ContextStats() = %#v, want cumulative session usage 115/cache 10/output 5", stats)
+	}
+}
+
+func TestContextStatsDoesNotEstimateWhenUsageIsUnknown(t *testing.T) {
+	runner := NewRunner(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), nil, "")
+
+	stats := runner.ContextStats(1024, "draft prompt")
+	if stats.UsedTokens != 0 || stats.CacheTokens != 0 || stats.SessionUsedTokens != 0 || stats.LimitTokens != 1024 {
+		t.Fatalf("ContextStats() = %#v, want zero usage until provider reports usage", stats)
+	}
+}
+
+func TestContextStatsUsesActualUsageWhenKnown(t *testing.T) {
+	tests := []struct {
+		name       string
+		usage      model.Usage
+		wantUsed   int
+		wantCache  int
+		wantOutput int
+	}{
+		{
+			name: "anthropic",
+			usage: model.Usage{
+				InputTokens:              100,
+				CacheCreationInputTokens: 4,
+				CacheReadInputTokens:     40,
+				OutputTokens:             6,
+			},
+			wantUsed:   150,
+			wantCache:  40,
+			wantOutput: 6,
+		},
+		{
+			name: "openai-compatible",
+			usage: model.Usage{
+				PromptTokens:          100,
+				CompletionTokens:      2,
+				TotalTokens:           102,
+				PromptCacheHitTokens:  40,
+				PromptCacheMissTokens: 60,
+			},
+			wantUsed:   102,
+			wantCache:  40,
+			wantOutput: 2,
+		},
+		{
+			name: "openai-nested-cache-details",
+			usage: model.Usage{
+				PromptTokens:     100,
+				CompletionTokens: 2,
+				TotalTokens:      102,
+				PromptTokensDetails: model.TokenDetails{
+					CachedTokens: 32,
+				},
+			},
+			wantUsed:   102,
+			wantCache:  32,
+			wantOutput: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := NewRunner(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), nil, "")
+			runner.usage = tt.usage
+			runner.usageKnown = true
+
+			stats := runner.ContextStats(1024, "draft should not be estimated")
+			if stats.UsedTokens != tt.wantUsed {
+				t.Fatalf("UsedTokens = %d, want %d", stats.UsedTokens, tt.wantUsed)
+			}
+			if stats.CacheTokens != tt.wantCache {
+				t.Fatalf("CacheTokens = %d, want %d", stats.CacheTokens, tt.wantCache)
+			}
+			if stats.OutputTokens != tt.wantOutput {
+				t.Fatalf("OutputTokens = %d, want %d", stats.OutputTokens, tt.wantOutput)
+			}
+		})
+	}
+}
+
+func TestResetHistoryClearsContextUsage(t *testing.T) {
+	runner := NewRunner(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), nil, "")
+	runner.usage = model.Usage{PromptTokens: 100, CompletionTokens: 20, PromptCacheHitTokens: 10}
+	runner.usageKnown = true
+	runner.sessionUsage = model.Usage{PromptTokens: 200, CompletionTokens: 40, PromptCacheHitTokens: 20}
+	runner.sessionUsageKnown = true
+
+	runner.ResetHistory()
+
+	stats := runner.ContextStats(1024, "")
+	if stats.UsedTokens != 0 || stats.CacheTokens != 0 || stats.OutputTokens != 0 || stats.SessionUsedTokens != 0 || stats.SessionCacheTokens != 0 || stats.SessionOutputTokens != 0 {
+		t.Fatalf("ContextStats() = %#v, want reset usage", stats)
 	}
 }
 

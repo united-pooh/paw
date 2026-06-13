@@ -4,7 +4,10 @@ package bubble
 import (
 	"github.com/charmbracelet/lipgloss"
 	"strings"
+	"time"
 )
+
+const toolExpandDuration = 650 * time.Millisecond
 
 // appendAssistantDelta 将模型流式增量追加到当前 assistant 消息，必要时新建消息。
 func (m *appModel) appendAssistantDelta(delta string) {
@@ -13,8 +16,9 @@ func (m *appModel) appendAssistantDelta(delta string) {
 	}
 	if m.activeAssistant < 0 || m.activeAssistant >= len(m.transcript) || m.transcript[m.activeAssistant].kind != entryAssistant {
 		m.transcript = append(m.transcript, transcriptEntry{
-			kind:  entryAssistant,
-			title: "assistant",
+			kind:      entryAssistant,
+			title:     "assistant",
+			createdAt: m.animationNow(),
 		})
 		m.activeAssistant = len(m.transcript) - 1
 	}
@@ -22,15 +26,42 @@ func (m *appModel) appendAssistantDelta(delta string) {
 	m.refreshViewport()
 }
 
+// appendThinkingDelta 将模型 thinking 增量追加到 transcript，渲染时由 showThinking 控制显隐。
+func (m *appModel) appendThinkingDelta(delta string) {
+	if delta == "" {
+		return
+	}
+	m.activeAssistant = -1
+	if len(m.transcript) == 0 || m.transcript[len(m.transcript)-1].kind != entryThinking {
+		m.transcript = append(m.transcript, transcriptEntry{
+			kind:      entryThinking,
+			title:     "thinking",
+			createdAt: m.animationNow(),
+		})
+	}
+	m.transcript[len(m.transcript)-1].body += delta
+	m.refreshViewport()
+}
+
 // addEntry 追加一条 transcript 记录并刷新滚动区。
 func (m *appModel) addEntry(entry transcriptEntry) {
+	if entry.createdAt.IsZero() {
+		entry.createdAt = m.animationNow()
+	}
 	m.transcript = append(m.transcript, entry)
 	m.refreshViewport()
 }
 
+func (m appModel) animationNow() time.Time {
+	if !m.cursorFrameAt.IsZero() {
+		return m.cursorFrameAt
+	}
+	return time.Now()
+}
+
 // refreshViewport 将 transcript 重新渲染到 viewport，并滚动到底部。
 func (m *appModel) refreshViewport() {
-	content := renderTranscript(m.transcript, maxInt(20, m.viewport.Width))
+	content := m.renderTranscriptContent()
 	if m.selectionActive {
 		content = m.renderTranscriptSelection(content)
 	}
@@ -43,7 +74,7 @@ func (m *appModel) refreshViewport() {
 // refreshViewportPreservingOffset 刷新 transcript 内容，但保留用户当前滚动位置。
 func (m *appModel) refreshViewportPreservingOffset() {
 	offset := m.viewport.YOffset
-	content := renderTranscript(m.transcript, maxInt(20, m.viewport.Width))
+	content := m.renderTranscriptContent()
 	if m.selectionActive {
 		content = m.renderTranscriptSelection(content)
 	}
@@ -51,24 +82,49 @@ func (m *appModel) refreshViewportPreservingOffset() {
 	m.viewport.SetYOffset(offset)
 }
 
+func (m appModel) renderTranscriptContent() string {
+	return renderTranscriptAt(m.transcript, maxInt(20, m.viewport.Width), m.showThinking, m.animationNow())
+}
+
+func (m appModel) hasActiveTranscriptAnimation() bool {
+	now := m.animationNow()
+	for _, entry := range m.transcript {
+		if entry.kind == entryTool && !entry.createdAt.IsZero() && now.Sub(entry.createdAt) < toolExpandDuration {
+			return true
+		}
+	}
+	return false
+}
+
 // renderTranscript 把多条 transcript 记录渲染为 viewport 内容。
-func renderTranscript(entries []transcriptEntry, width int) string {
+func renderTranscript(entries []transcriptEntry, width int, showThinking bool) string {
+	return renderTranscriptAt(entries, width, showThinking, time.Time{})
+}
+
+func renderTranscriptAt(entries []transcriptEntry, width int, showThinking bool, at time.Time) string {
 	if len(entries) == 0 {
 		return ""
 	}
 	parts := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		parts = append(parts, renderEntry(entry, width))
+		if entry.kind == entryThinking && !showThinking {
+			continue
+		}
+		parts = append(parts, renderEntryAt(entry, width, at))
 	}
 	return strings.Join(parts, "\n\n")
 }
 
 // renderEntry 渲染一条带标签和统一缩进的 transcript 记录。
 func renderEntry(entry transcriptEntry, width int) string {
+	return renderEntryAt(entry, width, time.Time{})
+}
+
+func renderEntryAt(entry transcriptEntry, width int, at time.Time) string {
 	const entryGutter = "  "
 	label := labelStyle(entry.kind).Render(entry.title)
 	bodyWidth := maxInt(20, width-lipgloss.Width(entryGutter))
-	body := renderEntryBody(entry, bodyWidth)
+	body := renderEntryBodyAt(entry, bodyWidth, at)
 	if body == "" {
 		return entryGutter + label
 	}
@@ -77,14 +133,73 @@ func renderEntry(entry transcriptEntry, width int) string {
 
 // renderEntryBody 按消息类型渲染正文，assistant 消息会走 Markdown 渲染。
 func renderEntryBody(entry transcriptEntry, width int) string {
+	return renderEntryBodyAt(entry, width, time.Time{})
+}
+
+func renderEntryBodyAt(entry transcriptEntry, width int, at time.Time) string {
 	body := strings.TrimRight(entry.body, "\n")
 	if body == "" {
 		return ""
 	}
+	if entry.kind == entryThinking {
+		return thinkingBodyStyle.Width(width).Render(body)
+	}
 	if entry.kind == entryAssistant {
 		return renderMarkdown(body, width)
 	}
+	if entry.kind == entryTool {
+		return renderToolEntryBody(body, width, toolExpandProgress(entry, at))
+	}
 	return bodyStyle.Width(width).Render(body)
+}
+
+func renderToolEntryBody(body string, width int, progress float64) string {
+	body = strings.TrimRight(body, "\n")
+	summary, detail := splitToolSummary(body)
+	header := toolHeaderStyle.Width(width).Render("▾ " + summary)
+	if detail == "" || progress <= 0 {
+		return header
+	}
+	detailLines := strings.Split(detail, "\n")
+	visibleLines := maxInt(1, int(float64(len(detailLines))*progress+0.999))
+	if visibleLines > len(detailLines) {
+		visibleLines = len(detailLines)
+	}
+	for i := range detailLines[:visibleLines] {
+		detailLines[i] = "│ " + detailLines[i]
+	}
+	trailer := "╰─"
+	if progress < 1 {
+		trailer = "╰╴"
+	}
+	revealed := strings.Join(append(detailLines[:visibleLines], trailer), "\n")
+	return header + "\n" + toolDetailStyle.Width(width).Render(revealed)
+}
+
+func splitToolSummary(body string) (string, string) {
+	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
+	if len(lines) == 0 {
+		return "", ""
+	}
+	summary := strings.TrimSpace(lines[0])
+	if len(lines) == 1 {
+		return summary, ""
+	}
+	return summary, strings.Join(lines[1:], "\n")
+}
+
+func toolExpandProgress(entry transcriptEntry, at time.Time) float64 {
+	if at.IsZero() || entry.createdAt.IsZero() {
+		return 1
+	}
+	elapsed := at.Sub(entry.createdAt)
+	if elapsed <= 0 {
+		return 0
+	}
+	if elapsed >= toolExpandDuration {
+		return 1
+	}
+	return easeOutCubic(float64(elapsed) / float64(toolExpandDuration))
 }
 
 // labelStyle 根据消息类型选择左侧标签样式。
@@ -94,6 +209,8 @@ func labelStyle(kind entryKind) lipgloss.Style {
 		return labelUserStyle
 	case entryAssistant:
 		return labelAssistantStyle
+	case entryThinking:
+		return labelThinkingStyle
 	case entryTool:
 		return labelToolStyle
 	case entryError:

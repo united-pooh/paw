@@ -126,6 +126,14 @@ func (u *UI) OnAssistantDelta(text string) error {
 	return u.send(assistantDeltaMsg(text))
 }
 
+// OnThinkingDelta 接收模型 thinking 流，并转发给 Bubble Tea 状态机。
+func (u *UI) OnThinkingDelta(text string) error {
+	if text == "" {
+		return nil
+	}
+	return u.send(thinkingDeltaMsg(text))
+}
+
 // OnToolCall 接收工具调用事件，并转发给 Bubble Tea 状态机展示。
 func (u *UI) OnToolCall(event ui.ToolCallEvent) error {
 	return u.send(toolCallMsg(event))

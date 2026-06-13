@@ -87,6 +87,7 @@ func (m *appModel) startNextQueuedTurn() tea.Cmd {
 		_ = m.chatQueue.Enqueue(line)
 		return nil
 	}
+	m.turnStartedAt = time.Now()
 	m.syncRunningFlags()
 	m.activeAssistant = -1
 	return runTurnCmd(m.ctx, m.runner, line)

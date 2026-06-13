@@ -18,10 +18,11 @@ import (
 // 2) Done=true：流结束
 // 3) Err 非空：流中出现错误
 type StreamEvent struct {
-	Delta string
-	Done  bool
-	Err   error
-	Usage *Usage
+	Delta    string
+	Thinking string
+	Done     bool
+	Err      error
+	Usage    *Usage
 }
 
 // chatCompletionsStreamResponse 只建模流式响应里当前需要的字段。
@@ -52,7 +53,17 @@ func (c *Client) StreamMessage(ctx context.Context, messages []message.Message) 
 	}
 
 	cfg := c.CurrentModelConfig()
+	if shouldAttemptAnthropicStream(cfg) {
+		events, err := c.streamAnthropicMessage(ctx, cfg, messages)
+		if err == nil {
+			return events, nil
+		}
+	}
 
+	return c.streamOpenAIMessage(ctx, cfg, messages)
+}
+
+func (c *Client) streamOpenAIMessage(ctx context.Context, cfg Config, messages []message.Message) (<-chan StreamEvent, error) {
 	// 启用 stream=true，让服务端按 SSE 增量返回。
 	reqBody := ChatCompletionsRequest{
 		Model:         cfg.Model,
@@ -82,7 +93,7 @@ func (c *Client) StreamMessage(ctx context.Context, messages []message.Message) 
 	c.setRequestHeaders(req)
 
 	// 发起请求；如果失败直接返回同步错误。
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.streamHTTPClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("调用模型接口失败: %w", err)
 	}
@@ -105,9 +116,22 @@ func (c *Client) StreamMessage(ctx context.Context, messages []message.Message) 
 	return events, nil
 }
 
+func shouldAttemptAnthropicStream(cfg Config) bool {
+	baseURL := strings.ToLower(strings.TrimSpace(cfg.APIBaseURL))
+	apiPath := strings.ToLower(strings.TrimSpace(cfg.APIPath))
+	return normalizeProvider(cfg.Provider) == ProviderDeepSeek ||
+		strings.Contains(baseURL, "/anthropic") ||
+		strings.HasSuffix(apiPath, "/messages")
+}
+
+const (
+	streamScannerInitialBufferBytes = 64 * 1024
+	streamScannerMaxTokenBytes      = 32 * 1024 * 1024
+)
+
 func newStreamScanner(body io.Reader) *bufio.Scanner {
 	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, streamScannerInitialBufferBytes), streamScannerMaxTokenBytes)
 	return scanner
 }
 

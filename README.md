@@ -21,6 +21,7 @@ internal/model/config.go
 internal/model/types.go
 internal/model/client.go
 internal/model/stream.go
+internal/model/anthropic_stream.go
 
 internal/tool/tool.go
 internal/tool/register.go
@@ -140,7 +141,14 @@ go run ./cmd/agent -s <session-id>
 
 #### 当前输入区状态
 
-输入面板标题默认展示 context meter，不再显示 `Input`、`Waiting`、`Terminal` 标签。
+context meter 默认展示在消息历史区下方、输入框上方；输入框保持在窗口底部，不再显示 `Input`、`Waiting`、`Terminal` 标签。
+
+context meter 的 token 数只来自模型服务端返回的真实 `usage` 字段；不会根据草稿、历史文本或本地字符数做估算。左侧 `↑/↓` 数字展示本次打开后的 session 累计 token 消耗，每次启动从 0 开始，`/clear` 也会清零；每次模型请求的 input/prompt、output/completion 与 cache hit 会按 provider 返回值入账，同一条流里多次 `usage` 会先合并成该请求的累计值再计入 session，避免 `message_start` / `message_delta` 重复计数。进度条、used 百分比、cache hit 百分比和 `free(...)` 仍然展示最近一次真实 usage 对应的当前上下文窗口占用；新一轮请求尚未返回 usage 时，会继续显示上一条上下文窗口 usage。
+
+context meter 左侧显示紧凑 token 与比例，例如 `260k↑ 2.05k↓ 25%(10%)`：`↑` 是 session 累计上传/input token，`↓` 是 session 累计回答/output token，两个百分比分别是当前 context 用量和当前 cache hit 用量占总 limit 的比例。右侧只显示当前 context 剩余比例，例如 `free(75%)`。超过三位的 token 会压缩成 `k`，超过 `999k` 会压缩成 `M`，数字最多保留三位有效数字。
+
+快捷键:
+- `ctrl+o`: 展开/折叠模型 thinking 过程；折叠时 thinking 仍保存在 transcript 中，但不渲染到 viewport。
 
 当前默认 settings:
 
@@ -152,7 +160,7 @@ go run ./cmd/agent -s <session-id>
   },
   "ui": {
     "context_limit_tokens": 1048576,
-    "context_meter_location": "input-title"
+    "context_meter_location": "input-above"
   }
 }
 ```
@@ -217,6 +225,7 @@ go run ./cmd/agent -s <session-id>
 - 调工具
 - 回灌 tool result
 - 维护内存中的对话历史
+- 记录最近一次模型流返回的真实 usage，供 context meter 展示
 
 这是当前系统的协调层。
 
@@ -229,7 +238,7 @@ main
   -> buildRunner
   -> loop.Runner.RunTurn
       -> model.Client.StreamMessage
-      -> ui.OnAssistantDelta / ui.OnDone
+      -> ui.OnThinkingDelta / ui.OnAssistantDelta / ui.OnDone
       -> parse tool_use
       -> tool.Registry.Get
       -> tool.Run
@@ -330,6 +339,7 @@ main
 - path: `/chat/completions`
 - model: `deepseek-chat`
 - 缺少 `DEEPSEEK_API_KEY` 时启动会报错
+- 流式调用会优先尝试 DeepSeek Anthropic Messages 端点以尽早获得 `message_start.usage.input_tokens`；如果 Anthropic 建流失败，则回退到 `/chat/completions` OpenAI-compatible 流。
 
 #### 请求/响应类型
 
@@ -386,8 +396,10 @@ main
 
 字段:
 - `Delta`
+- `Thinking`
 - `Done`
 - `Err`
+- `Usage`
 
 约定:
 - 一次事件只表达一种状态
@@ -785,10 +797,12 @@ main
 - `ui`
 - `registry`
 - `history`
+- `usage`
 
 职责:
 - 驱动单次 agent turn
 - 在成功 turn 后维护内存中的多轮历史
+- 用模型服务端 usage 字段更新 context 计量，不做本地 token 估算
 
 #### `NewRunner(model, output, registry) *Runner`
 
@@ -813,6 +827,7 @@ main
 
 职责:
 - 清空内存历史
+- 清空最近一次 usage 计量
 
 当前用途:
 - REPL 的 `/clear`

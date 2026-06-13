@@ -152,7 +152,7 @@ func (m appModel) transcriptContentLines() []string {
 
 // transcriptLineSnapshots 返回未应用选择高亮的 transcript 渲染行快照。
 func (m appModel) transcriptLineSnapshots() []transcriptLineSnapshot {
-	content := renderTranscript(m.transcript, maxInt(20, m.viewport.Width))
+	content := renderTranscript(m.transcript, maxInt(20, m.viewport.Width), m.showThinking)
 	return buildTranscriptLineSnapshots(content)
 }
 

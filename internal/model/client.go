@@ -28,6 +28,17 @@ func NewClient(cfg Config) *Client {
 	}
 }
 
+func (c *Client) streamHTTPClient() *http.Client {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.httpClient == nil {
+		return &http.Client{}
+	}
+	client := *c.httpClient
+	client.Timeout = 0
+	return &client
+}
+
 func (c *Client) setRequestHeaders(req *http.Request) {
 	cfg := c.CurrentModelConfig()
 	req.Header.Set("Content-Type", "application/json")

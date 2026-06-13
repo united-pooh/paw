@@ -57,7 +57,7 @@ func DefaultConfig() Config {
 		},
 		UI: UIConfig{
 			ContextLimitTokens:   DefaultContextLimitTokens,
-			ContextMeterLocation: MeterLocationInputTitle,
+			ContextMeterLocation: MeterLocationInputAbove,
 		},
 	}
 }
@@ -142,8 +142,10 @@ func NormalizeMeterLocation(location MeterLocation) MeterLocation {
 		return MeterLocationHeader
 	case MeterLocationInputAbove:
 		return MeterLocationInputAbove
-	default:
+	case MeterLocationInputTitle:
 		return MeterLocationInputTitle
+	default:
+		return MeterLocationInputAbove
 	}
 }
 
@@ -169,4 +171,3 @@ func (c *Controller) SaveSettings(cfg Config) error {
 	c.mu.Unlock()
 	return nil
 }
-

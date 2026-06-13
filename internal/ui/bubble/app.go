@@ -95,9 +95,20 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case cursorFrameMsg:
 		m.cursorFrameAt = time.Time(msg)
 		m.applyCursorAnimation()
+		m.updateContextMeterAnimation()
+		if m.hasActiveTranscriptAnimation() {
+			if m.viewport.AtBottom() {
+				m.refreshViewport()
+			} else {
+				m.refreshViewportPreservingOffset()
+			}
+		}
 		return m, cursorFrameTick()
 	case assistantDeltaMsg:
 		m.appendAssistantDelta(string(msg))
+		return m, nil
+	case thinkingDeltaMsg:
+		m.appendThinkingDelta(string(msg))
 		return m, nil
 	case toolCallMsg:
 		m.activeAssistant = -1
@@ -140,6 +151,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case turnFinishedMsg:
 		m.queryGuard.FinishModel()
+		m.turnStartedAt = time.Time{}
 		m.syncRunningFlags()
 		if msg.err != nil {
 			m.addEntry(transcriptEntry{
@@ -167,6 +179,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.input.Focus())
 	case subagentFinishedMsg:
 		m.queryGuard.FinishModel()
+		m.turnStartedAt = time.Time{}
 		m.syncRunningFlags()
 		if msg.err != nil {
 			m.addEntry(transcriptEntry{
@@ -195,6 +208,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c", "esc":
 			return m, tea.Quit
+		case "ctrl+o":
+			m.showThinking = !m.showThinking
+			m.refreshViewportPreservingOffset()
+			return m, nil
 		case "up":
 			return m.handleInputVerticalNavigation(-1)
 		case "down":

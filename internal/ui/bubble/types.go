@@ -24,6 +24,8 @@ const (
 	entryUser
 	// entryAssistant 表示 assistant 的模型输出消息。
 	entryAssistant
+	// entryThinking 表示模型 thinking 过程消息。
+	entryThinking
 	// entryTool 表示工具调用、工具结果或终端命令消息。
 	entryTool
 	// entryError 表示错误消息。
@@ -32,9 +34,10 @@ const (
 
 // transcriptEntry 是聊天历史区的一条可渲染记录。
 type transcriptEntry struct {
-	kind  entryKind
-	title string
-	body  string
+	kind      entryKind
+	title     string
+	body      string
+	createdAt time.Time
 }
 
 // selectionPoint 表示 transcript 渲染结果中的一个显示单元格坐标。
@@ -45,6 +48,9 @@ type selectionPoint struct {
 
 // assistantDeltaMsg 表示模型流式输出的一段文本增量。
 type assistantDeltaMsg string
+
+// thinkingDeltaMsg 表示模型 thinking 流式输出的一段文本增量。
+type thinkingDeltaMsg string
 
 // toolCallMsg 表示工具调用事件。
 type toolCallMsg ui.ToolCallEvent
@@ -139,6 +145,16 @@ type settingWizard struct {
 	err      string
 }
 
+// contextMeterAnimation 记录 context 进度条从旧 token 用量跳到新用量的短时动画。
+type contextMeterAnimation struct {
+	initialized bool
+	startedAt   time.Time
+	fromUsed    float64
+	fromCache   float64
+	targetUsed  int
+	targetCache int
+}
+
 // newModelWizard 根据当前配置创建 provider 选择向导，并默认选中当前 provider。
 func newModelWizard(current model.Config) *modelWizard {
 	selected := 0
@@ -186,11 +202,14 @@ type appModel struct {
 	runningTerminal bool
 	terminalMode    bool
 	terminalPreview bool
+	showThinking    bool
 	selecting       bool
 	selectionActive bool
 	selectionStart  selectionPoint
 	selectionEnd    selectionPoint
 	cursorFrameAt   time.Time
+	turnStartedAt   time.Time
+	contextMeter    contextMeterAnimation
 	pending         []string
 	inputHistory    []string
 	historyIndex    int
