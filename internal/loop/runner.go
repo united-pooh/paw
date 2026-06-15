@@ -57,13 +57,9 @@ type tokenUsageTotals struct {
 }
 
 type ContextStats struct {
-	UsedTokens          int
-	CacheTokens         int
-	OutputTokens        int
-	SessionUsedTokens   int
-	SessionCacheTokens  int
-	SessionOutputTokens int
-	LimitTokens         int
+	UsedTokens  int
+	CacheTokens int
+	LimitTokens int
 }
 
 type outputMode int
@@ -232,20 +228,13 @@ func (runner *Runner) ContextStats(limitTokens int, _ string) ContextStats {
 	runner.mu.RLock()
 	usage := runner.usage
 	usageKnown := runner.usageKnown
-	sessionUsage := runner.sessionUsage
-	sessionUsageKnown := runner.sessionUsageKnown
 	runner.mu.RUnlock()
 
 	current := usageTotalsFromUsage(usage, usageKnown)
-	session := usageTotalsFromUsage(sessionUsage, sessionUsageKnown)
 	return ContextStats{
-		UsedTokens:          current.used,
-		CacheTokens:         current.cache,
-		OutputTokens:        current.output,
-		SessionUsedTokens:   session.used,
-		SessionCacheTokens:  session.cache,
-		SessionOutputTokens: session.output,
-		LimitTokens:         limitTokens,
+		UsedTokens:  current.used,
+		CacheTokens: current.cache,
+		LimitTokens: limitTokens,
 	}
 }
 

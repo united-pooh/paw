@@ -333,11 +333,8 @@ func TestContextStatsUsesOnlyRealUsageAndKeepsLastKnownDuringNextTurn(t *testing
 		t.Fatalf("first turn started index = %d, want 0", got)
 	}
 	firstStats := runner.ContextStats(1024, "")
-	if firstStats.UsedTokens != 105 || firstStats.CacheTokens != 12 || firstStats.OutputTokens != 5 {
-		t.Fatalf("first ContextStats() = %#v, want real usage 105/cache 12/output 5", firstStats)
-	}
-	if firstStats.SessionUsedTokens != 105 || firstStats.SessionCacheTokens != 12 || firstStats.SessionOutputTokens != 5 {
-		t.Fatalf("first ContextStats() = %#v, want cumulative session usage 105/cache 12/output 5", firstStats)
+	if firstStats.UsedTokens != 105 || firstStats.CacheTokens != 12 {
+		t.Fatalf("first ContextStats() = %#v, want real usage 105/cache 12", firstStats)
 	}
 
 	errCh := make(chan error, 1)
@@ -350,11 +347,8 @@ func TestContextStatsUsesOnlyRealUsageAndKeepsLastKnownDuringNextTurn(t *testing
 	}
 
 	stats := runner.ContextStats(1024, "draft")
-	if stats.UsedTokens != 105 || stats.CacheTokens != 12 || stats.OutputTokens != 5 {
+	if stats.UsedTokens != 105 || stats.CacheTokens != 12 {
 		t.Fatalf("ContextStats() = %#v, want last real usage without draft estimate", stats)
-	}
-	if stats.SessionUsedTokens != 105 || stats.SessionCacheTokens != 12 || stats.SessionOutputTokens != 5 {
-		t.Fatalf("ContextStats() = %#v, want last cumulative session usage while next request has no usage", stats)
 	}
 
 	second <- model.StreamEvent{Done: true}
@@ -393,11 +387,8 @@ func TestContextStatsAccumulatesSessionUsageAcrossModelRequests(t *testing.T) {
 	}
 
 	stats := runner.ContextStats(1024, "")
-	if stats.UsedTokens != 157 || stats.CacheTokens != 30 || stats.OutputTokens != 7 {
-		t.Fatalf("ContextStats() = %#v, want latest context usage 157/cache 30/output 7", stats)
-	}
-	if stats.SessionUsedTokens != 302 || stats.SessionCacheTokens != 70 || stats.SessionOutputTokens != 12 {
-		t.Fatalf("ContextStats() = %#v, want cumulative session usage 302/cache 70/output 12", stats)
+	if stats.UsedTokens != 157 || stats.CacheTokens != 30 {
+		t.Fatalf("ContextStats() = %#v, want latest context usage 157/cache 30", stats)
 	}
 }
 
@@ -422,11 +413,8 @@ func TestContextStatsDoesNotDoubleCountCumulativeStreamUsageUpdates(t *testing.T
 	}
 
 	stats := runner.ContextStats(1024, "")
-	if stats.UsedTokens != 115 || stats.CacheTokens != 10 || stats.OutputTokens != 5 {
-		t.Fatalf("ContextStats() = %#v, want one request usage 115/cache 10/output 5", stats)
-	}
-	if stats.SessionUsedTokens != 115 || stats.SessionCacheTokens != 10 || stats.SessionOutputTokens != 5 {
-		t.Fatalf("ContextStats() = %#v, want cumulative session usage 115/cache 10/output 5", stats)
+	if stats.UsedTokens != 115 || stats.CacheTokens != 10 {
+		t.Fatalf("ContextStats() = %#v, want one request usage 115/cache 10", stats)
 	}
 }
 
@@ -434,18 +422,17 @@ func TestContextStatsDoesNotEstimateWhenUsageIsUnknown(t *testing.T) {
 	runner := NewRunner(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), nil, "")
 
 	stats := runner.ContextStats(1024, "draft prompt")
-	if stats.UsedTokens != 0 || stats.CacheTokens != 0 || stats.SessionUsedTokens != 0 || stats.LimitTokens != 1024 {
+	if stats.UsedTokens != 0 || stats.CacheTokens != 0 || stats.LimitTokens != 1024 {
 		t.Fatalf("ContextStats() = %#v, want zero usage until provider reports usage", stats)
 	}
 }
 
 func TestContextStatsUsesActualUsageWhenKnown(t *testing.T) {
 	tests := []struct {
-		name       string
-		usage      model.Usage
-		wantUsed   int
-		wantCache  int
-		wantOutput int
+		name      string
+		usage     model.Usage
+		wantUsed  int
+		wantCache int
 	}{
 		{
 			name: "anthropic",
@@ -455,9 +442,8 @@ func TestContextStatsUsesActualUsageWhenKnown(t *testing.T) {
 				CacheReadInputTokens:     40,
 				OutputTokens:             6,
 			},
-			wantUsed:   150,
-			wantCache:  40,
-			wantOutput: 6,
+			wantUsed:  150,
+			wantCache: 40,
 		},
 		{
 			name: "openai-compatible",
@@ -468,9 +454,8 @@ func TestContextStatsUsesActualUsageWhenKnown(t *testing.T) {
 				PromptCacheHitTokens:  40,
 				PromptCacheMissTokens: 60,
 			},
-			wantUsed:   102,
-			wantCache:  40,
-			wantOutput: 2,
+			wantUsed:  102,
+			wantCache: 40,
 		},
 		{
 			name: "openai-nested-cache-details",
@@ -482,9 +467,8 @@ func TestContextStatsUsesActualUsageWhenKnown(t *testing.T) {
 					CachedTokens: 32,
 				},
 			},
-			wantUsed:   102,
-			wantCache:  32,
-			wantOutput: 2,
+			wantUsed:  102,
+			wantCache: 32,
 		},
 	}
 	for _, tt := range tests {
@@ -500,9 +484,6 @@ func TestContextStatsUsesActualUsageWhenKnown(t *testing.T) {
 			if stats.CacheTokens != tt.wantCache {
 				t.Fatalf("CacheTokens = %d, want %d", stats.CacheTokens, tt.wantCache)
 			}
-			if stats.OutputTokens != tt.wantOutput {
-				t.Fatalf("OutputTokens = %d, want %d", stats.OutputTokens, tt.wantOutput)
-			}
 		})
 	}
 }
@@ -517,7 +498,7 @@ func TestResetHistoryClearsContextUsage(t *testing.T) {
 	runner.ResetHistory()
 
 	stats := runner.ContextStats(1024, "")
-	if stats.UsedTokens != 0 || stats.CacheTokens != 0 || stats.OutputTokens != 0 || stats.SessionUsedTokens != 0 || stats.SessionCacheTokens != 0 || stats.SessionOutputTokens != 0 {
+	if stats.UsedTokens != 0 || stats.CacheTokens != 0 {
 		t.Fatalf("ContextStats() = %#v, want reset usage", stats)
 	}
 }
@@ -890,5 +871,59 @@ func TestResetHistoryPreventsStoreReloadDuringProcess(t *testing.T) {
 		if callMsg.Content == "stale answer" {
 			t.Fatalf("unexpected stale history in model call: %#v", model.calls[0])
 		}
+	}
+}
+
+// TestContextStats_精简后三字段正确 验证 ContextStats 只暴露三个字段，且 UsedTokens = input+output。
+func TestContextStats_精简后三字段正确(t *testing.T) {
+	m := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{
+		{Usage: &model.Usage{InputTokens: 1000, OutputTokens: 100}},
+		{Done: true},
+	}}}}
+	runner := NewRunner(m, &fakeUI{}, nil, nil, "")
+	if _, err := runner.RunTurn(context.Background(), "hi"); err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	stats := runner.ContextStats(200000, "")
+	if stats.UsedTokens != 1100 {
+		t.Errorf("UsedTokens = %d，期望 1100", stats.UsedTokens)
+	}
+	if stats.CacheTokens != 0 {
+		t.Errorf("CacheTokens = %d，期望 0", stats.CacheTokens)
+	}
+	if stats.LimitTokens != 200000 {
+		t.Errorf("LimitTokens = %d，期望 200000", stats.LimitTokens)
+	}
+}
+
+// TestContextStats_CacheTokens正确反映命中缓存 验证 CacheHitTokens 进入 CacheTokens。
+func TestContextStats_CacheTokens正确反映命中缓存(t *testing.T) {
+	m := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{
+		{Usage: &model.Usage{InputTokens: 500, CacheReadInputTokens: 300, OutputTokens: 50}},
+		{Done: true},
+	}}}}
+	runner := NewRunner(m, &fakeUI{}, nil, nil, "")
+	if _, err := runner.RunTurn(context.Background(), "hi"); err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	stats := runner.ContextStats(200000, "")
+	// UsedTokens = 500 + 300 + 50 = 850
+	if stats.UsedTokens != 850 {
+		t.Errorf("UsedTokens = %d，期望 850（500 input + 300 cache_read + 50 output）", stats.UsedTokens)
+	}
+	if stats.CacheTokens != 300 {
+		t.Errorf("CacheTokens = %d，期望 300", stats.CacheTokens)
+	}
+}
+
+// TestContextStats_无usage时返回零值 验证未收到任何 usage 事件时安全返回零值。
+func TestContextStats_无usage时返回零值(t *testing.T) {
+	runner := NewRunner(nil, nil, nil, nil, "")
+	stats := runner.ContextStats(100000, "")
+	if stats.UsedTokens != 0 || stats.CacheTokens != 0 {
+		t.Errorf("空 runner ContextStats = %+v，期望 token 均为 0", stats)
+	}
+	if stats.LimitTokens != 100000 {
+		t.Errorf("LimitTokens = %d，期望 100000", stats.LimitTokens)
 	}
 }
