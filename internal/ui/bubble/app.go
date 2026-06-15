@@ -105,12 +105,15 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cursorFrameTick()
 	case assistantDeltaMsg:
+		m.isGenerating = true
 		m.appendAssistantDelta(string(msg))
 		return m, nil
 	case thinkingDeltaMsg:
+		m.isGenerating = true
 		m.appendThinkingDelta(string(msg))
 		return m, nil
 	case toolCallMsg:
+		m.isGenerating = false
 		m.activeAssistant = -1
 		m.addEntry(transcriptEntry{
 			kind:  entryTool,
@@ -146,10 +149,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 		return m, nil
 	case doneMsg:
+		m.isGenerating = false
 		m.activeAssistant = -1
 		m.refreshViewport()
 		return m, nil
 	case turnFinishedMsg:
+		m.isGenerating = false
 		m.queryGuard.FinishModel()
 		m.turnStartedAt = time.Time{}
 		m.syncRunningFlags()

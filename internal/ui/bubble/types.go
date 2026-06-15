@@ -217,6 +217,7 @@ type appModel struct {
 	historyDownLock bool
 	transcript      []transcriptEntry
 	activeAssistant int
+	isGenerating    bool
 	modelWizard     *modelWizard
 	settingWizard   *settingWizard
 }

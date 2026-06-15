@@ -24,22 +24,18 @@ func (m appModel) contextMeterLine(width int) string {
 	limit := maxInt(1, stats.LimitTokens)
 	used := maxInt(0, stats.UsedTokens)
 	cache := clampInt(stats.CacheTokens, 0, used)
-	sessionUsed := maxInt(0, stats.SessionUsedTokens)
-	sessionOutput := clampInt(stats.SessionOutputTokens, 0, sessionUsed)
-	sessionUpload := maxInt(0, sessionUsed-sessionOutput)
-	usedLabel := formatContextUsageLabel(sessionUpload, sessionOutput, used, cache, limit)
+	usedLabel := formatContextUsageLabel(used, cache, limit, m.isGenerating)
 	freeLabel := formatContextFreeLabel(used, limit)
-	barUsed := clampInt(used, 0, limit)
-	barCache := clampInt(cache, 0, barUsed)
-	animatedUsed, animatedCache, pulse := m.animatedContextTokens(barUsed, barCache, limit)
+	animatedUsed, animatedCache, pulse := m.animatedContextTokens(limit)
 	return renderContextMeterLine(width, usedLabel, freeLabel, animatedUsed, animatedCache, limit, m.thinkingLabel(), pulse)
 }
 
-func formatContextUsageLabel(upload, output, used, cache, limit int) string {
-	parts := []string{formatCompactTokenCount(upload) + "↑"}
-	if output > 0 {
-		parts = append(parts, formatCompactTokenCount(output)+"↓")
+func formatContextUsageLabel(used, cache, limit int, isGenerating bool) string {
+	arrow := "↑"
+	if isGenerating {
+		arrow = "↓"
 	}
+	parts := []string{formatCompactTokenCount(used) + arrow}
 	parts = append(parts, fmt.Sprintf("%s(%s)", formatContextPercent(used, limit), formatContextPercent(cache, limit)))
 	return strings.Join(parts, " ")
 }
@@ -218,7 +214,7 @@ func (m *appModel) updateContextMeterAnimation() {
 	if m.contextMeter.targetUsed == used && m.contextMeter.targetCache == cache {
 		return
 	}
-	currentUsed, currentCache, _ := m.animatedContextTokens(m.contextMeter.targetUsed, m.contextMeter.targetCache, limit)
+	currentUsed, currentCache, _ := m.animatedContextTokens(limit)
 	m.contextMeter.startedAt = now
 	m.contextMeter.fromUsed = float64(currentUsed)
 	m.contextMeter.fromCache = float64(currentCache)
@@ -226,9 +222,9 @@ func (m *appModel) updateContextMeterAnimation() {
 	m.contextMeter.targetCache = cache
 }
 
-func (m appModel) animatedContextTokens(used, cache, limit int) (int, int, float64) {
+func (m appModel) animatedContextTokens(limit int) (int, int, float64) {
 	if !m.contextMeter.initialized {
-		return used, cache, 0
+		return m.contextMeter.targetUsed, m.contextMeter.targetCache, 0
 	}
 	now := m.animationNow()
 	elapsed := now.Sub(m.contextMeter.startedAt)
