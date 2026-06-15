@@ -1597,12 +1597,8 @@ func TestRenderInputBoxShowsStatefulPanel(t *testing.T) {
 func TestContextMeterUsesDefaultLimitAndStableSegments(t *testing.T) {
 	runner := &fakeRunner{
 		stats: loop.ContextStats{
-			UsedTokens:          262144,
-			CacheTokens:         104858,
-			OutputTokens:        2048,
-			SessionUsedTokens:   262144,
-			SessionCacheTokens:  104858,
-			SessionOutputTokens: 2048,
+			UsedTokens:  262144,
+			CacheTokens: 104858,
 		},
 	}
 	model := newTestModel(runner)
@@ -1615,7 +1611,7 @@ func TestContextMeterUsesDefaultLimitAndStableSegments(t *testing.T) {
 	if runner.lastDraft != "draft prompt" {
 		t.Fatalf("lastDraft = %q, want draft prompt", runner.lastDraft)
 	}
-	for _, want := range []string{"260k↑", "2.05k↓", "25%(10%)", "free(75%)"} {
+	for _, want := range []string{"262k↑", "25%(10%)", "free(75%)"} {
 		if !strings.Contains(title, want) {
 			t.Fatalf("contextMeterTitle() = %q, want %q", title, want)
 		}
@@ -1635,22 +1631,18 @@ func TestContextMeterUsesDefaultLimitAndStableSegments(t *testing.T) {
 	}
 }
 
-func TestContextMeterShowsCumulativeCountsBeyondLimit(t *testing.T) {
+func TestContextMeterShowsCurrentContextSize(t *testing.T) {
 	runner := &fakeRunner{
 		stats: loop.ContextStats{
-			UsedTokens:          800,
-			CacheTokens:         100,
-			OutputTokens:        100,
-			SessionUsedTokens:   1500,
-			SessionCacheTokens:  300,
-			SessionOutputTokens: 200,
-			LimitTokens:         1000,
+			UsedTokens:  800,
+			CacheTokens: 100,
+			LimitTokens: 1000,
 		},
 	}
 	model := newTestModel(runner)
 
 	meter := model.contextMeterLine(48)
-	for _, want := range []string{"1.3k↑", "200↓", "80%(10%)", "free(20%)"} {
+	for _, want := range []string{"800↑", "80%(10%)", "free(20%)"} {
 		if !strings.Contains(meter, want) {
 			t.Fatalf("meter = %q, want %q", meter, want)
 		}
@@ -1701,12 +1693,9 @@ func TestContextMeterAnimatesBarButKeepsTokenLabelsImmediate(t *testing.T) {
 	started := time.Unix(30, 0)
 	runner := &fakeRunner{
 		stats: loop.ContextStats{
-			LimitTokens:         1000,
-			UsedTokens:          100,
-			CacheTokens:         0,
-			SessionUsedTokens:   100,
-			SessionCacheTokens:  0,
-			SessionOutputTokens: 0,
+			LimitTokens: 1000,
+			UsedTokens:  100,
+			CacheTokens: 0,
 		},
 	}
 	model := newTestModel(runner)
@@ -1714,14 +1703,11 @@ func TestContextMeterAnimatesBarButKeepsTokenLabelsImmediate(t *testing.T) {
 	model.updateContextMeterAnimation()
 
 	runner.stats.UsedTokens = 400
-	runner.stats.OutputTokens = 40
-	runner.stats.SessionUsedTokens = 400
-	runner.stats.SessionOutputTokens = 40
 	model.cursorFrameAt = started.Add(100 * time.Millisecond)
 	model.updateContextMeterAnimation()
 
 	model.cursorFrameAt = started.Add(260 * time.Millisecond)
-	animatedUsed, _, pulse := model.animatedContextTokens(400, 0, 1000)
+	animatedUsed, _, pulse := model.animatedContextTokens(1000)
 	if animatedUsed <= 100 || animatedUsed >= 400 {
 		t.Fatalf("animatedUsed = %d, want nonlinear value between old and new target", animatedUsed)
 	}
@@ -1729,14 +1715,15 @@ func TestContextMeterAnimatesBarButKeepsTokenLabelsImmediate(t *testing.T) {
 		t.Fatalf("pulse = %f, want active pulse during animation", pulse)
 	}
 	meter := model.contextMeterLine(48)
-	for _, want := range []string{"360↑", "40↓", "40%(0%)", "free(60%)"} {
+	// 标签立即反映当前 UsedTokens=400，不等动画结束
+	for _, want := range []string{"400↑", "40%(0%)", "free(60%)"} {
 		if !strings.Contains(meter, want) {
 			t.Fatalf("meter = %q, want immediate label %q", meter, want)
 		}
 	}
 
 	model.cursorFrameAt = started.Add(time.Second)
-	animatedUsed, _, pulse = model.animatedContextTokens(400, 0, 1000)
+	animatedUsed, _, pulse = model.animatedContextTokens(1000)
 	if animatedUsed != 400 || pulse != 0 {
 		t.Fatalf("animation end = used %d pulse %f, want target and no pulse", animatedUsed, pulse)
 	}
@@ -1773,9 +1760,8 @@ func TestContextMeterShowsThinkingTimerCenteredInLine(t *testing.T) {
 func TestNarrowLayoutKeepsMeterAboveBottomInput(t *testing.T) {
 	runner := &fakeRunner{
 		stats: loop.ContextStats{
-			UsedTokens:        settings.DefaultContextLimitTokens / 2,
-			CacheTokens:       0,
-			SessionUsedTokens: settings.DefaultContextLimitTokens / 2,
+			UsedTokens:  settings.DefaultContextLimitTokens / 2,
+			CacheTokens: 0,
 		},
 	}
 	model := newTestModel(runner)
@@ -1932,5 +1918,87 @@ func TestAnchoredOutputRestoresBeforeNextWrite(t *testing.T) {
 	want := "frame1\r\r\x1b[1A\x1b[7C\x1b[1B\rframe2\r\r\x1b[2A\x1b[3C"
 	if got := string(data); got != want {
 		t.Fatalf("anchored output = %q, want %q", got, want)
+	}
+}
+
+// TestContextMeter_空闲时显示上箭头 验证 isGenerating=false 时标签含 ↑ 不含 ↓。
+func TestContextMeter_空闲时显示上箭头(t *testing.T) {
+	label := formatContextUsageLabel(1000, 0, 200000, false)
+	if !strings.Contains(label, "↑") {
+		t.Errorf("空闲时标签应含 ↑，实际: %q", label)
+	}
+	if strings.Contains(label, "↓") {
+		t.Errorf("空闲时标签不应含 ↓，实际: %q", label)
+	}
+}
+
+// TestContextMeter_推理输出时显示下箭头 验证 isGenerating=true（thinking/文本输出）时标签含 ↓ 不含 ↑。
+func TestContextMeter_推理输出时显示下箭头(t *testing.T) {
+	label := formatContextUsageLabel(1000, 0, 200000, true)
+	if !strings.Contains(label, "↓") {
+		t.Errorf("推理/输出时标签应含 ↓，实际: %q", label)
+	}
+	if strings.Contains(label, "↑") {
+		t.Errorf("推理/输出时标签不应含 ↑，实际: %q", label)
+	}
+}
+
+// TestContextMeter_工具调用后恢复上箭头 验证 isGenerating 清零后标签恢复 ↑。
+func TestContextMeter_工具调用后恢复上箭头(t *testing.T) {
+	// 先模拟推理阶段
+	labelDuring := formatContextUsageLabel(1200, 0, 200000, true)
+	if !strings.Contains(labelDuring, "↓") {
+		t.Errorf("推理时标签应含 ↓，实际: %q", labelDuring)
+	}
+	// 工具调用后 isGenerating 被清零
+	labelAfter := formatContextUsageLabel(1200, 0, 200000, false)
+	if !strings.Contains(labelAfter, "↑") {
+		t.Errorf("工具调用后标签应含 ↑，实际: %q", labelAfter)
+	}
+}
+
+// TestContextMeter_零token时不崩溃 验证 UsedTokens=0 时安全返回 "0↑"。
+func TestContextMeter_零token时不崩溃(t *testing.T) {
+	label := formatContextUsageLabel(0, 0, 200000, false)
+	if !strings.Contains(label, "0↑") {
+		t.Errorf("零 token 标签应含 0↑，实际: %q", label)
+	}
+}
+
+// TestContextMeter_多轮后数字只反映当前context 验证数字等于 UsedTokens 而非 session 累加。
+func TestContextMeter_多轮后数字只反映当前context(t *testing.T) {
+	// 第 3 轮结束，当前 context = 2000，不是 3 轮累加值 6000
+	runner := &fakeRunner{stats: loop.ContextStats{UsedTokens: 2000, LimitTokens: 200000}}
+	model := newTestModel(runner)
+	meter := model.contextMeterLine(60)
+	if !strings.Contains(meter, "2k↑") {
+		t.Errorf("多轮后 meter 应含当前 context 大小 2k↑，实际: %q", meter)
+	}
+	if strings.Contains(meter, "6k") {
+		t.Errorf("meter 不应出现 session 累加值 6k，实际: %q", meter)
+	}
+}
+
+// TestContextMeter_thinkingDeltaMsg设置isGenerating 验证 app.go 里 thinkingDeltaMsg 触发 isGenerating=true。
+func TestContextMeter_thinkingDeltaMsg设置isGenerating(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	if model.isGenerating {
+		t.Fatalf("初始 isGenerating 应为 false")
+	}
+	updated, _ := model.Update(thinkingDeltaMsg("思考中..."))
+	next := updated.(appModel)
+	if !next.isGenerating {
+		t.Errorf("收到 thinkingDeltaMsg 后 isGenerating 应为 true")
+	}
+}
+
+// TestContextMeter_doneMsg清除isGenerating 验证 doneMsg 触发 isGenerating=false。
+func TestContextMeter_doneMsg清除isGenerating(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.isGenerating = true
+	updated, _ := model.Update(doneMsg{})
+	next := updated.(appModel)
+	if next.isGenerating {
+		t.Errorf("收到 doneMsg 后 isGenerating 应为 false")
 	}
 }
