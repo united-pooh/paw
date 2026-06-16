@@ -2618,6 +2618,26 @@ func TestRenderSubagentsCard_ShowsRunningAndDone(t *testing.T) {
 	}
 }
 
+// TestRenderPipelineOrTasksContent_ShowsTasksWhenNoPipeline 验证无 pipeline 时显示 tasks 徽章。
+func TestRenderPipelineOrTasksContent_ShowsTasksWhenNoPipeline(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.pipelineState.detected = false
+	result := model.renderPipelineOrTasksContent(28, 10)
+	if !strings.Contains(result, "tasks") {
+		t.Errorf("no-pipeline card = %q, want 'tasks' badge", result)
+	}
+}
+
+// TestRenderPipelineOrTasksContent_ShowsPipelineWhenDetected 验证检测到 pipeline 时显示 pipeline 内容。
+func TestRenderPipelineOrTasksContent_ShowsPipelineWhenDetected(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.pipelineState.detected = true
+	result := model.renderPipelineOrTasksContent(28, 10)
+	if !strings.Contains(result, "pipeline") {
+		t.Errorf("pipeline card = %q, want 'pipeline' content", result)
+	}
+}
+
 // TestCtrlC_清空时关闭候选框 验证 Ctrl+C 同时关闭文件补全候选框。
 func TestCtrlC_清空时关闭候选框(t *testing.T) {
 	model := newTestModel(&fakeRunner{})

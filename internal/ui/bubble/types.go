@@ -253,7 +253,40 @@ type appModel struct {
 	settingWizard   *settingWizard
 	sessionPicker   *sessionPicker
 	completion      *completion
+	pipelineState   pipelineState
 	sidebarWidth int // 右侧面板宽度（字符），由 relayout() 计算并存储
+}
+
+// pipelinePhaseStatus 标记单个 pipeline 阶段的状态。
+type pipelinePhaseStatus int
+
+const (
+	phaseStatusPending pipelinePhaseStatus = iota
+	phaseStatusDone
+	phaseStatusActive
+	phaseStatusRetry
+)
+
+// pipelinePhaseEntry 单个阶段的状态快照。
+type pipelinePhaseEntry struct {
+	name      string
+	artifact  string // 相对 .pipeline-workspace/ 的文件名
+	status    pipelinePhaseStatus
+	iteration int
+}
+
+// pipelineState 完整 pipeline 状态快照（每 500ms 轮询更新）。
+type pipelineState struct {
+	detected   bool               // .pipeline-workspace/spec.json 是否存在
+	activeIdx  int                // 当前 active 阶段索引（-1 = none）
+	globalIter int                // 全局迭代（来自 execution-report.json.iteration）
+	doneCount  int                // 已完成阶段数
+	phases     [18]pipelinePhaseEntry
+}
+
+// pipelineStateUpdatedMsg 由后台轮询 cmd 发回，携带最新 pipelineState。
+type pipelineStateUpdatedMsg struct {
+	state pipelineState
 }
 
 type contextStatsProvider interface {

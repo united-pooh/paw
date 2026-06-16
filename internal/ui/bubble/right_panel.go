@@ -82,7 +82,29 @@ func (m appModel) renderSubagentsCardContent(width int) string {
 	return strings.Join(lines, "\n")
 }
 
-// renderPipelineOrTasksContent 渲染 Pipeline/Tasks 内容（Task 5-7 实现）。
-func (m appModel) renderPipelineOrTasksContent(_, _ int) string {
-	return "pipeline / tasks"
+// renderPipelineOrTasksContent 渲染 Pipeline 或 Tasks 卡片内容。
+// 有 pipeline 时显示 pipeline 状态（Task 7 实现），无 pipeline 时显示 tasks 列表。
+func (m appModel) renderPipelineOrTasksContent(width, height int) string {
+	if m.pipelineState.detected {
+		return m.renderPipelineWindowedContent(width, height)
+	}
+	return m.renderTasksContent(width, height)
+}
+
+// renderTasksContent 渲染无 pipeline 时的 Tasks 列表。
+func (m appModel) renderTasksContent(width, height int) string {
+	badge := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("136")).
+		Background(lipgloss.Color("234")).
+		Padding(0, 1).
+		Render("✦ tasks")
+
+	// 当前 Runner 接口未暴露 TaskList，显示空状态
+	empty := lipgloss.NewStyle().Foreground(lipgloss.Color("235")).Italic(true).Render("no tasks")
+	return badge + "\n" + empty
+}
+
+// renderPipelineWindowedContent 留给 Task 7 实现。
+func (m appModel) renderPipelineWindowedContent(width, height int) string {
+	return "pipeline..."
 }
