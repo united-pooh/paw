@@ -225,12 +225,18 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.input.Focus())
 		return m, tea.Batch(cmds...)
 	case fileCompletionLoadedMsg:
-		if m.completion != nil && m.completion.kind == completionKindFile {
-			if msg.err == nil {
-				m.completion.items = msg.items
-				m.completion.loading = false
-			} else {
-				m.completion = nil
+		// 丢弃与当前 searchDir 不匹配的过期结果
+		if m.completion != nil && m.completion.kind == completionKindFile &&
+			m.completion.searchDir == msg.searchDir {
+			m.completion.allItems = msg.items
+			m.completion.filteredItems = msg.filtered
+			m.completion.loading = false
+			// 用当前 prefix 再过滤一次（加载期间前缀可能已改变）
+			if m.completion.prefix != "" {
+				m.completion.filteredItems = filterByPrefix(m.completion.allItems, m.completion.prefix)
+			}
+			if m.completion.selectedIndex >= len(m.completion.filteredItems) {
+				m.completion.selectedIndex = 0
 			}
 		}
 		return m, nil
@@ -244,8 +250,32 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.sessionPicker != nil {
 			return m.handleSessionPickerKey(msg)
 		}
+		// 补全激活时：只拦截导航键和确认键，其余按键正常透传给输入框
 		if m.completion != nil {
-			return m.handleCompletionKey(msg)
+			switch msg.String() {
+			case "esc":
+				m.completion = nil
+				return m, nil
+			case "up", "ctrl+p":
+				m.completion.navigateUp()
+				return m, nil
+			case "down", "ctrl+n":
+				m.completion.navigateDown()
+				return m, nil
+			case "tab", "enter":
+				visible := m.completion.visibleItems()
+				if !m.completion.loading && len(visible) > 0 {
+					selected := visible[m.completion.selectedIndex]
+					if m.completion.kind == completionKindFile {
+						m = m.applyFileCompletion(selected)
+					} else {
+						m = m.applyCommandCompletion(selected)
+					}
+				}
+				m.completion = nil
+				return m, nil
+			}
+			// 其他键：不 return，继续走下面的 switch 和 textarea 更新
 		}
 		switch msg.String() {
 		case "ctrl+c", "esc":
@@ -281,23 +311,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.relayout()
 		cmds = append(cmds, inputCmd)
 
-		// 检测 / 和 @ 前缀触发命令补全或文件补全（仅在文本编辑键后）
+		// 每次文本变化后同步补全状态
 		if isTextEditingKey(msg) {
-			val := m.input.Value()
-			switch {
-			case strings.HasPrefix(val, "/"):
-				query := strings.TrimPrefix(val, "/")
-				m.completion = newCommandCompletion(query, m.commandRegistry)
-				m.sessionPicker = nil
-			case strings.HasPrefix(val, "@"):
-				if m.completion == nil || m.completion.kind != completionKindFile {
-					m.completion = newFileCompletion(val[1:])
-					cmds = append(cmds, loadFileCompletionCmd())
-				}
-			default:
-				if m.completion != nil && (m.completion.kind == completionKindCommand || m.completion.kind == completionKindFile) {
-					m.completion = nil
-				}
+			// / 命令补全：整个输入以 / 开头时触发
+			m.syncCommandCompletion()
+			// @ 文件补全：词边界 @ 触发（只要 / 补全未激活）
+			if cmd := m.syncAtCompletion(); cmd != nil {
+				cmds = append(cmds, cmd)
 			}
 		}
 	}

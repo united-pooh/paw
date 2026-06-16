@@ -42,10 +42,12 @@ func (m appModel) renderActiveInputPanel() string {
 	if m.sessionPicker != nil {
 		return m.renderSessionPickerBox()
 	}
+	inputBox := m.renderInputBox()
 	if m.completion != nil {
-		return m.renderCompletionBox()
+		// 补全弹窗悬浮在输入框上方，输入框始终可见
+		return lipgloss.JoinVertical(lipgloss.Left, m.renderCompletionBox(), inputBox)
 	}
-	return m.renderInputBox()
+	return inputBox
 }
 
 // updateTerminalCursorAnchor 根据输入框在画面中的位置更新终端真实光标锚点。
@@ -62,13 +64,19 @@ func (m appModel) updateTerminalCursorAnchor(inputPanel string) {
 
 // shouldAnchorTextInputCursor 判断当前是否应该把终端真实光标移动到输入单元格。
 func (m appModel) shouldAnchorTextInputCursor() bool {
-	return m.ready && !m.running && m.modelWizard == nil && m.settingWizard == nil && m.sessionPicker == nil && m.completion == nil
+	// 补全弹窗开启时输入框仍然可见，光标仍需锚定
+	return m.ready && !m.running && m.modelWizard == nil && m.settingWizard == nil && m.sessionPicker == nil
 }
 
 // inputCursorTerminalPosition 计算输入框光标相对当前帧底部的位置。
 func (m appModel) inputCursorTerminalPosition(inputPanel string) terminalCursorPosition {
 	inputHeight := maxInt(1, lipgloss.Height(inputPanel))
-	row := minInt(1+m.inputEmbeddedTitleHeight()+visibleTextareaCursorRow(m.input), inputHeight-1)
+	// 补全弹窗在输入框上方时，光标行需要偏移补全框高度
+	completionOffset := 0
+	if m.completion != nil {
+		completionOffset = lipgloss.Height(m.renderCompletionBox())
+	}
+	row := minInt(completionOffset+1+m.inputEmbeddedTitleHeight()+visibleTextareaCursorRow(m.input), inputHeight-1)
 	upFromBottom := maxInt(0, inputHeight-row-1)
 	column := 2 + visibleTextareaCursorColumn(m.input)
 	if m.width > 0 {

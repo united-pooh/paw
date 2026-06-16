@@ -195,8 +195,10 @@ type sessionRestoredMsg struct {
 
 // fileCompletionLoadedMsg 携带异步加载完成的文件补全列表。
 type fileCompletionLoadedMsg struct {
-	items []string
-	err   error
+	searchDir string   // 对应的搜索目录，用于丢弃过期结果
+	items     []string // 目录内的全部条目（未过滤）
+	filtered  []string // 按前缀过滤后的结果
+	err       error
 }
 
 // sessionSummaryItem 是 session picker 中的一行显示项。

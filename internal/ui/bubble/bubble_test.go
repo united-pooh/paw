@@ -2238,3 +2238,187 @@ func TestSessionPickerKeyNavigation(t *testing.T) {
 		t.Fatalf("selectedIndex = %d, want 1 after up", model.sessionPicker.selectedIndex)
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// @ 文件补全触发边界行为测试
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestDetectAtTrigger_行首触发 验证输入以 @ 开头时能够触发。
+func TestDetectAtTrigger_行首触发(t *testing.T) {
+	idx, query := detectAtTrigger("@readme")
+	if idx != 0 {
+		t.Errorf("atByteIndex = %d, want 0", idx)
+	}
+	if query != "readme" {
+		t.Errorf("query = %q, want readme", query)
+	}
+}
+
+// TestDetectAtTrigger_空格后触发 验证 @ 前有空格时能够触发（如"可以 @文件"）。
+func TestDetectAtTrigger_空格后触发(t *testing.T) {
+	input := "可以 @readme"
+	idx, query := detectAtTrigger(input)
+	if idx < 0 {
+		t.Fatalf("atByteIndex = -1, want >=0 for %q", input)
+	}
+	if query != "readme" {
+		t.Errorf("query = %q, want readme", query)
+	}
+	// @ 之前的文本应保持不变
+	before := input[:idx]
+	if before != "可以 " {
+		t.Errorf("before = %q, want '可以 '", before)
+	}
+}
+
+// TestDetectAtTrigger_非词边界不触发 验证 @ 紧跟非空白字符时不触发（如"可以@文件"）。
+func TestDetectAtTrigger_非词边界不触发(t *testing.T) {
+	idx, _ := detectAtTrigger("可以@readme")
+	if idx >= 0 {
+		t.Errorf("atByteIndex = %d, want -1 for inline @ (not word boundary)", idx)
+	}
+}
+
+// TestDetectAtTrigger_末尾空白不触发 验证末尾是空白时不触发（词已结束）。
+func TestDetectAtTrigger_末尾空白不触发(t *testing.T) {
+	idx, _ := detectAtTrigger("@readme ")
+	if idx >= 0 {
+		t.Errorf("atByteIndex = %d, want -1 when trailing space ends the word", idx)
+	}
+}
+
+// TestDetectAtTrigger_仅At号 验证只有 @ 时 query 为空字符串。
+func TestDetectAtTrigger_仅At号(t *testing.T) {
+	idx, query := detectAtTrigger("@")
+	if idx != 0 {
+		t.Errorf("atByteIndex = %d, want 0", idx)
+	}
+	if query != "" {
+		t.Errorf("query = %q, want empty", query)
+	}
+}
+
+// TestDetectAtTrigger_路径前缀波浪号 验证 @~ 形式的 query。
+func TestDetectAtTrigger_路径前缀波浪号(t *testing.T) {
+	idx, query := detectAtTrigger("@~/docs")
+	if idx != 0 {
+		t.Errorf("atByteIndex = %d, want 0", idx)
+	}
+	if query != "~/docs" {
+		t.Errorf("query = %q, want ~/docs", query)
+	}
+}
+
+// TestDetectAtTrigger_路径前缀根目录 验证 @/ 形式的 query。
+func TestDetectAtTrigger_路径前缀根目录(t *testing.T) {
+	idx, query := detectAtTrigger("@/etc/hosts")
+	if idx != 0 {
+		t.Errorf("atByteIndex = %d, want 0", idx)
+	}
+	if query != "/etc/hosts" {
+		t.Errorf("query = %q, want /etc/hosts", query)
+	}
+}
+
+// TestResolvePathParts 验证 resolvePathParts 的路径分解逻辑。
+func TestResolvePathParts(t *testing.T) {
+	tests := []struct {
+		base, rest, wantDir, wantPrefix string
+	}{
+		{"/home/user", "", "/home/user", ""},
+		{"/home/user", "foo", "/home/user", "foo"},
+		{"/home/user", "dir/", "/home/user/dir", ""},
+		{"/home/user", "dir/foo", "/home/user/dir", "foo"},
+		{"/home/user", "a/b/c", "/home/user/a/b", "c"},
+	}
+	for _, tt := range tests {
+		dir, prefix := resolvePathParts(tt.base, tt.rest)
+		if dir != tt.wantDir || prefix != tt.wantPrefix {
+			t.Errorf("resolvePathParts(%q, %q) = (%q, %q), want (%q, %q)",
+				tt.base, tt.rest, dir, prefix, tt.wantDir, tt.wantPrefix)
+		}
+	}
+}
+
+// TestAtCompletion_输入时不阻断输入框 验证补全弹窗开启时字符键仍然写入输入框。
+func TestAtCompletion_输入时不阻断输入框(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	// 设置初始 @ 触发状态
+	model.completion = &completion{
+		kind:          completionKindFile,
+		filteredItems: []string{"readme.md", "go.mod"},
+		loading:       false,
+	}
+
+	// 发送普通字符键（非导航键），应该透传给输入框
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	model = next.(appModel)
+
+	// 输入框应该包含该字符
+	if !strings.Contains(model.input.Value(), "r") {
+		t.Errorf("input value = %q, want to contain 'r' after typing while completion open", model.input.Value())
+	}
+}
+
+// TestAtCompletion_Tab只替换At段 验证 tab 确认时只替换 @query 段，保留前面文本。
+func TestAtCompletion_Tab只替换At段(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.input.SetValue("请引用 @re")
+	model.completion = &completion{
+		kind:          completionKindFile,
+		atByteIndex:   len("请引用 "), // @ 位于"请引用 "之后
+		query:         "re",
+		filteredItems: []string{"readme.md"},
+		selectedIndex: 0,
+		loading:       false,
+	}
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = next.(appModel)
+
+	got := model.input.Value()
+	if !strings.HasPrefix(got, "请引用 @readme.md") {
+		t.Errorf("input value = %q, want to start with '请引用 @readme.md '", got)
+	}
+	if model.completion != nil {
+		t.Errorf("completion should be nil after tab, got %#v", model.completion)
+	}
+}
+
+// TestAtCompletion_Esc清除不退出 验证 esc 只清除补全弹窗，不退出 TUI。
+func TestAtCompletion_Esc清除不退出(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.completion = &completion{
+		kind:          completionKindFile,
+		filteredItems: []string{"readme.md"},
+		loading:       false,
+	}
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = next.(appModel)
+
+	if model.completion != nil {
+		t.Errorf("completion should be nil after esc, got %#v", model.completion)
+	}
+	// cmd 不应是 tea.Quit
+	if cmd != nil {
+		msg := cmd()
+		if _, ok := msg.(tea.QuitMsg); ok {
+			t.Errorf("esc while completion open should not quit TUI")
+		}
+	}
+}
+
+// TestFilterByPrefix 验证大小写不敏感的前缀过滤。
+func TestFilterByPrefix(t *testing.T) {
+	items := []string{"README.md", "readme.txt", "go.mod", "go.sum", "main.go"}
+	got := filterByPrefix(items, "read")
+	if len(got) != 2 {
+		t.Errorf("filterByPrefix = %v, want [README.md readme.txt]", got)
+	}
+	// 空前缀返回全部
+	all := filterByPrefix(items, "")
+	if len(all) != len(items) {
+		t.Errorf("filterByPrefix with empty prefix = %d items, want %d", len(all), len(items))
+	}
+}
