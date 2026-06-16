@@ -53,6 +53,9 @@ go run ./cmd/agent
 go run ./cmd/agent -s <session-id>
 ```
 
+- 不加参数直接启动时，每次都会创建一个全新的空会话。
+- 需要恢复历史会话时，使用 `-s <session-id>` 指定会话 ID；也可在交互界面输入 `/sessions` 浏览并恢复历史会话。
+
 当前运行目录会作为工作区 root，同时也是 `.ccagent/` 状态目录的基准路径。
 
 ## 入口
@@ -82,8 +85,8 @@ go run ./cmd/agent -s <session-id>
 行为:
 - `-p` 有值: 执行单轮
 - `-p` 为空: 进入交互式对话界面
-- `-s` 有值: 绑定到指定 session
-- `-s` 为空: 按当前工作目录自动打开或创建 session
+- `-s` 有值: 绑定到指定 session 并恢复历史
+- `-s` 为空: 每次启动都创建一个全新空 session
 
 #### `buildRunner(ctx, sessionIDFlag, output) (*loop.Runner, string, *model.Client, *settings.Controller, *subagent.Manager, error)`
 
@@ -126,6 +129,7 @@ go run ./cmd/agent -s <session-id>
 - `/model [status|custom|deepseek]`
 - `/export [filename]`
 - `/setting`
+- `/sessions`
 - `/subagent [--fork|--empty] [--background|--sync] <prompt>`
 - `/tasks`
 - `/status`
@@ -136,12 +140,18 @@ go run ./cmd/agent -s <session-id>
 - `/model` 无参数时打开 provider 向导；`status` 只输出当前配置；`custom`、`deepseek` 直接切换并持久化到 `.ccagent/model.json`；`deepseek` 需要 `DEEPSEEK_API_KEY`
 - `/export` 默认导出到 `.ccagent/exports/conversation-YYYY-MM-DD-HHMMSS.txt`，也支持工作区内显式路径；导出文件权限为 `0600`
 - `/setting` 通过向导保存默认 subagent context/run mode，以及 context meter 的位置和 token limit
+- `/sessions` 列出所有历史会话（ID 前缀、日期、文件大小、首条消息），选中条目后直接恢复该会话
 - `/subagent` 支持 `empty` 与 `fork` 两种上下文模式，以及 `sync` 与 `background` 两种运行模式；后台任务完成后会发 UI 系统通知，但结果不会自动插回主对话
 - `/tasks` 展示当前后台 subagent 任务及 transcript 路径
 
 #### 当前输入区状态
 
 context meter 默认展示在消息历史区下方、输入框上方；输入框保持在窗口底部，不再显示 `Input`、`Waiting`、`Terminal` 标签。
+
+输入补全:
+- 在输入框中输入 `/` 会弹出斜杠命令候选列表
+- 在输入框中输入 `@` 会弹出工作区文件路径候选列表
+- 使用 ↑↓ 键在候选项之间导航，Tab 或 Enter 确认补全，Esc 关闭弹窗
 
 context meter 的 token 数只来自模型服务端返回的真实 `usage` 字段；不会根据草稿、历史文本或本地字符数做估算。左侧 `↑/↓` 数字展示本次打开后的 session 累计 token 消耗，每次启动从 0 开始，`/clear` 也会清零；每次模型请求的 input/prompt、output/completion 与 cache hit 会按 provider 返回值入账，同一条流里多次 `usage` 会先合并成该请求的累计值再计入 session，避免 `message_start` / `message_delta` 重复计数。进度条、used 百分比、cache hit 百分比和 `free(...)` 仍然展示最近一次真实 usage 对应的当前上下文窗口占用；新一轮请求尚未返回 usage 时，会继续显示上一条上下文窗口 usage。
 
