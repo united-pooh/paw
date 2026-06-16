@@ -22,11 +22,14 @@ func (m appModel) contextMeterTitle() string {
 func (m appModel) contextMeterLine(width int) string {
 	stats := m.contextStats()
 	limit := maxInt(1, stats.LimitTokens)
-	used := maxInt(0, stats.UsedTokens)
-	cache := clampInt(stats.CacheTokens, 0, used)
-	usedLabel := formatContextUsageLabel(used, cache, limit, m.isGenerating)
-	freeLabel := formatContextFreeLabel(used, limit)
+	rawUsed := maxInt(0, stats.UsedTokens)
+	rawCache := clampInt(stats.CacheTokens, 0, rawUsed)
+	// 进度条：easeOutBack（有轻微超出感，720ms）
 	animatedUsed, animatedCache, pulse := m.animatedContextTokens(limit)
+	// 标签数字：easeOutCubic（无超出，400ms），呈现快速计数跳动效果
+	labelUsed, labelCache := m.animatedLabelTokens(rawUsed, rawCache, limit)
+	usedLabel := formatContextUsageLabel(labelUsed, labelCache, limit, m.isGenerating)
+	freeLabel := formatContextFreeLabel(labelUsed, limit)
 	return renderContextMeterLine(width, usedLabel, freeLabel, animatedUsed, animatedCache, limit, m.thinkingLabel(), pulse)
 }
 
@@ -239,6 +242,27 @@ func (m appModel) animatedContextTokens(limit int) (int, int, float64) {
 	animatedUsed = clampInt(animatedUsed, 0, limit)
 	animatedCache = clampInt(animatedCache, 0, animatedUsed)
 	return animatedUsed, animatedCache, contextPulse(progress)
+}
+
+// animatedLabelTokens 用 easeOutCubic + 400ms 为数字标签计算动画值。
+// 动画未初始化时回退到 rawUsed/rawCache（立即显示真实值）。
+func (m appModel) animatedLabelTokens(rawUsed, rawCache, limit int) (used, cache int) {
+	if !m.contextMeter.initialized {
+		return clampInt(rawUsed, 0, limit), clampInt(rawCache, 0, clampInt(rawUsed, 0, limit))
+	}
+	now := m.animationNow()
+	elapsed := now.Sub(m.contextMeter.startedAt)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	const labelDuration = 400 * time.Millisecond
+	progress := clamp01(float64(elapsed) / float64(labelDuration))
+	eased := easeOutCubic(progress)
+	animUsed := int(math.Round(lerp(m.contextMeter.fromUsed, float64(m.contextMeter.targetUsed), eased)))
+	animCache := int(math.Round(lerp(m.contextMeter.fromCache, float64(m.contextMeter.targetCache), eased)))
+	animUsed = clampInt(animUsed, 0, limit)
+	animCache = clampInt(animCache, 0, animUsed)
+	return animUsed, animCache
 }
 
 func contextPulse(progress float64) float64 {

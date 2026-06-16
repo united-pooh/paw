@@ -1697,7 +1697,8 @@ func TestFormatCompactTokenCountUsesThreeDigitsAndUnits(t *testing.T) {
 	}
 }
 
-func TestContextMeterAnimatesBarButKeepsTokenLabelsImmediate(t *testing.T) {
+// TestContextMeterAnimatesBarAndLabels 验证进度条和数字标签在动画过程中都呈插值变化。
+func TestContextMeterAnimatesBarAndLabels(t *testing.T) {
 	started := time.Unix(30, 0)
 	runner := &fakeRunner{
 		stats: loop.ContextStats{
@@ -1714,26 +1715,33 @@ func TestContextMeterAnimatesBarButKeepsTokenLabelsImmediate(t *testing.T) {
 	model.cursorFrameAt = started.Add(100 * time.Millisecond)
 	model.updateContextMeterAnimation()
 
+	// 260ms：动画进行中，进度条和标签都应显示中间插值，而非立即跳到 400
 	model.cursorFrameAt = started.Add(260 * time.Millisecond)
 	animatedUsed, _, pulse := model.animatedContextTokens(1000)
-	if animatedUsed <= 100 || animatedUsed >= 400 {
-		t.Fatalf("animatedUsed = %d, want nonlinear value between old and new target", animatedUsed)
+	if animatedUsed <= 100 || animatedUsed > 400 {
+		t.Fatalf("animatedUsed = %d, want value between 100 and 400 (bar animating)", animatedUsed)
 	}
 	if pulse <= 0 {
 		t.Fatalf("pulse = %f, want active pulse during animation", pulse)
 	}
 	meter := model.contextMeterLine(48)
-	// 标签立即反映当前 UsedTokens=400，不等动画结束
-	for _, want := range []string{"400↑", "40%(0%)", "free(60%)"} {
-		if !strings.Contains(meter, want) {
-			t.Fatalf("meter = %q, want immediate label %q", meter, want)
-		}
+	// 标签数字应也在动画中：不等于旧值 100↑，也不等于新值 400↑
+	if strings.Contains(meter, "100↑") {
+		t.Fatalf("meter = %q, label should have advanced past old value 100↑", meter)
+	}
+	if strings.Contains(meter, "400↑") {
+		t.Fatalf("meter = %q, label should not jump to final value 400↑ yet", meter)
 	}
 
+	// 动画结束（1s 后）：进度条和标签都应到达目标值
 	model.cursorFrameAt = started.Add(time.Second)
 	animatedUsed, _, pulse = model.animatedContextTokens(1000)
 	if animatedUsed != 400 || pulse != 0 {
-		t.Fatalf("animation end = used %d pulse %f, want target and no pulse", animatedUsed, pulse)
+		t.Fatalf("animation end = used %d pulse %f, want target 400 and no pulse", animatedUsed, pulse)
+	}
+	finalMeter := model.contextMeterLine(48)
+	if !strings.Contains(finalMeter, "400↑") {
+		t.Fatalf("finalMeter = %q, want 400↑ after animation completes", finalMeter)
 	}
 }
 
