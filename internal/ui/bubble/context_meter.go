@@ -319,3 +319,44 @@ func clampInt(value, minValue, maxValue int) int {
 	}
 	return value
 }
+
+// renderContextCardContent 为右侧 Context 卡片渲染多行内容。
+// 输出四行：token数+箭头/free%, 进度条, used%/cache%/free%, turns
+func (m appModel) renderContextCardContent(innerWidth int) string {
+	stats := m.contextStats()
+	limit := maxInt(1, stats.LimitTokens)
+	rawUsed := maxInt(0, stats.UsedTokens)
+	rawCache := clampInt(stats.CacheTokens, 0, rawUsed)
+	labelUsed, labelCache := m.animatedLabelTokens(rawUsed, rawCache, limit)
+
+	arrow := "↑"
+	if m.isGenerating {
+		arrow = "↓"
+	}
+	tokenStr := contextUsedStyle.Render(formatCompactTokenCount(labelUsed) + arrow)
+	freeStr := contextFreeStyle.Render(formatContextFreeLabel(labelUsed, limit))
+
+	// Line 1: token + free
+	gap := maxInt(1, innerWidth-lipgloss.Width(tokenStr)-lipgloss.Width(freeStr))
+	topLine := tokenStr + strings.Repeat(" ", gap) + freeStr
+
+	// Line 2: progress bar
+	animatedUsed, animatedCache, _ := m.animatedContextTokens(limit)
+	bar := renderContextBar(animatedUsed, animatedCache, limit, innerWidth, "")
+
+	// Line 3: percentages
+	usedPct := contextUsedStyle.Render(formatContextPercent(labelUsed, limit))
+	cachePct := contextCacheStyle.Render("cache " + formatContextPercent(labelCache, limit))
+	freePct := contextFreeStyle.Render("free " + formatContextPercent(maxInt(0, limit-labelUsed), limit))
+	pctLine := usedPct + " " + cachePct + " " + freePct
+
+	// Line 4: turns (right-aligned)
+	turnsStr := fmt.Sprintf("turns %d", m.turnsCount())
+	turnsLine := lipgloss.NewStyle().
+		Width(innerWidth).
+		Foreground(lipgloss.Color("236")).
+		Align(lipgloss.Right).
+		Render(turnsStr)
+
+	return strings.Join([]string{topLine, bar, pctLine, turnsLine}, "\n")
+}

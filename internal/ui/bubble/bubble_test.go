@@ -2582,6 +2582,23 @@ func TestRenderToolEntryBody_PrefixesDetailLinesWithArrow(t *testing.T) {
 	}
 }
 
+// TestRenderContextCard_ContainsTokenAndFree 验证 Context 卡片包含箭头和 free 标签。
+func TestRenderContextCard_ContainsTokenAndFree(t *testing.T) {
+	runner := &fakeRunner{stats: loop.ContextStats{UsedTokens: 5000, LimitTokens: 100000}}
+	model := newTestModel(runner)
+	model.width = 100
+	model.sidebarWidth = 30
+	result := model.renderContextCard(30)
+	// Must contain directional arrow and free percentage
+	hasArrow := strings.Contains(result, "↑") || strings.Contains(result, "↓")
+	if !hasArrow {
+		t.Errorf("context card = %q, want ↑ or ↓ arrow", result)
+	}
+	if !strings.Contains(result, "free") {
+		t.Errorf("context card = %q, want 'free' label", result)
+	}
+}
+
 // TestCtrlC_清空时关闭候选框 验证 Ctrl+C 同时关闭文件补全候选框。
 func TestCtrlC_清空时关闭候选框(t *testing.T) {
 	model := newTestModel(&fakeRunner{})

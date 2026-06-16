@@ -1,0 +1,52 @@
+// 本文件定义右侧 30% 面板的三个卡片渲染逻辑。
+package bubble
+
+import (
+	"github.com/charmbracelet/lipgloss"
+)
+
+// renderRightPanel 渲染右侧面板：Pipeline/Tasks 卡片 + Subagents 卡片 + Context 卡片。
+// 整体高度被钳制为 totalHeight，防止右侧面板撑高终端布局。
+func (m appModel) renderRightPanel(width, totalHeight int) string {
+	inner := maxInt(4, width-4)
+
+	subagentsContent := m.renderSubagentsCardContent(inner)
+	subagentsCard := rightCardStyle.Width(inner).Render(subagentsContent)
+	subH := lipgloss.Height(subagentsCard)
+
+	contextContent := m.renderContextCardContent(inner)
+	contextCard := rightCardStyle.Width(inner).Render(contextContent)
+	ctxH := lipgloss.Height(contextCard)
+
+	pipelineH := maxInt(6, totalHeight-subH-ctxH)
+	pipelineContent := m.renderPipelineOrTasksContent(inner, pipelineH-4)
+	pipelineCard := rightCardStyle.Width(inner).Height(pipelineH - 4).Render(pipelineContent)
+
+	joined := lipgloss.JoinVertical(lipgloss.Left,
+		pipelineCard,
+		subagentsCard,
+		contextCard,
+	)
+	// Clamp the right panel to totalHeight so it never exceeds the terminal height.
+	return lipgloss.NewStyle().
+		Width(width).
+		Height(totalHeight).
+		MaxHeight(totalHeight).
+		Render(joined)
+}
+
+// renderContextCard 返回 Context 卡片（用于测试）。
+func (m appModel) renderContextCard(width int) string {
+	inner := maxInt(4, width-4)
+	return rightCardStyle.Width(inner).Render(m.renderContextCardContent(inner))
+}
+
+// renderSubagentsCardContent 渲染 Subagents 内容（Task 4 实现）。
+func (m appModel) renderSubagentsCardContent(_ int) string {
+	return "subagents"
+}
+
+// renderPipelineOrTasksContent 渲染 Pipeline/Tasks 内容（Task 5-7 实现）。
+func (m appModel) renderPipelineOrTasksContent(_, _ int) string {
+	return "pipeline / tasks"
+}

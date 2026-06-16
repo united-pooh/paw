@@ -216,8 +216,3 @@ func (m *appModel) expandTranscriptToFillHeight() {
 	}
 }
 
-// renderRightPanel 渲染右侧 30% 面板。Task 3-7 将填充真实内容。
-func (m appModel) renderRightPanel(width, totalHeight int) string {
-	inner := maxInt(4, width-4)
-	return rightCardStyle.Width(inner).Height(maxInt(2, totalHeight-2)).Render("")
-}

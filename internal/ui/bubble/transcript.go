@@ -236,6 +236,17 @@ func labelStyle(kind entryKind) lipgloss.Style {
 	}
 }
 
+// turnsCount 返回当前会话的用户消息轮次数。
+func (m appModel) turnsCount() int {
+	n := 0
+	for _, e := range m.transcript {
+		if e.kind == entryUser {
+			n++
+		}
+	}
+	return n
+}
+
 // indentLines 给多行文本逐行添加固定前缀。
 func indentLines(text, prefix string) string {
 	lines := strings.Split(text, "\n")
