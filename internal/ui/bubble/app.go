@@ -267,11 +267,15 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !m.completion.loading && len(visible) > 0 {
 					selected := visible[m.completion.selectedIndex]
 					if m.completion.kind == completionKindFile {
-						// Tab：补全路径，不加尾部空格，光标停在路径末尾
+						// Tab：补全路径，不加尾部空格，候选框保持开启
 						m = m.applyFileCompletion(selected, false)
-					} else {
-						m = m.applyCommandCompletion(selected)
+						// 根据新的输入值重新同步候选（目录可能改变）
+						if syncCmd := m.syncAtCompletion(); syncCmd != nil {
+							return m, syncCmd
+						}
+						return m, nil
 					}
+					m = m.applyCommandCompletion(selected)
 				}
 				m.completion = nil
 				return m, nil

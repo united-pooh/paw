@@ -2360,15 +2360,16 @@ func TestAtCompletion_输入时不阻断输入框(t *testing.T) {
 	}
 }
 
-// TestAtCompletion_Tab不加空格 验证 Tab 确认时只替换 @query 段，不加尾部空格，保留前面文本。
-func TestAtCompletion_Tab不加空格(t *testing.T) {
+// TestAtCompletion_Tab不加空格且候选框保持 验证 Tab 不加尾部空格、候选框仍开启。
+func TestAtCompletion_Tab不加空格且候选框保持(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.input.SetValue("请引用 @re")
 	model.completion = &completion{
 		kind:          completionKindFile,
 		atByteIndex:   len("请引用 "), // @ 位于"请引用 "之后
 		query:         "re",
-		filteredItems: []string{"readme.md"},
+		allItems:      []string{"readme.md", "readme.txt"},
+		filteredItems: []string{"readme.md", "readme.txt"},
 		selectedIndex: 0,
 		loading:       false,
 	}
@@ -2377,12 +2378,13 @@ func TestAtCompletion_Tab不加空格(t *testing.T) {
 	model = next.(appModel)
 
 	got := model.input.Value()
-	// Tab：无尾部空格，光标停在路径末尾
+	// Tab：无尾部空格
 	if got != "请引用 @readme.md" {
 		t.Errorf("input value = %q, want '请引用 @readme.md' (no trailing space after tab)", got)
 	}
-	if model.completion != nil {
-		t.Errorf("completion should be nil after tab, got %#v", model.completion)
+	// 候选框应保持开启（不为 nil）
+	if model.completion == nil {
+		t.Errorf("completion should remain open after tab, got nil")
 	}
 }
 
