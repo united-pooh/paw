@@ -111,6 +111,10 @@ var (
 				Border(lipgloss.NormalBorder()).
 				BorderForeground(colorManager.LipglossColor(colorWizardBorder)).
 				Padding(0, 1)
+	completionPanelStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(colorManager.LipglossColor(colorWizardBorder)).
+				Padding(0, 1)
 	selectedTranscriptLineStyle = lipgloss.NewStyle().
 					Background(colorManager.LipglossColor(colorSelectionBackground)).
 					Foreground(colorManager.LipglossColor(colorSelectionForeground))

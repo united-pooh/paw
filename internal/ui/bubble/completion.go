@@ -392,7 +392,7 @@ func (m appModel) renderCompletionBox() string {
 		return ""
 	}
 	width := maxInt(32, m.width-2)
-	return wizardPanelStyle.Width(width).Render(m.renderCompletionContent())
+	return completionPanelStyle.Width(width).Render(m.renderCompletionContent())
 }
 
 // renderCompletionContent 渲染补全弹窗内容。
