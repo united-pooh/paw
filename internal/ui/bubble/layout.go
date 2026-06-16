@@ -19,9 +19,15 @@ func (m appModel) View() string {
 	input := m.renderActiveInputPanel()
 	panelHeight := maxInt(1, m.height-m.headerHeight())
 
-	leftContent := lipgloss.JoinVertical(lipgloss.Left,
-		m.renderTranscriptBox(),
-		input,
+	// Wrap the left column in a fixed-width container so its rendered width
+	// stays stable during streaming and never shifts the right sidebar.
+	// Use MaxWidth (not Width) to clip without wrapping lines.
+	leftColWidth := maxInt(1, m.width-m.sidebarWidth)
+	leftContent := lipgloss.NewStyle().MaxWidth(leftColWidth).Render(
+		lipgloss.JoinVertical(lipgloss.Left,
+			m.renderTranscriptBox(),
+			input,
+		),
 	)
 	right := m.renderRightPanel(m.sidebarWidth, panelHeight)
 

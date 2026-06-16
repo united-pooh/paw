@@ -170,7 +170,7 @@ func renderToolEntryBodyWithStyle(body string, width int, progress float64, bord
 	header := toolHeaderStyle.Render("▾ " + summary)
 
 	if detail == "" || progress <= 0 {
-		return borderStyle.Width(width - 3).Render(header)
+		return borderStyle.Width(width - 2).Render(header)
 	}
 
 	detailLines := strings.Split(detail, "\n")
@@ -182,8 +182,8 @@ func renderToolEntryBodyWithStyle(body string, width int, progress float64, bord
 	for i, l := range detailLines[:visibleLines] {
 		prefixed[i] = "> " + l
 	}
-	content := header + "\n" + toolDetailStyle.Width(width-4).Render(strings.Join(prefixed, "\n"))
-	return borderStyle.Width(width - 3).Render(content)
+	content := header + "\n" + toolDetailStyle.Width(width-2).Render(strings.Join(prefixed, "\n"))
+	return borderStyle.Width(width - 2).Render(content)
 }
 
 // renderToolEntryBody renders a tool call entry with the default orange border.
