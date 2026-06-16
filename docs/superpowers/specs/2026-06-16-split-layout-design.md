@@ -87,30 +87,59 @@
 
 #### Pipeline 状态机
 
-状态机阶段（按顺序）：
+基于 [multi-agent-pipeline skill](https://github.com/united-pooh/MultiAgent-Pipeline-skills/tree/main/skills/multi-agent-pipeline) 的完整 18 阶段流程：
 
-| 阶段 | artifact 文件 | 说明 |
+| # | 阶段 | artifact 文件（`.pipeline-workspace/`） |
 |---|---|---|
-| Brainstorming | `design.md` | 设计稿已生成 |
-| Spec | `spec.json` | Spec 已通过 |
-| Plan | `plan.json` | Plan 已生成 |
-| Architecture | `architecture.json` | 架构已确定 |
-| Execution | `execution-report.json` | 最新一次执行报告 |
-| Validation | `validation-report.json` | 最新一次验证报告 |
-| Review | `review_feedback.json` | 最新一次评审结果 |
-| Doc | `doc-report.json` | 文档已更新 |
+| 0 | Brainstorming | `design.md` |
+| 1 | Spec | `spec.json` |
+| 2 | Plan | `plan.json` |
+| 3 | Architecture | `architecture.json` |
+| 4 | Dispatch | `dispatch.json` |
+| 5 | Execution | `execution-report.json` |
+| 6 | Complexity Hook | `execution-report.json`（同 Execution，由 mtime 区分） |
+| 7 | Merge | `merge-report.json` |
+| 8 | Validation | `validation-report.json` |
+| 9 | Tree Classification | `tree-classification.json` |
+| 10 | Rubric Gen | `tree-rubrics.json` |
+| 11 | Rubric Verify | `tree-rubric-verification.json` |
+| 12 | Rubric Refine | `tree-rubrics-refined.json` |
+| 13 | Tree Grading | `tree-grading-individual.json` |
+| 14 | QA | `qa-report.json` |
+| 15 | Documentation | `doc-report.json` |
+| 16 | Final Assessment | `final-assessment.json` |
+| 17 | Cleanup | `.pipeline-last-run-summary.json`（run root） |
 
-**阶段状态判断**：
-- **done**（绿点）：对应 artifact 文件存在，且若为 execution/review 则状态字段为通过
-- **active**（蓝色发光点）：当前最新一步，artifact 文件刚刚写入（mtime 最近）
-- **retry**（橙点）：execution-report 的 `iteration` > 1 且 validation/review 状态为 fail
+**阶段状态判断**（每 500ms 轮询 `.pipeline-workspace/`）：
+- **done**（绿点）：artifact 文件存在
+- **active**（蓝色发光点）：最新写入的 artifact（mtime 最近且 > 上次检测时刻）
+- **retry**（橙点）：`execution-report.json` 的 `iteration` > 1，且其后续 artifact 不存在
 - **pending**（暗点）：artifact 尚未生成
 
-**迭代计数**：读取 `execution-report.json` 中的 `iteration` 字段，在 Execution/Validation/Review 阶段后显示 `×N`（retry 时附加 `↻`）。
+**Complexity Hook** 无独立 artifact，通过 `execution-report.json` 的 mtime 与 `merge-report.json` 是否存在来推断。
 
-**全局迭代轮次**：badge 上显示 `pipeline · iter N`，来自 `execution-report.json.iteration`。
+#### 滚动窗口显示（方案 C）
 
-状态数据存储在 `appModel.pipelineState`（新增结构体），由后台 `tea.Cmd` 定期轮询 `.pipeline-workspace/` 更新。
+```
+● pipeline · iter 3     9/18  ← badge + 全局计数
+● ● ● ● ● ○ ○ ○ ▶ ○ ○ ○ ○ ○ ○ ○ ○ ○   ← 18 小圆点总览（done/retry/active/pending）
+
+  Execution            ← 前 3 邻居（渐淡 opacity）
+  Complexity Hook
+  Merge
+▶ Validation ×3        ← 当前阶段（高亮框，蓝色边框）
+  Tree Classification  ← 后 3 邻居（渐淡 opacity）
+  Rubric Gen
+  Rubric Verify
+```
+
+- 顶部 18 点作为紧凑总览，颜色同状态圆点
+- 滚动窗口展示当前 ±3 相邻阶段（前 3 渐淡，后 3 渐淡）
+- 当前阶段用独立高亮框（`#101520` 背景 + 蓝色边框）
+- 迭代计数显示在当前阶段名右侧（`×N`，retry 时橙色 `×N ↻`）
+- `space-evenly` 垂直分布 7 行（3 前 + 当前 + 3 后）；头尾阶段时自动截断
+
+**全局计数**：badge 右侧显示 `N/18`，来自已存在 artifact 数量。
 
 #### Tasks 列表
 
@@ -148,44 +177,39 @@
 
 ```go
 // types.go 新增
-type pipelinePhase int
+
+// pipelinePhaseStatus 每个阶段的显示状态
+type pipelinePhaseStatus int
 const (
-    phaseNone pipelinePhase = iota  // 未检测到 pipeline
-    phaseBrainstorming
-    phaseSpec
-    phasePlan
-    phaseArchitecture
-    phaseExecution
-    phaseValidation
-    phaseReview
-    phaseDoc
-    phaseDone
+    phaseStatusPending pipelinePhaseStatus = iota
+    phaseStatusDone
+    phaseStatusActive
+    phaseStatusRetry
 )
 
-type phaseStatus int
-const (
-    statusPending phaseStatus = iota
-    statusActive
-    statusDone
-    statusRetry
-)
-
-type pipelinePhaseInfo struct {
-    phase     pipelinePhase
-    status    phaseStatus
-    iteration int
+// pipelinePhaseEntry 单个阶段的状态快照
+type pipelinePhaseEntry struct {
+    name      string              // 显示名称
+    artifact  string              // 对应的 artifact 文件名（相对 .pipeline-workspace/）
+    status    pipelinePhaseStatus
+    iteration int                 // 仅对 Execution/Validation 有意义
 }
 
+// pipelineState 完整的 pipeline 状态快照
 type pipelineState struct {
-    detected    bool
-    iteration   int  // global, from execution-report.json
-    phases      []pipelinePhaseInfo
+    detected    bool               // .pipeline-workspace/spec.json 是否存在
+    activeIdx   int                // 当前 active 阶段在 phases 中的索引（-1 = none）
+    globalIter  int                // 全局迭代轮次（来自 execution-report.json.iteration）
+    doneCount   int                // 已完成阶段数（用于 N/18 显示）
+    phases      [18]pipelinePhaseEntry
     lastChecked time.Time
 }
 
 // appModel 新增字段（右侧面板无独立 viewport，每帧直接渲染）
 pipelineState  pipelineState
 ```
+
+18 个阶段的 `name` / `artifact` 映射见 Pipeline 状态机阶段表。
 
 ---
 
@@ -220,5 +244,7 @@ go run ./cmd/agent
 # 3. 输入框上方无 context meter
 # 4. 右侧 Context 卡片显示 token 数 + bar + free%
 # 5. 创建 .pipeline-workspace/spec.json 后，右侧顶部切换为 pipeline 视图
-# 6. 无 pipeline 时显示 tasks
+# 6. 依次写入 plan.json、architecture.json、dispatch.json 等，验证圆点随之更新
+# 7. 写入 execution-report.json（iteration>1），验证 retry 橙点 + ↻
+# 8. 无 pipeline 时（删除 .pipeline-workspace/）显示 tasks
 ```
