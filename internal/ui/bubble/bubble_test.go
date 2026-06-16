@@ -2599,6 +2599,25 @@ func TestRenderContextCard_ContainsTokenAndFree(t *testing.T) {
 	}
 }
 
+// TestRenderSubagentsCard_ShowsRunningAndDone 验证 Subagents 卡片显示 running 和 completed 任务。
+func TestRenderSubagentsCard_ShowsRunningAndDone(t *testing.T) {
+	ctrl := &fakeSubagentController{
+		tasks: []subagent.TaskSnapshot{
+			{ID: "worker-1", Status: subagent.TaskRunning},
+			{ID: "worker-2", Status: subagent.TaskCompleted},
+		},
+	}
+	model := newTestModel(&fakeRunner{})
+	model.subagents = ctrl
+	result := model.renderSubagentsCardContent(30)
+	if !strings.Contains(result, "worker-1") {
+		t.Errorf("subagents card = %q, want worker-1", result)
+	}
+	if !strings.Contains(result, "worker-2") {
+		t.Errorf("subagents card = %q, want worker-2", result)
+	}
+}
+
 // TestCtrlC_清空时关闭候选框 验证 Ctrl+C 同时关闭文件补全候选框。
 func TestCtrlC_清空时关闭候选框(t *testing.T) {
 	model := newTestModel(&fakeRunner{})

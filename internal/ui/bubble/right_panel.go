@@ -2,7 +2,10 @@
 package bubble
 
 import (
+	"strings"
+
 	"github.com/charmbracelet/lipgloss"
+	"gocode/internal/subagent"
 )
 
 // renderRightPanel 渲染右侧面板：Pipeline/Tasks 卡片 + Subagents 卡片 + Context 卡片。
@@ -42,8 +45,41 @@ func (m appModel) renderContextCard(width int) string {
 }
 
 // renderSubagentsCardContent 渲染 Subagents 内容（Task 4 实现）。
-func (m appModel) renderSubagentsCardContent(_ int) string {
-	return "subagents"
+func (m appModel) renderSubagentsCardContent(width int) string {
+	hdrStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("237")).Bold(false)
+	hdr := hdrStyle.Render("subagents")
+
+	if m.subagents == nil {
+		return hdr
+	}
+	tasks := m.subagents.ListTasks()
+	if len(tasks) == 0 {
+		empty := lipgloss.NewStyle().Foreground(lipgloss.Color("235")).Italic(true).Render("none")
+		return hdr + "\n" + empty
+	}
+
+	dotRun  := lipgloss.NewStyle().Foreground(lipgloss.Color("84")).Render("⟳")
+	dotDone := lipgloss.NewStyle().Foreground(lipgloss.Color("238")).Render("✓")
+	dotFail := lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render("✗")
+
+	lines := []string{hdr}
+	for _, t := range tasks {
+		var dot, label string
+		switch t.Status {
+		case subagent.TaskRunning:
+			dot = dotRun
+			label = lipgloss.NewStyle().Foreground(lipgloss.Color("84")).Render(t.ID)
+		case subagent.TaskFailed:
+			dot = dotFail
+			label = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render(t.ID)
+		default:
+			dot = dotDone
+			label = lipgloss.NewStyle().Foreground(lipgloss.Color("236")).Render(t.ID)
+		}
+		lines = append(lines, dot+" "+label)
+	}
+	_ = width
+	return strings.Join(lines, "\n")
 }
 
 // renderPipelineOrTasksContent 渲染 Pipeline/Tasks 内容（Task 5-7 实现）。
