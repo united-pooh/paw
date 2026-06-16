@@ -267,15 +267,20 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !m.completion.loading && len(visible) > 0 {
 					selected := visible[m.completion.selectedIndex]
 					if m.completion.kind == completionKindFile {
-						// Tab：补全路径，不加尾部空格，候选框保持开启
-						m = m.applyFileCompletion(selected, false)
-						// 根据新的输入值重新同步候选（目录可能改变）
-						if syncCmd := m.syncAtCompletion(); syncCmd != nil {
-							return m, syncCmd
+						isDir := strings.HasSuffix(selected, "/")
+						if isDir {
+							// 目录：不加空格，候选框保持开启以继续浏览
+							m = m.applyFileCompletion(selected, false)
+							if syncCmd := m.syncAtCompletion(); syncCmd != nil {
+								return m, syncCmd
+							}
+							return m, nil
 						}
-						return m, nil
+						// 文件：行为与 Enter 一致（加空格 + 关闭候选框）
+						m = m.applyFileCompletion(selected, true)
+					} else {
+						m = m.applyCommandCompletion(selected)
 					}
-					m = m.applyCommandCompletion(selected)
 				}
 				m.completion = nil
 				return m, nil

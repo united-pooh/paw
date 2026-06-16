@@ -2360,13 +2360,13 @@ func TestAtCompletion_输入时不阻断输入框(t *testing.T) {
 	}
 }
 
-// TestAtCompletion_Tab不加空格且候选框保持 验证 Tab 不加尾部空格、候选框仍开启。
-func TestAtCompletion_Tab不加空格且候选框保持(t *testing.T) {
+// TestAtCompletion_Tab文件时行为同Enter 验证 Tab 选中文件时加空格并关闭候选框。
+func TestAtCompletion_Tab文件时行为同Enter(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.input.SetValue("请引用 @re")
 	model.completion = &completion{
 		kind:          completionKindFile,
-		atByteIndex:   len("请引用 "), // @ 位于"请引用 "之后
+		atByteIndex:   len("请引用 "),
 		query:         "re",
 		allItems:      []string{"readme.md", "readme.txt"},
 		filteredItems: []string{"readme.md", "readme.txt"},
@@ -2377,14 +2377,43 @@ func TestAtCompletion_Tab不加空格且候选框保持(t *testing.T) {
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = next.(appModel)
 
-	got := model.input.Value()
-	// Tab：无尾部空格
-	if got != "请引用 @readme.md" {
-		t.Errorf("input value = %q, want '请引用 @readme.md' (no trailing space after tab)", got)
+	// 文件：Tab 加尾部空格，与 Enter 一致
+	if got := model.input.Value(); got != "请引用 @readme.md " {
+		t.Errorf("input value = %q, want '请引用 @readme.md ' (trailing space for file)", got)
 	}
-	// 候选框应保持开启（不为 nil）
+	if model.completion != nil {
+		t.Errorf("completion should be nil after tab on file, got %#v", model.completion)
+	}
+}
+
+// TestAtCompletion_Tab目录时候选框保持 验证 Tab 选中目录时不加空格、候选框保持开启。
+func TestAtCompletion_Tab目录时候选框保持(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.input.SetValue("@sr")
+	model.completion = &completion{
+		kind:          completionKindFile,
+		atByteIndex:   0,
+		query:         "sr",
+		allItems:      []string{"src/", "scripts/"},
+		filteredItems: []string{"src/"},
+		selectedIndex: 0,
+		loading:       false,
+	}
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = next.(appModel)
+
+	// 目录：无尾部空格
+	got := model.input.Value()
+	if strings.HasSuffix(got, " ") {
+		t.Errorf("input value = %q, want no trailing space for directory tab", got)
+	}
+	if !strings.Contains(got, "@src/") {
+		t.Errorf("input value = %q, want to contain @src/", got)
+	}
+	// 候选框应保持开启
 	if model.completion == nil {
-		t.Errorf("completion should remain open after tab, got nil")
+		t.Errorf("completion should remain open after tab on directory, got nil")
 	}
 }
 
