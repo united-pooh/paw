@@ -133,9 +133,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			body = fmt.Sprintf("%s: %s", body, preview)
 		}
 		m.addEntry(transcriptEntry{
-			kind:  entryTool,
-			title: "result",
-			body:  body,
+			kind:    entryTool,
+			title:   "result",
+			body:    body,
+			isError: msg.IsError,
 		})
 		return m, nil
 	case systemEventMsg:

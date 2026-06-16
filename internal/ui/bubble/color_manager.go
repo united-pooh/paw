@@ -20,6 +20,7 @@ const (
 	colorLabelUser              colorRole = "label.user"
 	colorLabelAssistant         colorRole = "label.assistant"
 	colorLabelTool              colorRole = "label.tool"
+	colorLabelResult            colorRole = "label.result"
 	colorLabelSystem            colorRole = "label.system"
 	colorLabelError             colorRole = "label.error"
 	colorBody                   colorRole = "body"
@@ -68,6 +69,7 @@ func NewColorManager() ColorManager {
 			colorLabelUser:              "86",
 			colorLabelAssistant:         "111",
 			colorLabelTool:              "214",
+			colorLabelResult:            "65",
 			colorLabelSystem:            "245",
 			colorLabelError:             "203",
 			colorBody:                   "252",

@@ -125,7 +125,7 @@ var (
 
 	toolResultBorderStyle = lipgloss.NewStyle().
 				Border(lipgloss.Border{Left: "│"}).
-				BorderForeground(lipgloss.Color("65")).
+				BorderForeground(colorManager.LipglossColor(colorLabelResult)).
 				Background(lipgloss.Color("232")).
 				PaddingLeft(1)
 

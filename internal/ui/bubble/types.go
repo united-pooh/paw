@@ -37,6 +37,7 @@ type transcriptEntry struct {
 	kind      entryKind
 	title     string
 	body      string
+	isError   bool      // true for tool results with IsError=true
 	createdAt time.Time
 }
 

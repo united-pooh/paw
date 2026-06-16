@@ -148,7 +148,7 @@ func renderEntryBodyAt(entry transcriptEntry, width int, at time.Time) string {
 		return renderMarkdown(body, width)
 	}
 	if entry.kind == entryTool {
-		isError := entry.title == "result" && strings.Contains(entry.body, "error")
+		isError := entry.isError
 		isResult := entry.title == "result"
 		prog := toolExpandProgress(entry, at)
 		switch {
