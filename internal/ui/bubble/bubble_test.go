@@ -392,8 +392,6 @@ func TestSettingCommandPersistsWizardSelections(t *testing.T) {
 
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
 	model = next.(appModel)
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
-	model = next.(appModel)
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
 
@@ -920,7 +918,7 @@ func TestViewFillsTerminalHeightAndPinsInputToBottom(t *testing.T) {
 	}
 }
 
-func TestRelayoutAccountsForInputAboveMeterHeight(t *testing.T) {
+func TestRelayoutAccountsForInputTitleMeterHeight(t *testing.T) {
 	settingsController := &fakeSettingsController{current: settings.Config{
 		Subagent: settings.SubagentConfig{
 			DefaultContextMode: settings.ContextModeEmpty,
@@ -928,7 +926,7 @@ func TestRelayoutAccountsForInputAboveMeterHeight(t *testing.T) {
 		},
 		UI: settings.UIConfig{
 			ContextLimitTokens:   settings.DefaultContextLimitTokens,
-			ContextMeterLocation: settings.MeterLocationInputAbove,
+			ContextMeterLocation: settings.MeterLocationInputTitle,
 		},
 	}}
 	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, settingsController, nil, nil, newTerminalCursorAnchor())
@@ -937,7 +935,7 @@ func TestRelayoutAccountsForInputAboveMeterHeight(t *testing.T) {
 	model.height = 10
 	model.relayout()
 
-	minimum := maxInt(1, model.height-model.headerHeight()-lipgloss.Height(model.renderInputAboveMeter())-lipgloss.Height(model.renderInputBox())-transcriptPanelVerticalFrame)
+	minimum := maxInt(1, model.height-model.headerHeight()-lipgloss.Height(model.renderInputBox())-transcriptPanelVerticalFrame)
 	if model.viewport.Height < minimum {
 		t.Fatalf("viewport height = %d, want at least %d", model.viewport.Height, minimum)
 	}
@@ -1583,10 +1581,10 @@ func TestRenderInputBoxShowsStatefulPanel(t *testing.T) {
 			t.Fatalf("input box = %q, should not contain %q", rendered, unwanted)
 		}
 	}
-	meter := model.renderInputAboveMeter()
+	meter := model.contextMeterLine(maxInt(28, model.width-2))
 	for _, want := range []string{"0↑", "free(100%)"} {
 		if !strings.Contains(meter, want) {
-			t.Fatalf("input-above meter = %q, want %q", meter, want)
+			t.Fatalf("context meter line = %q, want %q", meter, want)
 		}
 	}
 
@@ -1669,8 +1667,9 @@ func TestContextMeterLineStretchesAndAlignsLabels(t *testing.T) {
 	model := newTestModel(runner)
 	model.width = 64
 
-	meter := model.renderInputAboveMeter()
-	if got, want := lipgloss.Width(meter), maxInt(28, model.width-2); got != want {
+	width := maxInt(28, model.width-2)
+	meter := model.contextMeterLine(width)
+	if got, want := lipgloss.Width(meter), width; got != want {
 		t.Fatalf("meter width = %d, want %d: %q", got, want, meter)
 	}
 	usedIndex := strings.Index(meter, "↑")
@@ -1755,7 +1754,8 @@ func TestContextMeterShowsThinkingTimerCenteredInLine(t *testing.T) {
 	model.turnStartedAt = time.Unix(10, 0)
 	model.cursorFrameAt = time.Unix(11, 500*int64(time.Millisecond))
 
-	meter := model.renderInputAboveMeter()
+	width := maxInt(28, model.width-2)
+	meter := model.contextMeterLine(width)
 	if !strings.Contains(meter, "<thinking 1s>") {
 		t.Fatalf("meter = %q, want thinking timer", meter)
 	}
@@ -2555,8 +2555,8 @@ func TestRelayout_SidebarWidthIs30Percent(t *testing.T) {
 	model.height = 40
 	model.ready = true
 	model.relayout()
-	if model.sidebarWidth < 30 || model.sidebarWidth > 40 {
-		t.Errorf("sidebarWidth = %d, want ~36 (30%% of 120)", model.sidebarWidth)
+	if model.sidebarWidth != 36 {
+		t.Errorf("sidebarWidth = %d, want 36 (30%% of 120)", model.sidebarWidth)
 	}
 	if model.viewport.Width < 70 {
 		t.Errorf("viewport.Width = %d, want ≥70 (left column inner)", model.viewport.Width)

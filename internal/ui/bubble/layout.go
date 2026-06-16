@@ -99,7 +99,7 @@ func (m appModel) inputEmbeddedTitleHeight() int {
 	if m.currentSettings().UI.ContextMeterLocation != settings.MeterLocationInputTitle {
 		return 0
 	}
-	width := maxInt(28, m.width-2)
+	width := maxInt(28, m.width-m.sidebarWidth-2)
 	title := m.contextMeterLine(maxInt(28, width-2))
 	return lipgloss.Height(inputLabelStyle.Render(title))
 }
@@ -155,7 +155,7 @@ func (m appModel) renderInputBox() string {
 // renderTranscriptBox 渲染带边框的聊天历史滚动面板。
 func (m appModel) renderTranscriptBox() string {
 	leftColWidth := m.width - m.sidebarWidth
-	width := maxInt(28, leftColWidth-2)
+	width := maxInt(20, leftColWidth-transcriptPanelHorizontalFrame)
 	return transcriptPanelStyle.Width(width).Height(maxInt(1, m.viewport.Height)).Render(m.viewport.View())
 }
 
@@ -180,14 +180,6 @@ func (m appModel) headerText() string {
 		return m.contextMeterLine(maxInt(28, m.width))
 	}
 	return ""
-}
-
-func (m appModel) renderInputAboveMeter() string {
-	if m.currentSettings().UI.ContextMeterLocation != settings.MeterLocationInputAbove {
-		return ""
-	}
-	width := maxInt(28, m.width-2)
-	return inputLabelStyle.Width(width).Render(m.contextMeterLine(width))
 }
 
 // relayout 根据终端尺寸和输入高度重新计算 viewport 与 textarea 尺寸。
@@ -226,6 +218,6 @@ func (m *appModel) expandTranscriptToFillHeight() {
 
 // renderRightPanel 渲染右侧 30% 面板。Task 3-7 将填充真实内容。
 func (m appModel) renderRightPanel(width, totalHeight int) string {
-	inner := maxInt(4, width-2)
+	inner := maxInt(4, width-4)
 	return rightCardStyle.Width(inner).Height(maxInt(2, totalHeight-2)).Render("")
 }

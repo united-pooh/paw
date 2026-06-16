@@ -49,7 +49,6 @@ func settingOptions(step settingWizardStep) []settingOption {
 		}
 	case settingWizardMeterLocation:
 		return []settingOption{
-			{label: string(settings.MeterLocationInputAbove), description: "show context meter above input", apply: func(cfg *settings.Config) { cfg.UI.ContextMeterLocation = settings.MeterLocationInputAbove }},
 			{label: string(settings.MeterLocationInputTitle), description: "show context meter inside input title", apply: func(cfg *settings.Config) { cfg.UI.ContextMeterLocation = settings.MeterLocationInputTitle }},
 			{label: string(settings.MeterLocationHeader), description: "show context meter in the header", apply: func(cfg *settings.Config) { cfg.UI.ContextMeterLocation = settings.MeterLocationHeader }},
 		}
