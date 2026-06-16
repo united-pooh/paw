@@ -24,7 +24,7 @@ type fakeModel struct {
 	calls  [][]message.Message
 }
 
-func (m *fakeModel) StreamMessage(ctx context.Context, messages []message.Message) (<-chan model.StreamEvent, error) {
+func (m *fakeModel) StreamMessage(ctx context.Context, messages []message.Message, _ []model.ToolDefinition) (<-chan model.StreamEvent, error) {
 	copied := append([]message.Message(nil), messages...)
 	m.calls = append(m.calls, copied)
 
@@ -52,7 +52,7 @@ type blockingModel struct {
 	calls   [][]message.Message
 }
 
-func (m *blockingModel) StreamMessage(ctx context.Context, messages []message.Message) (<-chan model.StreamEvent, error) {
+func (m *blockingModel) StreamMessage(ctx context.Context, messages []message.Message, _ []model.ToolDefinition) (<-chan model.StreamEvent, error) {
 	copied := append([]message.Message(nil), messages...)
 	m.calls = append(m.calls, copied)
 

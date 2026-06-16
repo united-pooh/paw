@@ -66,7 +66,7 @@ func TestStreamMessageUsesAnthropicStreamForDeepSeekEarlyUsageAndThinking(t *tes
 	events, err := client.StreamMessage(context.Background(), []message.Message{
 		{Role: message.RoleSystem, Content: "system prompt"},
 		{Role: message.RoleUser, Content: "hello"},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("StreamMessage() error = %v", err)
 	}
@@ -146,7 +146,7 @@ func TestStreamMessageFallsBackToOpenAIAndParsesDeepSeekUsage(t *testing.T) {
 		Timeout:       time.Minute,
 	})
 
-	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "hello"}})
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "hello"}}, nil)
 	if err != nil {
 		t.Fatalf("StreamMessage() error = %v", err)
 	}
@@ -226,7 +226,7 @@ func TestStreamMessageReadsSSELineLongerThanLegacyScannerLimit(t *testing.T) {
 		Timeout:       time.Minute,
 	})
 
-	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "hello"}})
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "hello"}}, nil)
 	if err != nil {
 		t.Fatalf("StreamMessage() error = %v", err)
 	}
@@ -265,7 +265,7 @@ func TestStreamMessageDoesNotTimeoutWhileReadingBody(t *testing.T) {
 		Timeout:       10 * time.Millisecond,
 	})
 
-	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "hello"}})
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "hello"}}, nil)
 	if err != nil {
 		t.Fatalf("StreamMessage() error = %v", err)
 	}

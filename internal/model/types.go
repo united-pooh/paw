@@ -1,6 +1,17 @@
 package model
 
-import "gocode/internal/message"
+import (
+	"encoding/json"
+
+	"gocode/internal/message"
+)
+
+// ToolDefinition 描述一个可被模型调用的工具，格式兼容 Anthropic 和 OpenAI。
+type ToolDefinition struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"input_schema"` // JSON Schema object
+}
 
 // ChatCompletionsRequest 是通用的 Chat Completions 请求结构。
 // 命名和字段不绑定具体供应商，便于后续替换 provider。
@@ -9,6 +20,13 @@ type ChatCompletionsRequest struct {
 	Messages      []message.Message `json:"messages"`
 	Stream        bool              `json:"stream,omitempty"`
 	StreamOptions *StreamOptions    `json:"stream_options,omitempty"`
+	Tools         []openAITool      `json:"tools,omitempty"`
+}
+
+// openAITool 是 OpenAI 兼容接口的工具定义格式。
+type openAITool struct {
+	Type     string          `json:"type"` // "function"
+	Function ToolDefinition  `json:"function"`
 }
 
 type StreamOptions struct {

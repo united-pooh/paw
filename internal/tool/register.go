@@ -3,6 +3,8 @@ package tool
 import (
 	"sort"
 	"strings"
+
+	"gocode/internal/model"
 )
 
 type Registry struct {
@@ -55,4 +57,31 @@ func (r *Registry) Describe() []string {
 		descriptions = append(descriptions, description)
 	}
 	return descriptions
+}
+
+// Definitions 返回注册表中所有工具的 ToolDefinition 切片，用于原生工具调用请求。
+func (r *Registry) Definitions() []model.ToolDefinition {
+	if r == nil || len(r.tools) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(r.tools))
+	for name := range r.tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	defs := make([]model.ToolDefinition, 0, len(names))
+	for _, name := range names {
+		t := r.tools[name]
+		schema := t.InputSchema()
+		if len(schema) == 0 {
+			schema = []byte(`{"type":"object","properties":{}}`)
+		}
+		defs = append(defs, model.ToolDefinition{
+			Name:        t.Name(),
+			Description: t.Description(),
+			InputSchema: schema,
+		})
+	}
+	return defs
 }

@@ -15,13 +15,13 @@ import (
 )
 
 const (
-	maxToolRounds       = 20
+	maxToolRounds       = 500
 	toolUseResponseType = "tool_use"
 )
 
 // ModelStreamer 是 loop 层依赖的最小模型流式接口。
 type ModelStreamer interface {
-	StreamMessage(ctx context.Context, messages []message.Message) (<-chan model.StreamEvent, error)
+	StreamMessage(ctx context.Context, messages []message.Message, tools []model.ToolDefinition) (<-chan model.StreamEvent, error)
 }
 
 // HistoryStore 是 Runner 依赖的最小历史存储接口。
@@ -153,7 +153,11 @@ func (runner *Runner) validate() error {
 }
 
 func (runner *Runner) runModelTurn(ctx context.Context, history []message.Message) (message.Message, error) {
-	events, err := runner.model.StreamMessage(ctx, runner.buildModelMessages(history))
+	var tools []model.ToolDefinition
+	if runner.registry != nil {
+		tools = runner.registry.Definitions()
+	}
+	events, err := runner.model.StreamMessage(ctx, runner.buildModelMessages(history), tools)
 	if err != nil {
 		return message.Message{}, err
 	}

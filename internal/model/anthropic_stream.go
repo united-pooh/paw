@@ -17,11 +17,19 @@ const (
 )
 
 type anthropicMessagesRequest struct {
-	Model     string             `json:"model"`
-	System    string             `json:"system,omitempty"`
-	Messages  []anthropicMessage `json:"messages"`
-	MaxTokens int                `json:"max_tokens"`
-	Stream    bool               `json:"stream"`
+	Model     string              `json:"model"`
+	System    string              `json:"system,omitempty"`
+	Messages  []anthropicMessage  `json:"messages"`
+	MaxTokens int                 `json:"max_tokens"`
+	Stream    bool                `json:"stream"`
+	Tools     []anthropicTool     `json:"tools,omitempty"`
+}
+
+// anthropicTool 是 Anthropic Messages API 的工具定义格式。
+type anthropicTool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"input_schema"`
 }
 
 type anthropicMessage struct {
@@ -38,6 +46,9 @@ type anthropicStreamResponse struct {
 		Type     string `json:"type"`
 		Text     string `json:"text,omitempty"`
 		Thinking string `json:"thinking,omitempty"`
+		// tool_use 类型的额外字段
+		ID   string `json:"id,omitempty"`
+		Name string `json:"name,omitempty"`
 	} `json:"content_block,omitempty"`
 	Delta *struct {
 		Type        string  `json:"type"`
@@ -53,8 +64,8 @@ type anthropicStreamResponse struct {
 	} `json:"error,omitempty"`
 }
 
-func (c *Client) streamAnthropicMessage(ctx context.Context, cfg Config, messages []message.Message) (<-chan StreamEvent, error) {
-	bodyBytes, err := json.Marshal(buildAnthropicMessagesRequest(cfg, messages))
+func (c *Client) streamAnthropicMessage(ctx context.Context, cfg Config, messages []message.Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
+	bodyBytes, err := json.Marshal(buildAnthropicMessagesRequest(cfg, messages, tools))
 	if err != nil {
 		return nil, fmt.Errorf("序列化 Anthropic 请求体失败: %w", err)
 	}
@@ -88,7 +99,7 @@ func (c *Client) streamAnthropicMessage(ctx context.Context, cfg Config, message
 	return events, nil
 }
 
-func buildAnthropicMessagesRequest(cfg Config, messages []message.Message) anthropicMessagesRequest {
+func buildAnthropicMessagesRequest(cfg Config, messages []message.Message, tools []ToolDefinition) anthropicMessagesRequest {
 	systemParts := make([]string, 0, 1)
 	apiMessages := make([]anthropicMessage, 0, len(messages))
 	for _, msg := range messages {
@@ -109,13 +120,21 @@ func buildAnthropicMessagesRequest(cfg Config, messages []message.Message) anthr
 	if len(apiMessages) == 0 {
 		apiMessages = append(apiMessages, anthropicMessage{Role: "user", Content: "continue"})
 	}
-	return anthropicMessagesRequest{
+	req := anthropicMessagesRequest{
 		Model:     cfg.Model,
 		System:    strings.Join(systemParts, "\n\n"),
 		Messages:  apiMessages,
 		MaxTokens: anthropicDefaultMaxTokens,
 		Stream:    true,
 	}
+	for _, t := range tools {
+		req.Tools = append(req.Tools, anthropicTool{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: t.InputSchema,
+		})
+	}
+	return req
 }
 
 func anthropicMessagesURL(cfg Config) string {
@@ -145,6 +164,13 @@ func setAnthropicRequestHeaders(req *http.Request, cfg Config) {
 	}
 }
 
+// activeAnthropicToolCall 追踪正在流式接收的原生 tool_use 块。
+type activeAnthropicToolCall struct {
+	id   string
+	name string
+	args strings.Builder
+}
+
 func (c *Client) consumeAnthropicStream(ctx context.Context, resp *http.Response, events chan<- StreamEvent) {
 	defer close(events)
 	defer func(Body io.ReadCloser) {
@@ -152,16 +178,75 @@ func (c *Client) consumeAnthropicStream(ctx context.Context, resp *http.Response
 	}(resp.Body)
 
 	scanner := newStreamScanner(resp.Body)
+	// 当前正在累积的原生 tool_use 块（nil 表示当前是文本内容）
+	var activeTool *activeAnthropicToolCall
+
 	for scanner.Scan() {
-		done, err := c.handleAnthropicStreamLine(ctx, scanner.Text(), events)
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" {
+			continue
+		}
+		if payload == "[DONE]" {
+			break
+		}
+
+		chunk, err := decodeAnthropicStreamChunk(payload)
 		if err != nil {
-			_ = emitStreamEvent(ctx, events, StreamEvent{Err: err})
+			_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("解析 Anthropic 流式数据失败: %w", err)})
 			return
 		}
-		if done {
+		if chunk.Error != nil {
+			_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("Anthropic 流式接口返回错误: %s", chunk.Error.Message)})
+			return
+		}
+
+		// 原生工具调用：content_block_start type=tool_use
+		if chunk.ContentBlock != nil && chunk.ContentBlock.Type == "tool_use" {
+			activeTool = &activeAnthropicToolCall{
+				id:   chunk.ContentBlock.ID,
+				name: chunk.ContentBlock.Name,
+			}
+			continue
+		}
+
+		// 原生工具调用：input_json_delta → 累积参数
+		if chunk.Delta != nil && chunk.Delta.Type == "input_json_delta" && activeTool != nil {
+			activeTool.args.WriteString(chunk.Delta.PartialJSON)
+			continue
+		}
+
+		// 原生工具调用：content_block_stop → 发出完整工具调用
+		if chunk.Type == "content_block_stop" && activeTool != nil {
+			args := activeTool.args.String()
+			var input json.RawMessage
+			if len(args) > 0 && json.Valid([]byte(args)) {
+				input = json.RawMessage(args)
+			} else {
+				input = json.RawMessage(`{}`)
+			}
+			callJSON, _ := json.Marshal(map[string]interface{}{
+				"type":  "tool_use",
+				"id":    activeTool.id,
+				"name":  activeTool.name,
+				"input": input,
+			})
+			if !emitStreamEvent(ctx, events, StreamEvent{Delta: string(callJSON)}) {
+				return
+			}
+			activeTool = nil
+			continue
+		}
+
+		// 普通事件：文本、thinking、usage 等
+		if done := emitAnthropicChunkEvents(ctx, chunk, events); done {
 			return
 		}
 	}
+
 	if err := scanner.Err(); err != nil {
 		_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("读取 Anthropic 流式响应失败: %w", err)})
 		return

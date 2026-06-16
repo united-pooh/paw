@@ -30,7 +30,8 @@ type StreamEvent struct {
 type chatCompletionsStreamResponse struct {
 	Choices []struct {
 		Delta struct {
-			Content string `json:"content"`
+			Content   string           `json:"content"`
+			ToolCalls []toolCallDelta  `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
@@ -41,12 +42,23 @@ type chatCompletionsStreamResponse struct {
 	} `json:"error,omitempty"`
 }
 
+// toolCallDelta 是 OpenAI 兼容接口流式 tool_calls 的单个增量。
+type toolCallDelta struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
 // StreamMessage 以 SSE 方式返回模型增量输出。
 // 调用方拿到 channel 后持续 range：
 // - 处理 Delta
 // - 处理 Err
 // - 收到 Done 后结束当前轮次
-func (c *Client) StreamMessage(ctx context.Context, messages []message.Message) (<-chan StreamEvent, error) {
+func (c *Client) StreamMessage(ctx context.Context, messages []message.Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
 	// 模型接口要求至少有一条输入消息。
 	if len(messages) == 0 {
 		return nil, fmt.Errorf("messages 不能为空")
@@ -54,22 +66,25 @@ func (c *Client) StreamMessage(ctx context.Context, messages []message.Message) 
 
 	cfg := c.CurrentModelConfig()
 	if shouldAttemptAnthropicStream(cfg) {
-		events, err := c.streamAnthropicMessage(ctx, cfg, messages)
+		events, err := c.streamAnthropicMessage(ctx, cfg, messages, tools)
 		if err == nil {
 			return events, nil
 		}
 	}
 
-	return c.streamOpenAIMessage(ctx, cfg, messages)
+	return c.streamOpenAIMessage(ctx, cfg, messages, tools)
 }
 
-func (c *Client) streamOpenAIMessage(ctx context.Context, cfg Config, messages []message.Message) (<-chan StreamEvent, error) {
+func (c *Client) streamOpenAIMessage(ctx context.Context, cfg Config, messages []message.Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
 	// 启用 stream=true，让服务端按 SSE 增量返回。
 	reqBody := ChatCompletionsRequest{
 		Model:         cfg.Model,
 		Messages:      messages,
 		Stream:        true,
 		StreamOptions: &StreamOptions{IncludeUsage: true},
+	}
+	for _, t := range tools {
+		reqBody.Tools = append(reqBody.Tools, openAITool{Type: "function", Function: t})
 	}
 
 	// 组装 JSON 请求体。
@@ -200,35 +215,138 @@ func emitChunkEvents(ctx context.Context, chunk chatCompletionsStreamResponse, e
 	return false
 }
 
-// consumeStream 负责把 SSE 文本行转换为 StreamEvent。
+// activeOpenAIToolCall 追踪正在流式累积的 OpenAI tool_call 增量。
+type activeOpenAIToolCall struct {
+	id   string
+	name string
+	args strings.Builder
+}
+
+// consumeStream 负责把 SSE 文本行转换为 StreamEvent，并累积原生 tool_calls。
 func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events chan<- StreamEvent) {
-	// 无论以何种路径退出，都要关闭事件通道和响应体。
 	defer close(events)
 	defer func(Body io.ReadCloser) {
 		_ = Body.Close()
 	}(resp.Body)
 
-	// SSE 是按行传输，这里使用 Scanner 逐行读取。
 	scanner := newStreamScanner(resp.Body)
+	// 按 index 累积 tool_calls，支持单次响应中多个工具调用
+	accumulated := map[int]*activeOpenAIToolCall{}
 
 	for scanner.Scan() {
-		done, err := c.handleStreamLine(ctx, scanner.Text(), events)
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" || payload == "[DONE]" {
+			break
+		}
+
+		chunk, err := decodeStreamChunk(payload)
 		if err != nil {
-			_ = emitStreamEvent(ctx, events, StreamEvent{Err: err})
+			_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("解析流式数据失败: %w", err)})
 			return
 		}
-		if done {
+		if chunk.Error != nil {
+			_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("模型接口返回错误: %s", chunk.Error.Message)})
+			return
+		}
+
+		// 累积 delta.tool_calls
+		if len(chunk.Choices) > 0 {
+			for _, tc := range chunk.Choices[0].Delta.ToolCalls {
+				call, ok := accumulated[tc.Index]
+				if !ok {
+					call = &activeOpenAIToolCall{}
+					accumulated[tc.Index] = call
+				}
+				if tc.ID != "" {
+					call.id = tc.ID
+				}
+				if tc.Function.Name != "" {
+					call.name = tc.Function.Name
+				}
+				call.args.WriteString(tc.Function.Arguments)
+			}
+		}
+
+		// Usage
+		if chunk.Usage != nil {
+			if !emitStreamEvent(ctx, events, StreamEvent{Usage: chunk.Usage}) {
+				return
+			}
+		}
+
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+
+		// 文本内容 delta
+		if delta := chunk.Choices[0].Delta.Content; delta != "" {
+			if !emitStreamEvent(ctx, events, StreamEvent{Delta: delta}) {
+				return
+			}
+		}
+
+		// finish_reason：先 flush 工具调用，再发 Done
+		finishReason := chunk.Choices[0].FinishReason
+		if finishReason != nil && *finishReason != "" {
+			for i := 0; i < len(accumulated); i++ {
+				call, ok := accumulated[i]
+				if !ok || call.name == "" {
+					continue
+				}
+				args := call.args.String()
+				var input json.RawMessage
+				if len(args) > 0 && json.Valid([]byte(args)) {
+					input = json.RawMessage(args)
+				} else {
+					input = json.RawMessage(`{}`)
+				}
+				callJSON, _ := json.Marshal(map[string]interface{}{
+					"type":  "tool_use",
+					"id":    call.id,
+					"name":  call.name,
+					"input": input,
+				})
+				if !emitStreamEvent(ctx, events, StreamEvent{Delta: string(callJSON)}) {
+					return
+				}
+			}
+			_ = emitStreamEvent(ctx, events, StreamEvent{Done: true})
 			return
 		}
 	}
 
-	// Scanner 自身出错（含网络中断）时回传错误事件。
 	if err := scanner.Err(); err != nil {
 		_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("读取流式响应失败: %w", err)})
 		return
 	}
 
-	// 正常读到 EOF 也视作结束，保证上层一定能收到 Done。
+	// EOF 前未收到 finish_reason：flush 积累的工具调用后发 Done
+	for i := 0; i < len(accumulated); i++ {
+		call, ok := accumulated[i]
+		if !ok || call.name == "" {
+			continue
+		}
+		args := call.args.String()
+		var input json.RawMessage
+		if len(args) > 0 && json.Valid([]byte(args)) {
+			input = json.RawMessage(args)
+		} else {
+			input = json.RawMessage(`{}`)
+		}
+		callJSON, _ := json.Marshal(map[string]interface{}{
+			"type":  "tool_use",
+			"id":    call.id,
+			"name":  call.name,
+			"input": input,
+		})
+		if !emitStreamEvent(ctx, events, StreamEvent{Delta: string(callJSON)}) {
+			return
+		}
+	}
 	_ = emitStreamEvent(ctx, events, StreamEvent{Done: true})
 }
 

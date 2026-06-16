@@ -27,7 +27,7 @@ type recordingModel struct {
 	calls  [][]message.Message
 }
 
-func (m *recordingModel) StreamMessage(ctx context.Context, messages []message.Message) (<-chan model.StreamEvent, error) {
+func (m *recordingModel) StreamMessage(ctx context.Context, messages []message.Message, _ []model.ToolDefinition) (<-chan model.StreamEvent, error) {
 	m.mu.Lock()
 	index := len(m.calls)
 	copied := append([]message.Message(nil), messages...)
