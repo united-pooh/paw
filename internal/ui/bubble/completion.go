@@ -340,7 +340,8 @@ func commandCompletionItems(prefix string, registry *CommandRegistry) []string {
 // ──────────────────────────────────────────────────────────────────────────────
 
 // applyFileCompletion 将选中文件写回输入框，只替换 @query 段，保留之前的文本。
-func (m appModel) applyFileCompletion(selected string) appModel {
+// trailingSpace=true（Enter）在路径后追加空格以结束引用；false（Tab）不追加，光标停在路径末尾。
+func (m appModel) applyFileCompletion(selected string, trailingSpace bool) appModel {
 	if m.completion == nil {
 		return m
 	}
@@ -352,7 +353,11 @@ func (m appModel) applyFileCompletion(selected string) appModel {
 
 	before := val[:atIdx]
 	ref := buildAtRef(query, m.completion.searchDir, selected)
-	m.input.SetValue(before + ref + " ")
+	suffix := ""
+	if trailingSpace {
+		suffix = " "
+	}
+	m.input.SetValue(before + ref + suffix)
 	m.input.CursorEnd()
 	m.relayout()
 	return m

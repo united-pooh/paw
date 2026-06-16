@@ -262,12 +262,26 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "down", "ctrl+n":
 				m.completion.navigateDown()
 				return m, nil
-			case "tab", "enter":
+			case "tab":
 				visible := m.completion.visibleItems()
 				if !m.completion.loading && len(visible) > 0 {
 					selected := visible[m.completion.selectedIndex]
 					if m.completion.kind == completionKindFile {
-						m = m.applyFileCompletion(selected)
+						// Tab：补全路径，不加尾部空格，光标停在路径末尾
+						m = m.applyFileCompletion(selected, false)
+					} else {
+						m = m.applyCommandCompletion(selected)
+					}
+				}
+				m.completion = nil
+				return m, nil
+			case "enter":
+				visible := m.completion.visibleItems()
+				if !m.completion.loading && len(visible) > 0 {
+					selected := visible[m.completion.selectedIndex]
+					if m.completion.kind == completionKindFile {
+						// Enter：补全路径并追加空格，结束引用
+						m = m.applyFileCompletion(selected, true)
 					} else {
 						m = m.applyCommandCompletion(selected)
 					}

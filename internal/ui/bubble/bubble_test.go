@@ -2360,8 +2360,8 @@ func TestAtCompletion_输入时不阻断输入框(t *testing.T) {
 	}
 }
 
-// TestAtCompletion_Tab只替换At段 验证 tab 确认时只替换 @query 段，保留前面文本。
-func TestAtCompletion_Tab只替换At段(t *testing.T) {
+// TestAtCompletion_Tab不加空格 验证 Tab 确认时只替换 @query 段，不加尾部空格，保留前面文本。
+func TestAtCompletion_Tab不加空格(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.input.SetValue("请引用 @re")
 	model.completion = &completion{
@@ -2377,11 +2377,38 @@ func TestAtCompletion_Tab只替换At段(t *testing.T) {
 	model = next.(appModel)
 
 	got := model.input.Value()
-	if !strings.HasPrefix(got, "请引用 @readme.md") {
-		t.Errorf("input value = %q, want to start with '请引用 @readme.md '", got)
+	// Tab：无尾部空格，光标停在路径末尾
+	if got != "请引用 @readme.md" {
+		t.Errorf("input value = %q, want '请引用 @readme.md' (no trailing space after tab)", got)
 	}
 	if model.completion != nil {
 		t.Errorf("completion should be nil after tab, got %#v", model.completion)
+	}
+}
+
+// TestAtCompletion_Enter加空格结束引用 验证 Enter 确认时在路径后追加空格以结束引用。
+func TestAtCompletion_Enter加空格结束引用(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.input.SetValue("请引用 @re")
+	model.completion = &completion{
+		kind:          completionKindFile,
+		atByteIndex:   len("请引用 "),
+		query:         "re",
+		filteredItems: []string{"readme.md"},
+		selectedIndex: 0,
+		loading:       false,
+	}
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+
+	got := model.input.Value()
+	// Enter：追加空格，光标在路径 + 空格之后
+	if got != "请引用 @readme.md " {
+		t.Errorf("input value = %q, want '请引用 @readme.md ' (trailing space after enter)", got)
+	}
+	if model.completion != nil {
+		t.Errorf("completion should be nil after enter, got %#v", model.completion)
 	}
 }
 
