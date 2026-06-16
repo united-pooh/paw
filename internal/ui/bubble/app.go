@@ -281,17 +281,23 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.relayout()
 		cmds = append(cmds, inputCmd)
 
-		// 检测 @ 前缀触发文件补全（仅在文本编辑键后）
-		if isTextEditingKey(msg) && m.completion == nil {
+		// 检测 / 和 @ 前缀触发命令补全或文件补全（仅在文本编辑键后）
+		if isTextEditingKey(msg) {
 			val := m.input.Value()
-			if strings.HasPrefix(val, "@") && len(val) >= 1 {
-				m.completion = newFileCompletion(val[1:])
-				cmds = append(cmds, loadFileCompletionCmd())
-			}
-		} else if isTextEditingKey(msg) && m.completion != nil && m.completion.kind == completionKindFile {
-			val := m.input.Value()
-			if !strings.HasPrefix(val, "@") {
-				m.completion = nil
+			switch {
+			case strings.HasPrefix(val, "/"):
+				query := strings.TrimPrefix(val, "/")
+				m.completion = newCommandCompletion(query, m.commandRegistry)
+				m.sessionPicker = nil
+			case strings.HasPrefix(val, "@"):
+				if m.completion == nil || m.completion.kind != completionKindFile {
+					m.completion = newFileCompletion(val[1:])
+					cmds = append(cmds, loadFileCompletionCmd())
+				}
+			default:
+				if m.completion != nil && (m.completion.kind == completionKindCommand || m.completion.kind == completionKindFile) {
+					m.completion = nil
+				}
 			}
 		}
 	}

@@ -2,6 +2,7 @@
 package bubble
 
 import (
+	"errors"
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
 	"os"
@@ -104,7 +105,7 @@ func loadFileCompletionCmd() tea.Cmd {
 			items = append(items, rel)
 			return nil
 		})
-		if err != nil && !strings.Contains(err.Error(), "SkipAll") {
+		if err != nil && !errors.Is(err, filepath.SkipAll) {
 			return fileCompletionLoadedMsg{err: err}
 		}
 		return fileCompletionLoadedMsg{items: items}
@@ -204,10 +205,6 @@ func (m appModel) renderCompletionContent() string {
 	for i := start; i < end; i++ {
 		item := c.items[i]
 		label := item
-		if c.kind == completionKindCommand {
-			// 显示命令描述
-			label = item
-		}
 		if i == c.selectedIndex {
 			lines = append(lines, selectedProviderStyle.Render(fmt.Sprintf("> %s", label)))
 		} else {

@@ -406,9 +406,10 @@ func (s *JSONLStore) keyIndexPath(key string) string {
 
 // SessionSummary 是 ListSessions 返回的会话摘要信息。
 type SessionSummary struct {
-	SessionID    string
-	CreatedAt    time.Time
-	FirstMessage string // 第一条用户消息的前 80 个字符，可能为空
+	SessionID      string
+	CreatedAt      time.Time
+	FirstMessage   string // 第一条用户消息的前 80 个字符，可能为空
+	TranscriptSize int    // transcript 中的记录数量
 }
 
 // ListSessions 枚举所有已存储的会话，按创建时间倒序返回。
@@ -446,9 +447,10 @@ func (s *JSONLStore) ListSessions(ctx context.Context) ([]SessionSummary, error)
 			CreatedAt: meta.CreatedAt,
 		}
 
-		// 尝试读取第一条用户消息
+		// 尝试读取第一条用户消息和记录总数
 		records, err := s.readOwnRecords(ctx, sessionID)
 		if err == nil {
+			summary.TranscriptSize = len(records)
 			for _, rec := range records {
 				if rec.Message.Role == "user" && rec.Message.Content != "" {
 					msg := rec.Message.Content

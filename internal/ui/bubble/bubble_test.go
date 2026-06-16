@@ -2010,3 +2010,176 @@ func TestContextMeter_doneMsg清除isGenerating(t *testing.T) {
 		t.Errorf("收到 doneMsg 后 isGenerating 应为 false")
 	}
 }
+
+// TestSessionsCommandOpensPicker 验证 /sessions 命令打开 sessionPicker。
+func TestSessionsCommandOpensPicker(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+
+	handled, _ := model.handleCommand("/sessions")
+	if !handled {
+		t.Fatalf("/sessions not handled")
+	}
+	if model.sessionPicker == nil {
+		t.Fatalf("sessionPicker = nil, want non-nil after /sessions")
+	}
+}
+
+// TestSessionPickerEscClosesPicker 验证 esc 键关闭 sessionPicker。
+func TestSessionPickerEscClosesPicker(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.sessionPicker = newSessionPicker()
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = next.(appModel)
+	if model.sessionPicker != nil {
+		t.Fatalf("sessionPicker = %#v, want nil after esc", model.sessionPicker)
+	}
+}
+
+// TestSessionPickerEnterRestoresSession 验证在选择器中按 enter 触发 loadSessionHistoryCmd。
+func TestSessionPickerEnterRestoresSession(t *testing.T) {
+	runner := &fakeRunner{}
+	model := newTestModel(runner)
+	model.sessionPicker = &sessionPicker{
+		loading: false,
+		sessions: []sessionSummaryItem{
+			{sessionID: "target-session", firstMessage: "hello"},
+		},
+		selectedIndex: 0,
+	}
+
+	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("enter on session picker returned nil cmd")
+	}
+	msg := cmd()
+	restored, ok := msg.(sessionRestoredMsg)
+	if !ok {
+		t.Fatalf("cmd() = %#v, want sessionRestoredMsg", msg)
+	}
+	if restored.err != nil {
+		t.Fatalf("sessionRestoredMsg.err = %v", restored.err)
+	}
+	if restored.sessionID != "target-session" {
+		t.Fatalf("sessionRestoredMsg.sessionID = %q, want target-session", restored.sessionID)
+	}
+}
+
+// TestSessionRestoredMsgUpdatesSessionID 验证 sessionRestoredMsg 更新 m.sessionID。
+func TestSessionRestoredMsgUpdatesSessionID(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.sessionPicker = newSessionPicker()
+
+	next, _ := model.Update(sessionRestoredMsg{sessionID: "new-session-id"})
+	model = next.(appModel)
+	if model.sessionID != "new-session-id" {
+		t.Fatalf("sessionID = %q, want new-session-id", model.sessionID)
+	}
+	if model.sessionPicker != nil {
+		t.Fatalf("sessionPicker = %#v, want nil after restore", model.sessionPicker)
+	}
+}
+
+// TestSlashPrefixTriggersCommandCompletion 验证输入 / 前缀触发命令补全。
+func TestSlashPrefixTriggersCommandCompletion(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+
+	// 模拟用户输入 "/"：先设置空值，再通过 rune 键输入 "/"
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	model = next.(appModel)
+
+	if model.completion == nil {
+		t.Fatalf("completion = nil, want command completion after / input")
+	}
+	if model.completion.kind != completionKindCommand {
+		t.Fatalf("completion.kind = %v, want completionKindCommand", model.completion.kind)
+	}
+}
+
+// TestAtPrefixTriggersFileCompletion 验证输入 @ 触发文件补全。
+func TestAtPrefixTriggersFileCompletion(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+
+	// 先设置 @ 前缀，然后发送一个 rune 键让 isTextEditingKey 触发补全逻辑
+	model.input.SetValue("@")
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	model = next.(appModel)
+
+	if model.completion == nil {
+		t.Fatalf("completion = nil, want file completion after @ input")
+	}
+	if model.completion.kind != completionKindFile {
+		t.Fatalf("completion.kind = %v, want completionKindFile", model.completion.kind)
+	}
+}
+
+// TestCompletionEscClears 验证 esc 键清除补全弹窗。
+func TestCompletionEscClears(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.completion = newFileCompletion("test")
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = next.(appModel)
+	if model.completion != nil {
+		t.Fatalf("completion = %#v, want nil after esc", model.completion)
+	}
+}
+
+// TestCompletionTabAppliesSelection 验证 tab 键应用选中的补全项并清除弹窗。
+func TestCompletionTabAppliesSelection(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.completion = &completion{
+		kind:          completionKindCommand,
+		items:         []string{"/help", "/model", "/sessions"},
+		selectedIndex: 0,
+		loading:       false,
+	}
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = next.(appModel)
+	if model.completion != nil {
+		t.Fatalf("completion = %#v, want nil after tab", model.completion)
+	}
+	if got := model.input.Value(); got != "/help " {
+		t.Fatalf("input value = %q, want /help after tab completion", got)
+	}
+}
+
+// TestSessionPickerKeyNavigation 验证上下键在会话选择器中移动选中项。
+func TestSessionPickerKeyNavigation(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.sessionPicker = &sessionPicker{
+		loading: false,
+		sessions: []sessionSummaryItem{
+			{sessionID: "s1"},
+			{sessionID: "s2"},
+			{sessionID: "s3"},
+		},
+		selectedIndex: 0,
+	}
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = next.(appModel)
+	if model.sessionPicker.selectedIndex != 1 {
+		t.Fatalf("selectedIndex = %d, want 1 after down", model.sessionPicker.selectedIndex)
+	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = next.(appModel)
+	if model.sessionPicker.selectedIndex != 2 {
+		t.Fatalf("selectedIndex = %d, want 2 after second down", model.sessionPicker.selectedIndex)
+	}
+
+	// 不超出边界
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = next.(appModel)
+	if model.sessionPicker.selectedIndex != 2 {
+		t.Fatalf("selectedIndex = %d, want 2 at boundary", model.sessionPicker.selectedIndex)
+	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyUp})
+	model = next.(appModel)
+	if model.sessionPicker.selectedIndex != 1 {
+		t.Fatalf("selectedIndex = %d, want 1 after up", model.sessionPicker.selectedIndex)
+	}
+}
