@@ -2689,6 +2689,41 @@ func TestCtrlC_清空时关闭候选框(t *testing.T) {
 }
 
 // TestRenderPipelineWindowedContent_ShowsCurrentStage 验证 Pipeline 滚动窗口正确显示当前阶段。
+func TestFullLayout_RightPanelVisible(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.width = 100
+	model.height = 30
+	model.ready = true
+	model.relayout()
+
+	view := model.View()
+	// Right panel exists — context card content should appear
+	if !strings.Contains(view, "free") && !strings.Contains(view, "turns") {
+		t.Errorf("View() = %q, want right panel with context card", view)
+	}
+	// 30% of 100 = 30
+	if model.sidebarWidth != 30 {
+		t.Errorf("sidebarWidth = %d, want 30 for 100-wide terminal", model.sidebarWidth)
+	}
+}
+
+func TestFullLayout_PipelineCardAppearsWhenDetected(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.width = 100
+	model.height = 30
+	model.ready = true
+	model.pipelineState.detected = true
+	model.pipelineState.activeIdx = 1
+	model.pipelineState.phases[0] = pipelinePhaseEntry{name: "Brainstorm", status: phaseStatusDone}
+	model.pipelineState.phases[1] = pipelinePhaseEntry{name: "Spec", status: phaseStatusActive}
+	model.relayout()
+
+	view := model.View()
+	if !strings.Contains(view, "pipeline") {
+		t.Errorf("View() = %q, want 'pipeline' badge when pipeline detected", view)
+	}
+}
+
 func TestRenderPipelineWindowedContent_ShowsCurrentStage(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.pipelineState.detected = true
