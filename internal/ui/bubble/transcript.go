@@ -148,32 +148,48 @@ func renderEntryBodyAt(entry transcriptEntry, width int, at time.Time) string {
 		return renderMarkdown(body, width)
 	}
 	if entry.kind == entryTool {
-		return renderToolEntryBody(body, width, toolExpandProgress(entry, at))
+		isError := entry.title == "result" && strings.Contains(entry.body, "error")
+		isResult := entry.title == "result"
+		prog := toolExpandProgress(entry, at)
+		switch {
+		case isError:
+			return renderToolEntryBodyWithStyle(entry.body, width, prog, toolErrorBorderStyle)
+		case isResult:
+			return renderToolEntryBodyWithStyle(entry.body, width, prog, toolResultBorderStyle)
+		default:
+			return renderToolEntryBody(entry.body, width, prog)
+		}
 	}
 	return bodyStyle.Width(width).Render(body)
 }
 
-func renderToolEntryBody(body string, width int, progress float64) string {
+// renderToolEntryBodyWithStyle renders a tool entry in blockquote style using the given border style.
+func renderToolEntryBodyWithStyle(body string, width int, progress float64, borderStyle lipgloss.Style) string {
 	body = strings.TrimRight(body, "\n")
 	summary, detail := splitToolSummary(body)
-	header := toolHeaderStyle.Width(width).Render("▾ " + summary)
+	header := toolHeaderStyle.Render("▾ " + summary)
+
 	if detail == "" || progress <= 0 {
-		return header
+		return borderStyle.Width(width - 3).Render(header)
 	}
+
 	detailLines := strings.Split(detail, "\n")
 	visibleLines := maxInt(1, int(float64(len(detailLines))*progress+0.999))
 	if visibleLines > len(detailLines) {
 		visibleLines = len(detailLines)
 	}
-	for i := range detailLines[:visibleLines] {
-		detailLines[i] = "│ " + detailLines[i]
+	prefixed := make([]string, visibleLines)
+	for i, l := range detailLines[:visibleLines] {
+		prefixed[i] = "> " + l
 	}
-	trailer := "╰─"
-	if progress < 1 {
-		trailer = "╰╴"
-	}
-	revealed := strings.Join(append(detailLines[:visibleLines], trailer), "\n")
-	return header + "\n" + toolDetailStyle.Width(width).Render(revealed)
+	content := header + "\n" + toolDetailStyle.Width(width-4).Render(strings.Join(prefixed, "\n"))
+	return borderStyle.Width(width - 3).Render(content)
+}
+
+// renderToolEntryBody renders a tool call entry with the default orange border.
+// Called from renderEntryBodyAt for the "tool" title.
+func renderToolEntryBody(body string, width int, progress float64) string {
+	return renderToolEntryBodyWithStyle(body, width, progress, toolCallBorderStyle)
 }
 
 func splitToolSummary(body string) (string, string) {

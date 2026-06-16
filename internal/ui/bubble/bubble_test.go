@@ -602,7 +602,7 @@ func TestToolEntryRevealsDetailsWithExpandAnimation(t *testing.T) {
 	}
 
 	late := renderEntryAt(entry, 80, started.Add(toolExpandDuration))
-	for _, want := range []string{"Read {", "file_path", "╰─"} {
+	for _, want := range []string{"Read {", "file_path", "> "} {
 		if !strings.Contains(late, want) {
 			t.Fatalf("late tool entry = %q, want %q", late, want)
 		}
@@ -2560,6 +2560,25 @@ func TestRelayout_SidebarWidthIs30Percent(t *testing.T) {
 	}
 	if model.viewport.Width < 70 {
 		t.Errorf("viewport.Width = %d, want ≥70 (left column inner)", model.viewport.Width)
+	}
+}
+
+func TestRenderToolEntryBody_BlockquoteContainsVerticalBar(t *testing.T) {
+	body := "Read README.md\nfile content here"
+	result := renderToolEntryBody(body, 60, 1.0)
+	if !strings.Contains(result, "│") {
+		t.Errorf("renderToolEntryBody = %q, want │ vertical bar (blockquote style)", result)
+	}
+	if !strings.Contains(result, "Read README.md") {
+		t.Errorf("renderToolEntryBody = %q, want summary in output", result)
+	}
+}
+
+func TestRenderToolEntryBody_PrefixesDetailLinesWithArrow(t *testing.T) {
+	body := "Bash ls .\nfile1.go\nfile2.go"
+	result := renderToolEntryBody(body, 60, 1.0)
+	if !strings.Contains(result, "> ") {
+		t.Errorf("renderToolEntryBody = %q, want > prefix on detail lines", result)
 	}
 }
 

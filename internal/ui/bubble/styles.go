@@ -115,6 +115,26 @@ var (
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(colorManager.LipglossColor(colorWizardBorder)).
 				Padding(0, 1)
+
+	// Blockquote styles for tool calls — coloured left border
+	toolCallBorderStyle = lipgloss.NewStyle().
+				Border(lipgloss.Border{Left: "│"}).
+				BorderForeground(colorManager.LipglossColor(colorLabelTool)).
+				Background(lipgloss.Color("232")).
+				PaddingLeft(1)
+
+	toolResultBorderStyle = lipgloss.NewStyle().
+				Border(lipgloss.Border{Left: "│"}).
+				BorderForeground(lipgloss.Color("65")).
+				Background(lipgloss.Color("232")).
+				PaddingLeft(1)
+
+	toolErrorBorderStyle = lipgloss.NewStyle().
+				Border(lipgloss.Border{Left: "│"}).
+				BorderForeground(colorManager.LipglossColor(colorLabelError)).
+				Background(lipgloss.Color("232")).
+				PaddingLeft(1)
+
 	rightCardStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorManager.LipglossColor(colorPanelBorder)).
