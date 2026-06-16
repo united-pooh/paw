@@ -159,8 +159,8 @@ func formatSessionLabel(item sessionSummaryItem) string {
 	size := formatFileSize(item.transcriptSize)
 	if item.firstMessage != "" {
 		msg := item.firstMessage
-		if len(msg) > 40 {
-			msg = msg[:40]
+		if runes := []rune(msg); len(runes) > 80 {
+			msg = string(runes[:80])
 		}
 		return fmt.Sprintf("%s  %s  %s  %s", id, date, size, msg)
 	}
