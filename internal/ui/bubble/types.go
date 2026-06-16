@@ -247,6 +247,7 @@ type appModel struct {
 	transcript      []transcriptEntry
 	activeAssistant int
 	isGenerating    bool
+	lastCtrlCAt     time.Time // 追踪双击 Ctrl+C 退出
 	modelWizard     *modelWizard
 	settingWizard   *settingWizard
 	sessionPicker   *sessionPicker

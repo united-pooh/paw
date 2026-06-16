@@ -2480,3 +2480,87 @@ func TestFilterByPrefix(t *testing.T) {
 		t.Errorf("filterByPrefix with empty prefix = %d items, want %d", len(all), len(items))
 	}
 }
+
+// TestCtrlC_首次清空输入不退出 验证第一次按 Ctrl+C 清空输入框且不退出。
+func TestCtrlC_首次清空输入不退出(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.input.SetValue("some input text")
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	model = next.(appModel)
+
+	if model.input.Value() != "" {
+		t.Errorf("input value = %q, want empty after first ctrl+c", model.input.Value())
+	}
+	// 不应触发退出
+	if cmd != nil {
+		msg := cmd()
+		if _, ok := msg.(tea.QuitMsg); ok {
+			t.Errorf("first ctrl+c should not quit")
+		}
+	}
+	// lastCtrlCAt 应已记录
+	if model.lastCtrlCAt.IsZero() {
+		t.Errorf("lastCtrlCAt should be set after first ctrl+c")
+	}
+}
+
+// TestCtrlC_双击退出 验证 1 秒内连按两次 Ctrl+C 触发退出。
+func TestCtrlC_双击退出(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	// 模拟第一次按（设置 lastCtrlCAt 为刚才）
+	model.lastCtrlCAt = time.Now()
+
+	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+
+	// 应触发退出命令
+	if cmd == nil {
+		t.Fatalf("second ctrl+c within 1s should return a quit cmd")
+	}
+	msg := cmd()
+	if _, ok := msg.(tea.QuitMsg); !ok {
+		t.Errorf("second ctrl+c within 1s should quit, got %T", msg)
+	}
+}
+
+// TestCtrlC_超时后不退出 验证超过 1 秒后再按 Ctrl+C 只清空输入、不退出。
+func TestCtrlC_超时后不退出(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.input.SetValue("hello")
+	// 设置 lastCtrlCAt 为 2 秒前（超出 1 秒窗口）
+	model.lastCtrlCAt = time.Now().Add(-2 * time.Second)
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	model = next.(appModel)
+
+	if model.input.Value() != "" {
+		t.Errorf("input = %q, want empty", model.input.Value())
+	}
+	if cmd != nil {
+		msg := cmd()
+		if _, ok := msg.(tea.QuitMsg); ok {
+			t.Errorf("ctrl+c after timeout should not quit")
+		}
+	}
+}
+
+// TestCtrlC_清空时关闭候选框 验证 Ctrl+C 同时关闭文件补全候选框。
+func TestCtrlC_清空时关闭候选框(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.input.SetValue("@readme")
+	model.completion = &completion{
+		kind:          completionKindFile,
+		filteredItems: []string{"readme.md"},
+		loading:       false,
+	}
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	model = next.(appModel)
+
+	if model.completion != nil {
+		t.Errorf("completion should be nil after ctrl+c, got %#v", model.completion)
+	}
+	if model.input.Value() != "" {
+		t.Errorf("input = %q, want empty", model.input.Value())
+	}
+}

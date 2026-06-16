@@ -301,7 +301,24 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// 其他键：不 return，继续走下面的 switch 和 textarea 更新
 		}
 		switch msg.String() {
-		case "ctrl+c", "esc":
+		case "ctrl+c":
+			now := time.Now()
+			if !m.lastCtrlCAt.IsZero() && now.Sub(m.lastCtrlCAt) < time.Second {
+				// 1 秒内连按两次：退出
+				m.queryGuard.Cancel()
+				m.chatQueue.Clear()
+				return m, tea.Quit
+			}
+			// 第一次按：清空输入框（不进入历史）、关闭补全框
+			m.lastCtrlCAt = now
+			m.input.SetValue("")
+			m.input.CursorEnd()
+			m.pending = nil
+			m.completion = nil
+			m.syncInputMode()
+			m.relayout()
+			return m, nil
+		case "esc":
 			return m, tea.Quit
 		case "ctrl+o":
 			m.showThinking = !m.showThinking
@@ -342,6 +359,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if cmd := m.syncAtCompletion(); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
+			// 补全状态可能已改变（如删除 @ 后清空），需要重新计算 viewport 高度
+			m.relayout()
 		}
 	}
 	m.applyCursorAnimation()
