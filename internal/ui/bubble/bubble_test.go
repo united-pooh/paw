@@ -2638,6 +2638,35 @@ func TestRenderPipelineOrTasksContent_ShowsPipelineWhenDetected(t *testing.T) {
 	}
 }
 
+func TestLoadPipelineState_DetectedWhenSpecExists(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "spec.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	state := loadPipelineState(dir)
+	if !state.detected {
+		t.Errorf("detected = false, want true when spec.json exists")
+	}
+}
+
+func TestLoadPipelineState_NotDetectedWhenEmpty(t *testing.T) {
+	dir := t.TempDir()
+	state := loadPipelineState(dir)
+	if state.detected {
+		t.Errorf("detected = true, want false for empty dir")
+	}
+}
+
+func TestLoadPipelineState_ActiveIdxAfterSpec(t *testing.T) {
+	dir := t.TempDir()
+	// spec.json exists → Spec (index 1) is done, Plan (index 2) is active
+	os.WriteFile(filepath.Join(dir, "spec.json"), []byte(`{}`), 0o644)
+	state := loadPipelineState(dir)
+	if state.activeIdx != 2 { // Plan
+		t.Errorf("activeIdx = %d, want 2 (Plan) when spec exists", state.activeIdx)
+	}
+}
+
 // TestCtrlC_清空时关闭候选框 验证 Ctrl+C 同时关闭文件补全候选框。
 func TestCtrlC_清空时关闭候选框(t *testing.T) {
 	model := newTestModel(&fakeRunner{})

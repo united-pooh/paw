@@ -5,15 +5,30 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"strings"
-	"time"
 )
+
+// pipelinePollCmd 异步检测 .pipeline-workspace/ 并返回 pipelineStateUpdatedMsg。
+func pipelinePollCmd() tea.Cmd {
+	return func() tea.Msg {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return pipelineStateUpdatedMsg{}
+		}
+		workspaceDir := filepath.Join(cwd, ".pipeline-workspace")
+		return pipelineStateUpdatedMsg{state: loadPipelineState(workspaceDir)}
+	}
+}
 
 // newModel 创建完整的 TUI 状态模型，并初始化输入框、滚动区和系统消息。
 func newModel(ctx context.Context, runner Runner, sessionID string, controller ModelConfigController, settingsController SettingsController, subagentController SubagentController, sessionStore SessionStore, anchor *terminalCursorAnchor) appModel {
@@ -104,7 +119,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refreshViewportPreservingOffset()
 			}
 		}
-		return m, cursorFrameTick()
+		return m, tea.Batch(cursorFrameTick(), pipelinePollCmd())
 	case assistantDeltaMsg:
 		m.isGenerating = true
 		m.appendAssistantDelta(string(msg))
@@ -240,6 +255,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.completion.selectedIndex = 0
 			}
 		}
+		return m, nil
+	case pipelineStateUpdatedMsg:
+		m.pipelineState = msg.state
 		return m, nil
 	case tea.KeyMsg:
 		if m.settingWizard != nil {

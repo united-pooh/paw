@@ -2,11 +2,98 @@
 package bubble
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"gocode/internal/subagent"
 )
+
+// pipelineArtifacts lists the 18 pipeline phases in order, each with display name and artifact filename.
+// Artifact paths are relative to .pipeline-workspace/ (except Cleanup which is in the parent dir).
+var pipelineArtifacts = [18][2]string{
+	{"Brainstorm", "design.md"},
+	{"Spec", "spec.json"},
+	{"Plan", "plan.json"},
+	{"Arch", "architecture.json"},
+	{"Dispatch", "dispatch.json"},
+	{"Execution", "execution-report.json"},
+	{"Complexity", "execution-report.json"}, // shares artifact; detected via Merge existence
+	{"Merge", "merge-report.json"},
+	{"Validation", "validation-report.json"},
+	{"Tree Class", "tree-classification.json"},
+	{"Rubric Gen", "tree-rubrics.json"},
+	{"Rubric Vfy", "tree-rubric-verification.json"},
+	{"Rubric Rfn", "tree-rubrics-refined.json"},
+	{"Grading", "tree-grading-individual.json"},
+	{"QA", "qa-report.json"},
+	{"Docs", "doc-report.json"},
+	{"Assessment", "final-assessment.json"},
+	{"Cleanup", ".pipeline-last-run-summary.json"}, // in parent of workspaceDir
+}
+
+// loadPipelineState scans workspaceDir and infers the current pipeline phase state.
+func loadPipelineState(workspaceDir string) pipelineState {
+	var s pipelineState
+	s.activeIdx = -1
+
+	// Read global iteration from execution-report.json
+	iterFile := filepath.Join(workspaceDir, "execution-report.json")
+	if data, err := os.ReadFile(iterFile); err == nil {
+		var rep struct {
+			Iteration int `json:"iteration"`
+		}
+		if json.Unmarshal(data, &rep) == nil && rep.Iteration > 0 {
+			s.globalIter = rep.Iteration
+		}
+	}
+
+	// Pipeline is "detected" only if spec.json exists
+	if _, err := os.Stat(filepath.Join(workspaceDir, "spec.json")); err == nil {
+		s.detected = true
+	}
+
+	// Determine each phase's status
+	lastDoneIdx := -1
+	for i, pa := range pipelineArtifacts {
+		artifactPath := filepath.Join(workspaceDir, pa[1])
+		if pa[0] == "Cleanup" {
+			artifactPath = filepath.Join(filepath.Dir(workspaceDir), pa[1])
+		}
+		_, err := os.Stat(artifactPath)
+		exists := err == nil
+		s.phases[i] = pipelinePhaseEntry{
+			name:     pa[0],
+			artifact: pa[1],
+		}
+		if exists {
+			s.phases[i].status = phaseStatusDone
+			s.doneCount++
+			lastDoneIdx = i
+		}
+	}
+
+	// Active phase = first phase after last done
+	if s.detected && lastDoneIdx+1 < 18 {
+		s.activeIdx = lastDoneIdx + 1
+		s.phases[s.activeIdx].status = phaseStatusActive
+		s.phases[s.activeIdx].iteration = s.globalIter
+	}
+
+	// Mark retry: Execution done + globalIter > 1 + Validation not done
+	execDone := s.phases[5].status == phaseStatusDone
+	validDone := s.phases[8].status == phaseStatusDone
+	if execDone && s.globalIter > 1 && !validDone {
+		for i := 5; i <= 8; i++ {
+			if s.phases[i].status == phaseStatusPending {
+				s.phases[i].status = phaseStatusRetry
+			}
+		}
+	}
+	return s
+}
 
 // renderRightPanel 渲染右侧面板：Pipeline/Tasks 卡片 + Subagents 卡片 + Context 卡片。
 // 整体高度被钳制为 totalHeight，防止右侧面板撑高终端布局。
