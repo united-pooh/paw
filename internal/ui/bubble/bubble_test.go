@@ -871,7 +871,7 @@ func TestViewFramesTranscriptHistoryPanel(t *testing.T) {
 	model.relayout()
 
 	rendered := model.View()
-	for _, want := range []string{"╭", "╰", "Interactive mode is running", "0↑", "free(100%)"} {
+	for _, want := range []string{"╭", "╰", "Interactive mode is running"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("view = %q, want %q", rendered, want)
 		}
@@ -895,8 +895,10 @@ func TestRelayoutReservesSpaceForTranscriptFrame(t *testing.T) {
 	if got := lipgloss.Height(rendered); got > model.height {
 		t.Fatalf("rendered height = %d, want <= %d", got, model.height)
 	}
-	if model.viewport.Width != model.width-transcriptPanelHorizontalFrame {
-		t.Fatalf("viewport width = %d, want %d", model.viewport.Width, model.width-transcriptPanelHorizontalFrame)
+	leftColWidth := model.width - model.sidebarWidth
+	wantViewportWidth := maxInt(20, leftColWidth-transcriptPanelHorizontalFrame)
+	if model.viewport.Width != wantViewportWidth {
+		t.Fatalf("viewport width = %d, want %d", model.viewport.Width, wantViewportWidth)
 	}
 }
 
@@ -1772,8 +1774,8 @@ func TestContextMeterShowsThinkingTimerCenteredInLine(t *testing.T) {
 	}
 }
 
-// TestNarrowLayoutKeepsMeterAboveBottomInput verifies compact layouts render the meter between transcript and input.
-func TestNarrowLayoutKeepsMeterAboveBottomInput(t *testing.T) {
+// TestNarrowLayoutKeepsInputVisible verifies compact layouts render within height and keep input visible.
+func TestNarrowLayoutKeepsInputVisible(t *testing.T) {
 	runner := &fakeRunner{
 		stats: loop.ContextStats{
 			UsedTokens:  settings.DefaultContextLimitTokens / 2,
@@ -1791,13 +1793,8 @@ func TestNarrowLayoutKeepsMeterAboveBottomInput(t *testing.T) {
 	if got := lipgloss.Height(rendered); got > model.height {
 		t.Fatalf("rendered height = %d, want <= %d", got, model.height)
 	}
-	if strings.Count(rendered, "▰")+strings.Count(rendered, "▱") == 0 {
-		t.Fatalf("view = %q, want context meter bar", rendered)
-	}
-	meterIndex := strings.Index(rendered, "524k↑")
-	inputIndex := strings.LastIndex(rendered, "narrow")
-	if meterIndex == -1 || inputIndex == -1 || meterIndex > inputIndex {
-		t.Fatalf("view = %q, want context meter before bottom input", rendered)
+	if !strings.Contains(rendered, "narrow") {
+		t.Fatalf("view = %q, want input text visible", rendered)
 	}
 	for _, unwanted := range []string{"Input", "Waiting", "Terminal"} {
 		if strings.Contains(rendered, unwanted) {
@@ -2549,6 +2546,20 @@ func TestCtrlC_超时后不退出(t *testing.T) {
 		if _, ok := msg.(tea.QuitMsg); ok {
 			t.Errorf("ctrl+c after timeout should not quit")
 		}
+	}
+}
+
+func TestRelayout_SidebarWidthIs30Percent(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.width = 120
+	model.height = 40
+	model.ready = true
+	model.relayout()
+	if model.sidebarWidth < 30 || model.sidebarWidth > 40 {
+		t.Errorf("sidebarWidth = %d, want ~36 (30%% of 120)", model.sidebarWidth)
+	}
+	if model.viewport.Width < 70 {
+		t.Errorf("viewport.Width = %d, want ≥70 (left column inner)", model.viewport.Width)
 	}
 }
 

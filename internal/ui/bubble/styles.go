@@ -115,6 +115,10 @@ var (
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(colorManager.LipglossColor(colorWizardBorder)).
 				Padding(0, 1)
+	rightCardStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorManager.LipglossColor(colorPanelBorder)).
+			Padding(0, 1)
 	selectedTranscriptLineStyle = lipgloss.NewStyle().
 					Background(colorManager.LipglossColor(colorSelectionBackground)).
 					Foreground(colorManager.LipglossColor(colorSelectionForeground))
@@ -130,4 +134,5 @@ const (
 	contextMeterMinimumBarCells    = 1
 	transcriptPanelHorizontalFrame = 4
 	transcriptPanelVerticalFrame   = 2
+	rightSidebarMinWidth           = 20
 )

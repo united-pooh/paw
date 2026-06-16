@@ -252,6 +252,7 @@ type appModel struct {
 	settingWizard   *settingWizard
 	sessionPicker   *sessionPicker
 	completion      *completion
+	sidebarWidth int // 右侧面板宽度（字符），由 relayout() 计算并存储
 }
 
 type contextStatsProvider interface {

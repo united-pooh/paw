@@ -17,16 +17,21 @@ func (m appModel) View() string {
 	}
 
 	input := m.renderActiveInputPanel()
+	panelHeight := maxInt(1, m.height-m.headerHeight())
+
+	leftContent := lipgloss.JoinVertical(lipgloss.Left,
+		m.renderTranscriptBox(),
+		input,
+	)
+	right := m.renderRightPanel(m.sidebarWidth, panelHeight)
+
+	body := lipgloss.JoinHorizontal(lipgloss.Top, leftContent, right)
 
 	var parts []string
 	if header := m.renderHeader(); header != "" {
 		parts = append(parts, header)
 	}
-	parts = append(parts, m.renderTranscriptBox())
-	if meter := m.renderInputAboveMeter(); meter != "" {
-		parts = append(parts, meter)
-	}
-	parts = append(parts, input)
+	parts = append(parts, body)
 	view := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	m.updateTerminalCursorAnchor(input)
 	return view
@@ -113,7 +118,7 @@ func visibleTextareaCursorColumn(input textarea.Model) int {
 
 // renderInputBox 渲染普通输入、多行输入、终端输入和等待状态的输入面板。
 func (m appModel) renderInputBox() string {
-	width := maxInt(28, m.width-2)
+	width := maxInt(28, m.width-m.sidebarWidth-2)
 	title := ""
 	content := m.input.View()
 	style := inputPanelFocusedStyle
@@ -149,7 +154,8 @@ func (m appModel) renderInputBox() string {
 
 // renderTranscriptBox 渲染带边框的聊天历史滚动面板。
 func (m appModel) renderTranscriptBox() string {
-	width := maxInt(28, m.width-2)
+	leftColWidth := m.width - m.sidebarWidth
+	width := maxInt(28, leftColWidth-2)
 	return transcriptPanelStyle.Width(width).Height(maxInt(1, m.viewport.Height)).Render(m.viewport.View())
 }
 
@@ -186,14 +192,17 @@ func (m appModel) renderInputAboveMeter() string {
 
 // relayout 根据终端尺寸和输入高度重新计算 viewport 与 textarea 尺寸。
 func (m *appModel) relayout() {
-	width := maxInt(20, m.width)
-	m.viewport.Width = maxInt(20, width-transcriptPanelHorizontalFrame)
-	m.input.SetWidth(maxInt(20, width-4))
+	total := maxInt(40, m.width)
+	m.sidebarWidth = maxInt(rightSidebarMinWidth, total*30/100)
+	leftColWidth := total - m.sidebarWidth
+
+	m.viewport.Width = maxInt(20, leftColWidth-transcriptPanelHorizontalFrame)
+	m.input.SetWidth(maxInt(20, leftColWidth-4))
 	m.input.SetHeight(inputVisibleLineCount(m.input))
+
 	headerHeight := m.headerHeight()
 	inputHeight := lipgloss.Height(m.renderActiveInputPanel())
-	inputAboveHeight := lipgloss.Height(m.renderInputAboveMeter())
-	availableTranscriptHeight := m.height - headerHeight - inputAboveHeight - inputHeight - transcriptPanelVerticalFrame
+	availableTranscriptHeight := m.height - headerHeight - inputHeight - transcriptPanelVerticalFrame
 	m.viewport.Height = maxInt(1, availableTranscriptHeight)
 	m.expandTranscriptToFillHeight()
 }
@@ -208,11 +217,15 @@ func (m *appModel) expandTranscriptToFillHeight() {
 		parts = append(parts, header)
 	}
 	parts = append(parts, m.renderTranscriptBox())
-	if meter := m.renderInputAboveMeter(); meter != "" {
-		parts = append(parts, meter)
-	}
 	parts = append(parts, input)
-	if deficit := m.height - lipgloss.Height(lipgloss.JoinVertical(lipgloss.Left, parts...)); deficit > 0 {
+	full := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	if deficit := m.height - lipgloss.Height(full); deficit > 0 {
 		m.viewport.Height += deficit
 	}
+}
+
+// renderRightPanel 渲染右侧 30% 面板。Task 3-7 将填充真实内容。
+func (m appModel) renderRightPanel(width, totalHeight int) string {
+	inner := maxInt(4, width-2)
+	return rightCardStyle.Width(inner).Height(maxInt(2, totalHeight-2)).Render("")
 }
