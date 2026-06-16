@@ -606,6 +606,12 @@ func detectOutputMode(content string) outputMode {
 		return outputModeSuppressed
 	}
 
+	// <tool_call> 和裸 <tool 开头时直接抑制，等 finalize 确认
+	if strings.HasPrefix(strings.ToLower(trimmed), "<tool_call") ||
+		strings.HasPrefix(strings.ToLower(trimmed), "<tool ") {
+		return outputModeSuppressed
+	}
+
 	return outputModeVisible
 }
 
@@ -629,6 +635,8 @@ func looksLikeToolPreamble(trimmed string) bool {
 		"let me",
 		"tool_use",
 		"<invoke",
+		"<tool_call",
+		"<tool ",
 		"工具",
 		"调用",
 		"使用",
@@ -716,11 +724,12 @@ func parseAssistantMessage(content string) message.Message {
 }
 
 // extractToolUseEnvelope 从 assistant 输出中提取第一个合法的 tool_use 对象。
-// 当前兼容四类格式：
+// 当前兼容五类格式：
 // 1) 整段内容就是裸 JSON
 // 2) 整段内容就是 fenced JSON
 // 3) 说明文字中嵌入 fenced JSON 或裸 JSON
 // 4) Claude/DeepSeek 兼容的 <invoke> + DSML 参数块
+// 5) <tool_call><tool name="...">...</tool></tool_call> 格式
 func extractToolUseEnvelope(trimmed string) (toolUseEnvelope, bool) {
 	if envelope, ok := decodeToolUseEnvelope(trimmed); ok {
 		return envelope, true
@@ -738,7 +747,55 @@ func extractToolUseEnvelope(trimmed string) (toolUseEnvelope, bool) {
 		return envelope, true
 	}
 
+	if envelope, ok := extractToolCallEnvelope(trimmed); ok {
+		return envelope, true
+	}
+
 	return toolUseEnvelope{}, false
+}
+
+// extractToolCallEnvelope 处理 <tool_call><tool name="...">...</tool></tool_call> 格式。
+// 也支持省略外层 <tool_call> 以及省略 </tool> 用 </tool_call> 直接关闭的写法。
+func extractToolCallEnvelope(content string) (toolUseEnvelope, bool) {
+	lower := strings.ToLower(content)
+
+	// 定位 <tool name="..."> 标签
+	toolIdx := strings.Index(lower, "<tool ")
+	if toolIdx == -1 {
+		return toolUseEnvelope{}, false
+	}
+
+	// 找到标签结束符 >
+	tagEndRel := strings.IndexByte(content[toolIdx:], '>')
+	if tagEndRel == -1 {
+		return toolUseEnvelope{}, false
+	}
+	tagEnd := toolIdx + tagEndRel
+
+	openTag := content[toolIdx : tagEnd+1]
+	name := extractTagAttribute(openTag, "name")
+	if name == "" {
+		return toolUseEnvelope{}, false
+	}
+
+	// 提取 body：从 > 之后到 </tool> 或 </tool_call>
+	bodyStart := tagEnd + 1
+	bodyEnd := len(content)
+	restLower := strings.ToLower(content[bodyStart:])
+	if closeIdx := strings.Index(restLower, "</tool>"); closeIdx != -1 {
+		bodyEnd = bodyStart + closeIdx
+	} else if closeIdx := strings.Index(restLower, "</tool_call>"); closeIdx != -1 {
+		bodyEnd = bodyStart + closeIdx
+	}
+
+	body := strings.TrimSpace(content[bodyStart:bodyEnd])
+	input := decodeInvokeInput(body)
+
+	return toolUseEnvelope{
+		Type:  toolUseResponseType,
+		Name:  name,
+		Input: input,
+	}, true
 }
 
 func decodeToolUseEnvelope(payload string) (toolUseEnvelope, bool) {
@@ -944,9 +1001,13 @@ func decodeInvokeInput(body string) json.RawMessage {
 		openTag := body[open : tagEnd+1]
 		paramName := extractTagAttribute(openTag, "name")
 		tagName := extractTagName(openTag)
-		if paramName == "" || tagName == "" {
+		if tagName == "" {
 			searchFrom = tagEnd + 1
 			continue
+		}
+		// 支持 <file_path>value</file_path> 风格（tag 名即参数名）
+		if paramName == "" {
+			paramName = tagName
 		}
 
 		closeTag := "</" + tagName + ">"

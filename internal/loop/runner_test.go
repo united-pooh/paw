@@ -927,3 +927,97 @@ func TestContextStats_无usage时返回零值(t *testing.T) {
 		t.Errorf("LimitTokens = %d，期望 100000", stats.LimitTokens)
 	}
 }
+
+// TestRunTurnExecutesToolCallFormatWithJSONInput 验证 <tool_call><tool name="...">JSON</tool></tool_call> 格式。
+func TestRunTurnExecutesToolCallFormatWithJSONInput(t *testing.T) {
+	ui := &fakeUI{}
+	m := &fakeModel{
+		rounds: []fakeRound{
+			{
+				events: []model.StreamEvent{
+					{Delta: "<tool_call>\n"},
+					{Delta: `<tool name="Bash">{"command":"ls ."}</tool>`},
+					{Delta: "\n</tool_call>"},
+					{Done: true},
+				},
+			},
+			{
+				events: []model.StreamEvent{
+					{Delta: "done"},
+					{Done: true},
+				},
+			},
+		},
+	}
+	registry := tool.NewRegistry()
+	bash := &fakeTool{name: "Bash", output: "ok"}
+	registry.Register(bash)
+	runner := NewRunner(m, ui, registry, nil, "")
+
+	msg, err := runner.RunTurn(context.Background(), "list files")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if msg.Content != "done" {
+		t.Fatalf("msg.Content = %q, want done", msg.Content)
+	}
+	if len(ui.toolCalls) != 1 || ui.toolCalls[0].Name != "Bash" {
+		t.Fatalf("ui.toolCalls = %#v, want single Bash call", ui.toolCalls)
+	}
+	var input struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(bash.input, &input); err != nil {
+		t.Fatalf("unmarshal Bash input: %v", err)
+	}
+	if input.Command != "ls ." {
+		t.Fatalf("command = %q, want ls .", input.Command)
+	}
+}
+
+// TestRunTurnExecutesToolCallFormatWithXMLParams 验证 <tool_call> 中 XML 参数风格。
+func TestRunTurnExecutesToolCallFormatWithXMLParams(t *testing.T) {
+	ui := &fakeUI{}
+	m := &fakeModel{
+		rounds: []fakeRound{
+			{
+				events: []model.StreamEvent{
+					{Delta: "<tool_call>\n<tool name=\"Read\">\n"},
+					{Delta: "<file_path>README.md</file_path>\n"},
+					{Delta: "</tool_call>"},
+					{Done: true},
+				},
+			},
+			{
+				events: []model.StreamEvent{
+					{Delta: "读取完成"},
+					{Done: true},
+				},
+			},
+		},
+	}
+	registry := tool.NewRegistry()
+	readTool := &fakeTool{name: "Read", output: "content"}
+	registry.Register(readTool)
+	runner := NewRunner(m, ui, registry, nil, "")
+
+	msg, err := runner.RunTurn(context.Background(), "read readme")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if msg.Content != "读取完成" {
+		t.Fatalf("msg.Content = %q, want 读取完成", msg.Content)
+	}
+	if len(ui.toolCalls) != 1 || ui.toolCalls[0].Name != "Read" {
+		t.Fatalf("ui.toolCalls = %#v, want single Read call", ui.toolCalls)
+	}
+	var input struct {
+		FilePath string `json:"file_path"`
+	}
+	if err := json.Unmarshal(readTool.input, &input); err != nil {
+		t.Fatalf("unmarshal Read input: %v", err)
+	}
+	if input.FilePath != "README.md" {
+		t.Fatalf("file_path = %q, want README.md", input.FilePath)
+	}
+}
