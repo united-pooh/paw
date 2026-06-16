@@ -606,12 +606,19 @@ func detectOutputMode(content string) outputMode {
 		return outputModeSuppressed
 	}
 
-	// <tool_call>、<tool ...> 和 <tool> 开头时直接抑制，等 finalize 确认
+	// <tool_call>、<tool> 系列 以及 <简单标签名> 开头时直接抑制，等 finalize 确认
 	lowerTrimmed := strings.ToLower(trimmed)
 	if strings.HasPrefix(lowerTrimmed, "<tool_call") ||
 		strings.HasPrefix(lowerTrimmed, "<tool ") ||
 		strings.HasPrefix(lowerTrimmed, "<tool>") {
 		return outputModeSuppressed
+	}
+	// <glob>、<bash>、<read> 等简单标签名开头（<toolname>JSON 格式）
+	if strings.HasPrefix(trimmed, "<") && !strings.HasPrefix(trimmed, "</") {
+		end := strings.IndexByte(trimmed[1:], '>')
+		if end != -1 && isSimpleXMLTagName(trimmed[1:end+1]) {
+			return outputModeSuppressed
+		}
 	}
 
 	return outputModeVisible
@@ -727,12 +734,14 @@ func parseAssistantMessage(content string) message.Message {
 }
 
 // extractToolUseEnvelope 从 assistant 输出中提取第一个合法的 tool_use 对象。
-// 当前兼容五类格式：
+// 当前兼容七类格式：
 // 1) 整段内容就是裸 JSON
 // 2) 整段内容就是 fenced JSON
 // 3) 说明文字中嵌入 fenced JSON 或裸 JSON
 // 4) Claude/DeepSeek 兼容的 <invoke> + DSML 参数块
 // 5) <tool_call><tool name="...">...</tool></tool_call> 格式
+// 6) <tool><tool_call><name>X</name><input>JSON</input></tool_call></tool> 格式
+// 7) <toolname>JSON</toolname> 格式（标签名即工具名）
 func extractToolUseEnvelope(trimmed string) (toolUseEnvelope, bool) {
 	if envelope, ok := decodeToolUseEnvelope(trimmed); ok {
 		return envelope, true
@@ -754,7 +763,80 @@ func extractToolUseEnvelope(trimmed string) (toolUseEnvelope, bool) {
 		return envelope, true
 	}
 
+	if envelope, ok := extractTagNameToolEnvelope(trimmed); ok {
+		return envelope, true
+	}
+
 	return toolUseEnvelope{}, false
+}
+
+// extractTagNameToolEnvelope 处理 <toolname>JSON</toolname> 格式。
+// 标签名即工具名，标签体为合法的 JSON 对象。
+// 仅匹配标签名由字母/数字/下划线/连字符构成（无属性）的简单标签。
+func extractTagNameToolEnvelope(content string) (toolUseEnvelope, bool) {
+	for start := 0; start < len(content); {
+		openIdx := strings.IndexByte(content[start:], '<')
+		if openIdx == -1 {
+			break
+		}
+		openIdx += start
+
+		// 跳过结束标签
+		if openIdx+1 < len(content) && content[openIdx+1] == '/' {
+			start = openIdx + 2
+			continue
+		}
+
+		// 找到标签结束 >
+		closeAngle := strings.IndexByte(content[openIdx:], '>')
+		if closeAngle == -1 {
+			break
+		}
+		closeAngle += openIdx
+
+		tagName := content[openIdx+1 : closeAngle]
+		if !isSimpleXMLTagName(tagName) {
+			start = closeAngle + 1
+			continue
+		}
+
+		// 查找对应的结束标签
+		closeTag := "</" + tagName + ">"
+		closeIdx := strings.Index(strings.ToLower(content[closeAngle+1:]), strings.ToLower(closeTag))
+		if closeIdx == -1 {
+			start = closeAngle + 1
+			continue
+		}
+		closeIdx += closeAngle + 1
+
+		body := strings.TrimSpace(content[closeAngle+1 : closeIdx])
+		// 标签体必须是有效的 JSON 对象
+		if !strings.HasPrefix(body, "{") || !json.Valid([]byte(body)) {
+			start = closeAngle + 1
+			continue
+		}
+
+		return toolUseEnvelope{
+			Type:  toolUseResponseType,
+			Name:  tagName,
+			Input: json.RawMessage(body),
+		}, true
+	}
+	return toolUseEnvelope{}, false
+}
+
+// isSimpleXMLTagName 验证字符串是否为仅含字母/数字/下划线/连字符的简单标签名（无属性、无空格）。
+func isSimpleXMLTagName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '_' || r == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 // extractToolCallEnvelope 处理以下三类 XML 工具调用格式：

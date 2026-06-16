@@ -1025,6 +1025,55 @@ func TestRunTurnExecutesToolCallNameInputFormat(t *testing.T) {
 	}
 }
 
+// TestRunTurnExecutesTagNameJSONFormat 验证 <toolname>JSON</toolname> 格式（如 <glob>{...}</glob>）。
+func TestRunTurnExecutesTagNameJSONFormat(t *testing.T) {
+	ui := &fakeUI{}
+	m := &fakeModel{
+		rounds: []fakeRound{
+			{
+				events: []model.StreamEvent{
+					{Delta: "好的，我来读取当前项目的内容。\n\n"},
+					{Delta: "<glob>\n"},
+					{Delta: "{\n\"pattern\": \"*\",\n\"path\": \".\"\n}\n"},
+					{Delta: "</glob>"},
+					{Done: true},
+				},
+			},
+			{
+				events: []model.StreamEvent{
+					{Delta: "读取完成"},
+					{Done: true},
+				},
+			},
+		},
+	}
+	registry := tool.NewRegistry()
+	glob := &fakeTool{name: "glob", output: "file1.go\nfile2.go"}
+	registry.Register(glob)
+	runner := NewRunner(m, ui, registry, nil, "")
+
+	msg, err := runner.RunTurn(context.Background(), "读取当前项目")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if msg.Content != "读取完成" {
+		t.Fatalf("msg.Content = %q, want 读取完成", msg.Content)
+	}
+	if len(ui.toolCalls) != 1 || ui.toolCalls[0].Name != "glob" {
+		t.Fatalf("ui.toolCalls = %#v, want single glob call", ui.toolCalls)
+	}
+	var input struct {
+		Pattern string `json:"pattern"`
+		Path    string `json:"path"`
+	}
+	if err := json.Unmarshal(glob.input, &input); err != nil {
+		t.Fatalf("unmarshal glob input: %v", err)
+	}
+	if input.Pattern != "*" || input.Path != "." {
+		t.Fatalf("glob input = %+v, want pattern=* path=.", input)
+	}
+}
+
 // TestRunTurnExecutesToolCallFormatWithXMLParams 验证 <tool_call> 中 XML 参数风格。
 func TestRunTurnExecutesToolCallFormatWithXMLParams(t *testing.T) {
 	ui := &fakeUI{}
