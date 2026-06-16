@@ -334,13 +334,13 @@ func (m appModel) renderContextCardContent(innerWidth int) string {
 	rawCache := clampInt(stats.CacheTokens, 0, rawUsed)
 	labelUsed, labelCache := m.animatedLabelTokens(rawUsed, rawCache, limit)
 
-	arrow := contextDirectionArrow(m.isGenerating)
-	tokenStr := contextUsedStyle.Render(formatCompactTokenCount(labelUsed) + arrow)
-	freeStr := contextFreeStyle.Render(formatContextFreeLabel(labelUsed, limit))
-
-	// Line 1: token + free
-	gap := maxInt(1, innerWidth-lipgloss.Width(tokenStr)-lipgloss.Width(freeStr))
-	topLine := tokenStr + strings.Repeat(" ", gap) + freeStr
+	// Line 1: token left, free right — measure raw rune widths to avoid ANSI width issues.
+	rawToken := formatCompactTokenCount(labelUsed) + contextDirectionArrow(m.isGenerating)
+	rawFree := formatContextFreeLabel(labelUsed, limit)
+	tokenVW := len([]rune(rawToken))
+	freeVW := len([]rune(rawFree))
+	gap := maxInt(1, innerWidth-tokenVW-freeVW)
+	topLine := contextUsedStyle.Render(rawToken) + strings.Repeat(" ", gap) + contextFreeStyle.Render(rawFree)
 
 	// Line 2: progress bar
 	animatedUsed, animatedCache, _ := m.animatedContextTokens(limit)

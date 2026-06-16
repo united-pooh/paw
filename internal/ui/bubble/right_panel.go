@@ -276,13 +276,13 @@ func (m appModel) renderPipelineWindowedContent(width, height int) string {
 		var fg lipgloss.Color
 		switch {
 		case row.opacity >= 0.9:
-			fg = lipgloss.Color("252")
+			fg = lipgloss.Color("252") // current stage label (inside highlighted box)
 		case row.opacity >= 0.50:
-			fg = lipgloss.Color("242")
+			fg = lipgloss.Color("248") // ±1 neighbors
 		case row.opacity >= 0.30:
-			fg = lipgloss.Color("238")
+			fg = lipgloss.Color("244") // ±2 neighbors
 		default:
-			fg = lipgloss.Color("235")
+			fg = lipgloss.Color("240") // ±3 neighbors
 		}
 
 		lineStyle := lipgloss.NewStyle().Foreground(fg)
@@ -297,7 +297,15 @@ func (m appModel) renderPipelineWindowedContent(width, height int) string {
 		stageLines = append(stageLines, lineStyle.Render(label))
 	}
 
+	// Center the 7-row stage window vertically in the available space.
+	// height = total card content height; 2 header lines (topLine + dotsLine) are subtracted.
+	availableForStages := maxInt(7, height-2)
+	topPad := (availableForStages - 7) / 2
+
 	allLines := []string{topLine, dotsLine}
+	for i := 0; i < topPad; i++ {
+		allLines = append(allLines, "")
+	}
 	allLines = append(allLines, stageLines...)
 	return strings.Join(allLines, "\n")
 }
