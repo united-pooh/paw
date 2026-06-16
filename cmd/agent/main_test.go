@@ -101,3 +101,74 @@ func TestResolveSessionIDWithoutFlag(t *testing.T) {
 		}
 	}
 }
+
+// TestResolveSessionID_NoFlag_CreatesNewSessions 验证无 flag 时每次调用创建不同的新会话。
+func TestResolveSessionID_NoFlag_CreatesNewSessions(t *testing.T) {
+	dir := t.TempDir()
+	store, err := session.NewJSONLStore(dir)
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	ctx := context.Background()
+
+	id1, err := resolveSessionID(ctx, store, "", dir)
+	if err != nil {
+		t.Fatalf("first resolveSessionID: %v", err)
+	}
+	if id1 == "" {
+		t.Fatalf("first resolveSessionID returned empty ID")
+	}
+
+	id2, err := resolveSessionID(ctx, store, "", dir)
+	if err != nil {
+		t.Fatalf("second resolveSessionID: %v", err)
+	}
+	if id2 == "" {
+		t.Fatalf("second resolveSessionID returned empty ID")
+	}
+
+	if id1 == id2 {
+		t.Fatalf("expected different IDs for two calls without flag, both = %q", id1)
+	}
+}
+
+// TestResolveSessionID_WithExistingFlag 验证传入已存在的 session ID 时原样返回。
+func TestResolveSessionID_WithExistingFlag(t *testing.T) {
+	dir := t.TempDir()
+	store, err := session.NewJSONLStore(dir)
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	ctx := context.Background()
+
+	id, err := session.GenerateSessionID()
+	if err != nil {
+		t.Fatalf("GenerateSessionID: %v", err)
+	}
+	if _, err := store.CreateRoot(ctx, session.CreateRootRequest{SessionID: id}); err != nil {
+		t.Fatalf("CreateRoot: %v", err)
+	}
+
+	got, err := resolveSessionID(ctx, store, id, dir)
+	if err != nil {
+		t.Fatalf("resolveSessionID with existing flag: %v", err)
+	}
+	if got != id {
+		t.Fatalf("resolveSessionID = %q, want %q", got, id)
+	}
+}
+
+// TestResolveSessionID_WithMissingFlag 验证传入不存在的 session ID 时返回错误。
+func TestResolveSessionID_WithMissingFlag(t *testing.T) {
+	dir := t.TempDir()
+	store, err := session.NewJSONLStore(dir)
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	ctx := context.Background()
+
+	_, err = resolveSessionID(ctx, store, "nonexistent-random-session-id", dir)
+	if err == nil {
+		t.Fatalf("expected error for missing session, got nil")
+	}
+}

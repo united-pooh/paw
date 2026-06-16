@@ -2145,6 +2145,61 @@ func TestCompletionTabAppliesSelection(t *testing.T) {
 	}
 }
 
+// TestFormatSessionLabel_SizeDisplay 验证 formatFileSize B/KB/MB 阈值格式化。
+func TestFormatSessionLabel_SizeDisplay(t *testing.T) {
+	base := time.Date(2024, 3, 15, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name     string
+		size     int64
+		wantSize string
+	}{
+		{"bytes", 512, "512B"},
+		{"bytes boundary", 1023, "1023B"},
+		{"kilobytes", 1024, "1.0KB"},
+		{"kilobytes larger", 2048, "2.0KB"},
+		{"kilobytes fractional", 1536, "1.5KB"},
+		{"megabytes", 1024 * 1024, "1.0MB"},
+		{"megabytes larger", 2 * 1024 * 1024, "2.0MB"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			item := sessionSummaryItem{
+				sessionID:      "abcdef1234567890",
+				createdAt:      base,
+				firstMessage:   "hello",
+				transcriptSize: tc.size,
+			}
+			label := formatSessionLabel(item)
+			if !strings.Contains(label, tc.wantSize) {
+				t.Fatalf("formatSessionLabel() = %q, want size %q", label, tc.wantSize)
+			}
+			// ID should be truncated to 8 chars
+			if !strings.Contains(label, "abcdef12") {
+				t.Fatalf("formatSessionLabel() = %q, want ID prefix abcdef12", label)
+			}
+			// Date should be YYYY-MM-DD
+			if !strings.Contains(label, "2024-03-15") {
+				t.Fatalf("formatSessionLabel() = %q, want date 2024-03-15", label)
+			}
+		})
+	}
+}
+
+// TestHelpIncludesSessionsCommand 验证 /help 输出包含 /sessions 命令。
+func TestHelpIncludesSessionsCommand(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	handled, cmd := model.handleCommand("/help")
+	if !handled || cmd != nil {
+		t.Fatalf("/help handled/cmd = %v/%v", handled, cmd)
+	}
+	body := model.transcript[len(model.transcript)-1].body
+	if !strings.Contains(body, "/sessions") {
+		t.Fatalf("help body = %q, want /sessions", body)
+	}
+}
+
 // TestSessionPickerKeyNavigation 验证上下键在会话选择器中移动选中项。
 func TestSessionPickerKeyNavigation(t *testing.T) {
 	model := newTestModel(&fakeRunner{})

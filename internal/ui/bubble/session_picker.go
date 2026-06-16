@@ -35,9 +35,10 @@ func loadSessionsCmd(ctx context.Context, store SessionStore) tea.Cmd {
 		items := make([]sessionSummaryItem, 0, len(summaries))
 		for _, s := range summaries {
 			items = append(items, sessionSummaryItem{
-				sessionID:    s.SessionID,
-				createdAt:    s.CreatedAt,
-				firstMessage: s.FirstMessage,
+				sessionID:      s.SessionID,
+				createdAt:      s.CreatedAt,
+				firstMessage:   s.FirstMessage,
+				transcriptSize: s.TranscriptSize,
 			})
 		}
 		return sessionsLoadedMsg{sessions: items}
@@ -148,20 +149,34 @@ func (m appModel) renderSessionPickerContent() string {
 }
 
 // formatSessionLabel 格式化会话列表项的显示文本。
+// 格式：ID[:8]  YYYY-MM-DD  <size>  <firstMessage>
 func formatSessionLabel(item sessionSummaryItem) string {
-	age := formatSessionAge(item.createdAt)
 	id := item.sessionID
-	if len(id) > 12 {
-		id = id[:12]
+	if len(id) > 8 {
+		id = id[:8]
 	}
+	date := item.createdAt.Format("2006-01-02")
+	size := formatFileSize(item.transcriptSize)
 	if item.firstMessage != "" {
 		msg := item.firstMessage
 		if len(msg) > 40 {
 			msg = msg[:40]
 		}
-		return fmt.Sprintf("[%s] %s  %s", age, id, msg)
+		return fmt.Sprintf("%s  %s  %s  %s", id, date, size, msg)
 	}
-	return fmt.Sprintf("[%s] %s  (empty)", age, id)
+	return fmt.Sprintf("%s  %s  %s  (empty)", id, date, size)
+}
+
+// formatFileSize 将字节数格式化为人类可读的文件大小。
+func formatFileSize(bytes int64) string {
+	switch {
+	case bytes < 1024:
+		return fmt.Sprintf("%dB", bytes)
+	case bytes < 1024*1024:
+		return fmt.Sprintf("%.1fKB", float64(bytes)/1024)
+	default:
+		return fmt.Sprintf("%.1fMB", float64(bytes)/(1024*1024))
+	}
 }
 
 // formatSessionAge 将创建时间转换为人类可读的相对时间。

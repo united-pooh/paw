@@ -201,9 +201,10 @@ type fileCompletionLoadedMsg struct {
 
 // sessionSummaryItem 是 session picker 中的一行显示项。
 type sessionSummaryItem struct {
-	sessionID    string
-	createdAt    time.Time
-	firstMessage string
+	sessionID      string
+	createdAt      time.Time
+	firstMessage   string
+	transcriptSize int64
 }
 
 // appModel 是 Bubble Tea TUI 的唯一状态中心。

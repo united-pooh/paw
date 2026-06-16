@@ -136,7 +136,7 @@ func TestListSessions_FirstUserMessageTruncated(t *testing.T) {
 	}
 }
 
-// TestListSessions_TranscriptSize 验证 TranscriptSize 等于实际记录数量。
+// TestListSessions_TranscriptSize 验证 TranscriptSize 返回实际文件字节数（大于 0）。
 func TestListSessions_TranscriptSize(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
@@ -155,8 +155,8 @@ func TestListSessions_TranscriptSize(t *testing.T) {
 	if len(summaries) != 1 {
 		t.Fatalf("ListSessions() = %d items, want 1", len(summaries))
 	}
-	if got := summaries[0].TranscriptSize; got != 3 {
-		t.Fatalf("TranscriptSize = %d, want 3", got)
+	if got := summaries[0].TranscriptSize; got <= 0 {
+		t.Fatalf("TranscriptSize = %d, want > 0 (actual bytes)", got)
 	}
 }
 
