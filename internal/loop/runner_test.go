@@ -975,6 +975,56 @@ func TestRunTurnExecutesToolCallFormatWithJSONInput(t *testing.T) {
 	}
 }
 
+// TestRunTurnExecutesToolCallNameInputFormat 验证 <tool><tool_call><name>X</name><input>JSON</input> 格式。
+func TestRunTurnExecutesToolCallNameInputFormat(t *testing.T) {
+	ui := &fakeUI{}
+	m := &fakeModel{
+		rounds: []fakeRound{
+			{
+				events: []model.StreamEvent{
+					{Delta: "让我读取代码。\n\n"},
+					{Delta: "<tool>\n"},
+					{Delta: "<tool_call>\n"},
+					{Delta: "<name>Bash</name>\n"},
+					{Delta: "<input>{\"command\":\"ls .\"}</input>\n"},
+					{Delta: "</tool_call>\n</tool>"},
+					{Done: true},
+				},
+			},
+			{
+				events: []model.StreamEvent{
+					{Delta: "done"},
+					{Done: true},
+				},
+			},
+		},
+	}
+	registry := tool.NewRegistry()
+	bash := &fakeTool{name: "Bash", output: "ok"}
+	registry.Register(bash)
+	runner := NewRunner(m, ui, registry, nil, "")
+
+	msg, err := runner.RunTurn(context.Background(), "list files")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if msg.Content != "done" {
+		t.Fatalf("msg.Content = %q, want done", msg.Content)
+	}
+	if len(ui.toolCalls) != 1 || ui.toolCalls[0].Name != "Bash" {
+		t.Fatalf("ui.toolCalls = %#v, want single Bash call", ui.toolCalls)
+	}
+	var input struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(bash.input, &input); err != nil {
+		t.Fatalf("unmarshal Bash input: %v", err)
+	}
+	if input.Command != "ls ." {
+		t.Fatalf("command = %q, want ls .", input.Command)
+	}
+}
+
 // TestRunTurnExecutesToolCallFormatWithXMLParams 验证 <tool_call> 中 XML 参数风格。
 func TestRunTurnExecutesToolCallFormatWithXMLParams(t *testing.T) {
 	ui := &fakeUI{}

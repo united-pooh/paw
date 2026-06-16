@@ -606,9 +606,11 @@ func detectOutputMode(content string) outputMode {
 		return outputModeSuppressed
 	}
 
-	// <tool_call> 和裸 <tool 开头时直接抑制，等 finalize 确认
-	if strings.HasPrefix(strings.ToLower(trimmed), "<tool_call") ||
-		strings.HasPrefix(strings.ToLower(trimmed), "<tool ") {
+	// <tool_call>、<tool ...> 和 <tool> 开头时直接抑制，等 finalize 确认
+	lowerTrimmed := strings.ToLower(trimmed)
+	if strings.HasPrefix(lowerTrimmed, "<tool_call") ||
+		strings.HasPrefix(lowerTrimmed, "<tool ") ||
+		strings.HasPrefix(lowerTrimmed, "<tool>") {
 		return outputModeSuppressed
 	}
 
@@ -637,6 +639,7 @@ func looksLikeToolPreamble(trimmed string) bool {
 		"<invoke",
 		"<tool_call",
 		"<tool ",
+		"<tool>",
 		"工具",
 		"调用",
 		"使用",
@@ -754,18 +757,30 @@ func extractToolUseEnvelope(trimmed string) (toolUseEnvelope, bool) {
 	return toolUseEnvelope{}, false
 }
 
-// extractToolCallEnvelope 处理 <tool_call><tool name="...">...</tool></tool_call> 格式。
-// 也支持省略外层 <tool_call> 以及省略 </tool> 用 </tool_call> 直接关闭的写法。
+// extractToolCallEnvelope 处理以下三类 XML 工具调用格式：
+//
+//   格式 A：<tool_call><tool name="X">body</tool></tool_call>
+//           （body 可以是 JSON 或 XML 参数，</tool> 可省略由 </tool_call> 关闭）
+//
+//   格式 B：<tool><tool_call><name>X</name><input>JSON</input></tool_call></tool>
+//           （DeepSeek 部分模型输出的格式）
+//
+//   格式 C：<tool_call><name>X</name><input>JSON</input></tool_call>
+//           （同格式 B 但无外层 <tool> 包装）
 func extractToolCallEnvelope(content string) (toolUseEnvelope, bool) {
 	lower := strings.ToLower(content)
 
-	// 定位 <tool name="..."> 标签
+	// 格式 B / C：通过 <name>...</name> + <input>...</input> 提取
+	if envelope, ok := extractNameInputEnvelope(content, lower); ok {
+		return envelope, true
+	}
+
+	// 格式 A：通过 <tool name="..."> 提取
 	toolIdx := strings.Index(lower, "<tool ")
 	if toolIdx == -1 {
 		return toolUseEnvelope{}, false
 	}
 
-	// 找到标签结束符 >
 	tagEndRel := strings.IndexByte(content[toolIdx:], '>')
 	if tagEndRel == -1 {
 		return toolUseEnvelope{}, false
@@ -778,7 +793,6 @@ func extractToolCallEnvelope(content string) (toolUseEnvelope, bool) {
 		return toolUseEnvelope{}, false
 	}
 
-	// 提取 body：从 > 之后到 </tool> 或 </tool_call>
 	bodyStart := tagEnd + 1
 	bodyEnd := len(content)
 	restLower := strings.ToLower(content[bodyStart:])
@@ -791,6 +805,41 @@ func extractToolCallEnvelope(content string) (toolUseEnvelope, bool) {
 	body := strings.TrimSpace(content[bodyStart:bodyEnd])
 	input := decodeInvokeInput(body)
 
+	return toolUseEnvelope{
+		Type:  toolUseResponseType,
+		Name:  name,
+		Input: input,
+	}, true
+}
+
+// extractNameInputEnvelope 提取 <name>X</name><input>JSON</input> 格式的工具调用。
+func extractNameInputEnvelope(content, lower string) (toolUseEnvelope, bool) {
+	nameStart := strings.Index(lower, "<name>")
+	if nameStart == -1 {
+		return toolUseEnvelope{}, false
+	}
+	nameEnd := strings.Index(lower[nameStart:], "</name>")
+	if nameEnd == -1 {
+		return toolUseEnvelope{}, false
+	}
+	nameEnd += nameStart
+	name := strings.TrimSpace(content[nameStart+len("<name>") : nameEnd])
+	if name == "" {
+		return toolUseEnvelope{}, false
+	}
+
+	inputStart := strings.Index(lower, "<input>")
+	if inputStart == -1 {
+		return toolUseEnvelope{}, false
+	}
+	inputEnd := strings.Index(lower[inputStart:], "</input>")
+	if inputEnd == -1 {
+		return toolUseEnvelope{}, false
+	}
+	inputEnd += inputStart
+	inputBody := strings.TrimSpace(content[inputStart+len("<input>") : inputEnd])
+
+	input := decodeInvokeInput(inputBody)
 	return toolUseEnvelope{
 		Type:  toolUseResponseType,
 		Name:  name,
