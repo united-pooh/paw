@@ -3,6 +3,7 @@ package bubble
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -191,7 +192,112 @@ func (m appModel) renderTasksContent(width, height int) string {
 	return badge + "\n" + empty
 }
 
-// renderPipelineWindowedContent 留给 Task 7 实现。
+// renderPipelineWindowedContent 渲染 Pipeline 滚动窗口：18 点总览 + 当前阶段 ±3 邻居。
 func (m appModel) renderPipelineWindowedContent(width, height int) string {
-	return "pipeline..."
+	ps := m.pipelineState
+
+	// Badge line
+	iterStr := ""
+	if ps.globalIter > 0 {
+		iterStr = fmt.Sprintf(" · iter %d", ps.globalIter)
+	}
+	badge := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("68")).
+		Background(lipgloss.Color("234")).
+		Padding(0, 1).
+		Render("● pipeline" + iterStr)
+	countStr := lipgloss.NewStyle().Foreground(lipgloss.Color("237")).
+		Render(fmt.Sprintf("%d/18", ps.doneCount))
+	gapWidth := maxInt(1, width-lipgloss.Width(badge)-lipgloss.Width(countStr))
+	topLine := badge + strings.Repeat(" ", gapWidth) + countStr
+
+	// 18-dot overview
+	dots := make([]string, 18)
+	for i, ph := range ps.phases {
+		switch ph.status {
+		case phaseStatusDone:
+			dots[i] = lipgloss.NewStyle().Foreground(lipgloss.Color("28")).Render("●")
+		case phaseStatusActive:
+			dots[i] = lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Bold(true).Render("▶")
+		case phaseStatusRetry:
+			dots[i] = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("○")
+		default:
+			dots[i] = lipgloss.NewStyle().Foreground(lipgloss.Color("235")).Render("·")
+		}
+	}
+	dotsLine := strings.Join(dots, "")
+
+	// Windowed stages: current ±3
+	cur := ps.activeIdx
+	if cur < 0 {
+		cur = maxInt(0, ps.doneCount-1)
+	}
+
+	type windowRow struct {
+		offset  int     // distance from current (-3 to +3)
+		opacity float64 // 1.0 = current, lower = faded
+	}
+	rows := []windowRow{
+		{-3, 0.18}, {-2, 0.35}, {-1, 0.55},
+		{0, 1.0},
+		{1, 0.55}, {2, 0.35}, {3, 0.18},
+	}
+
+	stageLines := make([]string, 0, 7)
+	for _, row := range rows {
+		idx := cur + row.offset
+		if idx < 0 || idx >= 18 {
+			stageLines = append(stageLines, "")
+			continue
+		}
+		ph := ps.phases[idx]
+
+		var dotRune string
+		switch ph.status {
+		case phaseStatusDone:
+			dotRune = "●"
+		case phaseStatusActive:
+			dotRune = "▶"
+		case phaseStatusRetry:
+			dotRune = "○"
+		default:
+			dotRune = "·"
+		}
+
+		iterSuffix := ""
+		if ph.iteration > 0 {
+			if ph.status == phaseStatusRetry {
+				iterSuffix = fmt.Sprintf(" ×%d ↻", ph.iteration)
+			} else if ph.status == phaseStatusActive {
+				iterSuffix = fmt.Sprintf(" ×%d", ph.iteration)
+			}
+		}
+
+		var fg lipgloss.Color
+		switch {
+		case row.opacity >= 0.9:
+			fg = lipgloss.Color("252")
+		case row.opacity >= 0.50:
+			fg = lipgloss.Color("242")
+		case row.opacity >= 0.30:
+			fg = lipgloss.Color("238")
+		default:
+			fg = lipgloss.Color("235")
+		}
+
+		lineStyle := lipgloss.NewStyle().Foreground(fg)
+		label := dotRune + " " + ph.name + iterSuffix
+		if row.offset == 0 {
+			lineStyle = lineStyle.
+				Background(lipgloss.Color("234")).
+				Border(lipgloss.Border{Left: "▐"}).
+				BorderForeground(lipgloss.Color("68")).
+				PaddingLeft(1)
+		}
+		stageLines = append(stageLines, lineStyle.Render(label))
+	}
+
+	allLines := []string{topLine, dotsLine}
+	allLines = append(allLines, stageLines...)
+	return strings.Join(allLines, "\n")
 }

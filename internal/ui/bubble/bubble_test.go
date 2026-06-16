@@ -2687,3 +2687,36 @@ func TestCtrlC_清空时关闭候选框(t *testing.T) {
 		t.Errorf("input = %q, want empty", model.input.Value())
 	}
 }
+
+// TestRenderPipelineWindowedContent_ShowsCurrentStage 验证 Pipeline 滚动窗口正确显示当前阶段。
+func TestRenderPipelineWindowedContent_ShowsCurrentStage(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.pipelineState.detected = true
+	model.pipelineState.globalIter = 3
+	model.pipelineState.doneCount = 8
+	model.pipelineState.activeIdx = 8
+	for i := 0; i < 8; i++ {
+		model.pipelineState.phases[i] = pipelinePhaseEntry{
+			name:   pipelineArtifacts[i][0],
+			status: phaseStatusDone,
+		}
+	}
+	model.pipelineState.phases[8] = pipelinePhaseEntry{
+		name:      "Validation",
+		status:    phaseStatusActive,
+		iteration: 3,
+	}
+	for i := 9; i < 18; i++ {
+		model.pipelineState.phases[i] = pipelinePhaseEntry{
+			name: pipelineArtifacts[i][0],
+		}
+	}
+
+	result := model.renderPipelineWindowedContent(28, 12)
+	if !strings.Contains(result, "Validation") {
+		t.Errorf("windowed = %q, want Validation as current stage", result)
+	}
+	if !strings.Contains(result, "8/18") {
+		t.Errorf("windowed = %q, want 8/18 count", result)
+	}
+}
