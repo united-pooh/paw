@@ -34,10 +34,7 @@ func (m appModel) contextMeterLine(width int) string {
 }
 
 func formatContextUsageLabel(used, cache, limit int, isGenerating bool) string {
-	arrow := "↑"
-	if isGenerating {
-		arrow = "↓"
-	}
+	arrow := contextDirectionArrow(isGenerating)
 	parts := []string{formatCompactTokenCount(used) + arrow}
 	parts = append(parts, fmt.Sprintf("%s(%s)", formatContextPercent(used, limit), formatContextPercent(cache, limit)))
 	return strings.Join(parts, " ")
@@ -46,6 +43,14 @@ func formatContextUsageLabel(used, cache, limit int, isGenerating bool) string {
 func formatContextFreeLabel(used, limit int) string {
 	free := maxInt(0, limit-used)
 	return fmt.Sprintf("free(%s)", formatContextPercent(free, limit))
+}
+
+// contextDirectionArrow returns "↓" during generation, "↑" otherwise.
+func contextDirectionArrow(isGenerating bool) string {
+	if isGenerating {
+		return "↓"
+	}
+	return "↑"
 }
 
 func formatContextPercent(value, total int) string {
@@ -329,10 +334,7 @@ func (m appModel) renderContextCardContent(innerWidth int) string {
 	rawCache := clampInt(stats.CacheTokens, 0, rawUsed)
 	labelUsed, labelCache := m.animatedLabelTokens(rawUsed, rawCache, limit)
 
-	arrow := "↑"
-	if m.isGenerating {
-		arrow = "↓"
-	}
+	arrow := contextDirectionArrow(m.isGenerating)
 	tokenStr := contextUsedStyle.Render(formatCompactTokenCount(labelUsed) + arrow)
 	freeStr := contextFreeStyle.Render(formatContextFreeLabel(labelUsed, limit))
 
@@ -348,7 +350,9 @@ func (m appModel) renderContextCardContent(innerWidth int) string {
 	usedPct := contextUsedStyle.Render(formatContextPercent(labelUsed, limit))
 	cachePct := contextCacheStyle.Render("cache " + formatContextPercent(labelCache, limit))
 	freePct := contextFreeStyle.Render("free " + formatContextPercent(maxInt(0, limit-labelUsed), limit))
-	pctLine := usedPct + " " + cachePct + " " + freePct
+	pctLine := lipgloss.NewStyle().MaxWidth(innerWidth).Render(
+		usedPct + " " + cachePct + " " + freePct,
+	)
 
 	// Line 4: turns (right-aligned)
 	turnsStr := fmt.Sprintf("turns %d", m.turnsCount())
