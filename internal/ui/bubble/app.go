@@ -16,7 +16,7 @@ import (
 )
 
 // newModel 创建完整的 TUI 状态模型，并初始化输入框、滚动区和系统消息。
-func newModel(ctx context.Context, runner Runner, sessionID string, controller ModelConfigController, settingsController SettingsController, subagentController SubagentController, anchor *terminalCursorAnchor) appModel {
+func newModel(ctx context.Context, runner Runner, sessionID string, controller ModelConfigController, settingsController SettingsController, subagentController SubagentController, sessionStore SessionStore, anchor *terminalCursorAnchor) appModel {
 	input := textarea.New()
 	input.Prompt = ""
 	input.Placeholder = ">"
@@ -42,6 +42,7 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 		modelConfig:     controller,
 		settingsConfig:  settingsController,
 		subagents:       subagentController,
+		sessionStore:    sessionStore,
 		commandRegistry: NewCommandRegistry(),
 		cursorAnchor:    anchor,
 		input:           input,
@@ -203,12 +204,48 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if queuedCmd := m.startNextQueuedTurn(); queuedCmd != nil {
 			cmds = append(cmds, queuedCmd)
 		}
+	case sessionsLoadedMsg:
+		if m.sessionPicker != nil {
+			if msg.err != nil {
+				m.sessionPicker.err = msg.err.Error()
+			} else {
+				m.sessionPicker.sessions = msg.sessions
+				m.sessionPicker.loading = false
+			}
+		}
+		return m, nil
+	case sessionRestoredMsg:
+		if msg.err != nil {
+			m.addEntry(transcriptEntry{kind: entryError, title: "sessions", body: msg.err.Error()})
+		} else {
+			m.sessionID = msg.sessionID
+			m.addEntry(transcriptEntry{kind: entrySystem, title: "sessions", body: fmt.Sprintf("已切换到会话: %s", msg.sessionID)})
+		}
+		m.sessionPicker = nil
+		cmds = append(cmds, m.input.Focus())
+		return m, tea.Batch(cmds...)
+	case fileCompletionLoadedMsg:
+		if m.completion != nil && m.completion.kind == completionKindFile {
+			if msg.err == nil {
+				m.completion.items = msg.items
+				m.completion.loading = false
+			} else {
+				m.completion = nil
+			}
+		}
+		return m, nil
 	case tea.KeyMsg:
 		if m.settingWizard != nil {
 			return m.handleSettingWizardKey(msg)
 		}
 		if m.modelWizard != nil {
 			return m.handleModelWizardKey(msg)
+		}
+		if m.sessionPicker != nil {
+			return m.handleSessionPickerKey(msg)
+		}
+		if m.completion != nil {
+			return m.handleCompletionKey(msg)
 		}
 		switch msg.String() {
 		case "ctrl+c", "esc":
@@ -243,6 +280,20 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncInputMode()
 		m.relayout()
 		cmds = append(cmds, inputCmd)
+
+		// 检测 @ 前缀触发文件补全（仅在文本编辑键后）
+		if isTextEditingKey(msg) && m.completion == nil {
+			val := m.input.Value()
+			if strings.HasPrefix(val, "@") && len(val) >= 1 {
+				m.completion = newFileCompletion(val[1:])
+				cmds = append(cmds, loadFileCompletionCmd())
+			}
+		} else if isTextEditingKey(msg) && m.completion != nil && m.completion.kind == completionKindFile {
+			val := m.input.Value()
+			if !strings.HasPrefix(val, "@") {
+				m.completion = nil
+			}
+		}
 	}
 	m.applyCursorAnimation()
 

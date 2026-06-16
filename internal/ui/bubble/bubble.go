@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"gocode/internal/message"
 	"gocode/internal/model"
+	"gocode/internal/session"
 	"gocode/internal/settings"
 	"gocode/internal/subagent"
 	"gocode/internal/ui"
@@ -19,6 +20,12 @@ import (
 type Runner interface {
 	RunTurn(ctx context.Context, input string) (message.Message, error)
 	ResetHistory()
+	LoadHistory(ctx context.Context, sessionID string) error
+}
+
+// SessionStore 描述 TUI 列举和管理会话所需的最小接口。
+type SessionStore interface {
+	ListSessions(ctx context.Context) ([]session.SessionSummary, error)
 }
 
 // ModelConfigController 描述运行时读取和应用模型配置的控制器。
@@ -52,6 +59,7 @@ type UI struct {
 	modelConfigController ModelConfigController
 	settingsController    SettingsController
 	subagentController    SubagentController
+	sessionStore          SessionStore
 }
 
 // 确保 UI 满足通用终端 UI 接口。
@@ -83,16 +91,24 @@ func (u *UI) SetSubagentController(controller SubagentController) {
 	u.subagentController = controller
 }
 
+// SetSessionStore 注入 session store，供 /sessions 命令列举历史会话。
+func (u *UI) SetSessionStore(store SessionStore) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.sessionStore = store
+}
+
 // Run 启动 Bubble Tea 主循环，并把输出写入带光标锚点修正的终端流。
 func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 	u.mu.Lock()
 	controller := u.modelConfigController
 	settingsController := u.settingsController
 	subagentController := u.subagentController
+	sessionStore := u.sessionStore
 	u.mu.Unlock()
 
 	anchor := newTerminalCursorAnchor()
-	appModel := newModel(ctx, runner, sessionID, controller, settingsController, subagentController, anchor)
+	appModel := newModel(ctx, runner, sessionID, controller, settingsController, subagentController, sessionStore, anchor)
 	program := tea.NewProgram(
 		appModel,
 		tea.WithContext(ctx),

@@ -117,6 +117,16 @@ func NewCommandRegistry() *CommandRegistry {
 		},
 	})
 	registry.Register(Command{
+		Name:              "/sessions",
+		Description:       "browse and restore previous sessions",
+		AllowWhileRunning: false,
+		Handler: func(m *appModel, invocation string) tea.Cmd {
+			m.sessionPicker = newSessionPicker()
+			m.pending = nil
+			return loadSessionsCmd(m.ctx, m.sessionStore)
+		},
+	})
+	registry.Register(Command{
 		Name:              "/exit",
 		Aliases:           []string{"/quit"},
 		Description:       "quit the TUI",

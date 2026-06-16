@@ -55,7 +55,7 @@ func main() {
 
 func runSingleTurnMode(ctx context.Context, opts options) error {
 	output := headless.New(os.Stdout)
-	runner, sessionID, _, _, _, err := buildRunner(ctx, opts.sessionID, output)
+	runner, sessionID, _, _, _, _, err := buildRunner(ctx, opts.sessionID, output)
 	if err != nil {
 		return err
 	}
@@ -69,7 +69,7 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	clearTerminalWindow(os.Stdout)
 
 	output := bubbleui.New()
-	runner, sessionID, client, settingsController, subagentManager, err := buildRunner(ctx, opts.sessionID, output)
+	runner, sessionID, client, settingsController, subagentManager, store, err := buildRunner(ctx, opts.sessionID, output)
 	if err != nil {
 		return err
 	}
@@ -77,6 +77,7 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	output.SetModelConfigController(client)
 	output.SetSettingsController(settingsController)
 	output.SetSubagentController(subagentManager)
+	output.SetSessionStore(store)
 	return output.Run(ctx, runner, sessionID)
 }
 
@@ -87,31 +88,31 @@ func clearTerminalWindow(w io.Writer) {
 	_, _ = io.WriteString(w, "\x1b[H\x1b[2J\x1b[3J")
 }
 
-func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI) (*loop.Runner, string, *model.Client, *settings.Controller, *subagent.Manager, error) {
+func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI) (*loop.Runner, string, *model.Client, *settings.Controller, *subagent.Manager, *session.JSONLStore, error) {
 	cfg, err := model.LoadConfigFromEnv()
 	if err != nil {
-		return nil, "", nil, nil, nil, err
+		return nil, "", nil, nil, nil, nil, err
 	}
 
 	root, err := os.Getwd()
 	if err != nil {
-		return nil, "", nil, nil, nil, err
+		return nil, "", nil, nil, nil, nil, err
 	}
 
 	store, err := session.NewJSONLStoreInCwd()
 	if err != nil {
-		return nil, "", nil, nil, nil, fmt.Errorf("初始化 session store 失败: %w", err)
+		return nil, "", nil, nil, nil, nil, fmt.Errorf("初始化 session store 失败: %w", err)
 	}
 
 	sessionID, err := resolveSessionID(ctx, store, sessionIDFlag, root)
 	if err != nil {
-		return nil, "", nil, nil, nil, err
+		return nil, "", nil, nil, nil, nil, err
 	}
 
 	client := model.NewClient(cfg)
 	settingsController, err := settings.NewControllerInCwd()
 	if err != nil {
-		return nil, "", nil, nil, nil, err
+		return nil, "", nil, nil, nil, nil, err
 	}
 	var notifier subagent.Notifier
 	if n, ok := output.(subagent.Notifier); ok {
@@ -135,7 +136,7 @@ func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI) (
 	registry.Register(subagent.NewTool(subagentManager, sessionID))
 	registry.Register(subagent.NewStatusTool(subagentManager))
 
-	return loop.NewRunnerWithInstructionRoot(client, output, registry, store, sessionID, root), sessionID, client, settingsController, subagentManager, nil
+	return loop.NewRunnerWithInstructionRoot(client, output, registry, store, sessionID, root), sessionID, client, settingsController, subagentManager, store, nil
 }
 
 func resolveSessionID(ctx context.Context, store *session.JSONLStore, sessionIDFlag, cwd string) (string, error) {
@@ -150,5 +151,12 @@ func resolveSessionID(ctx context.Context, store *session.JSONLStore, sessionIDF
 		return sessionIDFlag, nil
 	}
 
-	return store.OpenOrCreate(ctx, cwd)
+	sessionID, err := session.GenerateSessionID()
+	if err != nil {
+		return "", fmt.Errorf("生成 session ID 失败: %w", err)
+	}
+	if _, err := store.CreateRoot(ctx, session.CreateRootRequest{SessionID: sessionID}); err != nil {
+		return "", fmt.Errorf("创建 session 失败: %w", err)
+	}
+	return sessionID, nil
 }

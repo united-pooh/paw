@@ -26,12 +26,14 @@ import (
 
 // fakeRunner 记录测试中的提交输入，并模拟对话 runner。
 type fakeRunner struct {
-	inputs     []string
-	resetCalls int
-	err        error
-	stats      loop.ContextStats
-	lastDraft  string
-	lastLimit  int
+	inputs           []string
+	resetCalls       int
+	loadHistoryCalls []string
+	loadHistoryErr   error
+	err              error
+	stats            loop.ContextStats
+	lastDraft        string
+	lastLimit        int
 }
 
 // RunTurn 记录输入并返回固定 assistant 消息。
@@ -43,6 +45,12 @@ func (r *fakeRunner) RunTurn(ctx context.Context, input string) (message.Message
 // ResetHistory 记录历史重置调用次数。
 func (r *fakeRunner) ResetHistory() {
 	r.resetCalls++
+}
+
+// LoadHistory 记录加载历史的调用，并可模拟失败。
+func (r *fakeRunner) LoadHistory(ctx context.Context, sessionID string) error {
+	r.loadHistoryCalls = append(r.loadHistoryCalls, sessionID)
+	return r.loadHistoryErr
 }
 
 // ContextStats returns deterministic context-usage data for meter tests.
@@ -172,7 +180,7 @@ func newTestModel(runner Runner) appModel {
 			Model:         modelcfg.CustomDefaultModel,
 			Timeout:       time.Minute,
 		},
-	}, nil, nil, newTerminalCursorAnchor())
+	}, nil, nil, nil, newTerminalCursorAnchor())
 }
 
 func equalStrings(a, b []string) bool {
@@ -276,7 +284,7 @@ func TestModelCommandVariantsKeepWizardAndShortcuts(t *testing.T) {
 			Timeout:       time.Minute,
 		},
 	}
-	model := newModel(context.Background(), &fakeRunner{}, "session-1", controller, nil, nil, newTerminalCursorAnchor())
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", controller, nil, nil, nil, newTerminalCursorAnchor())
 
 	handled, cmd := model.handleCommand("/model status")
 	if !handled || cmd != nil {
@@ -364,7 +372,7 @@ func TestExportCommandWritesExplicitAndDefaultTranscriptFiles(t *testing.T) {
 // TestSettingCommandPersistsWizardSelections verifies /setting saves normalized config through the controller.
 func TestSettingCommandPersistsWizardSelections(t *testing.T) {
 	settingsController := &fakeSettingsController{current: settings.DefaultConfig()}
-	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, settingsController, nil, newTerminalCursorAnchor())
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, settingsController, nil, nil, newTerminalCursorAnchor())
 
 	handled, cmd := model.handleCommand("/setting")
 	if !handled || cmd != nil {
@@ -921,7 +929,7 @@ func TestRelayoutAccountsForInputAboveMeterHeight(t *testing.T) {
 			ContextMeterLocation: settings.MeterLocationInputAbove,
 		},
 	}}
-	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, settingsController, nil, newTerminalCursorAnchor())
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, settingsController, nil, nil, newTerminalCursorAnchor())
 	model.ready = true
 	model.width = 80
 	model.height = 10
@@ -1015,7 +1023,7 @@ func TestSubagentCommandUsesDefaultsAndTasksRender(t *testing.T) {
 			TranscriptPath: "/tmp/task-42.jsonl",
 		},
 	}
-	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, settingsController, subagents, newTerminalCursorAnchor())
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, settingsController, subagents, nil, newTerminalCursorAnchor())
 
 	handled, cmd := model.handleCommand("/subagent summarize recent changes")
 	if !handled || cmd != nil {
@@ -1054,7 +1062,7 @@ func TestSyncSubagentCompletionStartsQueuedTurn(t *testing.T) {
 			Content:        "subagent complete",
 		},
 	}
-	model := newModel(context.Background(), runner, "session-1", &fakeModelConfigController{}, nil, subagents, newTerminalCursorAnchor())
+	model := newModel(context.Background(), runner, "session-1", &fakeModelConfigController{}, nil, subagents, nil, newTerminalCursorAnchor())
 
 	handled, cmd := model.handleCommand("/subagent inspect this")
 	if !handled || cmd == nil {
@@ -1097,7 +1105,7 @@ func TestSyncSubagentCompletionStartsQueuedTurn(t *testing.T) {
 // TestViewAnchorsTerminalCursorOnInputCell 验证 View 会把真实终端光标锚定到输入单元格。
 func TestViewAnchorsTerminalCursorOnInputCell(t *testing.T) {
 	anchor := newTerminalCursorAnchor()
-	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, nil, nil, anchor)
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, nil, nil, nil, anchor)
 	model.ready = true
 	model.width = 80
 	model.height = 24
@@ -1130,7 +1138,7 @@ func TestViewAnchorsTerminalCursorWithEmbeddedInputTitle(t *testing.T) {
 			ContextMeterLocation: settings.MeterLocationInputTitle,
 		},
 	}}
-	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, settingsController, nil, anchor)
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, settingsController, nil, nil, anchor)
 	model.ready = true
 	model.width = 80
 	model.height = 24
@@ -1151,7 +1159,7 @@ func TestViewAnchorsTerminalCursorWithEmbeddedInputTitle(t *testing.T) {
 // TestViewClearsTerminalCursorAnchorWhenWizardOpen 验证打开模型向导时会清除输入光标锚点。
 func TestViewClearsTerminalCursorAnchorWhenWizardOpen(t *testing.T) {
 	anchor := newTerminalCursorAnchor()
-	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, nil, nil, anchor)
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, nil, nil, nil, anchor)
 	model.ready = true
 	model.width = 80
 	model.height = 24
@@ -1467,7 +1475,7 @@ func TestModelWizardAppliesDeepSeekConfig(t *testing.T) {
 			Timeout:       time.Minute,
 		},
 	}
-	model := newModel(context.Background(), &fakeRunner{}, "session-1", controller, nil, nil, newTerminalCursorAnchor())
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", controller, nil, nil, nil, newTerminalCursorAnchor())
 	model.modelWizard = newModelWizard(controller.current)
 	model.modelWizard.selectedIndex = 1
 
@@ -1504,7 +1512,7 @@ func TestModelWizardAllowsCustomConfigWithoutAPIKey(t *testing.T) {
 			Timeout:       time.Minute,
 		},
 	}
-	model := newModel(context.Background(), &fakeRunner{}, "session-1", controller, nil, nil, newTerminalCursorAnchor())
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", controller, nil, nil, nil, newTerminalCursorAnchor())
 	model.modelWizard = newModelWizard(controller.current)
 	model.modelWizard.selectedIndex = 0
 
@@ -1539,7 +1547,7 @@ func TestModelWizardDoesNotApplyConfigWhenSaveFails(t *testing.T) {
 		},
 		saveErr: errors.New("disk full"),
 	}
-	model := newModel(context.Background(), &fakeRunner{}, "session-1", controller, nil, nil, newTerminalCursorAnchor())
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", controller, nil, nil, nil, newTerminalCursorAnchor())
 	model.modelWizard = newModelWizard(controller.current)
 	model.modelWizard.selectedIndex = 1
 

@@ -39,6 +39,12 @@ func (m appModel) renderActiveInputPanel() string {
 	if m.settingWizard != nil {
 		return m.renderSettingWizardBox()
 	}
+	if m.sessionPicker != nil {
+		return m.renderSessionPickerBox()
+	}
+	if m.completion != nil {
+		return m.renderCompletionBox()
+	}
 	return m.renderInputBox()
 }
 
@@ -56,7 +62,7 @@ func (m appModel) updateTerminalCursorAnchor(inputPanel string) {
 
 // shouldAnchorTextInputCursor 判断当前是否应该把终端真实光标移动到输入单元格。
 func (m appModel) shouldAnchorTextInputCursor() bool {
-	return m.ready && !m.running && m.modelWizard == nil && m.settingWizard == nil
+	return m.ready && !m.running && m.modelWizard == nil && m.settingWizard == nil && m.sessionPicker == nil && m.completion == nil
 }
 
 // inputCursorTerminalPosition 计算输入框光标相对当前帧底部的位置。

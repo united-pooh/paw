@@ -181,6 +181,31 @@ func (w *modelWizard) selectedProvider() modelProviderOption {
 	return modelProviderOptions[w.selectedIndex]
 }
 
+// sessionsLoadedMsg 携带异步加载完成的会话列表。
+type sessionsLoadedMsg struct {
+	sessions []sessionSummaryItem
+	err      error
+}
+
+// sessionRestoredMsg 携带历史恢复完成的结果。
+type sessionRestoredMsg struct {
+	sessionID string
+	err       error
+}
+
+// fileCompletionLoadedMsg 携带异步加载完成的文件补全列表。
+type fileCompletionLoadedMsg struct {
+	items []string
+	err   error
+}
+
+// sessionSummaryItem 是 session picker 中的一行显示项。
+type sessionSummaryItem struct {
+	sessionID    string
+	createdAt    time.Time
+	firstMessage string
+}
+
 // appModel 是 Bubble Tea TUI 的唯一状态中心。
 type appModel struct {
 	ctx             context.Context
@@ -189,6 +214,7 @@ type appModel struct {
 	modelConfig     ModelConfigController
 	settingsConfig  SettingsController
 	subagents       SubagentController
+	sessionStore    SessionStore
 	commandRegistry *CommandRegistry
 	queryGuard      QueryGuard
 	chatQueue       CommandQueue
@@ -220,6 +246,8 @@ type appModel struct {
 	isGenerating    bool
 	modelWizard     *modelWizard
 	settingWizard   *settingWizard
+	sessionPicker   *sessionPicker
+	completion      *completion
 }
 
 type contextStatsProvider interface {

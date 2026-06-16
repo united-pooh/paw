@@ -11,6 +11,7 @@ import (
 	"gocode/internal/message"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -401,4 +402,72 @@ func (s *JSONLStore) keyIndexPath(key string) string {
 		safe = safe[len(safe)-200:]
 	}
 	return filepath.Join(s.baseDir, "index", safe)
+}
+
+// SessionSummary 是 ListSessions 返回的会话摘要信息。
+type SessionSummary struct {
+	SessionID    string
+	CreatedAt    time.Time
+	FirstMessage string // 第一条用户消息的前 80 个字符，可能为空
+}
+
+// ListSessions 枚举所有已存储的会话，按创建时间倒序返回。
+// 读取失败的会话会被跳过。
+func (s *JSONLStore) ListSessions(ctx context.Context) ([]SessionSummary, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	sessionsDir := filepath.Join(s.baseDir, defaultSessionsDir)
+	entries, err := os.ReadDir(sessionsDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var summaries []SessionSummary
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		sessionID := entry.Name()
+		meta, err := s.GetMeta(ctx, sessionID)
+		if err != nil {
+			continue // 跳过读取失败的会话
+		}
+
+		summary := SessionSummary{
+			SessionID: meta.SessionID,
+			CreatedAt: meta.CreatedAt,
+		}
+
+		// 尝试读取第一条用户消息
+		records, err := s.readOwnRecords(ctx, sessionID)
+		if err == nil {
+			for _, rec := range records {
+				if rec.Message.Role == "user" && rec.Message.Content != "" {
+					msg := rec.Message.Content
+					if len(msg) > 80 {
+						msg = msg[:80]
+					}
+					summary.FirstMessage = msg
+					break
+				}
+			}
+		}
+
+		summaries = append(summaries, summary)
+	}
+
+	// 按创建时间倒序排列（最新的在前）
+	sort.Slice(summaries, func(i, j int) bool {
+		return summaries[i].CreatedAt.After(summaries[j].CreatedAt)
+	})
+
+	return summaries, nil
 }

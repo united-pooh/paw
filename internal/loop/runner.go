@@ -217,6 +217,27 @@ func (runner *Runner) ResetHistory() {
 	runner.sessionUsageKnown = false
 }
 
+// LoadHistory 从 store 加载指定 session 的历史，并替换当前 runner 的历史。
+// 同时更新 runner.sessionID 以指向新会话。
+func (runner *Runner) LoadHistory(ctx context.Context, sessionID string) error {
+	if runner.store == nil {
+		return fmt.Errorf("runner store is nil")
+	}
+	messages, err := runner.store.LoadResolvedHistory(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	runner.history = append([]message.Message(nil), messages...)
+	runner.sessionID = sessionID
+	runner.usage = model.Usage{}
+	runner.usageKnown = false
+	runner.sessionUsage = model.Usage{}
+	runner.sessionUsageKnown = false
+	return nil
+}
+
 func (runner *Runner) ContextStats(limitTokens int, _ string) ContextStats {
 	if limitTokens <= 0 {
 		limitTokens = 1024 * 1024
