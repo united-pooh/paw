@@ -177,6 +177,9 @@ func (u *UI) OnDone() error {
 	return u.send(doneMsg{})
 }
 
+// ConsumesOldContent 声明 bubble UI 会消费 OldContent 用于 diff 展示。
+func (u *UI) ConsumesOldContent() bool { return true }
+
 // OnSystemMessage 接收后台任务等系统事件，并转发给 Bubble Tea 状态机展示。
 func (u *UI) OnSystemMessage(event ui.SystemEvent) error {
 	return u.send(systemEventMsg(event))

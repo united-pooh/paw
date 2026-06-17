@@ -5,9 +5,10 @@ import "encoding/json"
 // ToolCallEvent 描述一次工具调用事件。
 // UI 只关心展示，因此这里保留最小字段集合。
 type ToolCallEvent struct {
-	ID    string
-	Name  string
-	Input json.RawMessage
+	ID         string
+	Name       string
+	Input      json.RawMessage
+	OldContent string // 文件变更工具执行前的旧文件内容（Write/Edit），由调用方在工具执行前同步读取
 }
 
 // ToolResultEvent 描述一次工具执行结果事件。
@@ -42,4 +43,10 @@ type ThinkingDeltaReceiver interface {
 // SystemNotifier 是 UI 的可选扩展，用于接收后台任务完成等系统事件。
 type SystemNotifier interface {
 	OnSystemMessage(event SystemEvent) error
+}
+
+// OldContentConsumer 是 UI 的可选扩展，声明该 UI 会消费 ToolCallEvent.OldContent。
+// 未实现此接口的 UI（如 sinkUI）不会触发磁盘读取，避免浪费 I/O。
+type OldContentConsumer interface {
+	ConsumesOldContent() bool
 }

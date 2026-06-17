@@ -87,7 +87,7 @@ func (m *appModel) recordToolCallCitation(toolUseID, name string, input json.Raw
 	m.refreshViewport()
 }
 
-func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMessage) {
+func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMessage, oldContent string) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = "tool"
@@ -95,7 +95,7 @@ func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMes
 	m.addEntry(transcriptEntry{
 		kind:      entryTool,
 		title:     "tool",
-		body:      formatRunningToolCallBody(name, input),
+		body:      formatRunningToolCallBody(name, input, oldContent),
 		toolUseID: strings.TrimSpace(toolUseID),
 		toolName:  name,
 		createdAt: m.animationNow(),
@@ -519,14 +519,14 @@ func renderToolDetailLines(lines []string, width int) string {
 				Foreground(lipgloss.Color("194")).
 				Background(lipgloss.Color("22")).
 				Bold(true)
-			renderedLine = trimmed
+			renderedLine = strings.TrimRight(line, " \t\r")
 			isDiffLine = true
 		case diffDetailLineMarker(trimmed) == "-":
 			style = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("224")).
 				Background(lipgloss.Color("52")).
 				Bold(true)
-			renderedLine = trimmed
+			renderedLine = strings.TrimRight(line, " \t\r")
 			isDiffLine = true
 		}
 		if isDiffLine {
@@ -548,7 +548,7 @@ func diffDetailRowsWidth(lines []string, width int) int {
 		if diffDetailLineMarker(trimmed) == "" {
 			continue
 		}
-		maxLineWidth = maxInt(maxLineWidth, lipgloss.Width(truncateDisplayWidth(trimmed, maxAllowed)))
+		maxLineWidth = maxInt(maxLineWidth, lipgloss.Width(truncateDisplayWidth(strings.TrimRight(line, " \t\r"), maxAllowed)))
 	}
 	if maxLineWidth == 0 {
 		return maxAllowed

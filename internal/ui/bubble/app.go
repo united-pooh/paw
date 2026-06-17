@@ -133,7 +133,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case toolCallMsg:
 		m.isGenerating = false
 		m.activeAssistant = -1
-		m.recordToolCallEntry(msg.ID, msg.Name, json.RawMessage(msg.Input))
+		m.recordToolCallEntry(msg.ID, msg.Name, json.RawMessage(msg.Input), msg.OldContent)
 		return m, nil
 	case toolResultMsg:
 		m.activeAssistant = -1

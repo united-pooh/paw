@@ -861,7 +861,7 @@ func TestSubagentToolCallBodySummarizesPrompt(t *testing.T) {
 		"description":"读取并分析项目结构",
 		"prompt":"读取并分析当前项目。\n1. 读取 go.mod\n2. 读取 README.md",
 		"run_mode":"sync"
-	}`))
+	}`), "")
 	for _, want := range []string{"Subagent · sync · empty", "description", "读取并分析项目结构", "prompt"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("subagent body = %q, want %q", body, want)
@@ -875,7 +875,7 @@ func TestSubagentToolCallBodySummarizesPrompt(t *testing.T) {
 }
 
 func TestBashToolCallBodyHidesDefaultCWD(t *testing.T) {
-	body := formatToolCallBody("Bash", []byte(`{"command":"rm multi_line_file.txt","cwd":"."}`))
+	body := formatToolCallBody("Bash", []byte(`{"command":"rm multi_line_file.txt","cwd":"."}`), "")
 	if strings.Contains(body, "\n.") {
 		t.Fatalf("bash body = %q, should hide default cwd dot", body)
 	}
@@ -887,7 +887,7 @@ func TestBashToolCallBodyHidesDefaultCWD(t *testing.T) {
 }
 
 func TestWriteToolCallBodyRendersDiffPreview(t *testing.T) {
-	body := formatToolCallBody("Write", []byte(`{"file_path":"main.py","content":"def hanoi():\n    pass\n"}`))
+	body := formatToolCallBody("Write", []byte(`{"file_path":"main.py","content":"def hanoi():\n    pass\n"}`), "")
 	for _, want := range []string{"Write", "main.py", "1 + │ def hanoi():", "2 + │     pass"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("write body = %q, want %q", body, want)
@@ -901,7 +901,7 @@ func TestWriteToolCallBodyRendersDiffPreview(t *testing.T) {
 }
 
 func TestUpdateToolCallBodyRendersOldNewDiffPreview(t *testing.T) {
-	body := formatToolCallBody("Update", []byte(`{"file_path":"main.py","old_string":"return 1\n","new_string":"return 2\n"}`))
+	body := formatToolCallBody("Update", []byte(`{"file_path":"main.py","old_string":"return 1\n","new_string":"return 2\n"}`), "")
 	for _, want := range []string{"Update", "main.py", "1 - │ return 1", "1 + │ return 2"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("update body = %q, want %q", body, want)

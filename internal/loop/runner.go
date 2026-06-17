@@ -9,6 +9,8 @@ import (
 	"gocode/internal/tool"
 	"gocode/internal/ui"
 	"html"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,6 +45,7 @@ type Runner struct {
 	registry  *tool.Registry
 	store     HistoryStore
 	sessionID string
+	workRoot  string // 工具使用的 workspace 根目录，用于解析相对文件路径
 	prompt    *PromptBuilder
 	// history 保存“已经成功完成”的多轮对话消息。
 	// 当前调用路径是串行的，因此这里先不引入锁。
@@ -105,6 +108,7 @@ func NewRunnerWithInstructionRoot(model ModelStreamer, output ui.UI, registry *t
 		registry:  registry,
 		store:     store,
 		sessionID: sessionID,
+		workRoot:  instructionRoot,
 		prompt:    NewPromptBuilder(NewInstructionManager(instructionRoot)),
 	}
 }
@@ -1578,11 +1582,37 @@ func (runner *Runner) runToolCall(ctx context.Context, call message.ToolCall) (m
 }
 
 func (runner *Runner) emitToolCall(call message.ToolCall) error {
-	return runner.ui.OnToolCall(ui.ToolCallEvent{
+	event := ui.ToolCallEvent{
 		ID:    call.ID,
 		Name:  call.Name,
 		Input: append(json.RawMessage(nil), call.Input...),
-	})
+	}
+	// Write/Edit 工具执行前同步读旧文件，供 UI diff 展示使用。
+	// 只有 UI 声明会消费 OldContent 时才读取，避免 sinkUI 等无显示 UI 浪费 I/O。
+	if consumer, ok := runner.ui.(ui.OldContentConsumer); ok && consumer.ConsumesOldContent() {
+		switch strings.ToLower(strings.TrimSpace(call.Name)) {
+		case "write", "edit", "update":
+			var input struct {
+				FilePath string `json:"file_path"`
+				Path     string `json:"path"`
+			}
+			if err := json.Unmarshal(call.Input, &input); err == nil {
+				path := input.FilePath
+				if path == "" {
+					path = input.Path
+				}
+				if path != "" {
+					if !filepath.IsAbs(path) && runner.workRoot != "" {
+						path = filepath.Join(runner.workRoot, path)
+					}
+					if data, err := os.ReadFile(path); err == nil {
+						event.OldContent = string(data)
+					}
+				}
+			}
+		}
+	}
+	return runner.ui.OnToolCall(event)
 }
 
 func (runner *Runner) emitToolResult(call message.ToolCall, result message.ToolResult) error {

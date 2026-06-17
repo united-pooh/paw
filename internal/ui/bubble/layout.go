@@ -21,19 +21,28 @@ func (m appModel) View() string {
 	// Wrap the left column in a fixed-width container so its rendered width
 	// stays stable during streaming and never shifts the right sidebar.
 	// Use MaxWidth (not Width) to clip without wrapping lines.
+	// Also clamp height to bodyHeight so long/wrapping lines in the viewport
+	// content cannot make leftContent taller than the terminal body, which
+	// would otherwise shift the right panel up by the overflow amount.
+	header := m.renderHeader()
+	headerH := 0
+	if header != "" {
+		headerH = lipgloss.Height(header)
+	}
+	bodyHeight := maxInt(1, m.height-headerH)
 	leftColWidth := maxInt(1, m.width-m.sidebarWidth)
-	leftContent := lipgloss.NewStyle().MaxWidth(leftColWidth).Render(
+	leftContent := lipgloss.NewStyle().MaxWidth(leftColWidth).MaxHeight(bodyHeight).Render(
 		lipgloss.JoinVertical(lipgloss.Left,
 			m.renderTranscriptBox(),
 			input,
 		),
 	)
-	right := m.renderRightPanel(m.sidebarWidth, maxInt(1, lipgloss.Height(leftContent)))
+	right := m.renderRightPanel(m.sidebarWidth, bodyHeight)
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, leftContent, right)
 
 	var parts []string
-	if header := m.renderHeader(); header != "" {
+	if header != "" {
 		parts = append(parts, header)
 	}
 	parts = append(parts, body)
