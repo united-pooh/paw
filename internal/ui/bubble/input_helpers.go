@@ -48,3 +48,44 @@ func isTextEditingKey(msg tea.Msg) bool {
 		return keyMsg.String() == "alt+enter" || keyMsg.String() == "shift+enter"
 	}
 }
+
+// isRawMouseEscapeKey detects SGR mouse reports that occasionally arrive as
+// printable text instead of tea.MouseMsg, e.g. "<64;59;25M[<64;59;25M".
+func isRawMouseEscapeKey(msg tea.KeyMsg) bool {
+	if msg.Type != tea.KeyRunes || len(msg.Runes) == 0 {
+		return false
+	}
+	text := string(msg.Runes)
+	i := 0
+	seen := false
+	for i < len(text) {
+		if text[i] == '[' {
+			i++
+		}
+		if i >= len(text) || text[i] != '<' {
+			return false
+		}
+		i++
+		for field := 0; field < 3; field++ {
+			start := i
+			for i < len(text) && text[i] >= '0' && text[i] <= '9' {
+				i++
+			}
+			if start == i {
+				return false
+			}
+			if field < 2 {
+				if i >= len(text) || text[i] != ';' {
+					return false
+				}
+				i++
+			}
+		}
+		if i >= len(text) || (text[i] != 'm' && text[i] != 'M') {
+			return false
+		}
+		i++
+		seen = true
+	}
+	return seen
+}

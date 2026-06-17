@@ -128,7 +128,7 @@ func NewCommandRegistry() *CommandRegistry {
 	})
 	registry.Register(Command{
 		Name:              "/exit",
-		Aliases:           []string{"/quit"},
+		Aliases:           []string{"/quit", "exit", "quit"},
 		Description:       "quit the TUI",
 		AllowWhileRunning: true,
 		Handler: func(m *appModel, invocation string) tea.Cmd {
@@ -174,7 +174,7 @@ func (r *CommandRegistry) Lookup(token string) (Command, bool) {
 // Dispatch executes a registered slash command or writes stable feedback for
 // malformed and unknown command inputs.
 func (r *CommandRegistry) Dispatch(m *appModel, line string) (bool, tea.Cmd) {
-	if m == nil || !strings.HasPrefix(strings.TrimSpace(line), "/") {
+	if m == nil || strings.TrimSpace(line) == "" {
 		return false, nil
 	}
 	token := commandToken(line)

@@ -2,14 +2,15 @@
 package bubble
 
 import (
-	"github.com/charmbracelet/lipgloss"
 	"strings"
 	"unicode"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 // renderMarkdown 将 assistant 返回的 Markdown 文本转换为带样式的终端文本。
 func renderMarkdown(markdown string, width int) string {
-	width = maxInt(20, width)
+	width = maxInt(1, width)
 	lines := strings.Split(strings.TrimRight(markdown, "\n"), "\n")
 	parts := make([]string, 0, len(lines))
 
@@ -38,12 +39,12 @@ func renderMarkdown(markdown string, width int) string {
 			continue
 		}
 		if text, ok := strings.CutPrefix(trimmed, ">"); ok {
-			parts = append(parts, markdownQuoteStyle.Width(width-2).Render(renderInlineMarkdown(strings.TrimSpace(text))))
+			parts = append(parts, markdownQuoteStyle.Width(maxInt(1, width-2)).Render(renderInlineMarkdown(strings.TrimSpace(text))))
 			continue
 		}
 		if marker, text, ok := markdownListItem(trimmed); ok {
 			body := renderInlineMarkdown(text)
-			parts = append(parts, markdownBulletStyle.Render(marker)+" "+bodyStyle.Width(width-lipgloss.Width(marker)-1).Render(body))
+			parts = append(parts, markdownBulletStyle.Render(marker)+" "+bodyStyle.Width(maxInt(1, width-lipgloss.Width(marker)-1)).Render(body))
 			continue
 		}
 
@@ -102,16 +103,51 @@ func isMarkdownFenceLanguage(lang string) bool {
 
 // renderCodeBlock 渲染代码块，并把语言标签放在代码块外部。
 func renderCodeBlock(lang, code string, width int) string {
+	width = maxInt(1, width)
 	label := "code"
 	if lang != "" {
-		label = "code " + lang
+		label = lang
 	}
 	body := strings.TrimRight(code, "\n")
 	if body == "" {
 		body = " "
 	}
-	block := markdownCodeBlockStyle.Width(maxInt(20, width-2)).Render(body)
-	return markdownBulletStyle.Render(label) + "\n" + block
+	block := renderCodeBlockPanel(body, width)
+	return markdownBulletStyle.Render(truncateDisplayWidth(label, width)) + "\n" + block
+}
+
+func renderCodeBlockPanel(code string, width int) string {
+	width = maxInt(1, width)
+	blockWidth := markdownCodeBlockWidth(code, width)
+	if blockWidth < 6 {
+		return markdownCodeBlockStyle.Render(wrapDisplayWidthLines(code, width))
+	}
+	textWidth := maxInt(1, blockWidth-4)
+	lines := strings.Split(wrapDisplayWidthLines(code, textWidth), "\n")
+	rendered := make([]string, 0, len(lines)+2)
+	rendered = append(rendered, renderCodeBlockBorderLine("┌", "─", "┐", blockWidth))
+	for _, line := range lines {
+		body := " " + markdownCodeBlockStyle.Render(padDisplayWidth(line, textWidth)) + " "
+		rendered = append(rendered,
+			markdownCodeBlockBorderStyle.Render("│")+body+markdownCodeBlockBorderStyle.Render("│"),
+		)
+	}
+	rendered = append(rendered, renderCodeBlockBorderLine("└", "─", "┘", blockWidth))
+	return strings.Join(rendered, "\n")
+}
+
+func markdownCodeBlockWidth(code string, width int) int {
+	maxWidth := maxInt(6, width-4)
+	widest := 1
+	for _, line := range strings.Split(code, "\n") {
+		widest = maxInt(widest, lipgloss.Width(line))
+	}
+	return minInt(maxWidth, maxInt(6, widest+4))
+}
+
+func renderCodeBlockBorderLine(left, fill, right string, width int) string {
+	fillWidth := maxInt(1, width-lipgloss.Width(left)-lipgloss.Width(right))
+	return markdownCodeBlockBorderStyle.Render(left + strings.Repeat(fill, fillWidth) + right)
 }
 
 // isMarkdownTableStart 判断指定行是否是 Markdown 表格的表头行。
@@ -160,6 +196,7 @@ func renderMarkdownTable(lines []string, width int) string {
 	if columnCount == 0 {
 		return ""
 	}
+	columnCount = minInt(columnCount, markdownTableMaxColumnsForWidth(width))
 	normalizeMarkdownTableRows(rows, columnCount)
 	widths := markdownTableColumnWidths(rows, columnCount, width)
 	renderedRows := make([]string, 0, len(rows)+1)
@@ -195,15 +232,31 @@ func isMarkdownTableSeparatorCell(cell string) bool {
 		return false
 	}
 	cell = strings.Trim(cell, ":")
-	if len(cell) < 3 {
-		return false
-	}
+	count := 0
 	for _, r := range cell {
-		if r != '-' {
+		if unicode.IsSpace(r) {
+			continue
+		}
+		if !isMarkdownTableSeparatorRune(r) {
 			return false
 		}
+		count++
 	}
-	return true
+	return count >= 3
+}
+
+func isMarkdownTableSeparatorRune(r rune) bool {
+	switch r {
+	case '-', '—', '–', '─', '━':
+		return true
+	default:
+		return false
+	}
+}
+
+func markdownTableMaxColumnsForWidth(width int) int {
+	width = maxInt(1, width)
+	return maxInt(1, (width+3)/4)
 }
 
 // markdownTableColumnCount 返回表格中需要渲染的最大列数。
@@ -243,7 +296,7 @@ func markdownTableColumnWidths(rows [][]string, columnCount, maxWidth int) []int
 				widest = i
 			}
 		}
-		if widths[widest] <= 4 {
+		if widths[widest] <= 1 {
 			break
 		}
 		widths[widest]--
@@ -278,7 +331,7 @@ func renderMarkdownTableRow(row []string, widths []int, header bool) string {
 		}
 		cells = append(cells, padded)
 	}
-	return strings.Join(cells, markdownRuleStyle.Render(" │ "))
+	return strings.Join(cells, "  ")
 }
 
 // renderMarkdownTableRule 渲染表头和正文之间的横向分隔线。
@@ -287,11 +340,12 @@ func renderMarkdownTableRule(widths []int) string {
 	for _, width := range widths {
 		parts = append(parts, strings.Repeat("─", width))
 	}
-	return strings.Join(parts, "─┼─")
+	return strings.Join(parts, "  ")
 }
 
 // truncateDisplayWidth 按终端显示宽度截断文本，并在末尾添加省略号。
 func truncateDisplayWidth(text string, width int) string {
+	width = maxInt(1, width)
 	if lipgloss.Width(text) <= width {
 		return text
 	}
@@ -303,6 +357,51 @@ func truncateDisplayWidth(text string, width int) string {
 		return "…"
 	}
 	return string(runes) + "…"
+}
+
+func wrapDisplayWidthLines(text string, width int) string {
+	lines := strings.Split(text, "\n")
+	wrapped := make([]string, 0, len(lines))
+	for _, line := range lines {
+		wrapped = append(wrapped, wrapDisplayWidthLine(line, width)...)
+	}
+	return strings.Join(wrapped, "\n")
+}
+
+func wrapDisplayWidthLine(text string, width int) []string {
+	width = maxInt(1, width)
+	if text == "" {
+		return []string{""}
+	}
+	if lipgloss.Width(text) <= width {
+		return []string{text}
+	}
+
+	var lines []string
+	var chunk strings.Builder
+	chunkWidth := 0
+	for _, r := range text {
+		runeWidth := lipgloss.Width(string(r))
+		if runeWidth <= 0 {
+			chunk.WriteRune(r)
+			continue
+		}
+		if chunkWidth > 0 && chunkWidth+runeWidth > width {
+			lines = append(lines, chunk.String())
+			chunk.Reset()
+			chunkWidth = 0
+		}
+		if runeWidth > width {
+			lines = append(lines, truncateDisplayWidth(string(r), width))
+			continue
+		}
+		chunk.WriteRune(r)
+		chunkWidth += runeWidth
+	}
+	if chunk.Len() > 0 || len(lines) == 0 {
+		lines = append(lines, chunk.String())
+	}
+	return lines
 }
 
 // markdownHeading 解析 Markdown 标题等级和标题文本。
@@ -347,26 +446,41 @@ func markdownListItem(line string) (string, string, bool) {
 	return "•", strings.TrimSpace(line[dot+2:]), true
 }
 
-// renderInlineMarkdown 渲染行内 Markdown，目前重点处理反引号代码片段。
+// renderInlineMarkdown 渲染行内 Markdown，反引号代码片段优先于粗体解析。
 func renderInlineMarkdown(line string) string {
 	var rendered strings.Builder
-	for {
-		start := strings.Index(line, "`")
-		if start == -1 {
+	for line != "" {
+		codeStart := strings.Index(line, "`")
+		boldStart := strings.Index(line, "**")
+		switch {
+		case codeStart == -1 && boldStart == -1:
 			rendered.WriteString(line)
 			return rendered.String()
+		case codeStart != -1 && (boldStart == -1 || codeStart < boldStart):
+			rendered.WriteString(line[:codeStart])
+			line = line[codeStart+1:]
+			end := strings.Index(line, "`")
+			if end == -1 {
+				rendered.WriteString("`")
+				rendered.WriteString(line)
+				return rendered.String()
+			}
+			rendered.WriteString(markdownCodeStyle.Render(line[:end]))
+			line = line[end+1:]
+		default:
+			rendered.WriteString(line[:boldStart])
+			line = line[boldStart+2:]
+			end := strings.Index(line, "**")
+			if end <= 0 {
+				rendered.WriteString("**")
+				rendered.WriteString(line)
+				return rendered.String()
+			}
+			rendered.WriteString(markdownBoldStyle.Render(line[:end]))
+			line = line[end+2:]
 		}
-		rendered.WriteString(line[:start])
-		line = line[start+1:]
-		end := strings.Index(line, "`")
-		if end == -1 {
-			rendered.WriteString("`")
-			rendered.WriteString(line)
-			return rendered.String()
-		}
-		rendered.WriteString(markdownCodeStyle.Render(line[:end]))
-		line = line[end+1:]
 	}
+	return rendered.String()
 }
 
 // compactBlankLines 合并连续空行，避免终端历史区出现过大的空洞。

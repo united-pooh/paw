@@ -37,8 +37,18 @@ type transcriptEntry struct {
 	kind      entryKind
 	title     string
 	body      string
-	isError   bool      // true for tool results with IsError=true
+	isError   bool // true for tool results with IsError=true
+	citations []toolCitation
 	createdAt time.Time
+}
+
+type toolCitation struct {
+	toolUseID string
+	name      string
+	target    string
+	status    string
+	preview   string
+	isError   bool
 }
 
 // selectionPoint 表示 transcript 渲染结果中的一个显示单元格坐标。
@@ -212,49 +222,51 @@ type sessionSummaryItem struct {
 
 // appModel 是 Bubble Tea TUI 的唯一状态中心。
 type appModel struct {
-	ctx             context.Context
-	runner          Runner
-	sessionID       string
-	modelConfig     ModelConfigController
-	settingsConfig  SettingsController
-	subagents       SubagentController
-	sessionStore    SessionStore
-	commandRegistry *CommandRegistry
-	queryGuard      QueryGuard
-	chatQueue       CommandQueue
-	cursorAnchor    *terminalCursorAnchor
-	input           textarea.Model
-	viewport        viewport.Model
-	width           int
-	height          int
-	ready           bool
-	running         bool
-	runningTerminal bool
-	terminalMode    bool
-	terminalPreview bool
-	showThinking    bool
-	selecting       bool
-	selectionActive bool
-	selectionStart  selectionPoint
-	selectionEnd    selectionPoint
-	cursorFrameAt   time.Time
-	turnStartedAt   time.Time
-	contextMeter    contextMeterAnimation
-	pending         []string
-	inputHistory    []string
-	historyIndex    int
-	historyDraft    string
-	historyDownLock bool
-	transcript      []transcriptEntry
-	activeAssistant int
-	isGenerating    bool
-	lastCtrlCAt     time.Time // 追踪双击 Ctrl+C 退出
-	modelWizard     *modelWizard
-	settingWizard   *settingWizard
-	sessionPicker   *sessionPicker
-	completion      *completion
-	pipelineState   pipelineState
-	sidebarWidth int // 右侧面板宽度（字符），由 relayout() 计算并存储
+	ctx                 context.Context
+	runner              Runner
+	sessionID           string
+	modelConfig         ModelConfigController
+	settingsConfig      SettingsController
+	subagents           SubagentController
+	sessionStore        SessionStore
+	commandRegistry     *CommandRegistry
+	queryGuard          QueryGuard
+	chatQueue           CommandQueue
+	cursorAnchor        *terminalCursorAnchor
+	input               textarea.Model
+	viewport            viewport.Model
+	width               int
+	height              int
+	ready               bool
+	running             bool
+	runningTerminal     bool
+	terminalMode        bool
+	terminalPreview     bool
+	showThinking        bool
+	selecting           bool
+	selectionActive     bool
+	selectionStart      selectionPoint
+	selectionEnd        selectionPoint
+	cursorFrameAt       time.Time
+	turnStartedAt       time.Time
+	contextMeter        contextMeterAnimation
+	pending             []string
+	inputHistory        []string
+	historyIndex        int
+	historyDraft        string
+	historyDownLock     bool
+	transcript          []transcriptEntry
+	activeAssistant     int
+	pendingToolCites    []toolCitation
+	isGenerating        bool
+	lastCtrlCAt         time.Time // 追踪双击 Ctrl+C 退出
+	modelWizard         *modelWizard
+	settingWizard       *settingWizard
+	sessionPicker       *sessionPicker
+	completion          *completion
+	pipelineState       pipelineState
+	pipelineActiveAfter time.Time
+	sidebarWidth        int // 右侧面板宽度（字符），由 relayout() 计算并存储
 }
 
 // pipelinePhaseStatus 标记单个 pipeline 阶段的状态。
@@ -277,10 +289,10 @@ type pipelinePhaseEntry struct {
 
 // pipelineState 完整 pipeline 状态快照（每 500ms 轮询更新）。
 type pipelineState struct {
-	detected   bool               // .pipeline-workspace/spec.json 是否存在
-	activeIdx  int                // 当前 active 阶段索引（-1 = none）
-	globalIter int                // 全局迭代（来自 execution-report.json.iteration）
-	doneCount  int                // 已完成阶段数
+	detected   bool // 本次 TUI 会话检测到活跃 pipeline
+	activeIdx  int  // 当前 active 阶段索引（-1 = none）
+	globalIter int  // 全局迭代（来自 execution-report.json.iteration）
+	doneCount  int  // 已完成阶段数
 	phases     [18]pipelinePhaseEntry
 }
 

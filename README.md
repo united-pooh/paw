@@ -60,16 +60,17 @@ go run ./cmd/agent -s <session-id>
 
 ## 入口
 
-### 程序入口
+文件: [cmd/agent/main.go](./cmd/agent/main.go)
 
-文件: [cmd/agent/main.go](/Users/united_pooh/PyProjects/go-code/cmd/agent/main.go)
-
-#### `main()`
+### `main()`
 
 职责:
 - 解析命令行参数
 - 构造 `Runner`
-- 选择单轮模式或 Bubble Tea 交互模式
+- 三选一运行不同模式：
+  1. `-subagent-worker` → `runSubagentWorkerMode()`
+  2. `-p "xxx"` → `runSingleTurnMode()`
+  3. 无参数 → `runInteractiveMode()`
 
 不负责:
 - 直接调用模型
@@ -81,12 +82,14 @@ go run ./cmd/agent -s <session-id>
 职责:
 - 读取 `-p`
 - 读取 `-s`
+- 读取隐藏的 `-subagent-worker`
 
 行为:
 - `-p` 有值: 执行单轮
 - `-p` 为空: 进入交互式对话界面
 - `-s` 有值: 绑定到指定 session 并恢复历史
 - `-s` 为空: 每次启动都创建一个全新空 session
+- `-subagent-worker`: 以子进程方式运行，从 stdin 读取 `WorkerRequest`（JSON），执行后输出 `WorkerResult` 到 stdout
 
 #### `buildRunner(ctx, sessionIDFlag, output) (*loop.Runner, string, *model.Client, *settings.Controller, *subagent.Manager, error)`
 
@@ -120,6 +123,14 @@ go run ./cmd/agent -s <session-id>
 - 启动 Bubble Tea 主界面
 - 注入模型配置、settings、subagent 控制器
 - 以当前 session 进入可恢复的交互式对话
+
+#### `runSubagentWorkerMode(ctx)`
+
+职责:
+- 以子进程模式运行（由主 Agent 进程 fork 启动）
+- 从 stdin 读取 JSON 格式的 `WorkerRequest`（含 `ParentSessionID`、`Prompt`、`Tools`、`MaxTurns` 等）
+- 构建带有 subagent 上下文的 Runner（通过 `subagentRuntimeContext` 控制递归深度）
+- 执行 `runner.RunTurn()`，将 `WorkerResult`（含 TaskID、SessionID、Content、Error、ExitCode）写入 stdout
 
 #### 当前交互命令
 
@@ -192,6 +203,39 @@ context meter 左侧显示紧凑 token 与比例，例如 `260k↑ 2.05k↓ 25%(
 - 不知道 UI
 - 不知道工具注册和执行
 
+#### 核心类型
+
+##### `type Role string`
+
+三个角色常量：
+- `RoleSystem` — 系统提示
+- `RoleUser` — 用户消息
+- `RoleAssistant` — 助手（模型）消息
+
+##### `type Message struct`
+
+字段:
+- `Role` — 消息角色
+- `Content` — 文本内容
+- `ToolUse` (`*ToolCall`) — 工具调用请求（assistant 发出）
+- `ToolResult` (`*ToolResult`) — 工具执行结果（user 角色发出）
+
+##### `type ToolCall struct`
+
+字段:
+- `ID` — 调用唯一标识
+- `Name` — 工具名称
+- `Input` (`json.RawMessage`) — 调用参数（原始 JSON 字节，延迟解析）
+
+##### `type ToolResult struct`
+
+字段:
+- `ToolUseID` — 对应 ToolCall 的 ID
+- `Content` — 执行结果文本
+- `IsError` — 是否出错
+
+消息模型遵循 Claude/Anthropic 风格的对话格式：assistant 消息可包含工具调用请求，user 消息可包含工具执行结果，实现多轮工具闭环。
+
 ### 2. `model`
 
 职责:
@@ -257,11 +301,22 @@ main
       -> final assistant message
 ```
 
+Subagent 工作模式链路:
+
+```text
+main (-subagent-worker)
+  -> read WorkerRequest from stdin
+  -> buildRunnerWithSubagentContext (with depth/parentTaskID)
+  -> runner.RunTurn
+  -> write WorkerResult to stdout
+  -> exit
+```
+
 ## 包级 API
 
 ### `internal/message`
 
-文件: [types.go](/Users/united_pooh/python project/claude-code-sourcemap-main/go-code/internal/message/types.go)
+文件: [types.go](./internal/message/types.go)
 
 #### `type Role string`
 
@@ -309,7 +364,7 @@ main
 
 #### 配置层
 
-文件: [config.go](/Users/united_pooh/python project/claude-code-sourcemap-main/go-code/internal/model/config.go)
+文件: [config.go](./internal/model/config.go)
 
 ##### `type Config struct`
 
@@ -353,7 +408,7 @@ main
 
 #### 请求/响应类型
 
-文件: [types.go](/Users/united_pooh/python project/claude-code-sourcemap-main/go-code/internal/model/types.go)
+文件: [types.go](./internal/model/types.go)
 
 ##### `type ChatCompletionsRequest struct`
 
@@ -372,7 +427,7 @@ main
 
 #### 客户端
 
-文件: [client.go](/Users/united_pooh/python project/claude-code-sourcemap-main/go-code/internal/model/client.go)
+文件: [client.go](./internal/model/client.go)
 
 ##### `type Client struct`
 
@@ -400,7 +455,7 @@ main
 
 #### 流式层
 
-文件: [stream.go](/Users/united_pooh/python project/claude-code-sourcemap-main/go-code/internal/model/stream.go)
+文件: [stream.go](./internal/model/stream.go)
 
 ##### `type StreamEvent struct`
 
@@ -458,7 +513,7 @@ main
 
 #### 抽象层
 
-文件: [tool.go](/Users/united_pooh/python project/claude-code-sourcemap-main/go-code/internal/tool/tool.go)
+文件: [tool.go](./internal/tool/tool.go)
 
 ##### `type Tool interface`
 
@@ -475,7 +530,7 @@ main
 
 #### 注册层
 
-文件: [register.go](/Users/united_pooh/python project/claude-code-sourcemap-main/go-code/internal/tool/register.go)
+文件: [register.go](./internal/tool/register.go)
 
 ##### `type Registry struct`
 
@@ -506,15 +561,20 @@ main
 用途:
 - 给 `Runner` 拼 system prompt
 
+##### `Definitions() []model.ToolDefinition`
+
+职责:
+- 返回 `[]model.ToolDefinition`，用于 LLM API 的原生工具调用请求
+
 #### 文件工具
 
 文件:
-- [path.go](/Users/united_pooh/python project/claude-code-sourcemap-main/go-code/internal/tool/file/path.go)
-- [ls.go](/Users/united_pooh/python project/claude-code-sourcemap-main/go-code/internal/tool/file/ls.go)
-- [read.go](/Users/united_pooh/python project/claude-code-sourcemap-main/go-code/internal/tool/file/read.go)
-- [write.go](/Users/united_pooh/python project/claude-code-sourcemap-main/go-code/internal/tool/file/write.go)
-- [grep.go](/Users/united_pooh/python project/claude-code-sourcemap-main/go-code/internal/tool/file/grep.go)
-- [glob.go](/Users/united_pooh/python project/claude-code-sourcemap-main/go-code/internal/tool/file/glob.go)
+- [path.go](./internal/tool/file/path.go)
+- [ls.go](./internal/tool/file/ls.go)
+- [read.go](./internal/tool/file/read.go)
+- [write.go](./internal/tool/file/write.go)
+- [grep.go](./internal/tool/file/grep.go)
+- [glob.go](./internal/tool/file/glob.go)
 
 ##### `type LSTool struct`
 
@@ -640,7 +700,7 @@ main
 
 #### 命令执行工具
 
-文件: [bash.go](/Users/united_pooh/python project/claude-code-sourcemap-main/go-code/internal/tool/exec/bash.go)
+文件: [bash.go](./internal/tool/exec/bash.go)
 
 ##### `type BashTool struct`
 
@@ -694,7 +754,7 @@ main
 
 #### 网络工具
 
-文件: [webfetch.go](/Users/united_pooh/python project/claude-code-sourcemap-main/go-code/internal/tool/webfetch/webfetch.go)
+文件: [webfetch.go](./internal/tool/webfetch/webfetch.go)
 
 ##### `type Tool struct`
 
@@ -718,7 +778,7 @@ main
 
 #### 抽象层
 
-文件: [ui.go](/Users/united_pooh/python project/claude-code-sourcemap-main/go-code/internal/ui/ui.go)
+文件: [ui.go](./internal/ui/ui.go)
 
 ##### `type ToolCallEvent struct`
 
@@ -739,6 +799,7 @@ main
 
 方法:
 - `OnAssistantDelta(text string) error`
+- `OnThoughtDelta(text string) error`
 - `OnToolCall(event ToolCallEvent) error`
 - `OnToolResult(event ToolResultEvent) error`
 - `OnDone() error`
@@ -747,7 +808,7 @@ main
 
 #### Headless 实现
 
-文件: [headless.go](/Users/united_pooh/python project/claude-code-sourcemap-main/go-code/internal/ui/headless/headless.go)
+文件: [headless.go](./internal/ui/headless/headless.go)
 
 ##### `type UI struct`
 
@@ -788,7 +849,7 @@ main
 
 ### `internal/loop`
 
-文件: [runner.go](/Users/united_pooh/python project/claude-code-sourcemap-main/go-code/internal/loop/runner.go)
+文件: [runner.go](./internal/loop/runner.go)
 
 #### `type ModelStreamer interface`
 
@@ -803,11 +864,15 @@ main
 #### `type Runner struct`
 
 字段:
-- `model`
-- `ui`
-- `registry`
-- `history`
-- `usage`
+- `model` (`ModelStreamer`) — 最小模型流式接口
+- `ui` (`ui.UI`) — 输出界面接口
+- `registry` (`*tool.Registry`) — 工具注册表
+- `store` (`HistoryStore`) — 历史存储接口
+- `sessionID` — 当前会话 ID
+- `prompt` (`*PromptBuilder`) — 系统提示词构建器
+- `history` — 已成功完成的多轮对话消息列表（内存缓存）
+- `usage` / `sessionUsage` — 当前轮/整个会话的 token 用量统计
+- `supplements` — 用户在当前轮运行期间提交的补充指令（支持并发注入）
 
 职责:
 - 驱动单次 agent turn
@@ -825,13 +890,14 @@ main
 - 执行一次完整 turn
 
 当前逻辑:
-1. 校验依赖
-2. 用当前 `history + 新输入` 组成本轮上下文
-3. 调模型流式输出
-4. 聚合 assistant 消息
-5. 若是 `tool_use`，执行工具并回灌结果
-6. 循环直到拿到最终 assistant 文本
-7. 成功后提交历史
+1. 验证与初始化：检查 runner 初始化状态；首次运行时从 store 加载历史
+2. 构建本轮历史副本：复制已提交历史，插入未注入的 supplements，再追加当前用户输入（失败时不污染已提交历史）
+3. 多轮工具循环（最多 500 轮）：
+   - 每轮开始时检查是否有新注入的 supplements 并追加
+   - 调用 `runModelTurn`：构造 system prompt + 历史消息，通过 `model.StreamMessage` 发送给 LLM 并消费流式事件
+   - 若返回消息不含 `ToolUse`，调用 `commitHistory` 持久化并返回该 assistant 消息
+   - 若含 `ToolUse`，调用 `runToolCall` 执行工具，将 tool_result 追加到历史副本，继续下一轮
+4. 超限保护：超过 500 轮返回错误
 
 #### `ResetHistory()`
 
@@ -881,6 +947,143 @@ main
 职责:
 - 只执行工具，不做 UI 输出
 
+### `internal/subagent`
+
+文件: [manager.go](./internal/subagent/manager.go)
+
+#### `type Manager struct`
+
+字段:
+- `model` (`loop.ModelStreamer`) — 子 agent 使用的模型客户端
+- `store` (`Store`) — 会话存储
+- `root` — 工作区根路径
+- `settings` (`SettingsProvider`) — 设置提供者
+- `notifier` (`Notifier`) — 通知器（用于 UI 通知）
+- `launcher` (`Launcher`) — 进程启动器
+- `registry` (`taskRegistry`) — 任务注册表
+- `depth` / `maxDepth` — 当前递归深度 / 最大深度（默认 4）
+- `parentTaskID` — 父任务 ID
+- `tasks` — 内存中的任务快照（map[string]TaskSnapshot）
+- `running` — 运行中的进程（map[string]Process）
+
+职责:
+- 管理子 agent 任务的生命周期（创建、运行、查询、停止）
+- 控制递归嵌套深度防止无限循环
+
+##### `NewManager(cfg Config) *Manager`
+
+职责:
+- 创建 Manager 实例，默认 maxDepth=4
+
+##### `Run(ctx, req) (Result, error)`
+
+职责:
+- 同步运行子 agent，等待执行完成并返回结果
+
+##### `Launch(ctx, req) (TaskSnapshot, error)`
+
+职责:
+- 后台启动子 agent，立即返回任务快照，异步等待完成
+
+##### `Stop(ctx, id) (TaskSnapshot, error)`
+
+职责:
+- 停止指定 ID 的后台任务
+
+##### `Status(id) (TaskSnapshot, bool)`
+
+职责:
+- 查询指定任务的状态
+
+##### `ListTasks() []TaskSnapshot`
+
+职责:
+- 列出所有任务（内存 + 磁盘），按启动时间排序
+
+##### 内置 Tool 实现
+
+Manager 同文件中实现了三个供 LLM 调用的工具：
+
+- **`Subagent`** — 启动子 agent，支持 sync/background 两种运行模式
+- **`SubagentStatus`** — 查询任务状态，按 ID 查或列出所有
+- **`SubagentStop`** — 按 ID 停止运行中的任务
+
+#### `type Request struct`
+
+字段:
+- `ParentSessionID` — 父会话 ID（fork 模式使用）
+- `Prompt` — 子任务提示
+- `Description` — 任务描述
+- `ContextMode` — `"empty"`（空上下文）或 `"fork"`（继承父会话）
+- `RunMode` — `"sync"` 或 `"background"`
+
+#### `type Result struct`
+
+字段:
+- `AgentID` — 子 agent ID
+- `SessionID` — 子会话 ID
+- `Content` — 执行结果文本
+- `ExitCode` — 退出码
+- `Depth` — 递归深度
+
+#### `type TaskSnapshot struct`
+
+字段:
+- `ID` — 任务 ID
+- `Status` — running / completed / failed / stopped
+- `StartedAt` — 开始时间
+- `FinishedAt` — 结束时间
+- `Content` — 结果内容
+- `Error` — 错误信息
+
+### `internal/settings`
+
+文件: [settings.go](./internal/settings/settings.go)
+
+#### `type Config struct`
+
+字段:
+- `Subagent` (`SubagentConfig`) — 子 agent 默认配置
+- `UI` (`UIConfig`) — UI 配置
+
+##### `SubagentConfig`
+
+字段:
+- `DefaultContextMode` — `"empty"` 或 `"fork"`
+- `DefaultRunMode` — `"sync"` 或 `"background"`
+
+##### `UIConfig`
+
+字段:
+- `ContextLimitTokens` — 上下文 token 上限（默认 1,048,576）
+- `ContextMeterLocation` — context meter 位置（`"input-title"` / `"header"` / `"input-above"`）
+
+#### `type Controller struct`
+
+职责:
+- 加载、保存、提供运行时配置
+- 线程安全读写
+
+##### `NewControllerInCwd() (*Controller, error)`
+
+职责:
+- 从 `.ccagent/settings.json` 加载配置并创建 Controller
+
+##### `CurrentSettings() Config`
+
+职责:
+- 获取当前配置（线程安全，nil 安全）
+
+##### `SaveSettings(cfg Config) error`
+
+职责:
+- 持久化配置到磁盘并更新内存（线程安全）
+
+##### `Normalize(cfg Config) Config`
+
+职责:
+- 规范化配置字段值（大小写无关，非法值回退到默认）
+
 ## 抽象层总结
 
 当前有 3 个核心抽象层。
@@ -923,7 +1126,7 @@ main
 
 位置:
 - 新建 `internal/tool/<name>/...`
-- 在 [main.go](/Users/united_pooh/python project/claude-code-sourcemap-main/go-code/cmd/agent/main.go#L63) 注册
+- 在 [main.go](./cmd/agent/main.go) 注册
 
 要求:
 - 实现 `tool.Tool`
@@ -942,7 +1145,7 @@ main
 - 新建一个实现 `ui.UI` 的包
 
 接入点:
-- [main.go](/Users/united_pooh/python project/claude-code-sourcemap-main/go-code/cmd/agent/main.go#L61)
+- [main.go](./cmd/agent/main.go)
 
 ### 替换模型提供方
 
@@ -956,12 +1159,17 @@ main
 ### 增加本地命令
 
 接入点:
-- [handleREPLCommand](/Users/united_pooh/python project/claude-code-sourcemap-main/go-code/cmd/agent/main.go#L130)
+- Bubble Tea 命令注册表 `internal/ui/bubble/command_registry.go`
 
-适合加入:
-- `/history`
-- `/session`
-- `/resume`
+### 自定义 Subagent 行为
+
+位置:
+- `internal/subagent/manager.go` 中的 `Manager` 结构
+
+扩展方式:
+- 通过 `Manager` 的 `Config` 结构传入自定义 `Launcher`、`Notifier`、`SettingsProvider`
+- 修改 `maxDepth` 限制递归深度
+- 实现新的 `Store` 接口替换默认 JSONL 存储
 
 ## 当前不属于扩展面的函数
 
@@ -976,6 +1184,7 @@ main
 - `ui.UI`
 - `loop.ModelStreamer`
 - `main.buildRunner()`
+- `subagent.Manager`
 
 ## 启动要求
 
@@ -1004,4 +1213,10 @@ go run ./cmd/agent -p "hello"
 
 ```bash
 go run ./cmd/agent
+```
+
+### Subagent 工作模式（由主进程自动调用，一般不需要手动执行）
+
+```bash
+go run ./cmd/agent -subagent-worker < worker_request.json
 ```

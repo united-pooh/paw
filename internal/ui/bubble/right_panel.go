@@ -7,9 +7,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"gocode/internal/subagent"
+)
+
+const (
+	pipelineCardMaxContentHeight = 12
+	pipelineMaxStageRows         = 6
 )
 
 // pipelineArtifacts lists the 18 pipeline phases in order, each with display name and artifact filename.
@@ -36,9 +42,13 @@ var pipelineArtifacts = [18][2]string{
 }
 
 // loadPipelineState scans workspaceDir and infers the current pipeline phase state.
-func loadPipelineState(workspaceDir string) pipelineState {
+func loadPipelineState(workspaceDir string, activeAfter time.Time) pipelineState {
 	var s pipelineState
 	s.activeIdx = -1
+	latestArtifactAt := latestPipelineWorkspaceModTime(workspaceDir)
+	if info, err := os.Stat(filepath.Join(filepath.Dir(workspaceDir), ".pipeline-last-run-summary.json")); err == nil {
+		latestArtifactAt = maxTime(latestArtifactAt, info.ModTime())
+	}
 
 	// Read global iteration from execution-report.json
 	iterFile := filepath.Join(workspaceDir, "execution-report.json")
@@ -51,9 +61,9 @@ func loadPipelineState(workspaceDir string) pipelineState {
 		}
 	}
 
-	// Pipeline is "detected" only if spec.json exists
+	specExists := false
 	if _, err := os.Stat(filepath.Join(workspaceDir, "spec.json")); err == nil {
-		s.detected = true
+		specExists = true
 	}
 
 	// Determine each phase's status
@@ -75,6 +85,7 @@ func loadPipelineState(workspaceDir string) pipelineState {
 			lastDoneIdx = i
 		}
 	}
+	s.detected = specExists && pipelineWorkspaceIsActive(workspaceDir, latestArtifactAt, activeAfter)
 
 	// Active phase = first phase after last done
 	if s.detected && lastDoneIdx+1 < 18 {
@@ -96,28 +107,97 @@ func loadPipelineState(workspaceDir string) pipelineState {
 	return s
 }
 
-// renderRightPanel 渲染右侧面板：Pipeline/Tasks 卡片 + Subagents 卡片 + Context 卡片。
+func latestPipelineWorkspaceModTime(workspaceDir string) time.Time {
+	var latest time.Time
+	_ = filepath.Walk(workspaceDir, func(_ string, info os.FileInfo, err error) error {
+		if err != nil || info == nil {
+			return nil
+		}
+		latest = maxTime(latest, info.ModTime())
+		return nil
+	})
+	return latest
+}
+
+func pipelineWorkspaceIsActive(workspaceDir string, latestArtifactAt, activeAfter time.Time) bool {
+	if activeAfter.IsZero() {
+		return true
+	}
+	if pipelineActiveMarkerExists(workspaceDir, activeAfter) {
+		return true
+	}
+	return !latestArtifactAt.IsZero() && !latestArtifactAt.Before(activeAfter)
+}
+
+func pipelineActiveMarkerExists(workspaceDir string, activeAfter time.Time) bool {
+	for _, name := range []string{".active", ".pipeline-active", "active", "running", "pipeline.lock"} {
+		info, err := os.Stat(filepath.Join(workspaceDir, name))
+		if err == nil && !info.ModTime().Before(activeAfter) {
+			return true
+		}
+	}
+
+	statusPath := filepath.Join(workspaceDir, "status.json")
+	info, err := os.Stat(statusPath)
+	if err != nil || info.ModTime().Before(activeAfter) {
+		return false
+	}
+	data, err := os.ReadFile(statusPath)
+	if err != nil {
+		return false
+	}
+	var status struct {
+		Active  bool   `json:"active"`
+		Running bool   `json:"running"`
+		State   string `json:"state"`
+		Status  string `json:"status"`
+	}
+	if json.Unmarshal(data, &status) != nil {
+		return false
+	}
+	state := strings.ToLower(strings.TrimSpace(status.State))
+	statusValue := strings.ToLower(strings.TrimSpace(status.Status))
+	return status.Active || status.Running || state == "active" || state == "running" || statusValue == "active" || statusValue == "running"
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
+}
+
+// renderRightPanel 渲染右侧面板：Pipeline 卡片（仅检测到任务时）+ Subagents 卡片 + Context 卡片。
 // 整体高度被钳制为 totalHeight，防止右侧面板撑高终端布局。
 func (m appModel) renderRightPanel(width, totalHeight int) string {
-	inner := maxInt(4, width-4)
+	cardWidth := rightCardWidth(width)
+	contentWidth := rightCardContentWidth(width)
 
-	subagentsContent := m.renderSubagentsCardContent(inner)
-	subagentsCard := rightCardStyle.Width(inner).Render(subagentsContent)
-	subH := lipgloss.Height(subagentsCard)
-
-	contextContent := m.renderContextCardContent(inner)
-	contextCard := rightCardStyle.Width(inner).Render(contextContent)
+	contextContent := m.renderContextCardContent(contentWidth)
+	contextCard := rightCardStyle.Width(cardWidth).Render(contextContent)
 	ctxH := lipgloss.Height(contextCard)
 
-	pipelineH := maxInt(6, totalHeight-subH-ctxH)
-	pipelineContent := m.renderPipelineOrTasksContent(inner, pipelineH-4)
-	pipelineCard := rightCardStyle.Width(inner).Height(pipelineH - 4).Render(pipelineContent)
+	cards := []string{}
+	if m.pipelineState.detected {
+		reservedSubagentsHeight := rightCardVerticalFrame + 1
+		maxPipelineContentHeight := maxInt(1, totalHeight-ctxH-reservedSubagentsHeight-rightCardVerticalFrame)
+		pipelineContentHeight := minInt(pipelineCardMaxContentHeight, maxPipelineContentHeight)
+		pipelineContent := m.renderPipelineContent(contentWidth, pipelineContentHeight)
+		pipelineCard := rightCardStyle.Width(cardWidth).Height(pipelineContentHeight).Render(pipelineContent)
+		cards = append(cards, pipelineCard)
 
-	joined := lipgloss.JoinVertical(lipgloss.Left,
-		pipelineCard,
-		subagentsCard,
-		contextCard,
-	)
+		subagentsContentHeight := maxInt(1, totalHeight-lipgloss.Height(pipelineCard)-ctxH-rightCardVerticalFrame)
+		subagentsContent := m.renderSubagentsCardContentHeight(contentWidth, subagentsContentHeight)
+		subagentsCard := rightCardStyle.Width(cardWidth).Height(subagentsContentHeight).Render(subagentsContent)
+		cards = append(cards, subagentsCard)
+	} else {
+		subagentsContentHeight := maxInt(1, totalHeight-ctxH-rightCardVerticalFrame)
+		subagentsContent := m.renderSubagentsCardContentHeight(contentWidth, subagentsContentHeight)
+		cards = append(cards, rightCardStyle.Width(cardWidth).Height(subagentsContentHeight).Render(subagentsContent))
+	}
+	cards = append(cards, contextCard)
+
+	joined := lipgloss.JoinVertical(lipgloss.Left, cards...)
 	// Clamp the right panel to totalHeight so it never exceeds the terminal height.
 	return lipgloss.NewStyle().
 		Width(width).
@@ -128,184 +208,311 @@ func (m appModel) renderRightPanel(width, totalHeight int) string {
 
 // renderContextCard 返回 Context 卡片（用于测试）。
 func (m appModel) renderContextCard(width int) string {
-	inner := maxInt(4, width-4)
-	return rightCardStyle.Width(inner).Render(m.renderContextCardContent(inner))
+	cardWidth := rightCardWidth(width)
+	contentWidth := rightCardContentWidth(width)
+	return rightCardStyle.Width(cardWidth).Render(m.renderContextCardContent(contentWidth))
+}
+
+func rightCardWidth(totalWidth int) int {
+	return maxInt(4, totalWidth-rightCardBorderFrame)
+}
+
+func rightCardContentWidth(totalWidth int) int {
+	return maxInt(1, rightCardWidth(totalWidth)-rightCardHorizontalPadding)
 }
 
 // renderSubagentsCardContent 渲染 Subagents 内容（Task 4 实现）。
 func (m appModel) renderSubagentsCardContent(width int) string {
-	hdrStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("237")).Bold(false)
-	hdr := hdrStyle.Render("subagents")
+	return m.renderSubagentsCardContentHeight(width, 0)
+}
+
+func (m appModel) renderSubagentsCardContentHeight(width, height int) string {
+	hdrStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Bold(true)
+	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
+	hdr := renderSidebarRow(width, "subagents", "", hdrStyle, mutedStyle)
+	maxLines := height
 
 	if m.subagents == nil {
-		return hdr
+		if maxLines == 1 {
+			return hdr
+		}
+		return hdr + "\n" + mutedStyle.Italic(true).Render(padDisplayWidth("none", width))
 	}
-	tasks := m.subagents.ListTasks()
+	tasks := m.subagentTasks()
 	if len(tasks) == 0 {
-		empty := lipgloss.NewStyle().Foreground(lipgloss.Color("235")).Italic(true).Render("none")
+		if maxLines == 1 {
+			return hdr
+		}
+		empty := mutedStyle.Italic(true).Render(padDisplayWidth("none", width))
 		return hdr + "\n" + empty
 	}
 
-	dotRun  := lipgloss.NewStyle().Foreground(lipgloss.Color("84")).Render("⟳")
-	dotDone := lipgloss.NewStyle().Foreground(lipgloss.Color("238")).Render("✓")
-	dotFail := lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render("✗")
+	dotRunStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("84"))
+	dotDoneStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	dotFailStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	dotStopStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+
+	availableTaskRows := len(tasks)
+	moreCount := 0
+	if maxLines > 0 {
+		availableTaskRows = maxInt(0, maxLines-1)
+		if len(tasks) > availableTaskRows {
+			if availableTaskRows <= 1 {
+				moreCount = len(tasks)
+				availableTaskRows = 0
+			} else {
+				availableTaskRows--
+				moreCount = len(tasks) - availableTaskRows
+			}
+		}
+	}
 
 	lines := []string{hdr}
-	for _, t := range tasks {
-		var dot, label string
+	for _, t := range tasks[:minInt(len(tasks), availableTaskRows)] {
+		var dot, status string
+		dotStyle := dotDoneStyle
+		lineStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("248"))
 		switch t.Status {
 		case subagent.TaskRunning:
-			dot = dotRun
-			label = lipgloss.NewStyle().Foreground(lipgloss.Color("84")).Render(t.ID)
+			dot = "⟳"
+			status = "running"
+			dotStyle = dotRunStyle
+			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("84"))
 		case subagent.TaskFailed:
-			dot = dotFail
-			label = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render(t.ID)
+			dot = "✗"
+			status = "failed"
+			dotStyle = dotFailStyle
+			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+		case subagent.TaskStopped:
+			dot = "■"
+			status = "stopped"
+			dotStyle = dotStopStyle
+			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 		default:
-			dot = dotDone
-			label = lipgloss.NewStyle().Foreground(lipgloss.Color("236")).Render(t.ID)
+			dot = "✓"
+			status = "done"
 		}
-		lines = append(lines, dot+" "+label)
+		nameStyle := lineStyle
+		if color := strings.TrimSpace(t.Color); color != "" {
+			nameStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(color))
+		}
+		lines = append(lines, renderSubagentSidebarRow(width, dot, taskDisplayName(t), status, dotStyle, nameStyle, lineStyle))
 	}
-	_ = width
+	if moreCount > 0 {
+		lines = append(lines, renderSidebarRow(width, fmt.Sprintf("+%d more", moreCount), "", mutedStyle, mutedStyle))
+	}
 	return strings.Join(lines, "\n")
 }
 
-// renderPipelineOrTasksContent 渲染 Pipeline 或 Tasks 卡片内容。
-// 有 pipeline 时显示 pipeline 状态（Task 7 实现），无 pipeline 时显示 tasks 列表。
+// renderPipelineOrTasksContent 保留给测试和旧调用点：无 pipeline 时返回空内容。
 func (m appModel) renderPipelineOrTasksContent(width, height int) string {
 	if m.pipelineState.detected {
-		return m.renderPipelineWindowedContent(width, height)
+		return m.renderPipelineContent(width, height)
 	}
-	return m.renderTasksContent(width, height)
+	return ""
 }
 
-// renderTasksContent 渲染无 pipeline 时的 Tasks 列表。
-func (m appModel) renderTasksContent(width, height int) string {
-	badge := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("136")).
-		Background(lipgloss.Color("234")).
-		Padding(0, 1).
-		Render("✦ tasks")
-
-	// 当前 Runner 接口未暴露 TaskList，显示空状态
-	empty := lipgloss.NewStyle().Foreground(lipgloss.Color("235")).Italic(true).Render("no tasks")
-	return badge + "\n" + empty
+func (m appModel) renderPipelineContent(width, height int) string {
+	return m.renderPipelineWindowedContent(width, height)
 }
 
-// renderPipelineWindowedContent 渲染 Pipeline 滚动窗口：18 点总览 + 当前阶段 ±3 邻居。
+// renderPipelineWindowedContent 渲染满宽 Pipeline 仪表盘：摘要、阶段进度条和 timeline。
 func (m appModel) renderPipelineWindowedContent(width, height int) string {
 	ps := m.pipelineState
 
-	// Badge line
-	iterStr := ""
-	if ps.globalIter > 0 {
-		iterStr = fmt.Sprintf(" · iter %d", ps.globalIter)
+	currentIdx := ps.activeIdx
+	if currentIdx < 0 {
+		currentIdx = maxInt(0, ps.doneCount-1)
 	}
-	badge := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("68")).
-		Background(lipgloss.Color("234")).
-		Padding(0, 1).
-		Render("● pipeline" + iterStr)
-	countStr := lipgloss.NewStyle().Foreground(lipgloss.Color("237")).
-		Render(fmt.Sprintf("%d/18", ps.doneCount))
-	gapWidth := maxInt(1, width-lipgloss.Width(badge)-lipgloss.Width(countStr))
-	topLine := badge + strings.Repeat(" ", gapWidth) + countStr
+	currentName := ""
+	if currentIdx >= 0 && currentIdx < len(ps.phases) {
+		currentName = ps.phases[currentIdx].name
+	}
+	if currentName == "" {
+		currentName = "idle"
+	}
 
-	// 18-dot overview
-	dots := make([]string, 18)
-	for i, ph := range ps.phases {
+	titleRight := currentName
+	if ps.globalIter > 0 {
+		titleRight = fmt.Sprintf("%s ×%d", titleRight, ps.globalIter)
+	}
+
+	pendingCount := 0
+	retryCount := 0
+	activeCount := 0
+	for _, ph := range ps.phases {
 		switch ph.status {
-		case phaseStatusDone:
-			dots[i] = lipgloss.NewStyle().Foreground(lipgloss.Color("28")).Render("●")
 		case phaseStatusActive:
-			dots[i] = lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Bold(true).Render("▶")
+			activeCount++
 		case phaseStatusRetry:
-			dots[i] = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("○")
-		default:
-			dots[i] = lipgloss.NewStyle().Foreground(lipgloss.Color("235")).Render("·")
+			retryCount++
+		case phaseStatusPending:
+			pendingCount++
 		}
 	}
-	dotsLine := strings.Join(dots, "")
 
-	// Windowed stages: current ±3
-	cur := ps.activeIdx
-	if cur < 0 {
-		cur = maxInt(0, ps.doneCount-1)
+	total := len(ps.phases)
+	percent := 0
+	if total > 0 {
+		percent = int(float64(ps.doneCount) / float64(total) * 100)
 	}
 
-	type windowRow struct {
-		offset  int     // distance from current (-3 to +3)
-		opacity float64 // 1.0 = current, lower = faded
-	}
-	rows := []windowRow{
-		{-3, 0.18}, {-2, 0.35}, {-1, 0.55},
-		{0, 1.0},
-		{1, 0.55}, {2, 0.35}, {3, 0.18},
+	lines := []string{
+		renderSidebarRow(width, "pipeline", titleRight, lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Bold(true), lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Bold(true)),
+		renderSidebarRow(width, fmt.Sprintf("%d/%d complete", ps.doneCount, total), fmt.Sprintf("%d%%", percent), lipgloss.NewStyle().Foreground(lipgloss.Color("246")), lipgloss.NewStyle().Foreground(lipgloss.Color("246"))),
+		renderPipelineProgressBar(ps, width),
+		renderSidebarRow(width, fmt.Sprintf("ok %d", ps.doneCount), fmt.Sprintf("now %d", activeCount), lipgloss.NewStyle().Foreground(lipgloss.Color("28")), lipgloss.NewStyle().Foreground(lipgloss.Color("75"))),
+		renderSidebarRow(width, fmt.Sprintf("todo %d", pendingCount), fmt.Sprintf("retry %d", retryCount), lipgloss.NewStyle().Foreground(lipgloss.Color("246")), lipgloss.NewStyle().Foreground(lipgloss.Color("214"))),
+		renderSidebarRow(width, "timeline", "near", lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Bold(true), lipgloss.NewStyle().Foreground(lipgloss.Color("246"))),
 	}
 
-	stageLines := make([]string, 0, 7)
-	for _, row := range rows {
-		idx := cur + row.offset
-		if idx < 0 || idx >= 18 {
-			stageLines = append(stageLines, "")
+	stageRows := minInt(pipelineMaxStageRows, maxInt(0, height-len(lines)))
+	for _, idx := range visiblePipelineStageIndices(ps, stageRows) {
+		lines = append(lines, renderPipelineStageLine(ps.phases[idx], idx, currentIdx, width))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderPipelineProgressBar(ps pipelineState, width int) string {
+	width = maxInt(1, width)
+	total := len(ps.phases)
+	if total == 0 {
+		return strings.Repeat("▱", width)
+	}
+	parts := make([]string, 0, width)
+	for cell := 0; cell < width; cell++ {
+		idx := minInt(total-1, cell*total/width)
+		status := ps.phases[idx].status
+		if status == phaseStatusActive && (cell == 0 || minInt(total-1, (cell-1)*total/width) != idx) {
+			parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Bold(true).Render("▶"))
 			continue
 		}
-		ph := ps.phases[idx]
-
-		var dotRune string
-		switch ph.status {
+		switch status {
 		case phaseStatusDone:
-			dotRune = "●"
+			parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color("28")).Render("▰"))
 		case phaseStatusActive:
-			dotRune = "▶"
+			parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Render("▰"))
 		case phaseStatusRetry:
-			dotRune = "○"
+			parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("▱"))
 		default:
-			dotRune = "·"
+			parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("▱"))
 		}
-
-		iterSuffix := ""
-		if ph.iteration > 0 {
-			if ph.status == phaseStatusRetry {
-				iterSuffix = fmt.Sprintf(" ×%d ↻", ph.iteration)
-			} else if ph.status == phaseStatusActive {
-				iterSuffix = fmt.Sprintf(" ×%d", ph.iteration)
-			}
-		}
-
-		var fg lipgloss.Color
-		switch {
-		case row.opacity >= 0.9:
-			fg = lipgloss.Color("252") // current stage label (inside highlighted box)
-		case row.opacity >= 0.50:
-			fg = lipgloss.Color("248") // ±1 neighbors
-		case row.opacity >= 0.30:
-			fg = lipgloss.Color("244") // ±2 neighbors
-		default:
-			fg = lipgloss.Color("240") // ±3 neighbors
-		}
-
-		lineStyle := lipgloss.NewStyle().Foreground(fg)
-		label := dotRune + " " + ph.name + iterSuffix
-		if row.offset == 0 {
-			lineStyle = lineStyle.
-				Background(lipgloss.Color("234")).
-				Border(lipgloss.Border{Left: "▐"}).
-				BorderForeground(lipgloss.Color("68")).
-				PaddingLeft(1)
-		}
-		stageLines = append(stageLines, lineStyle.Render(label))
 	}
+	return strings.Join(parts, "")
+}
 
-	// Center the 7-row stage window vertically in the available space.
-	// height = total card content height; 2 header lines (topLine + dotsLine) are subtracted.
-	availableForStages := maxInt(7, height-2)
-	topPad := (availableForStages - 7) / 2
-
-	allLines := []string{topLine, dotsLine}
-	for i := 0; i < topPad; i++ {
-		allLines = append(allLines, "")
+func visiblePipelineStageIndices(ps pipelineState, available int) []int {
+	total := len(ps.phases)
+	if available <= 0 {
+		return nil
 	}
-	allLines = append(allLines, stageLines...)
-	return strings.Join(allLines, "\n")
+	if available >= total {
+		indices := make([]int, total)
+		for i := range indices {
+			indices[i] = i
+		}
+		return indices
+	}
+	center := ps.activeIdx
+	if center < 0 {
+		center = maxInt(0, ps.doneCount-1)
+	}
+	start := center - available/2
+	start = maxInt(0, minInt(start, total-available))
+	indices := make([]int, available)
+	for i := range indices {
+		indices[i] = start + i
+	}
+	return indices
+}
+
+func renderPipelineStageLine(ph pipelinePhaseEntry, idx, currentIdx, width int) string {
+	symbol, status := pipelineStageGlyphAndStatus(ph.status)
+	name := ph.name
+	if ph.iteration > 0 {
+		name = fmt.Sprintf("%s ×%d", name, ph.iteration)
+	}
+	left := symbol + " " + name
+	if idx == currentIdx {
+		contentWidth := maxInt(1, width-1)
+		content := renderSidebarRow(contentWidth, left, status, lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Bold(true), lipgloss.NewStyle().Foreground(lipgloss.Color("252")))
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("68")).Render("▐") +
+			lipgloss.NewStyle().Width(contentWidth).Background(lipgloss.Color("234")).Render(content)
+	}
+	var fg lipgloss.Color
+	switch ph.status {
+	case phaseStatusDone:
+		fg = lipgloss.Color("248")
+	case phaseStatusRetry:
+		fg = lipgloss.Color("214")
+	case phaseStatusActive:
+		fg = lipgloss.Color("252")
+	default:
+		fg = lipgloss.Color("245")
+	}
+	style := lipgloss.NewStyle().Foreground(fg)
+	return renderSidebarRow(width, left, status, style, style)
+}
+
+func pipelineStageGlyphAndStatus(status pipelinePhaseStatus) (string, string) {
+	switch status {
+	case phaseStatusDone:
+		return "✓", "done"
+	case phaseStatusActive:
+		return "▶", "now"
+	case phaseStatusRetry:
+		return "↻", "retry"
+	default:
+		return "·", "pending"
+	}
+}
+
+func renderSidebarRow(width int, left, right string, leftStyle, rightStyle lipgloss.Style) string {
+	width = maxInt(1, width)
+	if width <= 2 || strings.TrimSpace(right) == "" {
+		return leftStyle.Render(padDisplayWidth(truncateDisplayWidth(left, width), width))
+	}
+	right = truncateDisplayWidth(right, maxInt(1, width/2))
+	rightWidth := lipgloss.Width(right)
+	leftMax := maxInt(1, width-rightWidth-1)
+	left = truncateDisplayWidth(left, leftMax)
+	gap := maxInt(0, width-lipgloss.Width(left)-rightWidth)
+	return leftStyle.Render(left) + strings.Repeat(" ", gap) + rightStyle.Render(right)
+}
+
+func renderSubagentSidebarRow(width int, dot, name, right string, dotStyle, nameStyle, rightStyle lipgloss.Style) string {
+	width = maxInt(1, width)
+	right = strings.TrimSpace(right)
+	if width <= 2 || right == "" {
+		return renderSubagentSidebarLeft(width, dot, name, dotStyle, nameStyle)
+	}
+	right = truncateDisplayWidth(right, maxInt(1, width/2))
+	rightWidth := lipgloss.Width(right)
+	leftMax := maxInt(1, width-rightWidth-1)
+	left := renderSubagentSidebarLeft(leftMax, dot, name, dotStyle, nameStyle)
+	gap := maxInt(0, width-lipgloss.Width(left)-rightWidth)
+	return left + strings.Repeat(" ", gap) + rightStyle.Render(right)
+}
+
+func renderSubagentSidebarLeft(width int, dot, name string, dotStyle, nameStyle lipgloss.Style) string {
+	width = maxInt(1, width)
+	dot = truncateDisplayWidth(dot, width)
+	dotWidth := lipgloss.Width(dot)
+	if width <= dotWidth+1 {
+		return dotStyle.Render(padDisplayWidth(dot, width))
+	}
+	nameWidth := maxInt(1, width-dotWidth-1)
+	name = truncateDisplayWidth(name, nameWidth)
+	left := dotStyle.Render(dot) + " " + nameStyle.Render(name)
+	if lipgloss.Width(left) >= width {
+		return left
+	}
+	return left + strings.Repeat(" ", width-lipgloss.Width(left))
+}
+
+func padDisplayWidth(text string, width int) string {
+	if lipgloss.Width(text) >= width {
+		return text
+	}
+	return text + strings.Repeat(" ", width-lipgloss.Width(text))
 }

@@ -9,6 +9,7 @@ import (
 	"gocode/internal/message"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 )
 
@@ -18,11 +19,12 @@ import (
 // 2) Done=true：流结束
 // 3) Err 非空：流中出现错误
 type StreamEvent struct {
-	Delta    string
-	Thinking string
-	Done     bool
-	Err      error
-	Usage    *Usage
+	Delta     string
+	Thinking  string
+	ToolCalls []message.ToolCall
+	Done      bool
+	Err       error
+	Usage     *Usage
 }
 
 // chatCompletionsStreamResponse 只建模流式响应里当前需要的字段。
@@ -30,8 +32,8 @@ type StreamEvent struct {
 type chatCompletionsStreamResponse struct {
 	Choices []struct {
 		Delta struct {
-			Content   string           `json:"content"`
-			ToolCalls []toolCallDelta  `json:"tool_calls,omitempty"`
+			Content   string          `json:"content"`
+			ToolCalls []toolCallDelta `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
@@ -222,6 +224,32 @@ type activeOpenAIToolCall struct {
 	args strings.Builder
 }
 
+func openAIToolCallsFromAccumulated(accumulated map[int]*activeOpenAIToolCall) []message.ToolCall {
+	calls := make([]message.ToolCall, 0, len(accumulated))
+	indexes := make([]int, 0, len(accumulated))
+	for index := range accumulated {
+		indexes = append(indexes, index)
+	}
+	sort.Ints(indexes)
+	for _, index := range indexes {
+		call := accumulated[index]
+		if call == nil || call.name == "" {
+			continue
+		}
+		args := call.args.String()
+		input := json.RawMessage(`{}`)
+		if len(args) > 0 && json.Valid([]byte(args)) {
+			input = json.RawMessage(args)
+		}
+		calls = append(calls, message.ToolCall{
+			ID:    call.id,
+			Name:  call.name,
+			Input: input,
+		})
+	}
+	return calls
+}
+
 // consumeStream 负责把 SSE 文本行转换为 StreamEvent，并累积原生 tool_calls。
 func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events chan<- StreamEvent) {
 	defer close(events)
@@ -292,25 +320,8 @@ func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events 
 		// finish_reason：先 flush 工具调用，再发 Done
 		finishReason := chunk.Choices[0].FinishReason
 		if finishReason != nil && *finishReason != "" {
-			for i := 0; i < len(accumulated); i++ {
-				call, ok := accumulated[i]
-				if !ok || call.name == "" {
-					continue
-				}
-				args := call.args.String()
-				var input json.RawMessage
-				if len(args) > 0 && json.Valid([]byte(args)) {
-					input = json.RawMessage(args)
-				} else {
-					input = json.RawMessage(`{}`)
-				}
-				callJSON, _ := json.Marshal(map[string]interface{}{
-					"type":  "tool_use",
-					"id":    call.id,
-					"name":  call.name,
-					"input": input,
-				})
-				if !emitStreamEvent(ctx, events, StreamEvent{Delta: string(callJSON)}) {
+			if calls := openAIToolCallsFromAccumulated(accumulated); len(calls) > 0 {
+				if !emitStreamEvent(ctx, events, StreamEvent{ToolCalls: calls}) {
 					return
 				}
 			}
@@ -325,25 +336,8 @@ func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events 
 	}
 
 	// EOF 前未收到 finish_reason：flush 积累的工具调用后发 Done
-	for i := 0; i < len(accumulated); i++ {
-		call, ok := accumulated[i]
-		if !ok || call.name == "" {
-			continue
-		}
-		args := call.args.String()
-		var input json.RawMessage
-		if len(args) > 0 && json.Valid([]byte(args)) {
-			input = json.RawMessage(args)
-		} else {
-			input = json.RawMessage(`{}`)
-		}
-		callJSON, _ := json.Marshal(map[string]interface{}{
-			"type":  "tool_use",
-			"id":    call.id,
-			"name":  call.name,
-			"input": input,
-		})
-		if !emitStreamEvent(ctx, events, StreamEvent{Delta: string(callJSON)}) {
+	if calls := openAIToolCallsFromAccumulated(accumulated); len(calls) > 0 {
+		if !emitStreamEvent(ctx, events, StreamEvent{ToolCalls: calls}) {
 			return
 		}
 	}

@@ -95,7 +95,7 @@ func NewColorManager() ColorManager {
 			colorSelectionForeground:    "255",
 			colorContextCache:           "214",
 			colorContextUsed:            "111",
-			colorContextFree:            "240",
+			colorContextFree:            "246",
 			colorCursorNormalBright:     "#9fffd3",
 			colorCursorTerminalBright:   "#ff8ddd",
 		},

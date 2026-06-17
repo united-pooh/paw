@@ -29,6 +29,23 @@ var (
 			Bold(true)
 	toolDetailStyle = lipgloss.NewStyle().
 			Foreground(colorManager.LipglossColor(colorBody))
+	toolCitationStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorMarkdownQuote))
+	toolCitationKeyStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorLabelAssistant)).
+				Bold(true)
+	toolCitationOKStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorLabelResult)).
+				Bold(true)
+	toolCitationErrorStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorLabelError)).
+				Bold(true)
+	toolCitationQuoteBorderStyle = lipgloss.NewStyle().
+					Foreground(colorManager.LipglossColor(colorMarkdownQuoteBorder))
+	toolCitationRailStyle = lipgloss.NewStyle().
+				Border(lipgloss.Border{Left: "│"}).
+				BorderForeground(colorManager.LipglossColor(colorMarkdownQuoteBorder)).
+				PaddingLeft(1)
 	labelSystemStyle = lipgloss.NewStyle().
 				Foreground(colorManager.LipglossColor(colorLabelSystem)).
 				Bold(true)
@@ -40,6 +57,9 @@ var (
 	thinkingBodyStyle = lipgloss.NewStyle().
 				Foreground(colorManager.LipglossColor(colorMarkdownQuote)).
 				Italic(true)
+	markdownBoldStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorBody)).
+				Bold(true)
 	markdownHeadingStyle = lipgloss.NewStyle().
 				Foreground(colorManager.LipglossColor(colorMarkdownHeading)).
 				Bold(true)
@@ -54,9 +74,9 @@ var (
 				Padding(0, 1)
 	markdownCodeBlockStyle = lipgloss.NewStyle().
 				Foreground(colorManager.LipglossColor(colorMarkdownCodeForeground)).
-				Border(lipgloss.NormalBorder()).
-				BorderForeground(colorManager.LipglossColor(colorMarkdownCodeBorder)).
-				Padding(0, 1)
+				Background(colorManager.LipglossColor(colorMarkdownCodeBackground))
+	markdownCodeBlockBorderStyle = lipgloss.NewStyle().
+					Foreground(colorManager.LipglossColor(colorMarkdownCodeBorder))
 	markdownQuoteStyle = lipgloss.NewStyle().
 				Foreground(colorManager.LipglossColor(colorMarkdownQuote)).
 				Border(lipgloss.Border{Left: "│"}).
@@ -120,19 +140,16 @@ var (
 	toolCallBorderStyle = lipgloss.NewStyle().
 				Border(lipgloss.Border{Left: "│"}).
 				BorderForeground(colorManager.LipglossColor(colorLabelTool)).
-				Background(lipgloss.Color("232")).
 				PaddingLeft(1)
 
 	toolResultBorderStyle = lipgloss.NewStyle().
 				Border(lipgloss.Border{Left: "│"}).
 				BorderForeground(colorManager.LipglossColor(colorLabelResult)).
-				Background(lipgloss.Color("232")).
 				PaddingLeft(1)
 
 	toolErrorBorderStyle = lipgloss.NewStyle().
 				Border(lipgloss.Border{Left: "│"}).
 				BorderForeground(colorManager.LipglossColor(colorLabelError)).
-				Background(lipgloss.Color("232")).
 				PaddingLeft(1)
 
 	rightCardStyle = lipgloss.NewStyle().
@@ -154,5 +171,8 @@ const (
 	contextMeterMinimumBarCells    = 1
 	transcriptPanelHorizontalFrame = 4
 	transcriptPanelVerticalFrame   = 2
+	rightCardBorderFrame           = 2
+	rightCardHorizontalPadding     = 2
+	rightCardVerticalFrame         = 2
 	rightSidebarMinWidth           = 20
 )

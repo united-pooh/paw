@@ -11,28 +11,18 @@ import (
 // handleSubmit 处理 Enter 提交，根据输入内容分派到聊天、命令或终端执行路径。
 func (m appModel) handleSubmit() (tea.Model, tea.Cmd) {
 	m.reconcileLegacyRunningState()
-	line := strings.TrimSpace(m.input.Value())
-	if line == "" {
+	var line string
+	var ok bool
+	m, line, ok = m.consumeSubmittedInput()
+	if !ok {
 		return m, nil
 	}
-	m.input.Reset()
-	m.resetHistoryNavigation()
-	m.syncInputMode()
-	m.relayout()
 
-	if continued, text := splitContinuation(line); continued {
+	if isExitCommandInput(line) {
 		m.rememberInputHistory(line)
-		m.pending = append(m.pending, text)
-		m.refreshViewport()
-		return m, nil
+		_, cmd := m.handleCommand(line)
+		return m, cmd
 	}
-
-	if len(m.pending) > 0 {
-		m.pending = append(m.pending, line)
-		line = strings.Join(m.pending, "\n")
-		m.pending = nil
-	}
-
 	if line == "!" {
 		m.toggleTerminalMode()
 		return m, nil
@@ -55,7 +45,7 @@ func (m appModel) handleSubmit() (tea.Model, tea.Cmd) {
 	}
 
 	if m.isModelWorkRunning() {
-		return m.queueChatInput(line), nil
+		return m.submitSupplement(line), nil
 	}
 	if m.isTerminalWorkRunning() {
 		m.addEntry(transcriptEntry{kind: entrySystem, title: "busy", body: "chat is unavailable while a terminal command is running"})
@@ -66,15 +56,67 @@ func (m appModel) handleSubmit() (tea.Model, tea.Cmd) {
 	return m.startChatTurn(line)
 }
 
-// handleCommand 处理以斜杠开头的内置 TUI 命令。
+func (m appModel) handleQueueSubmit() (tea.Model, tea.Cmd) {
+	var line string
+	var ok bool
+	m, line, ok = m.consumeSubmittedInput()
+	if !ok {
+		return m, nil
+	}
+	if m.isModelWorkRunning() {
+		return m.queueChatInput(line), nil
+	}
+	m.input.SetValue(line)
+	m.input.CursorEnd()
+	m.syncInputMode()
+	m.relayout()
+	return m, nil
+}
+
+func (m appModel) consumeSubmittedInput() (appModel, string, bool) {
+	line := strings.TrimSpace(m.input.Value())
+	if line == "" {
+		return m, "", false
+	}
+	m.input.Reset()
+	m.resetHistoryNavigation()
+	m.syncInputMode()
+	m.relayout()
+
+	if continued, text := splitContinuation(line); continued {
+		m.rememberInputHistory(line)
+		m.pending = append(m.pending, text)
+		m.refreshViewport()
+		return m, "", false
+	}
+
+	if len(m.pending) > 0 {
+		m.pending = append(m.pending, line)
+		line = strings.Join(m.pending, "\n")
+		m.pending = nil
+	}
+	return m, line, true
+}
+
+// handleCommand 处理内置 TUI 命令。除 exit/quit 外，命令仍要求以斜杠开头。
 func (m *appModel) handleCommand(line string) (bool, tea.Cmd) {
-	if !strings.HasPrefix(strings.TrimSpace(line), "/") {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "/") && !isBareExitCommand(trimmed) {
 		return false, nil
 	}
 	if m.commandRegistry == nil {
 		m.commandRegistry = NewCommandRegistry()
 	}
 	return m.commandRegistry.Dispatch(m, line)
+}
+
+func isExitCommandInput(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return trimmed == "/exit" || trimmed == "/quit" || isBareExitCommand(trimmed)
+}
+
+func isBareExitCommand(line string) bool {
+	return line == "exit" || line == "quit"
 }
 
 // toggleTerminalMode 切换持续终端模式，并在 transcript 中写入状态提示。
@@ -111,7 +153,7 @@ func (m *appModel) syncInputMode() {
 
 // handleInputVerticalNavigation 让上下键先在多行文本内移动，抵达边界后再切换历史输入。
 func (m appModel) handleInputVerticalNavigation(direction int) (tea.Model, tea.Cmd) {
-	if m.running {
+	if m.isTerminalWorkRunning() {
 		return m, nil
 	}
 
@@ -143,6 +185,29 @@ func (m appModel) handleInputVerticalNavigation(direction int) (tea.Model, tea.C
 		return m, nil
 	}
 	return m.handleHistoryNavigation(1)
+}
+
+func (m appModel) submitSupplement(line string) appModel {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return m
+	}
+	m.rememberInputHistory(line)
+	submitter, ok := m.runner.(SupplementSubmitter)
+	if !ok || !submitter.SubmitSupplement(line) {
+		m.addEntry(transcriptEntry{
+			kind:  entrySystem,
+			title: "supplement",
+			body:  "runner does not support running-turn supplements",
+		})
+		return m
+	}
+	m.addEntry(transcriptEntry{
+		kind:  entryUser,
+		title: "you (supplement)",
+		body:  line,
+	})
+	return m
 }
 
 // startChatTurn records and starts a model turn when the guard is idle.
@@ -308,7 +373,7 @@ func (m appModel) submitShellCommand(command string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if !m.queryGuard.StartTerminal() {
-		m.addEntry(transcriptEntry{kind: entrySystem, title: "busy", body: "terminal command is already running"})
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "busy", body: "terminal commands are unavailable while work is running"})
 		return m, nil
 	}
 	m.addEntry(transcriptEntry{

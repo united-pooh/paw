@@ -326,7 +326,7 @@ func clampInt(value, minValue, maxValue int) int {
 }
 
 // renderContextCardContent 为右侧 Context 卡片渲染多行内容。
-// 输出四行：token数+箭头/free%, 进度条, used%/cache%/free%, turns
+// 输出 token 数、进度条，以及压缩后的 cache/free/turns 状态。
 func (m appModel) renderContextCardContent(innerWidth int) string {
 	stats := m.contextStats()
 	limit := maxInt(1, stats.LimitTokens)
@@ -346,21 +346,93 @@ func (m appModel) renderContextCardContent(innerWidth int) string {
 	animatedUsed, animatedCache, _ := m.animatedContextTokens(limit)
 	bar := renderContextBar(animatedUsed, animatedCache, limit, innerWidth, "")
 
-	// Line 3: percentages
-	usedPct := contextUsedStyle.Render(formatContextPercent(labelUsed, limit))
-	cachePct := contextCacheStyle.Render("cache " + formatContextPercent(labelCache, limit))
-	freePct := contextFreeStyle.Render("free " + formatContextPercent(maxInt(0, limit-labelUsed), limit))
-	pctLine := lipgloss.NewStyle().MaxWidth(innerWidth).Render(
-		usedPct + " " + cachePct + " " + freePct,
+	// Line 3: compact percentages + turns, centered as one status row.
+	cachePct := formatContextPercent(labelCache, limit)
+	freePct := formatContextPercent(maxInt(0, limit-labelUsed), limit)
+	pctLine := m.contextPercentStatusLine(innerWidth, cachePct, freePct)
+
+	lines := []string{topLine, bar, pctLine}
+	if supplementLine := m.contextWorkStatusLine(innerWidth); supplementLine != "" {
+		lines = append(lines, supplementLine)
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func centeredContextStatusLine(width int, parts ...string) string {
+	return compactContextStatusLine(width, nonEmptyStrings(parts...))
+}
+
+func compactContextStatusLine(width int, options ...[]string) string {
+	if width <= 0 {
+		return ""
+	}
+	for _, parts := range options {
+		visible := strings.Join(nonEmptyStrings(parts...), " · ")
+		if lipgloss.Width(visible) <= width {
+			return centeredContextStatusText(width, visible)
+		}
+	}
+	if len(options) == 0 {
+		return centeredContextStatusText(width, "")
+	}
+	fallback := strings.Join(nonEmptyStrings(options[len(options)-1]...), " ")
+	return centeredContextStatusText(width, trimVisibleWidth(fallback, width))
+}
+
+func centeredContextStatusText(width int, visible string) string {
+	return lipgloss.NewStyle().
+		Width(width).
+		Align(lipgloss.Center).
+		Foreground(colorManager.LipglossColor(colorContextFree)).
+		Render(visible)
+}
+
+func trimVisibleWidth(text string, width int) string {
+	if width <= 0 || lipgloss.Width(text) <= width {
+		return text
+	}
+	runes := []rune(text)
+	for lipgloss.Width(string(runes)) > width && len(runes) > 0 {
+		runes = runes[:len(runes)-1]
+	}
+	return string(runes)
+}
+
+func (m appModel) contextPercentStatusLine(width int, cachePct, freePct string) string {
+	turns := m.turnsCount()
+	return compactContextStatusLine(
+		width,
+		[]string{"cache " + cachePct, "free " + freePct, fmt.Sprintf("turns %d", turns)},
+		[]string{"cache" + cachePct, "free" + freePct, fmt.Sprintf("turns%d", turns)},
+		[]string{"c" + cachePct, "f" + freePct, fmt.Sprintf("t%d", turns)},
 	)
+}
 
-	// Line 4: turns (right-aligned)
-	turnsStr := fmt.Sprintf("turns %d", m.turnsCount())
-	turnsLine := lipgloss.NewStyle().
-		Width(innerWidth).
-		Foreground(lipgloss.Color("236")).
-		Align(lipgloss.Right).
-		Render(turnsStr)
+func (m appModel) contextWorkStatusLine(width int) string {
+	var full []string
+	var compact []string
+	var tiny []string
+	if supplements := m.pendingSupplementCount(); supplements > 0 {
+		full = append(full, fmt.Sprintf("supplements %d", supplements))
+		compact = append(compact, fmt.Sprintf("supp %d", supplements))
+		tiny = append(tiny, fmt.Sprintf("s%d", supplements))
+	}
+	if queued := m.chatQueue.Len(); queued > 0 {
+		full = append(full, fmt.Sprintf("queued %d", queued))
+		compact = append(compact, fmt.Sprintf("queue %d", queued))
+		tiny = append(tiny, fmt.Sprintf("q%d", queued))
+	}
+	if len(full) == 0 {
+		return ""
+	}
+	return compactContextStatusLine(width, full, compact, tiny)
+}
 
-	return strings.Join([]string{topLine, bar, pctLine, turnsLine}, "\n")
+func (m appModel) pendingSupplementCount() int {
+	provider, ok := m.runner.(SupplementStatsProvider)
+	if !ok {
+		return 0
+	}
+	return provider.PendingSupplementCount()
 }

@@ -182,7 +182,15 @@ func (s *JSONLStore) Append(ctx context.Context, sessionID string, msgs ...messa
 	if strings.TrimSpace(sessionID) == "" {
 		return fmt.Errorf("sessionID 不能为空")
 	}
-	if _, err := s.GetMeta(ctx, sessionID); err != nil {
+	exists, err := s.Exists(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		if _, err := s.CreateRoot(ctx, CreateRootRequest{SessionID: sessionID}); err != nil {
+			return err
+		}
+	} else if _, err := s.GetMeta(ctx, sessionID); err != nil {
 		return err
 	}
 

@@ -35,6 +35,10 @@ func (t *GlobTool) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"max_results":{"type":"integer","minimum":1}},"required":["pattern"]}`)
 }
 
+func (t *GlobTool) IsConcurrencySafe(json.RawMessage) bool {
+	return true
+}
+
 func (t *GlobTool) Run(ctx context.Context, input json.RawMessage) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err

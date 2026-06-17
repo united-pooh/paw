@@ -34,6 +34,7 @@ type fakeRunner struct {
 	stats            loop.ContextStats
 	lastDraft        string
 	lastLimit        int
+	supplements      []string
 }
 
 // RunTurn 记录输入并返回固定 assistant 消息。
@@ -51,6 +52,19 @@ func (r *fakeRunner) ResetHistory() {
 func (r *fakeRunner) LoadHistory(ctx context.Context, sessionID string) error {
 	r.loadHistoryCalls = append(r.loadHistoryCalls, sessionID)
 	return r.loadHistoryErr
+}
+
+func (r *fakeRunner) SubmitSupplement(input string) bool {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return false
+	}
+	r.supplements = append(r.supplements, input)
+	return true
+}
+
+func (r *fakeRunner) PendingSupplementCount() int {
+	return len(r.supplements)
 }
 
 // ContextStats returns deterministic context-usage data for meter tests.
@@ -121,6 +135,9 @@ func (c *fakeSubagentController) Launch(ctx context.Context, req subagent.Reques
 	}
 	if task.SessionID == "" {
 		task.SessionID = task.ID
+	}
+	if task.ParentSessionID == "" {
+		task.ParentSessionID = req.ParentSessionID
 	}
 	if task.TranscriptPath == "" {
 		task.TranscriptPath = "/tmp/" + task.ID + ".jsonl"
@@ -195,6 +212,23 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
+func assertRenderedLineWidthsAtMost(t *testing.T, rendered string, width int) {
+	t.Helper()
+	for i, line := range strings.Split(ansi.Strip(rendered), "\n") {
+		if got := lipgloss.Width(line); got > width {
+			t.Fatalf("line %d width = %d, want <= %d: %q\n%s", i+1, got, width, line, ansi.Strip(rendered))
+		}
+	}
+}
+
+func maxRenderedLineWidth(rendered string) int {
+	maxWidth := 0
+	for _, line := range strings.Split(ansi.Strip(rendered), "\n") {
+		maxWidth = maxInt(maxWidth, lipgloss.Width(line))
+	}
+	return maxWidth
+}
+
 // TestSubmitRunsTurnAndRecordsUserEntry 验证普通输入会写入 transcript 并启动一轮模型调用。
 func TestSubmitRunsTurnAndRecordsUserEntry(t *testing.T) {
 	runner := &fakeRunner{}
@@ -262,7 +296,7 @@ func TestHelpComesFromCommandRegistry(t *testing.T) {
 		"/setting - open settings wizard",
 		"/subagent [--fork|--empty] [--background|--sync] <prompt> - launch a subagent",
 		"/tasks - show background subagent tasks",
-		"/exit (/quit) - quit the TUI",
+		"/exit (/quit, exit, quit) - quit the TUI",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("help body = %q, want %q", body, want)
@@ -385,8 +419,6 @@ func TestSettingCommandPersistsWizardSelections(t *testing.T) {
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
 
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
-	model = next.(appModel)
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
 
@@ -482,8 +514,73 @@ func TestRunningCommandPolicyAllowsStatusAndBlocksClear(t *testing.T) {
 	}
 }
 
-// TestRunningModelQueuesChatFIFO 验证模型运行中普通聊天按 FIFO 排队且不重入 runner。
-func TestRunningModelQueuesChatFIFO(t *testing.T) {
+// TestRunningModelEnterSubmitsSupplement 验证模型运行中 Enter 会作为当前 turn 的补充输入。
+func TestRunningModelEnterSubmitsSupplement(t *testing.T) {
+	runner := &fakeRunner{}
+	model := newTestModel(runner)
+	model.input.SetValue("first")
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if cmd == nil {
+		t.Fatalf("first submit cmd is nil")
+	}
+
+	model.input.SetValue("supplement this turn")
+	next, supplementCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if supplementCmd != nil {
+		t.Fatalf("supplement submit returned cmd")
+	}
+	if got := model.chatQueue.Len(); got != 0 {
+		t.Fatalf("queue len = %d, want 0", got)
+	}
+	if got := runner.supplements; !equalStrings(got, []string{"supplement this turn"}) {
+		t.Fatalf("runner.supplements = %#v", got)
+	}
+	last := model.transcript[len(model.transcript)-1]
+	if last.title != "you (supplement)" || last.body != "supplement this turn" {
+		t.Fatalf("last transcript = %#v", last)
+	}
+	if got := model.input.Value(); got != "" {
+		t.Fatalf("input value = %q, want cleared", got)
+	}
+	_ = cmd()
+	if len(runner.inputs) != 1 || runner.inputs[0] != "first" {
+		t.Fatalf("runner.inputs = %#v, want [first]", runner.inputs)
+	}
+}
+
+func TestRunningModelRejectsTerminalModeSubmit(t *testing.T) {
+	runner := &fakeRunner{}
+	model := newTestModel(runner)
+	model.input.SetValue("first")
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if cmd == nil {
+		t.Fatalf("first submit cmd is nil")
+	}
+
+	model.terminalMode = true
+	model.input.SetValue("ls")
+	next, terminalCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if terminalCmd != nil {
+		t.Fatalf("terminal submit returned cmd while model running")
+	}
+	last := model.transcript[len(model.transcript)-1]
+	if last.title != "busy" || !strings.Contains(last.body, "terminal commands are unavailable") {
+		t.Fatalf("last transcript = %#v, want terminal busy message", last)
+	}
+	if got := len(runner.inputs); got != 0 {
+		t.Fatalf("runner.inputs before first cmd = %#v, want none", runner.inputs)
+	}
+	_ = cmd()
+}
+
+// TestRunningModelQueuesChatFIFOWithTab 验证模型运行中 Tab 按 FIFO 排队且不重入 runner。
+func TestRunningModelQueuesChatFIFOWithTab(t *testing.T) {
 	runner := &fakeRunner{}
 	model := newTestModel(runner)
 	model.input.SetValue("first")
@@ -495,16 +592,19 @@ func TestRunningModelQueuesChatFIFO(t *testing.T) {
 	}
 
 	model.input.SetValue("second")
-	next, queuedCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, queuedCmd := model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = next.(appModel)
 	if queuedCmd != nil {
 		t.Fatalf("queued submit returned cmd")
 	}
 	model.input.SetValue("third")
-	next, queuedCmd = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, queuedCmd = model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = next.(appModel)
 	if queuedCmd != nil {
 		t.Fatalf("second queued submit returned cmd")
+	}
+	if got := runner.supplements; len(got) != 0 {
+		t.Fatalf("runner.supplements = %#v, want none for queued inputs", got)
 	}
 	if len(runner.inputs) != 0 {
 		t.Fatalf("runner.inputs before first cmd = %#v", runner.inputs)
@@ -556,6 +656,39 @@ func TestExitClearsQueuedWork(t *testing.T) {
 	}
 }
 
+func TestExitCommandVariantsQuitTUI(t *testing.T) {
+	for _, input := range []string{"exit", "/exit", "quit", "/quit"} {
+		model := newTestModel(&fakeRunner{})
+		model.input.SetValue(input)
+
+		_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		if cmd == nil {
+			t.Fatalf("%q did not return quit cmd", input)
+		}
+		if _, ok := cmd().(tea.QuitMsg); !ok {
+			t.Fatalf("%q returned non-quit cmd", input)
+		}
+	}
+}
+
+func TestExitCommandWorksBeforeTerminalModeShellDispatch(t *testing.T) {
+	runner := &fakeRunner{}
+	model := newTestModel(runner)
+	model.terminalMode = true
+	model.input.SetValue("exit")
+
+	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("terminal-mode exit did not return quit cmd")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("terminal-mode exit returned non-quit cmd")
+	}
+	if len(runner.inputs) != 0 {
+		t.Fatalf("runner inputs = %#v, want no chat turn", runner.inputs)
+	}
+}
+
 // TestAssistantAndToolMessagesUpdateTranscript 验证 assistant 增量和工具事件会正确更新聊天历史。
 func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
@@ -573,38 +706,154 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 
 	next, _ = model.Update(toolCallMsg(ui.ToolCallEvent{Name: "Read", Input: []byte(`{"file_path":"go.mod"}`)}))
 	model = next.(appModel)
+	runningRendered := renderTranscript(model.transcript, 80, model.showThinking)
+	for _, want := range []string{"hello", "[Read]", "running", "file_path=go.mod"} {
+		if !strings.Contains(runningRendered, want) {
+			t.Fatalf("running transcript = %q, want %q", runningRendered, want)
+		}
+	}
+
 	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{Name: "Read", Content: "module gocode"}))
+	model = next.(appModel)
+	okRendered := renderTranscript(model.transcript, 80, model.showThinking)
+	for _, want := range []string{"hello", "[Read]", "ok", "file_path=go.mod"} {
+		if !strings.Contains(okRendered, want) {
+			t.Fatalf("ok transcript = %q, want %q", okRendered, want)
+		}
+	}
+	if strings.Contains(okRendered, "[Read] running") {
+		t.Fatalf("ok transcript = %q, should replace running status", okRendered)
+	}
+	next, _ = model.Update(assistantDeltaMsg("loaded go.mod"))
 	model = next.(appModel)
 
 	rendered := renderTranscript(model.transcript, 80, model.showThinking)
-	for _, want := range []string{"Read", "file_path", "module gocode"} {
+	for _, want := range []string{"loaded go.mod", "[Read]", "ok", "file_path=go.mod"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered transcript = %q, want %q", rendered, want)
 		}
 	}
+	for _, hidden := range []string{"\n  tool\n", "\n  result\n", "module gocode", "tool cites"} {
+		if strings.Contains(rendered, hidden) {
+			t.Fatalf("rendered transcript = %q, should not contain old tool block marker/content %q", rendered, hidden)
+		}
+	}
 }
 
-func TestToolEntryRevealsDetailsWithExpandAnimation(t *testing.T) {
-	started := time.Unix(20, 0)
+func TestAssistantCitationRendersAsBlockquoteUnderMessage(t *testing.T) {
 	entry := transcriptEntry{
-		kind:      entryTool,
-		title:     "tool",
-		body:      "Read {\n  \"file_path\": \"go.mod\"\n}",
-		createdAt: started,
+		kind:  entryAssistant,
+		title: "assistant",
+		body:  "README loaded",
+		citations: []toolCitation{
+			{name: "Read", target: "file_path=README.md", status: "ok"},
+		},
 	}
 
-	early := renderEntryAt(entry, 80, started)
-	if !strings.Contains(early, "Read {") {
-		t.Fatalf("early tool entry = %q, want summary", early)
+	rendered := renderEntry(entry, 58)
+	for _, want := range []string{"README loaded", "[Read]", "ok", "file_path=README.md"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("assistant citation = %q, want %q", rendered, want)
+		}
 	}
-	if strings.Contains(early, "file_path") {
-		t.Fatalf("early tool entry = %q, should hide details at animation start", early)
+	for _, hidden := range []string{"tool cites", "[^tool-1]"} {
+		if strings.Contains(rendered, hidden) {
+			t.Fatalf("assistant citation = %q, should not contain previous citation marker %q", rendered, hidden)
+		}
+	}
+	for _, line := range strings.Split(ansi.Strip(rendered), "\n") {
+		if strings.Contains(line, "[Read]") {
+			if !strings.Contains(line, "│ ") {
+				t.Fatalf("citation line = %q, want stable left quote edge", line)
+			}
+			if got := lipgloss.Width(line); got > 58 {
+				t.Fatalf("citation line width = %d, want <= 58: %q", got, line)
+			}
+		}
+	}
+}
+
+func TestToolResultCitationMatchesByToolUseID(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{ID: "call_1", Name: "Read", Input: []byte(`{"file_path":"first.go"}`)}))
+	model = next.(appModel)
+	next, _ = model.Update(toolCallMsg(ui.ToolCallEvent{ID: "call_2", Name: "Read", Input: []byte(`{"file_path":"second.go"}`)}))
+	model = next.(appModel)
+
+	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{ToolUseID: "call_1", Name: "Read", Content: "first result"}))
+	model = next.(appModel)
+
+	idx := model.lastAssistantCitationHostIndex()
+	if idx < 0 || len(model.transcript[idx].citations) != 2 {
+		t.Fatalf("citations = %#v", model.transcript)
+	}
+	first := model.transcript[idx].citations[0]
+	second := model.transcript[idx].citations[1]
+	if first.status != "ok" || !strings.Contains(first.preview, "first result") {
+		t.Fatalf("first citation = %#v, want call_1 result", first)
+	}
+	if second.status != "running" || !strings.Contains(second.target, "second.go") {
+		t.Fatalf("second citation = %#v, want untouched running call_2", second)
+	}
+}
+
+func TestToolCallWithoutAssistantTextRendersRunningCitation(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+
+	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{Name: "LS", Input: []byte(`{"path":"."}`)}))
+	model = next.(appModel)
+	rendered := renderTranscript(model.transcript, 54, model.showThinking)
+	for _, want := range []string{"assistant", "[LS]", "running", "path=."} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("running-only citation = %q, want %q", rendered, want)
+		}
 	}
 
-	late := renderEntryAt(entry, 80, started.Add(toolExpandDuration))
-	for _, want := range []string{"Read {", "file_path", "> "} {
-		if !strings.Contains(late, want) {
-			t.Fatalf("late tool entry = %q, want %q", late, want)
+	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{Name: "LS", Content: "README.md"}))
+	model = next.(appModel)
+	rendered = renderTranscript(model.transcript, 54, model.showThinking)
+	for _, want := range []string{"[LS]", "ok", "path=."} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("completed-only citation = %q, want %q", rendered, want)
+		}
+	}
+	if strings.Contains(rendered, "[LS] running") || strings.Contains(rendered, "README.md") {
+		t.Fatalf("completed-only citation = %q, should hide running state and long output", rendered)
+	}
+}
+
+func TestAssistantToolUseJSONIsHiddenFromTranscript(t *testing.T) {
+	entry := transcriptEntry{
+		kind:  entryAssistant,
+		title: "assistant",
+		body:  `Let me inspect the project.{"id":"call_1","input":{"path":"."},"name":"LS","type":"tool_use"}`,
+	}
+	rendered := renderEntry(entry, 80)
+	if !strings.Contains(rendered, "Let me inspect the project.") {
+		t.Fatalf("assistant entry = %q, want visible prose", rendered)
+	}
+	for _, hidden := range []string{"tool_use", "call_1", `"path"`, `"name"`} {
+		if strings.Contains(rendered, hidden) {
+			t.Fatalf("assistant entry = %q, should hide %q", rendered, hidden)
+		}
+	}
+}
+
+func TestSubagentToolCallBodySummarizesPrompt(t *testing.T) {
+	body := formatToolCallBody("Subagent", []byte(`{
+		"context_mode":"empty",
+		"description":"读取并分析项目结构",
+		"prompt":"读取并分析当前项目。\n1. 读取 go.mod\n2. 读取 README.md",
+		"run_mode":"sync"
+	}`))
+	for _, want := range []string{"Subagent · sync · empty", "description", "读取并分析项目结构", "prompt"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("subagent body = %q, want %q", body, want)
+		}
+	}
+	for _, hidden := range []string{`{"`, `\n`} {
+		if strings.Contains(body, hidden) {
+			t.Fatalf("subagent body = %q, should not contain raw JSON marker %q", body, hidden)
 		}
 	}
 }
@@ -900,6 +1149,21 @@ func TestRelayoutReservesSpaceForTranscriptFrame(t *testing.T) {
 	}
 }
 
+func TestLeftPanelsRenderWithSameOuterWidth(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 120
+	model.height = 30
+	model.input.SetValue("aligned")
+	model.relayout()
+
+	transcriptWidth := lipgloss.Width(model.renderTranscriptBox())
+	inputWidth := lipgloss.Width(model.renderInputBox())
+	if transcriptWidth != inputWidth {
+		t.Fatalf("transcript box width = %d, input box width = %d; want aligned", transcriptWidth, inputWidth)
+	}
+}
+
 func TestViewFillsTerminalHeightAndPinsInputToBottom(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
@@ -912,13 +1176,17 @@ func TestViewFillsTerminalHeightAndPinsInputToBottom(t *testing.T) {
 	if got := lipgloss.Height(rendered); got != model.height {
 		t.Fatalf("rendered height = %d, want %d\n%s", got, model.height, rendered)
 	}
-	lines := strings.Split(rendered, "\n")
+	lines := strings.Split(ansi.Strip(rendered), "\n")
 	if len(lines) < 2 || !strings.Contains(lines[len(lines)-2], "bottom") {
 		t.Fatalf("last input content line = %q, want bottom", lines[maxInt(0, len(lines)-2)])
 	}
+	lastLine := lines[len(lines)-1]
+	if strings.Count(lastLine, "╯") < 2 {
+		t.Fatalf("last rendered line = %q, want input and right sidebar bottom borders aligned", lastLine)
+	}
 }
 
-func TestRelayoutAccountsForInputTitleMeterHeight(t *testing.T) {
+func TestRelayoutIgnoresLegacyInputTitleMeter(t *testing.T) {
 	settingsController := &fakeSettingsController{current: settings.Config{
 		Subagent: settings.SubagentConfig{
 			DefaultContextMode: settings.ContextModeEmpty,
@@ -941,6 +1209,9 @@ func TestRelayoutAccountsForInputTitleMeterHeight(t *testing.T) {
 	}
 	if got := lipgloss.Height(model.View()); got != model.height {
 		t.Fatalf("rendered height = %d, want %d", got, model.height)
+	}
+	if titleHeight := model.inputEmbeddedTitleHeight(); titleHeight != 0 {
+		t.Fatalf("inputEmbeddedTitleHeight() = %d, want 0 for legacy input-title", titleHeight)
 	}
 }
 
@@ -1010,7 +1281,7 @@ func TestSubagentCommandUsesDefaultsAndTasksRender(t *testing.T) {
 		},
 		UI: settings.UIConfig{
 			ContextLimitTokens:   settings.DefaultContextLimitTokens,
-			ContextMeterLocation: settings.MeterLocationInputTitle,
+			ContextMeterLocation: settings.MeterLocationInputAbove,
 		},
 	}}
 	subagents := &fakeSubagentController{
@@ -1036,7 +1307,7 @@ func TestSubagentCommandUsesDefaultsAndTasksRender(t *testing.T) {
 	if req.ContextMode != settings.ContextModeFork || req.RunMode != settings.RunModeBackground || req.ParentSessionID != "session-1" || req.Prompt != "summarize recent changes" {
 		t.Fatalf("launch request = %#v", req)
 	}
-	if got := model.transcript[len(model.transcript)-1].body; !strings.Contains(got, "task-42 status=running context=fork") {
+	if got := model.transcript[len(model.transcript)-1].body; !strings.Contains(got, "task-42 · running · fork") {
 		t.Fatalf("launch transcript = %q", got)
 	}
 
@@ -1044,7 +1315,7 @@ func TestSubagentCommandUsesDefaultsAndTasksRender(t *testing.T) {
 	if !handled || cmd != nil {
 		t.Fatalf("/tasks handled/cmd = %v/%v", handled, cmd)
 	}
-	if got := model.transcript[len(model.transcript)-1].body; !strings.Contains(got, "task-42 status=running context=fork") {
+	if got := model.transcript[len(model.transcript)-1].body; !strings.Contains(got, "task-42 · running · fork") {
 		t.Fatalf("tasks transcript = %q", got)
 	}
 }
@@ -1064,7 +1335,7 @@ func TestSyncSubagentCompletionStartsQueuedTurn(t *testing.T) {
 	}
 	model := newModel(context.Background(), runner, "session-1", &fakeModelConfigController{}, nil, subagents, nil, newTerminalCursorAnchor())
 
-	handled, cmd := model.handleCommand("/subagent inspect this")
+	handled, cmd := model.handleCommand("/subagent --sync inspect this")
 	if !handled || cmd == nil {
 		t.Fatalf("/subagent handled/cmd = %v/%v", handled, cmd)
 	}
@@ -1073,7 +1344,7 @@ func TestSyncSubagentCompletionStartsQueuedTurn(t *testing.T) {
 	}
 
 	model.input.SetValue("queued follow-up")
-	next, queuedCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, queuedCmd := model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = next.(appModel)
 	if queuedCmd != nil {
 		t.Fatalf("queued chat returned cmd")
@@ -1086,7 +1357,7 @@ func TestSyncSubagentCompletionStartsQueuedTurn(t *testing.T) {
 		t.Fatalf("sync subagent completion should start queued turn")
 	}
 	last := model.transcript[len(model.transcript)-1]
-	if last.title != "subagent" || !strings.Contains(last.body, "agent=agent-7") || !strings.Contains(last.body, "/tmp/agent-7.jsonl") {
+	if last.title != "subagent" || !strings.Contains(last.body, "agent-7 · depth 0") || !strings.Contains(last.body, "/tmp/agent-7.jsonl") {
 		t.Fatalf("subagent transcript = %#v", last)
 	}
 
@@ -1129,8 +1400,8 @@ func TestViewAnchorsTerminalCursorOnInputCell(t *testing.T) {
 	}
 }
 
-// TestViewAnchorsTerminalCursorWithEmbeddedInputTitle 验证 context 位于输入框 title 时仍锚定到内容行。
-func TestViewAnchorsTerminalCursorWithEmbeddedInputTitle(t *testing.T) {
+// TestViewAnchorsTerminalCursorWithLegacyInputTitle 验证旧 input-title 配置不会改变输入光标锚点。
+func TestViewAnchorsTerminalCursorWithLegacyInputTitle(t *testing.T) {
 	anchor := newTerminalCursorAnchor()
 	settingsController := &fakeSettingsController{current: settings.Config{
 		UI: settings.UIConfig{
@@ -1152,7 +1423,7 @@ func TestViewAnchorsTerminalCursorWithEmbeddedInputTitle(t *testing.T) {
 		t.Fatalf("anchor = %#v/%v, want active", position, ok)
 	}
 	if position.upFromBottom != 1 {
-		t.Fatalf("upFromBottom = %d, want input content row below embedded title", position.upFromBottom)
+		t.Fatalf("upFromBottom = %d, want input content row", position.upFromBottom)
 	}
 }
 
@@ -1210,6 +1481,121 @@ func TestMouseWheelScrollsTranscriptViewport(t *testing.T) {
 	model = next.(appModel)
 	if model.viewport.YOffset >= bottomOffset {
 		t.Fatalf("YOffset = %d, want less than %d", model.viewport.YOffset, bottomOffset)
+	}
+}
+
+func TestMouseWheelOverTranscriptDoesNotScrollInputViewport(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 14
+	model.input.SetValue("input 01\ninput 02\ninput 03\ninput 04\ninput 05\ninput 06\ninput 07\ninput 08")
+	model.input.CursorEnd()
+	model.relayout()
+	model.transcript = nil
+	for i := 0; i < 30; i++ {
+		model.transcript = append(model.transcript, transcriptEntry{
+			kind:  entryAssistant,
+			title: "assistant",
+			body:  fmt.Sprintf("line %02d", i),
+		})
+	}
+	model.refreshViewport()
+	beforeInput := model.input.View()
+
+	next, _ := model.Update(tea.MouseMsg{
+		X:      10,
+		Y:      3,
+		Type:   tea.MouseWheelUp,
+		Button: tea.MouseButtonWheelUp,
+		Action: tea.MouseActionPress,
+	})
+	model = next.(appModel)
+	if got := model.input.View(); got != beforeInput {
+		t.Fatalf("input view changed after transcript wheel:\nbefore:\n%s\nafter:\n%s", beforeInput, got)
+	}
+}
+
+func TestSidebarMouseWheelDoesNotScrollTranscriptViewport(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 10
+	model.input.SetValue("keep me")
+	model.relayout()
+	model.transcript = nil
+	for i := 0; i < 30; i++ {
+		model.transcript = append(model.transcript, transcriptEntry{
+			kind:  entryAssistant,
+			title: "assistant",
+			body:  fmt.Sprintf("line %02d", i),
+		})
+	}
+	model.refreshViewport()
+	bottomOffset := model.viewport.YOffset
+	beforeInput := model.input.Value()
+
+	next, _ := model.Update(tea.MouseMsg{
+		X:      model.width - model.sidebarWidth + 1,
+		Y:      3,
+		Type:   tea.MouseWheelUp,
+		Button: tea.MouseButtonWheelUp,
+		Action: tea.MouseActionPress,
+	})
+	model = next.(appModel)
+	if model.viewport.YOffset != bottomOffset {
+		t.Fatalf("YOffset = %d, want unchanged %d when wheel is over sidebar", model.viewport.YOffset, bottomOffset)
+	}
+	if model.input.Value() != beforeInput {
+		t.Fatalf("input value = %q, want unchanged %q", model.input.Value(), beforeInput)
+	}
+}
+
+func TestRawMouseEscapeSequenceDoesNotEnterInput(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 12
+	model.input.SetValue("draft")
+	model.relayout()
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("<64;59;25M[<64;59;25M[<65;56;40M")})
+	model = next.(appModel)
+	if got := model.input.Value(); got != "draft" {
+		t.Fatalf("input value = %q, want raw mouse sequence ignored", got)
+	}
+}
+
+func TestRawMouseEscapeDetectorDoesNotRejectNormalText(t *testing.T) {
+	for _, text := range []string{"<tag>", "[not-mouse]", "<64;not;mouseM", "hello"} {
+		if isRawMouseEscapeKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text)}) {
+			t.Fatalf("text %q was detected as raw mouse escape", text)
+		}
+	}
+}
+
+func TestSidebarMouseClickDoesNotStartTranscriptSelection(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 10
+	model.relayout()
+	model.transcript = []transcriptEntry{{
+		kind:  entryAssistant,
+		title: "assistant",
+		body:  "hello",
+	}}
+	model.refreshViewport()
+
+	next, _ := model.Update(tea.MouseMsg{
+		X:      model.width - model.sidebarWidth + 1,
+		Y:      3,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+	model = next.(appModel)
+	if model.selecting || model.selectionActive {
+		t.Fatalf("selection state = selecting:%v active:%v, want sidebar click ignored", model.selecting, model.selectionActive)
 	}
 }
 
@@ -1564,8 +1950,8 @@ func TestModelWizardDoesNotApplyConfigWhenSaveFails(t *testing.T) {
 	}
 }
 
-// TestRenderInputBoxShowsStatefulPanel 验证输入面板会随普通、多行和等待状态切换文案。
-func TestRenderInputBoxShowsStatefulPanel(t *testing.T) {
+// TestRenderInputBoxShowsPureTextarea 验证输入面板只渲染 textarea 内容，不承载 context meter 或等待文案。
+func TestRenderInputBoxShowsPureTextarea(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.width = 80
 	model.input.SetValue("hello")
@@ -1595,9 +1981,17 @@ func TestRenderInputBoxShowsStatefulPanel(t *testing.T) {
 	}
 
 	model.running = true
+	model.input.SetValue("keep typing")
 	rendered = model.renderInputBox()
-	if !strings.Contains(rendered, "waiting for assistant") || strings.Contains(rendered, "0%(0.0%)") {
-		t.Fatalf("waiting input box = %q", rendered)
+	for _, want := range []string{"keep typing"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("running input box = %q, want %q", rendered, want)
+		}
+	}
+	for _, unwanted := range []string{"waiting for assistant", "0%(0.0%)", "free(", "Input", "Waiting", "Terminal"} {
+		if strings.Contains(rendered, unwanted) {
+			t.Fatalf("running input box = %q, should not contain %q", rendered, unwanted)
+		}
 	}
 }
 
@@ -1631,7 +2025,7 @@ func TestContextMeterUsesDefaultLimitAndStableSegments(t *testing.T) {
 	for role, want := range map[string]string{
 		fmt.Sprint(contextCacheStyle.GetForeground()): "214",
 		fmt.Sprint(contextUsedStyle.GetForeground()):  "111",
-		fmt.Sprint(contextFreeStyle.GetForeground()):  "240",
+		fmt.Sprint(contextFreeStyle.GetForeground()):  "246",
 	} {
 		if role != want {
 			t.Fatalf("context style foreground = %q, want %q", role, want)
@@ -1654,6 +2048,71 @@ func TestContextMeterShowsCurrentContextSize(t *testing.T) {
 		if !strings.Contains(meter, want) {
 			t.Fatalf("meter = %q, want %q", meter, want)
 		}
+	}
+}
+
+func TestContextCardCompactsStatusAndWorkCounts(t *testing.T) {
+	runner := &fakeRunner{
+		stats: loop.ContextStats{
+			UsedTokens:  250,
+			CacheTokens: 50,
+			LimitTokens: 1000,
+		},
+		supplements: []string{"extra"},
+	}
+	model := newTestModel(runner)
+	model.transcript = []transcriptEntry{
+		{kind: entryUser, title: "you", body: "first turn"},
+		{kind: entryUser, title: "you (supplement)", body: "extra"},
+		{kind: entryUser, title: "you (queued)", body: "later"},
+	}
+	model.chatQueue.Enqueue("later")
+
+	card := ansi.Strip(model.renderContextCardContent(48))
+	lines := strings.Split(card, "\n")
+	if len(lines) != 4 {
+		t.Fatalf("context card lines = %#v, want token/bar/status/work", lines)
+	}
+	status := lines[2]
+	for _, want := range []string{"cache 5%", "free 75%", "turns 1"} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("status line = %q, want %q", status, want)
+		}
+	}
+	if strings.Contains(status, "supplements") || strings.Contains(status, "queued") {
+		t.Fatalf("status line = %q, should keep work counts separate", status)
+	}
+	work := lines[3]
+	for _, want := range []string{"supplements 1", "queued 1"} {
+		if !strings.Contains(work, want) {
+			t.Fatalf("work line = %q, want %q", work, want)
+		}
+	}
+}
+
+func TestContextCardStatusStaysOneLineWhenNarrow(t *testing.T) {
+	runner := &fakeRunner{
+		stats: loop.ContextStats{
+			UsedTokens:  0,
+			CacheTokens: 0,
+			LimitTokens: 1000,
+		},
+	}
+	model := newTestModel(runner)
+
+	card := ansi.Strip(model.renderContextCardContent(20))
+	lines := strings.Split(card, "\n")
+	if len(lines) != 3 {
+		t.Fatalf("context card lines = %#v, want compact token/bar/status only", lines)
+	}
+	status := lines[2]
+	for _, want := range []string{"c0%", "f100%", "t0"} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("status line = %q, want %q", status, want)
+		}
+	}
+	if lipgloss.Width(status) > 20 {
+		t.Fatalf("status line width = %d, want <= 20: %q", lipgloss.Width(status), status)
 	}
 }
 
@@ -1808,13 +2267,41 @@ func TestAssistantEntryRendersMarkdown(t *testing.T) {
 	rendered := renderEntry(transcriptEntry{
 		kind:  entryAssistant,
 		title: "assistant",
-		body:  "## Title\n\n- one with `code`\n- two\n\n> quoted\n\n```go\nfmt.Println(\"hi\")\n```",
+		body:  "## Title\n\n- one with `code`\n- **bold item**\n\n> quoted **bold quote**\n\n```go\nfmt.Println(\"hi\")\n```",
 	}, 80)
 
-	for _, want := range []string{"assistant", "## Title", "•", "one", "code", "│", "quoted", "code go", "fmt.Println"} {
+	for _, want := range []string{"assistant", "## Title", "•", "one", "code", "bold item", "│", "quoted", "bold quote", "go", "fmt.Println"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered markdown = %q, want %q", rendered, want)
 		}
+	}
+	if strings.Contains(ansi.Strip(rendered), "code go") {
+		t.Fatalf("rendered markdown = %q, should not prefix language labels with code", rendered)
+	}
+	if strings.Contains(ansi.Strip(rendered), "**bold") {
+		t.Fatalf("rendered markdown = %q, should not leave bold markers visible", rendered)
+	}
+}
+
+func TestRenderInlineMarkdownBoldAndCodePrecedence(t *testing.T) {
+	rendered := renderInlineMarkdown("**completion.go** uses `**raw**` and keeps **bold** text")
+	stripped := ansi.Strip(rendered)
+	for _, want := range []string{"completion.go", "**raw**", "bold"} {
+		if !strings.Contains(stripped, want) {
+			t.Fatalf("inline markdown = %q, want %q", stripped, want)
+		}
+	}
+	for _, hidden := range []string{"**completion.go**", "**bold**"} {
+		if strings.Contains(stripped, hidden) {
+			t.Fatalf("inline markdown = %q, should not contain parsed bold marker %q", stripped, hidden)
+		}
+	}
+}
+
+func TestRenderInlineMarkdownKeepsUnclosedBoldLiteral(t *testing.T) {
+	rendered := renderInlineMarkdown("keep **unfinished marker")
+	if got := ansi.Strip(rendered); got != "keep **unfinished marker" {
+		t.Fatalf("inline markdown = %q, want literal unfinished marker", got)
 	}
 }
 
@@ -1822,12 +2309,12 @@ func TestAssistantEntryRendersMarkdown(t *testing.T) {
 func TestMarkdownCodeBlockKeepsNestedMarkdownFencesInsideBlock(t *testing.T) {
 	rendered := renderMarkdown("```markdown\n# 水獭的问候\n\n```go\nfunc hello() {\nfmt.Println(\"Hello!\")\n}\n```\n```", 80)
 
-	for _, want := range []string{"code markdown", "# 水獭的问候", "```go", "func hello()", "fmt.Println", "```"} {
+	for _, want := range []string{"markdown", "# 水獭的问候", "```go", "func hello()", "fmt.Println", "```"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered markdown = %q, want %q", rendered, want)
 		}
 	}
-	if strings.Contains(rendered, "code go") {
+	if strings.Contains(ansi.Strip(rendered), "code markdown") || strings.Contains(ansi.Strip(rendered), "code go") {
 		t.Fatalf("rendered markdown = %q, should not render inner go fence", rendered)
 	}
 }
@@ -1836,14 +2323,89 @@ func TestMarkdownCodeBlockKeepsNestedMarkdownFencesInsideBlock(t *testing.T) {
 func TestMarkdownTableRendersAsAlignedTable(t *testing.T) {
 	rendered := renderMarkdown("| Name | Value |\n| :--- | ---: |\n| alpha | 1 |\n| beta | two |", 80)
 
-	for _, want := range []string{"Name", "Value", "alpha", "beta", "│", "─┼─"} {
+	for _, want := range []string{"Name", "Value", "alpha", "beta", "─────"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered table = %q, want %q", rendered, want)
 		}
 	}
-	for _, unwanted := range []string{":---", "---:"} {
+	for _, unwanted := range []string{":---", "---:", "│", "┼"} {
 		if strings.Contains(rendered, unwanted) {
 			t.Fatalf("rendered table = %q, should not contain %q", rendered, unwanted)
+		}
+	}
+}
+
+func TestMarkdownTableSeparatorVariantsDoNotLeak(t *testing.T) {
+	cases := []struct {
+		name   string
+		input  string
+		leaked []string
+	}{
+		{
+			name:   "em and en dash",
+			input:  "| 模型 | 状态 |\n| ——— | ––– |\n| deepseek-reasoner-with-a-very-long-name | 可用且支持中文输出 |",
+			leaked: []string{"———", "–––"},
+		},
+		{
+			name:   "box drawing",
+			input:  "| Name | Value |\n| ━━━ | ─── |\n| alpha-with-a-very-long-name | beta-with-a-very-long-value |",
+			leaked: []string{"━━━"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			const width = 24
+			rendered := renderMarkdown(tc.input, width)
+			for _, want := range []string{"────"} {
+				if !strings.Contains(rendered, want) {
+					t.Fatalf("rendered table = %q, want %q", rendered, want)
+				}
+			}
+			for _, leaked := range append(tc.leaked, "│", "┼") {
+				if strings.Contains(ansi.Strip(rendered), leaked) {
+					t.Fatalf("rendered table = %q, should not leak separator %q", rendered, leaked)
+				}
+			}
+			assertRenderedLineWidthsAtMost(t, rendered, width)
+		})
+	}
+}
+
+func TestMarkdownCodeBlockWrapsLongLinesWithinWidth(t *testing.T) {
+	const width = 26
+	rendered := renderMarkdown("```go\nfmt.Println(\"这是很长很长的中文内容\") // abcdefghijklmnopqrstuvwxyz\n```\n", width)
+	stripped := ansi.Strip(rendered)
+
+	for _, want := range []string{"go", "┌", "┐", "└", "┘", "│", "fmt.Println"} {
+		if !strings.Contains(stripped, want) {
+			t.Fatalf("rendered code block = %q, want %q", stripped, want)
+		}
+	}
+	if strings.Contains(stripped, "code go") {
+		t.Fatalf("rendered code block = %q, should not prefix language labels with code", stripped)
+	}
+	for _, unwanted := range []string{"▌"} {
+		if strings.Contains(stripped, unwanted) {
+			t.Fatalf("rendered code block = %q, should not contain fragile border %q", stripped, unwanted)
+		}
+	}
+	assertRenderedLineWidthsAtMost(t, rendered, width)
+	if got := maxRenderedLineWidth(stripped); got > width-4 {
+		t.Fatalf("max rendered line width = %d, want <= %d to avoid terminal autowrap:\n%s", got, width-4, stripped)
+	}
+}
+
+func TestMarkdownCodeBlockDoesNotForceFullViewportWidth(t *testing.T) {
+	const width = 80
+	rendered := renderMarkdown("```json\n{\"ok\": true}\n```", width)
+	stripped := ansi.Strip(rendered)
+	if got := maxRenderedLineWidth(stripped); got >= width/2 {
+		t.Fatalf("max rendered line width = %d, want compact code block:\n%s", got, stripped)
+	}
+	for _, want := range []string{"┌", "┐", "└", "┘", "│", "{\"ok\": true}"} {
+		if !strings.Contains(stripped, want) {
+			t.Fatalf("rendered code block = %q, want %q", stripped, want)
 		}
 	}
 }
@@ -1852,16 +2414,27 @@ func TestMarkdownTableRendersAsAlignedTable(t *testing.T) {
 func TestMarkdownCodeBlockKeepsLanguageLabelOutsideBlock(t *testing.T) {
 	rendered := renderMarkdown("```json\n{\"ok\": true}\n```", 80)
 	lines := strings.Split(rendered, "\n")
-	if len(lines) < 2 || !strings.Contains(lines[0], "code json") {
+	if len(lines) < 2 || !strings.Contains(lines[0], "json") || strings.Contains(ansi.Strip(lines[0]), "code json") {
 		t.Fatalf("rendered code block = %q", rendered)
 	}
 	for _, line := range lines[1:] {
-		if strings.Contains(line, "code json") {
+		if strings.Contains(line, "json") {
 			t.Fatalf("rendered code block = %q, should not include label inside body", rendered)
 		}
 	}
 	if !strings.Contains(rendered, "{\"ok\": true}") {
 		t.Fatalf("rendered code block = %q, want json body", rendered)
+	}
+}
+
+func TestMarkdownCodeBlockShowsOnlyLanguageLabel(t *testing.T) {
+	rendered := ansi.Strip(renderMarkdown("```python\ndef hanoi():\n    pass\n```", 80))
+	lines := strings.Split(rendered, "\n")
+	if len(lines) < 2 || strings.TrimSpace(lines[0]) != "python" {
+		t.Fatalf("rendered code block = %q, want python-only label", rendered)
+	}
+	if strings.Contains(rendered, "code python") {
+		t.Fatalf("rendered code block = %q, should not include code prefix", rendered)
 	}
 }
 
@@ -2130,15 +2703,44 @@ func TestCompletionEscClears(t *testing.T) {
 	}
 }
 
+func TestCompletionEscRelayoutsImmediately(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 20
+	model.input.SetValue("@readme")
+	model.completion = &completion{
+		kind:          completionKindFile,
+		filteredItems: []string{"readme.md"},
+		loading:       false,
+	}
+	model.relayout()
+	withCompletionHeight := model.viewport.Height
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = next.(appModel)
+	if model.completion != nil {
+		t.Fatalf("completion = %#v, want nil after esc", model.completion)
+	}
+	if model.viewport.Height <= withCompletionHeight {
+		t.Fatalf("viewport height = %d, want greater than %d after completion closes", model.viewport.Height, withCompletionHeight)
+	}
+}
+
 // TestCompletionTabAppliesSelection 验证 tab 键应用选中的补全项并清除弹窗。
 func TestCompletionTabAppliesSelection(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 20
 	model.completion = &completion{
 		kind:          completionKindCommand,
 		items:         []string{"/help", "/model", "/sessions"},
 		selectedIndex: 0,
 		loading:       false,
 	}
+	model.relayout()
+	withCompletionHeight := model.viewport.Height
 
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = next.(appModel)
@@ -2147,6 +2749,55 @@ func TestCompletionTabAppliesSelection(t *testing.T) {
 	}
 	if got := model.input.Value(); got != "/help " {
 		t.Fatalf("input value = %q, want /help after tab completion", got)
+	}
+	if model.viewport.Height <= withCompletionHeight {
+		t.Fatalf("viewport height = %d, want greater than %d after tab completion", model.viewport.Height, withCompletionHeight)
+	}
+}
+
+func TestCompletionBackspaceRelayoutsWhenTriggerDeleted(t *testing.T) {
+	cases := []struct {
+		name       string
+		value      string
+		completion *completion
+	}{
+		{
+			name:  "file trigger",
+			value: "@",
+			completion: &completion{
+				kind:          completionKindFile,
+				filteredItems: []string{"readme.md"},
+				loading:       false,
+			},
+		},
+		{
+			name:       "command trigger",
+			value:      "/",
+			completion: newCommandCompletion("", NewCommandRegistry()),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			model := newTestModel(&fakeRunner{})
+			model.ready = true
+			model.width = 80
+			model.height = 20
+			model.input.SetValue(tc.value)
+			model.input.CursorEnd()
+			model.completion = tc.completion
+			model.relayout()
+			withCompletionHeight := model.viewport.Height
+
+			next, _ := model.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+			model = next.(appModel)
+			if model.completion != nil {
+				t.Fatalf("completion = %#v, want nil after deleting trigger", model.completion)
+			}
+			if model.viewport.Height <= withCompletionHeight {
+				t.Fatalf("viewport height = %d, want greater than %d after trigger deletion", model.viewport.Height, withCompletionHeight)
+			}
+		})
 	}
 }
 
@@ -2368,6 +3019,9 @@ func TestAtCompletion_输入时不阻断输入框(t *testing.T) {
 // TestAtCompletion_Tab文件时行为同Enter 验证 Tab 选中文件时加空格并关闭候选框。
 func TestAtCompletion_Tab文件时行为同Enter(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 20
 	model.input.SetValue("请引用 @re")
 	model.completion = &completion{
 		kind:          completionKindFile,
@@ -2378,6 +3032,8 @@ func TestAtCompletion_Tab文件时行为同Enter(t *testing.T) {
 		selectedIndex: 0,
 		loading:       false,
 	}
+	model.relayout()
+	withCompletionHeight := model.viewport.Height
 
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = next.(appModel)
@@ -2388,6 +3044,9 @@ func TestAtCompletion_Tab文件时行为同Enter(t *testing.T) {
 	}
 	if model.completion != nil {
 		t.Errorf("completion should be nil after tab on file, got %#v", model.completion)
+	}
+	if model.viewport.Height <= withCompletionHeight {
+		t.Fatalf("viewport height = %d, want greater than %d after file tab completion", model.viewport.Height, withCompletionHeight)
 	}
 }
 
@@ -2425,6 +3084,9 @@ func TestAtCompletion_Tab目录时候选框保持(t *testing.T) {
 // TestAtCompletion_Enter加空格结束引用 验证 Enter 确认时在路径后追加空格以结束引用。
 func TestAtCompletion_Enter加空格结束引用(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 20
 	model.input.SetValue("请引用 @re")
 	model.completion = &completion{
 		kind:          completionKindFile,
@@ -2434,6 +3096,8 @@ func TestAtCompletion_Enter加空格结束引用(t *testing.T) {
 		selectedIndex: 0,
 		loading:       false,
 	}
+	model.relayout()
+	withCompletionHeight := model.viewport.Height
 
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
@@ -2445,6 +3109,9 @@ func TestAtCompletion_Enter加空格结束引用(t *testing.T) {
 	}
 	if model.completion != nil {
 		t.Errorf("completion should be nil after enter, got %#v", model.completion)
+	}
+	if model.viewport.Height <= withCompletionHeight {
+		t.Fatalf("viewport height = %d, want greater than %d after file enter completion", model.viewport.Height, withCompletionHeight)
 	}
 }
 
@@ -2469,6 +3136,18 @@ func TestAtCompletion_Esc清除不退出(t *testing.T) {
 		if _, ok := msg.(tea.QuitMsg); ok {
 			t.Errorf("esc while completion open should not quit TUI")
 		}
+	}
+}
+
+func TestEscDoesNotQuitTUI(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+
+	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd == nil {
+		return
+	}
+	if _, ok := cmd().(tea.QuitMsg); ok {
+		t.Fatalf("esc should not quit TUI")
 	}
 }
 
@@ -2574,11 +3253,16 @@ func TestRenderToolEntryBody_BlockquoteContainsVerticalBar(t *testing.T) {
 	}
 }
 
-func TestRenderToolEntryBody_PrefixesDetailLinesWithArrow(t *testing.T) {
+func TestRenderToolEntryBody_UsesQuietDetailLines(t *testing.T) {
 	body := "Bash ls .\nfile1.go\nfile2.go"
 	result := renderToolEntryBody(body, 60, 1.0)
-	if !strings.Contains(result, "> ") {
-		t.Errorf("renderToolEntryBody = %q, want > prefix on detail lines", result)
+	for _, want := range []string{"Bash ls .", "file1.go", "file2.go"} {
+		if !strings.Contains(result, want) {
+			t.Errorf("renderToolEntryBody = %q, want %q", result, want)
+		}
+	}
+	if strings.Contains(result, "> ") {
+		t.Errorf("renderToolEntryBody = %q, should not use old quote prefix", result)
 	}
 }
 
@@ -2603,8 +3287,8 @@ func TestRenderContextCard_ContainsTokenAndFree(t *testing.T) {
 func TestRenderSubagentsCard_ShowsRunningAndDone(t *testing.T) {
 	ctrl := &fakeSubagentController{
 		tasks: []subagent.TaskSnapshot{
-			{ID: "worker-1", Status: subagent.TaskRunning},
-			{ID: "worker-2", Status: subagent.TaskCompleted},
+			{ID: "worker-1", ParentSessionID: "session-1", Status: subagent.TaskRunning},
+			{ID: "worker-2", ParentSessionID: "session-1", Status: subagent.TaskCompleted},
 		},
 	}
 	model := newTestModel(&fakeRunner{})
@@ -2618,13 +3302,74 @@ func TestRenderSubagentsCard_ShowsRunningAndDone(t *testing.T) {
 	}
 }
 
-// TestRenderPipelineOrTasksContent_ShowsTasksWhenNoPipeline 验证无 pipeline 时显示 tasks 徽章。
-func TestRenderPipelineOrTasksContent_ShowsTasksWhenNoPipeline(t *testing.T) {
+func TestRenderSubagentsCard_UsesPersonaColorForName(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.subagents = &fakeSubagentController{tasks: []subagent.TaskSnapshot{
+		{
+			ID:              "worker-1",
+			Name:            "八潮瑠唯",
+			Color:           "#669988",
+			ParentSessionID: "session-1",
+			Status:          subagent.TaskRunning,
+		},
+	}}
+
+	result := model.renderSubagentsCardContent(40)
+	expectedName := lipgloss.NewStyle().Foreground(lipgloss.Color("#669988")).Render("八潮瑠唯")
+	if !strings.Contains(result, expectedName) {
+		t.Fatalf("subagents card = %q, want persona-colored name %q", result, expectedName)
+	}
+}
+
+func TestRenderSubagentsCard_HidesTasksFromOtherSessions(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.subagents = &fakeSubagentController{tasks: []subagent.TaskSnapshot{
+		{ID: "old-worker", ParentSessionID: "previous-session", Status: subagent.TaskCompleted},
+		{ID: "legacy-worker", Status: subagent.TaskCompleted},
+	}}
+
+	result := model.renderSubagentsCardContent(30)
+	if !strings.Contains(result, "none") {
+		t.Fatalf("subagents card = %q, want empty state for fresh session", result)
+	}
+	for _, hidden := range []string{"old-worker", "legacy-worker"} {
+		if strings.Contains(result, hidden) {
+			t.Fatalf("subagents card = %q, should not contain %q", result, hidden)
+		}
+	}
+}
+
+func TestRenderSubagentsCardContent_ClampsToHeight(t *testing.T) {
+	tasks := make([]subagent.TaskSnapshot, 0, 12)
+	for i := 0; i < 12; i++ {
+		tasks = append(tasks, subagent.TaskSnapshot{
+			ID:              fmt.Sprintf("worker-%02d-long-id", i),
+			ParentSessionID: "session-1",
+			Status:          subagent.TaskCompleted,
+		})
+	}
+	model := newTestModel(&fakeRunner{})
+	model.subagents = &fakeSubagentController{tasks: tasks}
+
+	result := ansi.Strip(model.renderSubagentsCardContentHeight(30, 5))
+	lines := strings.Split(result, "\n")
+	if len(lines) != 5 {
+		t.Fatalf("subagents lines = %d, want 5\n%s", len(lines), result)
+	}
+	if !strings.Contains(result, "more") {
+		t.Fatalf("subagents card = %q, want overflow summary", result)
+	}
+}
+
+// TestRenderPipelineOrTasksContent_HidesTasksWhenNoPipeline 验证无 pipeline 时不显示空 tasks 小块。
+func TestRenderPipelineOrTasksContent_HidesTasksWhenNoPipeline(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.pipelineState.detected = false
 	result := model.renderPipelineOrTasksContent(28, 10)
-	if !strings.Contains(result, "tasks") {
-		t.Errorf("no-pipeline card = %q, want 'tasks' badge", result)
+	for _, hidden := range []string{"tasks", "idle", "no tasks"} {
+		if strings.Contains(result, hidden) {
+			t.Errorf("no-pipeline card = %q, want no %q", result, hidden)
+		}
 	}
 }
 
@@ -2638,12 +3383,124 @@ func TestRenderPipelineOrTasksContent_ShowsPipelineWhenDetected(t *testing.T) {
 	}
 }
 
+func TestRenderPipelineWindowedContent_UsesFullWidthProgressAndRows(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.pipelineState.detected = true
+	model.pipelineState.doneCount = 5
+	model.pipelineState.activeIdx = 5
+	for i := 0; i < len(model.pipelineState.phases); i++ {
+		model.pipelineState.phases[i] = pipelinePhaseEntry{
+			name:   pipelineArtifacts[i][0],
+			status: phaseStatusPending,
+		}
+	}
+	for i := 0; i < 5; i++ {
+		model.pipelineState.phases[i].status = phaseStatusDone
+	}
+	model.pipelineState.phases[5].status = phaseStatusActive
+
+	width := 32
+	result := model.renderPipelineWindowedContent(width, 14)
+	lines := strings.Split(ansi.Strip(result), "\n")
+	if len(lines) < 6 {
+		t.Fatalf("pipeline content = %q, want dashboard rows", result)
+	}
+	progress := lines[2]
+	if got := lipgloss.Width(progress); got != width {
+		t.Fatalf("progress width = %d, want %d in %q", got, width, progress)
+	}
+	if !strings.Contains(progress, "▰") || !strings.Contains(progress, "▶") || !strings.Contains(progress, "▱") {
+		t.Fatalf("progress = %q, want done, active, and pending cells", progress)
+	}
+	if strings.Contains(lines[3], "…") {
+		t.Fatalf("stats row = %q, should not truncate compact labels", lines[3])
+	}
+	for _, line := range lines {
+		if strings.Contains(line, "Execution") && strings.Contains(line, "now") {
+			if got := lipgloss.Width(line); got != width {
+				t.Fatalf("current stage row width = %d, want %d in %q", got, width, line)
+			}
+			return
+		}
+	}
+	t.Fatalf("pipeline content = %q, want current Execution row", result)
+}
+
+func TestRenderPipelineWindowedContent_CompactsLongTimeline(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.pipelineState.detected = true
+	model.pipelineState.doneCount = 5
+	model.pipelineState.activeIdx = 5
+	for i := 0; i < len(model.pipelineState.phases); i++ {
+		model.pipelineState.phases[i] = pipelinePhaseEntry{
+			name:   pipelineArtifacts[i][0],
+			status: phaseStatusPending,
+		}
+	}
+	for i := 0; i < 5; i++ {
+		model.pipelineState.phases[i].status = phaseStatusDone
+	}
+	model.pipelineState.phases[5].status = phaseStatusActive
+
+	result := ansi.Strip(model.renderPipelineWindowedContent(36, 40))
+	visibleStages := 0
+	for _, pa := range pipelineArtifacts {
+		if strings.Contains(result, pa[0]) {
+			visibleStages++
+		}
+	}
+	if visibleStages > pipelineMaxStageRows {
+		t.Fatalf("visible stages = %d, want <= %d\n%s", visibleStages, pipelineMaxStageRows, result)
+	}
+	if strings.Contains(result, "Cleanup") {
+		t.Fatalf("compact timeline should not show distant Cleanup stage:\n%s", result)
+	}
+}
+
+func TestRenderRightPanel_VisibleCardsFillRequestedHeight(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	panel := model.renderRightPanel(30, 24)
+	if got := lipgloss.Height(panel); got != 24 {
+		t.Fatalf("right panel height = %d, want 24", got)
+	}
+	lines := strings.Split(ansi.Strip(panel), "\n")
+	lastLine := strings.TrimSpace(lines[len(lines)-1])
+	if !strings.Contains(lastLine, "╯") {
+		t.Fatalf("right panel last line = %q, want visible card bottom border", lastLine)
+	}
+}
+
+func TestRenderRightPanel_PipelineProgressDoesNotWrap(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.pipelineState.detected = true
+	model.pipelineState.doneCount = 5
+	model.pipelineState.activeIdx = 5
+	for i := 0; i < len(model.pipelineState.phases); i++ {
+		model.pipelineState.phases[i] = pipelinePhaseEntry{
+			name:   pipelineArtifacts[i][0],
+			status: phaseStatusPending,
+		}
+	}
+	for i := 0; i < 5; i++ {
+		model.pipelineState.phases[i].status = phaseStatusDone
+	}
+	model.pipelineState.phases[5].status = phaseStatusActive
+
+	panel := model.renderRightPanel(30, 24)
+	lines := strings.Split(ansi.Strip(panel), "\n")
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "▱▱" {
+			t.Fatalf("right panel has wrapped progress remainder line: %q\n%s", line, ansi.Strip(panel))
+		}
+	}
+}
+
 func TestLoadPipelineState_DetectedWhenSpecExists(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "spec.json"), []byte(`{}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	state := loadPipelineState(dir)
+	state := loadPipelineState(dir, time.Time{})
 	if !state.detected {
 		t.Errorf("detected = false, want true when spec.json exists")
 	}
@@ -2651,7 +3508,7 @@ func TestLoadPipelineState_DetectedWhenSpecExists(t *testing.T) {
 
 func TestLoadPipelineState_NotDetectedWhenEmpty(t *testing.T) {
 	dir := t.TempDir()
-	state := loadPipelineState(dir)
+	state := loadPipelineState(dir, time.Time{})
 	if state.detected {
 		t.Errorf("detected = true, want false for empty dir")
 	}
@@ -2661,9 +3518,42 @@ func TestLoadPipelineState_ActiveIdxAfterSpec(t *testing.T) {
 	dir := t.TempDir()
 	// spec.json exists → Spec (index 1) is done, Plan (index 2) is active
 	os.WriteFile(filepath.Join(dir, "spec.json"), []byte(`{}`), 0o644)
-	state := loadPipelineState(dir)
+	state := loadPipelineState(dir, time.Time{})
 	if state.activeIdx != 2 { // Plan
 		t.Errorf("activeIdx = %d, want 2 (Plan) when spec exists", state.activeIdx)
+	}
+}
+
+func TestLoadPipelineState_IgnoresStaleWorkspaceAfterStartup(t *testing.T) {
+	dir := t.TempDir()
+	specPath := filepath.Join(dir, "spec.json")
+	if err := os.WriteFile(specPath, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cutoff := time.Now()
+	old := cutoff.Add(-2 * time.Hour)
+	if err := os.Chtimes(specPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(dir, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	state := loadPipelineState(dir, cutoff)
+	if state.detected {
+		t.Fatalf("detected = true, want false for stale workspace")
+	}
+}
+
+func TestLoadPipelineState_DetectsWorkspaceUpdatedAfterStartup(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "spec.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	state := loadPipelineState(dir, time.Now().Add(-time.Hour))
+	if !state.detected {
+		t.Fatalf("detected = false, want true for recently updated workspace")
 	}
 }
 

@@ -208,7 +208,7 @@ func (m *appModel) handleTasksCommand() {
 		m.addEntry(transcriptEntry{kind: entryError, title: "tasks", body: "subagent controller is unavailable"})
 		return
 	}
-	tasks := m.subagents.ListTasks()
+	tasks := m.subagentTasks()
 	if len(tasks) == 0 {
 		m.addEntry(transcriptEntry{kind: entrySystem, title: "tasks", body: "no subagent tasks"})
 		return
@@ -225,7 +225,7 @@ func (m appModel) statusText(sessionID string) string {
 	modelCfg := m.currentModelConfig()
 	taskCount := 0
 	if m.subagents != nil {
-		taskCount = len(m.subagents.ListTasks())
+		taskCount = len(m.subagentTasks())
 	}
 	stats := m.contextStats()
 	return fmt.Sprintf(
@@ -245,17 +245,78 @@ func (m appModel) statusText(sessionID string) string {
 	)
 }
 
+func (m appModel) subagentTasks() []subagent.TaskSnapshot {
+	if m.subagents == nil {
+		return nil
+	}
+	sessionID := strings.TrimSpace(m.sessionID)
+	if sessionID == "" {
+		return nil
+	}
+	all := m.subagents.ListTasks()
+	tasks := make([]subagent.TaskSnapshot, 0, len(all))
+	for _, task := range all {
+		if strings.TrimSpace(task.ParentSessionID) == sessionID {
+			tasks = append(tasks, task)
+		}
+	}
+	return tasks
+}
+
 func renderSubagentResult(result subagent.Result) string {
-	return fmt.Sprintf("agent=%s transcript=%s\n%s", result.AgentID, result.TranscriptPath, strings.TrimSpace(result.Content))
+	lines := []string{
+		fmt.Sprintf("%s · depth %d", resultDisplayName(result), result.Depth),
+	}
+	if result.AgentName != "" && result.AgentID != "" {
+		lines = append(lines, "id  "+result.AgentID)
+	}
+	if result.OutputPath != "" {
+		lines = append(lines, "output  "+result.OutputPath)
+	}
+	if result.TranscriptPath != "" {
+		lines = append(lines, "transcript  "+result.TranscriptPath)
+	}
+	if content := summarizeToolContent(strings.TrimSpace(result.Content)); content != "" {
+		lines = append(lines, "result  "+content)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func renderTask(task subagent.TaskSnapshot) string {
-	line := fmt.Sprintf("%s status=%s context=%s transcript=%s", task.ID, task.Status, task.ContextMode, task.TranscriptPath)
+	lines := []string{
+		fmt.Sprintf("%s · %s · %s · depth %d", taskDisplayName(task), task.Status, task.ContextMode, task.Depth),
+	}
+	if task.Name != "" && task.ID != "" {
+		lines = append(lines, "id  "+task.ID)
+	}
+	if task.PID > 0 {
+		lines = append(lines, fmt.Sprintf("pid  %d", task.PID))
+	}
+	if task.OutputPath != "" {
+		lines = append(lines, "output  "+task.OutputPath)
+	}
+	if task.TranscriptPath != "" {
+		lines = append(lines, "transcript  "+task.TranscriptPath)
+	}
 	if task.Error != "" {
-		line += "\nerror: " + task.Error
+		lines = append(lines, "error  "+task.Error)
 	}
 	if task.Content != "" {
-		line += "\nresult: " + summarizeToolContent(task.Content)
+		lines = append(lines, "result  "+summarizeToolContent(task.Content))
 	}
-	return line
+	return strings.Join(lines, "\n")
+}
+
+func taskDisplayName(task subagent.TaskSnapshot) string {
+	if name := strings.TrimSpace(task.Name); name != "" {
+		return name
+	}
+	return shortTaskID(task.ID)
+}
+
+func resultDisplayName(result subagent.Result) string {
+	if name := strings.TrimSpace(result.AgentName); name != "" {
+		return name
+	}
+	return shortTaskID(result.AgentID)
 }

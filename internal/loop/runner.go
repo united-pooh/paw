@@ -31,6 +31,10 @@ type HistoryStore interface {
 	Append(ctx context.Context, sessionID string, msgs ...message.Message) error
 }
 
+type historyExistenceStore interface {
+	Exists(ctx context.Context, sessionID string) (bool, error)
+}
+
 // Runner 负责单轮工具闭环调度。
 type Runner struct {
 	mu        sync.RWMutex
@@ -48,6 +52,7 @@ type Runner struct {
 	usageKnown        bool
 	sessionUsage      model.Usage
 	sessionUsageKnown bool
+	supplements       []string
 }
 
 type tokenUsageTotals struct {
@@ -73,6 +78,7 @@ const (
 type turnState struct {
 	content     strings.Builder
 	pending     strings.Builder
+	toolCalls   []message.ToolCall
 	wroteOutput bool
 	outputMode  outputMode
 	usage       model.Usage
@@ -112,30 +118,55 @@ func (runner *Runner) RunTurn(ctx context.Context, input string) (message.Messag
 	if runner.historyIsNil() && runner.store != nil {
 		messages, err := runner.store.LoadResolvedHistory(ctx, runner.sessionID)
 		if err != nil {
-			return message.Message{}, err
+			if existsStore, ok := runner.store.(historyExistenceStore); ok {
+				exists, existsErr := existsStore.Exists(ctx, runner.sessionID)
+				if existsErr != nil {
+					return message.Message{}, existsErr
+				}
+				if !exists {
+					runner.setHistoryIfNil(nil)
+				} else {
+					return message.Message{}, err
+				}
+			} else {
+				return message.Message{}, err
+			}
+		} else {
+			runner.setHistoryIfNil(messages)
 		}
-		runner.setHistoryIfNil(messages)
 	}
 
 	// 每一轮都基于“已提交的历史副本”工作。
 	// 这样即使当前轮中途失败，也不会污染下一轮上下文。
-	history := runner.buildTurnHistory(input)
+	history, injectedSupplements := runner.buildTurnHistory(input)
+	committed := false
+	defer func() {
+		if !committed && len(injectedSupplements) > 0 {
+			runner.prependSupplements(injectedSupplements)
+		}
+	}()
 	for round := 0; round < maxToolRounds; round++ {
+		var injected []string
+		history, injected = runner.appendPendingSupplements(history)
+		injectedSupplements = append(injectedSupplements, injected...)
+
 		assistantMessage, err := runner.runModelTurn(ctx, history)
 		if err != nil {
 			return message.Message{}, err
 		}
 		history = append(history, assistantMessage)
 
-		if assistantMessage.ToolUse == nil {
+		toolCalls := toolCallsFromMessage(assistantMessage)
+		if len(toolCalls) == 0 {
 			// 只有当本轮完整结束时，才把本轮消息提交为新的会话历史。
 			if err := runner.commitHistory(ctx, history); err != nil {
 				return message.Message{}, err
 			}
+			committed = true
 			return assistantMessage, nil
 		}
 
-		toolResult, err := runner.runToolCall(ctx, assistantMessage.ToolUse)
+		toolResult, err := runner.runToolCalls(ctx, toolCalls)
 		if err != nil {
 			return message.Message{}, err
 		}
@@ -174,14 +205,88 @@ func buildUserMessages(input string) []message.Message {
 	}
 }
 
+// SubmitSupplement records a user supplement that should be injected into the
+// next available model step. It is safe to call while RunTurn is streaming.
+func (runner *Runner) SubmitSupplement(input string) bool {
+	input = strings.TrimSpace(input)
+	if runner == nil || input == "" {
+		return false
+	}
+	runner.mu.Lock()
+	runner.supplements = append(runner.supplements, input)
+	runner.mu.Unlock()
+	return true
+}
+
+// PendingSupplementCount returns supplements that have not yet been injected.
+func (runner *Runner) PendingSupplementCount() int {
+	if runner == nil {
+		return 0
+	}
+	runner.mu.RLock()
+	defer runner.mu.RUnlock()
+	return len(runner.supplements)
+}
+
 // buildTurnHistory 复制已完成历史，并在尾部追加当前用户输入。
 // 这样单轮执行可以安全地在本地 history 上反复追加 tool_use / tool_result。
-func (runner *Runner) buildTurnHistory(input string) []message.Message {
+func (runner *Runner) buildTurnHistory(input string) ([]message.Message, []string) {
 	runner.mu.RLock()
 	history := append([]message.Message(nil), runner.history...)
 	runner.mu.RUnlock()
+	supplements := runner.drainSupplements()
+	history = append(history, buildSupplementMessages(supplements)...)
 	history = append(history, buildUserMessages(input)...)
-	return history
+	return history, supplements
+}
+
+func (runner *Runner) appendPendingSupplements(history []message.Message) ([]message.Message, []string) {
+	supplements := runner.drainSupplements()
+	if len(supplements) == 0 {
+		return history, nil
+	}
+	return append(history, buildSupplementMessages(supplements)...), supplements
+}
+
+func (runner *Runner) drainSupplements() []string {
+	if runner == nil {
+		return nil
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if len(runner.supplements) == 0 {
+		return nil
+	}
+	supplements := append([]string(nil), runner.supplements...)
+	runner.supplements = nil
+	return supplements
+}
+
+func (runner *Runner) prependSupplements(supplements []string) {
+	if runner == nil || len(supplements) == 0 {
+		return
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	combined := make([]string, 0, len(supplements)+len(runner.supplements))
+	combined = append(combined, supplements...)
+	combined = append(combined, runner.supplements...)
+	runner.supplements = combined
+}
+
+func buildSupplementMessages(supplements []string) []message.Message {
+	messages := make([]message.Message, 0, len(supplements))
+	for _, supplement := range supplements {
+		supplement = strings.TrimSpace(supplement)
+		if supplement == "" {
+			continue
+		}
+		messages = append(messages, message.Message{
+			Role:    message.RoleUser,
+			Content: "Supplemental instruction submitted while this turn was running:\n" + supplement,
+		})
+	}
+	return messages
 }
 
 // commitHistory 在一次 turn 成功结束后提交历史。
@@ -219,6 +324,7 @@ func (runner *Runner) ResetHistory() {
 	runner.usageKnown = false
 	runner.sessionUsage = model.Usage{}
 	runner.sessionUsageKnown = false
+	runner.supplements = nil
 }
 
 // LoadHistory 从 store 加载指定 session 的历史，并替换当前 runner 的历史。
@@ -239,6 +345,7 @@ func (runner *Runner) LoadHistory(ctx context.Context, sessionID string) error {
 	runner.usageKnown = false
 	runner.sessionUsage = model.Usage{}
 	runner.sessionUsageKnown = false
+	runner.supplements = nil
 	return nil
 }
 
@@ -302,6 +409,40 @@ func buildToolResultMessage(toolUseID, content string, isError bool) message.Mes
 	}
 }
 
+func buildToolResultsMessage(results []message.ToolResult) message.Message {
+	msg := message.Message{Role: message.RoleUser}
+	if len(results) == 0 {
+		return msg
+	}
+	if len(results) == 1 {
+		result := results[0]
+		msg.ToolResult = &result
+		return msg
+	}
+	msg.ToolResults = append([]message.ToolResult(nil), results...)
+	return msg
+}
+
+func toolCallsFromMessage(msg message.Message) []message.ToolCall {
+	if len(msg.ToolUses) > 0 {
+		return append([]message.ToolCall(nil), msg.ToolUses...)
+	}
+	if msg.ToolUse == nil {
+		return nil
+	}
+	return []message.ToolCall{*msg.ToolUse}
+}
+
+func toolResultsFromMessage(msg message.Message) []message.ToolResult {
+	if len(msg.ToolResults) > 0 {
+		return append([]message.ToolResult(nil), msg.ToolResults...)
+	}
+	if msg.ToolResult == nil {
+		return nil
+	}
+	return []message.ToolResult{*msg.ToolResult}
+}
+
 func (runner *Runner) buildModelMessages(history []message.Message) []message.Message {
 	messages := make([]message.Message, 0, len(history)+1)
 	messages = append(messages, buildSystemMessage(runner.buildSystemPrompt()))
@@ -331,15 +472,29 @@ func (runner *Runner) buildSystemPrompt() string {
 
 func renderMessageForModel(msg message.Message) message.Message {
 	switch {
-	case msg.ToolUse != nil:
+	case len(toolCallsFromMessage(msg)) > 0:
+		calls := toolCallsFromMessage(msg)
+		parts := make([]string, 0, len(calls))
+		for _, call := range calls {
+			parts = append(parts, marshalJSON(toolUseEnvelope{Type: toolUseResponseType, ID: call.ID, Name: call.Name, Input: call.Input}))
+		}
 		return message.Message{
 			Role:    message.RoleAssistant,
-			Content: marshalJSON(toolUseEnvelope{Type: toolUseResponseType, ID: msg.ToolUse.ID, Name: msg.ToolUse.Name, Input: msg.ToolUse.Input}),
+			Content: strings.Join(parts, "\n"),
 		}
-	case msg.ToolResult != nil:
+	case len(toolResultsFromMessage(msg)) > 0:
+		results := toolResultsFromMessage(msg)
+		parts := make([]string, 0, len(results))
+		for _, result := range results {
+			parts = append(parts, marshalJSON(result))
+		}
+		label := "TOOL_RESULT:\n"
+		if len(results) > 1 {
+			label = "TOOL_RESULTS:\n"
+		}
 		return message.Message{
 			Role:    message.RoleUser,
-			Content: "TOOL_RESULT:\n" + marshalJSON(msg.ToolResult),
+			Content: label + strings.Join(parts, "\n"),
 		}
 	default:
 		return message.Message{
@@ -387,6 +542,7 @@ func (runner *Runner) handleEvent(state *turnState, ev model.StreamEvent) (messa
 	if err := runner.appendDelta(state, ev.Delta); err != nil {
 		return message.Message{}, false, err
 	}
+	appendStreamToolCalls(state, ev.ToolCalls)
 
 	if !ev.Done {
 		return message.Message{}, false, nil
@@ -593,7 +749,7 @@ func detectOutputMode(content string) outputMode {
 	}
 
 	// 只要当前累计内容里已经能提取出合法 tool_use，就直接压制输出。
-	if _, ok := extractToolUseEnvelope(trimmed); ok {
+	if len(extractToolUseEnvelopes(trimmed)) > 0 {
 		return outputModeSuppressed
 	}
 
@@ -606,7 +762,7 @@ func detectOutputMode(content string) outputMode {
 	// 模型有时会把 tool_use JSON 包在 Markdown fence 里返回。
 	// 这里一旦看到 “{” 或 “`” 开头，就先抑制输出，等 finalize 再判定
 	// 它到底是工具调用还是普通文本，避免把 tool_use JSON 泄漏到终端。
-	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "`") {
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "`") {
 		return outputModeSuppressed
 	}
 
@@ -696,8 +852,12 @@ func (runner *Runner) writeDelta(state *turnState, delta string) error {
 }
 
 func (runner *Runner) finalizeAssistantMessage(state *turnState) (message.Message, error) {
+	if len(state.toolCalls) > 0 {
+		return buildAssistantToolCallMessage(state.toolCalls), nil
+	}
+
 	msg := parseAssistantMessage(state.content.String())
-	if msg.ToolUse != nil {
+	if len(toolCallsFromMessage(msg)) > 0 {
 		return msg, nil
 	}
 
@@ -719,25 +879,78 @@ func parseAssistantMessage(content string) message.Message {
 		return buildAssistantMessage("")
 	}
 
-	envelope, ok := extractToolUseEnvelope(trimmed)
-	if !ok {
+	envelopes := extractToolUseEnvelopes(trimmed)
+	if len(envelopes) == 0 {
 		return buildAssistantMessage(content)
 	}
-	if envelope.ID == "" {
-		envelope.ID = envelope.Name
-	}
 
-	return message.Message{
-		Role: message.RoleAssistant,
-		ToolUse: &message.ToolCall{
+	calls := make([]message.ToolCall, 0, len(envelopes))
+	for _, envelope := range envelopes {
+		calls = append(calls, message.ToolCall{
 			ID:    envelope.ID,
 			Name:  envelope.Name,
 			Input: envelope.Input,
-		},
+		})
 	}
+
+	return buildAssistantToolCallMessage(calls)
 }
 
-// extractToolUseEnvelope 从 assistant 输出中提取第一个合法的 tool_use 对象。
+func appendStreamToolCalls(state *turnState, calls []message.ToolCall) {
+	if state == nil || len(calls) == 0 {
+		return
+	}
+	state.toolCalls = append(state.toolCalls, calls...)
+	state.pending.Reset()
+	state.outputMode = outputModeSuppressed
+}
+
+func buildAssistantToolCallMessage(calls []message.ToolCall) message.Message {
+	calls = normalizeToolCalls(calls)
+	msg := message.Message{Role: message.RoleAssistant}
+	if len(calls) == 1 {
+		call := calls[0]
+		msg.ToolUse = &call
+	} else if len(calls) > 1 {
+		msg.ToolUses = calls
+		call := calls[0]
+		msg.ToolUse = &call
+	}
+	return msg
+}
+
+func normalizeToolCalls(calls []message.ToolCall) []message.ToolCall {
+	normalized := make([]message.ToolCall, 0, len(calls))
+	for i, call := range calls {
+		if strings.TrimSpace(call.Name) == "" {
+			continue
+		}
+		if call.ID == "" {
+			if len(calls) == 1 {
+				call.ID = call.Name
+			} else {
+				call.ID = fmt.Sprintf("%s_%d", call.Name, i+1)
+			}
+		}
+		if len(call.Input) == 0 {
+			call.Input = json.RawMessage(`{}`)
+		} else {
+			call.Input = append(json.RawMessage(nil), call.Input...)
+		}
+		normalized = append(normalized, call)
+	}
+	return normalized
+}
+
+func extractToolUseEnvelope(trimmed string) (toolUseEnvelope, bool) {
+	envelopes := extractToolUseEnvelopes(trimmed)
+	if len(envelopes) == 0 {
+		return toolUseEnvelope{}, false
+	}
+	return envelopes[0], true
+}
+
+// extractToolUseEnvelopes 从 assistant 输出中提取一个或多个合法的 tool_use 对象。
 // 当前兼容七类格式：
 // 1) 整段内容就是裸 JSON
 // 2) 整段内容就是 fenced JSON
@@ -746,32 +959,34 @@ func parseAssistantMessage(content string) message.Message {
 // 5) <tool_call><tool name="...">...</tool></tool_call> 格式
 // 6) <tool><tool_call><name>X</name><input>JSON</input></tool_call></tool> 格式
 // 7) <toolname>JSON</toolname> 格式（标签名即工具名）
-func extractToolUseEnvelope(trimmed string) (toolUseEnvelope, bool) {
-	if envelope, ok := decodeToolUseEnvelope(trimmed); ok {
-		return envelope, true
+func extractToolUseEnvelopes(trimmed string) []toolUseEnvelope {
+	if envelopes, ok := decodeToolUseEnvelopes(trimmed); ok {
+		return envelopes
 	}
 
 	if payload, ok := extractFencedToolUsePayload(trimmed); ok {
-		return decodeToolUseEnvelope(payload)
+		if envelopes, matched := decodeToolUseEnvelopes(payload); matched {
+			return envelopes
+		}
 	}
 
-	if payload, ok := extractEmbeddedJSONObject(trimmed); ok {
-		return decodeToolUseEnvelope(payload)
+	if envelopes := extractEmbeddedToolUseEnvelopes(trimmed); len(envelopes) > 0 {
+		return envelopes
 	}
 
 	if envelope, ok := extractInvokeToolUseEnvelope(trimmed); ok {
-		return envelope, true
+		return []toolUseEnvelope{envelope}
 	}
 
 	if envelope, ok := extractToolCallEnvelope(trimmed); ok {
-		return envelope, true
+		return []toolUseEnvelope{envelope}
 	}
 
 	if envelope, ok := extractTagNameToolEnvelope(trimmed); ok {
-		return envelope, true
+		return []toolUseEnvelope{envelope}
 	}
 
-	return toolUseEnvelope{}, false
+	return nil
 }
 
 // extractTagNameToolEnvelope 处理 <toolname>JSON</toolname> 格式。
@@ -845,14 +1060,14 @@ func isSimpleXMLTagName(s string) bool {
 
 // extractToolCallEnvelope 处理以下三类 XML 工具调用格式：
 //
-//   格式 A：<tool_call><tool name="X">body</tool></tool_call>
-//           （body 可以是 JSON 或 XML 参数，</tool> 可省略由 </tool_call> 关闭）
+//	格式 A：<tool_call><tool name="X">body</tool></tool_call>
+//	        （body 可以是 JSON 或 XML 参数，</tool> 可省略由 </tool_call> 关闭）
 //
-//   格式 B：<tool><tool_call><name>X</name><input>JSON</input></tool_call></tool>
-//           （DeepSeek 部分模型输出的格式）
+//	格式 B：<tool><tool_call><name>X</name><input>JSON</input></tool_call></tool>
+//	        （DeepSeek 部分模型输出的格式）
 //
-//   格式 C：<tool_call><name>X</name><input>JSON</input></tool_call>
-//           （同格式 B 但无外层 <tool> 包装）
+//	格式 C：<tool_call><name>X</name><input>JSON</input></tool_call>
+//	        （同格式 B 但无外层 <tool> 包装）
 func extractToolCallEnvelope(content string) (toolUseEnvelope, bool) {
 	lower := strings.ToLower(content)
 
@@ -949,6 +1164,32 @@ func decodeToolUseEnvelope(payload string) (toolUseEnvelope, bool) {
 	return envelope, true
 }
 
+func decodeToolUseEnvelopes(payload string) ([]toolUseEnvelope, bool) {
+	payload = strings.TrimSpace(payload)
+	if payload == "" {
+		return nil, false
+	}
+	if envelope, ok := decodeToolUseEnvelope(payload); ok {
+		return []toolUseEnvelope{envelope}, true
+	}
+	if !strings.HasPrefix(payload, "[") {
+		return nil, false
+	}
+	var envelopes []toolUseEnvelope
+	if err := json.Unmarshal([]byte(payload), &envelopes); err != nil {
+		return nil, false
+	}
+	if len(envelopes) == 0 {
+		return nil, false
+	}
+	for _, envelope := range envelopes {
+		if envelope.Type != toolUseResponseType || envelope.Name == "" {
+			return nil, false
+		}
+	}
+	return envelopes, true
+}
+
 func extractMarkdownFenceBody(trimmed string) (string, bool) {
 	rest := strings.TrimPrefix(trimmed, "```")
 	newlineIndex := strings.IndexByte(rest, '\n')
@@ -1031,6 +1272,28 @@ func extractEmbeddedJSONObject(trimmed string) (string, bool) {
 		start = next + relative
 	}
 	return "", false
+}
+
+func extractEmbeddedToolUseEnvelopes(trimmed string) []toolUseEnvelope {
+	var envelopes []toolUseEnvelope
+	for start := strings.IndexByte(trimmed, '{'); start != -1; {
+		payload, next, ok := extractBalancedJSONObject(trimmed, start)
+		if ok {
+			if envelope, matched := decodeToolUseEnvelope(payload); matched {
+				envelopes = append(envelopes, envelope)
+			}
+		}
+
+		if next >= len(trimmed) {
+			break
+		}
+		relative := strings.IndexByte(trimmed[next:], '{')
+		if relative == -1 {
+			break
+		}
+		start = next + relative
+	}
+	return envelopes
 }
 
 func extractBalancedJSONObject(content string, start int) (string, int, bool) {
@@ -1247,46 +1510,108 @@ func (runner *Runner) failAfterPartialOutput(wroteOutput bool, err error) error 
 	return err
 }
 
-func (runner *Runner) runToolCall(ctx context.Context, call *message.ToolCall) (message.Message, error) {
-	if call == nil {
-		return buildToolResultMessage("", "tool call is nil", true), nil
+func (runner *Runner) runToolCalls(ctx context.Context, calls []message.ToolCall) (message.Message, error) {
+	results := make([]message.ToolResult, 0, len(calls))
+	for start := 0; start < len(calls); {
+		if runner.isToolCallConcurrencySafe(calls[start]) {
+			end := start + 1
+			for end < len(calls) && runner.isToolCallConcurrencySafe(calls[end]) {
+				end++
+			}
+			batchResults, err := runner.runToolCallBatch(ctx, calls[start:end])
+			if err != nil {
+				return message.Message{}, err
+			}
+			results = append(results, batchResults...)
+			start = end
+			continue
+		}
+
+		result, err := runner.runToolCall(ctx, calls[start])
+		if err != nil {
+			return message.Message{}, err
+		}
+		results = append(results, result)
+		start++
+	}
+	return buildToolResultsMessage(results), nil
+}
+
+func (runner *Runner) runToolCallBatch(ctx context.Context, calls []message.ToolCall) ([]message.ToolResult, error) {
+	for _, call := range calls {
+		if err := runner.emitToolCall(call); err != nil {
+			return nil, err
+		}
 	}
 
-	if err := runner.ui.OnToolCall(ui.ToolCallEvent{
-		ID:    call.ID,
-		Name:  call.Name,
-		Input: append(json.RawMessage(nil), call.Input...),
-	}); err != nil {
-		return message.Message{}, err
+	results := make([]message.ToolResult, len(calls))
+	var wg sync.WaitGroup
+	for i := range calls {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i] = runner.executeToolCall(ctx, calls[i])
+		}()
+	}
+	wg.Wait()
+
+	for i, result := range results {
+		if err := runner.emitToolResult(calls[i], result); err != nil {
+			return nil, err
+		}
+	}
+	return results, nil
+}
+
+func (runner *Runner) runToolCall(ctx context.Context, call message.ToolCall) (message.ToolResult, error) {
+	if err := runner.emitToolCall(call); err != nil {
+		return message.ToolResult{}, err
 	}
 
 	result := runner.executeToolCall(ctx, call)
-	if err := runner.ui.OnToolResult(ui.ToolResultEvent{
-		ToolUseID: result.ToolResult.ToolUseID,
-		Name:      call.Name,
-		Content:   result.ToolResult.Content,
-		IsError:   result.ToolResult.IsError,
-	}); err != nil {
-		return message.Message{}, err
+	if err := runner.emitToolResult(call, result); err != nil {
+		return message.ToolResult{}, err
 	}
 
 	return result, nil
 }
 
-func (runner *Runner) executeToolCall(ctx context.Context, call *message.ToolCall) message.Message {
+func (runner *Runner) emitToolCall(call message.ToolCall) error {
+	return runner.ui.OnToolCall(ui.ToolCallEvent{
+		ID:    call.ID,
+		Name:  call.Name,
+		Input: append(json.RawMessage(nil), call.Input...),
+	})
+}
+
+func (runner *Runner) emitToolResult(call message.ToolCall, result message.ToolResult) error {
+	return runner.ui.OnToolResult(ui.ToolResultEvent{
+		ToolUseID: result.ToolUseID,
+		Name:      call.Name,
+		Content:   result.Content,
+		IsError:   result.IsError,
+	})
+}
+
+func (runner *Runner) isToolCallConcurrencySafe(call message.ToolCall) bool {
+	return runner.registry != nil && runner.registry.IsConcurrencySafe(call.Name, call.Input)
+}
+
+func (runner *Runner) executeToolCall(ctx context.Context, call message.ToolCall) message.ToolResult {
 	if runner.registry == nil {
-		return buildToolResultMessage(call.ID, "tool registry is nil", true)
+		return message.ToolResult{ToolUseID: call.ID, Content: "tool registry is nil", IsError: true}
 	}
 
 	selectedTool, ok := runner.registry.Get(call.Name)
 	if !ok {
-		return buildToolResultMessage(call.ID, fmt.Sprintf("unknown tool: %s", call.Name), true)
+		return message.ToolResult{ToolUseID: call.ID, Content: fmt.Sprintf("unknown tool: %s", call.Name), IsError: true}
 	}
 
 	output, err := selectedTool.Run(ctx, call.Input)
 	if err != nil {
-		return buildToolResultMessage(call.ID, err.Error(), true)
+		return message.ToolResult{ToolUseID: call.ID, Content: err.Error(), IsError: true}
 	}
 
-	return buildToolResultMessage(call.ID, output, false)
+	return message.ToolResult{ToolUseID: call.ID, Content: output}
 }

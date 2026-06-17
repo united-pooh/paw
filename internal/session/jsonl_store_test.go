@@ -36,6 +36,38 @@ func createTestSession(t *testing.T, store *JSONLStore, sessionID string, msgs [
 	}
 }
 
+func TestAppendCreatesRootSessionOnFirstWrite(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	sessionID := "lazy-session"
+
+	exists, err := store.Exists(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("Exists(%q): %v", sessionID, err)
+	}
+	if exists {
+		t.Fatalf("session %q exists before append", sessionID)
+	}
+
+	if err := store.Append(ctx, sessionID, message.Message{Role: message.RoleUser, Content: "hello"}); err != nil {
+		t.Fatalf("Append(%q) error = %v", sessionID, err)
+	}
+	exists, err = store.Exists(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("Exists(%q) after append: %v", sessionID, err)
+	}
+	if !exists {
+		t.Fatalf("session %q should exist after append", sessionID)
+	}
+	history, err := store.LoadResolvedHistory(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("LoadResolvedHistory(%q) error = %v", sessionID, err)
+	}
+	if len(history) != 1 || history[0].Content != "hello" {
+		t.Fatalf("history = %#v, want first appended message", history)
+	}
+}
+
 // TestListSessions_EmptyDir 验证会话目录不存在时返回空切片而不报错。
 func TestListSessions_EmptyDir(t *testing.T) {
 	store := newTestStore(t)
@@ -223,4 +255,3 @@ func TestListSessions_AssistantMessageNotFirstMessage(t *testing.T) {
 		t.Fatalf("FirstMessage = %q, want 'user second'", got)
 	}
 }
-

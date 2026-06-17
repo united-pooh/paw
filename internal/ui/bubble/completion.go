@@ -28,10 +28,10 @@ type completion struct {
 	items []string
 
 	// 文件补全专用
-	atByteIndex   int    // @ 在 input.Value() 中的字节偏移
-	query         string // @ 之后到词尾的完整文本（含路径前缀）
-	searchDir     string // 解析出的搜索目录（用于判断是否需要重载）
-	prefix        string // searchDir 内的文件名前缀过滤
+	atByteIndex   int      // @ 在 input.Value() 中的字节偏移
+	query         string   // @ 之后到词尾的完整文本（含路径前缀）
+	searchDir     string   // 解析出的搜索目录（用于判断是否需要重载）
+	prefix        string   // searchDir 内的文件名前缀过滤
 	allItems      []string // 目录内加载到的全部条目
 	filteredItems []string // 按 prefix 过滤后的条目
 
@@ -185,7 +185,7 @@ func (m *appModel) syncAtCompletion() tea.Cmd {
 	if atIdx < 0 {
 		// 没有触发点，清除文件补全
 		if m.completion != nil && m.completion.kind == completionKindFile {
-			m.completion = nil
+			m.clearCompletionAndRelayout()
 		}
 		return nil
 	}
@@ -227,14 +227,14 @@ func (m *appModel) syncCommandCompletion() {
 	val := m.input.Value()
 	if !strings.HasPrefix(val, "/") {
 		if m.completion != nil && m.completion.kind == completionKindCommand {
-			m.completion = nil
+			m.clearCompletionAndRelayout()
 		}
 		return
 	}
 	query := strings.TrimPrefix(val, "/")
 	items := commandCompletionItems(query, m.commandRegistry)
 	if len(items) == 0 {
-		m.completion = nil
+		m.clearCompletionAndRelayout()
 		return
 	}
 	if m.completion == nil || m.completion.kind != completionKindCommand {
@@ -380,6 +380,14 @@ func (m appModel) applyCommandCompletion(selected string) appModel {
 	m.input.SetValue(selected + " ")
 	m.input.CursorEnd()
 	return m
+}
+
+func (m *appModel) clearCompletionAndRelayout() {
+	if m.completion == nil {
+		return
+	}
+	m.completion = nil
+	m.relayout()
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

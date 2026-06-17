@@ -3,6 +3,7 @@ package subagent
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -19,6 +20,47 @@ import (
 type fakeRound struct {
 	events []model.StreamEvent
 	err    error
+}
+
+type blockingLauncher struct {
+	mu      sync.Mutex
+	started []WorkerRequest
+}
+
+func (l *blockingLauncher) Start(ctx context.Context, req WorkerRequest) (Process, error) {
+	l.mu.Lock()
+	l.started = append(l.started, req)
+	l.mu.Unlock()
+	return newBlockingProcess(req), nil
+}
+
+type blockingProcess struct {
+	req  WorkerRequest
+	once sync.Once
+	done chan struct{}
+}
+
+func newBlockingProcess(req WorkerRequest) *blockingProcess {
+	return &blockingProcess{req: req, done: make(chan struct{})}
+}
+
+func (p *blockingProcess) PID() int {
+	return 4242
+}
+
+func (p *blockingProcess) Wait() (WorkerResult, error) {
+	<-p.done
+	return WorkerResult{
+		TaskID:    p.req.TaskID,
+		SessionID: p.req.SessionID,
+		Error:     "stopped",
+		ExitCode:  -1,
+	}, context.Canceled
+}
+
+func (p *blockingProcess) Stop() error {
+	p.once.Do(func() { close(p.done) })
+	return nil
 }
 
 type recordingModel struct {
@@ -152,6 +194,15 @@ func messageContents(messages []message.Message) []string {
 	return contents
 }
 
+func withDefaultPersonas(t *testing.T, personas []persona) {
+	t.Helper()
+	previous := defaultPersonas
+	defaultPersonas = append([]persona(nil), personas...)
+	t.Cleanup(func() {
+		defaultPersonas = previous
+	})
+}
+
 func TestRunEmptyContextStartsIndependentRootSession(t *testing.T) {
 	modelStreamer := &recordingModel{
 		rounds: []fakeRound{
@@ -205,6 +256,79 @@ func TestRunEmptyContextStartsIndependentRootSession(t *testing.T) {
 	}
 }
 
+func TestLaunchAssignsUniqueRunningPersonas(t *testing.T) {
+	withDefaultPersonas(t, []persona{
+		{Name: "角色A", Color: "#111111"},
+		{Name: "角色B", Color: "#222222"},
+	})
+
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".ccagent"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	launcher := &blockingLauncher{}
+	manager := NewManager(Config{
+		Store:    store,
+		Root:     root,
+		Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+		Launcher: launcher,
+	})
+
+	first, err := manager.Launch(context.Background(), Request{Prompt: "first"})
+	if err != nil {
+		t.Fatalf("first Launch() error = %v", err)
+	}
+	second, err := manager.Launch(context.Background(), Request{Prompt: "second"})
+	if err != nil {
+		t.Fatalf("second Launch() error = %v", err)
+	}
+	if first.Name == "" || second.Name == "" || first.Color == "" || second.Color == "" {
+		t.Fatalf("launched personas = %#v / %#v", first, second)
+	}
+	if first.Name == second.Name {
+		t.Fatalf("running subagents reused persona %q", first.Name)
+	}
+
+	if _, err := manager.Launch(context.Background(), Request{Prompt: "third"}); err == nil || !strings.Contains(err.Error(), "no idle subagent names") {
+		t.Fatalf("third Launch() error = %v, want exhausted persona pool", err)
+	}
+
+	if _, err := manager.Stop(context.Background(), first.ID); err != nil {
+		t.Fatalf("Stop(first) error = %v", err)
+	}
+	if _, err := manager.Stop(context.Background(), second.ID); err != nil {
+		t.Fatalf("Stop(second) error = %v", err)
+	}
+}
+
+func TestCompletedPersonaIsIdle(t *testing.T) {
+	withDefaultPersonas(t, []persona{{Name: "可复用角色", Color: "#333333"}})
+	modelStreamer := &recordingModel{
+		rounds: []fakeRound{
+			{events: []model.StreamEvent{{Delta: "first answer"}, {Done: true}}},
+			{events: []model.StreamEvent{{Delta: "second answer"}, {Done: true}}},
+		},
+	}
+	manager, _, _ := newTestManager(t, modelStreamer, settings.DefaultConfig(), nil)
+
+	first, err := manager.Run(context.Background(), Request{Prompt: "first"})
+	if err != nil {
+		t.Fatalf("first Run() error = %v", err)
+	}
+	if first.AgentName != "可复用角色" || first.AgentColor != "#333333" {
+		t.Fatalf("first result persona = %#v", first)
+	}
+
+	second, err := manager.Run(context.Background(), Request{Prompt: "second"})
+	if err != nil {
+		t.Fatalf("second Run() error = %v", err)
+	}
+	if second.AgentName != first.AgentName || second.AgentColor != first.AgentColor {
+		t.Fatalf("second result persona = %#v, want reuse of completed persona %#v", second, first)
+	}
+}
+
 func TestRunForkContextInheritsCommittedParentHistory(t *testing.T) {
 	modelStreamer := &recordingModel{
 		rounds: []fakeRound{
@@ -248,6 +372,36 @@ func TestRunForkContextInheritsCommittedParentHistory(t *testing.T) {
 		if gotHistoryContents[i] != want {
 			t.Fatalf("resolved history = %#v, want %#v", gotHistoryContents, wantHistoryContents)
 		}
+	}
+}
+
+func TestRunForkContextCreatesEmptyParentWhenMissing(t *testing.T) {
+	modelStreamer := &recordingModel{
+		rounds: []fakeRound{
+			{events: []model.StreamEvent{{Delta: "child answer"}, {Done: true}}},
+		},
+	}
+	manager, store, _ := newTestManager(t, modelStreamer, settings.DefaultConfig(), nil)
+
+	result, err := manager.Run(context.Background(), Request{
+		ParentSessionID: "lazy-parent",
+		Prompt:          "child prompt",
+		ContextMode:     settings.ContextModeFork,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if exists, err := store.Exists(context.Background(), "lazy-parent"); err != nil {
+		t.Fatalf("Exists(lazy-parent) error = %v", err)
+	} else if !exists {
+		t.Fatalf("lazy parent should be created before fork")
+	}
+	history, err := store.LoadResolvedHistory(context.Background(), result.SessionID)
+	if err != nil {
+		t.Fatalf("LoadResolvedHistory(%q) error = %v", result.SessionID, err)
+	}
+	if got := messageContents(history); len(got) != 2 || got[0] != "child prompt" || got[1] != "child answer" {
+		t.Fatalf("resolved history = %#v, want child-only history", got)
 	}
 }
 
@@ -312,7 +466,11 @@ func TestSubagentToolsProvideSyncAndStatusAccess(t *testing.T) {
 		}
 	}
 
-	syncOut, err := tool.Run(context.Background(), json.RawMessage(`{"prompt":"sync prompt","description":"focus"}`))
+	if safeTool, ok := tool.(interface{ IsConcurrencySafe(json.RawMessage) bool }); !ok || !safeTool.IsConcurrencySafe(json.RawMessage(`{"prompt":"background prompt"}`)) || safeTool.IsConcurrencySafe(json.RawMessage(`{"prompt":"sync prompt","run_mode":"sync"}`)) {
+		t.Fatalf("Subagent concurrency safety should be true for default background and false for explicit sync")
+	}
+
+	syncOut, err := tool.Run(context.Background(), json.RawMessage(`{"prompt":"sync prompt","description":"focus","run_mode":"sync"}`))
 	if err != nil {
 		t.Fatalf("sync Run() error = %v", err)
 	}
@@ -320,7 +478,7 @@ func TestSubagentToolsProvideSyncAndStatusAccess(t *testing.T) {
 		t.Fatalf("sync output = %q", syncOut)
 	}
 
-	backgroundOut, err := tool.Run(context.Background(), json.RawMessage(`{"prompt":"background prompt","run_mode":"background"}`))
+	backgroundOut, err := tool.Run(context.Background(), json.RawMessage(`{"prompt":"background prompt"}`))
 	if err != nil {
 		t.Fatalf("background Run() error = %v", err)
 	}
@@ -328,9 +486,15 @@ func TestSubagentToolsProvideSyncAndStatusAccess(t *testing.T) {
 	if err := json.Unmarshal([]byte(backgroundOut), &launched); err != nil {
 		t.Fatalf("json.Unmarshal(backgroundOut) error = %v", err)
 	}
+	if launched.ParentSessionID != "parent-session" {
+		t.Fatalf("launched.ParentSessionID = %q, want parent-session", launched.ParentSessionID)
+	}
 	completed := waitForTask(t, manager, launched.ID, TaskCompleted)
 	if completed.Content != "background answer" {
 		t.Fatalf("completed background task = %#v", completed)
+	}
+	if completed.ParentSessionID != "parent-session" {
+		t.Fatalf("completed.ParentSessionID = %q, want parent-session", completed.ParentSessionID)
 	}
 
 	statusTool := NewStatusTool(manager)
@@ -349,4 +513,116 @@ func TestSubagentToolsProvideSyncAndStatusAccess(t *testing.T) {
 	if !strings.Contains(singleOut, `"id": "`+launched.ID+`"`) || !strings.Contains(singleOut, `"content": "background answer"`) {
 		t.Fatalf("status single output = %q", singleOut)
 	}
+}
+
+func TestLaunchPersistsTaskRegistry(t *testing.T) {
+	modelStreamer := &recordingModel{
+		rounds: []fakeRound{
+			{events: []model.StreamEvent{{Delta: "persisted answer"}, {Done: true}}},
+		},
+	}
+	manager, store, root := newTestManager(t, modelStreamer, settings.DefaultConfig(), nil)
+
+	task, err := manager.Launch(context.Background(), Request{
+		Prompt:      "persist this",
+		Description: "persist test",
+	})
+	if err != nil {
+		t.Fatalf("Launch() error = %v", err)
+	}
+	completed := waitForTask(t, manager, task.ID, TaskCompleted)
+	if completed.OutputPath == "" || completed.ExitCode == nil || *completed.ExitCode != 0 {
+		t.Fatalf("completed task output metadata = %#v", completed)
+	}
+	if _, err := os.Stat(completed.OutputPath); err != nil {
+		t.Fatalf("output path %q stat error = %v", completed.OutputPath, err)
+	}
+
+	reader := NewManager(Config{Store: store, Root: root, Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()}})
+	loaded, ok := reader.Status(task.ID)
+	if !ok {
+		t.Fatalf("Status(%q) from registry not found", task.ID)
+	}
+	if loaded.Status != TaskCompleted || loaded.Content != "persisted answer" || loaded.OutputPath != completed.OutputPath {
+		t.Fatalf("loaded task = %#v, want completed persisted task", loaded)
+	}
+}
+
+func TestStopStopsRunningWorkerAndPersistsStoppedStatus(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".ccagent"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	launcher := &blockingLauncher{}
+	manager := NewManager(Config{
+		Store:    store,
+		Root:     root,
+		Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+		Launcher: launcher,
+	})
+
+	task, err := manager.Launch(context.Background(), Request{Prompt: "wait"})
+	if err != nil {
+		t.Fatalf("Launch() error = %v", err)
+	}
+	if task.PID != 4242 || task.OutputPath == "" || task.Depth != 1 {
+		t.Fatalf("launched task = %#v", task)
+	}
+
+	stopped, err := manager.Stop(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if stopped.Status != TaskStopped || stopped.ExitCode == nil || *stopped.ExitCode != -1 {
+		t.Fatalf("stopped task = %#v", stopped)
+	}
+	loaded, ok := manager.Status(task.ID)
+	if !ok || loaded.Status != TaskStopped {
+		t.Fatalf("Status() after stop = %#v/%v", loaded, ok)
+	}
+	if _, err := os.Stat(stopped.OutputPath); err != nil {
+		t.Fatalf("stopped output path %q stat error = %v", stopped.OutputPath, err)
+	}
+}
+
+func TestProcessLauncherParsesWorkerJSON(t *testing.T) {
+	launcher := &ProcessLauncher{
+		Command: os.Args[0],
+		Args:    []string{"-test.run=TestSubagentWorkerHelperProcess"},
+		Env:     []string{"GOCODE_SUBAGENT_HELPER=1"},
+	}
+	proc, err := launcher.Start(context.Background(), WorkerRequest{
+		TaskID:    "task-1",
+		SessionID: "session-1",
+		Prompt:    "hello",
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	result, err := proc.Wait()
+	if err != nil {
+		t.Fatalf("Wait() error = %v result=%#v", err, result)
+	}
+	if result.TaskID != "task-1" || result.SessionID != "session-1" || result.Content != "worker: hello" || result.ExitCode != 0 {
+		t.Fatalf("worker result = %#v", result)
+	}
+}
+
+func TestSubagentWorkerHelperProcess(t *testing.T) {
+	if os.Getenv("GOCODE_SUBAGENT_HELPER") != "1" {
+		return
+	}
+	var req WorkerRequest
+	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
+		_, _ = os.Stderr.WriteString(err.Error())
+		os.Exit(2)
+	}
+	_ = json.NewEncoder(os.Stdout).Encode(WorkerResult{
+		TaskID:    req.TaskID,
+		SessionID: req.SessionID,
+		Content:   "worker: " + req.Prompt,
+		ExitCode:  0,
+	})
+	os.Exit(0)
 }

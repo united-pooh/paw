@@ -33,6 +33,22 @@ func TestNormalizeRestoresSupportedDefaults(t *testing.T) {
 	}
 }
 
+func TestNormalizeLegacyInputTitleMeterLocation(t *testing.T) {
+	cfg := Normalize(Config{
+		Subagent: SubagentConfig{
+			DefaultContextMode: ContextModeEmpty,
+			DefaultRunMode:     RunModeSync,
+		},
+		UI: UIConfig{
+			ContextLimitTokens:   DefaultContextLimitTokens,
+			ContextMeterLocation: MeterLocationInputTitle,
+		},
+	})
+	if cfg.UI.ContextMeterLocation != MeterLocationInputAbove {
+		t.Fatalf("ContextMeterLocation = %q, want %q", cfg.UI.ContextMeterLocation, MeterLocationInputAbove)
+	}
+}
+
 func TestSaveLoadAndControllerRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".ccagent", "settings.json")
 	want := Config{

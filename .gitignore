@@ -5,3 +5,4 @@
 .ccagent/
 .env.local
 .pipeline-workspace/
+.mockups/

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"gocode/internal/loop"
@@ -19,27 +20,38 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 )
 
 type options struct {
-	prompt    string
-	sessionID string
+	prompt         string
+	sessionID      string
+	subagentWorker bool
 }
 
 func parseOptions() options {
 	prompt := flag.String("p", "", "single-turn prompt; omit to start Bubble Tea UI")
 	sessionID := flag.String("s", "", "session ID; omit to resume/create by cwd")
+	subagentWorker := flag.Bool("subagent-worker", false, "run hidden subagent worker")
 	flag.Parse()
 
 	return options{
-		prompt:    *prompt,
-		sessionID: *sessionID,
+		prompt:         *prompt,
+		sessionID:      *sessionID,
+		subagentWorker: *subagentWorker,
 	}
 }
 
 func main() {
 	opts := parseOptions()
 	ctx := context.Background()
+
+	if opts.subagentWorker {
+		if err := runSubagentWorkerMode(ctx, os.Stdin, os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 
 	if opts.prompt != "" {
 		if err := runSingleTurnMode(ctx, opts); err != nil {
@@ -81,6 +93,41 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	return output.Run(ctx, runner, sessionID)
 }
 
+func runSubagentWorkerMode(ctx context.Context, input io.Reader, output io.Writer) error {
+	var req subagent.WorkerRequest
+	if err := json.NewDecoder(input).Decode(&req); err != nil {
+		return fmt.Errorf("decode subagent worker request: %w", err)
+	}
+	if strings.TrimSpace(req.SessionID) == "" {
+		return fmt.Errorf("subagent worker session_id is required")
+	}
+
+	runner, sessionID, _, _, _, _, err := buildRunnerWithSubagentContext(ctx, req.SessionID, headless.New(io.Discard), subagentRuntimeContext{
+		depth:        req.Depth,
+		maxDepth:     req.MaxDepth,
+		parentTaskID: req.TaskID,
+	})
+	result := subagent.WorkerResult{
+		TaskID:    req.TaskID,
+		SessionID: sessionID,
+		ExitCode:  0,
+	}
+	if err != nil {
+		result.Error = err.Error()
+		result.ExitCode = 1
+		return json.NewEncoder(output).Encode(result)
+	}
+
+	msg, err := runner.RunTurn(ctx, req.Prompt)
+	if err != nil {
+		result.Error = err.Error()
+		result.ExitCode = 1
+		return json.NewEncoder(output).Encode(result)
+	}
+	result.Content = strings.TrimSpace(msg.Content)
+	return json.NewEncoder(output).Encode(result)
+}
+
 func clearTerminalWindow(w io.Writer) {
 	if w == nil {
 		return
@@ -88,7 +135,17 @@ func clearTerminalWindow(w io.Writer) {
 	_, _ = io.WriteString(w, "\x1b[H\x1b[2J\x1b[3J")
 }
 
+type subagentRuntimeContext struct {
+	depth        int
+	maxDepth     int
+	parentTaskID string
+}
+
 func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI) (*loop.Runner, string, *model.Client, *settings.Controller, *subagent.Manager, *session.JSONLStore, error) {
+	return buildRunnerWithSubagentContext(ctx, sessionIDFlag, output, subagentRuntimeContext{})
+}
+
+func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, output uiiface.UI, subCtx subagentRuntimeContext) (*loop.Runner, string, *model.Client, *settings.Controller, *subagent.Manager, *session.JSONLStore, error) {
 	cfg, err := model.LoadConfigFromEnv()
 	if err != nil {
 		return nil, "", nil, nil, nil, nil, err
@@ -118,13 +175,27 @@ func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI) (
 	if n, ok := output.(subagent.Notifier); ok {
 		notifier = n
 	}
+	executable, err := os.Executable()
+	if err != nil {
+		return nil, "", nil, nil, nil, nil, fmt.Errorf("resolve executable: %w", err)
+	}
 	subagentManager := subagent.NewManager(subagent.Config{
-		Model:    client,
-		Store:    store,
-		Root:     root,
-		Settings: settingsController,
-		Notifier: notifier,
+		Model:        client,
+		Store:        store,
+		Root:         root,
+		Settings:     settingsController,
+		Notifier:     notifier,
+		Launcher:     subagent.NewProcessLauncher(executable, root),
+		Depth:        subCtx.depth,
+		MaxDepth:     subCtx.maxDepth,
+		ParentTaskID: subCtx.parentTaskID,
 	})
+	registry := buildToolRegistry(root, subagentManager, sessionID)
+
+	return loop.NewRunnerWithInstructionRoot(client, output, registry, store, sessionID, root), sessionID, client, settingsController, subagentManager, store, nil
+}
+
+func buildToolRegistry(root string, subagentManager *subagent.Manager, sessionID string) *tool.Registry {
 	registry := tool.NewRegistry()
 	registry.Register(&toolfile.LSTool{Root: root})
 	registry.Register(&toolfile.ReadTool{Root: root})
@@ -135,8 +206,8 @@ func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI) (
 	registry.Register(&toolwebfetch.Tool{})
 	registry.Register(subagent.NewTool(subagentManager, sessionID))
 	registry.Register(subagent.NewStatusTool(subagentManager))
-
-	return loop.NewRunnerWithInstructionRoot(client, output, registry, store, sessionID, root), sessionID, client, settingsController, subagentManager, store, nil
+	registry.Register(subagent.NewStopTool(subagentManager))
+	return registry
 }
 
 func resolveSessionID(ctx context.Context, store *session.JSONLStore, sessionIDFlag, cwd string) (string, error) {
@@ -154,9 +225,6 @@ func resolveSessionID(ctx context.Context, store *session.JSONLStore, sessionIDF
 	sessionID, err := session.GenerateSessionID()
 	if err != nil {
 		return "", fmt.Errorf("生成 session ID 失败: %w", err)
-	}
-	if _, err := store.CreateRoot(ctx, session.CreateRootRequest{SessionID: sessionID}); err != nil {
-		return "", fmt.Errorf("创建 session 失败: %w", err)
 	}
 	return sessionID, nil
 }

@@ -11,10 +11,12 @@ const (
 )
 
 type Message struct {
-	Role       Role        `json:"role"`
-	Content    string      `json:"content,omitempty"`
-	ToolUse    *ToolCall   `json:"tool_use,omitempty"`
-	ToolResult *ToolResult `json:"tool_result,omitempty"`
+	Role        Role         `json:"role"`
+	Content     string       `json:"content,omitempty"`
+	ToolUse     *ToolCall    `json:"tool_use,omitempty"`
+	ToolUses    []ToolCall   `json:"tool_uses,omitempty"`
+	ToolResult  *ToolResult  `json:"tool_result,omitempty"`
+	ToolResults []ToolResult `json:"tool_results,omitempty"`
 }
 
 type ToolCall struct {

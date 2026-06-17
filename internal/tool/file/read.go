@@ -27,6 +27,10 @@ func (t *ReadTool) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}`)
 }
 
+func (t *ReadTool) IsConcurrencySafe(json.RawMessage) bool {
+	return true
+}
+
 func (t *ReadTool) Run(ctx context.Context, input json.RawMessage) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err

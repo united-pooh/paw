@@ -23,6 +23,17 @@ type Runner interface {
 	LoadHistory(ctx context.Context, sessionID string) error
 }
 
+// SupplementSubmitter describes runners that can accept instructions while a
+// model turn is already running.
+type SupplementSubmitter interface {
+	SubmitSupplement(input string) bool
+}
+
+// SupplementStatsProvider exposes pending supplement counts for status UI.
+type SupplementStatsProvider interface {
+	PendingSupplementCount() int
+}
+
 // SessionStore 描述 TUI 列举和管理会话所需的最小接口。
 type SessionStore interface {
 	ListSessions(ctx context.Context) ([]session.SessionSummary, error)
@@ -113,6 +124,7 @@ func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 		appModel,
 		tea.WithContext(ctx),
 		tea.WithOutput(newAnchoredOutput(os.Stdout, anchor)),
+		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
 

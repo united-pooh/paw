@@ -35,6 +35,18 @@ func (r *Registry) Get(name string) (Tool, bool) {
 	return tool, ok
 }
 
+func (r *Registry) IsConcurrencySafe(name string, input []byte) bool {
+	registered, ok := r.Get(name)
+	if !ok {
+		return false
+	}
+	safeTool, ok := registered.(ConcurrencySafeTool)
+	if !ok {
+		return false
+	}
+	return safeTool.IsConcurrencySafe(append([]byte(nil), input...))
+}
+
 func (r *Registry) Describe() []string {
 	if r == nil || len(r.tools) == 0 {
 		return nil

@@ -19,19 +19,20 @@ import (
 )
 
 // pipelinePollCmd 异步检测 .pipeline-workspace/ 并返回 pipelineStateUpdatedMsg。
-func pipelinePollCmd() tea.Cmd {
+func pipelinePollCmd(activeAfter time.Time) tea.Cmd {
 	return func() tea.Msg {
 		cwd, err := os.Getwd()
 		if err != nil {
 			return pipelineStateUpdatedMsg{}
 		}
 		workspaceDir := filepath.Join(cwd, ".pipeline-workspace")
-		return pipelineStateUpdatedMsg{state: loadPipelineState(workspaceDir)}
+		return pipelineStateUpdatedMsg{state: loadPipelineState(workspaceDir, activeAfter)}
 	}
 }
 
 // newModel 创建完整的 TUI 状态模型，并初始化输入框、滚动区和系统消息。
 func newModel(ctx context.Context, runner Runner, sessionID string, controller ModelConfigController, settingsController SettingsController, subagentController SubagentController, sessionStore SessionStore, anchor *terminalCursorAnchor) appModel {
+	now := time.Now()
 	input := textarea.New()
 	input.Prompt = ""
 	input.Placeholder = ">"
@@ -51,20 +52,21 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 
 	vp := viewport.New(80, 20)
 	model := appModel{
-		ctx:             ctx,
-		runner:          runner,
-		sessionID:       sessionID,
-		modelConfig:     controller,
-		settingsConfig:  settingsController,
-		subagents:       subagentController,
-		sessionStore:    sessionStore,
-		commandRegistry: NewCommandRegistry(),
-		cursorAnchor:    anchor,
-		input:           input,
-		viewport:        vp,
-		cursorFrameAt:   time.Now(),
-		activeAssistant: -1,
-		historyIndex:    -1,
+		ctx:                 ctx,
+		runner:              runner,
+		sessionID:           sessionID,
+		modelConfig:         controller,
+		settingsConfig:      settingsController,
+		subagents:           subagentController,
+		sessionStore:        sessionStore,
+		commandRegistry:     NewCommandRegistry(),
+		cursorAnchor:        anchor,
+		input:               input,
+		viewport:            vp,
+		cursorFrameAt:       now,
+		pipelineActiveAfter: now,
+		activeAssistant:     -1,
+		historyIndex:        -1,
 		transcript: []transcriptEntry{
 			{
 				kind:  entrySystem,
@@ -119,7 +121,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refreshViewportPreservingOffset()
 			}
 		}
-		return m, tea.Batch(cursorFrameTick(), pipelinePollCmd())
+		return m, tea.Batch(cursorFrameTick(), pipelinePollCmd(m.pipelineActiveAfter))
 	case assistantDeltaMsg:
 		m.isGenerating = true
 		m.appendAssistantDelta(string(msg))
@@ -131,11 +133,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case toolCallMsg:
 		m.isGenerating = false
 		m.activeAssistant = -1
-		m.addEntry(transcriptEntry{
-			kind:  entryTool,
-			title: "tool",
-			body:  fmt.Sprintf("%s %s", msg.Name, prettyJSON(json.RawMessage(msg.Input))),
-		})
+		m.recordToolCallCitation(msg.ID, msg.Name, json.RawMessage(msg.Input))
 		return m, nil
 	case toolResultMsg:
 		m.activeAssistant = -1
@@ -143,16 +141,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.IsError {
 			status = "error"
 		}
-		body := fmt.Sprintf("%s %s", msg.Name, status)
-		if preview := summarizeToolContent(msg.Content); preview != "" {
-			body = fmt.Sprintf("%s: %s", body, preview)
-		}
-		m.addEntry(transcriptEntry{
-			kind:    entryTool,
-			title:   "result",
-			body:    body,
-			isError: msg.IsError,
-		})
+		m.recordToolResultCitation(msg.ToolUseID, msg.Name, status, msg.Content, msg.IsError)
 		return m, nil
 	case systemEventMsg:
 		title := strings.TrimSpace(msg.Title)
@@ -176,6 +165,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.turnStartedAt = time.Time{}
 		m.syncRunningFlags()
 		if msg.err != nil {
+			m.pendingToolCites = nil
 			m.addEntry(transcriptEntry{
 				kind:  entryError,
 				title: "error",
@@ -260,6 +250,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pipelineState = msg.state
 		return m, nil
 	case tea.KeyMsg:
+		if isRawMouseEscapeKey(msg) {
+			return m, nil
+		}
 		if m.settingWizard != nil {
 			return m.handleSettingWizardKey(msg)
 		}
@@ -273,7 +266,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.completion != nil {
 			switch msg.String() {
 			case "esc":
-				m.completion = nil
+				m.clearCompletionAndRelayout()
 				return m, nil
 			case "up", "ctrl+p":
 				m.completion.navigateUp()
@@ -301,7 +294,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m = m.applyCommandCompletion(selected)
 					}
 				}
-				m.completion = nil
+				m.clearCompletionAndRelayout()
 				return m, nil
 			case "enter":
 				visible := m.completion.visibleItems()
@@ -314,7 +307,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m = m.applyCommandCompletion(selected)
 					}
 				}
-				m.completion = nil
+				m.clearCompletionAndRelayout()
 				return m, nil
 			}
 			// 其他键：不 return，继续走下面的 switch 和 textarea 更新
@@ -333,12 +326,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input.SetValue("")
 			m.input.CursorEnd()
 			m.pending = nil
-			m.completion = nil
+			m.clearCompletionAndRelayout()
 			m.syncInputMode()
 			m.relayout()
 			return m, nil
-		case "esc":
-			return m, tea.Quit
 		case "ctrl+o":
 			m.showThinking = !m.showThinking
 			m.refreshViewportPreservingOffset()
@@ -347,12 +338,27 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleInputVerticalNavigation(-1)
 		case "down":
 			return m.handleInputVerticalNavigation(1)
+		case "tab":
+			if m.isModelWorkRunning() {
+				return m.handleQueueSubmit()
+			}
 		case "enter":
 			return m.handleSubmit()
 		}
 	case tea.MouseMsg:
 		if next, handled, cmd := m.handleTranscriptMouse(msg); handled {
 			return next, cmd
+		}
+		if isMouseWheel(msg) {
+			if m.isTranscriptViewportMouse(msg) {
+				var viewportCmd tea.Cmd
+				m.viewport, viewportCmd = m.viewport.Update(msg)
+				return m, viewportCmd
+			}
+			return m, nil
+		}
+		if m.isSidebarMouse(msg) {
+			return m, nil
 		}
 	}
 

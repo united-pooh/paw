@@ -6,12 +6,14 @@ import (
 	"errors"
 	"gocode/internal/message"
 	"gocode/internal/model"
+	"gocode/internal/session"
 	"gocode/internal/tool"
 	"gocode/internal/ui"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeRound struct {
@@ -104,6 +106,15 @@ type fakeTool struct {
 	output string
 	err    error
 	input  json.RawMessage
+	safe   bool
+}
+
+type blockingTool struct {
+	name    string
+	output  string
+	started chan struct{}
+	release chan struct{}
+	safe    bool
 }
 
 type fakeStore struct {
@@ -143,6 +154,49 @@ func (t *fakeTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 	return t.output, nil
 }
 
+func (t *fakeTool) IsConcurrencySafe(input json.RawMessage) bool {
+	return t.safe
+}
+
+func (t *blockingTool) Name() string {
+	return t.name
+}
+
+func (t *blockingTool) Description() string {
+	return "blocking fake tool"
+}
+
+func (t *blockingTool) InputSchema() json.RawMessage {
+	return nil
+}
+
+func (t *blockingTool) Run(ctx context.Context, input json.RawMessage) (string, error) {
+	if t.started != nil {
+		close(t.started)
+	}
+	if t.release != nil {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-t.release:
+		}
+	}
+	return t.output, nil
+}
+
+func (t *blockingTool) IsConcurrencySafe(input json.RawMessage) bool {
+	return t.safe
+}
+
+func messagesContainContent(messages []message.Message, want string) bool {
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, want) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRunTurnStreamsAndReturnsFinalMessage(t *testing.T) {
 	ui := &fakeUI{}
 	model := &fakeModel{
@@ -176,6 +230,49 @@ func TestRunTurnStreamsAndReturnsFinalMessage(t *testing.T) {
 	}
 	if ui.doneCount != 1 {
 		t.Fatalf("ui.doneCount = %d, want 1", ui.doneCount)
+	}
+}
+
+func TestRunTurnCreatesLazySessionOnCommit(t *testing.T) {
+	ui := &fakeUI{}
+	model := &fakeModel{
+		rounds: []fakeRound{{
+			events: []model.StreamEvent{
+				{Delta: "hello back"},
+				{Done: true},
+			},
+		}},
+	}
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	runner := NewRunner(model, ui, tool.NewRegistry(), store, "lazy-session")
+
+	exists, err := store.Exists(context.Background(), "lazy-session")
+	if err != nil {
+		t.Fatalf("Exists() error = %v", err)
+	}
+	if exists {
+		t.Fatalf("lazy session exists before RunTurn")
+	}
+
+	if _, err := runner.RunTurn(context.Background(), "hello"); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	exists, err = store.Exists(context.Background(), "lazy-session")
+	if err != nil {
+		t.Fatalf("Exists() after RunTurn error = %v", err)
+	}
+	if !exists {
+		t.Fatalf("lazy session should exist after successful RunTurn")
+	}
+	history, err := store.LoadResolvedHistory(context.Background(), "lazy-session")
+	if err != nil {
+		t.Fatalf("LoadResolvedHistory() error = %v", err)
+	}
+	if len(history) != 2 || history[0].Content != "hello" || history[1].Content != "hello back" {
+		t.Fatalf("history = %#v, want user prompt and assistant reply", history)
 	}
 }
 
@@ -562,6 +659,324 @@ func TestRunTurnExecutesToolAndReturnsFinalAnswer(t *testing.T) {
 	}
 	if !foundToolResult {
 		t.Fatalf("second round messages do not include tool result: %#v", model.calls[1])
+	}
+}
+
+func TestRunTurnExecutesMultipleToolUsesAndCarriesAllResults(t *testing.T) {
+	ui := &fakeUI{}
+	model := &fakeModel{
+		rounds: []fakeRound{
+			{
+				events: []model.StreamEvent{
+					{Delta: `{"type":"tool_use","id":"call_read","name":"Read","input":{"file_path":"go.mod"}}`},
+					{Delta: `{"type":"tool_use","id":"call_grep","name":"Grep","input":{"pattern":"module"}}`},
+					{Done: true},
+				},
+			},
+			{
+				events: []model.StreamEvent{
+					{Delta: "tools complete"},
+					{Done: true},
+				},
+			},
+		},
+	}
+	registry := tool.NewRegistry()
+	registry.Register(&fakeTool{name: "Read", output: "module gocode", safe: true})
+	registry.Register(&fakeTool{name: "Grep", output: "go.mod:1:module gocode", safe: true})
+	runner := NewRunner(model, ui, registry, nil, "")
+
+	msg, err := runner.RunTurn(context.Background(), "read and grep")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if msg.Content != "tools complete" {
+		t.Fatalf("msg.Content = %q, want tools complete", msg.Content)
+	}
+	if got := len(ui.toolCalls); got != 2 {
+		t.Fatalf("len(ui.toolCalls) = %d, want 2", got)
+	}
+	if got := len(ui.toolResults); got != 2 {
+		t.Fatalf("len(ui.toolResults) = %d, want 2", got)
+	}
+	if len(model.calls) != 2 {
+		t.Fatalf("model calls = %d, want 2", len(model.calls))
+	}
+	for _, want := range []string{"TOOL_RESULTS:", "call_read", "module gocode", "call_grep", "go.mod:1:module gocode"} {
+		if !messagesContainContent(model.calls[1], want) {
+			t.Fatalf("second model call messages = %#v, want %q", model.calls[1], want)
+		}
+	}
+}
+
+func TestRunTurnRunsConcurrencySafeToolsInParallel(t *testing.T) {
+	ui := &fakeUI{}
+	model := &fakeModel{
+		rounds: []fakeRound{
+			{
+				events: []model.StreamEvent{
+					{Delta: `[`},
+					{Delta: `{"type":"tool_use","id":"call_a","name":"A","input":{}},`},
+					{Delta: `{"type":"tool_use","id":"call_b","name":"B","input":{}}]`},
+					{Done: true},
+				},
+			},
+			{
+				events: []model.StreamEvent{{Delta: "done"}, {Done: true}},
+			},
+		},
+	}
+	first := &blockingTool{name: "A", output: "a", started: make(chan struct{}), release: make(chan struct{}), safe: true}
+	second := &blockingTool{name: "B", output: "b", started: make(chan struct{}), release: make(chan struct{}), safe: true}
+	registry := tool.NewRegistry()
+	registry.Register(first)
+	registry.Register(second)
+	runner := NewRunner(model, ui, registry, nil, "")
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := runner.RunTurn(context.Background(), "run both")
+		done <- err
+	}()
+
+	select {
+	case <-first.started:
+	case <-time.After(time.Second):
+		t.Fatal("first tool did not start")
+	}
+	select {
+	case <-second.started:
+	case <-time.After(time.Second):
+		t.Fatal("second concurrency-safe tool did not start before first released")
+	}
+	close(first.release)
+	close(second.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunTurn() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunTurn() timed out")
+	}
+	if len(ui.deltas) != 1 || ui.deltas[0] != "done" {
+		t.Fatalf("ui.deltas = %#v, want only final answer", ui.deltas)
+	}
+}
+
+func TestRunTurnKeepsUnsafeToolsSerial(t *testing.T) {
+	ui := &fakeUI{}
+	model := &fakeModel{
+		rounds: []fakeRound{
+			{
+				events: []model.StreamEvent{
+					{Delta: `[{"type":"tool_use","id":"call_a","name":"A","input":{}},{"type":"tool_use","id":"call_b","name":"B","input":{}}]`},
+					{Done: true},
+				},
+			},
+			{
+				events: []model.StreamEvent{{Delta: "done"}, {Done: true}},
+			},
+		},
+	}
+	first := &blockingTool{name: "A", output: "a", started: make(chan struct{}), release: make(chan struct{})}
+	second := &blockingTool{name: "B", output: "b", started: make(chan struct{}), release: make(chan struct{})}
+	registry := tool.NewRegistry()
+	registry.Register(first)
+	registry.Register(second)
+	runner := NewRunner(model, ui, registry, nil, "")
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := runner.RunTurn(context.Background(), "run both")
+		done <- err
+	}()
+
+	select {
+	case <-first.started:
+	case <-time.After(time.Second):
+		t.Fatal("first tool did not start")
+	}
+	select {
+	case <-second.started:
+		t.Fatal("unsafe second tool started before first released")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(first.release)
+	select {
+	case <-second.started:
+	case <-time.After(time.Second):
+		t.Fatal("second tool did not start after first released")
+	}
+	close(second.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunTurn() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunTurn() timed out")
+	}
+}
+
+func TestRunTurnInjectsSupplementBeforeNextModelStep(t *testing.T) {
+	ui := &fakeUI{}
+	model := &fakeModel{
+		rounds: []fakeRound{
+			{
+				events: []model.StreamEvent{
+					{Delta: `{"type":"tool_use","id":"call_1","name":"Read","input":{"file_path":"go.mod"}}`},
+					{Done: true},
+				},
+			},
+			{
+				events: []model.StreamEvent{
+					{Delta: "used supplement"},
+					{Done: true},
+				},
+			},
+		},
+	}
+	blocker := &blockingTool{
+		name:    "Read",
+		output:  "module gocode",
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	registry := tool.NewRegistry()
+	registry.Register(blocker)
+	runner := NewRunner(model, ui, registry, nil, "")
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := runner.RunTurn(context.Background(), "read go.mod")
+		done <- err
+	}()
+
+	select {
+	case <-blocker.started:
+	case <-time.After(time.Second):
+		t.Fatal("tool did not start")
+	}
+	if !runner.SubmitSupplement("prefer the short answer") {
+		t.Fatal("SubmitSupplement() = false")
+	}
+	close(blocker.release)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunTurn() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunTurn() timed out")
+	}
+	if got := runner.PendingSupplementCount(); got != 0 {
+		t.Fatalf("PendingSupplementCount() = %d, want 0", got)
+	}
+	if len(model.calls) != 2 {
+		t.Fatalf("model calls = %d, want 2", len(model.calls))
+	}
+	for _, want := range []string{
+		"Supplemental instruction submitted while this turn was running:",
+		"prefer the short answer",
+	} {
+		if !messagesContainContent(model.calls[1], want) {
+			t.Fatalf("second model call messages = %#v, want %q", model.calls[1], want)
+		}
+	}
+}
+
+func TestRunTurnCarriesLateSupplementToNextPrompt(t *testing.T) {
+	stream := make(chan model.StreamEvent, 2)
+	blocking := &blockingModel{
+		streams: []chan model.StreamEvent{stream},
+		started: make(chan int, 1),
+	}
+	runner := NewRunner(blocking, &fakeUI{}, tool.NewRegistry(), nil, "")
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := runner.RunTurn(context.Background(), "first")
+		done <- err
+	}()
+
+	select {
+	case <-blocking.started:
+	case <-time.After(time.Second):
+		t.Fatal("first model call did not start")
+	}
+	if !runner.SubmitSupplement("late context") {
+		t.Fatal("SubmitSupplement() = false")
+	}
+	stream <- model.StreamEvent{Delta: "done"}
+	stream <- model.StreamEvent{Done: true}
+	close(stream)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunTurn() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunTurn() timed out")
+	}
+	if got := runner.PendingSupplementCount(); got != 1 {
+		t.Fatalf("PendingSupplementCount() = %d, want 1", got)
+	}
+
+	nextModel := &fakeModel{rounds: []fakeRound{{
+		events: []model.StreamEvent{
+			{Delta: "next done"},
+			{Done: true},
+		},
+	}}}
+	runner.model = nextModel
+	if _, err := runner.RunTurn(context.Background(), "next"); err != nil {
+		t.Fatalf("second RunTurn() error = %v", err)
+	}
+	if got := runner.PendingSupplementCount(); got != 0 {
+		t.Fatalf("PendingSupplementCount() after second turn = %d, want 0", got)
+	}
+	if len(nextModel.calls) != 1 {
+		t.Fatalf("next model calls = %d, want 1", len(nextModel.calls))
+	}
+	for _, want := range []string{"late context", "next"} {
+		if !messagesContainContent(nextModel.calls[0], want) {
+			t.Fatalf("next model call messages = %#v, want %q", nextModel.calls[0], want)
+		}
+	}
+}
+
+func TestRunTurnKeepsSupplementWhenModelCallFails(t *testing.T) {
+	failingModel := &fakeModel{rounds: []fakeRound{{err: errors.New("boom")}}}
+	runner := NewRunner(failingModel, &fakeUI{}, tool.NewRegistry(), nil, "")
+	if !runner.SubmitSupplement("do not lose this") {
+		t.Fatal("SubmitSupplement() = false")
+	}
+
+	if _, err := runner.RunTurn(context.Background(), "first"); err == nil {
+		t.Fatal("RunTurn() error = nil, want failure")
+	}
+	if got := runner.PendingSupplementCount(); got != 1 {
+		t.Fatalf("PendingSupplementCount() = %d, want 1", got)
+	}
+
+	nextModel := &fakeModel{rounds: []fakeRound{{
+		events: []model.StreamEvent{
+			{Delta: "recovered"},
+			{Done: true},
+		},
+	}}}
+	runner.model = nextModel
+	if _, err := runner.RunTurn(context.Background(), "recover"); err != nil {
+		t.Fatalf("recovery RunTurn() error = %v", err)
+	}
+	if got := runner.PendingSupplementCount(); got != 0 {
+		t.Fatalf("PendingSupplementCount() after recovery = %d, want 0", got)
+	}
+	if !messagesContainContent(nextModel.calls[0], "do not lose this") {
+		t.Fatalf("recovery messages = %#v, want retained supplement", nextModel.calls[0])
 	}
 }
 

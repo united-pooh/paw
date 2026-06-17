@@ -38,17 +38,29 @@ type Config struct {
 	Root     string
 	Settings SettingsProvider
 	Notifier Notifier
+	Launcher Launcher
+
+	Depth        int
+	MaxDepth     int
+	ParentTaskID string
 }
 
 type Manager struct {
-	model    loop.ModelStreamer
-	store    Store
-	root     string
-	settings SettingsProvider
-	notifier Notifier
+	model        loop.ModelStreamer
+	store        Store
+	root         string
+	settings     SettingsProvider
+	notifier     Notifier
+	launcher     Launcher
+	registry     taskRegistry
+	depth        int
+	maxDepth     int
+	parentTaskID string
 
-	mu    sync.RWMutex
-	tasks map[string]TaskSnapshot
+	startMu sync.Mutex
+	mu      sync.RWMutex
+	tasks   map[string]TaskSnapshot
+	running map[string]Process
 }
 
 type Request struct {
@@ -61,10 +73,16 @@ type Request struct {
 
 type Result struct {
 	AgentID        string               `json:"agent_id"`
+	AgentName      string               `json:"agent_name,omitempty"`
+	AgentColor     string               `json:"agent_color,omitempty"`
 	SessionID      string               `json:"session_id"`
 	ContextMode    settings.ContextMode `json:"context_mode"`
 	RunMode        settings.RunMode     `json:"run_mode"`
 	TranscriptPath string               `json:"transcript_path"`
+	OutputPath     string               `json:"output_path,omitempty"`
+	ExitCode       *int                 `json:"exit_code,omitempty"`
+	Depth          int                  `json:"depth"`
+	ParentTaskID   string               `json:"parent_task_id,omitempty"`
 	Content        string               `json:"content,omitempty"`
 }
 
@@ -74,21 +92,30 @@ const (
 	TaskRunning   TaskStatus = "running"
 	TaskCompleted TaskStatus = "completed"
 	TaskFailed    TaskStatus = "failed"
+	TaskStopped   TaskStatus = "stopped"
 )
 
 type TaskSnapshot struct {
-	ID             string               `json:"id"`
-	SessionID      string               `json:"session_id"`
-	Description    string               `json:"description,omitempty"`
-	Prompt         string               `json:"prompt"`
-	ContextMode    settings.ContextMode `json:"context_mode"`
-	RunMode        settings.RunMode     `json:"run_mode"`
-	Status         TaskStatus           `json:"status"`
-	TranscriptPath string               `json:"transcript_path"`
-	StartedAt      time.Time            `json:"started_at"`
-	FinishedAt     *time.Time           `json:"finished_at,omitempty"`
-	Content        string               `json:"content,omitempty"`
-	Error          string               `json:"error,omitempty"`
+	ID              string               `json:"id"`
+	Name            string               `json:"name,omitempty"`
+	Color           string               `json:"color,omitempty"`
+	SessionID       string               `json:"session_id"`
+	ParentSessionID string               `json:"parent_session_id,omitempty"`
+	Description     string               `json:"description,omitempty"`
+	Prompt          string               `json:"prompt"`
+	ContextMode     settings.ContextMode `json:"context_mode"`
+	RunMode         settings.RunMode     `json:"run_mode"`
+	Status          TaskStatus           `json:"status"`
+	TranscriptPath  string               `json:"transcript_path"`
+	OutputPath      string               `json:"output_path,omitempty"`
+	PID             int                  `json:"pid,omitempty"`
+	ExitCode        *int                 `json:"exit_code,omitempty"`
+	Depth           int                  `json:"depth"`
+	ParentTaskID    string               `json:"parent_task_id,omitempty"`
+	StartedAt       time.Time            `json:"started_at"`
+	FinishedAt      *time.Time           `json:"finished_at,omitempty"`
+	Content         string               `json:"content,omitempty"`
+	Error           string               `json:"error,omitempty"`
 }
 
 type sinkUI struct{}
@@ -96,18 +123,32 @@ type sinkUI struct{}
 var _ ui.UI = sinkUI{}
 
 func NewManager(cfg Config) *Manager {
-	return &Manager{
-		model:    cfg.Model,
-		store:    cfg.Store,
-		root:     cfg.Root,
-		settings: cfg.Settings,
-		notifier: cfg.Notifier,
-		tasks:    make(map[string]TaskSnapshot),
+	m := &Manager{
+		model:        cfg.Model,
+		store:        cfg.Store,
+		root:         cfg.Root,
+		settings:     cfg.Settings,
+		notifier:     cfg.Notifier,
+		launcher:     cfg.Launcher,
+		registry:     newTaskRegistry(cfg.Root),
+		depth:        cfg.Depth,
+		maxDepth:     cfg.MaxDepth,
+		parentTaskID: strings.TrimSpace(cfg.ParentTaskID),
+		tasks:        make(map[string]TaskSnapshot),
+		running:      make(map[string]Process),
 	}
+	if m.maxDepth <= 0 {
+		m.maxDepth = 4
+	}
+	if m.launcher == nil && m.model != nil {
+		m.launcher = newInProcessLauncher(m.runWorkerInProcess)
+	}
+	return m
 }
 
 func (m *Manager) Run(ctx context.Context, req Request) (Result, error) {
 	req = m.normalizeRequest(req)
+	req.RunMode = settings.RunModeSync
 	if err := validateRequest(req); err != nil {
 		return Result{}, err
 	}
@@ -115,26 +156,23 @@ func (m *Manager) Run(ctx context.Context, req Request) (Result, error) {
 		return Result{}, err
 	}
 
-	sessionID, err := m.prepareSession(ctx, req)
+	task, process, err := m.startTask(ctx, req)
 	if err != nil {
 		return Result{}, err
 	}
-	content, err := m.runSession(ctx, sessionID, req.Prompt)
-	result := Result{
-		AgentID:        sessionID,
-		SessionID:      sessionID,
-		ContextMode:    req.ContextMode,
-		RunMode:        settings.RunModeSync,
-		TranscriptPath: m.store.TranscriptPath(sessionID),
-		Content:        content,
-	}
-	if err != nil {
-		return result, err
+	workerResult, waitErr := process.Wait()
+	task = m.finishTask(ctx, task.ID, workerResult, waitErr)
+	result := resultFromTask(task)
+	if waitErr != nil {
+		return result, waitErr
 	}
 	return result, nil
 }
 
 func (m *Manager) Launch(ctx context.Context, req Request) (TaskSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return TaskSnapshot{}, err
+	}
 	req = m.normalizeRequest(req)
 	req.RunMode = settings.RunModeBackground
 	if err := validateRequest(req); err != nil {
@@ -144,40 +182,102 @@ func (m *Manager) Launch(ctx context.Context, req Request) (TaskSnapshot, error)
 		return TaskSnapshot{}, err
 	}
 
-	sessionID, err := m.prepareSession(ctx, req)
+	task, process, err := m.startTask(context.Background(), req)
 	if err != nil {
 		return TaskSnapshot{}, err
 	}
+	go m.waitBackground(task.ID, process)
+	return task, nil
+}
 
-	task := TaskSnapshot{
-		ID:             sessionID,
-		SessionID:      sessionID,
-		Description:    req.Description,
-		Prompt:         req.Prompt,
-		ContextMode:    req.ContextMode,
-		RunMode:        settings.RunModeBackground,
-		Status:         TaskRunning,
-		TranscriptPath: m.store.TranscriptPath(sessionID),
-		StartedAt:      time.Now().UTC(),
+func (m *Manager) Stop(ctx context.Context, id string) (TaskSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return TaskSnapshot{}, err
 	}
-	m.setTask(task)
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return TaskSnapshot{}, fmt.Errorf("subagent task id is required")
+	}
 
-	go m.runBackground(sessionID, req)
+	m.mu.RLock()
+	process, ok := m.running[id]
+	task, taskOK := m.tasks[id]
+	m.mu.RUnlock()
+	if !taskOK {
+		var loadErr error
+		task, taskOK, loadErr = m.registry.loadTask(ctx, id)
+		if loadErr != nil {
+			return TaskSnapshot{}, loadErr
+		}
+	}
+	if !taskOK {
+		return TaskSnapshot{}, fmt.Errorf("subagent task not found: %s", id)
+	}
+	if task.Status != TaskRunning {
+		return task, fmt.Errorf("subagent task %s is not running (status=%s)", id, task.Status)
+	}
+
+	if ok && process != nil {
+		_ = process.Stop()
+	}
+
+	now := time.Now().UTC()
+	exitCode := -1
+	task.Status = TaskStopped
+	task.FinishedAt = &now
+	task.ExitCode = &exitCode
+	task.Error = "stopped"
+
+	m.mu.Lock()
+	m.tasks[id] = task
+	delete(m.running, id)
+	m.mu.Unlock()
+
+	_ = m.registry.saveTask(ctx, task)
+	_ = m.registry.saveOutput(ctx, id, WorkerResult{
+		TaskID:    id,
+		SessionID: task.SessionID,
+		Error:     task.Error,
+		ExitCode:  exitCode,
+	})
+	m.notifyTaskFinished(task)
 	return task, nil
 }
 
 func (m *Manager) Status(id string) (TaskSnapshot, bool) {
+	id = strings.TrimSpace(id)
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-	task, ok := m.tasks[strings.TrimSpace(id)]
+	task, ok := m.tasks[id]
+	m.mu.RUnlock()
+	if ok {
+		return task, true
+	}
+	task, ok, err := m.registry.loadTask(context.Background(), id)
+	if err != nil {
+		return TaskSnapshot{}, false
+	}
 	return task, ok
 }
 
 func (m *Manager) ListTasks() []TaskSnapshot {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-	tasks := make([]TaskSnapshot, 0, len(m.tasks))
+	tasksByID := make(map[string]TaskSnapshot, len(m.tasks))
 	for _, task := range m.tasks {
+		tasksByID[task.ID] = task
+	}
+	m.mu.RUnlock()
+
+	diskTasks, err := m.registry.listTasks(context.Background())
+	if err == nil {
+		for _, task := range diskTasks {
+			if _, ok := tasksByID[task.ID]; !ok {
+				tasksByID[task.ID] = task
+			}
+		}
+	}
+
+	tasks := make([]TaskSnapshot, 0, len(tasksByID))
+	for _, task := range tasksByID {
 		tasks = append(tasks, task)
 	}
 	sort.Slice(tasks, func(i, j int) bool {
@@ -218,8 +318,8 @@ func (m *Manager) validate() error {
 	if m == nil {
 		return fmt.Errorf("subagent manager is nil")
 	}
-	if m.model == nil {
-		return fmt.Errorf("subagent model is nil")
+	if m.launcher == nil {
+		return fmt.Errorf("subagent launcher is nil")
 	}
 	if m.store == nil {
 		return fmt.Errorf("subagent store is nil")
@@ -230,6 +330,154 @@ func (m *Manager) validate() error {
 	return nil
 }
 
+func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Process, error) {
+	m.startMu.Lock()
+	defer m.startMu.Unlock()
+
+	depth := m.depth + 1
+	if depth > m.maxDepth {
+		return TaskSnapshot{}, nil, fmt.Errorf("subagent depth limit exceeded: %d > %d", depth, m.maxDepth)
+	}
+
+	persona, err := m.assignPersona(ctx)
+	if err != nil {
+		return TaskSnapshot{}, nil, err
+	}
+
+	sessionID, err := m.prepareSession(ctx, req)
+	if err != nil {
+		return TaskSnapshot{}, nil, err
+	}
+
+	task := TaskSnapshot{
+		ID:              sessionID,
+		Name:            persona.Name,
+		Color:           persona.Color,
+		SessionID:       sessionID,
+		ParentSessionID: strings.TrimSpace(req.ParentSessionID),
+		Description:     req.Description,
+		Prompt:          req.Prompt,
+		ContextMode:     req.ContextMode,
+		RunMode:         req.RunMode,
+		Status:          TaskRunning,
+		TranscriptPath:  m.store.TranscriptPath(sessionID),
+		OutputPath:      m.registry.outputPath(sessionID),
+		Depth:           depth,
+		ParentTaskID:    m.parentTaskID,
+		StartedAt:       time.Now().UTC(),
+	}
+	workerReq := WorkerRequest{
+		TaskID:          task.ID,
+		SessionID:       task.SessionID,
+		ParentSessionID: strings.TrimSpace(req.ParentSessionID),
+		ParentTaskID:    task.ParentTaskID,
+		Prompt:          req.Prompt,
+		Description:     req.Description,
+		ContextMode:     req.ContextMode,
+		RunMode:         req.RunMode,
+		Depth:           task.Depth,
+		MaxDepth:        m.maxDepth,
+	}
+
+	if err := m.registry.saveTask(ctx, task); err != nil {
+		return TaskSnapshot{}, nil, err
+	}
+	m.setTask(task)
+
+	process, err := m.launcher.Start(ctx, workerReq)
+	if err != nil {
+		task.Status = TaskFailed
+		task.Error = err.Error()
+		now := time.Now().UTC()
+		exitCode := 1
+		task.FinishedAt = &now
+		task.ExitCode = &exitCode
+		m.setTask(task)
+		_ = m.registry.saveTask(ctx, task)
+		_ = m.registry.saveOutput(ctx, task.ID, WorkerResult{
+			TaskID:    task.ID,
+			SessionID: task.SessionID,
+			Error:     task.Error,
+			ExitCode:  exitCode,
+		})
+		return TaskSnapshot{}, nil, err
+	}
+	task.PID = process.PID()
+	m.mu.Lock()
+	m.tasks[task.ID] = task
+	m.running[task.ID] = process
+	m.mu.Unlock()
+	if err := m.registry.saveTask(ctx, task); err != nil {
+		_ = process.Stop()
+		now := time.Now().UTC()
+		exitCode := 1
+		task.Status = TaskFailed
+		task.Error = err.Error()
+		task.FinishedAt = &now
+		task.ExitCode = &exitCode
+		m.mu.Lock()
+		m.tasks[task.ID] = task
+		delete(m.running, task.ID)
+		m.mu.Unlock()
+		_ = m.registry.saveOutput(ctx, task.ID, WorkerResult{
+			TaskID:    task.ID,
+			SessionID: task.SessionID,
+			Error:     task.Error,
+			ExitCode:  exitCode,
+		})
+		_ = m.registry.saveTask(ctx, task)
+		return TaskSnapshot{}, nil, err
+	}
+	return task, process, nil
+}
+
+func (m *Manager) waitBackground(taskID string, process Process) {
+	result, err := process.Wait()
+	task := m.finishTask(context.Background(), taskID, result, err)
+	m.notifyTaskFinished(task)
+}
+
+func (m *Manager) finishTask(ctx context.Context, taskID string, result WorkerResult, err error) TaskSnapshot {
+	now := time.Now().UTC()
+	m.mu.Lock()
+	task := m.tasks[taskID]
+	if task.ID == "" {
+		task.ID = taskID
+		task.SessionID = result.SessionID
+		task.OutputPath = m.registry.outputPath(taskID)
+	}
+	if task.Status != TaskRunning {
+		delete(m.running, taskID)
+		m.mu.Unlock()
+		return task
+	}
+	exitCode := result.ExitCode
+	if exitCode == 0 && err != nil {
+		exitCode = 1
+	}
+	task.FinishedAt = &now
+	task.ExitCode = &exitCode
+	if result.Content != "" {
+		task.Content = strings.TrimSpace(result.Content)
+	}
+	if err != nil || result.Error != "" {
+		task.Status = TaskFailed
+		task.Error = strings.TrimSpace(result.Error)
+		if task.Error == "" && err != nil {
+			task.Error = err.Error()
+		}
+	} else {
+		task.Status = TaskCompleted
+	}
+	m.tasks[taskID] = task
+	delete(m.running, taskID)
+	m.mu.Unlock()
+
+	_ = m.registry.saveOutput(ctx, taskID, result)
+	_ = m.registry.saveTask(ctx, task)
+	return task
+}
+
 func (m *Manager) prepareSession(ctx context.Context, req Request) (string, error) {
 	sessionID, err := session.GenerateSessionID()
 	if err != nil {
@@ -237,9 +485,13 @@ func (m *Manager) prepareSession(ctx context.Context, req Request) (string, erro
 	}
 	switch req.ContextMode {
 	case settings.ContextModeFork:
+		parentID := strings.TrimSpace(req.ParentSessionID)
+		if err := m.ensureSessionExists(ctx, parentID); err != nil {
+			return "", err
+		}
 		if _, err := m.store.Fork(ctx, session.ForkRequest{
-			SessionID:        sessionID,
-			ParentSessionID: strings.TrimSpace(req.ParentSessionID),
+			SessionID:       sessionID,
+			ParentSessionID: parentID,
 			ForkFromSeq:     -1,
 		}); err != nil {
 			return "", err
@@ -252,6 +504,23 @@ func (m *Manager) prepareSession(ctx context.Context, req Request) (string, erro
 	return sessionID, nil
 }
 
+func (m *Manager) ensureSessionExists(ctx context.Context, sessionID string) error {
+	if strings.TrimSpace(sessionID) == "" {
+		return fmt.Errorf("parent session id is required")
+	}
+	exists, err := m.store.Exists(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	if _, err := m.store.CreateRoot(ctx, session.CreateRootRequest{SessionID: sessionID}); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (m *Manager) runSession(ctx context.Context, sessionID, prompt string) (string, error) {
 	runner := loop.NewRunnerWithInstructionRoot(m.model, sinkUI{}, newBaseToolRegistry(m.root), m.store, sessionID, m.root)
 	msg, err := runner.RunTurn(ctx, prompt)
@@ -261,25 +530,20 @@ func (m *Manager) runSession(ctx context.Context, sessionID, prompt string) (str
 	return strings.TrimSpace(msg.Content), nil
 }
 
-func (m *Manager) runBackground(sessionID string, req Request) {
-	ctx := context.Background()
-	content, err := m.runSession(ctx, sessionID, req.Prompt)
-	now := time.Now().UTC()
-
-	m.mu.Lock()
-	task := m.tasks[sessionID]
-	task.FinishedAt = &now
-	if err != nil {
-		task.Status = TaskFailed
-		task.Error = err.Error()
-	} else {
-		task.Status = TaskCompleted
-		task.Content = content
+func (m *Manager) runWorkerInProcess(ctx context.Context, req WorkerRequest) (WorkerResult, error) {
+	content, err := m.runSession(ctx, req.SessionID, req.Prompt)
+	result := WorkerResult{
+		TaskID:    req.TaskID,
+		SessionID: req.SessionID,
+		Content:   content,
+		ExitCode:  0,
 	}
-	m.tasks[sessionID] = task
-	m.mu.Unlock()
-
-	m.notifyTaskFinished(task)
+	if err != nil {
+		result.Error = err.Error()
+		result.ExitCode = 1
+		return result, err
+	}
+	return result, nil
 }
 
 func (m *Manager) setTask(task TaskSnapshot) {
@@ -303,6 +567,23 @@ func (m *Manager) notifyTaskFinished(task TaskSnapshot) {
 		Title: "subagent",
 		Body:  body,
 	})
+}
+
+func resultFromTask(task TaskSnapshot) Result {
+	return Result{
+		AgentID:        task.SessionID,
+		AgentName:      task.Name,
+		AgentColor:     task.Color,
+		SessionID:      task.SessionID,
+		ContextMode:    task.ContextMode,
+		RunMode:        task.RunMode,
+		TranscriptPath: task.TranscriptPath,
+		OutputPath:     task.OutputPath,
+		ExitCode:       task.ExitCode,
+		Depth:          task.Depth,
+		ParentTaskID:   task.ParentTaskID,
+		Content:        task.Content,
+	}
 }
 
 func newBaseToolRegistry(root string) *tool.Registry {
@@ -358,6 +639,10 @@ type statusTool struct {
 	manager *Manager
 }
 
+type stopTool struct {
+	manager *Manager
+}
+
 type toolInput struct {
 	Prompt      string               `json:"prompt"`
 	Description string               `json:"description,omitempty"`
@@ -369,6 +654,10 @@ type statusInput struct {
 	ID string `json:"id,omitempty"`
 }
 
+type stopInput struct {
+	ID string `json:"id"`
+}
+
 func NewTool(manager *Manager, parentSessionID string) tool.Tool {
 	return &subagentTool{manager: manager, parentSessionID: parentSessionID}
 }
@@ -377,22 +666,26 @@ func NewStatusTool(manager *Manager) tool.Tool {
 	return &statusTool{manager: manager}
 }
 
+func NewStopTool(manager *Manager) tool.Tool {
+	return &stopTool{manager: manager}
+}
+
 func (t *subagentTool) Name() string {
 	return "Subagent"
 }
 
 func (t *subagentTool) Description() string {
-	return "Launch a focused subagent. Use context_mode empty for a self-contained spec, or fork to inherit committed parent session history. run_mode sync waits for the result; background returns a task id."
+	return "Launch a focused subagent. Use context_mode empty for a self-contained spec, or fork to inherit committed parent session history. run_mode defaults to background and returns a task id immediately; explicit sync waits for the result."
 }
 
 func (t *subagentTool) InputSchema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"prompt":{"type":"string"},"description":{"type":"string"},"context_mode":{"type":"string","enum":["empty","fork"]},"run_mode":{"type":"string","enum":["sync","background"]}},"required":["prompt"]}`)
+	return json.RawMessage(`{"type":"object","properties":{"prompt":{"type":"string"},"description":{"type":"string"},"context_mode":{"type":"string","enum":["empty","fork"]},"run_mode":{"type":"string","enum":["sync","background"],"default":"background"}},"required":["prompt"]}`)
 }
 
-func (t *subagentTool) Run(ctx context.Context, raw json.RawMessage) (string, error) {
+func (t *subagentTool) buildRequest(raw json.RawMessage) (Request, error) {
 	var in toolInput
 	if err := json.Unmarshal(raw, &in); err != nil {
-		return "", err
+		return Request{}, err
 	}
 	req := Request{
 		ParentSessionID: t.parentSessionID,
@@ -401,7 +694,23 @@ func (t *subagentTool) Run(ctx context.Context, raw json.RawMessage) (string, er
 		ContextMode:     in.ContextMode,
 		RunMode:         in.RunMode,
 	}
+	if req.RunMode == "" {
+		req.RunMode = settings.RunModeBackground
+	}
 	req = t.manager.normalizeRequest(req)
+	return req, nil
+}
+
+func (t *subagentTool) IsConcurrencySafe(raw json.RawMessage) bool {
+	req, err := t.buildRequest(raw)
+	return err == nil && req.RunMode == settings.RunModeBackground
+}
+
+func (t *subagentTool) Run(ctx context.Context, raw json.RawMessage) (string, error) {
+	req, err := t.buildRequest(raw)
+	if err != nil {
+		return "", err
+	}
 	if req.RunMode == settings.RunModeBackground {
 		task, err := t.manager.Launch(ctx, req)
 		if err != nil {
@@ -428,6 +737,10 @@ func (t *statusTool) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"}}}`)
 }
 
+func (t *statusTool) IsConcurrencySafe(json.RawMessage) bool {
+	return t != nil && t.manager != nil
+}
+
 func (t *statusTool) Run(ctx context.Context, raw json.RawMessage) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -446,6 +759,30 @@ func (t *statusTool) Run(ctx context.Context, raw json.RawMessage) (string, erro
 		return marshalResult(task), nil
 	}
 	return marshalResult(t.manager.ListTasks()), nil
+}
+
+func (t *stopTool) Name() string {
+	return "SubagentStop"
+}
+
+func (t *stopTool) Description() string {
+	return "Stop a running background subagent task by id."
+}
+
+func (t *stopTool) InputSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}`)
+}
+
+func (t *stopTool) Run(ctx context.Context, raw json.RawMessage) (string, error) {
+	var in stopInput
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return "", err
+	}
+	task, err := t.manager.Stop(ctx, in.ID)
+	if err != nil {
+		return marshalResult(task), err
+	}
+	return marshalResult(task), nil
 }
 
 func marshalResult(v any) string {

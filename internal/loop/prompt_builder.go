@@ -45,9 +45,10 @@ func (b *PromptBuilder) Build(toolDescriptions []string) string {
 		prompt.WriteString(description)
 		prompt.WriteByte('\n')
 	}
-	prompt.WriteString("When you need a tool, respond with ONLY a JSON object in this format:\n")
+	prompt.WriteString("When you need one tool, respond with ONLY a JSON object in this format:\n")
 	prompt.WriteString(`{"type":"tool_use","id":"call_1","name":"tool_name","input":{}}`)
 	prompt.WriteByte('\n')
+	prompt.WriteString("When you need multiple independent tools, respond with a JSON array of those objects.\n")
 	prompt.WriteString("Make sure the input object matches the tool input_schema exactly.\n")
 	prompt.WriteString("Do not wrap the JSON in markdown fences.\n")
 	prompt.WriteString("After you receive a TOOL_RESULT message:\n")

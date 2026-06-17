@@ -17,7 +17,6 @@ func (m appModel) View() string {
 	}
 
 	input := m.renderActiveInputPanel()
-	panelHeight := maxInt(1, m.height-m.headerHeight())
 
 	// Wrap the left column in a fixed-width container so its rendered width
 	// stays stable during streaming and never shifts the right sidebar.
@@ -29,7 +28,7 @@ func (m appModel) View() string {
 			input,
 		),
 	)
-	right := m.renderRightPanel(m.sidebarWidth, panelHeight)
+	right := m.renderRightPanel(m.sidebarWidth, maxInt(1, lipgloss.Height(leftContent)))
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, leftContent, right)
 
@@ -102,12 +101,7 @@ func (m appModel) inputCursorTerminalPosition(inputPanel string) terminalCursorP
 
 // inputEmbeddedTitleHeight 返回输入框内部 title 区域的行高。
 func (m appModel) inputEmbeddedTitleHeight() int {
-	if m.currentSettings().UI.ContextMeterLocation != settings.MeterLocationInputTitle {
-		return 0
-	}
-	width := maxInt(28, m.width-m.sidebarWidth-2)
-	title := m.contextMeterLine(maxInt(28, width-2))
-	return lipgloss.Height(inputLabelStyle.Render(title))
+	return 0
 }
 
 // visibleTextareaCursorRow 返回 textarea 光标在当前可视输入区域中的行号。
@@ -124,14 +118,9 @@ func visibleTextareaCursorColumn(input textarea.Model) int {
 
 // renderInputBox 渲染普通输入、多行输入、终端输入和等待状态的输入面板。
 func (m appModel) renderInputBox() string {
-	width := maxInt(28, m.width-m.sidebarWidth-2)
-	title := ""
+	width := m.leftPanelContentWidth(20)
 	content := m.input.View()
 	style := inputPanelFocusedStyle
-	titleStyle := inputLabelStyle
-	if m.currentSettings().UI.ContextMeterLocation == settings.MeterLocationInputTitle {
-		title = m.contextMeterLine(maxInt(28, width-2))
-	}
 
 	if m.isTerminalInputActive() {
 		style = inputPanelTerminalStyle
@@ -142,27 +131,22 @@ func (m appModel) renderInputBox() string {
 			style = inputPanelTerminalStyle
 		}
 	}
-	if m.running {
-		content = inputWaitingStyle.Render("waiting for assistant...")
-		style = inputPanelWaitingStyle
-		if m.runningTerminal {
-			content = inputWaitingStyle.Render("running shell command...")
-			style = inputPanelTerminalStyle
-		}
+	if m.runningTerminal {
+		style = inputPanelTerminalStyle
 	}
 
-	body := content
-	if title != "" {
-		body = lipgloss.JoinVertical(lipgloss.Left, titleStyle.Render(title), content)
-	}
-	return style.Width(width).Render(body)
+	return style.Width(width).Render(content)
 }
 
 // renderTranscriptBox 渲染带边框的聊天历史滚动面板。
 func (m appModel) renderTranscriptBox() string {
-	leftColWidth := m.width - m.sidebarWidth
-	width := maxInt(20, leftColWidth-transcriptPanelHorizontalFrame)
+	width := m.leftPanelContentWidth(20)
 	return transcriptPanelStyle.Width(width).Height(maxInt(1, m.viewport.Height)).Render(m.viewport.View())
+}
+
+func (m appModel) leftPanelContentWidth(minWidth int) int {
+	leftColWidth := m.width - m.sidebarWidth
+	return maxInt(minWidth, leftColWidth-transcriptPanelHorizontalFrame)
 }
 
 // renderHeader 渲染顶部状态栏。空 header 文本表示当前不展示状态栏。
@@ -194,8 +178,9 @@ func (m *appModel) relayout() {
 	m.sidebarWidth = maxInt(rightSidebarMinWidth, total*30/100)
 	leftColWidth := total - m.sidebarWidth
 
-	m.viewport.Width = maxInt(20, leftColWidth-transcriptPanelHorizontalFrame)
-	m.input.SetWidth(maxInt(20, leftColWidth-4))
+	contentWidth := maxInt(20, leftColWidth-transcriptPanelHorizontalFrame)
+	m.viewport.Width = contentWidth
+	m.input.SetWidth(contentWidth)
 	m.input.SetHeight(inputVisibleLineCount(m.input))
 
 	headerHeight := m.headerHeight()
@@ -221,4 +206,3 @@ func (m *appModel) expandTranscriptToFillHeight() {
 		m.viewport.Height += deficit
 	}
 }
-

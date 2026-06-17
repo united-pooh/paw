@@ -11,3 +11,7 @@ type Tool interface {
 	Run(ctx context.Context, input json.RawMessage) (string, error)
 	InputSchema() json.RawMessage
 }
+
+type ConcurrencySafeTool interface {
+	IsConcurrencySafe(input json.RawMessage) bool
+}

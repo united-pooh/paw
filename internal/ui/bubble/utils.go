@@ -3,6 +3,8 @@ package bubble
 
 import (
 	"encoding/json"
+	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -35,6 +37,306 @@ func prettyJSON(raw json.RawMessage) string {
 		return input
 	}
 	return string(encoded)
+}
+
+type toolDisplayField struct {
+	key   string
+	value string
+}
+
+func formatToolCallBody(name string, input json.RawMessage) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "tool"
+	}
+	fields := toolInputFields(input)
+	if strings.EqualFold(name, "Subagent") {
+		return formatSubagentToolCallBody(name, fields)
+	}
+
+	summary := name
+	if primary := primaryToolInput(name, fields); primary != "" {
+		summary += " · " + primary
+	}
+
+	lines := []string{summary}
+	for _, field := range fields {
+		lines = append(lines, field.key+"  "+field.value)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatToolResultBody(name, status, content string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "tool"
+	}
+	status = strings.TrimSpace(status)
+	if status == "" {
+		status = "ok"
+	}
+	lines := []string{name + " · " + status}
+	if preview := summarizeToolContent(content); preview != "" {
+		lines = append(lines, preview)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatSubagentToolCallBody(name string, fields []toolDisplayField) string {
+	contextMode := fieldValue(fields, "context_mode")
+	runMode := fieldValue(fields, "run_mode")
+	description := fieldValue(fields, "description")
+	prompt := fieldValue(fields, "prompt")
+
+	suffix := strings.Join(nonEmptyStrings(runMode, contextMode), " · ")
+	summary := name
+	if suffix != "" {
+		summary += " · " + suffix
+	}
+
+	lines := []string{summary}
+	if description != "" {
+		lines = append(lines, "description  "+description)
+	}
+	if contextMode != "" || runMode != "" {
+		lines = append(lines, "mode  "+strings.Join(nonEmptyStrings(runMode, contextMode), " · "))
+	}
+	if prompt != "" {
+		lines = append(lines, "prompt  "+summarizeToolContent(prompt))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func toolInputFields(raw json.RawMessage) []toolDisplayField {
+	input := strings.TrimSpace(string(raw))
+	if input == "" || input == "null" {
+		return nil
+	}
+
+	var object map[string]any
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return []toolDisplayField{{key: "input", value: summarizeToolContent(input)}}
+	}
+	keys := make([]string, 0, len(object))
+	for key := range object {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	fields := make([]toolDisplayField, 0, len(keys))
+	for _, key := range keys {
+		if value := displayToolValue(object[key]); value != "" {
+			fields = append(fields, toolDisplayField{key: key, value: value})
+		}
+	}
+	return fields
+}
+
+func displayToolValue(value any) string {
+	switch v := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return summarizeToolContent(v)
+	case bool:
+		if v {
+			return "true"
+		}
+		return "false"
+	case float64:
+		return fmt.Sprintf("%g", v)
+	default:
+		data, err := json.Marshal(v)
+		if err != nil {
+			return summarizeToolContent(fmt.Sprint(v))
+		}
+		return summarizeToolContent(string(data))
+	}
+}
+
+func primaryToolInput(name string, fields []toolDisplayField) string {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	for _, key := range primaryToolInputKeys(lower) {
+		if value := fieldValue(fields, key); value != "" {
+			return key + "=" + value
+		}
+	}
+	if len(fields) == 1 {
+		return fields[0].key + "=" + fields[0].value
+	}
+	return ""
+}
+
+func primaryToolInputKeys(name string) []string {
+	switch name {
+	case "ls", "glob":
+		return []string{"path", "pattern"}
+	case "read":
+		return []string{"file_path", "path"}
+	case "write", "edit":
+		return []string{"file_path", "path"}
+	case "bash":
+		return []string{"command"}
+	case "webfetch":
+		return []string{"url"}
+	case "subagentstop":
+		return []string{"id"}
+	default:
+		return []string{"path", "file_path", "command", "url", "id"}
+	}
+}
+
+func fieldValue(fields []toolDisplayField, key string) string {
+	for _, field := range fields {
+		if field.key == key {
+			return field.value
+		}
+	}
+	return ""
+}
+
+func nonEmptyStrings(values ...string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func shortTaskID(id string) string {
+	id = strings.TrimSpace(id)
+	if len([]rune(id)) <= 12 {
+		return id
+	}
+	runes := []rune(id)
+	return string(runes[:10]) + "…"
+}
+
+func sanitizeAssistantVisibleBody(body string) string {
+	body = stripToolUseFences(body)
+	body = stripEmbeddedToolUseJSON(body)
+	return strings.TrimSpace(body)
+}
+
+func stripToolUseFences(content string) string {
+	for {
+		start := strings.Index(content, "```")
+		if start == -1 {
+			return content
+		}
+		rest := content[start+3:]
+		newline := strings.IndexByte(rest, '\n')
+		if newline == -1 {
+			return content
+		}
+		bodyStart := start + 3 + newline + 1
+		closeRel := strings.Index(content[bodyStart:], "```")
+		if closeRel == -1 {
+			return content
+		}
+		bodyEnd := bodyStart + closeRel
+		if isToolUseJSONPayload(strings.TrimSpace(content[bodyStart:bodyEnd])) {
+			content = strings.TrimSpace(content[:start]) + "\n" + strings.TrimSpace(content[bodyEnd+3:])
+			continue
+		}
+		next := bodyEnd + 3
+		if next >= len(content) {
+			return content
+		}
+		remaining := stripToolUseFences(content[next:])
+		return content[:next] + remaining
+	}
+}
+
+func stripEmbeddedToolUseJSON(content string) string {
+	var out strings.Builder
+	last := 0
+	for start := strings.IndexByte(content, '{'); start != -1; {
+		payload, next, ok := balancedJSONObjectAt(content, start)
+		if ok && isToolUseJSONPayload(payload) {
+			out.WriteString(content[last:start])
+			last = next
+			if next >= len(content) {
+				break
+			}
+			relative := strings.IndexByte(content[next:], '{')
+			if relative == -1 {
+				break
+			}
+			start = next + relative
+			continue
+		}
+		searchFrom := start + 1
+		if ok && next > searchFrom {
+			searchFrom = next
+		}
+		if searchFrom >= len(content) {
+			break
+		}
+		relative := strings.IndexByte(content[searchFrom:], '{')
+		if relative == -1 {
+			break
+		}
+		start = searchFrom + relative
+	}
+	out.WriteString(content[last:])
+	return strings.TrimSpace(out.String())
+}
+
+func balancedJSONObjectAt(content string, start int) (string, int, bool) {
+	if start < 0 || start >= len(content) || content[start] != '{' {
+		return "", len(content), false
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(content); i++ {
+		ch := content[i]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return content[start : i+1], i + 1, true
+			}
+		}
+	}
+	return "", len(content), false
+}
+
+func isToolUseJSONPayload(payload string) bool {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(payload), &object); err != nil {
+		return false
+	}
+	var typ string
+	_ = json.Unmarshal(object["type"], &typ)
+	if typ != "" && typ != "tool_use" {
+		return false
+	}
+	if typ == "tool_use" {
+		return object["name"] != nil && object["input"] != nil
+	}
+	return object["id"] != nil && object["name"] != nil && object["input"] != nil
 }
 
 // maxInt 返回两个整数中的较大值。

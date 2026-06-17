@@ -38,6 +38,10 @@ func (t *Tool) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"url":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1}},"required":["url"]}`)
 }
 
+func (t *Tool) IsConcurrencySafe(json.RawMessage) bool {
+	return true
+}
+
 func (t *Tool) Run(ctx context.Context, raw json.RawMessage) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err

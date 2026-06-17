@@ -28,6 +28,10 @@ func (t *LSTool) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}}}`)
 }
 
+func (t *LSTool) IsConcurrencySafe(json.RawMessage) bool {
+	return true
+}
+
 func (t *LSTool) Run(ctx context.Context, input json.RawMessage) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err

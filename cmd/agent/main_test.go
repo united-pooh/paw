@@ -64,7 +64,7 @@ func TestResolveSessionIDWithFlagNotFound(t *testing.T) {
 	}
 }
 
-// TestResolveSessionIDWithoutFlag 验证无 -s flag 时每次生成新 session。
+// TestResolveSessionIDWithoutFlag 验证无 -s flag 时每次生成新 session ID，但不立即落盘。
 func TestResolveSessionIDWithoutFlag(t *testing.T) {
 	dir := t.TempDir()
 	store, err := session.NewJSONLStore(dir)
@@ -90,19 +90,18 @@ func TestResolveSessionIDWithoutFlag(t *testing.T) {
 		t.Fatalf("expected different session IDs, both = %q", id1)
 	}
 
-	// 两个 session 都应该存在
 	for _, id := range []string{id1, id2} {
 		exists, err := store.Exists(ctx, id)
 		if err != nil {
 			t.Fatalf("Exists(%q): %v", id, err)
 		}
-		if !exists {
-			t.Fatalf("session %q should exist", id)
+		if exists {
+			t.Fatalf("session %q should not exist before first append", id)
 		}
 	}
 }
 
-// TestResolveSessionID_NoFlag_CreatesNewSessions 验证无 flag 时每次调用创建不同的新会话。
+// TestResolveSessionID_NoFlag_CreatesNewSessions 验证无 flag 时每次调用生成不同的新会话 ID。
 func TestResolveSessionID_NoFlag_CreatesNewSessions(t *testing.T) {
 	dir := t.TempDir()
 	store, err := session.NewJSONLStore(dir)

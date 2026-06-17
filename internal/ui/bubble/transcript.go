@@ -2,6 +2,7 @@
 package bubble
 
 import (
+	"encoding/json"
 	"github.com/charmbracelet/lipgloss"
 	"strings"
 	"time"
@@ -18,9 +19,12 @@ func (m *appModel) appendAssistantDelta(delta string) {
 		m.transcript = append(m.transcript, transcriptEntry{
 			kind:      entryAssistant,
 			title:     "assistant",
+			citations: m.consumePendingToolCitations(),
 			createdAt: m.animationNow(),
 		})
 		m.activeAssistant = len(m.transcript) - 1
+	} else if len(m.pendingToolCites) > 0 {
+		m.transcript[m.activeAssistant].citations = append(m.transcript[m.activeAssistant].citations, m.consumePendingToolCitations()...)
 	}
 	m.transcript[m.activeAssistant].body += delta
 	m.refreshViewport()
@@ -57,6 +61,100 @@ func (m appModel) animationNow() time.Time {
 		return m.cursorFrameAt
 	}
 	return time.Now()
+}
+
+func (m *appModel) consumePendingToolCitations() []toolCitation {
+	if len(m.pendingToolCites) == 0 {
+		return nil
+	}
+	cites := append([]toolCitation(nil), m.pendingToolCites...)
+	m.pendingToolCites = nil
+	return cites
+}
+
+func (m *appModel) recordToolCallCitation(toolUseID, name string, input json.RawMessage) {
+	cite := newToolCallCitation(toolUseID, name, input)
+	if idx := m.lastAssistantCitationHostIndex(); idx >= 0 {
+		m.transcript[idx].citations = append(m.transcript[idx].citations, cite)
+	} else {
+		m.transcript = append(m.transcript, transcriptEntry{
+			kind:      entryAssistant,
+			title:     "assistant",
+			citations: []toolCitation{cite},
+			createdAt: m.animationNow(),
+		})
+	}
+	m.refreshViewport()
+}
+
+func (m *appModel) recordToolResultCitation(toolUseID, name, status, content string, isError bool) {
+	cite := newToolResultCitation(toolUseID, name, status, content, isError)
+	for entryIdx := len(m.transcript) - 1; entryIdx >= 0; entryIdx-- {
+		entry := &m.transcript[entryIdx]
+		if entry.kind == entryUser {
+			break
+		}
+		if entry.kind != entryAssistant {
+			continue
+		}
+		for citeIdx := len(entry.citations) - 1; citeIdx >= 0; citeIdx-- {
+			if toolCitationMatchesResult(entry.citations[citeIdx], cite) {
+				entry.citations[citeIdx].status = cite.status
+				entry.citations[citeIdx].preview = cite.preview
+				entry.citations[citeIdx].isError = cite.isError
+				m.refreshViewport()
+				return
+			}
+		}
+	}
+	if idx := m.lastAssistantCitationHostIndex(); idx >= 0 {
+		m.transcript[idx].citations = append(m.transcript[idx].citations, cite)
+	} else {
+		m.transcript = append(m.transcript, transcriptEntry{
+			kind:      entryAssistant,
+			title:     "assistant",
+			citations: []toolCitation{cite},
+			createdAt: m.animationNow(),
+		})
+	}
+	m.refreshViewport()
+}
+
+func toolCitationMatchesResult(running, result toolCitation) bool {
+	if running.status != "running" {
+		return false
+	}
+	if running.toolUseID != "" || result.toolUseID != "" {
+		return running.toolUseID != "" && running.toolUseID == result.toolUseID
+	}
+	return strings.EqualFold(running.name, result.name)
+}
+
+func (m appModel) lastAssistantCitationHostIndex() int {
+	for i := len(m.transcript) - 1; i >= 0; i-- {
+		switch m.transcript[i].kind {
+		case entryAssistant:
+			return i
+		case entryUser:
+			return -1
+		}
+	}
+	return -1
+}
+
+func assistantEntryIsRenderable(entry transcriptEntry) bool {
+	if entry.kind != entryAssistant {
+		return true
+	}
+	if sanitizeAssistantVisibleBody(entry.body) != "" {
+		return true
+	}
+	for _, cite := range entry.citations {
+		if strings.TrimSpace(cite.name) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // refreshViewport 将 transcript 重新渲染到 viewport，并滚动到底部。
@@ -110,6 +208,9 @@ func renderTranscriptAt(entries []transcriptEntry, width int, showThinking bool,
 		if entry.kind == entryThinking && !showThinking {
 			continue
 		}
+		if !assistantEntryIsRenderable(entry) {
+			continue
+		}
 		parts = append(parts, renderEntryAt(entry, width, at))
 	}
 	return strings.Join(parts, "\n\n")
@@ -138,14 +239,15 @@ func renderEntryBody(entry transcriptEntry, width int) string {
 
 func renderEntryBodyAt(entry transcriptEntry, width int, at time.Time) string {
 	body := strings.TrimRight(entry.body, "\n")
+	if entry.kind == entryAssistant {
+		body = sanitizeAssistantVisibleBody(body)
+		return renderAssistantBodyWithCitations(body, width, entry.citations)
+	}
 	if body == "" {
 		return ""
 	}
 	if entry.kind == entryThinking {
 		return thinkingBodyStyle.Width(width).Render(body)
-	}
-	if entry.kind == entryAssistant {
-		return renderMarkdown(body, width)
 	}
 	if entry.kind == entryTool {
 		isError := entry.isError
@@ -153,9 +255,9 @@ func renderEntryBodyAt(entry transcriptEntry, width int, at time.Time) string {
 		prog := toolExpandProgress(entry, at)
 		switch {
 		case isError:
-			return renderToolEntryBodyWithStyle(entry.body, width, prog, toolErrorBorderStyle)
+			return renderToolEntryBodyWithMarker(entry.body, width, prog, toolErrorBorderStyle, "!")
 		case isResult:
-			return renderToolEntryBodyWithStyle(entry.body, width, prog, toolResultBorderStyle)
+			return renderToolEntryBodyWithMarker(entry.body, width, prog, toolResultBorderStyle, "✓")
 		default:
 			return renderToolEntryBody(entry.body, width, prog)
 		}
@@ -163,11 +265,139 @@ func renderEntryBodyAt(entry transcriptEntry, width int, at time.Time) string {
 	return bodyStyle.Width(width).Render(body)
 }
 
+func renderAssistantBodyWithCitations(body string, width int, citations []toolCitation) string {
+	citations = compactToolCitations(citations)
+	rendered := renderMarkdown(body, width)
+	if len(citations) == 0 {
+		return rendered
+	}
+	quote := renderToolCitationQuote(citations, width)
+	if quote == "" {
+		return rendered
+	}
+	if rendered == "" {
+		return quote
+	}
+	return rendered + "\n" + quote
+}
+
+func newToolCallCitation(toolUseID, name string, input json.RawMessage) toolCitation {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "tool"
+	}
+	fields := toolInputFields(input)
+	return toolCitation{
+		toolUseID: strings.TrimSpace(toolUseID),
+		name:      name,
+		target:    primaryToolInput(name, fields),
+		status:    "running",
+	}
+}
+
+func newToolResultCitation(toolUseID, name, status, content string, isError bool) toolCitation {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "tool"
+	}
+	status = strings.TrimSpace(status)
+	if status == "" {
+		status = "ok"
+	}
+	return toolCitation{
+		toolUseID: strings.TrimSpace(toolUseID),
+		name:      name,
+		status:    status,
+		preview:   summarizeToolContent(content),
+		isError:   isError,
+	}
+}
+
+func compactToolCitations(citations []toolCitation) []toolCitation {
+	out := make([]toolCitation, 0, len(citations))
+	for _, cite := range citations {
+		cite.name = strings.TrimSpace(cite.name)
+		cite.target = strings.TrimSpace(cite.target)
+		cite.status = strings.TrimSpace(cite.status)
+		cite.preview = strings.TrimSpace(cite.preview)
+		if cite.name == "" {
+			continue
+		}
+		if cite.status == "" {
+			cite.status = "ok"
+		}
+		out = append(out, cite)
+	}
+	return out
+}
+
+func renderToolCitationQuote(citations []toolCitation, width int) string {
+	lines := make([]string, 0, len(citations))
+	contentWidth := maxInt(1, width-2)
+	for _, cite := range citations {
+		if line := renderToolCitationQuoteLine(cite, contentWidth); line != "" {
+			lines = append(lines, toolCitationQuoteBorderStyle.Render("│")+" "+line)
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderToolCitationQuoteLine(cite toolCitation, width int) string {
+	name := strings.TrimSpace(cite.name)
+	if name == "" {
+		return ""
+	}
+	key := toolCitationKeyStyle.Render("[" + name + "]")
+	status := toolCitationStatusStyle(cite).Render(toolCitationStatusText(cite))
+	target := strings.TrimSpace(cite.target)
+	lineWidth := lipgloss.Width("["+name+"] ") + lipgloss.Width(toolCitationStatusText(cite))
+	if target == "" {
+		return key + " " + status
+	}
+	targetWidth := maxInt(1, width-lineWidth-lipgloss.Width(" · "))
+	return key + " " + status + toolCitationStyle.Render(" · "+truncateDisplayWidth(target, targetWidth))
+}
+
+func toolCitationStatusText(cite toolCitation) string {
+	switch {
+	case cite.isError || strings.EqualFold(cite.status, "error"):
+		return "error"
+	case strings.EqualFold(cite.status, "running"):
+		return "running"
+	default:
+		return "ok"
+	}
+}
+
+func toolCitationStatusStyle(cite toolCitation) lipgloss.Style {
+	if cite.isError || strings.EqualFold(cite.status, "error") {
+		return toolCitationErrorStyle
+	}
+	if strings.EqualFold(cite.status, "running") {
+		return toolCitationStyle
+	}
+	return toolCitationOKStyle
+}
+
 // renderToolEntryBodyWithStyle renders a tool entry in blockquote style using the given border style.
 func renderToolEntryBodyWithStyle(body string, width int, progress float64, borderStyle lipgloss.Style) string {
+	return renderToolEntryBodyWithMarker(body, width, progress, borderStyle, "▸")
+}
+
+func renderToolEntryBodyWithMarker(body string, width int, progress float64, borderStyle lipgloss.Style, marker string) string {
 	body = strings.TrimRight(body, "\n")
 	summary, detail := splitToolSummary(body)
-	header := toolHeaderStyle.Render("▾ " + summary)
+	headerStyle := toolHeaderStyle
+	switch marker {
+	case "✓":
+		headerStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorLabelResult)).Bold(true)
+	case "!":
+		headerStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorLabelError)).Bold(true)
+	}
+	header := headerStyle.Render(marker + " " + summary)
 
 	if detail == "" || progress <= 0 {
 		return borderStyle.Width(width - 2).Render(header)
@@ -180,7 +410,7 @@ func renderToolEntryBodyWithStyle(body string, width int, progress float64, bord
 	}
 	prefixed := make([]string, visibleLines)
 	for i, l := range detailLines[:visibleLines] {
-		prefixed[i] = "> " + l
+		prefixed[i] = "  " + strings.TrimSpace(l)
 	}
 	content := header + "\n" + toolDetailStyle.Width(width-2).Render(strings.Join(prefixed, "\n"))
 	return borderStyle.Width(width - 2).Render(content)
@@ -240,7 +470,7 @@ func labelStyle(kind entryKind) lipgloss.Style {
 func (m appModel) turnsCount() int {
 	n := 0
 	for _, e := range m.transcript {
-		if e.kind == entryUser {
+		if e.kind == entryUser && e.title == "you" {
 			n++
 		}
 	}

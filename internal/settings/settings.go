@@ -53,7 +53,7 @@ func DefaultConfig() Config {
 	return Config{
 		Subagent: SubagentConfig{
 			DefaultContextMode: ContextModeEmpty,
-			DefaultRunMode:     RunModeSync,
+			DefaultRunMode:     RunModeBackground,
 		},
 		UI: UIConfig{
 			ContextLimitTokens:   DefaultContextLimitTokens,
@@ -129,10 +129,12 @@ func NormalizeContextMode(mode ContextMode) ContextMode {
 
 func NormalizeRunMode(mode RunMode) RunMode {
 	switch RunMode(strings.ToLower(strings.TrimSpace(string(mode)))) {
+	case RunModeSync:
+		return RunModeSync
 	case RunModeBackground:
 		return RunModeBackground
 	default:
-		return RunModeSync
+		return RunModeBackground
 	}
 }
 
@@ -142,8 +144,6 @@ func NormalizeMeterLocation(location MeterLocation) MeterLocation {
 		return MeterLocationHeader
 	case MeterLocationInputAbove:
 		return MeterLocationInputAbove
-	case MeterLocationInputTitle:
-		return MeterLocationInputTitle
 	default:
 		return MeterLocationInputAbove
 	}

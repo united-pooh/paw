@@ -17,12 +17,12 @@ const (
 )
 
 type anthropicMessagesRequest struct {
-	Model     string              `json:"model"`
-	System    string              `json:"system,omitempty"`
-	Messages  []anthropicMessage  `json:"messages"`
-	MaxTokens int                 `json:"max_tokens"`
-	Stream    bool                `json:"stream"`
-	Tools     []anthropicTool     `json:"tools,omitempty"`
+	Model     string             `json:"model"`
+	System    string             `json:"system,omitempty"`
+	Messages  []anthropicMessage `json:"messages"`
+	MaxTokens int                `json:"max_tokens"`
+	Stream    bool               `json:"stream"`
+	Tools     []anthropicTool    `json:"tools,omitempty"`
 }
 
 // anthropicTool 是 Anthropic Messages API 的工具定义格式。
@@ -222,19 +222,15 @@ func (c *Client) consumeAnthropicStream(ctx context.Context, resp *http.Response
 		// 原生工具调用：content_block_stop → 发出完整工具调用
 		if chunk.Type == "content_block_stop" && activeTool != nil {
 			args := activeTool.args.String()
-			var input json.RawMessage
+			input := json.RawMessage(`{}`)
 			if len(args) > 0 && json.Valid([]byte(args)) {
 				input = json.RawMessage(args)
-			} else {
-				input = json.RawMessage(`{}`)
 			}
-			callJSON, _ := json.Marshal(map[string]interface{}{
-				"type":  "tool_use",
-				"id":    activeTool.id,
-				"name":  activeTool.name,
-				"input": input,
-			})
-			if !emitStreamEvent(ctx, events, StreamEvent{Delta: string(callJSON)}) {
+			if !emitStreamEvent(ctx, events, StreamEvent{ToolCalls: []message.ToolCall{{
+				ID:    activeTool.id,
+				Name:  activeTool.name,
+				Input: input,
+			}}}) {
 				return
 			}
 			activeTool = nil

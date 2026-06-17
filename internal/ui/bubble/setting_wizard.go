@@ -39,8 +39,8 @@ func settingOptions(step settingWizardStep) []settingOption {
 	switch step {
 	case settingWizardContext:
 		return []settingOption{
-			{label: string(settings.ContextModeEmpty), description: "subagent starts with only the spec", apply: func(cfg *settings.Config) { cfg.Subagent.DefaultContextMode = settings.ContextModeEmpty }},
-			{label: string(settings.ContextModeFork), description: "subagent inherits committed parent history", apply: func(cfg *settings.Config) { cfg.Subagent.DefaultContextMode = settings.ContextModeFork }},
+			{label: string(settings.ContextModeEmpty), description: "temporary empty session", apply: func(cfg *settings.Config) { cfg.Subagent.DefaultContextMode = settings.ContextModeEmpty }},
+			{label: string(settings.ContextModeFork), description: "fork parent committed history", apply: func(cfg *settings.Config) { cfg.Subagent.DefaultContextMode = settings.ContextModeFork }},
 		}
 	case settingWizardRunMode:
 		return []settingOption{
@@ -49,7 +49,7 @@ func settingOptions(step settingWizardStep) []settingOption {
 		}
 	case settingWizardMeterLocation:
 		return []settingOption{
-			{label: string(settings.MeterLocationInputTitle), description: "show context meter inside input title", apply: func(cfg *settings.Config) { cfg.UI.ContextMeterLocation = settings.MeterLocationInputTitle }},
+			{label: string(settings.MeterLocationInputAbove), description: "show context meter in the right sidebar", apply: func(cfg *settings.Config) { cfg.UI.ContextMeterLocation = settings.MeterLocationInputAbove }},
 			{label: string(settings.MeterLocationHeader), description: "show context meter in the header", apply: func(cfg *settings.Config) { cfg.UI.ContextMeterLocation = settings.MeterLocationHeader }},
 		}
 	case settingWizardLimit:

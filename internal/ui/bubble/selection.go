@@ -83,6 +83,36 @@ func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.C
 	}
 }
 
+func isMouseWheel(msg tea.MouseMsg) bool {
+	switch msg.Button {
+	case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown, tea.MouseButtonWheelLeft, tea.MouseButtonWheelRight:
+		return true
+	}
+	switch msg.Type {
+	case tea.MouseWheelUp, tea.MouseWheelDown, tea.MouseWheelLeft, tea.MouseWheelRight:
+		return true
+	default:
+		return false
+	}
+}
+
+func (m appModel) isSidebarMouse(msg tea.MouseMsg) bool {
+	if m.sidebarWidth <= 0 {
+		return false
+	}
+	return msg.X >= maxInt(0, m.width-m.sidebarWidth)
+}
+
+func (m appModel) isTranscriptViewportMouse(msg tea.MouseMsg) bool {
+	if _, ok := m.transcriptContentRow(msg.Y); !ok {
+		return false
+	}
+	if _, ok := m.transcriptContentColumn(msg.X); !ok {
+		return false
+	}
+	return true
+}
+
 // transcriptPointForMouse 将鼠标屏幕坐标转换为 transcript 内容中的全局显示单元格坐标。
 func (m appModel) transcriptPointForMouse(x, y int) (selectionPoint, bool) {
 	row, ok := m.transcriptContentRow(y)

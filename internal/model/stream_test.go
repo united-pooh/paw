@@ -106,6 +106,60 @@ func TestStreamMessageUsesAnthropicStreamForDeepSeekEarlyUsageAndThinking(t *tes
 	}
 }
 
+func TestStreamMessageEmitsAnthropicToolCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = r.Body.Close() }()
+		if r.URL.Path != "/anthropic/v1/messages" {
+			t.Fatalf("path = %q, want /anthropic/v1/messages", r.URL.Path)
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "event: content_block_start\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_subagent\",\"name\":\"Subagent\"}}\n\n")
+		_, _ = fmt.Fprint(w, "event: content_block_delta\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"prompt\\\":\\\"work\\\"}\"}}\n\n")
+		_, _ = fmt.Fprint(w, "event: content_block_stop\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"content_block_stop\"}\n\n")
+		_, _ = fmt.Fprint(w, "event: message_stop\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Provider:      ProviderDeepSeek,
+		APIBaseURL:    server.URL,
+		APIPath:       "/chat/completions",
+		APIKey:        "sk-test",
+		APIKeyEnvName: DeepSeekAPIKeyEnvName,
+		Model:         DeepSeekDefaultModel,
+		Timeout:       time.Minute,
+	})
+
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "launch"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+
+	var calls []message.ToolCall
+	var delta strings.Builder
+	for ev := range events {
+		if ev.Err != nil {
+			t.Fatalf("stream error = %v", ev.Err)
+		}
+		delta.WriteString(ev.Delta)
+		calls = append(calls, ev.ToolCalls...)
+	}
+	if delta.String() != "" {
+		t.Fatalf("delta = %q, want no textual tool JSON", delta.String())
+	}
+	if len(calls) != 1 || calls[0].ID != "call_subagent" || calls[0].Name != "Subagent" {
+		t.Fatalf("tool calls = %#v, want Subagent call", calls)
+	}
+	if string(calls[0].Input) != `{"prompt":"work"}` {
+		t.Fatalf("tool call input = %s", calls[0].Input)
+	}
+}
+
 func TestStreamMessageFallsBackToOpenAIAndParsesDeepSeekUsage(t *testing.T) {
 	anthropicChecked := false
 	openAIChecked := false
@@ -182,6 +236,57 @@ func TestStreamMessageFallsBackToOpenAIAndParsesDeepSeekUsage(t *testing.T) {
 	}
 	if gotUsage.PromptTokenCount() != 100 {
 		t.Fatalf("PromptTokenCount() = %d, want 100", gotUsage.PromptTokenCount())
+	}
+}
+
+func TestStreamMessageEmitsOpenAIToolCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = r.Body.Close() }()
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("path = %q, want /chat/completions", r.URL.Path)
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_read","function":{"name":"Read","arguments":"{\"file_path\":\"go.mod\"}"}},{"index":1,"id":"call_ls","function":{"name":"LS","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`+"\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Provider:      ProviderCustom,
+		APIBaseURL:    server.URL,
+		APIPath:       "/chat/completions",
+		APIKey:        "sk-test",
+		APIKeyEnvName: CustomAPIKeyEnvName,
+		Model:         CustomDefaultModel,
+		Timeout:       time.Minute,
+	})
+
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "inspect"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+
+	var calls []message.ToolCall
+	var delta strings.Builder
+	for ev := range events {
+		if ev.Err != nil {
+			t.Fatalf("stream error = %v", ev.Err)
+		}
+		delta.WriteString(ev.Delta)
+		calls = append(calls, ev.ToolCalls...)
+	}
+	if delta.String() != "" {
+		t.Fatalf("delta = %q, want no textual tool JSON", delta.String())
+	}
+	if len(calls) != 2 {
+		t.Fatalf("tool calls = %#v, want two calls", calls)
+	}
+	if calls[0].ID != "call_read" || calls[0].Name != "Read" || string(calls[0].Input) != `{"file_path":"go.mod"}` {
+		t.Fatalf("first call = %#v", calls[0])
+	}
+	if calls[1].ID != "call_ls" || calls[1].Name != "LS" || string(calls[1].Input) != `{}` {
+		t.Fatalf("second call = %#v", calls[1])
 	}
 }
 
