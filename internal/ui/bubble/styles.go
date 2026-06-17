@@ -166,7 +166,7 @@ const (
 	cursorFrameInterval            = time.Second / 30
 	cursorCycleDuration            = 3 * time.Second
 	cursorHiddenThreshold          = 0.03
-	inputMaxVisibleLines           = 5
+	inputMaxVisibleLines           = 10
 	contextMeterDefaultWidth       = 80
 	contextMeterMinimumBarCells    = 1
 	transcriptPanelHorizontalFrame = 4

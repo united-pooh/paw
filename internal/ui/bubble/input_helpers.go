@@ -4,13 +4,27 @@ package bubble
 import (
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"strings"
 )
 
 // inputVisibleLineCount 计算 textarea 当前需要展示的可视行数。
 func inputVisibleLineCount(input textarea.Model) int {
-	lineCount := maxInt(1, strings.Count(input.Value(), "\n")+1)
+	lineCount := wrappedInputLineCount(input.Value(), input.Width())
 	return minInt(inputMaxVisibleLines, lineCount)
+}
+
+func wrappedInputLineCount(value string, width int) int {
+	width = maxInt(1, width)
+	if value == "" {
+		return 1
+	}
+	total := 0
+	for _, line := range strings.Split(value, "\n") {
+		lineWidth := lipgloss.Width(line)
+		total += maxInt(1, (lineWidth+width-1)/width)
+	}
+	return maxInt(1, total)
 }
 
 // splitContinuation 解析以反斜杠结尾的续行输入。

@@ -38,6 +38,8 @@ type transcriptEntry struct {
 	title     string
 	body      string
 	isError   bool // true for tool results with IsError=true
+	toolUseID string
+	toolName  string
 	citations []toolCitation
 	createdAt time.Time
 }

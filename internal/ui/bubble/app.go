@@ -133,7 +133,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case toolCallMsg:
 		m.isGenerating = false
 		m.activeAssistant = -1
-		m.recordToolCallCitation(msg.ID, msg.Name, json.RawMessage(msg.Input))
+		m.recordToolCallEntry(msg.ID, msg.Name, json.RawMessage(msg.Input))
 		return m, nil
 	case toolResultMsg:
 		m.activeAssistant = -1
@@ -141,7 +141,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.IsError {
 			status = "error"
 		}
-		m.recordToolResultCitation(msg.ToolUseID, msg.Name, status, msg.Content, msg.IsError)
+		m.recordToolResultEntry(msg.ToolUseID, msg.Name, status, msg.IsError)
 		return m, nil
 	case systemEventMsg:
 		title := strings.TrimSpace(msg.Title)

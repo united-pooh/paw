@@ -87,6 +87,58 @@ func (m *appModel) recordToolCallCitation(toolUseID, name string, input json.Raw
 	m.refreshViewport()
 }
 
+func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMessage) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "tool"
+	}
+	m.addEntry(transcriptEntry{
+		kind:      entryTool,
+		title:     "tool",
+		body:      formatRunningToolCallBody(name, input),
+		toolUseID: strings.TrimSpace(toolUseID),
+		toolName:  name,
+		createdAt: m.animationNow(),
+	})
+}
+
+func (m *appModel) recordToolResultEntry(toolUseID, name, status string, isError bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "tool"
+	}
+	status = strings.TrimSpace(status)
+	if status == "" {
+		status = "ok"
+	}
+	result := toolEntryResult{
+		toolUseID: strings.TrimSpace(toolUseID),
+		name:      name,
+		status:    status,
+		isError:   isError,
+	}
+	for idx := len(m.transcript) - 1; idx >= 0; idx-- {
+		entry := &m.transcript[idx]
+		if !toolEntryMatchesResult(*entry, result) {
+			continue
+		}
+		entry.title = "tool"
+		entry.body = completeRunningToolCallBody(entry.body, status)
+		entry.isError = isError
+		m.refreshViewport()
+		return
+	}
+	m.addEntry(transcriptEntry{
+		kind:      entryTool,
+		title:     "tool",
+		body:      formatToolResultBody(name, status, ""),
+		isError:   isError,
+		toolUseID: strings.TrimSpace(toolUseID),
+		toolName:  name,
+		createdAt: m.animationNow(),
+	})
+}
+
 func (m *appModel) recordToolResultCitation(toolUseID, name, status, content string, isError bool) {
 	cite := newToolResultCitation(toolUseID, name, status, content, isError)
 	for entryIdx := len(m.transcript) - 1; entryIdx >= 0; entryIdx-- {
@@ -118,6 +170,26 @@ func (m *appModel) recordToolResultCitation(toolUseID, name, status, content str
 		})
 	}
 	m.refreshViewport()
+}
+
+type toolEntryResult struct {
+	toolUseID string
+	name      string
+	status    string
+	isError   bool
+}
+
+func toolEntryMatchesResult(entry transcriptEntry, result toolEntryResult) bool {
+	if entry.kind != entryTool || entry.title != "tool" {
+		return false
+	}
+	if !strings.Contains(firstToolEntryLine(entry.body), "running") {
+		return false
+	}
+	if entry.toolUseID != "" || result.toolUseID != "" {
+		return entry.toolUseID != "" && entry.toolUseID == result.toolUseID
+	}
+	return strings.EqualFold(entry.toolName, result.name)
 }
 
 func toolCitationMatchesResult(running, result toolCitation) bool {
@@ -226,6 +298,12 @@ func renderEntryAt(entry transcriptEntry, width int, at time.Time) string {
 	label := labelStyle(entry.kind).Render(entry.title)
 	bodyWidth := maxInt(20, width-lipgloss.Width(entryGutter))
 	body := renderEntryBodyAt(entry, bodyWidth, at)
+	if entry.kind == entryTool {
+		if body == "" {
+			return ""
+		}
+		return indentLines(body, entryGutter)
+	}
 	if body == "" {
 		return entryGutter + label
 	}
@@ -251,7 +329,7 @@ func renderEntryBodyAt(entry transcriptEntry, width int, at time.Time) string {
 	}
 	if entry.kind == entryTool {
 		isError := entry.isError
-		isResult := entry.title == "result"
+		isResult := toolEntryHasCompletedStatus(entry)
 		prog := toolExpandProgress(entry, at)
 		switch {
 		case isError:
@@ -263,6 +341,12 @@ func renderEntryBodyAt(entry transcriptEntry, width int, at time.Time) string {
 		}
 	}
 	return bodyStyle.Width(width).Render(body)
+}
+
+func toolEntryHasCompletedStatus(entry transcriptEntry) bool {
+	line := firstToolEntryLine(entry.body)
+	parts := splitToolSummaryParts(line)
+	return len(parts) >= 2 && strings.EqualFold(parts[1], "ok")
 }
 
 func renderAssistantBodyWithCitations(body string, width int, citations []toolCitation) string {
@@ -390,6 +474,7 @@ func renderToolEntryBodyWithStyle(body string, width int, progress float64, bord
 func renderToolEntryBodyWithMarker(body string, width int, progress float64, borderStyle lipgloss.Style, marker string) string {
 	body = strings.TrimRight(body, "\n")
 	summary, detail := splitToolSummary(body)
+	contentWidth := toolEntryContentWidth(width, borderStyle)
 	headerStyle := toolHeaderStyle
 	switch marker {
 	case "✓":
@@ -400,7 +485,7 @@ func renderToolEntryBodyWithMarker(body string, width int, progress float64, bor
 	header := headerStyle.Render(marker + " " + summary)
 
 	if detail == "" || progress <= 0 {
-		return borderStyle.Width(width - 2).Render(header)
+		return borderStyle.Width(contentWidth).Render(header)
 	}
 
 	detailLines := strings.Split(detail, "\n")
@@ -408,12 +493,98 @@ func renderToolEntryBodyWithMarker(body string, width int, progress float64, bor
 	if visibleLines > len(detailLines) {
 		visibleLines = len(detailLines)
 	}
-	prefixed := make([]string, visibleLines)
-	for i, l := range detailLines[:visibleLines] {
-		prefixed[i] = "  " + strings.TrimSpace(l)
+	content := header + "\n" + renderToolDetailLines(detailLines[:visibleLines], contentWidth)
+	return borderStyle.Width(contentWidth).Render(content)
+}
+
+func toolEntryContentWidth(width int, borderStyle lipgloss.Style) int {
+	return maxInt(1, width-borderStyle.GetHorizontalFrameSize()-toolEntryNoWrapSafetyCells)
+}
+
+const toolEntryNoWrapSafetyCells = transcriptPanelHorizontalFrame + 1
+
+func renderToolDetailLines(lines []string, width int) string {
+	diffRowWidth := diffDetailRowsWidth(lines, width)
+	rendered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		style := toolDetailStyle
+		renderedLine := "  " + trimmed
+		isDiffLine := false
+		switch {
+		case strings.HasPrefix(trimmed, "@@"), strings.HasPrefix(trimmed, "---"), strings.HasPrefix(trimmed, "+++"):
+			style = toolCitationStyle
+		case diffDetailLineMarker(trimmed) == "+":
+			style = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("194")).
+				Background(lipgloss.Color("22")).
+				Bold(true)
+			renderedLine = trimmed
+			isDiffLine = true
+		case diffDetailLineMarker(trimmed) == "-":
+			style = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("224")).
+				Background(lipgloss.Color("52")).
+				Bold(true)
+			renderedLine = trimmed
+			isDiffLine = true
+		}
+		if isDiffLine {
+			renderedLine = padDisplayWidth(truncateDisplayWidth(renderedLine, diffRowWidth), diffRowWidth)
+			rendered = append(rendered, style.Render(renderedLine))
+			continue
+		}
+		renderedLine = truncateDisplayWidth(renderedLine, width)
+		rendered = append(rendered, style.Width(width).Render(renderedLine))
 	}
-	content := header + "\n" + toolDetailStyle.Width(width-2).Render(strings.Join(prefixed, "\n"))
-	return borderStyle.Width(width - 2).Render(content)
+	return strings.Join(rendered, "\n")
+}
+
+func diffDetailRowsWidth(lines []string, width int) int {
+	maxAllowed := maxInt(1, width-2)
+	maxLineWidth := 0
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if diffDetailLineMarker(trimmed) == "" {
+			continue
+		}
+		maxLineWidth = maxInt(maxLineWidth, lipgloss.Width(truncateDisplayWidth(trimmed, maxAllowed)))
+	}
+	if maxLineWidth == 0 {
+		return maxAllowed
+	}
+	return minInt(maxAllowed, maxLineWidth)
+}
+
+func diffDetailLineMarker(line string) string {
+	if strings.HasPrefix(line, "+") {
+		return "+"
+	}
+	if strings.HasPrefix(line, "-") {
+		return "-"
+	}
+	fields := strings.Fields(line)
+	if len(fields) < 2 || !isDecimalNumber(fields[0]) {
+		return ""
+	}
+	switch fields[1] {
+	case "+", "-":
+		return fields[1]
+	default:
+		return ""
+	}
+}
+
+func isDecimalNumber(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // renderToolEntryBody renders a tool call entry with the default orange border.

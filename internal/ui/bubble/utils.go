@@ -53,17 +53,146 @@ func formatToolCallBody(name string, input json.RawMessage) string {
 	if strings.EqualFold(name, "Subagent") {
 		return formatSubagentToolCallBody(name, fields)
 	}
-
-	summary := name
-	if primary := primaryToolInput(name, fields); primary != "" {
-		summary += " · " + primary
+	if isFileMutationTool(name) {
+		return formatFileMutationToolCallBody(name, fields)
 	}
 
-	lines := []string{summary}
+	lines := []string{name}
 	for _, field := range fields {
-		lines = append(lines, field.key+"  "+field.value)
+		if shouldHideToolDetailField(name, field) {
+			continue
+		}
+		lines = append(lines, field.value)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func shouldHideToolDetailField(_ string, field toolDisplayField) bool {
+	key := strings.ToLower(strings.TrimSpace(field.key))
+	value := strings.TrimSpace(field.value)
+	switch key {
+	case "cwd":
+		return value == "" || value == "."
+	default:
+		return false
+	}
+}
+
+func isFileMutationTool(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "write", "edit", "update":
+		return true
+	default:
+		return false
+	}
+}
+
+func formatFileMutationToolCallBody(name string, fields []toolDisplayField) string {
+	target := firstNonEmptyField(fields, "file_path", "path")
+	lines := []string{name}
+	if target != "" {
+		lines = append(lines, target)
+	}
+	if diff := fileMutationDiffPreview(fields); diff != "" {
+		lines = append(lines, diff)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func fileMutationDiffPreview(fields []toolDisplayField) string {
+	oldContent := firstNonEmptyField(fields, "old_content", "old_string", "before")
+	newContent := firstNonEmptyField(fields, "new_content", "new_string", "replacement", "content", "after")
+	if oldContent == "" && newContent == "" {
+		return ""
+	}
+
+	diffLines := []string{}
+	if oldContent != "" {
+		diffLines = appendNumberedDiffLines(diffLines, "-", oldContent)
+	}
+	if newContent != "" {
+		diffLines = appendNumberedDiffLines(diffLines, "+", newContent)
+	}
+	return strings.Join(limitDiffPreviewLines(diffLines), "\n")
+}
+
+func appendNumberedDiffLines(lines []string, prefix, content string) []string {
+	content = strings.TrimRight(content, "\n")
+	if content == "" {
+		return append(lines, formatNumberedDiffLine(prefix, 1, ""))
+	}
+	for i, line := range strings.Split(content, "\n") {
+		lines = append(lines, formatNumberedDiffLine(prefix, i+1, line))
+	}
+	return lines
+}
+
+func formatNumberedDiffLine(prefix string, lineNumber int, content string) string {
+	return fmt.Sprintf("%d %s │ %s", lineNumber, prefix, content)
+}
+
+func limitDiffPreviewLines(lines []string) []string {
+	const maxDiffPreviewLines = 32
+	if len(lines) <= maxDiffPreviewLines {
+		return lines
+	}
+	hidden := len(lines) - maxDiffPreviewLines
+	out := append([]string(nil), lines[:maxDiffPreviewLines]...)
+	out = append(out, fmt.Sprintf("... %d more diff lines", hidden))
+	return out
+}
+
+func firstNonEmptyField(fields []toolDisplayField, keys ...string) string {
+	for _, key := range keys {
+		if value := fieldValue(fields, key); strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func formatRunningToolCallBody(name string, input json.RawMessage) string {
+	return setToolCallBodyStatus(formatToolCallBody(name, input), "running")
+}
+
+func completeRunningToolCallBody(body, status string) string {
+	return setToolCallBodyStatus(body, status)
+}
+
+func setToolCallBodyStatus(body, status string) string {
+	status = strings.TrimSpace(status)
+	if status == "" {
+		status = "ok"
+	}
+	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) == "" {
+		return status
+	}
+	parts := splitToolSummaryParts(lines[0])
+	if len(parts) >= 2 && (parts[1] == "running" || parts[1] == "ok" || parts[1] == "error") {
+		parts[1] = status
+	} else {
+		parts = append(parts[:1], append([]string{status}, parts[1:]...)...)
+	}
+	lines[0] = strings.Join(parts, " · ")
+	return strings.Join(lines, "\n")
+}
+
+func splitToolSummaryParts(summary string) []string {
+	rawParts := strings.Split(summary, " · ")
+	parts := make([]string, 0, len(rawParts))
+	for _, part := range rawParts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return parts
+}
+
+func firstToolEntryLine(body string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(body), "\n")
+	return line
 }
 
 func formatToolResultBody(name, status, content string) string {
@@ -125,11 +254,29 @@ func toolInputFields(raw json.RawMessage) []toolDisplayField {
 
 	fields := make([]toolDisplayField, 0, len(keys))
 	for _, key := range keys {
-		if value := displayToolValue(object[key]); value != "" {
+		if value := displayToolFieldValue(key, object[key]); value != "" {
 			fields = append(fields, toolDisplayField{key: key, value: value})
 		}
 	}
 	return fields
+}
+
+func displayToolFieldValue(key string, value any) string {
+	if preservesMultilineToolField(key) {
+		if text, ok := value.(string); ok {
+			return text
+		}
+	}
+	return displayToolValue(value)
+}
+
+func preservesMultilineToolField(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "content", "old_content", "new_content", "old_string", "new_string", "replacement", "before", "after":
+		return true
+	default:
+		return false
+	}
 }
 
 func displayToolValue(value any) string {
@@ -174,6 +321,8 @@ func primaryToolInputKeys(name string) []string {
 	case "read":
 		return []string{"file_path", "path"}
 	case "write", "edit":
+		return []string{"file_path", "path"}
+	case "update":
 		return []string{"file_path", "path"}
 	case "bash":
 		return []string{"command"}

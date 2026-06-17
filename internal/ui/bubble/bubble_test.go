@@ -707,33 +707,51 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 	next, _ = model.Update(toolCallMsg(ui.ToolCallEvent{Name: "Read", Input: []byte(`{"file_path":"go.mod"}`)}))
 	model = next.(appModel)
 	runningRendered := renderTranscript(model.transcript, 80, model.showThinking)
-	for _, want := range []string{"hello", "[Read]", "running", "file_path=go.mod"} {
+	for _, want := range []string{"hello", "Read · running", "go.mod"} {
 		if !strings.Contains(runningRendered, want) {
 			t.Fatalf("running transcript = %q, want %q", runningRendered, want)
+		}
+	}
+	for _, hidden := range []string{"[Read]", "file_path=", "file_path  "} {
+		if strings.Contains(runningRendered, hidden) {
+			t.Fatalf("running transcript = %q, should not show duplicate citation or field label %q", runningRendered, hidden)
+		}
+	}
+	for _, hidden := range []string{"\n  tool\n", "\n  result\n"} {
+		if strings.Contains(runningRendered, hidden) {
+			t.Fatalf("running transcript = %q, should not show %q title", runningRendered, strings.TrimSpace(hidden))
 		}
 	}
 
 	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{Name: "Read", Content: "module gocode"}))
 	model = next.(appModel)
 	okRendered := renderTranscript(model.transcript, 80, model.showThinking)
-	for _, want := range []string{"hello", "[Read]", "ok", "file_path=go.mod"} {
+	for _, want := range []string{"hello", "Read · ok", "go.mod"} {
 		if !strings.Contains(okRendered, want) {
 			t.Fatalf("ok transcript = %q, want %q", okRendered, want)
 		}
 	}
-	if strings.Contains(okRendered, "[Read] running") {
+	if strings.Contains(okRendered, "[Read]") || strings.Contains(okRendered, "Read · running") || strings.Contains(okRendered, "file_path=") || strings.Contains(okRendered, "file_path  ") {
 		t.Fatalf("ok transcript = %q, should replace running status", okRendered)
+	}
+	if !strings.Contains(okRendered, "Read · ok") {
+		t.Fatalf("ok transcript = %q, want completed tool block", okRendered)
+	}
+	for _, hidden := range []string{"\n  tool\n", "\n  result\n"} {
+		if strings.Contains(okRendered, hidden) {
+			t.Fatalf("ok transcript = %q, should not show %q title", okRendered, strings.TrimSpace(hidden))
+		}
 	}
 	next, _ = model.Update(assistantDeltaMsg("loaded go.mod"))
 	model = next.(appModel)
 
 	rendered := renderTranscript(model.transcript, 80, model.showThinking)
-	for _, want := range []string{"loaded go.mod", "[Read]", "ok", "file_path=go.mod"} {
+	for _, want := range []string{"loaded go.mod", "Read · ok", "go.mod"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered transcript = %q, want %q", rendered, want)
 		}
 	}
-	for _, hidden := range []string{"\n  tool\n", "\n  result\n", "module gocode", "tool cites"} {
+	for _, hidden := range []string{"\n  tool\n", "\n  result\n", "[Read]", "file_path=", "file_path  ", "Read · running", "module gocode", "tool cites"} {
 		if strings.Contains(rendered, hidden) {
 			t.Fatalf("rendered transcript = %q, should not contain old tool block marker/content %q", rendered, hidden)
 		}
@@ -773,7 +791,7 @@ func TestAssistantCitationRendersAsBlockquoteUnderMessage(t *testing.T) {
 	}
 }
 
-func TestToolResultCitationMatchesByToolUseID(t *testing.T) {
+func TestToolResultEntryMatchesByToolUseID(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{ID: "call_1", Name: "Read", Input: []byte(`{"file_path":"first.go"}`)}))
 	model = next.(appModel)
@@ -783,42 +801,40 @@ func TestToolResultCitationMatchesByToolUseID(t *testing.T) {
 	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{ToolUseID: "call_1", Name: "Read", Content: "first result"}))
 	model = next.(appModel)
 
-	idx := model.lastAssistantCitationHostIndex()
-	if idx < 0 || len(model.transcript[idx].citations) != 2 {
-		t.Fatalf("citations = %#v", model.transcript)
+	rendered := renderTranscript(model.transcript, 80, model.showThinking)
+	if !strings.Contains(rendered, "Read · ok") || !strings.Contains(rendered, "first.go") {
+		t.Fatalf("rendered transcript = %q, want call_1 completed", rendered)
 	}
-	first := model.transcript[idx].citations[0]
-	second := model.transcript[idx].citations[1]
-	if first.status != "ok" || !strings.Contains(first.preview, "first result") {
-		t.Fatalf("first citation = %#v, want call_1 result", first)
-	}
-	if second.status != "running" || !strings.Contains(second.target, "second.go") {
-		t.Fatalf("second citation = %#v, want untouched running call_2", second)
+	if !strings.Contains(rendered, "Read · running") || !strings.Contains(rendered, "second.go") {
+		t.Fatalf("rendered transcript = %q, want call_2 still running", rendered)
 	}
 }
 
-func TestToolCallWithoutAssistantTextRendersRunningCitation(t *testing.T) {
+func TestToolCallWithoutAssistantTextRendersRunningEntry(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 
 	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{Name: "LS", Input: []byte(`{"path":"."}`)}))
 	model = next.(appModel)
 	rendered := renderTranscript(model.transcript, 54, model.showThinking)
-	for _, want := range []string{"assistant", "[LS]", "running", "path=."} {
+	for _, want := range []string{"LS · running", "."} {
 		if !strings.Contains(rendered, want) {
-			t.Fatalf("running-only citation = %q, want %q", rendered, want)
+			t.Fatalf("running-only tool entry = %q, want %q", rendered, want)
 		}
+	}
+	if strings.Contains(rendered, "assistant") || strings.Contains(rendered, "[LS]") || strings.Contains(rendered, "path=") || strings.Contains(rendered, "path  ") {
+		t.Fatalf("running-only tool entry = %q, should not create assistant citation", rendered)
 	}
 
 	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{Name: "LS", Content: "README.md"}))
 	model = next.(appModel)
 	rendered = renderTranscript(model.transcript, 54, model.showThinking)
-	for _, want := range []string{"[LS]", "ok", "path=."} {
+	for _, want := range []string{"LS · ok", "."} {
 		if !strings.Contains(rendered, want) {
-			t.Fatalf("completed-only citation = %q, want %q", rendered, want)
+			t.Fatalf("completed-only tool entry = %q, want %q", rendered, want)
 		}
 	}
-	if strings.Contains(rendered, "[LS] running") || strings.Contains(rendered, "README.md") {
-		t.Fatalf("completed-only citation = %q, should hide running state and long output", rendered)
+	if strings.Contains(rendered, "[LS]") || strings.Contains(rendered, "path=") || strings.Contains(rendered, "path  ") || strings.Contains(rendered, "LS · running") || strings.Contains(rendered, "README.md") {
+		t.Fatalf("completed-only tool entry = %q, should hide duplicate citation/running state/long output", rendered)
 	}
 }
 
@@ -855,6 +871,104 @@ func TestSubagentToolCallBodySummarizesPrompt(t *testing.T) {
 		if strings.Contains(body, hidden) {
 			t.Fatalf("subagent body = %q, should not contain raw JSON marker %q", body, hidden)
 		}
+	}
+}
+
+func TestBashToolCallBodyHidesDefaultCWD(t *testing.T) {
+	body := formatToolCallBody("Bash", []byte(`{"command":"rm multi_line_file.txt","cwd":"."}`))
+	if strings.Contains(body, "\n.") {
+		t.Fatalf("bash body = %q, should hide default cwd dot", body)
+	}
+	for _, want := range []string{"Bash", "rm multi_line_file.txt"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("bash body = %q, want %q", body, want)
+		}
+	}
+}
+
+func TestWriteToolCallBodyRendersDiffPreview(t *testing.T) {
+	body := formatToolCallBody("Write", []byte(`{"file_path":"main.py","content":"def hanoi():\n    pass\n"}`))
+	for _, want := range []string{"Write", "main.py", "1 + │ def hanoi():", "2 + │     pass"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("write body = %q, want %q", body, want)
+		}
+	}
+	for _, hidden := range []string{"file_path=", "file_path  ", "content  ", "---", "+++", "@@", `{"file_path"`} {
+		if strings.Contains(body, hidden) {
+			t.Fatalf("write body = %q, should not contain raw write field %q", body, hidden)
+		}
+	}
+}
+
+func TestUpdateToolCallBodyRendersOldNewDiffPreview(t *testing.T) {
+	body := formatToolCallBody("Update", []byte(`{"file_path":"main.py","old_string":"return 1\n","new_string":"return 2\n"}`))
+	for _, want := range []string{"Update", "main.py", "1 - │ return 1", "1 + │ return 2"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("update body = %q, want %q", body, want)
+		}
+	}
+	for _, hidden := range []string{"file_path=", "file_path  ", "---", "+++", "@@", "old_string", "new_string"} {
+		if strings.Contains(body, hidden) {
+			t.Fatalf("update body = %q, should not contain removed field/header %q", body, hidden)
+		}
+	}
+}
+
+func TestToolDiffDetailLinesUseBackgroundColors(t *testing.T) {
+	rendered := renderToolDetailLines([]string{"1 - │ old", "1 + │ new"}, 40)
+	deleted := lipgloss.NewStyle().Foreground(lipgloss.Color("224")).Background(lipgloss.Color("52")).Bold(true).Width(40).Render("1 - │ old")
+	added := lipgloss.NewStyle().Foreground(lipgloss.Color("194")).Background(lipgloss.Color("22")).Bold(true).Width(40).Render("1 + │ new")
+	for _, want := range []string{deleted, added} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered diff = %q, want colored line %q", rendered, want)
+		}
+	}
+	for _, line := range strings.Split(ansi.Strip(rendered), "\n") {
+		if got := lipgloss.Width(line); got != 40 {
+			t.Fatalf("diff line width = %d, want full safe row width 40: %q", got, line)
+		}
+	}
+}
+
+func TestToolEntryContentWidthLeavesTranscriptNoWrapCell(t *testing.T) {
+	width := 80
+	want := width - toolResultBorderStyle.GetHorizontalFrameSize() - transcriptPanelHorizontalFrame - 1
+	if got := toolEntryContentWidth(width, toolResultBorderStyle); got != want {
+		t.Fatalf("tool content width = %d, want %d", got, want)
+	}
+}
+
+func TestToolDiffRowsAlignLineNumberWithStatusMarker(t *testing.T) {
+	longLine := strings.Repeat("这是一个测试文件的内容。", 20)
+	rendered := ansi.Strip(renderEntry(transcriptEntry{
+		kind:  entryTool,
+		title: "tool",
+		body:  "Write · ok\ntest.txt\n1 + │ " + longLine,
+	}, 80))
+	lines := strings.Split(rendered, "\n")
+	var headerLine, diffLine string
+	for _, line := range lines {
+		if strings.Contains(line, "✓ Write · ok") {
+			headerLine = line
+		}
+		if strings.Contains(line, "1 + │") {
+			diffLine = line
+		}
+		if got := lipgloss.Width(line); got > 80 {
+			t.Fatalf("rendered line width = %d, want <= 80: %q\n%s", got, line, rendered)
+		}
+	}
+	if headerLine == "" || diffLine == "" {
+		t.Fatalf("rendered tool entry missing header or diff line:\n%s", rendered)
+	}
+	if got, want := strings.Index(diffLine, "1"), strings.Index(headerLine, "✓"); got != want {
+		t.Fatalf("line number column = %d, want status marker column %d\nheader: %q\ndiff:   %q", got, want, headerLine, diffLine)
+	}
+	if got := lipgloss.Width(diffLine); got >= 80 {
+		t.Fatalf("diff line width = %d, want right margin to avoid terminal wrap: %q", got, diffLine)
+	}
+	if !strings.Contains(diffLine, "…") {
+		t.Fatalf("diff line = %q, want long diff content truncated to avoid soft wrap", diffLine)
 	}
 }
 
@@ -1992,6 +2106,32 @@ func TestRenderInputBoxShowsPureTextarea(t *testing.T) {
 		if strings.Contains(rendered, unwanted) {
 			t.Fatalf("running input box = %q, should not contain %q", rendered, unwanted)
 		}
+	}
+}
+
+func TestInputBoxExpandsForLongWrappedInput(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 120
+	model.height = 40
+	model.relayout()
+
+	singleLineHeight := lipgloss.Height(model.renderInputBox())
+	wrappedWidth := maxInt(1, model.input.Width())
+	model.input.SetValue(strings.Repeat("x", wrappedWidth*3+5))
+	model.relayout()
+
+	if got := model.input.Height(); got < 4 {
+		t.Fatalf("input height = %d, want expansion for soft-wrapped long input", got)
+	}
+	if got := lipgloss.Height(model.renderInputBox()); got <= singleLineHeight {
+		t.Fatalf("input box height = %d, want > %d", got, singleLineHeight)
+	}
+
+	model.input.SetValue(strings.Repeat("line\n", inputMaxVisibleLines+5))
+	model.relayout()
+	if got := model.input.Height(); got != inputMaxVisibleLines {
+		t.Fatalf("input height = %d, want capped at %d", got, inputMaxVisibleLines)
 	}
 }
 
