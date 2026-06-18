@@ -41,6 +41,15 @@ func (runner *Runner) SetStreamMASubagentRunner(subagents StreamMASubagentRunner
 	runner.streamMASubagents = subagents
 }
 
+func (runner *Runner) SetSubagentTokensProvider(p SubagentTokensProvider) {
+	if runner == nil {
+		return
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	runner.subagentTokensProvider = p
+}
+
 func parseStreamMAInvocation(input string) (string, bool) {
 	trimmed := strings.TrimSpace(input)
 	if trimmed == "" {
@@ -278,7 +287,7 @@ func (m *streamMASubagentModel) StreamMessage(ctx context.Context, messages []me
 	agentID, role := streamMAAgentMetadata(messages)
 	prompt := buildStreamMASubagentPrompt(agentID, role, messages)
 	if m.notify != nil {
-		m.notify("streamma", fmt.Sprintf("subagent %s (%s) started", agentID, role))
+		m.notify(agentID, fmt.Sprintf("(%s) started", role))
 	}
 	result, err := m.subagents.RunStreamMASubagent(ctx, StreamMASubagentRequest{
 		AgentID:     agentID,
@@ -292,11 +301,11 @@ func (m *streamMASubagentModel) StreamMessage(ctx context.Context, messages []me
 	}
 	content := ensureStreamMABoundary(result.Content)
 	if m.notify != nil {
-		detail := fmt.Sprintf("subagent %s finished", agentID)
+		detail := fmt.Sprintf("(%s) finished", role)
 		if strings.TrimSpace(result.SessionID) != "" {
 			detail += " session=" + result.SessionID
 		}
-		m.notify("streamma", detail)
+		m.notify(agentID, detail)
 	}
 	ch := make(chan model.StreamEvent, 2)
 	ch <- model.StreamEvent{Delta: content}

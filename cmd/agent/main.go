@@ -122,9 +122,11 @@ func runSubagentWorkerMode(ctx context.Context, input io.Reader, output io.Write
 	if err != nil {
 		result.Error = err.Error()
 		result.ExitCode = 1
+		result.UsedTokens = runner.ContextStats(1<<30, "").UsedTokens
 		return json.NewEncoder(output).Encode(result)
 	}
 	result.Content = strings.TrimSpace(msg.Content)
+	result.UsedTokens = runner.ContextStats(1<<30, "").UsedTokens
 	return json.NewEncoder(output).Encode(result)
 }
 
@@ -197,6 +199,7 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 		manager:         subagentManager,
 		parentSessionID: sessionID,
 	})
+	runner.SetSubagentTokensProvider(subagentManager)
 	registerTools(registry, root, subagentManager, sessionID)
 
 	return runner, sessionID, client, settingsController, subagentManager, store, nil

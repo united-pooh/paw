@@ -265,9 +265,9 @@ func (m appModel) subagentTasks() []subagent.TaskSnapshot {
 
 func renderSubagentResult(result subagent.Result) string {
 	lines := []string{
-		fmt.Sprintf("%s · depth %d", resultDisplayName(result), result.Depth),
+		fmt.Sprintf("done · depth %d", result.Depth),
 	}
-	if result.AgentName != "" && result.AgentID != "" {
+	if result.AgentID != "" {
 		lines = append(lines, "id  "+result.AgentID)
 	}
 	if result.OutputPath != "" {

@@ -38,6 +38,12 @@ type historyExistenceStore interface {
 }
 
 // Runner 负责单轮工具闭环调度。
+// SubagentTokensProvider returns the cumulative token usage for all subagents
+// spawned by a given parent session.
+type SubagentTokensProvider interface {
+	TotalSubagentTokens(parentSessionID string) int
+}
+
 type Runner struct {
 	mu        sync.RWMutex
 	model     ModelStreamer
@@ -47,16 +53,17 @@ type Runner struct {
 	sessionID string
 	workRoot  string // 工具使用的 workspace 根目录，用于解析相对文件路径
 	prompt    *PromptBuilder
-	// history 保存“已经成功完成”的多轮对话消息。
+	// history 保存”已经成功完成”的多轮对话消息。
 	// 当前调用路径是串行的，因此这里先不引入锁。
 	// TODO: 如果后续要把 Runner 暴露给并发调用方，需要为 history 增加互斥保护。
-	history           []message.Message
-	usage             model.Usage
-	usageKnown        bool
-	sessionUsage      model.Usage
-	sessionUsageKnown bool
-	supplements       []string
-	streamMASubagents StreamMASubagentRunner
+	history                []message.Message
+	usage                  model.Usage
+	usageKnown             bool
+	sessionUsage           model.Usage
+	sessionUsageKnown      bool
+	supplements            []string
+	streamMASubagents      StreamMASubagentRunner
+	subagentTokensProvider SubagentTokensProvider
 }
 
 type tokenUsageTotals struct {
@@ -369,11 +376,17 @@ func (runner *Runner) ContextStats(limitTokens int, _ string) ContextStats {
 	runner.mu.RLock()
 	usage := runner.usage
 	usageKnown := runner.usageKnown
+	sessionID := runner.sessionID
+	provider := runner.subagentTokensProvider
 	runner.mu.RUnlock()
 
 	current := usageTotalsFromUsage(usage, usageKnown)
+	subagentTokens := 0
+	if provider != nil {
+		subagentTokens = provider.TotalSubagentTokens(sessionID)
+	}
 	return ContextStats{
-		UsedTokens:  current.used,
+		UsedTokens:  current.used + subagentTokens,
 		CacheTokens: current.cache,
 		LimitTokens: limitTokens,
 	}

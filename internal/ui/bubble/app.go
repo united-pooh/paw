@@ -193,16 +193,17 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.queryGuard.FinishModel()
 		m.turnStartedAt = time.Time{}
 		m.syncRunningFlags()
+		agentTitle := resultDisplayName(msg.result)
 		if msg.err != nil {
 			m.addEntry(transcriptEntry{
 				kind:  entryError,
-				title: "subagent",
+				title: agentTitle,
 				body:  msg.err.Error(),
 			})
 		} else {
 			m.addEntry(transcriptEntry{
 				kind:  entrySystem,
-				title: "subagent",
+				title: agentTitle,
 				body:  renderSubagentResult(msg.result),
 			})
 		}

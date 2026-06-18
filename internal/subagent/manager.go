@@ -122,6 +122,7 @@ type TaskSnapshot struct {
 	FinishedAt      *time.Time           `json:"finished_at,omitempty"`
 	Content         string               `json:"content,omitempty"`
 	Error           string               `json:"error,omitempty"`
+	UsedTokens      int                  `json:"used_tokens,omitempty"`
 }
 
 type sinkUI struct{}
@@ -291,6 +292,23 @@ func (m *Manager) ListTasks() []TaskSnapshot {
 		return tasks[i].StartedAt.Before(tasks[j].StartedAt)
 	})
 	return tasks
+}
+
+// TotalSubagentTokens returns the sum of UsedTokens for all completed tasks
+// whose ParentSessionID matches the given session ID.
+func (m *Manager) TotalSubagentTokens(parentSessionID string) int {
+	if m == nil || parentSessionID == "" {
+		return 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	total := 0
+	for _, task := range m.tasks {
+		if task.ParentSessionID == parentSessionID {
+			total += task.UsedTokens
+		}
+	}
+	return total
 }
 
 func (m *Manager) normalizeRequest(req Request) Request {
@@ -466,6 +484,9 @@ func (m *Manager) finishTask(ctx context.Context, taskID string, result WorkerRe
 	task.ExitCode = &exitCode
 	if result.Content != "" {
 		task.Content = strings.TrimSpace(result.Content)
+	}
+	if result.UsedTokens > 0 {
+		task.UsedTokens = result.UsedTokens
 	}
 	if err != nil || result.Error != "" {
 		task.Status = TaskFailed

@@ -27,11 +27,12 @@ type WorkerRequest struct {
 }
 
 type WorkerResult struct {
-	TaskID    string `json:"task_id"`
-	SessionID string `json:"session_id"`
-	Content   string `json:"content,omitempty"`
-	Error     string `json:"error,omitempty"`
-	ExitCode  int    `json:"exit_code"`
+	TaskID     string `json:"task_id"`
+	SessionID  string `json:"session_id"`
+	Content    string `json:"content,omitempty"`
+	Error      string `json:"error,omitempty"`
+	ExitCode   int    `json:"exit_code"`
+	UsedTokens int    `json:"used_tokens,omitempty"`
 }
 
 type Launcher interface {

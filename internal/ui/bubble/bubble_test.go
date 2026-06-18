@@ -1518,7 +1518,7 @@ func TestSyncSubagentCompletionStartsQueuedTurn(t *testing.T) {
 		t.Fatalf("sync subagent completion should start queued turn")
 	}
 	last := model.transcript[len(model.transcript)-1]
-	if last.title != "subagent" || !strings.Contains(last.body, "agent-7 · depth 0") || !strings.Contains(last.body, "/tmp/agent-7.jsonl") {
+	if last.title != "agent-7" || !strings.Contains(last.body, "done · depth 0") || !strings.Contains(last.body, "/tmp/agent-7.jsonl") {
 		t.Fatalf("subagent transcript = %#v", last)
 	}
 
@@ -2257,19 +2257,16 @@ func TestContextCardCompactsStatusAndWorkCounts(t *testing.T) {
 
 	card := ansi.Strip(model.renderContextCardContent(48))
 	lines := strings.Split(card, "\n")
-	if len(lines) != 4 {
-		t.Fatalf("context card lines = %#v, want token/bar/status/work", lines)
+	if len(lines) != 3 {
+		t.Fatalf("context card lines = %#v, want token/bar/work", lines)
 	}
-	status := lines[2]
-	for _, want := range []string{"cache 5%", "free 75%", "turns 1"} {
-		if !strings.Contains(status, want) {
-			t.Fatalf("status line = %q, want %q", status, want)
+	topLine := lines[0]
+	for _, want := range []string{"cache 5%", "free(75%)"} {
+		if !strings.Contains(topLine, want) {
+			t.Fatalf("top line = %q, want %q", topLine, want)
 		}
 	}
-	if strings.Contains(status, "supplements") || strings.Contains(status, "queued") {
-		t.Fatalf("status line = %q, should keep work counts separate", status)
-	}
-	work := lines[3]
+	work := lines[2]
 	for _, want := range []string{"supplements 1", "queued 1"} {
 		if !strings.Contains(work, want) {
 			t.Fatalf("work line = %q, want %q", work, want)
@@ -2289,17 +2286,14 @@ func TestContextCardStatusStaysOneLineWhenNarrow(t *testing.T) {
 
 	card := ansi.Strip(model.renderContextCardContent(20))
 	lines := strings.Split(card, "\n")
-	if len(lines) != 3 {
-		t.Fatalf("context card lines = %#v, want compact token/bar/status only", lines)
+	if len(lines) != 2 {
+		t.Fatalf("context card lines = %#v, want token/bar only", lines)
 	}
-	status := lines[2]
-	for _, want := range []string{"c0%", "f100%", "t0"} {
-		if !strings.Contains(status, want) {
-			t.Fatalf("status line = %q, want %q", status, want)
+	topLine := lines[0]
+	for _, want := range []string{"cache 0%", "free(100%)"} {
+		if !strings.Contains(topLine, want) {
+			t.Fatalf("top line = %q, want %q", topLine, want)
 		}
-	}
-	if lipgloss.Width(status) > 20 {
-		t.Fatalf("status line width = %d, want <= 20: %q", lipgloss.Width(status), status)
 	}
 }
 

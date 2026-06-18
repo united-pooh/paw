@@ -272,10 +272,11 @@ func (m appModel) renderSubagentsCardContentHeight(width, height int) string {
 		var dot, status string
 		dotStyle := dotDoneStyle
 		lineStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("248"))
+		noDot := false
 		switch t.Status {
 		case subagent.TaskRunning:
-			dot = "⟳"
-			status = "running"
+			noDot = true
+			status = formatElapsedTime(time.Since(t.StartedAt))
 			dotStyle = dotRunStyle
 			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("84"))
 		case subagent.TaskFailed:
@@ -296,7 +297,11 @@ func (m appModel) renderSubagentsCardContentHeight(width, height int) string {
 		if color := strings.TrimSpace(t.Color); color != "" {
 			nameStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(color))
 		}
-		lines = append(lines, renderSubagentSidebarRow(width, dot, taskDisplayName(t), status, dotStyle, nameStyle, lineStyle))
+		if noDot {
+			lines = append(lines, renderSidebarRow(width, taskDisplayName(t), status, nameStyle, lineStyle))
+		} else {
+			lines = append(lines, renderSubagentSidebarRow(width, dot, taskDisplayName(t), status, dotStyle, nameStyle, lineStyle))
+		}
 	}
 	if moreCount > 0 {
 		lines = append(lines, renderSidebarRow(width, fmt.Sprintf("+%d more", moreCount), "", mutedStyle, mutedStyle))
@@ -515,4 +520,21 @@ func padDisplayWidth(text string, width int) string {
 		return text
 	}
 	return text + strings.Repeat(" ", width-lipgloss.Width(text))
+}
+
+func formatElapsedTime(d time.Duration) string {
+	s := int(d.Seconds())
+	if s < 0 {
+		s = 0
+	}
+	if s < 60 {
+		return fmt.Sprintf("%ds", s)
+	}
+	h := s / 3600
+	m := (s % 3600) / 60
+	sec := s % 60
+	if h > 0 {
+		return fmt.Sprintf("%dh %dm %ds", h, m, sec)
+	}
+	return fmt.Sprintf("%dm %ds", m, sec)
 }
