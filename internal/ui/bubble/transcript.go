@@ -295,7 +295,12 @@ func renderEntry(entry transcriptEntry, width int) string {
 
 func renderEntryAt(entry transcriptEntry, width int, at time.Time) string {
 	const entryGutter = "  "
-	label := labelStyle(entry.kind).Render(entry.title)
+	var label string
+	if entry.color != "" {
+		label = lipgloss.NewStyle().Foreground(lipgloss.Color(entry.color)).Bold(true).Render(entry.title)
+	} else {
+		label = labelStyle(entry.kind).Render(entry.title)
+	}
 	bodyWidth := maxInt(20, width-lipgloss.Width(entryGutter))
 	body := renderEntryBodyAt(entry, bodyWidth, at)
 	if entry.kind == entryTool {

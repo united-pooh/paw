@@ -37,6 +37,7 @@ type transcriptEntry struct {
 	kind      entryKind
 	title     string
 	body      string
+	color     string // 可选：标题颜色（lipgloss 颜色字符串），与 subagents 面板保持一致
 	isError   bool // true for tool results with IsError=true
 	toolUseID string
 	toolName  string
@@ -269,6 +270,7 @@ type appModel struct {
 	pipelineState       pipelineState
 	pipelineActiveAfter time.Time
 	sidebarWidth        int // 右侧面板宽度（字符），由 relayout() 计算并存储
+	spinnerFrameIdx     int // 侧边栏 running 条目动画帧索引，由 cursorFrameMsg 驱动
 }
 
 // pipelinePhaseStatus 标记单个 pipeline 阶段的状态。

@@ -251,6 +251,7 @@ func (m appModel) renderSubagentsCardContentHeight(width, height int) string {
 	dotDoneStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	dotFailStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 	dotStopStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	spinnerFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 	availableTaskRows := len(tasks)
 	moreCount := 0
@@ -272,10 +273,9 @@ func (m appModel) renderSubagentsCardContentHeight(width, height int) string {
 		var dot, status string
 		dotStyle := dotDoneStyle
 		lineStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("248"))
-		noDot := false
 		switch t.Status {
 		case subagent.TaskRunning:
-			noDot = true
+			dot = spinnerFrames[m.spinnerFrameIdx%len(spinnerFrames)]
 			status = formatElapsedTime(time.Since(t.StartedAt))
 			dotStyle = dotRunStyle
 			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("84"))
@@ -297,11 +297,7 @@ func (m appModel) renderSubagentsCardContentHeight(width, height int) string {
 		if color := strings.TrimSpace(t.Color); color != "" {
 			nameStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(color))
 		}
-		if noDot {
-			lines = append(lines, renderSidebarRow(width, taskDisplayName(t), status, nameStyle, lineStyle))
-		} else {
-			lines = append(lines, renderSubagentSidebarRow(width, dot, taskDisplayName(t), status, dotStyle, nameStyle, lineStyle))
-		}
+		lines = append(lines, renderSubagentSidebarRow(width, dot, taskDisplayName(t), status, dotStyle, nameStyle, lineStyle))
 	}
 	if moreCount > 0 {
 		lines = append(lines, renderSidebarRow(width, fmt.Sprintf("+%d more", moreCount), "", mutedStyle, mutedStyle))

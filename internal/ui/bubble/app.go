@@ -112,6 +112,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case cursorFrameMsg:
 		m.cursorFrameAt = time.Time(msg)
+		m.spinnerFrameIdx++
 		m.applyCursorAnimation()
 		m.updateContextMeterAnimation()
 		if m.hasActiveTranscriptAnimation() {
@@ -152,6 +153,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			kind:  entrySystem,
 			title: title,
 			body:  strings.TrimSpace(msg.Body),
+			color: msg.Color,
 		})
 		return m, nil
 	case doneMsg:
@@ -194,16 +196,19 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.turnStartedAt = time.Time{}
 		m.syncRunningFlags()
 		agentTitle := resultDisplayName(msg.result)
+		agentColor := strings.TrimSpace(msg.result.AgentColor)
 		if msg.err != nil {
 			m.addEntry(transcriptEntry{
 				kind:  entryError,
 				title: agentTitle,
+				color: agentColor,
 				body:  msg.err.Error(),
 			})
 		} else {
 			m.addEntry(transcriptEntry{
 				kind:  entrySystem,
 				title: agentTitle,
+				color: agentColor,
 				body:  renderSubagentResult(msg.result),
 			})
 		}
@@ -245,6 +250,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.completion.selectedIndex >= len(m.completion.filteredItems) {
 				m.completion.selectedIndex = 0
 			}
+			// 候选项加载完成后补全框高度变化，必须重新计算布局
+			m.relayout()
 		}
 		return m, nil
 	case pipelineStateUpdatedMsg:

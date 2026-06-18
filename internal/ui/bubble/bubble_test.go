@@ -2261,7 +2261,7 @@ func TestContextCardCompactsStatusAndWorkCounts(t *testing.T) {
 		t.Fatalf("context card lines = %#v, want token/bar/work", lines)
 	}
 	topLine := lines[0]
-	for _, want := range []string{"cache 5%", "free(75%)"} {
+	for _, want := range []string{"cache 20%", "free(75%)"} {
 		if !strings.Contains(topLine, want) {
 			t.Fatalf("top line = %q, want %q", topLine, want)
 		}

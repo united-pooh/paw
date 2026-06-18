@@ -334,8 +334,8 @@ func (m appModel) renderContextCardContent(innerWidth int) string {
 	rawCache := clampInt(stats.CacheTokens, 0, rawUsed)
 	labelUsed, labelCache := m.animatedLabelTokens(rawUsed, rawCache, limit)
 
-	// Line 1: cache% left, token centre-left, free right.
-	cacheLabel := "cache " + formatContextPercent(labelCache, limit)
+	// Line 1: cache% left (hit rate = cache / used), token centre-left, free right.
+	cacheLabel := "cache " + formatContextPercent(labelCache, labelUsed)
 	rawToken := formatCompactTokenCount(labelUsed) + contextDirectionArrow(m.isGenerating)
 	rawFree := formatContextFreeLabel(labelUsed, limit)
 	cacheVW := len([]rune(cacheLabel))
