@@ -34,7 +34,7 @@ func (l *EventLog) Append(event Event) Event {
 	}
 	copied := cloneEvent(event)
 	l.events = append(l.events, copied)
-	return cloneEvent(copied)
+	return copied
 }
 
 func (l *EventLog) Snapshot() []Event {

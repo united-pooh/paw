@@ -229,12 +229,6 @@ func (a streamMASubagentAdapter) RunStreamMASubagent(ctx context.Context, req lo
 	}, nil
 }
 
-func buildToolRegistry(root string, subagentManager *subagent.Manager, sessionID string) *tool.Registry {
-	registry := tool.NewRegistry()
-	registerTools(registry, root, subagentManager, sessionID)
-	return registry
-}
-
 func registerTools(registry *tool.Registry, root string, subagentManager *subagent.Manager, sessionID string) {
 	if registry == nil {
 		return

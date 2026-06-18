@@ -207,8 +207,6 @@ type compiledGraph struct {
 	successors   map[string][]string
 	edgeIDs      map[string]string
 	sources      []string
-	sinks        []string
-	topologyTag  string
 }
 
 func compileGraph(spec GraphSpec) (*compiledGraph, error) {
@@ -279,20 +277,22 @@ func compileGraph(spec GraphSpec) (*compiledGraph, error) {
 		if len(graph.predecessors[id]) == 0 {
 			graph.sources = append(graph.sources, id)
 		}
+	}
+	sinkCount := 0
+	for _, id := range graph.agentOrder {
 		if len(graph.successors[id]) == 0 {
-			graph.sinks = append(graph.sinks, id)
+			sinkCount++
 		}
 	}
 	if len(graph.sources) == 0 {
 		return nil, fmt.Errorf("streamma graph has no source agent")
 	}
-	if len(graph.sinks) == 0 {
+	if sinkCount == 0 {
 		return nil, fmt.Errorf("streamma graph has no sink agent")
 	}
 	if err := graph.validateAcyclic(); err != nil {
 		return nil, err
 	}
-	graph.topologyTag = graph.buildTopologyTag()
 	return graph, nil
 }
 
@@ -320,18 +320,6 @@ func (g *compiledGraph) validateAcyclic() error {
 		return fmt.Errorf("streamma graph must be a DAG")
 	}
 	return nil
-}
-
-func (g *compiledGraph) buildTopologyTag() string {
-	edges := make([]string, 0, len(g.edgeIDs))
-	for _, edgeID := range g.edgeIDs {
-		edges = append(edges, edgeID)
-	}
-	sort.Strings(edges)
-	if len(edges) == 0 {
-		return "single"
-	}
-	return strings.Join(edges, ", ")
 }
 
 func edgeKey(from, to string) string {

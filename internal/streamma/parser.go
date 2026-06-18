@@ -116,7 +116,7 @@ func (p *stepParser) consume(delta string) error {
 	for {
 		idx := strings.IndexByte(p.pending, '\n')
 		if idx < 0 {
-			return p.checkPendingSize()
+			return p.checkSize(p.current.Len() + len(p.pending))
 		}
 		line := p.pending[:idx+1]
 		p.pending = p.pending[idx+1:]
@@ -134,7 +134,7 @@ func (p *stepParser) processLine(line string) error {
 	}
 
 	p.current.WriteString(line)
-	if err := p.checkCurrentSize(); err != nil {
+	if err := p.checkSize(p.current.Len()); err != nil {
 		return err
 	}
 	if isFenceLine(trimmed) {
@@ -147,7 +147,7 @@ func (p *stepParser) finish() ([]StepPacket, error) {
 	if p.pending != "" {
 		p.current.WriteString(p.pending)
 		p.pending = ""
-		if err := p.checkCurrentSize(); err != nil {
+		if err := p.checkSize(p.current.Len()); err != nil {
 			return nil, err
 		}
 	}
@@ -195,21 +195,8 @@ func (p *stepParser) commit(recovered bool) error {
 	return nil
 }
 
-func (p *stepParser) checkPendingSize() error {
-	if p.config.MaxStepBytes <= 0 {
-		return nil
-	}
-	if p.current.Len()+len(p.pending) <= p.config.MaxStepBytes {
-		return nil
-	}
-	return &ParserFatalError{
-		AgentID: p.config.AgentID,
-		Reason:  fmt.Sprintf("step exceeded max bytes: %d", p.config.MaxStepBytes),
-	}
-}
-
-func (p *stepParser) checkCurrentSize() error {
-	if p.config.MaxStepBytes <= 0 || p.current.Len() <= p.config.MaxStepBytes {
+func (p *stepParser) checkSize(n int) error {
+	if p.config.MaxStepBytes <= 0 || n <= p.config.MaxStepBytes {
 		return nil
 	}
 	return &ParserFatalError{

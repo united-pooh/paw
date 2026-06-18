@@ -18,10 +18,12 @@ type Runtime struct {
 	log    *EventLog
 	broker *Broker
 
-	states map[string]*agentRuntimeState
-	final  *FinalAnswerPacket
-	failed bool
-	err    error
+	states         map[string]*agentRuntimeState
+	activeCount    int
+	completedCount int
+	final          *FinalAnswerPacket
+	failed         bool
+	err            error
 }
 
 type agentRuntimeState struct {
@@ -116,15 +118,14 @@ func (r *Runtime) Run(ctx context.Context, problem string) (RunResult, error) {
 	}
 	cancel()
 
-	for r.activeInvocationCount() > 0 {
+	// Drain signals that arrived before goroutines observed cancellation.
+drain:
+	for {
 		select {
 		case signal := <-signals:
 			r.handleSignal(signal)
 		default:
-			break
-		}
-		if r.activeInvocationCount() > 0 {
-			break
+			break drain
 		}
 	}
 
@@ -149,6 +150,8 @@ func (r *Runtime) Run(ctx context.Context, problem string) (RunResult, error) {
 func (r *Runtime) reset(problem string) {
 	r.broker = NewBroker(r.graph)
 	r.states = map[string]*agentRuntimeState{}
+	r.activeCount = 0
+	r.completedCount = 0
 	r.final = nil
 	r.failed = false
 	r.err = nil
@@ -232,6 +235,7 @@ func (r *Runtime) invokeAgent(ctx context.Context, agentID string, inputEvents [
 		InputEvents:  append([]string(nil), inputEvents...),
 	}
 	state.active = true
+	r.activeCount++
 
 	go func() {
 		stream, err := r.model.StreamMessage(ctx, prompt, nil)
@@ -271,6 +275,7 @@ func (r *Runtime) handleSignal(signal runtimeSignal) {
 		state := r.states[signal.agentID]
 		if state != nil {
 			state.active = false
+			r.activeCount--
 		}
 		r.fail(signal.agentID, signal.err)
 		return
@@ -301,6 +306,7 @@ func (r *Runtime) handleSignal(signal runtimeSignal) {
 	}
 	if signal.done {
 		state.active = false
+		r.activeCount--
 	}
 }
 
@@ -318,6 +324,7 @@ func (r *Runtime) canComplete(agentID string) bool {
 func (r *Runtime) completeAgent(agentID string) {
 	state := r.states[agentID]
 	state.completed = true
+	r.completedCount++
 	if len(r.graph.successors[agentID]) == 0 && !r.failed {
 		r.emitFinal(agentID)
 	}
@@ -373,20 +380,9 @@ func (r *Runtime) fail(agentID string, err error) {
 }
 
 func (r *Runtime) allCompleted() bool {
-	for _, state := range r.states {
-		if !state.completed {
-			return false
-		}
-	}
-	return true
+	return r.completedCount == len(r.states)
 }
 
 func (r *Runtime) activeInvocationCount() int {
-	count := 0
-	for _, state := range r.states {
-		if state.active {
-			count++
-		}
-	}
-	return count
+	return r.activeCount
 }

@@ -240,14 +240,7 @@ func finalStreamMAText(result streamma.RunResult) string {
 }
 
 func cleanStreamMAFinalText(text string) string {
-	var lines []string
-	for _, line := range strings.Split(text, "\n") {
-		if strings.TrimSpace(line) == streamma.DefaultBoundary {
-			continue
-		}
-		lines = append(lines, line)
-	}
-	cleaned := strings.TrimSpace(strings.Join(lines, "\n"))
+	cleaned := strings.TrimSpace(text)
 	for {
 		trimmed := strings.TrimSpace(strings.TrimPrefix(cleaned, "Own step:"))
 		if trimmed == cleaned {

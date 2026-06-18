@@ -56,19 +56,20 @@ func (b *Broker) FanoutStep(event Event) []BrokerDelivery {
 func (b *Broker) PropagateEOF(runID, from string, finalStep int, reason string) []BrokerDelivery {
 	var deliveries []BrokerDelivery
 	for _, successor := range b.graph.successors[from] {
+		edgeID := b.graph.edgeIDs[edgeKey(from, successor)]
 		event := Event{
 			RunID:           runID,
 			Type:            EventUpstreamEOF,
 			ProducerAgentID: from,
 			TargetAgentID:   successor,
-			EdgeID:          b.graph.edgeIDs[edgeKey(from, successor)],
+			EdgeID:          edgeID,
 			Control: &ControlPacket{
 				SchemaVersion: "streamma.control.v1",
 				RunID:         runID,
 				ControlType:   "upstream_eof",
 				AgentID:       from,
 				TargetAgentID: successor,
-				EdgeID:        b.graph.edgeIDs[edgeKey(from, successor)],
+				EdgeID:        edgeID,
 				FinalStep:     finalStep,
 				Reason:        reason,
 			},
@@ -86,9 +87,8 @@ func (b *Broker) Dequeue(agentID string) (BrokerDelivery, bool) {
 		return BrokerDelivery{}, false
 	}
 	delivery := queue[0]
-	copy(queue, queue[1:])
-	queue = queue[:len(queue)-1]
-	b.queues[agentID] = queue
+	queue[0] = BrokerDelivery{} // release reference for GC
+	b.queues[agentID] = queue[1:]
 	return delivery, true
 }
 
