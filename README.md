@@ -152,7 +152,7 @@ go run ./cmd/agent -s <session-id>
 - `/export` 默认导出到 `.ccagent/exports/conversation-YYYY-MM-DD-HHMMSS.txt`，也支持工作区内显式路径；导出文件权限为 `0600`
 - `/setting` 通过向导保存默认 subagent context/run mode，以及 context meter 的位置和 token limit
 - `/sessions` 列出所有历史会话（ID 前缀、日期、文件大小、首条消息），选中条目后直接恢复该会话
-- `/subagent` 支持 `empty` 与 `fork` 两种上下文模式，以及 `sync` 与 `background` 两种运行模式；后台任务完成后会发 UI 系统通知，但结果不会自动插回主对话
+- `/subagent` 支持 `empty` 与 `fork` 两种上下文模式，以及 `sync` 与 `background` 两种运行模式；后台任务完成后会发 UI 系统通知，并把截断后的结果作为补充上下文注入后续模型轮次（完整结果仍在任务 output/transcript 路径中）
 - `/tasks` 展示当前后台 subagent 任务及 transcript 路径
 
 #### 当前输入区状态

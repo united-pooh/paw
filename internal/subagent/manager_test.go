@@ -141,6 +141,38 @@ func (n *fakeNotifier) wait(t *testing.T) ui.SystemEvent {
 	}
 }
 
+type fakeContextSink struct {
+	mu     sync.Mutex
+	inputs []string
+	ch     chan string
+}
+
+func newFakeContextSink() *fakeContextSink {
+	return &fakeContextSink{ch: make(chan string, 4)}
+}
+
+func (s *fakeContextSink) SubmitSupplement(input string) bool {
+	s.mu.Lock()
+	s.inputs = append(s.inputs, input)
+	s.mu.Unlock()
+	select {
+	case s.ch <- input:
+	default:
+	}
+	return true
+}
+
+func (s *fakeContextSink) wait(t *testing.T) string {
+	t.Helper()
+	select {
+	case input := <-s.ch:
+		return input
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for context supplement")
+		return ""
+	}
+}
+
 func newTestManager(t *testing.T, modelStreamer *recordingModel, cfg settings.Config, notifier Notifier) (*Manager, *session.JSONLStore, string) {
 	t.Helper()
 	root := t.TempDir()
@@ -443,6 +475,79 @@ func TestLaunchTracksStatusListAndNotification(t *testing.T) {
 	event := notifier.wait(t)
 	if event.Title != "subagent" || !strings.Contains(event.Body, "status=completed") || !strings.Contains(event.Body, "background answer") {
 		t.Fatalf("system event = %#v", event)
+	}
+}
+
+func TestBackgroundCompletionSubmitsParentContext(t *testing.T) {
+	longResult := strings.Repeat("x", parentContextResultMaxRunes+20)
+	modelStreamer := &recordingModel{
+		rounds: []fakeRound{
+			{events: []model.StreamEvent{{Delta: longResult}, {Done: true}}},
+		},
+	}
+	sink := newFakeContextSink()
+	manager, _, _ := newTestManager(t, modelStreamer, settings.DefaultConfig(), nil)
+	manager.contextSink = sink
+
+	task, err := manager.Launch(context.Background(), Request{
+		ParentSessionID: "parent-session",
+		Prompt:          "background prompt",
+		Description:     "collect context",
+	})
+	if err != nil {
+		t.Fatalf("Launch() error = %v", err)
+	}
+	completed := waitForTask(t, manager, task.ID, TaskCompleted)
+	if completed.Content != longResult {
+		t.Fatalf("completed.Content length = %d, want %d", len(completed.Content), len(longResult))
+	}
+
+	update := sink.wait(t)
+	for _, want := range []string{
+		"Background subagent completed.",
+		"id: " + task.ID,
+		"description: collect context",
+		"status: completed",
+		"result:",
+		"[truncated; full result: " + completed.OutputPath + "]",
+	} {
+		if !strings.Contains(update, want) {
+			t.Fatalf("context update = %q, want %q", update, want)
+		}
+	}
+	_, afterResult, ok := strings.Cut(update, "result:\n")
+	if !ok {
+		t.Fatalf("context update = %q, want result section", update)
+	}
+	resultSection, _, ok := strings.Cut(afterResult, "\n[truncated; full result:")
+	if !ok {
+		t.Fatalf("context update = %q, want truncated marker after result", update)
+	}
+	if len([]rune(resultSection)) != parentContextResultMaxRunes {
+		t.Fatalf("context result rune length = %d, want %d", len([]rune(resultSection)), parentContextResultMaxRunes)
+	}
+}
+
+func TestSyncCompletionDoesNotSubmitParentContext(t *testing.T) {
+	modelStreamer := &recordingModel{
+		rounds: []fakeRound{
+			{events: []model.StreamEvent{{Delta: "sync answer"}, {Done: true}}},
+		},
+	}
+	sink := newFakeContextSink()
+	manager, _, _ := newTestManager(t, modelStreamer, settings.DefaultConfig(), nil)
+	manager.contextSink = sink
+
+	if _, err := manager.Run(context.Background(), Request{
+		ParentSessionID: "parent-session",
+		Prompt:          "sync prompt",
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	select {
+	case update := <-sink.ch:
+		t.Fatalf("unexpected context update for sync task: %q", update)
+	default:
 	}
 }
 

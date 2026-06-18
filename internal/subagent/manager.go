@@ -27,6 +27,10 @@ type Notifier interface {
 	OnSystemMessage(event ui.SystemEvent) error
 }
 
+type ContextSink interface {
+	SubmitSupplement(input string) bool
+}
+
 type Store interface {
 	session.Store
 	TranscriptPath(sessionID string) string
@@ -38,6 +42,7 @@ type Config struct {
 	Root     string
 	Settings SettingsProvider
 	Notifier Notifier
+	Context  ContextSink
 	Launcher Launcher
 
 	Depth        int
@@ -51,6 +56,7 @@ type Manager struct {
 	root         string
 	settings     SettingsProvider
 	notifier     Notifier
+	contextSink  ContextSink
 	launcher     Launcher
 	registry     taskRegistry
 	depth        int
@@ -129,6 +135,7 @@ func NewManager(cfg Config) *Manager {
 		root:         cfg.Root,
 		settings:     cfg.Settings,
 		notifier:     cfg.Notifier,
+		contextSink:  cfg.Context,
 		launcher:     cfg.Launcher,
 		registry:     newTaskRegistry(cfg.Root),
 		depth:        cfg.Depth,
@@ -475,6 +482,7 @@ func (m *Manager) finishTask(ctx context.Context, taskID string, result WorkerRe
 
 	_ = m.registry.saveOutput(ctx, taskID, result)
 	_ = m.registry.saveTask(ctx, task)
+	m.submitTaskContext(task)
 	return task
 }
 
@@ -567,6 +575,67 @@ func (m *Manager) notifyTaskFinished(task TaskSnapshot) {
 		Title: "subagent",
 		Body:  body,
 	})
+}
+
+const parentContextResultMaxRunes = 6000
+
+func (m *Manager) submitTaskContext(task TaskSnapshot) {
+	if m == nil || m.contextSink == nil || task.RunMode != settings.RunModeBackground {
+		return
+	}
+	if strings.TrimSpace(task.ParentSessionID) == "" {
+		return
+	}
+	update := renderTaskContextUpdate(task)
+	if strings.TrimSpace(update) == "" {
+		return
+	}
+	_ = m.contextSink.SubmitSupplement(update)
+}
+
+func renderTaskContextUpdate(task TaskSnapshot) string {
+	var lines []string
+	lines = append(lines, "Background subagent completed.")
+	lines = append(lines, "id: "+task.ID)
+	if task.Name != "" {
+		lines = append(lines, "name: "+task.Name)
+	}
+	if task.Description != "" {
+		lines = append(lines, "description: "+task.Description)
+	}
+	lines = append(lines, "status: "+string(task.Status))
+	lines = append(lines, "context_mode: "+string(task.ContextMode))
+	lines = append(lines, "run_mode: "+string(task.RunMode))
+	if task.TranscriptPath != "" {
+		lines = append(lines, "transcript: "+task.TranscriptPath)
+	}
+	if task.OutputPath != "" {
+		lines = append(lines, "output: "+task.OutputPath)
+	}
+	if task.Error != "" {
+		lines = append(lines, "error: "+task.Error)
+	}
+	content := strings.TrimSpace(task.Content)
+	if content != "" {
+		lines = append(lines, "result:")
+		lines = append(lines, truncateForParentContext(content, parentContextResultMaxRunes, task.OutputPath))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func truncateForParentContext(content string, limit int, outputPath string) string {
+	if limit <= 0 {
+		limit = parentContextResultMaxRunes
+	}
+	runes := []rune(content)
+	if len(runes) <= limit {
+		return content
+	}
+	suffix := "\n[truncated]"
+	if outputPath != "" {
+		suffix = "\n[truncated; full result: " + outputPath + "]"
+	}
+	return string(runes[:limit]) + suffix
 }
 
 func resultFromTask(task TaskSnapshot) Result {

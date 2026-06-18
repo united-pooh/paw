@@ -179,24 +179,35 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 	if err != nil {
 		return nil, "", nil, nil, nil, nil, fmt.Errorf("resolve executable: %w", err)
 	}
+	registry := tool.NewRegistry()
+	runner := loop.NewRunnerWithInstructionRoot(client, output, registry, store, sessionID, root)
 	subagentManager := subagent.NewManager(subagent.Config{
 		Model:        client,
 		Store:        store,
 		Root:         root,
 		Settings:     settingsController,
 		Notifier:     notifier,
+		Context:      runner,
 		Launcher:     subagent.NewProcessLauncher(executable, root),
 		Depth:        subCtx.depth,
 		MaxDepth:     subCtx.maxDepth,
 		ParentTaskID: subCtx.parentTaskID,
 	})
-	registry := buildToolRegistry(root, subagentManager, sessionID)
+	registerTools(registry, root, subagentManager, sessionID)
 
-	return loop.NewRunnerWithInstructionRoot(client, output, registry, store, sessionID, root), sessionID, client, settingsController, subagentManager, store, nil
+	return runner, sessionID, client, settingsController, subagentManager, store, nil
 }
 
 func buildToolRegistry(root string, subagentManager *subagent.Manager, sessionID string) *tool.Registry {
 	registry := tool.NewRegistry()
+	registerTools(registry, root, subagentManager, sessionID)
+	return registry
+}
+
+func registerTools(registry *tool.Registry, root string, subagentManager *subagent.Manager, sessionID string) {
+	if registry == nil {
+		return
+	}
 	registry.Register(&toolfile.LSTool{Root: root})
 	registry.Register(&toolfile.ReadTool{Root: root})
 	registry.Register(&toolfile.WriteTool{Root: root})
@@ -207,7 +218,6 @@ func buildToolRegistry(root string, subagentManager *subagent.Manager, sessionID
 	registry.Register(subagent.NewTool(subagentManager, sessionID))
 	registry.Register(subagent.NewStatusTool(subagentManager))
 	registry.Register(subagent.NewStopTool(subagentManager))
-	return registry
 }
 
 func resolveSessionID(ctx context.Context, store *session.JSONLStore, sessionIDFlag, cwd string) (string, error) {
