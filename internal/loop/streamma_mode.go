@@ -8,28 +8,42 @@ import (
 	"gocode/internal/streamma"
 	"gocode/internal/ui"
 	"strings"
+	"sync"
 	"time"
 )
 
-const streamMACommand = "/streamma"
+const (
+	streamMACommand      = "/streamma"
+	streamMATraceCommand = "/streamma-trace"
+)
 
 type StreamMASubagentRequest struct {
-	AgentID     string
-	Role        string
-	Description string
-	Prompt      string
-	ContextMode string
+	RunID           string
+	SessionID       string
+	SessionKey      string
+	InvocationIndex int
+	AgentID         string
+	Role            string
+	Description     string
+	SystemPrompt    string
+	Problem         string
+	InboundFrom     string
+	InboundStep     *streamma.StepPacket
+	Boundary        string
+	RequireBoundary bool
+	Prompt          string
+	ContextMode     string
 }
 
-type StreamMASubagentResult struct {
-	Content        string
+type StreamMASubagentStream struct {
+	Events         <-chan model.StreamEvent
 	SessionID      string
 	TranscriptPath string
 	OutputPath     string
 }
 
 type StreamMASubagentRunner interface {
-	RunStreamMASubagent(ctx context.Context, req StreamMASubagentRequest) (StreamMASubagentResult, error)
+	StreamSubagent(ctx context.Context, req StreamMASubagentRequest) (StreamMASubagentStream, error)
 }
 
 func (runner *Runner) SetStreamMASubagentRunner(subagents StreamMASubagentRunner) {
@@ -50,23 +64,46 @@ func (runner *Runner) SetSubagentTokensProvider(p SubagentTokensProvider) {
 	runner.subagentTokensProvider = p
 }
 
-func parseStreamMAInvocation(input string) (string, bool) {
-	trimmed := strings.TrimSpace(input)
-	if trimmed == "" {
-		return "", false
+func (runner *Runner) SetSystemSupplement(supplement string) {
+	if runner == nil {
+		return
 	}
-	if trimmed == streamMACommand {
-		return "", true
-	}
-	prefix := streamMACommand + " "
-	if !strings.HasPrefix(trimmed, prefix) {
-		return "", false
-	}
-	return strings.TrimSpace(strings.TrimPrefix(trimmed, prefix)), true
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	runner.systemSupplement = strings.TrimSpace(supplement)
 }
 
-func (runner *Runner) runStreamMATurn(ctx context.Context, input, task string) (message.Message, error) {
+type streamMAInvocation struct {
+	Task  string
+	Trace bool
+}
+
+func parseStreamMAInvocation(input string) (streamMAInvocation, bool) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return streamMAInvocation{}, false
+	}
+	for _, command := range []string{streamMACommand, streamMATraceCommand} {
+		if trimmed == command {
+			return streamMAInvocation{Trace: command == streamMATraceCommand}, true
+		}
+		prefix := command + " "
+		if strings.HasPrefix(trimmed, prefix) {
+			return streamMAInvocation{
+				Task:  strings.TrimSpace(strings.TrimPrefix(trimmed, prefix)),
+				Trace: command == streamMATraceCommand,
+			}, true
+		}
+	}
+	return streamMAInvocation{}, false
+}
+
+func (runner *Runner) runStreamMATurn(ctx context.Context, input string, invocation streamMAInvocation) (message.Message, error) {
+	task := invocation.Task
 	if strings.TrimSpace(task) == "" {
+		if invocation.Trace {
+			return message.Message{}, fmt.Errorf("usage: /streamma-trace <task>")
+		}
 		return message.Message{}, fmt.Errorf("usage: /streamma <task>")
 	}
 	subagents := runner.currentStreamMASubagents()
@@ -83,8 +120,18 @@ func (runner *Runner) runStreamMATurn(ctx context.Context, input, task string) (
 	}()
 
 	spec := defaultStreamMAGraph(task)
-	runner.notifySystem("streamma", fmt.Sprintf("running %s with subagent-backed Exact+END_STEP workers", describeStreamMAGraph(spec)))
-	result, err := streamma.RunGraph(ctx, spec, newStreamMASubagentModel(subagents, runner.notifySystem), buildStreamMAProblem(task, history))
+	if invocation.Trace {
+		runner.notifySystem("streamma-trace", fmt.Sprintf("running %s with live runtime events", describeStreamMAGraph(spec)))
+	} else {
+		runner.notifySystem("streamma", fmt.Sprintf("running %s with subagent-backed Exact+END_STEP workers", describeStreamMAGraph(spec)))
+	}
+	result, err := streamma.RunGraphWithAgentEventSink(
+		ctx,
+		spec,
+		newStreamMASubagentModel(subagents, runner.notifySystem, invocation.Trace),
+		buildStreamMAProblem(task, history),
+		runner.streamMATraceSink(invocation.Trace),
+	)
 	if err != nil {
 		return message.Message{}, err
 	}
@@ -109,6 +156,58 @@ func (runner *Runner) runStreamMATurn(ctx context.Context, input, task string) (
 	return assistant, nil
 }
 
+func (runner *Runner) streamMATraceSink(enabled bool) func(streamma.Event) {
+	if !enabled {
+		return nil
+	}
+	started := time.Now()
+	return func(event streamma.Event) {
+		body := formatStreamMATraceEvent(started, event)
+		if strings.TrimSpace(body) != "" {
+			runner.notifySystem("streamma-trace", body)
+		}
+	}
+}
+
+func formatStreamMATraceEvent(started time.Time, event streamma.Event) string {
+	elapsed := time.Since(started).Truncate(time.Millisecond)
+	parts := []string{
+		fmt.Sprintf("+%s", elapsed),
+		fmt.Sprintf("seq=%d", event.Seq),
+		"type=" + string(event.Type),
+	}
+	if event.ProducerAgentID != "" {
+		parts = append(parts, "producer="+event.ProducerAgentID)
+	}
+	if event.TargetAgentID != "" {
+		parts = append(parts, "target="+event.TargetAgentID)
+	}
+	if event.EdgeID != "" {
+		parts = append(parts, "edge="+event.EdgeID)
+	}
+	if event.Step != nil {
+		parts = append(parts,
+			"step="+event.Step.StepID,
+			fmt.Sprintf("index=%d", event.Step.StepIndex),
+			fmt.Sprintf("recovered=%t", event.Step.Boundary.BoundaryRecovered),
+		)
+	}
+	if event.Control != nil {
+		parts = append(parts,
+			"control="+event.Control.ControlType,
+			fmt.Sprintf("final_step=%d", event.Control.FinalStep),
+			"reason="+event.Control.Reason,
+		)
+	}
+	if event.Final != nil {
+		parts = append(parts, "final_agent="+event.Final.AgentID)
+	}
+	if event.Error != "" {
+		parts = append(parts, "error="+event.Error)
+	}
+	return strings.Join(parts, " ")
+}
+
 func (runner *Runner) currentStreamMASubagents() StreamMASubagentRunner {
 	if runner == nil {
 		return nil
@@ -124,8 +223,9 @@ func defaultStreamMAGraph(task string) streamma.GraphSpec {
 			RunID:    fmt.Sprintf("streamma-%d", time.Now().UTC().UnixNano()),
 			Protocol: streamma.ProtocolStream,
 			StepPolicy: streamma.StepPolicy{
-				Boundary:     streamma.DefaultBoundary,
-				MaxStepBytes: 64 * 1024,
+				Boundary:        streamma.DefaultBoundary,
+				MaxStepBytes:    64 * 1024,
+				RequireBoundary: true,
 			},
 			Agents: []streamma.AgentSpec{
 				{ID: "planner", Role: "source_planner", SystemPrompt: streamMAAgentPrompt("planner", "source_planner", "Create a concise implementation plan and success criteria. Do not modify files.")},
@@ -147,8 +247,9 @@ func defaultStreamMAGraph(task string) streamma.GraphSpec {
 		RunID:    fmt.Sprintf("streamma-%d", time.Now().UTC().UnixNano()),
 		Protocol: streamma.ProtocolStream,
 		StepPolicy: streamma.StepPolicy{
-			Boundary:     streamma.DefaultBoundary,
-			MaxStepBytes: 32 * 1024,
+			Boundary:        streamma.DefaultBoundary,
+			MaxStepBytes:    32 * 1024,
+			RequireBoundary: true,
 		},
 		Agents: []streamma.AgentSpec{
 			{ID: "planner", Role: "source_planner", SystemPrompt: streamMAAgentPrompt("planner", "source_planner", "Break down the task into early useful reasoning steps.")},
@@ -187,6 +288,8 @@ const streamMAOutputContract = `Output contract:
 - Use natural language only.
 - End every reasoning step with a line that contains exactly END_STEP.
 - END_STEP must be on its own line with no spaces, punctuation, indentation, JSON, or Markdown fences.
+- The StreamMA runtime is strict: if your final answer does not include an exact END_STEP line, this agent invocation fails instead of being propagated.
+- The final non-whitespace line of every assistant message must be exactly END_STEP. Never write any text after a closing END_STEP line.
 - You are a real subagent worker with your normal tools available.
 - Use tools only when your role needs them and after you have enough verified plan/context.
 - Keep each step public and concise; do not reveal private chain-of-thought.`
@@ -210,7 +313,7 @@ func streamMAConversationContext(history []message.Message) string {
 		if content == "" {
 			continue
 		}
-		if strings.HasPrefix(content, streamMACommand) {
+		if strings.HasPrefix(content, streamMACommand) || strings.HasPrefix(content, streamMATraceCommand) {
 			continue
 		}
 		switch msg.Role {
@@ -274,100 +377,267 @@ func (runner *Runner) notifySystem(title, body string) {
 type streamMASubagentModel struct {
 	subagents StreamMASubagentRunner
 	notify    func(string, string)
+	trace     bool
+
+	mu       sync.Mutex
+	sessions map[string]string
 }
 
-func newStreamMASubagentModel(subagents StreamMASubagentRunner, notify func(string, string)) *streamMASubagentModel {
-	return &streamMASubagentModel{subagents: subagents, notify: notify}
+func newStreamMASubagentModel(subagents StreamMASubagentRunner, notify func(string, string), trace bool) *streamMASubagentModel {
+	return &streamMASubagentModel{
+		subagents: subagents,
+		notify:    notify,
+		trace:     trace,
+		sessions:  map[string]string{},
+	}
 }
 
-func (m *streamMASubagentModel) StreamMessage(ctx context.Context, messages []message.Message, _ []model.ToolDefinition) (<-chan model.StreamEvent, error) {
+func (m *streamMASubagentModel) StreamAgent(ctx context.Context, invocation streamma.AgentInvocation) (<-chan model.StreamEvent, error) {
 	if m == nil || m.subagents == nil {
 		return nil, fmt.Errorf("streamma subagent backend is nil")
 	}
-	agentID, role := streamMAAgentMetadata(messages)
-	prompt := buildStreamMASubagentPrompt(agentID, role, messages)
-	if m.notify != nil {
-		m.notify(agentID, fmt.Sprintf("(%s) started", role))
+	agentID := strings.TrimSpace(invocation.AgentID)
+	if agentID == "" {
+		agentID = "agent"
 	}
-	result, err := m.subagents.RunStreamMASubagent(ctx, StreamMASubagentRequest{
-		AgentID:     agentID,
-		Role:        role,
-		Description: "streamma " + agentID + " " + role,
-		Prompt:      prompt,
-		ContextMode: "empty",
+	role := strings.TrimSpace(invocation.Role)
+	if role == "" {
+		role = "worker"
+	}
+	sessionKey := streamMASessionKey(invocation.RunID, agentID)
+	sessionID := m.sessionID(sessionKey)
+	firstInvocation := sessionID == ""
+	prompt := buildStreamMAIncrementalPrompt(invocation, firstInvocation)
+	stream, err := m.subagents.StreamSubagent(ctx, StreamMASubagentRequest{
+		RunID:           invocation.RunID,
+		SessionID:       sessionID,
+		SessionKey:      sessionKey,
+		InvocationIndex: invocation.InvocationIndex,
+		AgentID:         agentID,
+		Role:            role,
+		Description:     "streamma " + agentID + " " + role,
+		SystemPrompt:    invocation.SystemPrompt,
+		Problem:         invocation.Problem,
+		InboundFrom:     invocation.InboundFrom,
+		InboundStep:     cloneLoopStreamMAStep(invocation.InboundStep),
+		Boundary:        invocation.Boundary,
+		RequireBoundary: invocation.RequireBoundary,
+		Prompt:          prompt,
+		ContextMode:     "empty",
 	})
 	if err != nil {
 		return nil, err
 	}
-	content := ensureStreamMABoundary(result.Content)
-	if m.notify != nil {
-		detail := fmt.Sprintf("(%s) finished", role)
-		if strings.TrimSpace(result.SessionID) != "" {
-			detail += " session=" + result.SessionID
-		}
-		m.notify(agentID, detail)
+	if assigned := strings.TrimSpace(stream.SessionID); assigned != "" {
+		sessionID = m.rememberSession(sessionKey, assigned)
 	}
-	ch := make(chan model.StreamEvent, 2)
-	ch <- model.StreamEvent{Delta: content}
-	ch <- model.StreamEvent{Done: true}
-	close(ch)
-	return ch, nil
+	if m.notify != nil {
+		if m.trace {
+			m.notify("streamma-trace", fmt.Sprintf("subagent.started agent=%s role=%s invocation=%d session=%s", agentID, role, invocation.InvocationIndex, sessionID))
+		} else {
+			m.notify(agentID, fmt.Sprintf("(%s) started", role))
+		}
+	}
+	return m.wrapStream(ctx, invocation, stream), nil
 }
 
-func streamMAAgentMetadata(messages []message.Message) (string, string) {
-	agentID := "agent"
-	role := "worker"
-	if len(messages) == 0 {
-		return agentID, role
+func (m *streamMASubagentModel) sessionID(sessionKey string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sessions[sessionKey]
+}
+
+func (m *streamMASubagentModel) rememberSession(sessionKey, sessionID string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if existing := strings.TrimSpace(m.sessions[sessionKey]); existing != "" {
+		return existing
 	}
-	system := messages[0].Content
-	for _, line := range strings.Split(system, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "streamma_agent_id=") {
-			agentID = strings.TrimSpace(strings.TrimPrefix(line, "streamma_agent_id="))
+	m.sessions[sessionKey] = sessionID
+	return sessionID
+}
+
+func (m *streamMASubagentModel) wrapStream(ctx context.Context, invocation streamma.AgentInvocation, stream StreamMASubagentStream) <-chan model.StreamEvent {
+	out := make(chan model.StreamEvent)
+	go func() {
+		defer close(out)
+		var lastUsage *model.Usage
+		defer func() {
+			if m.notify == nil {
+				return
+			}
+			agentID := strings.TrimSpace(invocation.AgentID)
+			role := strings.TrimSpace(invocation.Role)
+			detail := fmt.Sprintf("(%s) finished", role)
+			if strings.TrimSpace(stream.SessionID) != "" {
+				detail += " session=" + stream.SessionID
+			}
+			if m.trace {
+				traceDetail := fmt.Sprintf("subagent.finished agent=%s role=%s invocation=%d", agentID, role, invocation.InvocationIndex)
+				if strings.TrimSpace(stream.SessionID) != "" {
+					traceDetail += " session=" + stream.SessionID
+				}
+				traceDetail += formatStreamMAUsageTrace(lastUsage)
+				m.notify("streamma-trace", traceDetail)
+			} else {
+				m.notify(agentID, detail)
+			}
+		}()
+		for ev := range stream.Events {
+			if ev.Usage != nil {
+				usage := *ev.Usage
+				lastUsage = &usage
+			}
+			if !sendStreamMAEvent(ctx, out, ev) {
+				drainStreamMAEvents(stream.Events, &lastUsage)
+				return
+			}
 		}
-		if strings.HasPrefix(line, "streamma_role=") {
-			role = strings.TrimSpace(strings.TrimPrefix(line, "streamma_role="))
+	}()
+	return out
+}
+
+func drainStreamMAEvents(events <-chan model.StreamEvent, lastUsage **model.Usage) {
+	for ev := range events {
+		if ev.Usage != nil && lastUsage != nil {
+			usage := *ev.Usage
+			*lastUsage = &usage
 		}
+	}
+}
+
+func sendStreamMAEvent(ctx context.Context, out chan<- model.StreamEvent, ev model.StreamEvent) bool {
+	select {
+	case out <- ev:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func streamMASessionKey(runID, agentID string) string {
+	runID = strings.TrimSpace(runID)
+	agentID = strings.TrimSpace(agentID)
+	if runID == "" {
+		runID = "run"
 	}
 	if agentID == "" {
 		agentID = "agent"
 	}
-	if role == "" {
-		role = "worker"
-	}
-	return agentID, role
+	return runID + ":" + agentID
 }
 
-func buildStreamMASubagentPrompt(agentID, role string, messages []message.Message) string {
+func buildStreamMAIncrementalPrompt(invocation streamma.AgentInvocation, firstInvocation bool) string {
 	var builder strings.Builder
-	builder.WriteString("You are a StreamMA subagent worker.\n")
+	boundary := strings.TrimSpace(invocation.Boundary)
+	if boundary == "" {
+		boundary = streamma.DefaultBoundary
+	}
+	if firstInvocation {
+		builder.WriteString("StreamMA logical agent bootstrap. Treat this subagent session as the persistent ctx_a for this logical agent.\n")
+		builder.WriteString("Future invocations will append only new inbound steps to this same session; keep your prior session history as prefix context.\n\n")
+	} else {
+		builder.WriteString("StreamMA incremental invocation. Continue from the existing ctx_a in this same subagent session.\n")
+		builder.WriteString("Do not restate the original problem or earlier inbound steps unless needed for a concise next step.\n\n")
+	}
+	builder.WriteString("Run ID: ")
+	builder.WriteString(strings.TrimSpace(invocation.RunID))
+	builder.WriteString("\nInvocation: ")
+	builder.WriteString(fmt.Sprintf("%d", invocation.InvocationIndex))
+	builder.WriteString("\n")
 	builder.WriteString("Agent ID: ")
-	builder.WriteString(agentID)
+	builder.WriteString(strings.TrimSpace(invocation.AgentID))
 	builder.WriteString("\nRole: ")
-	builder.WriteString(role)
+	builder.WriteString(strings.TrimSpace(invocation.Role))
 	builder.WriteString("\n\n")
-	builder.WriteString("Follow the conversation below as your complete task context. Produce one or more public StreamMA steps. Each step must end with a standalone END_STEP line.\n\n")
-	for _, msg := range messages {
-		builder.WriteString(strings.ToUpper(string(msg.Role)))
-		builder.WriteString(":\n")
-		builder.WriteString(msg.Content)
+	if firstInvocation {
+		builder.WriteString("Original problem:\n")
+		builder.WriteString(strings.TrimSpace(invocation.Problem))
 		builder.WriteString("\n\n")
 	}
+	if invocation.InboundStep != nil {
+		builder.WriteString("New inbound step from ")
+		builder.WriteString(strings.TrimSpace(invocation.InboundFrom))
+		builder.WriteString(":\n")
+		builder.WriteString(strings.TrimSpace(invocation.InboundStep.Content.Text))
+		builder.WriteString("\n\n")
+	} else if firstInvocation {
+		builder.WriteString("Initial problem delivery. Start producing useful public reasoning steps for this agent role.\n\n")
+	} else {
+		builder.WriteString("No new inbound step is attached; continue only if this role can make useful progress from existing ctx_a.\n\n")
+	}
+	builder.WriteString("Produce one or more public StreamMA steps. Each step must end with a standalone ")
+	builder.WriteString(boundary)
+	builder.WriteString(" line. The boundary line must contain exactly ")
+	builder.WriteString(boundary)
+	builder.WriteString(".")
+	if invocation.RequireBoundary {
+		builder.WriteString(" This runtime is strict and will fail this invocation if the final emitted step is not closed by the exact boundary. The last non-whitespace line of your assistant message must be exactly ")
+		builder.WriteString(boundary)
+		builder.WriteString(", with no text after it.")
+	}
+	builder.WriteString("\n")
 	return builder.String()
 }
 
-func ensureStreamMABoundary(content string) string {
-	content = strings.TrimSpace(content)
-	if content == "" {
-		return "No useful subagent output.\n" + streamma.DefaultBoundary + "\n"
+func cloneLoopStreamMAStep(step *streamma.StepPacket) *streamma.StepPacket {
+	if step == nil {
+		return nil
 	}
-	for _, line := range strings.Split(content, "\n") {
-		if strings.TrimSpace(line) == streamma.DefaultBoundary {
-			return content + "\n"
+	cloned := *step
+	if cloned.Dependencies.InputEvents != nil {
+		cloned.Dependencies.InputEvents = append([]string(nil), cloned.Dependencies.InputEvents...)
+	}
+	return &cloned
+}
+
+func formatStreamMAUsageTrace(usage *model.Usage) string {
+	if usage == nil {
+		return " usage=unknown"
+	}
+	parts := []string{
+		fmt.Sprintf("input=%d", usage.PromptTokenCount()),
+		fmt.Sprintf("output=%d", usage.CompletionTokenCount()),
+	}
+	cacheKnown := usageHasCacheSignal(*usage)
+	if cacheKnown {
+		parts = append(parts, fmt.Sprintf("cache_hit=%d", usage.CacheHitTokens()))
+	} else {
+		parts = append(parts, "cache_hit=unknown")
+	}
+	if usage.PromptCacheMissTokens != 0 {
+		parts = append(parts, fmt.Sprintf("cache_miss=%d", usage.PromptCacheMissTokens))
+	} else {
+		parts = append(parts, "cache_miss=unknown")
+	}
+	if cacheKnown && usage.PromptCacheMissTokens != 0 {
+		denominator := usage.CacheHitTokens() + usage.PromptCacheMissTokens
+		if denominator > 0 {
+			parts = append(parts, fmt.Sprintf("hit_rate=%.1f%%", float64(usage.CacheHitTokens())*100/float64(denominator)))
+		} else {
+			parts = append(parts, "hit_rate=unknown")
 		}
+	} else {
+		parts = append(parts, "hit_rate=unknown")
 	}
-	return content + "\n" + streamma.DefaultBoundary + "\n"
+	return " usage(" + strings.Join(parts, " ") + ")"
+}
+
+func usageHasCacheSignal(usage model.Usage) bool {
+	return usage.PromptCacheHitTokens != 0 ||
+		usage.PromptCacheMissTokens != 0 ||
+		usage.CacheReadInputTokens != 0 ||
+		usage.CacheCreationInputTokens != 0 ||
+		usage.PromptTokensDetails.CachedTokens != 0 ||
+		usage.InputTokensDetails.CachedTokens != 0 ||
+		usage.PromptTokensDetails.CacheReadTokens != 0 ||
+		usage.InputTokensDetails.CacheReadTokens != 0 ||
+		usage.PromptTokensDetails.CacheReadInputTokens != 0 ||
+		usage.InputTokensDetails.CacheReadInputTokens != 0 ||
+		usage.PromptTokensDetails.CacheCreationTokens != 0 ||
+		usage.InputTokensDetails.CacheCreationTokens != 0 ||
+		usage.PromptTokensDetails.CacheCreationInputTokens != 0 ||
+		usage.InputTokensDetails.CacheCreationInputTokens != 0
 }
 
 func describeStreamMAGraph(spec streamma.GraphSpec) string {

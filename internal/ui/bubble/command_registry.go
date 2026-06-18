@@ -87,6 +87,15 @@ func NewCommandRegistry() *CommandRegistry {
 		},
 	})
 	registry.Register(Command{
+		Name:              "/streamma-trace",
+		Description:       "run StreamMA with live event trace",
+		ArgumentHint:      "<prompt>",
+		AllowWhileRunning: false,
+		Handler: func(m *appModel, invocation string) tea.Cmd {
+			return m.handleStreamMACommand(invocation)
+		},
+	})
+	registry.Register(Command{
 		Name:              "/tasks",
 		Description:       "show background subagent tasks",
 		AllowWhileRunning: true,
@@ -248,6 +257,14 @@ func (m *appModel) handleStreamMACommand(invocation string) tea.Cmd {
 	invocation = strings.TrimSpace(invocation)
 	task := strings.TrimSpace(strings.TrimPrefix(invocation, commandToken(invocation)))
 	if task == "" {
+		if commandToken(invocation) == "/streamma-trace" {
+			m.addEntry(transcriptEntry{
+				kind:  entrySystem,
+				title: "streamma-trace",
+				body:  "usage: /streamma-trace <prompt>\nRuns the same StreamMA DAG and prints live runtime events for step fanout inspection.",
+			})
+			return nil
+		}
 		m.addEntry(transcriptEntry{
 			kind:  entrySystem,
 			title: "streamma",

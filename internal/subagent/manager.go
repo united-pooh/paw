@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"gocode/internal/loop"
+	"gocode/internal/model"
 	"gocode/internal/session"
 	"gocode/internal/settings"
 	"gocode/internal/tool"
@@ -12,6 +13,7 @@ import (
 	toolfile "gocode/internal/tool/file"
 	toolwebfetch "gocode/internal/tool/webfetch"
 	"gocode/internal/ui"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -70,8 +72,10 @@ type Manager struct {
 }
 
 type Request struct {
+	SessionID       string
 	ParentSessionID string
 	Prompt          string
+	SystemPrompt    string
 	Description     string
 	ContextMode     settings.ContextMode
 	RunMode         settings.RunMode
@@ -92,6 +96,16 @@ type Result struct {
 	Content        string               `json:"content,omitempty"`
 }
 
+type Stream struct {
+	Events         <-chan model.StreamEvent
+	AgentID        string
+	AgentName      string
+	AgentColor     string
+	SessionID      string
+	TranscriptPath string
+	OutputPath     string
+}
+
 type TaskStatus string
 
 const (
@@ -109,6 +123,7 @@ type TaskSnapshot struct {
 	ParentSessionID string               `json:"parent_session_id,omitempty"`
 	Description     string               `json:"description,omitempty"`
 	Prompt          string               `json:"prompt"`
+	SystemPrompt    string               `json:"system_prompt,omitempty"`
 	ContextMode     settings.ContextMode `json:"context_mode"`
 	RunMode         settings.RunMode     `json:"run_mode"`
 	Status          TaskStatus           `json:"status"`
@@ -175,6 +190,38 @@ func (m *Manager) Run(ctx context.Context, req Request) (Result, error) {
 		return result, waitErr
 	}
 	return result, nil
+}
+
+func (m *Manager) Stream(ctx context.Context, req Request) (Stream, error) {
+	if err := ctx.Err(); err != nil {
+		return Stream{}, err
+	}
+	req = m.normalizeRequest(req)
+	req.RunMode = settings.RunModeSync
+	if err := validateRequest(req); err != nil {
+		return Stream{}, err
+	}
+	if err := m.validateStreaming(); err != nil {
+		return Stream{}, err
+	}
+
+	task, err := m.startStreamingTask(ctx, req)
+	if err != nil {
+		return Stream{}, err
+	}
+
+	events := make(chan model.StreamEvent)
+	go m.runStreamingTask(ctx, task, events)
+
+	return Stream{
+		Events:         events,
+		AgentID:        task.SessionID,
+		AgentName:      task.Name,
+		AgentColor:     task.Color,
+		SessionID:      task.SessionID,
+		TranscriptPath: task.TranscriptPath,
+		OutputPath:     task.OutputPath,
+	}, nil
 }
 
 func (m *Manager) Launch(ctx context.Context, req Request) (TaskSnapshot, error) {
@@ -355,6 +402,22 @@ func (m *Manager) validate() error {
 	return nil
 }
 
+func (m *Manager) validateStreaming() error {
+	if m == nil {
+		return fmt.Errorf("subagent manager is nil")
+	}
+	if m.model == nil {
+		return fmt.Errorf("subagent streaming model is nil")
+	}
+	if m.store == nil {
+		return fmt.Errorf("subagent store is nil")
+	}
+	if strings.TrimSpace(m.root) == "" {
+		return fmt.Errorf("subagent root is empty")
+	}
+	return nil
+}
+
 func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Process, error) {
 	m.startMu.Lock()
 	defer m.startMu.Unlock()
@@ -382,6 +445,7 @@ func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Pro
 		ParentSessionID: strings.TrimSpace(req.ParentSessionID),
 		Description:     req.Description,
 		Prompt:          req.Prompt,
+		SystemPrompt:    strings.TrimSpace(req.SystemPrompt),
 		ContextMode:     req.ContextMode,
 		RunMode:         req.RunMode,
 		Status:          TaskRunning,
@@ -456,6 +520,73 @@ func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Pro
 	return task, process, nil
 }
 
+func (m *Manager) startStreamingTask(ctx context.Context, req Request) (TaskSnapshot, error) {
+	m.startMu.Lock()
+	defer m.startMu.Unlock()
+
+	depth := m.depth + 1
+	if depth > m.maxDepth {
+		return TaskSnapshot{}, fmt.Errorf("subagent depth limit exceeded: %d > %d", depth, m.maxDepth)
+	}
+
+	persona, err := m.assignPersona(ctx)
+	if err != nil {
+		return TaskSnapshot{}, err
+	}
+
+	sessionID, err := m.prepareSession(ctx, req)
+	if err != nil {
+		return TaskSnapshot{}, err
+	}
+
+	task := TaskSnapshot{
+		ID:              sessionID,
+		Name:            persona.Name,
+		Color:           persona.Color,
+		SessionID:       sessionID,
+		ParentSessionID: strings.TrimSpace(req.ParentSessionID),
+		Description:     req.Description,
+		Prompt:          req.Prompt,
+		SystemPrompt:    strings.TrimSpace(req.SystemPrompt),
+		ContextMode:     req.ContextMode,
+		RunMode:         req.RunMode,
+		Status:          TaskRunning,
+		TranscriptPath:  m.store.TranscriptPath(sessionID),
+		OutputPath:      m.registry.outputPath(sessionID),
+		PID:             os.Getpid(),
+		Depth:           depth,
+		ParentTaskID:    m.parentTaskID,
+		StartedAt:       time.Now().UTC(),
+	}
+
+	if err := m.registry.saveTask(ctx, task); err != nil {
+		return TaskSnapshot{}, err
+	}
+	m.setTask(task)
+	return task, nil
+}
+
+func (m *Manager) runStreamingTask(ctx context.Context, task TaskSnapshot, events chan<- model.StreamEvent) {
+	defer close(events)
+
+	content, usedTokens, done, err := m.runStreamingSession(ctx, task.SessionID, task.Prompt, task.SystemPrompt, events)
+	result := WorkerResult{
+		TaskID:     task.ID,
+		SessionID:  task.SessionID,
+		Content:    content,
+		ExitCode:   0,
+		UsedTokens: usedTokens,
+	}
+	if err != nil {
+		result.Error = err.Error()
+		result.ExitCode = 1
+		if !done {
+			_ = sendModelStreamEvent(context.Background(), events, model.StreamEvent{Err: err})
+		}
+	}
+	m.finishTask(context.Background(), task.ID, result, err)
+}
+
 func (m *Manager) waitBackground(taskID string, process Process) {
 	result, err := process.Wait()
 	task := m.finishTask(context.Background(), taskID, result, err)
@@ -508,6 +639,37 @@ func (m *Manager) finishTask(ctx context.Context, taskID string, result WorkerRe
 }
 
 func (m *Manager) prepareSession(ctx context.Context, req Request) (string, error) {
+	if sessionID := strings.TrimSpace(req.SessionID); sessionID != "" {
+		if err := validateRequestedSessionID(sessionID); err != nil {
+			return "", err
+		}
+		exists, err := m.store.Exists(ctx, sessionID)
+		if err != nil {
+			return "", err
+		}
+		if exists {
+			return sessionID, nil
+		}
+		switch req.ContextMode {
+		case settings.ContextModeFork:
+			parentID := strings.TrimSpace(req.ParentSessionID)
+			if err := m.ensureSessionExists(ctx, parentID); err != nil {
+				return "", err
+			}
+			if _, err := m.store.Fork(ctx, session.ForkRequest{
+				SessionID:       sessionID,
+				ParentSessionID: parentID,
+				ForkFromSeq:     -1,
+			}); err != nil {
+				return "", err
+			}
+		default:
+			if _, err := m.store.CreateRoot(ctx, session.CreateRootRequest{SessionID: sessionID}); err != nil {
+				return "", err
+			}
+		}
+		return sessionID, nil
+	}
 	sessionID, err := session.GenerateSessionID()
 	if err != nil {
 		return "", err
@@ -531,6 +693,16 @@ func (m *Manager) prepareSession(ctx context.Context, req Request) (string, erro
 		}
 	}
 	return sessionID, nil
+}
+
+func validateRequestedSessionID(sessionID string) error {
+	if sessionID == "" {
+		return fmt.Errorf("session id is required")
+	}
+	if strings.Contains(sessionID, "..") || strings.ContainsAny(sessionID, `/\`) {
+		return fmt.Errorf("invalid requested session id: %s", sessionID)
+	}
+	return nil
 }
 
 func (m *Manager) ensureSessionExists(ctx context.Context, sessionID string) error {
@@ -557,6 +729,19 @@ func (m *Manager) runSession(ctx context.Context, sessionID, prompt string) (str
 		return "", err
 	}
 	return strings.TrimSpace(msg.Content), nil
+}
+
+func (m *Manager) runStreamingSession(ctx context.Context, sessionID, prompt, systemPrompt string, events chan<- model.StreamEvent) (string, int, bool, error) {
+	streamUI := &streamingUI{ctx: ctx, events: events}
+	runner := loop.NewRunnerWithInstructionRoot(m.model, streamUI, newBaseToolRegistry(m.root), m.store, sessionID, m.root)
+	runner.SetSystemSupplement(systemPrompt)
+	msg, err := runner.RunTurn(ctx, prompt)
+	usedTokens := runner.ContextStats(1<<30, "").UsedTokens
+	done := streamUI.Done()
+	if err != nil {
+		return streamUI.Content(), usedTokens, done, err
+	}
+	return strings.TrimSpace(msg.Content), usedTokens, done, nil
 }
 
 func (m *Manager) runWorkerInProcess(ctx context.Context, req WorkerRequest) (WorkerResult, error) {
@@ -718,6 +903,69 @@ func (sinkUI) OnToolResult(ui.ToolResultEvent) error {
 
 func (sinkUI) OnDone() error {
 	return nil
+}
+
+type streamingUI struct {
+	ctx    context.Context
+	events chan<- model.StreamEvent
+
+	mu      sync.RWMutex
+	done    bool
+	content strings.Builder
+}
+
+func (u *streamingUI) OnAssistantDelta(text string) error {
+	if text == "" {
+		return nil
+	}
+	u.mu.Lock()
+	u.content.WriteString(text)
+	u.mu.Unlock()
+	return sendModelStreamEvent(u.ctx, u.events, model.StreamEvent{Delta: text})
+}
+
+func (u *streamingUI) OnToolCall(ui.ToolCallEvent) error {
+	return nil
+}
+
+func (u *streamingUI) OnToolResult(ui.ToolResultEvent) error {
+	return nil
+}
+
+func (u *streamingUI) OnDone() error {
+	u.mu.Lock()
+	u.done = true
+	u.mu.Unlock()
+	return sendModelStreamEvent(u.ctx, u.events, model.StreamEvent{Done: true})
+}
+
+func (u *streamingUI) OnModelUsage(usage model.Usage) {
+	copied := usage
+	_ = sendModelStreamEvent(u.ctx, u.events, model.StreamEvent{Usage: &copied})
+}
+
+func (u *streamingUI) Done() bool {
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	return u.done
+}
+
+func (u *streamingUI) Content() string {
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	return strings.TrimSpace(u.content.String())
+}
+
+func sendModelStreamEvent(ctx context.Context, events chan<- model.StreamEvent, event model.StreamEvent) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case events <- event:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 type subagentTool struct {

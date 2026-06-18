@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -121,17 +122,100 @@ func promptTextForTest(messages []message.Message) string {
 }
 
 type fakeStreamMASubagentRunner struct {
-	requests []StreamMASubagentRequest
+	mu                   sync.Mutex
+	requests             []StreamMASubagentRequest
+	omitBoundaryFor      map[string]bool
+	plannerFirstStepSent chan struct{}
+	releasePlanner       chan struct{}
+	builderStarted       chan struct{}
 }
 
-func (r *fakeStreamMASubagentRunner) RunStreamMASubagent(ctx context.Context, req StreamMASubagentRequest) (StreamMASubagentResult, error) {
+func (r *fakeStreamMASubagentRunner) StreamSubagent(ctx context.Context, req StreamMASubagentRequest) (StreamMASubagentStream, error) {
+	r.mu.Lock()
 	r.requests = append(r.requests, req)
+	r.mu.Unlock()
+	sessionID := strings.TrimSpace(req.SessionID)
+	if sessionID == "" {
+		sessionID = req.AgentID + "-session"
+	}
+	if req.AgentID == "planner" && r.plannerFirstStepSent != nil {
+		return StreamMASubagentStream{Events: r.streamBlockingPlanner(ctx), SessionID: sessionID}, nil
+	}
+	if req.AgentID == "builder" && r.builderStarted != nil {
+		closeOnce(r.builderStarted)
+	}
+
+	content := req.AgentID + " completed step\nEND_STEP\n"
+	if r.omitBoundaryFor[req.AgentID] {
+		content = req.AgentID + " completed step\n"
+	}
 	switch req.AgentID {
 	case "finalizer":
-		return StreamMASubagentResult{Content: "final StreamMA answer\nEND_STEP\n", SessionID: "finalizer-session"}, nil
-	default:
-		return StreamMASubagentResult{Content: req.AgentID + " completed step\nEND_STEP\n", SessionID: req.AgentID + "-session"}, nil
+		content = "final StreamMA answer\nEND_STEP\n"
+		if r.omitBoundaryFor[req.AgentID] {
+			content = "final StreamMA answer\n"
+		}
 	}
+	return StreamMASubagentStream{Events: streamMAEvents(ctx, content), SessionID: sessionID}, nil
+}
+
+func (r *fakeStreamMASubagentRunner) Requests() []StreamMASubagentRequest {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]StreamMASubagentRequest(nil), r.requests...)
+}
+
+func (r *fakeStreamMASubagentRunner) streamBlockingPlanner(ctx context.Context) <-chan model.StreamEvent {
+	ch := make(chan model.StreamEvent)
+	go func() {
+		defer close(ch)
+		if !sendLoopTestStreamEvent(ctx, ch, model.StreamEvent{Delta: "planner early step\nEND_STEP\n"}) {
+			return
+		}
+		closeOnce(r.plannerFirstStepSent)
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.releasePlanner:
+		}
+		if !sendLoopTestStreamEvent(ctx, ch, model.StreamEvent{Delta: "planner late step\nEND_STEP\n"}) {
+			return
+		}
+		_ = sendLoopTestStreamEvent(ctx, ch, model.StreamEvent{Done: true})
+	}()
+	return ch
+}
+
+func streamMAEvents(ctx context.Context, content string) <-chan model.StreamEvent {
+	ch := make(chan model.StreamEvent)
+	go func() {
+		defer close(ch)
+		usage := model.Usage{PromptTokens: 100, CompletionTokens: 10, PromptCacheHitTokens: 40, PromptCacheMissTokens: 60}
+		if !sendLoopTestStreamEvent(ctx, ch, model.StreamEvent{Usage: &usage}) {
+			return
+		}
+		if !sendLoopTestStreamEvent(ctx, ch, model.StreamEvent{Delta: content}) {
+			return
+		}
+		_ = sendLoopTestStreamEvent(ctx, ch, model.StreamEvent{Done: true})
+	}()
+	return ch
+}
+
+func sendLoopTestStreamEvent(ctx context.Context, ch chan<- model.StreamEvent, ev model.StreamEvent) bool {
+	select {
+	case ch <- ev:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func closeOnce(ch chan struct{}) {
+	defer func() {
+		_ = recover()
+	}()
+	close(ch)
 }
 
 type fakeTool struct {
@@ -298,14 +382,18 @@ func TestRunTurnStreamMACommandUsesRuntime(t *testing.T) {
 	if len(streamer.calls) != 0 {
 		t.Fatalf("model calls = %d, want direct model unused when StreamMA subagents are configured", len(streamer.calls))
 	}
-	if len(subagents.requests) < 4 {
-		t.Fatalf("subagent requests = %d, want multiple StreamMA workers", len(subagents.requests))
+	requests := subagents.Requests()
+	if len(requests) < 4 {
+		t.Fatalf("subagent requests = %d, want multiple StreamMA workers", len(requests))
 	}
 	seen := map[string]bool{}
-	for _, req := range subagents.requests {
+	for _, req := range requests {
 		seen[req.AgentID] = true
 		if !strings.Contains(req.Prompt, "END_STEP") {
 			t.Fatalf("subagent prompt for %s missing END_STEP contract: %q", req.AgentID, req.Prompt)
+		}
+		if req.RunID == "" || req.SessionKey == "" || req.InvocationIndex == 0 {
+			t.Fatalf("subagent request missing streamma metadata: %#v", req)
 		}
 	}
 	for _, want := range []string{"planner", "scout", "builder", "verifier", "finalizer"} {
@@ -319,6 +407,137 @@ func TestRunTurnStreamMACommandUsesRuntime(t *testing.T) {
 	if store.appends[0][0].Content != "/streamma 制作一个临时游戏" ||
 		store.appends[0][1].Content != "final StreamMA answer" {
 		t.Fatalf("stored messages = %#v", store.appends[0])
+	}
+}
+
+func TestRunTurnStreamMAReusesLogicalAgentSessionAndIncrementalPrompt(t *testing.T) {
+	output := &fakeUI{}
+	subagents := &fakeStreamMASubagentRunner{}
+	runner := NewRunner(&fakeModel{}, output, tool.NewRegistry(), &fakeStore{}, "streamma-session")
+	runner.SetStreamMASubagentRunner(subagents)
+
+	if _, err := runner.RunTurn(context.Background(), "/streamma 制作一个临时游戏"); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	var builder []StreamMASubagentRequest
+	for _, req := range subagents.Requests() {
+		if req.AgentID == "builder" {
+			builder = append(builder, req)
+		}
+	}
+	if len(builder) < 2 {
+		t.Fatalf("builder requests = %d, want repeated logical agent invocations: %#v", len(builder), subagents.Requests())
+	}
+	if builder[0].SessionID != "" {
+		t.Fatalf("first builder request SessionID = %q, want empty before session assignment", builder[0].SessionID)
+	}
+	for i := 1; i < len(builder); i++ {
+		if builder[i].SessionID != "builder-session" {
+			t.Fatalf("builder request %d SessionID = %q, want reused builder-session", i, builder[i].SessionID)
+		}
+		if builder[i].SessionKey != builder[0].SessionKey {
+			t.Fatalf("builder session key changed: first=%q next=%q", builder[0].SessionKey, builder[i].SessionKey)
+		}
+		if strings.Contains(builder[i].Prompt, "Original problem:") {
+			t.Fatalf("incremental builder prompt repeated base problem: %q", builder[i].Prompt)
+		}
+		if !strings.Contains(builder[i].Prompt, "StreamMA incremental invocation") {
+			t.Fatalf("builder prompt %d missing incremental marker: %q", i, builder[i].Prompt)
+		}
+	}
+}
+
+func TestRunTurnStreamMATraceEmitsRuntimeEvents(t *testing.T) {
+	output := &fakeUI{}
+	subagents := &fakeStreamMASubagentRunner{}
+	runner := NewRunner(&fakeModel{}, output, tool.NewRegistry(), &fakeStore{}, "streamma-session")
+	runner.SetStreamMASubagentRunner(subagents)
+
+	if _, err := runner.RunTurn(context.Background(), "/streamma-trace 制作一个临时游戏"); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	var sawStarted, sawStep, sawUsage bool
+	for _, event := range output.system {
+		if event.Title != "streamma-trace" {
+			continue
+		}
+		if strings.Contains(event.Body, "subagent.started agent=planner") &&
+			strings.Contains(event.Body, "invocation=1") &&
+			strings.Contains(event.Body, "session=planner-session") {
+			sawStarted = true
+		}
+		if strings.Contains(event.Body, "type=agent.step.committed") && strings.Contains(event.Body, "producer=planner") {
+			sawStep = true
+		}
+		if strings.Contains(event.Body, "subagent.finished") &&
+			strings.Contains(event.Body, "cache_hit=40") &&
+			strings.Contains(event.Body, "cache_miss=60") {
+			sawUsage = true
+		}
+	}
+	if !sawStarted || !sawStep || !sawUsage {
+		t.Fatalf("trace events = %#v, want planner start, committed step, and usage", output.system)
+	}
+}
+
+func TestRunTurnStreamMARejectsRecoveredSubagentStep(t *testing.T) {
+	output := &fakeUI{}
+	subagents := &fakeStreamMASubagentRunner{
+		omitBoundaryFor: map[string]bool{"planner": true, "scout": true},
+	}
+	runner := NewRunner(&fakeModel{}, output, tool.NewRegistry(), &fakeStore{}, "streamma-session")
+	runner.SetStreamMASubagentRunner(subagents)
+
+	_, err := runner.RunTurn(context.Background(), "/streamma 制作一个临时游戏")
+	if err == nil || !strings.Contains(err.Error(), "stream ended before exact boundary") {
+		t.Fatalf("RunTurn() error = %v, want strict boundary failure", err)
+	}
+	for _, req := range subagents.Requests() {
+		if req.AgentID == "builder" {
+			t.Fatalf("builder should not start from recovered upstream step: %#v", subagents.Requests())
+		}
+	}
+}
+
+func TestRunTurnStreamMAFansOutSubagentStepBeforeDone(t *testing.T) {
+	output := &fakeUI{}
+	streamer := &fakeModel{}
+	subagents := &fakeStreamMASubagentRunner{
+		plannerFirstStepSent: make(chan struct{}),
+		releasePlanner:       make(chan struct{}),
+		builderStarted:       make(chan struct{}),
+	}
+	runner := NewRunner(streamer, output, tool.NewRegistry(), &fakeStore{}, "streamma-session")
+	runner.SetStreamMASubagentRunner(subagents)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := runner.RunTurn(context.Background(), "/streamma 制作一个临时游戏")
+		done <- err
+	}()
+
+	select {
+	case <-subagents.plannerFirstStepSent:
+	case <-time.After(time.Second):
+		t.Fatal("planner did not emit its first StreamMA step")
+	}
+	select {
+	case <-subagents.builderStarted:
+	case <-time.After(time.Second):
+		t.Fatal("builder did not start from planner END_STEP before planner Done")
+	}
+
+	close(subagents.releasePlanner)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunTurn() error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("RunTurn() did not finish after planner release")
 	}
 }
 

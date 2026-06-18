@@ -161,6 +161,27 @@ func TestParserForcedClosesTrailingContentWithoutFinalSentinel(t *testing.T) {
 	}
 }
 
+func TestParserRequireBoundaryRejectsTrailingContentWithoutFinalSentinel(t *testing.T) {
+	_, err := parseTextForTest(t, "tail without sentinel", ParserConfig{RunID: "run", AgentID: "a", RequireBoundary: true})
+	if err == nil || !IsParserFatal(err) || !strings.Contains(err.Error(), "stream ended before exact boundary") {
+		t.Fatalf("ParseStream() error = %v, want parser fatal missing boundary", err)
+	}
+}
+
+func TestParserAcceptsFinalBoundaryWithoutTrailingNewline(t *testing.T) {
+	steps, err := parseTextForTest(t, "final step\nEND_STEP", ParserConfig{
+		RunID:           "run",
+		AgentID:         "a",
+		RequireBoundary: true,
+	})
+	if err != nil {
+		t.Fatalf("ParseStream() error = %v", err)
+	}
+	if len(steps) != 1 || steps[0].Content.Text != "final step\n" || !steps[0].Boundary.Closed {
+		t.Fatalf("steps = %#v, want one closed final step", steps)
+	}
+}
+
 func TestParserFatalOnMaxByteViolation(t *testing.T) {
 	_, err := parseTextForTest(t, "abcd", ParserConfig{RunID: "run", AgentID: "a", MaxStepBytes: 3})
 	if err == nil {

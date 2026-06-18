@@ -210,25 +210,27 @@ type streamMASubagentAdapter struct {
 	parentSessionID string
 }
 
-func (a streamMASubagentAdapter) RunStreamMASubagent(ctx context.Context, req loop.StreamMASubagentRequest) (loop.StreamMASubagentResult, error) {
+func (a streamMASubagentAdapter) StreamSubagent(ctx context.Context, req loop.StreamMASubagentRequest) (loop.StreamMASubagentStream, error) {
 	if a.manager == nil {
-		return loop.StreamMASubagentResult{}, fmt.Errorf("streamma subagent manager is nil")
+		return loop.StreamMASubagentStream{}, fmt.Errorf("streamma subagent manager is nil")
 	}
-	result, err := a.manager.Run(ctx, subagent.Request{
+	stream, err := a.manager.Stream(ctx, subagent.Request{
+		SessionID:       req.SessionID,
 		ParentSessionID: a.parentSessionID,
 		Prompt:          req.Prompt,
+		SystemPrompt:    req.SystemPrompt,
 		Description:     req.Description,
 		ContextMode:     settings.ContextMode(req.ContextMode),
 		RunMode:         settings.RunModeSync,
 	})
 	if err != nil {
-		return loop.StreamMASubagentResult{}, err
+		return loop.StreamMASubagentStream{}, err
 	}
-	return loop.StreamMASubagentResult{
-		Content:        result.Content,
-		SessionID:      result.SessionID,
-		TranscriptPath: result.TranscriptPath,
-		OutputPath:     result.OutputPath,
+	return loop.StreamMASubagentStream{
+		Events:         stream.Events,
+		SessionID:      stream.SessionID,
+		TranscriptPath: stream.TranscriptPath,
+		OutputPath:     stream.OutputPath,
 	}, nil
 }
 

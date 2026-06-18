@@ -20,6 +20,26 @@ type ModelStreamer interface {
 	StreamMessage(ctx context.Context, messages []message.Message, tools []model.ToolDefinition) (<-chan model.StreamEvent, error)
 }
 
+type AgentStreamer interface {
+	StreamAgent(ctx context.Context, invocation AgentInvocation) (<-chan model.StreamEvent, error)
+}
+
+type AgentInvocation struct {
+	RunID           string
+	AgentID         string
+	Role            string
+	SystemPrompt    string
+	Problem         string
+	InvocationIndex int
+	StartStepIndex  int
+	Boundary        string
+	RequireBoundary bool
+	InputEvents     []string
+	InboundFrom     string
+	InboundStep     *StepPacket
+	Transcript      []TranscriptEntry
+}
+
 type GraphSpec struct {
 	RunID      string      `json:"run_id,omitempty"`
 	Protocol   string      `json:"protocol,omitempty"`
@@ -29,8 +49,9 @@ type GraphSpec struct {
 }
 
 type StepPolicy struct {
-	Boundary     string `json:"boundary,omitempty"`
-	MaxStepBytes int    `json:"max_step_bytes,omitempty"`
+	Boundary        string `json:"boundary,omitempty"`
+	MaxStepBytes    int    `json:"max_step_bytes,omitempty"`
+	RequireBoundary bool   `json:"require_boundary,omitempty"`
 }
 
 type AgentSpec struct {
@@ -198,15 +219,16 @@ type PromptSegment struct {
 }
 
 type compiledGraph struct {
-	runID        string
-	boundary     string
-	maxStepBytes int
-	agents       map[string]AgentSpec
-	agentOrder   []string
-	predecessors map[string][]string
-	successors   map[string][]string
-	edgeIDs      map[string]string
-	sources      []string
+	runID           string
+	boundary        string
+	maxStepBytes    int
+	requireBoundary bool
+	agents          map[string]AgentSpec
+	agentOrder      []string
+	predecessors    map[string][]string
+	successors      map[string][]string
+	edgeIDs         map[string]string
+	sources         []string
 }
 
 func compileGraph(spec GraphSpec) (*compiledGraph, error) {
@@ -230,13 +252,14 @@ func compileGraph(spec GraphSpec) (*compiledGraph, error) {
 	}
 
 	graph := &compiledGraph{
-		runID:        runID,
-		boundary:     boundary,
-		maxStepBytes: spec.StepPolicy.MaxStepBytes,
-		agents:       map[string]AgentSpec{},
-		predecessors: map[string][]string{},
-		successors:   map[string][]string{},
-		edgeIDs:      map[string]string{},
+		runID:           runID,
+		boundary:        boundary,
+		maxStepBytes:    spec.StepPolicy.MaxStepBytes,
+		requireBoundary: spec.StepPolicy.RequireBoundary,
+		agents:          map[string]AgentSpec{},
+		predecessors:    map[string][]string{},
+		successors:      map[string][]string{},
+		edgeIDs:         map[string]string{},
 	}
 	for _, agent := range spec.Agents {
 		agent.ID = strings.TrimSpace(agent.ID)

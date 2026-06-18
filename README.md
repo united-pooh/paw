@@ -144,6 +144,7 @@ go run ./cmd/agent -s <session-id>
 - `/sessions`
 - `/subagent [--fork|--empty] [--background|--sync] <prompt>`
 - `/streamma <prompt>`
+- `/streamma-trace <prompt>`
 - `/tasks`
 - `/status`
 - `/clear`
@@ -155,7 +156,8 @@ go run ./cmd/agent -s <session-id>
 - `/setting` 通过向导保存默认 subagent context/run mode，以及 context meter 的位置和 token limit
 - `/sessions` 列出所有历史会话（ID 前缀、日期、文件大小、首条消息），选中条目后直接恢复该会话
 - `/subagent` 支持 `empty` 与 `fork` 两种上下文模式，以及 `sync` 与 `background` 两种运行模式；后台任务完成后会发 UI 系统通知，并把截断后的结果作为补充上下文注入后续模型轮次（完整结果仍在任务 output/transcript 路径中）
-- `/streamma <prompt>` 显式把当前任务交给 StreamMA runtime；runtime 会按任务选择一个小型 DAG，并把每个 StreamMA worker 映射为真实 subagent，同步 subagent 输出中的 `END_STEP` step 后继续在 DAG 中传播，最终由 finalizer 的最后一步作为 assistant 回复写回会话历史
+- `/streamma <prompt>` 显式把当前任务交给 StreamMA runtime；runtime 会按任务选择一个小型 DAG，并把每个 StreamMA worker 映射为真实 subagent。一次 run 内同一个 logical agent 复用同一个 subagent session 作为真实 `ctx_a`；首次调用写入 agent base context + problem，后续调用只追加新 inbound step。只有同步到精确 `END_STEP` step 后才继续在 DAG 中传播；缺失 `END_STEP` 会失败而不是在 agent `Done` 时兜底传播，最终由 finalizer 的最后一步作为 assistant 回复写回会话历史
+- `/streamma-trace <prompt>` 使用同一套真实 StreamMA/subagent 路径，并额外输出 live runtime trace（如 `subagent.started`、`agent.step.committed`、`control.upstream_eof`、per-invocation usage/cache），用于观察 step fanout 是否发生在上游 agent `Done` 前，以及同一 agent 是否复用同一 session
 - `/tasks` 展示当前后台 subagent 任务及 transcript 路径
 
 #### 当前输入区状态
@@ -566,17 +568,30 @@ main (-subagent-worker)
 字段:
 - `Boundary`
 - `MaxStepBytes`
+- `RequireBoundary`
 
 当前默认:
 - `Boundary` 为空时使用 `END_STEP`
 - step contract 是 `Exact+END_STEP`
+- `RequireBoundary=true` 时，缺失最终 sentinel 的内容会触发 parser fatal，不产生 recovered step，也不会传播给下游 agent
+
+##### `type AgentStreamer interface`
+
+方法:
+- `StreamAgent(ctx, invocation) (<-chan model.StreamEvent, error)`
+
+职责:
+- 接收结构化 `AgentInvocation`，包含 `run_id`、`agent_id`、role、system prompt、problem、invocation index、input event、新 inbound step 和 transcript snapshot
+- 真实 `/streamma` 路径使用该接口把同一 logical agent 绑定到同一个 subagent session，并按论文模型增量 append 新 step
 
 ##### `type ModelStreamer interface`
 
 方法:
 - `StreamMessage(ctx, messages, tools) (<-chan model.StreamEvent, error)`
 
-当前 StreamMA runtime 会以 `tools = nil` 调用模型；stream 中的 tool event 默认不会触发工具执行。
+用途:
+- 作为内存 runtime / fake model / 兼容测试的 adapter 输入
+- adapter 会从 `Transcript` 构造完整 prompt，并以 `tools = nil` 调用模型；stream 中的 tool event 默认不会触发工具执行
 
 ##### `type StepPacket struct`
 
@@ -616,7 +631,7 @@ main (-subagent-worker)
 - 只把单独成行且精确等于 `END_STEP` 的行作为 step 边界
 - 保留 step 原文内容，包括前后空白和普通换行
 - 代码块内、普通句子内、带额外空白的 `END_STEP` 不触发边界
-- 缺失最终 sentinel 但仍有内容时 forced close，并设置 `BoundaryRecovered`
+- `RequireBoundary=false` 且缺失最终 sentinel 但仍有内容时才 forced close，并设置 `BoundaryRecovered`
 - 超过 `MaxStepBytes` 时返回 parser fatal error
 
 ##### `StreamSteps(ctx, events, config, emit) error`
@@ -640,6 +655,7 @@ main (-subagent-worker)
 职责:
 - 每个 agent 保存 append-only transcript
 - inbound step 与 own step 按实际处理顺序追加
+- 在真实 `/streamma` 路径中作为 runtime 审计投影；真实 `ctx_a` 落在每个 logical agent 的 subagent session history 中
 
 ##### `BuildPrompt(transcript) []message.Message`
 
@@ -647,6 +663,7 @@ main (-subagent-worker)
 - 从 transcript 构造模型输入
 - 固定 system prompt 和 original problem
 - 不把 event id、timestamp、trace、seq 等动态 metadata 写进 prompt
+- 只用于 fake model、内存 runtime 兼容和审计验收；真实 subagent 路径不会反复发送完整 `base + transcript`
 
 ##### `BuildPromptSegments(transcript) []PromptSegment`
 
@@ -662,7 +679,7 @@ main (-subagent-worker)
 
 职责:
 - 编译 DAG
-- 注入 `ModelStreamer`
+- 注入 `AgentStreamer`；旧 `ModelStreamer` 会通过兼容 adapter 包装为 `AgentStreamer`
 - 初始化 broker、event log 和 agent runtime state
 
 ##### `RunGraph(ctx, spec, model, problem) (RunResult, error)`
@@ -673,6 +690,9 @@ main (-subagent-worker)
 - 下游 agent 可在上游 agent 尚未 `Done` 时启动自己的模型调用
 - 多前驱节点是 arrival-triggered，任意前驱 step 到达即可调用，不等待同步 barrier
 - 单个 agent 内部仍按队列顺序串行处理 inbound delivery，避免同一 transcript 被多个 invocation 同时改写
+- 真实 subagent 路径按 `run_id + agent_id` 维护 session pool：同一 logical agent 多次 invocation 复用同一个 sessionID，不同 agent 和不同 run 不共享 session
+- 首次 subagent invocation 写入 stable system prompt、original problem 和当前输入；后续 invocation 只写入新增 inbound step，避免重复写入旧 transcript
+- `/streamma-trace` 的 `subagent.started` / `subagent.finished` 会显示 invocation index、sessionID 和 provider 返回的 usage/cache 字段；cache 命中只来自 provider usage，不做本地估算
 - 非 source agent 只有在所有 predecessors EOF、队列 drain、无 active invocation 后结束
 - critical agent 调用失败、parser fatal、EOF 不一致等错误会 fail-fast
 

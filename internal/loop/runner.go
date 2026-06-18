@@ -44,6 +44,10 @@ type SubagentTokensProvider interface {
 	TotalSubagentTokens(parentSessionID string) int
 }
 
+type modelUsageReceiver interface {
+	OnModelUsage(usage model.Usage)
+}
+
 type Runner struct {
 	mu        sync.RWMutex
 	model     ModelStreamer
@@ -62,6 +66,7 @@ type Runner struct {
 	sessionUsage           model.Usage
 	sessionUsageKnown      bool
 	supplements            []string
+	systemSupplement       string
 	streamMASubagents      StreamMASubagentRunner
 	subagentTokensProvider SubagentTokensProvider
 }
@@ -148,8 +153,8 @@ func (runner *Runner) RunTurn(ctx context.Context, input string) (message.Messag
 		}
 	}
 
-	if task, ok := parseStreamMAInvocation(input); ok {
-		return runner.runStreamMATurn(ctx, input, task)
+	if invocation, ok := parseStreamMAInvocation(input); ok {
+		return runner.runStreamMATurn(ctx, input, invocation)
 	}
 
 	// 每一轮都基于“已提交的历史副本”工作。
@@ -489,7 +494,14 @@ func (runner *Runner) buildSystemPrompt() string {
 	if runner.prompt == nil {
 		runner.prompt = NewPromptBuilder(NewInstructionManager(""))
 	}
-	return runner.prompt.Build(descriptions)
+	prompt := runner.prompt.Build(descriptions)
+	runner.mu.RLock()
+	supplement := runner.systemSupplement
+	runner.mu.RUnlock()
+	if strings.TrimSpace(supplement) == "" {
+		return prompt
+	}
+	return strings.TrimRight(prompt, "\n") + "\n\nAdditional system instructions:\n" + strings.TrimSpace(supplement) + "\n"
 }
 
 func renderMessageForModel(msg message.Message) message.Message {
@@ -581,6 +593,18 @@ func (runner *Runner) recordUsageEvent(state *turnState, usage model.Usage) {
 	current := usageTotalsFromUsage(state.usage, true)
 	runner.setCurrentUsage(state.usage)
 	runner.addSessionUsage(current.delta(previous))
+	runner.emitModelUsage(state.usage)
+}
+
+func (runner *Runner) emitModelUsage(usage model.Usage) {
+	if runner == nil || runner.ui == nil {
+		return
+	}
+	receiver, ok := runner.ui.(modelUsageReceiver)
+	if !ok {
+		return
+	}
+	receiver.OnModelUsage(usage)
 }
 
 func (runner *Runner) setCurrentUsage(usage model.Usage) {

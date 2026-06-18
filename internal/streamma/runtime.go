@@ -3,20 +3,25 @@ package streamma
 import (
 	"context"
 	"fmt"
+	"gocode/internal/model"
 	"strings"
+	"time"
 )
 
 type RuntimeConfig struct {
-	Graph    GraphSpec
-	Model    ModelStreamer
-	EventLog *EventLog
+	Graph     GraphSpec
+	Model     ModelStreamer
+	Agent     AgentStreamer
+	EventLog  *EventLog
+	EventSink func(Event)
 }
 
 type Runtime struct {
 	graph  *compiledGraph
-	model  ModelStreamer
+	agent  AgentStreamer
 	log    *EventLog
 	broker *Broker
+	sink   func(Event)
 
 	states         map[string]*agentRuntimeState
 	activeCount    int
@@ -32,6 +37,7 @@ type agentRuntimeState struct {
 	lastStepIndex int
 	lastStepText  string
 	usedSteps     []string
+	invocations   int
 	started       bool
 	active        bool
 	completed     bool
@@ -49,8 +55,12 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	if config.Model == nil {
-		return nil, fmt.Errorf("streamma runtime requires a model")
+	agent := config.Agent
+	if agent == nil && config.Model != nil {
+		agent = modelAgentStreamer{model: config.Model}
+	}
+	if agent == nil {
+		return nil, fmt.Errorf("streamma runtime requires an agent streamer")
 	}
 	log := config.EventLog
 	if log == nil {
@@ -58,15 +68,32 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 	}
 	return &Runtime{
 		graph:  graph,
-		model:  config.Model,
+		agent:  agent,
 		log:    log,
 		broker: NewBroker(graph),
+		sink:   config.EventSink,
 		states: map[string]*agentRuntimeState{},
 	}, nil
 }
 
 func RunGraph(ctx context.Context, spec GraphSpec, model ModelStreamer, problem string) (RunResult, error) {
-	runtime, err := NewRuntime(RuntimeConfig{Graph: spec, Model: model})
+	return RunGraphWithEventSink(ctx, spec, model, problem, nil)
+}
+
+func RunGraphWithEventSink(ctx context.Context, spec GraphSpec, model ModelStreamer, problem string, sink func(Event)) (RunResult, error) {
+	runtime, err := NewRuntime(RuntimeConfig{Graph: spec, Model: model, EventSink: sink})
+	if err != nil {
+		return RunResult{}, err
+	}
+	return runtime.Run(ctx, problem)
+}
+
+func RunGraphWithAgent(ctx context.Context, spec GraphSpec, agent AgentStreamer, problem string) (RunResult, error) {
+	return RunGraphWithAgentEventSink(ctx, spec, agent, problem, nil)
+}
+
+func RunGraphWithAgentEventSink(ctx context.Context, spec GraphSpec, agent AgentStreamer, problem string, sink func(Event)) (RunResult, error) {
+	runtime, err := NewRuntime(RuntimeConfig{Graph: spec, Agent: agent, EventSink: sink})
 	if err != nil {
 		return RunResult{}, err
 	}
@@ -83,7 +110,7 @@ func (r *Runtime) Run(ctx context.Context, problem string) (RunResult, error) {
 	r.reset(problem)
 	signals := make(chan runtimeSignal)
 
-	problemEvent := r.log.Append(Event{
+	problemEvent := r.appendEvent(Event{
 		RunID: r.graph.runID,
 		Type:  EventProblem,
 		Problem: &ProblemPacket{
@@ -117,17 +144,7 @@ func (r *Runtime) Run(ctx context.Context, problem string) (RunResult, error) {
 		break
 	}
 	cancel()
-
-	// Drain signals that arrived before goroutines observed cancellation.
-drain:
-	for {
-		select {
-		case signal := <-signals:
-			r.handleSignal(signal)
-		default:
-			break drain
-		}
-	}
+	r.drainAfterCancel(signals, 5*time.Second)
 
 	events := r.log.Snapshot()
 	if r.failed {
@@ -203,42 +220,63 @@ func (r *Runtime) handleDelivery(ctx context.Context, agentID string, delivery B
 	switch event.Type {
 	case EventProblem:
 		state.started = true
-		return r.invokeAgent(ctx, agentID, []string{event.EventID}, signals)
+		return r.invokeAgent(ctx, agentID, []string{event.EventID}, "", nil, signals)
 	case EventStepCommitted:
 		if event.Step == nil {
 			return fmt.Errorf("step delivery to %s missing step packet", agentID)
 		}
-		state.transcript.AppendInbound(event.ProducerAgentID, *event.Step)
+		inbound := cloneStepPacket(*event.Step)
+		state.transcript.AppendInbound(event.ProducerAgentID, inbound)
 		state.started = true
-		return r.invokeAgent(ctx, agentID, []string{event.EventID}, signals)
+		return r.invokeAgent(ctx, agentID, []string{event.EventID}, event.ProducerAgentID, &inbound, signals)
 	case EventUpstreamEOF:
 		r.broker.MarkEOF(agentID, event.ProducerAgentID)
-		r.log.Append(event)
+		r.appendEvent(event)
 		return nil
 	default:
 		return fmt.Errorf("unsupported delivery type %s for %s", event.Type, agentID)
 	}
 }
 
-func (r *Runtime) invokeAgent(ctx context.Context, agentID string, inputEvents []string, signals chan<- runtimeSignal) error {
+func (r *Runtime) invokeAgent(ctx context.Context, agentID string, inputEvents []string, inboundFrom string, inboundStep *StepPacket, signals chan<- runtimeSignal) error {
 	state := r.states[agentID]
 	if state.active {
 		return fmt.Errorf("agent %s already has an active invocation", agentID)
 	}
-	prompt := BuildPrompt(state.transcript)
+	state.invocations++
+	agent := r.graph.agents[agentID]
+	invocation := AgentInvocation{
+		RunID:           r.graph.runID,
+		AgentID:         agentID,
+		Role:            agent.Role,
+		SystemPrompt:    agent.SystemPrompt,
+		Problem:         state.transcript.Problem,
+		InvocationIndex: state.invocations,
+		StartStepIndex:  state.nextStepIndex,
+		Boundary:        r.graph.boundary,
+		RequireBoundary: r.graph.requireBoundary,
+		InputEvents:     append([]string(nil), inputEvents...),
+		InboundFrom:     inboundFrom,
+		Transcript:      state.transcript.Entries(),
+	}
+	if inboundStep != nil {
+		step := cloneStepPacket(*inboundStep)
+		invocation.InboundStep = &step
+	}
 	config := ParserConfig{
-		RunID:        r.graph.runID,
-		AgentID:      agentID,
-		Boundary:     r.graph.boundary,
-		MaxStepBytes: r.graph.maxStepBytes,
-		StartIndex:   state.nextStepIndex,
-		InputEvents:  append([]string(nil), inputEvents...),
+		RunID:           r.graph.runID,
+		AgentID:         agentID,
+		Boundary:        r.graph.boundary,
+		MaxStepBytes:    r.graph.maxStepBytes,
+		RequireBoundary: r.graph.requireBoundary,
+		StartIndex:      state.nextStepIndex,
+		InputEvents:     append([]string(nil), inputEvents...),
 	}
 	state.active = true
 	r.activeCount++
 
 	go func() {
-		stream, err := r.model.StreamMessage(ctx, prompt, nil)
+		stream, err := r.agent.StreamAgent(ctx, invocation)
 		if err != nil {
 			sendRuntimeSignal(ctx, signals, runtimeSignal{agentID: agentID, err: fmt.Errorf("model %s: %w", agentID, err)})
 			return
@@ -290,7 +328,7 @@ func (r *Runtime) handleSignal(signal runtimeSignal) {
 		step.AgentID = signal.agentID
 		step.RunID = r.graph.runID
 		state.transcript.AppendOwn(step)
-		committed := r.log.Append(Event{
+		committed := r.appendEvent(Event{
 			RunID:           r.graph.runID,
 			Type:            EventStepCommitted,
 			ProducerAgentID: signal.agentID,
@@ -351,7 +389,7 @@ func (r *Runtime) emitFinal(agentID string) {
 			UsedSteps: append([]string(nil), state.usedSteps...),
 		},
 	}
-	committed := r.log.Append(Event{
+	committed := r.appendEvent(Event{
 		RunID:           r.graph.runID,
 		Type:            EventFinalAnswer,
 		ProducerAgentID: agentID,
@@ -372,11 +410,19 @@ func (r *Runtime) fail(agentID string, err error) {
 		err = fmt.Errorf("%s: %w", agentID, err)
 	}
 	r.err = err
-	r.log.Append(Event{
+	r.appendEvent(Event{
 		RunID: r.graph.runID,
 		Type:  EventRunFailed,
 		Error: err.Error(),
 	})
+}
+
+func (r *Runtime) appendEvent(event Event) Event {
+	committed := r.log.Append(event)
+	if r.sink != nil {
+		r.sink(cloneEvent(committed))
+	}
+	return committed
 }
 
 func (r *Runtime) allCompleted() bool {
@@ -385,4 +431,39 @@ func (r *Runtime) allCompleted() bool {
 
 func (r *Runtime) activeInvocationCount() int {
 	return r.activeCount
+}
+
+func (r *Runtime) drainAfterCancel(signals <-chan runtimeSignal, timeout time.Duration) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for r.activeInvocationCount() > 0 {
+		select {
+		case signal := <-signals:
+			r.handleSignal(signal)
+		case <-timer.C:
+			return
+		}
+	}
+	for {
+		select {
+		case signal := <-signals:
+			r.handleSignal(signal)
+		default:
+			return
+		}
+	}
+}
+
+type modelAgentStreamer struct {
+	model ModelStreamer
+}
+
+func (m modelAgentStreamer) StreamAgent(ctx context.Context, invocation AgentInvocation) (<-chan model.StreamEvent, error) {
+	transcript := &Transcript{
+		AgentID: invocation.AgentID,
+		System:  invocation.SystemPrompt,
+		Problem: invocation.Problem,
+		entries: append([]TranscriptEntry(nil), invocation.Transcript...),
+	}
+	return m.model.StreamMessage(ctx, BuildPrompt(transcript), nil)
 }

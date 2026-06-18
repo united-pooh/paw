@@ -9,12 +9,13 @@ import (
 )
 
 type ParserConfig struct {
-	RunID        string
-	AgentID      string
-	Boundary     string
-	MaxStepBytes int
-	StartIndex   int
-	InputEvents  []string
+	RunID           string
+	AgentID         string
+	Boundary        string
+	MaxStepBytes    int
+	RequireBoundary bool
+	StartIndex      int
+	InputEvents     []string
 }
 
 type ParserFatalError struct {
@@ -145,6 +146,13 @@ func (p *stepParser) processLine(line string) error {
 
 func (p *stepParser) finish() ([]StepPacket, error) {
 	if p.pending != "" {
+		if !p.inCodeBlock && strings.TrimSuffix(p.pending, "\r") == p.boundary {
+			p.pending = ""
+			if err := p.commit(false); err != nil {
+				return nil, err
+			}
+			return append([]StepPacket(nil), p.steps...), nil
+		}
 		p.current.WriteString(p.pending)
 		p.pending = ""
 		if err := p.checkSize(p.current.Len()); err != nil {
@@ -152,6 +160,12 @@ func (p *stepParser) finish() ([]StepPacket, error) {
 		}
 	}
 	if strings.TrimSpace(p.current.String()) != "" {
+		if p.config.RequireBoundary {
+			return nil, &ParserFatalError{
+				AgentID: p.config.AgentID,
+				Reason:  fmt.Sprintf("stream ended before exact boundary %q", p.boundary),
+			}
+		}
 		if err := p.commit(true); err != nil {
 			return nil, err
 		}
