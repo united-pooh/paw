@@ -120,6 +120,20 @@ func promptTextForTest(messages []message.Message) string {
 	return builder.String()
 }
 
+type fakeStreamMASubagentRunner struct {
+	requests []StreamMASubagentRequest
+}
+
+func (r *fakeStreamMASubagentRunner) RunStreamMASubagent(ctx context.Context, req StreamMASubagentRequest) (StreamMASubagentResult, error) {
+	r.requests = append(r.requests, req)
+	switch req.AgentID {
+	case "finalizer":
+		return StreamMASubagentResult{Content: "final StreamMA answer\nEND_STEP\n", SessionID: "finalizer-session"}, nil
+	default:
+		return StreamMASubagentResult{Content: req.AgentID + " completed step\nEND_STEP\n", SessionID: req.AgentID + "-session"}, nil
+	}
+}
+
 type fakeTool struct {
 	name   string
 	output string
@@ -254,28 +268,15 @@ func TestRunTurnStreamsAndReturnsFinalMessage(t *testing.T) {
 
 func TestRunTurnStreamMACommandUsesRuntime(t *testing.T) {
 	output := &fakeUI{}
-	streamer := &fakeModel{
-		rounds: []fakeRound{
-			{events: []model.StreamEvent{
-				{Delta: "A early plan\nEND_STEP\n"},
-				{Done: true},
-			}},
-			{events: []model.StreamEvent{
-				{Delta: "B refined plan\nEND_STEP\n"},
-				{Done: true},
-			}},
-			{events: []model.StreamEvent{
-				{Delta: "final StreamMA answer\nEND_STEP\n"},
-				{Done: true},
-			}},
-		},
-	}
+	streamer := &fakeModel{}
+	subagents := &fakeStreamMASubagentRunner{}
 	registry := tool.NewRegistry()
 	registry.Register(&fakeTool{name: "read"})
 	store := &fakeStore{}
 	runner := NewRunner(streamer, output, registry, store, "streamma-session")
+	runner.SetStreamMASubagentRunner(subagents)
 
-	msg, err := runner.RunTurn(context.Background(), "/streamma explain the design")
+	msg, err := runner.RunTurn(context.Background(), "/streamma 制作一个临时游戏")
 	if err != nil {
 		t.Fatalf("RunTurn() error = %v", err)
 	}
@@ -288,29 +289,46 @@ func TestRunTurnStreamMACommandUsesRuntime(t *testing.T) {
 	if output.doneCount != 1 {
 		t.Fatalf("doneCount = %d, want 1", output.doneCount)
 	}
-	if len(output.system) != 1 || output.system[0].Title != "streamma" {
-		t.Fatalf("system events = %#v, want streamma event", output.system)
+	if len(output.system) == 0 || output.system[0].Title != "streamma" {
+		t.Fatalf("system events = %#v, want streamma events", output.system)
 	}
-	if len(streamer.calls) != 3 {
-		t.Fatalf("model calls = %d, want A/B/D", len(streamer.calls))
+	if !strings.Contains(output.system[0].Body, "subagent-backed") {
+		t.Fatalf("first system event = %#v, want subagent-backed graph notice", output.system[0])
 	}
-	for i, tools := range streamer.tools {
-		if len(tools) != 0 {
-			t.Fatalf("call %d tools = %#v, want none in StreamMA mode", i, tools)
+	if len(streamer.calls) != 0 {
+		t.Fatalf("model calls = %d, want direct model unused when StreamMA subagents are configured", len(streamer.calls))
+	}
+	if len(subagents.requests) < 4 {
+		t.Fatalf("subagent requests = %d, want multiple StreamMA workers", len(subagents.requests))
+	}
+	seen := map[string]bool{}
+	for _, req := range subagents.requests {
+		seen[req.AgentID] = true
+		if !strings.Contains(req.Prompt, "END_STEP") {
+			t.Fatalf("subagent prompt for %s missing END_STEP contract: %q", req.AgentID, req.Prompt)
 		}
 	}
-	if !strings.Contains(streamer.calls[0][0].Content, "StreamMA agent A") {
-		t.Fatalf("A system prompt = %q", streamer.calls[0][0].Content)
-	}
-	if !strings.Contains(promptTextForTest(streamer.calls[1]), "Inbound step from A") {
-		t.Fatalf("B prompt missing A inbound step: %#v", streamer.calls[1])
+	for _, want := range []string{"planner", "scout", "builder", "verifier", "finalizer"} {
+		if !seen[want] {
+			t.Fatalf("subagent ids = %#v, missing %s", seen, want)
+		}
 	}
 	if len(store.appends) != 1 || len(store.appends[0]) != 2 {
 		t.Fatalf("store appends = %#v, want user+assistant", store.appends)
 	}
-	if store.appends[0][0].Content != "/streamma explain the design" ||
+	if store.appends[0][0].Content != "/streamma 制作一个临时游戏" ||
 		store.appends[0][1].Content != "final StreamMA answer" {
 		t.Fatalf("stored messages = %#v", store.appends[0])
+	}
+}
+
+func TestRunTurnStreamMARequiresSubagentBackend(t *testing.T) {
+	output := &fakeUI{}
+	runner := NewRunner(&fakeModel{}, output, tool.NewRegistry(), nil, "")
+
+	_, err := runner.RunTurn(context.Background(), "/streamma explain the design")
+	if err == nil || !strings.Contains(err.Error(), "requires subagent backend") {
+		t.Fatalf("RunTurn() error = %v, want subagent backend error", err)
 	}
 }
 

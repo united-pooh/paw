@@ -155,7 +155,7 @@ go run ./cmd/agent -s <session-id>
 - `/setting` 通过向导保存默认 subagent context/run mode，以及 context meter 的位置和 token limit
 - `/sessions` 列出所有历史会话（ID 前缀、日期、文件大小、首条消息），选中条目后直接恢复该会话
 - `/subagent` 支持 `empty` 与 `fork` 两种上下文模式，以及 `sync` 与 `background` 两种运行模式；后台任务完成后会发 UI 系统通知，并把截断后的结果作为补充上下文注入后续模型轮次（完整结果仍在任务 output/transcript 路径中）
-- `/streamma <prompt>` 显式把当前任务交给 StreamMA A→B→D runtime；内部按 `END_STEP` step 边界流式 fanout，默认不向 agent 传工具，最终由 D 的最后一步作为 assistant 回复写回会话历史
+- `/streamma <prompt>` 显式把当前任务交给 StreamMA runtime；runtime 会按任务选择一个小型 DAG，并把每个 StreamMA worker 映射为真实 subagent，同步 subagent 输出中的 `END_STEP` step 后继续在 DAG 中传播，最终由 finalizer 的最后一步作为 assistant 回复写回会话历史
 - `/tasks` 展示当前后台 subagent 任务及 transcript 路径
 
 #### 当前输入区状态
@@ -195,7 +195,7 @@ context meter 左侧显示紧凑 token 与比例，例如 `260k↑ 2.05k↓ 25%(
 
 补充:
 - `session`、`settings`、`subagent`、`streamma` 是新增的运行时支撑模块，负责 `.ccagent/` 持久化、用户默认配置、子代理调度和 StreamMA runtime；主对话链路仍按下面的 5 层理解即可。
-- `internal/streamma` 是独立的内存版 multi-agent runtime，目前覆盖 fake model + runtime 验收，并通过 `/streamma <prompt>` 接入 `loop.Runner` 的显式分支；生产版 NATS、Postgres、MinIO 适配器仍未接入。
+- `internal/streamma` 是独立的内存版 multi-agent runtime，目前覆盖 fake model + runtime 验收，并通过 `/streamma <prompt>` 接入 `loop.Runner` 的显式分支；交互入口会使用真实 subagent worker 作为 StreamMA agent，生产版 NATS、Postgres、MinIO 适配器仍未接入。
 
 ### 1. `message`
 

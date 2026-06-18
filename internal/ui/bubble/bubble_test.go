@@ -295,7 +295,7 @@ func TestHelpComesFromCommandRegistry(t *testing.T) {
 		"/export [filename] - export the current conversation",
 		"/setting - open settings wizard",
 		"/subagent [--fork|--empty] [--background|--sync] <prompt> - launch a subagent",
-		"/streamma <prompt> - run a prompt through StreamMA A->B->D reasoning",
+		"/streamma <prompt> - run a prompt through StreamMA subagents",
 		"/tasks - show background subagent tasks",
 		"/exit (/quit, exit, quit) - quit the TUI",
 	} {

@@ -56,6 +56,7 @@ type Runner struct {
 	sessionUsage      model.Usage
 	sessionUsageKnown bool
 	supplements       []string
+	streamMASubagents StreamMASubagentRunner
 }
 
 type tokenUsageTotals struct {

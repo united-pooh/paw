@@ -2,7 +2,11 @@ package streamma
 
 import (
 	"context"
+	"fmt"
+	"gocode/internal/message"
+	"gocode/internal/model"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -112,14 +116,12 @@ func TestRuntimeGraphMultiPredecessorIsArrivalTriggered(t *testing.T) {
 			{From: "c", To: "d"},
 		},
 	}
-	model := newFakeModel(
-		fakeTextResponse("A.step1\nEND_STEP\n"),
-		fakeTextResponse("C.afterAShortcut\nEND_STEP\n"),
-		fakeTextResponse("B.fromA\nEND_STEP\n"),
-		fakeTextResponse("D.afterCShortcut\nEND_STEP\n"),
-		fakeTextResponse("C.afterB\nEND_STEP\n"),
-		fakeTextResponse("D.afterCAndB\nEND_STEP\n"),
-	)
+	model := newAgentResponseModel(map[string][]string{
+		"agent A": {"A.step1\nEND_STEP\n"},
+		"agent B": {"B.fromA\nEND_STEP\n"},
+		"agent C": {"C.afterAShortcut\nEND_STEP\n", "C.afterB\nEND_STEP\n"},
+		"agent D": {"D.afterCShortcut\nEND_STEP\n", "D.afterCAndB\nEND_STEP\n"},
+	})
 
 	result, err := RunGraph(context.Background(), spec, model, "problem")
 	if err != nil {
@@ -132,30 +134,98 @@ func TestRuntimeGraphMultiPredecessorIsArrivalTriggered(t *testing.T) {
 	if len(calls) != 6 {
 		t.Fatalf("calls = %d, want 6", len(calls))
 	}
-	cFirstPrompt := promptText(calls[1].Messages)
-	if calls[1].Messages[0].Content != "agent C" {
-		t.Fatalf("call 2 target = %q, want agent C", calls[1].Messages[0].Content)
+	cPrompts := promptsForSystem(calls, "agent C")
+	if len(cPrompts) != 2 {
+		t.Fatalf("C calls = %d, want 2: %#v", len(cPrompts), calls)
 	}
-	if calls[2].Messages[0].Content != "agent B" {
-		t.Fatalf("call 3 target = %q, want agent B", calls[2].Messages[0].Content)
-	}
+	cFirstPrompt := cPrompts[0]
 	if !strings.Contains(cFirstPrompt, "A.step1") {
 		t.Fatalf("first c prompt missing a step: %q", cFirstPrompt)
 	}
 	if strings.Contains(cFirstPrompt, "B.fromA") {
 		t.Fatalf("c waited for b before first invocation: %q", cFirstPrompt)
 	}
-	cSecondPrompt := ""
-	for _, call := range calls[3:] {
-		if call.Messages[0].Content == "agent C" {
-			cSecondPrompt = promptText(call.Messages)
-			break
-		}
-	}
-	if cSecondPrompt == "" {
-		t.Fatalf("missing second C invocation: %#v", calls)
-	}
+	cSecondPrompt := cPrompts[1]
 	if !strings.Contains(cSecondPrompt, "A.step1") || !strings.Contains(cSecondPrompt, "B.fromA") {
 		t.Fatalf("second c prompt did not consume both shortcut and B steps: %q", cSecondPrompt)
 	}
+}
+
+func promptsForSystem(calls []fakeCall, system string) []string {
+	var prompts []string
+	for _, call := range calls {
+		if len(call.Messages) == 0 || call.Messages[0].Content != system {
+			continue
+		}
+		prompts = append(prompts, promptText(call.Messages))
+	}
+	return prompts
+}
+
+type agentResponseModel struct {
+	mu        sync.Mutex
+	responses map[string][]fakeResponse
+	calls     []fakeCall
+	counts    map[string]int
+}
+
+func newAgentResponseModel(responses map[string][]string) *agentResponseModel {
+	modelResponses := make(map[string][]fakeResponse, len(responses))
+	for agent, texts := range responses {
+		for _, text := range texts {
+			modelResponses[agent] = append(modelResponses[agent], fakeTextResponse(text))
+		}
+	}
+	return &agentResponseModel{
+		responses: modelResponses,
+		counts:    make(map[string]int),
+	}
+}
+
+func (m *agentResponseModel) StreamMessage(ctx context.Context, messages []message.Message, tools []model.ToolDefinition) (<-chan model.StreamEvent, error) {
+	agent := ""
+	if len(messages) > 0 {
+		agent = messages[0].Content
+	}
+	m.mu.Lock()
+	m.calls = append(m.calls, fakeCall{
+		Messages: append([]message.Message(nil), messages...),
+		Tools:    append([]model.ToolDefinition(nil), tools...),
+	})
+	index := m.counts[agent]
+	m.counts[agent]++
+	responses := m.responses[agent]
+	m.mu.Unlock()
+
+	if index >= len(responses) {
+		return nil, fmt.Errorf("unexpected call %d for %s", index+1, agent)
+	}
+	response := responses[index]
+	if response.err != nil {
+		return nil, response.err
+	}
+	ch := make(chan model.StreamEvent, len(response.events))
+	for _, event := range response.events {
+		select {
+		case <-ctx.Done():
+			close(ch)
+			return ch, nil
+		case ch <- event:
+		}
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *agentResponseModel) Calls() []fakeCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]fakeCall, len(m.calls))
+	for i, call := range m.calls {
+		out[i] = fakeCall{
+			Messages: append([]message.Message(nil), call.Messages...),
+			Tools:    append([]model.ToolDefinition(nil), call.Tools...),
+		}
+	}
+	return out
 }

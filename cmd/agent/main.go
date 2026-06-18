@@ -193,9 +193,40 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 		MaxDepth:     subCtx.maxDepth,
 		ParentTaskID: subCtx.parentTaskID,
 	})
+	runner.SetStreamMASubagentRunner(streamMASubagentAdapter{
+		manager:         subagentManager,
+		parentSessionID: sessionID,
+	})
 	registerTools(registry, root, subagentManager, sessionID)
 
 	return runner, sessionID, client, settingsController, subagentManager, store, nil
+}
+
+type streamMASubagentAdapter struct {
+	manager         *subagent.Manager
+	parentSessionID string
+}
+
+func (a streamMASubagentAdapter) RunStreamMASubagent(ctx context.Context, req loop.StreamMASubagentRequest) (loop.StreamMASubagentResult, error) {
+	if a.manager == nil {
+		return loop.StreamMASubagentResult{}, fmt.Errorf("streamma subagent manager is nil")
+	}
+	result, err := a.manager.Run(ctx, subagent.Request{
+		ParentSessionID: a.parentSessionID,
+		Prompt:          req.Prompt,
+		Description:     req.Description,
+		ContextMode:     settings.ContextMode(req.ContextMode),
+		RunMode:         settings.RunModeSync,
+	})
+	if err != nil {
+		return loop.StreamMASubagentResult{}, err
+	}
+	return loop.StreamMASubagentResult{
+		Content:        result.Content,
+		SessionID:      result.SessionID,
+		TranscriptPath: result.TranscriptPath,
+		OutputPath:     result.OutputPath,
+	}, nil
 }
 
 func buildToolRegistry(root string, subagentManager *subagent.Manager, sessionID string) *tool.Registry {

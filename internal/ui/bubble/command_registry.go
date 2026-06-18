@@ -79,7 +79,7 @@ func NewCommandRegistry() *CommandRegistry {
 	})
 	registry.Register(Command{
 		Name:              "/streamma",
-		Description:       "run a prompt through StreamMA A->B->D reasoning",
+		Description:       "run a prompt through StreamMA subagents",
 		ArgumentHint:      "<prompt>",
 		AllowWhileRunning: false,
 		Handler: func(m *appModel, invocation string) tea.Cmd {
@@ -251,7 +251,7 @@ func (m *appModel) handleStreamMACommand(invocation string) tea.Cmd {
 		m.addEntry(transcriptEntry{
 			kind:  entrySystem,
 			title: "streamma",
-			body:  "usage: /streamma <prompt>\nRuns A -> B -> D with step-level END_STEP streaming. Tools are disabled inside StreamMA mode.",
+			body:  "usage: /streamma <prompt>\nRuns an adaptive StreamMA DAG with real subagent workers and END_STEP step exchange.",
 		})
 		return nil
 	}
