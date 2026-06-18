@@ -295,12 +295,59 @@ func TestHelpComesFromCommandRegistry(t *testing.T) {
 		"/export [filename] - export the current conversation",
 		"/setting - open settings wizard",
 		"/subagent [--fork|--empty] [--background|--sync] <prompt> - launch a subagent",
+		"/streamma <prompt> - run a prompt through StreamMA A->B->D reasoning",
 		"/tasks - show background subagent tasks",
 		"/exit (/quit, exit, quit) - quit the TUI",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("help body = %q, want %q", body, want)
 		}
+	}
+}
+
+func TestStreamMACommandStartsTurn(t *testing.T) {
+	runner := &fakeRunner{}
+	model := newTestModel(runner)
+	model.input.SetValue("/streamma design the runtime")
+
+	updatedModel, cmd := model.handleSubmit()
+	updated := updatedModel.(appModel)
+	if cmd == nil {
+		t.Fatalf("/streamma command returned nil cmd")
+	}
+	if !updated.running {
+		t.Fatalf("updated.running = false, want true")
+	}
+	last := updated.transcript[len(updated.transcript)-1]
+	if last.kind != entryUser || last.body != "/streamma design the runtime" {
+		t.Fatalf("last transcript entry = %#v", last)
+	}
+	msg := cmd()
+	if _, ok := msg.(turnFinishedMsg); !ok {
+		t.Fatalf("cmd() = %#v, want turnFinishedMsg", msg)
+	}
+	if len(runner.inputs) != 1 || runner.inputs[0] != "/streamma design the runtime" {
+		t.Fatalf("runner.inputs = %#v", runner.inputs)
+	}
+	if len(updated.inputHistory) != 1 || updated.inputHistory[0] != "/streamma design the runtime" {
+		t.Fatalf("inputHistory = %#v", updated.inputHistory)
+	}
+}
+
+func TestStreamMACommandWithoutPromptShowsUsage(t *testing.T) {
+	runner := &fakeRunner{}
+	model := newTestModel(runner)
+
+	handled, cmd := model.handleCommand("/streamma")
+	if !handled || cmd != nil {
+		t.Fatalf("/streamma handled/cmd = %v/%v, want handled with nil cmd", handled, cmd)
+	}
+	if len(runner.inputs) != 0 {
+		t.Fatalf("runner.inputs = %#v, want empty", runner.inputs)
+	}
+	last := model.transcript[len(model.transcript)-1]
+	if last.title != "streamma" || !strings.Contains(last.body, "usage: /streamma <prompt>") {
+		t.Fatalf("last transcript entry = %#v", last)
 	}
 }
 

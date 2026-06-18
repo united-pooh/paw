@@ -140,6 +140,10 @@ func (runner *Runner) RunTurn(ctx context.Context, input string) (message.Messag
 		}
 	}
 
+	if task, ok := parseStreamMAInvocation(input); ok {
+		return runner.runStreamMATurn(ctx, input, task)
+	}
+
 	// 每一轮都基于“已提交的历史副本”工作。
 	// 这样即使当前轮中途失败，也不会污染下一轮上下文。
 	history, injectedSupplements := runner.buildTurnHistory(input)

@@ -78,6 +78,15 @@ func NewCommandRegistry() *CommandRegistry {
 		},
 	})
 	registry.Register(Command{
+		Name:              "/streamma",
+		Description:       "run a prompt through StreamMA A->B->D reasoning",
+		ArgumentHint:      "<prompt>",
+		AllowWhileRunning: false,
+		Handler: func(m *appModel, invocation string) tea.Cmd {
+			return m.handleStreamMACommand(invocation)
+		},
+	})
+	registry.Register(Command{
 		Name:              "/tasks",
 		Description:       "show background subagent tasks",
 		AllowWhileRunning: true,
@@ -233,4 +242,21 @@ func commandToken(line string) string {
 		return line
 	}
 	return fields[0]
+}
+
+func (m *appModel) handleStreamMACommand(invocation string) tea.Cmd {
+	invocation = strings.TrimSpace(invocation)
+	task := strings.TrimSpace(strings.TrimPrefix(invocation, commandToken(invocation)))
+	if task == "" {
+		m.addEntry(transcriptEntry{
+			kind:  entrySystem,
+			title: "streamma",
+			body:  "usage: /streamma <prompt>\nRuns A -> B -> D with step-level END_STEP streaming. Tools are disabled inside StreamMA mode.",
+		})
+		return nil
+	}
+	m.rememberInputHistory(invocation)
+	updated, cmd := m.startChatTurn(invocation)
+	*m = updated
+	return cmd
 }

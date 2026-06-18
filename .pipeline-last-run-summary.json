@@ -1,93 +1,42 @@
 {
   "version": "1.0",
-  "run_id": "parallel-subagent-execution-20260617",
+  "pipeline": "multi-agent-pipeline",
   "status": "accepted",
-  "objective": "Make Subagent creation non-blocking by default and allow multiple safe tool calls from one assistant response to execute in parallel.",
+  "branch": "feat/streamma",
+  "task": "Implement strict StreamMA incremental step fanout runtime",
   "changed_files": [
-    "internal/message/types.go",
-    "internal/model/stream.go",
-    "internal/model/anthropic_stream.go",
-    "internal/model/stream_test.go",
-    "internal/loop/prompt_builder.go",
-    "internal/loop/runner.go",
-    "internal/loop/runner_test.go",
-    "internal/tool/tool.go",
-    "internal/tool/register.go",
-    "internal/tool/file/ls.go",
-    "internal/tool/file/read.go",
-    "internal/tool/file/grep.go",
-    "internal/tool/file/glob.go",
-    "internal/tool/webfetch/webfetch.go",
-    "internal/settings/settings.go",
-    "internal/settings/settings_test.go",
-    "internal/subagent/manager.go",
-    "internal/subagent/manager_test.go",
-    "internal/ui/bubble/app.go",
-    "internal/ui/bubble/transcript.go",
-    "internal/ui/bubble/types.go",
-    "internal/ui/bubble/bubble_test.go"
+    "README.md",
+    "internal/streamma/broker.go",
+    "internal/streamma/broker_test.go",
+    "internal/streamma/context.go",
+    "internal/streamma/context_test.go",
+    "internal/streamma/eof_drain_test.go",
+    "internal/streamma/event_log.go",
+    "internal/streamma/event_log_test.go",
+    "internal/streamma/failure_test.go",
+    "internal/streamma/fake_model_test.go",
+    "internal/streamma/parser.go",
+    "internal/streamma/parser_test.go",
+    "internal/streamma/prompt.go",
+    "internal/streamma/prompt_test.go",
+    "internal/streamma/replay.go",
+    "internal/streamma/replay_test.go",
+    "internal/streamma/runtime.go",
+    "internal/streamma/runtime_streaming_test.go",
+    "internal/streamma/runtime_test.go",
+    "internal/streamma/runtime_topology_test.go",
+    "internal/streamma/types.go"
   ],
-  "requirements": [
-    {
-      "id": "REQ-001",
-      "status": "passed",
-      "summary": "Subagent tool input without run_mode now defaults to background and returns a task id immediately; explicit run_mode=sync still waits."
-    },
-    {
-      "id": "REQ-002",
-      "status": "passed",
-      "summary": "Messages and runner preserve multiple tool calls/results in one assistant turn."
-    },
-    {
-      "id": "REQ-003",
-      "status": "passed",
-      "summary": "Concurrency-safe tools run as same-turn batches, while unsafe, unknown, and explicit sync paths remain serial."
-    },
-    {
-      "id": "REQ-004",
-      "status": "passed",
-      "summary": "OpenAI-compatible and Anthropic stream tool calls are surfaced structurally and consumed by the runner."
-    },
-    {
-      "id": "REQ-005",
-      "status": "passed",
-      "summary": "Bubble UI matches tool results by tool_use_id so concurrent same-name tools do not update the wrong citation."
-    }
+  "verification": [
+    {"command": "go test ./internal/streamma -count=1", "status": "passed"},
+    {"command": "go test -race ./internal/streamma -count=1", "status": "passed"},
+    {"command": "go vet ./...", "status": "passed"},
+    {"command": "go test ./...", "status": "failed_unrelated", "details": "Pre-existing internal/ui/bubble TestToolDiffDetailLinesUseBackgroundColors failure; internal/streamma passed in the full run."}
   ],
-  "validation": [
-    {
-      "command": "go test -count=1 ./internal/loop ./internal/subagent ./internal/settings",
-      "status": "passed"
-    },
-    {
-      "command": "go test -count=1 ./...",
-      "status": "passed"
-    },
-    {
-      "command": "git diff --check",
-      "status": "passed"
-    }
-  ],
-  "computer_use": {
-    "status": "blocked",
-    "details": "Computer Use refused both Ghostty (com.mitchellh.ghostty) and Codex (com.openai.codex) app access for safety reasons, so plugin-based visual inspection could not be completed."
-  },
-  "subagents": [
-    {
-      "agent_id": "019ed3e9-8ae5-72b3-9b32-2e9d8fd4898f",
-      "role": "execution",
-      "status": "completed"
-    },
-    {
-      "agent_id": "019ed3e9-a0d6-7a52-b86d-245eb65967a8",
-      "role": "test-coverage-review",
-      "status": "completed"
-    }
-  ],
-  "cleanup": {
-    "closed_subagents": true,
-    "preserved_existing_workspace": ".pipeline-workspace",
-    "preserve_reason": ".pipeline-workspace contained pre-existing June 12 artifacts unrelated to this run."
-  },
-  "codex_pet_events": []
+  "final_assessment": {
+    "verdict": "accept",
+    "readability_conclusion": "high",
+    "complexity_conclusion": "low",
+    "tree_grading": "unanimous_pass"
+  }
 }

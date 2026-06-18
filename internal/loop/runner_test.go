@@ -24,11 +24,13 @@ type fakeRound struct {
 type fakeModel struct {
 	rounds []fakeRound
 	calls  [][]message.Message
+	tools  [][]model.ToolDefinition
 }
 
-func (m *fakeModel) StreamMessage(ctx context.Context, messages []message.Message, _ []model.ToolDefinition) (<-chan model.StreamEvent, error) {
+func (m *fakeModel) StreamMessage(ctx context.Context, messages []message.Message, tools []model.ToolDefinition) (<-chan model.StreamEvent, error) {
 	copied := append([]message.Message(nil), messages...)
 	m.calls = append(m.calls, copied)
+	m.tools = append(m.tools, append([]model.ToolDefinition(nil), tools...))
 
 	index := len(m.calls) - 1
 	if index >= len(m.rounds) {
@@ -73,6 +75,7 @@ type fakeUI struct {
 	thinking    []string
 	toolCalls   []ui.ToolCallEvent
 	toolResults []ui.ToolResultEvent
+	system      []ui.SystemEvent
 	doneCount   int
 }
 
@@ -99,6 +102,22 @@ func (u *fakeUI) OnToolResult(event ui.ToolResultEvent) error {
 func (u *fakeUI) OnDone() error {
 	u.doneCount++
 	return nil
+}
+
+func (u *fakeUI) OnSystemMessage(event ui.SystemEvent) error {
+	u.system = append(u.system, event)
+	return nil
+}
+
+func promptTextForTest(messages []message.Message) string {
+	var builder strings.Builder
+	for _, msg := range messages {
+		builder.WriteString(string(msg.Role))
+		builder.WriteString(":\n")
+		builder.WriteString(msg.Content)
+		builder.WriteByte('\n')
+	}
+	return builder.String()
 }
 
 type fakeTool struct {
@@ -230,6 +249,68 @@ func TestRunTurnStreamsAndReturnsFinalMessage(t *testing.T) {
 	}
 	if ui.doneCount != 1 {
 		t.Fatalf("ui.doneCount = %d, want 1", ui.doneCount)
+	}
+}
+
+func TestRunTurnStreamMACommandUsesRuntime(t *testing.T) {
+	output := &fakeUI{}
+	streamer := &fakeModel{
+		rounds: []fakeRound{
+			{events: []model.StreamEvent{
+				{Delta: "A early plan\nEND_STEP\n"},
+				{Done: true},
+			}},
+			{events: []model.StreamEvent{
+				{Delta: "B refined plan\nEND_STEP\n"},
+				{Done: true},
+			}},
+			{events: []model.StreamEvent{
+				{Delta: "final StreamMA answer\nEND_STEP\n"},
+				{Done: true},
+			}},
+		},
+	}
+	registry := tool.NewRegistry()
+	registry.Register(&fakeTool{name: "read"})
+	store := &fakeStore{}
+	runner := NewRunner(streamer, output, registry, store, "streamma-session")
+
+	msg, err := runner.RunTurn(context.Background(), "/streamma explain the design")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if msg.Role != message.RoleAssistant || msg.Content != "final StreamMA answer" {
+		t.Fatalf("msg = %#v, want final StreamMA answer", msg)
+	}
+	if got := strings.Join(output.deltas, ""); got != "final StreamMA answer" {
+		t.Fatalf("deltas = %q, want final answer", got)
+	}
+	if output.doneCount != 1 {
+		t.Fatalf("doneCount = %d, want 1", output.doneCount)
+	}
+	if len(output.system) != 1 || output.system[0].Title != "streamma" {
+		t.Fatalf("system events = %#v, want streamma event", output.system)
+	}
+	if len(streamer.calls) != 3 {
+		t.Fatalf("model calls = %d, want A/B/D", len(streamer.calls))
+	}
+	for i, tools := range streamer.tools {
+		if len(tools) != 0 {
+			t.Fatalf("call %d tools = %#v, want none in StreamMA mode", i, tools)
+		}
+	}
+	if !strings.Contains(streamer.calls[0][0].Content, "StreamMA agent A") {
+		t.Fatalf("A system prompt = %q", streamer.calls[0][0].Content)
+	}
+	if !strings.Contains(promptTextForTest(streamer.calls[1]), "Inbound step from A") {
+		t.Fatalf("B prompt missing A inbound step: %#v", streamer.calls[1])
+	}
+	if len(store.appends) != 1 || len(store.appends[0]) != 2 {
+		t.Fatalf("store appends = %#v, want user+assistant", store.appends)
+	}
+	if store.appends[0][0].Content != "/streamma explain the design" ||
+		store.appends[0][1].Content != "final StreamMA answer" {
+		t.Fatalf("stored messages = %#v", store.appends[0])
 	}
 }
 
