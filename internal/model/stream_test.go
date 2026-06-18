@@ -34,7 +34,7 @@ func TestStreamMessageUsesAnthropicStreamForDeepSeekEarlyUsageAndThinking(t *tes
 		if !req.Stream || req.MaxTokens == 0 {
 			t.Fatalf("request = %#v, want stream with max tokens", req)
 		}
-		if req.System == "" || len(req.Messages) != 1 || req.Messages[0].Role != "user" {
+		if len(req.System) == 0 || len(req.Messages) != 1 || req.Messages[0].Role != "user" {
 			t.Fatalf("request = %#v, want system plus one user message", req)
 		}
 		requestChecked = true
