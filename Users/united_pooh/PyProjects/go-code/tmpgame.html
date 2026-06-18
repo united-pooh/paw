@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🎮 猜数字 - 临时游戏</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    background: linear-gradient(145deg, #0f0c29, #302b63, #24243e);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #e0e0e0;
+  }
+  .game-container {
+    background: rgba(255,255,255,0.07);
+    backdrop-filter: blur(10px);
+    border-radius: 36px;
+    padding: 40px;
+    width: 500px;
+    max-width: 96%;
+    box-shadow: 0 25px 40px rgba(0,0,0,0.5);
+    border: 1px solid rgba(255,255,255,0.1);
+    text-align: center;
+  }
+  h1 {
+    font-size: 2.2rem;
+    margin-bottom: 8px;
+  }
+  .subtitle {
+    color: #aaa;
+    margin-bottom: 24px;
+    font-size: 0.95rem;
+  }
+  .range-info {
+    font-size: 1.4rem;
+    font-weight: 700;
+    margin: 16px 0;
+    color: #ffd700;
+  }
+  .guess-area {
+    display: flex;
+    gap: 10px;
+    margin: 20px 0;
+    justify-content: center;
+  }
+  .guess-area input {
+    width: 150px;
+    padding: 14px 18px;
+    border-radius: 16px;
+    border: none;
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+    font-size: 1.3rem;
+    text-align: center;
+    outline: 2px solid transparent;
+    transition: 0.2s;
+  }
+  .guess-area input:focus {
+    outline: 2px solid #7c5cfc;
+    background: rgba(255,255,255,0.15);
+  }
+  .guess-area input::placeholder {
+    color: #888;
+    font-size: 0.9rem;
+  }
+  button {
+    padding: 14px 28px;
+    border-radius: 16px;
+    border: none;
+    font-size: 1.1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .btn-primary {
+    background: linear-gradient(135deg, #7c5cfc, #5b3ddb);
+    color: #fff;
+    box-shadow: 0 4px 15px rgba(124,92,252,0.4);
+  }
+  .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(124,92,252,0.6); }
+  .btn-secondary {
+    background: rgba(255,255,255,0.08);
+    color: #ccc;
+  }
+  .btn-secondary:hover { background: rgba(255,255,255,0.15); }
+  .message {
+    min-height: 60px;
+    margin: 16px 0;
+    padding: 14px;
+    border-radius: 16px;
+    font-size: 1.1rem;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+  .message.hint { background: rgba(255,255,255,0.05); }
+  .message.success { background: rgba(46,213,115,0.2); color: #2ed573; }
+  .message.error { background: rgba(255,71,87,0.2); color: #ff4757; }
+  .history {
+    margin-top: 20px;
+    text-align: left;
+  }
+  .history h3 {
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #888;
+    margin-bottom: 8px;
+  }
+  .history-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-height: 32px;
+  }
+  .tag {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+  .tag.low { background: rgba(255,165,0,0.25); color: #ffa500; }
+  .tag.high { background: rgba(255,71,87,0.25); color: #ff4757; }
+  .tag.correct { background: rgba(46,213,115,0.25); color: #2ed573; }
+  .attempts {
+    margin-top: 12px;
+    font-size: 0.9rem;
+    color: #999;
+  }
+  .hidden-num {
+    font-size: 1rem;
+    color: #888;
+    margin-top: 4px;
+  }
+  @media (max-width: 480px) {
+    .game-container { padding: 24px; }
+    h1 { font-size: 1.6rem; }
+    .guess-area { flex-direction: column; align-items: center; }
+    .guess-area input { width: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<div class="game-container">
+  <h1>🎯 猜数字</h1>
+  <p class="subtitle">临时小游戏 · 试试你的运气</p>
+  <div class="range-info" id="rangeInfo">1 — 100</div>
+  <div class="guess-area">
+    <input type="number" id="guessInput" min="1" max="100" placeholder="猜一个数字" autofocus>
+    <button class="btn-primary" id="guessBtn">↵ 猜</button>
+  </div>
+  <div class="message hint" id="message">💡 输入数字开始游戏</div>
+  <button class="btn-secondary" id="resetBtn">🔄 重新开始</button>
+  <div class="history">
+    <h3>📝 猜测记录</h3>
+    <div class="history-list" id="historyList"></div>
+    <div class="attempts" id="attempts">已猜 0 次</div>
+  </div>
+  <div class="hidden-num" id="hiddenNum"></div>
+</div>
+
+<script>
+(function() {
+  const MIN = 1, MAX = 100;
+  let secret = Math.floor(Math.random() * (MAX - MIN + 1)) + MIN;
+  let attempts = 0;
+  let gameOver = false;
+
+  const guessInput = document.getElementById('guessInput');
+  const guessBtn = document.getElementById('guessBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const message = document.getElementById('message');
+  const historyList = document.getElementById('historyList');
+  const attemptsSpan = document.getElementById('attempts');
+  const rangeInfo = document.getElementById('rangeInfo');
+  const hiddenNum = document.getElementById('hiddenNum');
+
+  function updateUI() {
+    attemptsSpan.textContent = `已猜 ${attempts} 次`;
+  }
+
+  function addTag(value, type) {
+    const span = document.createElement('span');
+    span.className = `tag ${type}`;
+    span.textContent = type === 'correct' ? `🎉 ${value}` : `${value} ${type === 'low' ? '⬆️' : '⬇️'}`;
+    historyList.appendChild(span);
+    historyList.scrollTo({ left: historyList.scrollWidth, behavior: 'smooth' });
+  }
+
+  function setMessage(text, type) {
+    message.textContent = text;
+    message.className = 'message ' + (type || 'hint');
+  }
+
+  function resetGame() {
+    secret = Math.floor(Math.random() * (MAX - MIN + 1)) + MIN;
+    attempts = 0;
+    gameOver = false;
+    historyList.innerHTML = '';
+    guessInput.value = '';
+    guessInput.disabled = false;
+    guessBtn.disabled = false;
+    guessInput.focus();
+    hiddenNum.textContent = '';
+    updateUI();
+    setMessage('🔄 新游戏！输入数字开始', 'hint');
+  }
+
+  function handleGuess() {
+    if (gameOver) {
+      setMessage('⛔ 游戏已结束，点击 "重新开始" 再来一局', 'error');
+      return;
+    }
+
+    const raw = guessInput.value.trim();
+    if (raw === '') {
+      setMessage('⚠️ 请输入一个数字', 'error');
+      return;
+    }
+
+    const guess = Number(raw);
+    if (!Number.isInteger(guess) || isNaN(guess) || guess < MIN || guess > MAX) {
+      setMessage(`⚠️ 请输入 ${MIN}~${MAX} 之间的整数`, 'error');
+      guessInput.value = '';
+      return;
+    }
+
+    attempts++;
+    let msg, type;
+
+    if (guess === secret) {
+      msg = `🎉 恭喜！就是 ${secret}！你用了 ${attempts} 次猜中！`;
+      type = 'success';
+      gameOver = true;
+      guessInput.disabled = true;
+      guessBtn.disabled = true;
+      hiddenNum.textContent = `✨ 正确答案: ${secret}`;
+      addTag(guess, 'correct');
+    } else if (guess < secret) {
+      msg = `⬆️ ${guess} 太小了，再大一点`;
+      type = 'hint';
+      addTag(guess, 'low');
+    } else {
+      msg = `⬇️ ${guess} 太大了，再小一点`;
+      type = 'hint';
+      addTag(guess, 'high');
+    }
+
+    setMessage(msg, type);
+    updateUI();
+    guessInput.value = '';
+    guessInput.focus();
+  }
+
+  guessBtn.addEventListener('click', handleGuess);
+  guessInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') handleGuess();
+  });
+  resetBtn.addEventListener('click', resetGame);
+
+  // Initial message
+  setMessage('💡 输入数字开始游戏', 'hint');
+})();
+</script>
+</body>
+</html>

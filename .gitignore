@@ -8,3 +8,15 @@
 .mockups/
 tmp/
 .superpowers/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.ico
+*.log
+*.bak
+*.tmp
+*.swp
+*.swo
+*.DS_Store

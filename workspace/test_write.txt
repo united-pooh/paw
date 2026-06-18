@@ -1,1 +1,0 @@
-Hello from Write tool! 写入测试成功！
