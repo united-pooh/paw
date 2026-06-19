@@ -3,7 +3,7 @@ package streamma
 import (
 	"context"
 	"errors"
-	"gocode/internal/model"
+	"codex-agent-go/internal/model"
 	"strings"
 	"testing"
 	"time"

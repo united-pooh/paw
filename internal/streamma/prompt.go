@@ -2,7 +2,7 @@ package streamma
 
 import (
 	"fmt"
-	"gocode/internal/message"
+	"codex-agent-go/internal/message"
 	"strings"
 )
 

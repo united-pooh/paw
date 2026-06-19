@@ -3,7 +3,7 @@ package bubble
 import (
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
-	"gocode/internal/settings"
+	"codex-agent-go/internal/settings"
 	"strings"
 )
 

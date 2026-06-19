@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"gocode/internal/model"
+	"codex-agent-go/internal/model"
 	"strings"
 )
 

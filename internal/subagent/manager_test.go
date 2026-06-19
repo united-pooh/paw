@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"gocode/internal/loop"
-	"gocode/internal/message"
-	"gocode/internal/model"
-	"gocode/internal/session"
-	"gocode/internal/settings"
-	"gocode/internal/ui"
+	"codex-agent-go/internal/loop"
+	"codex-agent-go/internal/message"
+	"codex-agent-go/internal/model"
+	"codex-agent-go/internal/session"
+	"codex-agent-go/internal/settings"
+	"codex-agent-go/internal/ui"
 )
 
 type fakeRound struct {
@@ -441,6 +441,9 @@ func TestStreamReusesRequestedSessionAndDoesNotDuplicateBootstrapPrompt(t *testi
 	system := calls[0][0]
 	if system.Role != message.RoleSystem || !strings.Contains(system.Content, "streamma_agent_id=a") || !strings.Contains(system.Content, "exactly END_STEP") {
 		t.Fatalf("first model system prompt = %#v, want StreamMA system supplement", system)
+	}
+	if strings.Contains(system.Content, "input_schema=") {
+		t.Fatalf("StreamMA system prompt should use compact tool descriptions, got: %q", system.Content)
 	}
 	if strings.Contains(history[0].Content, "streamma_agent_id=a") {
 		t.Fatalf("StreamMA system prompt leaked into user history: %#v", history[0])

@@ -1,4 +1,4 @@
-module gocode
+module codex-agent-go
 
 go 1.25.0
 

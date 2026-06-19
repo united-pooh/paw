@@ -1,18 +1,18 @@
 package subagent
 
 import (
+	"codex-agent-go/internal/loop"
+	"codex-agent-go/internal/model"
+	"codex-agent-go/internal/session"
+	"codex-agent-go/internal/settings"
+	"codex-agent-go/internal/tool"
+	toolexec "codex-agent-go/internal/tool/exec"
+	toolfile "codex-agent-go/internal/tool/file"
+	toolwebfetch "codex-agent-go/internal/tool/webfetch"
+	"codex-agent-go/internal/ui"
 	"context"
 	"encoding/json"
 	"fmt"
-	"gocode/internal/loop"
-	"gocode/internal/model"
-	"gocode/internal/session"
-	"gocode/internal/settings"
-	"gocode/internal/tool"
-	toolexec "gocode/internal/tool/exec"
-	toolfile "gocode/internal/tool/file"
-	toolwebfetch "gocode/internal/tool/webfetch"
-	"gocode/internal/ui"
 	"os"
 	"path/filepath"
 	"sort"
@@ -735,6 +735,9 @@ func (m *Manager) runStreamingSession(ctx context.Context, sessionID, prompt, sy
 	streamUI := &streamingUI{ctx: ctx, events: events}
 	runner := loop.NewRunnerWithInstructionRoot(m.model, streamUI, newBaseToolRegistry(m.root), m.store, sessionID, m.root)
 	runner.SetSystemSupplement(systemPrompt)
+	if isStreamMASystemPrompt(systemPrompt) {
+		runner.SetCompactToolPrompt(true)
+	}
 	msg, err := runner.RunTurn(ctx, prompt)
 	usedTokens := runner.ContextStats(1<<30, "").UsedTokens
 	done := streamUI.Done()
@@ -742,6 +745,10 @@ func (m *Manager) runStreamingSession(ctx context.Context, sessionID, prompt, sy
 		return streamUI.Content(), usedTokens, done, err
 	}
 	return strings.TrimSpace(msg.Content), usedTokens, done, nil
+}
+
+func isStreamMASystemPrompt(systemPrompt string) bool {
+	return strings.Contains(systemPrompt, "streamma_agent_id=")
 }
 
 func (m *Manager) runWorkerInProcess(ctx context.Context, req WorkerRequest) (WorkerResult, error) {

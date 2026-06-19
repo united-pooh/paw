@@ -1,13 +1,13 @@
 package loop
 
 import (
+	"codex-agent-go/internal/message"
+	"codex-agent-go/internal/model"
+	"codex-agent-go/internal/tool"
+	"codex-agent-go/internal/ui"
 	"context"
 	"encoding/json"
 	"fmt"
-	"gocode/internal/message"
-	"gocode/internal/model"
-	"gocode/internal/tool"
-	"gocode/internal/ui"
 	"html"
 	"os"
 	"path/filepath"
@@ -67,6 +67,7 @@ type Runner struct {
 	sessionUsageKnown      bool
 	supplements            []string
 	systemSupplement       string
+	compactToolPrompt      bool
 	streamMASubagents      StreamMASubagentRunner
 	subagentTokensProvider SubagentTokensProvider
 }
@@ -489,7 +490,14 @@ func (runner *Runner) buildModelMessages(history []message.Message) []message.Me
 func (runner *Runner) buildSystemPrompt() string {
 	descriptions := []string{}
 	if runner.registry != nil {
-		descriptions = runner.registry.Describe()
+		runner.mu.RLock()
+		compactToolPrompt := runner.compactToolPrompt
+		runner.mu.RUnlock()
+		if compactToolPrompt {
+			descriptions = runner.registry.DescribeBrief()
+		} else {
+			descriptions = runner.registry.Describe()
+		}
 	}
 	if runner.prompt == nil {
 		runner.prompt = NewPromptBuilder(NewInstructionManager(""))

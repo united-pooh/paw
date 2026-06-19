@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"gocode/internal/settings"
+	"codex-agent-go/internal/settings"
 	"os"
 	"os/exec"
 	"strings"

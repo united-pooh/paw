@@ -2,14 +2,14 @@
 package bubble
 
 import (
+	"codex-agent-go/internal/loop"
+	"codex-agent-go/internal/model"
+	"codex-agent-go/internal/settings"
+	"codex-agent-go/internal/subagent"
+	"codex-agent-go/internal/ui"
 	"context"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
-	"gocode/internal/loop"
-	"gocode/internal/model"
-	"gocode/internal/settings"
-	"gocode/internal/subagent"
-	"gocode/internal/ui"
 	"time"
 )
 
@@ -38,7 +38,7 @@ type transcriptEntry struct {
 	title     string
 	body      string
 	color     string // 可选：标题颜色（lipgloss 颜色字符串），与 subagents 面板保持一致
-	isError   bool // true for tool results with IsError=true
+	isError   bool   // true for tool results with IsError=true
 	toolUseID string
 	toolName  string
 	citations []toolCitation
@@ -225,52 +225,53 @@ type sessionSummaryItem struct {
 
 // appModel 是 Bubble Tea TUI 的唯一状态中心。
 type appModel struct {
-	ctx                 context.Context
-	runner              Runner
-	sessionID           string
-	modelConfig         ModelConfigController
-	settingsConfig      SettingsController
-	subagents           SubagentController
-	sessionStore        SessionStore
-	commandRegistry     *CommandRegistry
-	queryGuard          QueryGuard
-	chatQueue           CommandQueue
-	cursorAnchor        *terminalCursorAnchor
-	input               textarea.Model
-	viewport            viewport.Model
-	width               int
-	height              int
-	ready               bool
-	running             bool
-	runningTerminal     bool
-	terminalMode        bool
-	terminalPreview     bool
-	showThinking        bool
-	selecting           bool
-	selectionActive     bool
-	selectionStart      selectionPoint
-	selectionEnd        selectionPoint
-	cursorFrameAt       time.Time
-	turnStartedAt       time.Time
-	contextMeter        contextMeterAnimation
-	pending             []string
-	inputHistory        []string
-	historyIndex        int
-	historyDraft        string
-	historyDownLock     bool
-	transcript          []transcriptEntry
-	activeAssistant     int
-	pendingToolCites    []toolCitation
-	isGenerating        bool
-	lastCtrlCAt         time.Time // 追踪双击 Ctrl+C 退出
-	modelWizard         *modelWizard
-	settingWizard       *settingWizard
-	sessionPicker       *sessionPicker
-	completion          *completion
-	pipelineState       pipelineState
-	pipelineActiveAfter time.Time
-	sidebarWidth        int // 右侧面板宽度（字符），由 relayout() 计算并存储
-	spinnerFrameIdx     int // 侧边栏 running 条目动画帧索引，由 cursorFrameMsg 驱动
+	ctx                  context.Context
+	runner               Runner
+	sessionID            string
+	modelConfig          ModelConfigController
+	settingsConfig       SettingsController
+	subagents            SubagentController
+	sessionStore         SessionStore
+	commandRegistry      *CommandRegistry
+	queryGuard           QueryGuard
+	chatQueue            CommandQueue
+	cursorAnchor         *terminalCursorAnchor
+	input                textarea.Model
+	viewport             viewport.Model
+	width                int
+	height               int
+	ready                bool
+	running              bool
+	runningTerminal      bool
+	terminalMode         bool
+	terminalPreview      bool
+	showThinking         bool
+	selecting            bool
+	selectionActive      bool
+	selectionStart       selectionPoint
+	selectionEnd         selectionPoint
+	cursorFrameAt        time.Time
+	turnStartedAt        time.Time
+	contextMeter         contextMeterAnimation
+	pending              []string
+	inputHistory         []string
+	historyIndex         int
+	historyDraft         string
+	historyDownLock      bool
+	inputPasteFoldActive bool
+	transcript           []transcriptEntry
+	activeAssistant      int
+	pendingToolCites     []toolCitation
+	isGenerating         bool
+	lastCtrlCAt          time.Time // 追踪双击 Ctrl+C 退出
+	modelWizard          *modelWizard
+	settingWizard        *settingWizard
+	sessionPicker        *sessionPicker
+	completion           *completion
+	pipelineState        pipelineState
+	pipelineActiveAfter  time.Time
+	sidebarWidth         int // 右侧面板宽度（字符），由 relayout() 计算并存储
+	spinnerFrameIdx      int // 侧边栏 running 条目动画帧索引，由 cursorFrameMsg 驱动
 }
 
 // pipelinePhaseStatus 标记单个 pipeline 阶段的状态。

@@ -1,12 +1,12 @@
 package loop
 
 import (
+	"codex-agent-go/internal/message"
+	"codex-agent-go/internal/model"
+	"codex-agent-go/internal/streamma"
+	"codex-agent-go/internal/ui"
 	"context"
 	"fmt"
-	"gocode/internal/message"
-	"gocode/internal/model"
-	"gocode/internal/streamma"
-	"gocode/internal/ui"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +15,11 @@ import (
 const (
 	streamMACommand      = "/streamma"
 	streamMATraceCommand = "/streamma-trace"
+
+	streamMATaskMaxBytes                = 4096
+	streamMAConversationContextMaxBytes = 2048
+	streamMAProblemMaxBytes             = 6144
+	streamMAInboundStepMaxBytes         = 6144
 )
 
 type StreamMASubagentRequest struct {
@@ -71,6 +76,15 @@ func (runner *Runner) SetSystemSupplement(supplement string) {
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
 	runner.systemSupplement = strings.TrimSpace(supplement)
+}
+
+func (runner *Runner) SetCompactToolPrompt(enabled bool) {
+	if runner == nil {
+		return
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	runner.compactToolPrompt = enabled
 }
 
 type streamMAInvocation struct {
@@ -297,16 +311,15 @@ const streamMAOutputContract = `Output contract:
 func buildStreamMAProblem(task string, history []message.Message) string {
 	var builder strings.Builder
 	builder.WriteString("Current user task:\n")
-	builder.WriteString(strings.TrimSpace(task))
+	builder.WriteString(truncateStreamMAHeadBytes(strings.TrimSpace(task), streamMATaskMaxBytes))
 	if context := streamMAConversationContext(history); context != "" {
 		builder.WriteString("\n\nConversation context:\n")
 		builder.WriteString(context)
 	}
-	return builder.String()
+	return truncateStreamMAHeadBytes(builder.String(), streamMAProblemMaxBytes)
 }
 
 func streamMAConversationContext(history []message.Message) string {
-	const maxRunes = 6000
 	var lines []string
 	for _, msg := range history {
 		content := strings.TrimSpace(msg.Content)
@@ -327,11 +340,48 @@ func streamMAConversationContext(history []message.Message) string {
 		return ""
 	}
 	text := strings.Join(lines, "\n")
-	runes := []rune(text)
-	if len(runes) <= maxRunes {
+	return truncateStreamMATailBytes(text, streamMAConversationContextMaxBytes)
+}
+
+func truncateStreamMAHeadBytes(text string, maxBytes int) string {
+	text = strings.TrimSpace(text)
+	if maxBytes <= 0 || len([]byte(text)) <= maxBytes {
 		return text
 	}
-	return string(runes[len(runes)-maxRunes:])
+	suffix := "\n[truncated to fit StreamMA request budget]"
+	limit := maxInt(0, maxBytes-len([]byte(suffix)))
+	var builder strings.Builder
+	for _, r := range text {
+		if builder.Len()+len(string(r)) > limit {
+			break
+		}
+		builder.WriteRune(r)
+	}
+	return strings.TrimSpace(builder.String()) + suffix
+}
+
+func truncateStreamMATailBytes(text string, maxBytes int) string {
+	text = strings.TrimSpace(text)
+	if maxBytes <= 0 || len([]byte(text)) <= maxBytes {
+		return text
+	}
+	prefix := "[earlier conversation truncated to fit StreamMA request budget]\n"
+	limit := maxInt(0, maxBytes-len([]byte(prefix)))
+	var tail []rune
+	used := 0
+	runes := []rune(text)
+	for i := len(runes) - 1; i >= 0; i-- {
+		size := len(string(runes[i]))
+		if used+size > limit {
+			break
+		}
+		tail = append(tail, runes[i])
+		used += size
+	}
+	for i, j := 0, len(tail)-1; i < j; i, j = i+1, j-1 {
+		tail[i], tail[j] = tail[j], tail[i]
+	}
+	return prefix + strings.TrimSpace(string(tail))
 }
 
 func finalStreamMAText(result streamma.RunResult) string {
@@ -552,14 +602,14 @@ func buildStreamMAIncrementalPrompt(invocation streamma.AgentInvocation, firstIn
 	builder.WriteString("\n\n")
 	if firstInvocation {
 		builder.WriteString("Original problem:\n")
-		builder.WriteString(strings.TrimSpace(invocation.Problem))
+		builder.WriteString(truncateStreamMAHeadBytes(strings.TrimSpace(invocation.Problem), streamMAProblemMaxBytes))
 		builder.WriteString("\n\n")
 	}
 	if invocation.InboundStep != nil {
 		builder.WriteString("New inbound step from ")
 		builder.WriteString(strings.TrimSpace(invocation.InboundFrom))
 		builder.WriteString(":\n")
-		builder.WriteString(strings.TrimSpace(invocation.InboundStep.Content.Text))
+		builder.WriteString(truncateStreamMAHeadBytes(strings.TrimSpace(invocation.InboundStep.Content.Text), streamMAInboundStepMaxBytes))
 		builder.WriteString("\n\n")
 	} else if firstInvocation {
 		builder.WriteString("Initial problem delivery. Start producing useful public reasoning steps for this agent role.\n\n")

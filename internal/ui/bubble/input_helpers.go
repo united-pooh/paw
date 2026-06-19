@@ -2,16 +2,25 @@
 package bubble
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"strings"
+)
+
+const (
+	inputPasteFoldThreshold  = 6
+	inputPasteFoldHeadLines  = 3
+	inputPasteFoldTailLines  = 2
+	inputPasteFoldMarkerLine = "... %d lines folded ..."
 )
 
 // inputVisibleLineCount 计算 textarea 当前需要展示的可视行数。
 func inputVisibleLineCount(input textarea.Model) int {
 	lineCount := wrappedInputLineCount(input.Value(), input.Width())
-	return minInt(inputMaxVisibleLines, lineCount)
+	return minInt(inputMaxVisibleLines, maxInt(inputMinVisibleLines, lineCount))
 }
 
 func wrappedInputLineCount(value string, width int) int {
@@ -25,6 +34,63 @@ func wrappedInputLineCount(value string, width int) int {
 		total += maxInt(1, (lineWidth+width-1)/width)
 	}
 	return maxInt(1, total)
+}
+
+func logicalInputLineCount(value string) int {
+	if value == "" {
+		return 1
+	}
+	return len(strings.Split(value, "\n"))
+}
+
+func inputPasteFoldable(value string) bool {
+	return logicalInputLineCount(value) > inputPasteFoldThreshold
+}
+
+func inputPasteFoldProjection(value string) ([]string, int, bool) {
+	lines := strings.Split(value, "\n")
+	if len(lines) <= inputPasteFoldThreshold {
+		return lines, 0, false
+	}
+	head := minInt(inputPasteFoldHeadLines, len(lines))
+	tail := minInt(inputPasteFoldTailLines, maxInt(0, len(lines)-head))
+	hidden := len(lines) - head - tail
+	if hidden <= 0 {
+		return lines, 0, false
+	}
+	projected := make([]string, 0, head+1+tail)
+	projected = append(projected, lines[:head]...)
+	projected = append(projected, fmt.Sprintf(inputPasteFoldMarkerLine, hidden))
+	projected = append(projected, lines[len(lines)-tail:]...)
+	return projected, hidden, true
+}
+
+func inputPasteFoldHiddenRange(value string) (int, int, bool) {
+	lines := logicalInputLineCount(value)
+	if lines <= inputPasteFoldThreshold {
+		return 0, 0, false
+	}
+	start := minInt(inputPasteFoldHeadLines, lines)
+	end := maxInt(start, lines-inputPasteFoldTailLines)
+	return start, end, end > start
+}
+
+func inputCursorInPasteFoldHiddenRange(input textarea.Model) bool {
+	start, end, ok := inputPasteFoldHiddenRange(input.Value())
+	return ok && input.Line() >= start && input.Line() < end
+}
+
+func inputTextMutationLooksLikeMultilinePaste(msg tea.Msg, beforeValue, afterValue string) bool {
+	if beforeValue == afterValue {
+		return false
+	}
+	beforeLines := logicalInputLineCount(beforeValue)
+	afterLines := logicalInputLineCount(afterValue)
+	if afterLines-beforeLines > 1 {
+		return true
+	}
+	keyMsg, ok := msg.(tea.KeyMsg)
+	return ok && keyMsg.Type == tea.KeyRunes && strings.Contains(string(keyMsg.Runes), "\n")
 }
 
 // splitContinuation 解析以反斜杠结尾的续行输入。

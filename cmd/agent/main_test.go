@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"gocode/internal/session"
+	"codex-agent-go/internal/session"
 )
 
 func TestClearTerminalWindowWritesClearAndScrollbackSequence(t *testing.T) {

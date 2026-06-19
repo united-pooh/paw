@@ -1,14 +1,15 @@
 package loop
 
 import (
+	"codex-agent-go/internal/message"
+	"codex-agent-go/internal/model"
+	"codex-agent-go/internal/session"
+	"codex-agent-go/internal/streamma"
+	"codex-agent-go/internal/tool"
+	"codex-agent-go/internal/ui"
 	"context"
 	"encoding/json"
 	"errors"
-	"gocode/internal/message"
-	"gocode/internal/model"
-	"gocode/internal/session"
-	"gocode/internal/tool"
-	"gocode/internal/ui"
 	"os"
 	"path/filepath"
 	"strings"
@@ -223,6 +224,7 @@ type fakeTool struct {
 	output string
 	err    error
 	input  json.RawMessage
+	schema json.RawMessage
 	safe   bool
 }
 
@@ -260,6 +262,9 @@ func (t *fakeTool) Description() string {
 }
 
 func (t *fakeTool) InputSchema() json.RawMessage {
+	if t.schema != nil {
+		return t.schema
+	}
 	return nil
 }
 
@@ -479,6 +484,74 @@ func TestRunTurnStreamMATraceEmitsRuntimeEvents(t *testing.T) {
 	}
 	if !sawStarted || !sawStep || !sawUsage {
 		t.Fatalf("trace events = %#v, want planner start, committed step, and usage", output.system)
+	}
+}
+
+func TestStreamMAConversationContextIsByteCapped(t *testing.T) {
+	history := []message.Message{
+		{Role: message.RoleUser, Content: "old " + strings.Repeat("甲", streamMAConversationContextMaxBytes)},
+		{Role: message.RoleAssistant, Content: "recent answer"},
+	}
+
+	context := streamMAConversationContext(history)
+	if got := len([]byte(context)); got > streamMAConversationContextMaxBytes {
+		t.Fatalf("context bytes = %d, want <= %d", got, streamMAConversationContextMaxBytes)
+	}
+	if !strings.Contains(context, "recent answer") {
+		t.Fatalf("context = %q, want recent history retained", context)
+	}
+	if !strings.Contains(context, "earlier conversation truncated") {
+		t.Fatalf("context = %q, want truncation marker", context)
+	}
+}
+
+func TestBuildStreamMAIncrementalPromptTruncatesLargeInboundStep(t *testing.T) {
+	prompt := buildStreamMAIncrementalPrompt(streamma.AgentInvocation{
+		RunID:           "run-1",
+		InvocationIndex: 2,
+		AgentID:         "builder",
+		Role:            "implementation_builder",
+		InboundFrom:     "planner",
+		InboundStep: &streamma.StepPacket{
+			Content: streamma.StepContent{Text: strings.Repeat("x", streamMAInboundStepMaxBytes+2048)},
+		},
+		Boundary:        streamma.DefaultBoundary,
+		RequireBoundary: true,
+	}, false)
+
+	if !strings.Contains(prompt, "truncated to fit StreamMA request budget") {
+		t.Fatalf("prompt missing truncation marker")
+	}
+	if got := len([]byte(prompt)); got > streamMAInboundStepMaxBytes+2048 {
+		t.Fatalf("prompt bytes = %d, want bounded prompt", got)
+	}
+}
+
+func TestRunnerCompactToolPromptOmitsSystemSchemasButKeepsNativeTools(t *testing.T) {
+	streamer := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{{Delta: "ok"}, {Done: true}}}}}
+	registry := tool.NewRegistry()
+	registry.Register(&fakeTool{
+		name:   "Huge",
+		schema: json.RawMessage(`{"type":"object","properties":{"payload":{"type":"string","description":"` + strings.Repeat("schema detail ", 80) + `"}}}`),
+	})
+	runner := NewRunner(streamer, &fakeUI{}, registry, &fakeStore{}, "session-1")
+	runner.SetCompactToolPrompt(true)
+
+	if _, err := runner.RunTurn(context.Background(), "hello"); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if len(streamer.calls) != 1 || len(streamer.calls[0]) == 0 {
+		t.Fatalf("model calls = %#v", streamer.calls)
+	}
+	systemPrompt := streamer.calls[0][0].Content
+	if strings.Contains(systemPrompt, "input_schema=") || strings.Contains(systemPrompt, "schema detail") {
+		t.Fatalf("compact system prompt leaked schema: %q", systemPrompt)
+	}
+	if !strings.Contains(systemPrompt, "Huge: fake tool") {
+		t.Fatalf("compact system prompt missing brief tool description: %q", systemPrompt)
+	}
+	if len(streamer.tools) != 1 || len(streamer.tools[0]) != 1 || !strings.Contains(string(streamer.tools[0][0].InputSchema), "schema detail") {
+		t.Fatalf("native tools = %#v, want schema preserved out-of-band", streamer.tools)
 	}
 }
 

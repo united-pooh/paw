@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"gocode/internal/subagent"
+	"codex-agent-go/internal/subagent"
 )
 
 const (

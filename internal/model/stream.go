@@ -6,7 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"gocode/internal/message"
+	"codex-agent-go/internal/message"
 	"io"
 	"net/http"
 	"sort"

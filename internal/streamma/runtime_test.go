@@ -2,8 +2,8 @@ package streamma
 
 import (
 	"context"
-	"gocode/internal/message"
-	"gocode/internal/model"
+	"codex-agent-go/internal/message"
+	"codex-agent-go/internal/model"
 	"strings"
 	"sync"
 	"testing"

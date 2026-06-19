@@ -3,8 +3,8 @@ package bubble
 import (
 	"fmt"
 	"github.com/charmbracelet/lipgloss"
-	"gocode/internal/loop"
-	"gocode/internal/settings"
+	"codex-agent-go/internal/loop"
+	"codex-agent-go/internal/settings"
 	"math"
 	"strconv"
 	"strings"

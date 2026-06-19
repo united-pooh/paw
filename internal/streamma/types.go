@@ -3,8 +3,8 @@ package streamma
 import (
 	"context"
 	"fmt"
-	"gocode/internal/message"
-	"gocode/internal/model"
+	"codex-agent-go/internal/message"
+	"codex-agent-go/internal/model"
 	"sort"
 	"strings"
 	"time"

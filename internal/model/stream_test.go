@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"gocode/internal/message"
+	"codex-agent-go/internal/message"
 	"net/http"
 	"net/http/httptest"
 	"strings"

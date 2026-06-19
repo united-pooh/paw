@@ -68,6 +68,7 @@ func (m appModel) handleQueueSubmit() (tea.Model, tea.Cmd) {
 	}
 	m.input.SetValue(line)
 	m.input.CursorEnd()
+	m.inputPasteFoldActive = false
 	m.syncInputMode()
 	m.relayout()
 	return m, nil
@@ -79,6 +80,7 @@ func (m appModel) consumeSubmittedInput() (appModel, string, bool) {
 		return m, "", false
 	}
 	m.input.Reset()
+	m.inputPasteFoldActive = false
 	m.resetHistoryNavigation()
 	m.syncInputMode()
 	m.relayout()
@@ -263,6 +265,20 @@ func (m appModel) updateInputWithKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m *appModel) syncInputPasteFoldState(msg tea.Msg, beforeValue string, textChanged bool) {
+	value := m.input.Value()
+	if !inputPasteFoldable(value) {
+		m.inputPasteFoldActive = false
+		return
+	}
+	if m.inputPasteFoldActive {
+		return
+	}
+	if textChanged && inputTextMutationLooksLikeMultilinePaste(msg, beforeValue, value) {
+		m.inputPasteFoldActive = true
+	}
+}
+
 // canMoveTextareaUp 判断 textarea 光标是否还能向上移动到上一行或上方可视行。
 func canMoveTextareaUp(input textarea.Model) bool {
 	lineInfo := input.LineInfo()
@@ -321,6 +337,7 @@ func (m appModel) handleHistoryNavigation(direction int) (tea.Model, tea.Cmd) {
 		}
 		m.input.SetValue(m.inputHistory[m.historyIndex])
 		m.input.CursorEnd()
+		m.inputPasteFoldActive = false
 		m.syncInputMode()
 		m.relayout()
 		m.applyCursorAnimation()
@@ -341,6 +358,7 @@ func (m appModel) handleHistoryNavigation(direction int) (tea.Model, tea.Cmd) {
 		m.historyDownLock = false
 	}
 	m.input.CursorEnd()
+	m.inputPasteFoldActive = false
 	m.syncInputMode()
 	m.relayout()
 	m.applyCursorAnimation()

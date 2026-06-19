@@ -16,12 +16,12 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"gocode/internal/loop"
-	"gocode/internal/message"
-	modelcfg "gocode/internal/model"
-	"gocode/internal/settings"
-	"gocode/internal/subagent"
-	"gocode/internal/ui"
+	"codex-agent-go/internal/loop"
+	"codex-agent-go/internal/message"
+	modelcfg "codex-agent-go/internal/model"
+	"codex-agent-go/internal/settings"
+	"codex-agent-go/internal/subagent"
+	"codex-agent-go/internal/ui"
 )
 
 // fakeRunner 记录测试中的提交输入，并模拟对话 runner。
@@ -1261,6 +1261,43 @@ func TestCtrlJInsertsNewlineAndEnterSubmitsMultiline(t *testing.T) {
 	}
 }
 
+func TestCtrlJSecondNewlineKeepsEarlierLinesVisible(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 100
+	model.height = 30
+	model.relayout()
+	model.input.SetValue("first")
+	model.input.CursorEnd()
+	model.relayout()
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	model = next.(appModel)
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("second")})
+	model = next.(appModel)
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	model = next.(appModel)
+
+	if got := model.input.Height(); got != 3 {
+		t.Fatalf("input height = %d, want 3", got)
+	}
+	if got := model.input.Value(); got != "first\nsecond\n" {
+		t.Fatalf("input value = %q", got)
+	}
+	if got := model.input.Line(); got != 2 {
+		t.Fatalf("cursor line = %d, want third logical line", got)
+	}
+	if got := visibleTextareaCursorRow(model.input); got != 2 {
+		t.Fatalf("visible cursor row = %d, want third rendered row", got)
+	}
+	rendered := ansi.Strip(model.renderInputBox())
+	first := strings.Index(rendered, "first")
+	second := strings.Index(rendered, "second")
+	if first < 0 || second < 0 || first > second {
+		t.Fatalf("input box should keep first and second lines in order:\n%s", rendered)
+	}
+}
+
 // TestInputHistorySkipsControlCommands 验证控制命令不会污染普通输入历史。
 func TestInputHistorySkipsControlCommands(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
@@ -1378,8 +1415,16 @@ func TestViewFillsTerminalHeightAndPinsInputToBottom(t *testing.T) {
 		t.Fatalf("rendered height = %d, want %d\n%s", got, model.height, rendered)
 	}
 	lines := strings.Split(ansi.Strip(rendered), "\n")
-	if len(lines) < 2 || !strings.Contains(lines[len(lines)-2], "bottom") {
-		t.Fatalf("last input content line = %q, want bottom", lines[maxInt(0, len(lines)-2)])
+	searchStart := maxInt(0, len(lines)-4)
+	bottomVisible := false
+	for _, line := range lines[searchStart:] {
+		if strings.Contains(line, "bottom") {
+			bottomVisible = true
+			break
+		}
+	}
+	if !bottomVisible {
+		t.Fatalf("bottom input not visible near frame bottom:\n%s", ansi.Strip(rendered))
 	}
 	lastLine := lines[len(lines)-1]
 	if strings.Count(lastLine, "╯") < 2 {
@@ -1593,8 +1638,9 @@ func TestViewAnchorsTerminalCursorOnInputCell(t *testing.T) {
 	if !position.active {
 		t.Fatalf("cursor position = %#v", position)
 	}
-	if position.upFromBottom != 1 {
-		t.Fatalf("upFromBottom = %d, want input content row", position.upFromBottom)
+	wantUpFromBottom := maxInt(0, lipgloss.Height(model.renderActiveInputPanel())-2)
+	if position.upFromBottom != wantUpFromBottom {
+		t.Fatalf("upFromBottom = %d, want input content row %d", position.upFromBottom, wantUpFromBottom)
 	}
 	if position.column <= 2 {
 		t.Fatalf("column = %d, want input cell position", position.column)
@@ -1623,8 +1669,9 @@ func TestViewAnchorsTerminalCursorWithLegacyInputTitle(t *testing.T) {
 	if !ok || !position.active {
 		t.Fatalf("anchor = %#v/%v, want active", position, ok)
 	}
-	if position.upFromBottom != 1 {
-		t.Fatalf("upFromBottom = %d, want input content row", position.upFromBottom)
+	wantUpFromBottom := maxInt(0, lipgloss.Height(model.renderActiveInputPanel())-2)
+	if position.upFromBottom != wantUpFromBottom {
+		t.Fatalf("upFromBottom = %d, want input content row %d", position.upFromBottom, wantUpFromBottom)
 	}
 }
 
@@ -2203,6 +2250,10 @@ func TestInputBoxExpandsForLongWrappedInput(t *testing.T) {
 	model.height = 40
 	model.relayout()
 
+	if got := model.input.Height(); got != inputMinVisibleLines {
+		t.Fatalf("empty input height = %d, want %d", got, inputMinVisibleLines)
+	}
+
 	singleLineHeight := lipgloss.Height(model.renderInputBox())
 	wrappedWidth := maxInt(1, model.input.Width())
 	model.input.SetValue(strings.Repeat("x", wrappedWidth*3+5))
@@ -2219,6 +2270,133 @@ func TestInputBoxExpandsForLongWrappedInput(t *testing.T) {
 	model.relayout()
 	if got := model.input.Height(); got != inputMaxVisibleLines {
 		t.Fatalf("input height = %d, want capped at %d", got, inputMaxVisibleLines)
+	}
+}
+
+func TestInputMaxVisibleLinesRemainsTen(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 120
+	model.height = 40
+	model.input.SetValue(strings.Join([]string{
+		"line 01", "line 02", "line 03", "line 04", "line 05",
+		"line 06", "line 07", "line 08", "line 09", "line 10",
+		"line 11", "line 12", "line 13", "line 14", "line 15",
+	}, "\n"))
+	model.relayout()
+
+	if inputMaxVisibleLines != 10 {
+		t.Fatalf("inputMaxVisibleLines = %d, want 10", inputMaxVisibleLines)
+	}
+	if got := model.input.Height(); got != 10 {
+		t.Fatalf("input height = %d, want 10", got)
+	}
+}
+
+func TestInputAllowsMoreLogicalLinesThanVisibleLimit(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 120
+	model.height = 40
+	model.relayout()
+
+	for i := 1; i <= inputMaxVisibleLines+3; i++ {
+		next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(fmt.Sprintf("line %02d", i))})
+		model = next.(appModel)
+		if i < inputMaxVisibleLines+3 {
+			next, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+			model = next.(appModel)
+		}
+	}
+
+	if got := model.input.LineCount(); got != inputMaxVisibleLines+3 {
+		t.Fatalf("line count = %d, want %d", got, inputMaxVisibleLines+3)
+	}
+	if got := model.input.Height(); got != inputMaxVisibleLines {
+		t.Fatalf("input height = %d, want capped at %d", got, inputMaxVisibleLines)
+	}
+	if !strings.Contains(model.input.Value(), "line 13") {
+		t.Fatalf("input value missing final logical line: %q", model.input.Value())
+	}
+}
+
+func TestLargePastedInputFoldsInInputBoxButSubmitsFullText(t *testing.T) {
+	runner := &fakeRunner{}
+	model := newTestModel(runner)
+	model.ready = true
+	model.width = 120
+	model.height = 40
+	model.relayout()
+	pasted := strings.Join([]string{
+		"line 01", "line 02", "line 03", "line 04",
+		"line 05", "line 06", "line 07", "line 08",
+	}, "\n")
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(pasted)})
+	model = next.(appModel)
+
+	if !model.inputPasteFoldActive {
+		t.Fatalf("inputPasteFoldActive = false, want true")
+	}
+	rendered := ansi.Strip(model.renderInputBox())
+	for _, want := range []string{"line 01", "line 03", "... 3 lines folded ...", "line 07", "line 08"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("folded input box missing %q:\n%s", want, rendered)
+		}
+	}
+	for _, hidden := range []string{"line 04", "line 05", "line 06"} {
+		if strings.Contains(rendered, hidden) {
+			t.Fatalf("folded input box should hide %q:\n%s", hidden, rendered)
+		}
+	}
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if cmd == nil {
+		t.Fatalf("enter after folded paste returned nil cmd")
+	}
+	_ = cmd()
+	if len(runner.inputs) != 1 || runner.inputs[0] != pasted {
+		t.Fatalf("runner.inputs = %#v, want full pasted text", runner.inputs)
+	}
+	if model.inputPasteFoldActive {
+		t.Fatalf("inputPasteFoldActive = true after submit, want false")
+	}
+}
+
+func TestFoldedPasteUnfoldsWhenCursorMovesIntoHiddenMiddle(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 120
+	model.height = 40
+	model.relayout()
+	pasted := strings.Join([]string{
+		"line 01", "line 02", "line 03", "line 04",
+		"line 05", "line 06", "line 07", "line 08",
+	}, "\n")
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(pasted)})
+	model = next.(appModel)
+	if !model.shouldRenderFoldedInput() {
+		t.Fatalf("folded input should render immediately after large paste")
+	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyUp})
+	model = next.(appModel)
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyUp})
+	model = next.(appModel)
+
+	if !model.inputPasteFoldActive {
+		t.Fatalf("inputPasteFoldActive = false, want state retained")
+	}
+	if model.shouldRenderFoldedInput() {
+		t.Fatalf("folded input should temporarily unfold when cursor is in hidden middle")
+	}
+	rendered := ansi.Strip(model.renderInputBox())
+	for _, want := range []string{"line 04", "line 05", "line 06"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("unfolded input box missing %q:\n%s", want, rendered)
+		}
 	}
 }
 
