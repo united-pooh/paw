@@ -76,11 +76,11 @@ func defaultTokenTracerOpen() bool {
 func defaultTokenTracerPort() int {
 	value := strings.TrimSpace(os.Getenv("GOCODE_TOKEN_TRACER_PORT"))
 	if value == "" {
-		return 0
+		return 8999
 	}
 	port, err := strconv.Atoi(value)
 	if err != nil || port < 0 {
-		return 0
+		return 8999
 	}
 	return port
 }

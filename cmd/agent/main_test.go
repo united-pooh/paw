@@ -37,6 +37,14 @@ func TestTokenTracerDefaultsFromEnv(t *testing.T) {
 	if !defaultTokenTracerOpen() {
 		t.Fatalf("defaultTokenTracerOpen() = false, want true")
 	}
+	t.Setenv("GOCODE_TOKEN_TRACER_PORT", "")
+	if got := defaultTokenTracerPort(); got != 8999 {
+		t.Fatalf("defaultTokenTracerPort() = %d, want 8999 by default", got)
+	}
+	t.Setenv("GOCODE_TOKEN_TRACER_PORT", "bad")
+	if got := defaultTokenTracerPort(); got != 8999 {
+		t.Fatalf("defaultTokenTracerPort() = %d, want 8999 for invalid env", got)
+	}
 	t.Setenv("GOCODE_TOKEN_TRACER_PORT", "43210")
 	if got := defaultTokenTracerPort(); got != 43210 {
 		t.Fatalf("defaultTokenTracerPort() = %d, want 43210", got)

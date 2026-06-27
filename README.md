@@ -169,7 +169,7 @@ go run ./cmd/agent -s <session-id>
 Token Tracer:
 - StreamMA 可用 `GOCODE_STREAMMA=0` 或 `-streamma=false` 手动关闭；关闭后输入 `/streamma` 或 `/streamma-trace` 会直接提示已禁用，不会启动 worker，也不会触发 `END_STEP` parser
 - 交互模式启动时默认拉起本地 dashboard；可用 `GOCODE_TOKEN_TRACER=0` 或 `-token-tracer=false` 关闭
-- `-token-tracer-port <port>` 指定端口，默认 `0` 表示自动选择空闲端口；`GOCODE_TOKEN_TRACER_PORT` 也可设置默认端口
+- `-token-tracer-port <port>` 指定端口，默认 `8999`；`GOCODE_TOKEN_TRACER_PORT` 也可设置默认端口
 - `-token-tracer-open` 或 `GOCODE_TOKEN_TRACER_OPEN=1` 会自动在浏览器打开 dashboard
 - Dashboard 聚合普通对话、工具调用、StreamMA runtime events、StreamMA subagent usage/cache、后台 subagent 任务生命周期，并按 `pipeline -> stage -> agent` 语义展示 token lane；output token 单独统计，不参与 context lane 宽度
 
