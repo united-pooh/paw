@@ -1,10 +1,10 @@
 package bubble
 
 import (
+	"codex-agent-go/internal/loop"
+	"codex-agent-go/internal/settings"
 	"fmt"
 	"github.com/charmbracelet/lipgloss"
-	"gocode/internal/loop"
-	"gocode/internal/settings"
 	"math"
 	"strconv"
 	"strings"
@@ -193,10 +193,11 @@ func renderContextBarWithOverlayStart(used, cache, limit, width int, overlay str
 			cells[i] = contextFreeStyle.Render("▱")
 		}
 	}
-	overlayRunes := []rune(overlay)
-	if len(overlayRunes) > 0 && overlayStart >= 0 && overlayStart+len(overlayRunes) <= width {
-		for i, r := range overlayRunes {
-			cells[overlayStart+i] = contextThinkingStyle.Render(string(r))
+	overlayWidth := lipgloss.Width(overlay)
+	if overlayWidth > 0 && overlayStart >= 0 && overlayStart+overlayWidth <= width {
+		cells[overlayStart] = contextThinkingStyle.Render(overlay)
+		for i := 1; i < overlayWidth; i++ {
+			cells[overlayStart+i] = ""
 		}
 	}
 	return strings.Join(cells, "")
@@ -334,24 +335,21 @@ func (m appModel) renderContextCardContent(innerWidth int) string {
 	rawCache := clampInt(stats.CacheTokens, 0, rawUsed)
 	labelUsed, labelCache := m.animatedLabelTokens(rawUsed, rawCache, limit)
 
-	// Line 1: token left, free right — measure raw rune widths to avoid ANSI width issues.
+	// Line 1: cache% left (hit rate = cache / used), token centre-left, free right.
+	cacheLabel := "cache " + formatContextPercent(labelCache, labelUsed)
 	rawToken := formatCompactTokenCount(labelUsed) + contextDirectionArrow(m.isGenerating)
 	rawFree := formatContextFreeLabel(labelUsed, limit)
+	cacheVW := len([]rune(cacheLabel))
 	tokenVW := len([]rune(rawToken))
 	freeVW := len([]rune(rawFree))
-	gap := maxInt(1, innerWidth-tokenVW-freeVW)
-	topLine := contextUsedStyle.Render(rawToken) + strings.Repeat(" ", gap) + contextFreeStyle.Render(rawFree)
+	gap := maxInt(1, innerWidth-cacheVW-1-tokenVW-freeVW)
+	topLine := contextCacheStyle.Render(cacheLabel) + " " + contextUsedStyle.Render(rawToken) + strings.Repeat(" ", gap) + contextFreeStyle.Render(rawFree)
 
 	// Line 2: progress bar
 	animatedUsed, animatedCache, _ := m.animatedContextTokens(limit)
 	bar := renderContextBar(animatedUsed, animatedCache, limit, innerWidth, "")
 
-	// Line 3: compact percentages + turns, centered as one status row.
-	cachePct := formatContextPercent(labelCache, limit)
-	freePct := formatContextPercent(maxInt(0, limit-labelUsed), limit)
-	pctLine := m.contextPercentStatusLine(innerWidth, cachePct, freePct)
-
-	lines := []string{topLine, bar, pctLine}
+	lines := []string{topLine, bar}
 	if supplementLine := m.contextWorkStatusLine(innerWidth); supplementLine != "" {
 		lines = append(lines, supplementLine)
 	}

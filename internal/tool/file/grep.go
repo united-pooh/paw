@@ -15,7 +15,8 @@ import (
 const defaultGrepMaxResults = 200
 
 type GrepTool struct {
-	Root string
+	Root      string
+	ReadRoots []string
 }
 
 type grepInput struct {
@@ -54,7 +55,7 @@ func (t *GrepTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 		return "", fmt.Errorf("pattern is required")
 	}
 
-	searchRoot, err := resolvePathWithinRoot(t.Root, in.Path)
+	searchRoot, _, err := resolvePathWithinRoots(t.Root, t.ReadRoots, in.Path)
 	if err != nil {
 		return "", err
 	}
@@ -142,7 +143,7 @@ func grepFile(ctx context.Context, workspaceRoot, path string, matcher lineMatch
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
-	relPath := relativePath(workspaceRoot, path)
+	relPath := displayPath(workspaceRoot, path)
 	matches := make([]string, 0, min(limit, 8))
 	lineNo := 0
 	for scanner.Scan() {

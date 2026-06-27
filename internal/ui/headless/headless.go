@@ -2,7 +2,7 @@ package headless
 
 import (
 	"fmt"
-	"gocode/internal/ui"
+	"codex-agent-go/internal/ui"
 	"io"
 	"strings"
 	"sync"

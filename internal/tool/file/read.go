@@ -8,7 +8,8 @@ import (
 )
 
 type ReadTool struct {
-	Root string
+	Root      string
+	ReadRoots []string
 }
 
 type readInput struct {
@@ -44,7 +45,7 @@ func (t *ReadTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 		return "", fmt.Errorf("file_path is required")
 	}
 
-	target, err := resolvePathWithinRoot(t.Root, in.FilePath)
+	target, _, err := resolvePathWithinRoots(t.Root, t.ReadRoots, in.FilePath)
 	if err != nil {
 		return "", err
 	}

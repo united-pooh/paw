@@ -2,9 +2,11 @@
 package bubble
 
 import (
+	"strings"
+
+	"codex-agent-go/internal/settings"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/lipgloss"
-	"gocode/internal/settings"
 )
 
 // View 根据当前状态渲染 header、聊天历史面板和输入面板。
@@ -95,9 +97,9 @@ func (m appModel) inputCursorTerminalPosition(inputPanel string) terminalCursorP
 	if m.completion != nil {
 		completionOffset = lipgloss.Height(m.renderCompletionBox())
 	}
-	row := minInt(completionOffset+1+m.inputEmbeddedTitleHeight()+visibleTextareaCursorRow(m.input), inputHeight-1)
+	row := minInt(completionOffset+1+m.inputEmbeddedTitleHeight()+m.visibleInputCursorRow(), inputHeight-1)
 	upFromBottom := maxInt(0, inputHeight-row-1)
-	column := 2 + visibleTextareaCursorColumn(m.input)
+	column := 2 + m.visibleInputCursorColumn()
 	if m.width > 0 {
 		column = minInt(column, maxInt(0, m.width-1))
 	}
@@ -111,6 +113,20 @@ func (m appModel) inputCursorTerminalPosition(inputPanel string) terminalCursorP
 // inputEmbeddedTitleHeight 返回输入框内部 title 区域的行高。
 func (m appModel) inputEmbeddedTitleHeight() int {
 	return 0
+}
+
+func (m appModel) visibleInputCursorRow() int {
+	if m.shouldRenderFoldedInput() {
+		return foldedInputCursorRow(m.input)
+	}
+	return visibleTextareaCursorRow(m.input)
+}
+
+func (m appModel) visibleInputCursorColumn() int {
+	if m.shouldRenderFoldedInput() {
+		return minInt(maxInt(0, m.input.LineInfo().CharOffset), maxInt(0, m.input.Width()-1))
+	}
+	return visibleTextareaCursorColumn(m.input)
 }
 
 // visibleTextareaCursorRow 返回 textarea 光标在当前可视输入区域中的行号。
@@ -128,7 +144,7 @@ func visibleTextareaCursorColumn(input textarea.Model) int {
 // renderInputBox 渲染普通输入、多行输入、终端输入和等待状态的输入面板。
 func (m appModel) renderInputBox() string {
 	width := m.leftPanelContentWidth(20)
-	content := m.input.View()
+	content := m.renderInputContent()
 	style := inputPanelFocusedStyle
 
 	if m.isTerminalInputActive() {
@@ -145,6 +161,52 @@ func (m appModel) renderInputBox() string {
 	}
 
 	return style.Width(width).Render(content)
+}
+
+func (m appModel) renderInputContent() string {
+	if m.shouldRenderFoldedInput() {
+		return renderFoldedInputContent(m.input)
+	}
+	return m.input.View()
+}
+
+func (m appModel) shouldRenderFoldedInput() bool {
+	return m.inputPasteFoldActive &&
+		inputPasteFoldable(m.input.Value()) &&
+		!inputCursorInPasteFoldHiddenRange(m.input)
+}
+
+func renderFoldedInputContent(input textarea.Model) string {
+	projected, _, ok := inputPasteFoldProjection(input.Value())
+	if !ok {
+		return input.View()
+	}
+	width := maxInt(1, input.Width())
+	height := maxInt(1, input.Height())
+	lines := make([]string, 0, height)
+	for _, line := range projected {
+		if len(lines) >= height {
+			break
+		}
+		lines = append(lines, padDisplayWidth(truncateDisplayWidth(line, width), width))
+	}
+	for len(lines) < height {
+		lines = append(lines, strings.Repeat(" ", width))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func foldedInputCursorRow(input textarea.Model) int {
+	start, end, ok := inputPasteFoldHiddenRange(input.Value())
+	if !ok {
+		return visibleTextareaCursorRow(input)
+	}
+	line := input.Line()
+	if line < start {
+		return minInt(maxInt(0, line), maxInt(0, input.Height()-1))
+	}
+	row := start + 1 + (line - end)
+	return minInt(maxInt(0, row), maxInt(0, input.Height()-1))
 }
 
 // renderTranscriptBox 渲染带边框的聊天历史滚动面板。

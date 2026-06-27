@@ -78,6 +78,24 @@ func NewCommandRegistry() *CommandRegistry {
 		},
 	})
 	registry.Register(Command{
+		Name:              "/streamma",
+		Description:       "run a prompt through StreamMA subagents",
+		ArgumentHint:      "<prompt>",
+		AllowWhileRunning: false,
+		Handler: func(m *appModel, invocation string) tea.Cmd {
+			return m.handleStreamMACommand(invocation)
+		},
+	})
+	registry.Register(Command{
+		Name:              "/streamma-trace",
+		Description:       "run StreamMA with live event trace",
+		ArgumentHint:      "<prompt>",
+		AllowWhileRunning: false,
+		Handler: func(m *appModel, invocation string) tea.Cmd {
+			return m.handleStreamMACommand(invocation)
+		},
+	})
+	registry.Register(Command{
 		Name:              "/tasks",
 		Description:       "show background subagent tasks",
 		AllowWhileRunning: true,
@@ -233,4 +251,29 @@ func commandToken(line string) string {
 		return line
 	}
 	return fields[0]
+}
+
+func (m *appModel) handleStreamMACommand(invocation string) tea.Cmd {
+	invocation = strings.TrimSpace(invocation)
+	task := strings.TrimSpace(strings.TrimPrefix(invocation, commandToken(invocation)))
+	if task == "" {
+		if commandToken(invocation) == "/streamma-trace" {
+			m.addEntry(transcriptEntry{
+				kind:  entrySystem,
+				title: "streamma-trace",
+				body:  "usage: /streamma-trace <prompt>\nRuns the same StreamMA DAG and prints live runtime events for step fanout inspection.",
+			})
+			return nil
+		}
+		m.addEntry(transcriptEntry{
+			kind:  entrySystem,
+			title: "streamma",
+			body:  "usage: /streamma <prompt>\nRuns an adaptive StreamMA DAG with real subagent workers and END_STEP step exchange.",
+		})
+		return nil
+	}
+	m.rememberInputHistory(invocation)
+	updated, cmd := m.startChatTurn(invocation)
+	*m = updated
+	return cmd
 }

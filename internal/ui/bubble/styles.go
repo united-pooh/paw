@@ -166,6 +166,7 @@ const (
 	cursorFrameInterval            = time.Second / 30
 	cursorCycleDuration            = 3 * time.Second
 	cursorHiddenThreshold          = 0.03
+	inputMinVisibleLines           = 2
 	inputMaxVisibleLines           = 10
 	contextMeterDefaultWidth       = 80
 	contextMeterMinimumBarCells    = 1

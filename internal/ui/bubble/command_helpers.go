@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
-	"gocode/internal/model"
-	"gocode/internal/settings"
-	"gocode/internal/subagent"
+	"codex-agent-go/internal/model"
+	"codex-agent-go/internal/settings"
+	"codex-agent-go/internal/subagent"
 	"os"
 	"path/filepath"
 	"strings"
@@ -265,9 +265,9 @@ func (m appModel) subagentTasks() []subagent.TaskSnapshot {
 
 func renderSubagentResult(result subagent.Result) string {
 	lines := []string{
-		fmt.Sprintf("%s · depth %d", resultDisplayName(result), result.Depth),
+		fmt.Sprintf("done · depth %d", result.Depth),
 	}
-	if result.AgentName != "" && result.AgentID != "" {
+	if result.AgentID != "" {
 		lines = append(lines, "id  "+result.AgentID)
 	}
 	if result.OutputPath != "" {

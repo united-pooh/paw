@@ -1,13 +1,14 @@
 package loop
 
 import (
+	"codex-agent-go/internal/message"
+	"codex-agent-go/internal/model"
+	"codex-agent-go/internal/tokentracer"
+	"codex-agent-go/internal/tool"
+	"codex-agent-go/internal/ui"
 	"context"
 	"encoding/json"
 	"fmt"
-	"gocode/internal/message"
-	"gocode/internal/model"
-	"gocode/internal/tool"
-	"gocode/internal/ui"
 	"html"
 	"os"
 	"path/filepath"
@@ -38,6 +39,16 @@ type historyExistenceStore interface {
 }
 
 // Runner 负责单轮工具闭环调度。
+// SubagentTokensProvider returns the cumulative token usage for all subagents
+// spawned by a given parent session.
+type SubagentTokensProvider interface {
+	TotalSubagentTokens(parentSessionID string) int
+}
+
+type modelUsageReceiver interface {
+	OnModelUsage(usage model.Usage)
+}
+
 type Runner struct {
 	mu        sync.RWMutex
 	model     ModelStreamer
@@ -47,15 +58,22 @@ type Runner struct {
 	sessionID string
 	workRoot  string // 工具使用的 workspace 根目录，用于解析相对文件路径
 	prompt    *PromptBuilder
-	// history 保存“已经成功完成”的多轮对话消息。
+	// history 保存”已经成功完成”的多轮对话消息。
 	// 当前调用路径是串行的，因此这里先不引入锁。
 	// TODO: 如果后续要把 Runner 暴露给并发调用方，需要为 history 增加互斥保护。
-	history           []message.Message
-	usage             model.Usage
-	usageKnown        bool
-	sessionUsage      model.Usage
-	sessionUsageKnown bool
-	supplements       []string
+	history                []message.Message
+	usage                  model.Usage
+	usageKnown             bool
+	sessionUsage           model.Usage
+	sessionUsageKnown      bool
+	supplements            []string
+	systemSupplement       string
+	compactToolPrompt      bool
+	streamMASubagents      StreamMASubagentRunner
+	subagentTokensProvider SubagentTokensProvider
+	tokenTracer            *tokentracer.Tracer
+	traceStageID           string
+	traceAgentID           string
 }
 
 type tokenUsageTotals struct {
@@ -138,6 +156,10 @@ func (runner *Runner) RunTurn(ctx context.Context, input string) (message.Messag
 		} else {
 			runner.setHistoryIfNil(messages)
 		}
+	}
+
+	if invocation, ok := parseStreamMAInvocation(input); ok {
+		return runner.runStreamMATurn(ctx, input, invocation)
 	}
 
 	// 每一轮都基于“已提交的历史副本”工作。
@@ -364,11 +386,17 @@ func (runner *Runner) ContextStats(limitTokens int, _ string) ContextStats {
 	runner.mu.RLock()
 	usage := runner.usage
 	usageKnown := runner.usageKnown
+	sessionID := runner.sessionID
+	provider := runner.subagentTokensProvider
 	runner.mu.RUnlock()
 
 	current := usageTotalsFromUsage(usage, usageKnown)
+	subagentTokens := 0
+	if provider != nil {
+		subagentTokens = provider.TotalSubagentTokens(sessionID)
+	}
 	return ContextStats{
-		UsedTokens:  current.used,
+		UsedTokens:  current.used + subagentTokens,
 		CacheTokens: current.cache,
 		LimitTokens: limitTokens,
 	}
@@ -466,12 +494,26 @@ func (runner *Runner) buildModelMessages(history []message.Message) []message.Me
 func (runner *Runner) buildSystemPrompt() string {
 	descriptions := []string{}
 	if runner.registry != nil {
-		descriptions = runner.registry.Describe()
+		runner.mu.RLock()
+		compactToolPrompt := runner.compactToolPrompt
+		runner.mu.RUnlock()
+		if compactToolPrompt {
+			descriptions = runner.registry.DescribeBrief()
+		} else {
+			descriptions = runner.registry.Describe()
+		}
 	}
 	if runner.prompt == nil {
 		runner.prompt = NewPromptBuilder(NewInstructionManager(""))
 	}
-	return runner.prompt.Build(descriptions)
+	prompt := runner.prompt.Build(descriptions)
+	runner.mu.RLock()
+	supplement := runner.systemSupplement
+	runner.mu.RUnlock()
+	if strings.TrimSpace(supplement) == "" {
+		return prompt
+	}
+	return strings.TrimRight(prompt, "\n") + "\n\nAdditional system instructions:\n" + strings.TrimSpace(supplement) + "\n"
 }
 
 func renderMessageForModel(msg message.Message) message.Message {
@@ -563,6 +605,18 @@ func (runner *Runner) recordUsageEvent(state *turnState, usage model.Usage) {
 	current := usageTotalsFromUsage(state.usage, true)
 	runner.setCurrentUsage(state.usage)
 	runner.addSessionUsage(current.delta(previous))
+	runner.emitModelUsage(state.usage)
+}
+
+func (runner *Runner) emitModelUsage(usage model.Usage) {
+	if runner == nil || runner.ui == nil {
+		return
+	}
+	receiver, ok := runner.ui.(modelUsageReceiver)
+	if !ok {
+		return
+	}
+	receiver.OnModelUsage(usage)
 }
 
 func (runner *Runner) setCurrentUsage(usage model.Usage) {

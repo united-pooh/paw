@@ -1,22 +1,23 @@
 package main
 
 import (
+	"codex-agent-go/internal/loop"
+	"codex-agent-go/internal/model"
+	"codex-agent-go/internal/session"
+	"codex-agent-go/internal/settings"
+	"codex-agent-go/internal/skill"
+	"codex-agent-go/internal/subagent"
+	"codex-agent-go/internal/tool"
+	toolexec "codex-agent-go/internal/tool/exec"
+	toolfile "codex-agent-go/internal/tool/file"
+	toolwebfetch "codex-agent-go/internal/tool/webfetch"
+	uiiface "codex-agent-go/internal/ui"
+	bubbleui "codex-agent-go/internal/ui/bubble"
+	"codex-agent-go/internal/ui/headless"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"gocode/internal/loop"
-	"gocode/internal/model"
-	"gocode/internal/session"
-	"gocode/internal/settings"
-	"gocode/internal/subagent"
-	"gocode/internal/tool"
-	toolexec "gocode/internal/tool/exec"
-	toolfile "gocode/internal/tool/file"
-	toolwebfetch "gocode/internal/tool/webfetch"
-	uiiface "gocode/internal/ui"
-	bubbleui "gocode/internal/ui/bubble"
-	"gocode/internal/ui/headless"
 	"io"
 	"log"
 	"os"
@@ -122,9 +123,11 @@ func runSubagentWorkerMode(ctx context.Context, input io.Reader, output io.Write
 	if err != nil {
 		result.Error = err.Error()
 		result.ExitCode = 1
+		result.UsedTokens = runner.ContextStats(1<<30, "").UsedTokens
 		return json.NewEncoder(output).Encode(result)
 	}
 	result.Content = strings.TrimSpace(msg.Content)
+	result.UsedTokens = runner.ContextStats(1<<30, "").UsedTokens
 	return json.NewEncoder(output).Encode(result)
 }
 
@@ -179,35 +182,74 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 	if err != nil {
 		return nil, "", nil, nil, nil, nil, fmt.Errorf("resolve executable: %w", err)
 	}
+	registry := tool.NewRegistry()
+	runner := loop.NewRunnerWithInstructionRoot(client, output, registry, store, sessionID, root)
 	subagentManager := subagent.NewManager(subagent.Config{
 		Model:        client,
 		Store:        store,
 		Root:         root,
 		Settings:     settingsController,
 		Notifier:     notifier,
+		Context:      runner,
 		Launcher:     subagent.NewProcessLauncher(executable, root),
 		Depth:        subCtx.depth,
 		MaxDepth:     subCtx.maxDepth,
 		ParentTaskID: subCtx.parentTaskID,
 	})
-	registry := buildToolRegistry(root, subagentManager, sessionID)
+	runner.SetStreamMASubagentRunner(streamMASubagentAdapter{
+		manager:         subagentManager,
+		parentSessionID: sessionID,
+	})
+	runner.SetSubagentTokensProvider(subagentManager)
+	registerTools(registry, root, subagentManager, sessionID)
 
-	return loop.NewRunnerWithInstructionRoot(client, output, registry, store, sessionID, root), sessionID, client, settingsController, subagentManager, store, nil
+	return runner, sessionID, client, settingsController, subagentManager, store, nil
 }
 
-func buildToolRegistry(root string, subagentManager *subagent.Manager, sessionID string) *tool.Registry {
-	registry := tool.NewRegistry()
+type streamMASubagentAdapter struct {
+	manager         *subagent.Manager
+	parentSessionID string
+}
+
+func (a streamMASubagentAdapter) StreamSubagent(ctx context.Context, req loop.StreamMASubagentRequest) (loop.StreamMASubagentStream, error) {
+	if a.manager == nil {
+		return loop.StreamMASubagentStream{}, fmt.Errorf("streamma subagent manager is nil")
+	}
+	stream, err := a.manager.Stream(ctx, subagent.Request{
+		SessionID:       req.SessionID,
+		ParentSessionID: a.parentSessionID,
+		Prompt:          req.Prompt,
+		SystemPrompt:    req.SystemPrompt,
+		Description:     req.Description,
+		ContextMode:     settings.ContextMode(req.ContextMode),
+		RunMode:         settings.RunModeSync,
+	})
+	if err != nil {
+		return loop.StreamMASubagentStream{}, err
+	}
+	return loop.StreamMASubagentStream{
+		Events:         stream.Events,
+		SessionID:      stream.SessionID,
+		TranscriptPath: stream.TranscriptPath,
+		OutputPath:     stream.OutputPath,
+	}, nil
+}
+
+func registerTools(registry *tool.Registry, root string, subagentManager *subagent.Manager, sessionID string) {
+	if registry == nil {
+		return
+	}
+	readRoots := skill.DefaultRoots(root)
 	registry.Register(&toolfile.LSTool{Root: root})
-	registry.Register(&toolfile.ReadTool{Root: root})
+	registry.Register(&toolfile.ReadTool{Root: root, ReadRoots: readRoots})
 	registry.Register(&toolfile.WriteTool{Root: root})
-	registry.Register(&toolfile.GrepTool{Root: root})
-	registry.Register(&toolfile.GlobTool{Root: root})
+	registry.Register(&toolfile.GrepTool{Root: root, ReadRoots: readRoots})
+	registry.Register(&toolfile.GlobTool{Root: root, ReadRoots: readRoots})
 	registry.Register(&toolexec.BashTool{Root: root})
 	registry.Register(&toolwebfetch.Tool{})
 	registry.Register(subagent.NewTool(subagentManager, sessionID))
 	registry.Register(subagent.NewStatusTool(subagentManager))
 	registry.Register(subagent.NewStopTool(subagentManager))
-	return registry
 }
 
 func resolveSessionID(ctx context.Context, store *session.JSONLStore, sessionIDFlag, cwd string) (string, error) {

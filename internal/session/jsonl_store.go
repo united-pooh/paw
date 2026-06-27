@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"gocode/internal/message"
+	"codex-agent-go/internal/message"
 	"os"
 	"path/filepath"
 	"sort"

@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"gocode/internal/model"
+	"codex-agent-go/internal/model"
 )
 
 type Registry struct {
@@ -67,6 +67,30 @@ func (r *Registry) Describe() []string {
 			description += " input_schema=" + schema
 		}
 		descriptions = append(descriptions, description)
+	}
+	return descriptions
+}
+
+func (r *Registry) DescribeBrief() []string {
+	if r == nil || len(r.tools) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(r.tools))
+	for name := range r.tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	descriptions := make([]string, 0, len(r.tools))
+	for _, name := range names {
+		tool := r.tools[name]
+		description := strings.TrimSpace(tool.Description())
+		if description == "" {
+			descriptions = append(descriptions, tool.Name())
+			continue
+		}
+		descriptions = append(descriptions, tool.Name()+": "+description)
 	}
 	return descriptions
 }

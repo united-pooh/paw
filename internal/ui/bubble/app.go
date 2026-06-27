@@ -39,9 +39,9 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 	input.ShowLineNumbers = false
 	input.EndOfBufferCharacter = ' '
 	input.CharLimit = 0
-	input.MaxHeight = inputMaxVisibleLines
+	input.MaxHeight = 0
 	input.SetWidth(72)
-	input.SetHeight(1)
+	input.SetHeight(inputMinVisibleLines)
 	input.KeyMap.InsertNewline = key.NewBinding(
 		key.WithKeys("ctrl+j", "alt+enter", "shift+enter"),
 		key.WithHelp("ctrl+j", "newline"),
@@ -112,9 +112,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case cursorFrameMsg:
 		m.cursorFrameAt = time.Time(msg)
+		m.spinnerFrameIdx++
 		m.applyCursorAnimation()
 		m.updateContextMeterAnimation()
-		if m.hasActiveTranscriptAnimation() {
+		if m.transcriptRefreshPending || m.hasActiveTranscriptAnimation() {
 			if m.viewport.AtBottom() {
 				m.refreshViewport()
 			} else {
@@ -152,6 +153,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			kind:  entrySystem,
 			title: title,
 			body:  strings.TrimSpace(msg.Body),
+			color: msg.Color,
 		})
 		return m, nil
 	case doneMsg:
@@ -193,16 +195,20 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.queryGuard.FinishModel()
 		m.turnStartedAt = time.Time{}
 		m.syncRunningFlags()
+		agentTitle := resultDisplayName(msg.result)
+		agentColor := strings.TrimSpace(msg.result.AgentColor)
 		if msg.err != nil {
 			m.addEntry(transcriptEntry{
 				kind:  entryError,
-				title: "subagent",
+				title: agentTitle,
+				color: agentColor,
 				body:  msg.err.Error(),
 			})
 		} else {
 			m.addEntry(transcriptEntry{
 				kind:  entrySystem,
-				title: "subagent",
+				title: agentTitle,
+				color: agentColor,
 				body:  renderSubagentResult(msg.result),
 			})
 		}
@@ -244,6 +250,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.completion.selectedIndex >= len(m.completion.filteredItems) {
 				m.completion.selectedIndex = 0
 			}
+			// 候选项加载完成后补全框高度变化，必须重新计算布局
+			m.relayout()
 		}
 		return m, nil
 	case pipelineStateUpdatedMsg:
@@ -326,6 +334,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input.SetValue("")
 			m.input.CursorEnd()
 			m.pending = nil
+			m.inputPasteFoldActive = false
 			m.clearCompletionAndRelayout()
 			m.syncInputMode()
 			m.relayout()
@@ -368,16 +377,20 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	if !m.isTerminalWorkRunning() {
 		var inputCmd tea.Cmd
+		beforeValue := m.input.Value()
+		m.input.SetHeight(inputMaxVisibleLines)
 		m.input, inputCmd = m.input.Update(msg)
-		if isTextEditingKey(msg) {
+		textChanged := beforeValue != m.input.Value()
+		if isTextEditingKey(msg) || textChanged {
 			m.resetHistoryNavigation()
 		}
+		m.syncInputPasteFoldState(msg, beforeValue, textChanged)
 		m.syncInputMode()
 		m.relayout()
 		cmds = append(cmds, inputCmd)
 
 		// 每次文本变化后同步补全状态
-		if isTextEditingKey(msg) {
+		if isTextEditingKey(msg) || textChanged {
 			// / 命令补全：整个输入以 / 开头时触发
 			m.syncCommandCompletion()
 			// @ 文件补全：词边界 @ 触发（只要 / 补全未激活）

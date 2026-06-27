@@ -16,12 +16,12 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"gocode/internal/loop"
-	"gocode/internal/message"
-	modelcfg "gocode/internal/model"
-	"gocode/internal/settings"
-	"gocode/internal/subagent"
-	"gocode/internal/ui"
+	"codex-agent-go/internal/loop"
+	"codex-agent-go/internal/message"
+	modelcfg "codex-agent-go/internal/model"
+	"codex-agent-go/internal/settings"
+	"codex-agent-go/internal/subagent"
+	"codex-agent-go/internal/ui"
 )
 
 // fakeRunner 记录测试中的提交输入，并模拟对话 runner。
@@ -295,12 +295,99 @@ func TestHelpComesFromCommandRegistry(t *testing.T) {
 		"/export [filename] - export the current conversation",
 		"/setting - open settings wizard",
 		"/subagent [--fork|--empty] [--background|--sync] <prompt> - launch a subagent",
+		"/streamma <prompt> - run a prompt through StreamMA subagents",
+		"/streamma-trace <prompt> - run StreamMA with live event trace",
 		"/tasks - show background subagent tasks",
 		"/exit (/quit, exit, quit) - quit the TUI",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("help body = %q, want %q", body, want)
 		}
+	}
+}
+
+func TestStreamMACommandStartsTurn(t *testing.T) {
+	runner := &fakeRunner{}
+	model := newTestModel(runner)
+	model.input.SetValue("/streamma design the runtime")
+
+	updatedModel, cmd := model.handleSubmit()
+	updated := updatedModel.(appModel)
+	if cmd == nil {
+		t.Fatalf("/streamma command returned nil cmd")
+	}
+	if !updated.running {
+		t.Fatalf("updated.running = false, want true")
+	}
+	last := updated.transcript[len(updated.transcript)-1]
+	if last.kind != entryUser || last.body != "/streamma design the runtime" {
+		t.Fatalf("last transcript entry = %#v", last)
+	}
+	msg := cmd()
+	if _, ok := msg.(turnFinishedMsg); !ok {
+		t.Fatalf("cmd() = %#v, want turnFinishedMsg", msg)
+	}
+	if len(runner.inputs) != 1 || runner.inputs[0] != "/streamma design the runtime" {
+		t.Fatalf("runner.inputs = %#v", runner.inputs)
+	}
+	if len(updated.inputHistory) != 1 || updated.inputHistory[0] != "/streamma design the runtime" {
+		t.Fatalf("inputHistory = %#v", updated.inputHistory)
+	}
+}
+
+func TestStreamMATraceCommandStartsTurn(t *testing.T) {
+	runner := &fakeRunner{}
+	model := newTestModel(runner)
+	model.input.SetValue("/streamma-trace design the runtime")
+
+	updatedModel, cmd := model.handleSubmit()
+	updated := updatedModel.(appModel)
+	if cmd == nil {
+		t.Fatalf("/streamma-trace command returned nil cmd")
+	}
+	msg := cmd()
+	if _, ok := msg.(turnFinishedMsg); !ok {
+		t.Fatalf("cmd() = %#v, want turnFinishedMsg", msg)
+	}
+	if len(runner.inputs) != 1 || runner.inputs[0] != "/streamma-trace design the runtime" {
+		t.Fatalf("runner.inputs = %#v", runner.inputs)
+	}
+	if len(updated.inputHistory) != 1 || updated.inputHistory[0] != "/streamma-trace design the runtime" {
+		t.Fatalf("inputHistory = %#v", updated.inputHistory)
+	}
+}
+
+func TestStreamMACommandWithoutPromptShowsUsage(t *testing.T) {
+	runner := &fakeRunner{}
+	model := newTestModel(runner)
+
+	handled, cmd := model.handleCommand("/streamma")
+	if !handled || cmd != nil {
+		t.Fatalf("/streamma handled/cmd = %v/%v, want handled with nil cmd", handled, cmd)
+	}
+	if len(runner.inputs) != 0 {
+		t.Fatalf("runner.inputs = %#v, want empty", runner.inputs)
+	}
+	last := model.transcript[len(model.transcript)-1]
+	if last.title != "streamma" || !strings.Contains(last.body, "usage: /streamma <prompt>") {
+		t.Fatalf("last transcript entry = %#v", last)
+	}
+}
+
+func TestStreamMATraceCommandWithoutPromptShowsUsage(t *testing.T) {
+	runner := &fakeRunner{}
+	model := newTestModel(runner)
+
+	handled, cmd := model.handleCommand("/streamma-trace")
+	if !handled || cmd != nil {
+		t.Fatalf("/streamma-trace handled/cmd = %v/%v, want handled with nil cmd", handled, cmd)
+	}
+	if len(runner.inputs) != 0 {
+		t.Fatalf("runner.inputs = %#v, want empty", runner.inputs)
+	}
+	last := model.transcript[len(model.transcript)-1]
+	if last.title != "streamma-trace" || !strings.Contains(last.body, "usage: /streamma-trace <prompt>") {
+		t.Fatalf("last transcript entry = %#v", last)
 	}
 }
 
@@ -758,6 +845,72 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 	}
 }
 
+func TestAssistantDeltaCoalescesTranscriptRefresh(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 20
+	model.relayout()
+	model.refreshViewport()
+	model.lastTranscriptRefreshAt = time.Now().Add(transcriptStreamingRefreshInterval)
+
+	next, _ := model.Update(assistantDeltaMsg("streamed text"))
+	model = next.(appModel)
+
+	if !model.transcriptRefreshPending {
+		t.Fatalf("transcriptRefreshPending = false, want true")
+	}
+	if got := model.transcript[len(model.transcript)-1].body; got != "streamed text" {
+		t.Fatalf("assistant body = %q, want streamed text", got)
+	}
+	if strings.Contains(model.viewport.View(), "streamed text") {
+		t.Fatalf("viewport refreshed immediately despite coalescing: %q", model.viewport.View())
+	}
+
+	next, _ = model.Update(cursorFrameMsg(time.Now().Add(transcriptStreamingRefreshInterval)))
+	model = next.(appModel)
+
+	if model.transcriptRefreshPending {
+		t.Fatalf("transcriptRefreshPending = true, want false after cursor frame")
+	}
+	if !strings.Contains(model.viewport.View(), "streamed text") {
+		t.Fatalf("viewport = %q, want streamed text after cursor frame", model.viewport.View())
+	}
+}
+
+func TestRenderTranscriptContentCachesUnchangedEntries(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.viewport.Width = 80
+	model.transcript = []transcriptEntry{
+		{kind: entryAssistant, title: "assistant", body: "first **bold**", version: 1},
+		{kind: entryAssistant, title: "assistant", body: "second", version: 1},
+	}
+
+	first := model.renderTranscriptContent()
+	if !strings.Contains(ansi.Strip(first), "first bold") || !strings.Contains(first, "second") {
+		t.Fatalf("first render = %q", first)
+	}
+	if len(model.transcriptRenderCache) != len(model.transcript) {
+		t.Fatalf("cache len = %d, want %d", len(model.transcriptRenderCache), len(model.transcript))
+	}
+	cachedFirst := model.transcriptRenderCache[0]
+	cachedSecond := model.transcriptRenderCache[1]
+
+	model.transcript[1].body = "second updated"
+	touchTranscriptEntry(&model.transcript[1])
+	second := model.renderTranscriptContent()
+
+	if !strings.Contains(second, "second updated") {
+		t.Fatalf("second render = %q, want updated body", second)
+	}
+	if model.transcriptRenderCache[0] != cachedFirst {
+		t.Fatalf("first cache entry changed for an untouched transcript entry")
+	}
+	if model.transcriptRenderCache[1].key == cachedSecond.key {
+		t.Fatalf("second cache key did not change after transcript entry mutation")
+	}
+}
+
 func TestAssistantCitationRendersAsBlockquoteUnderMessage(t *testing.T) {
 	entry := transcriptEntry{
 		kind:  entryAssistant,
@@ -1174,6 +1327,43 @@ func TestCtrlJInsertsNewlineAndEnterSubmitsMultiline(t *testing.T) {
 	}
 }
 
+func TestCtrlJSecondNewlineKeepsEarlierLinesVisible(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 100
+	model.height = 30
+	model.relayout()
+	model.input.SetValue("first")
+	model.input.CursorEnd()
+	model.relayout()
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	model = next.(appModel)
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("second")})
+	model = next.(appModel)
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	model = next.(appModel)
+
+	if got := model.input.Height(); got != 3 {
+		t.Fatalf("input height = %d, want 3", got)
+	}
+	if got := model.input.Value(); got != "first\nsecond\n" {
+		t.Fatalf("input value = %q", got)
+	}
+	if got := model.input.Line(); got != 2 {
+		t.Fatalf("cursor line = %d, want third logical line", got)
+	}
+	if got := visibleTextareaCursorRow(model.input); got != 2 {
+		t.Fatalf("visible cursor row = %d, want third rendered row", got)
+	}
+	rendered := ansi.Strip(model.renderInputBox())
+	first := strings.Index(rendered, "first")
+	second := strings.Index(rendered, "second")
+	if first < 0 || second < 0 || first > second {
+		t.Fatalf("input box should keep first and second lines in order:\n%s", rendered)
+	}
+}
+
 // TestInputHistorySkipsControlCommands 验证控制命令不会污染普通输入历史。
 func TestInputHistorySkipsControlCommands(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
@@ -1291,8 +1481,16 @@ func TestViewFillsTerminalHeightAndPinsInputToBottom(t *testing.T) {
 		t.Fatalf("rendered height = %d, want %d\n%s", got, model.height, rendered)
 	}
 	lines := strings.Split(ansi.Strip(rendered), "\n")
-	if len(lines) < 2 || !strings.Contains(lines[len(lines)-2], "bottom") {
-		t.Fatalf("last input content line = %q, want bottom", lines[maxInt(0, len(lines)-2)])
+	searchStart := maxInt(0, len(lines)-4)
+	bottomVisible := false
+	for _, line := range lines[searchStart:] {
+		if strings.Contains(line, "bottom") {
+			bottomVisible = true
+			break
+		}
+	}
+	if !bottomVisible {
+		t.Fatalf("bottom input not visible near frame bottom:\n%s", ansi.Strip(rendered))
 	}
 	lastLine := lines[len(lines)-1]
 	if strings.Count(lastLine, "╯") < 2 {
@@ -1471,7 +1669,7 @@ func TestSyncSubagentCompletionStartsQueuedTurn(t *testing.T) {
 		t.Fatalf("sync subagent completion should start queued turn")
 	}
 	last := model.transcript[len(model.transcript)-1]
-	if last.title != "subagent" || !strings.Contains(last.body, "agent-7 · depth 0") || !strings.Contains(last.body, "/tmp/agent-7.jsonl") {
+	if last.title != "agent-7" || !strings.Contains(last.body, "done · depth 0") || !strings.Contains(last.body, "/tmp/agent-7.jsonl") {
 		t.Fatalf("subagent transcript = %#v", last)
 	}
 
@@ -1506,8 +1704,9 @@ func TestViewAnchorsTerminalCursorOnInputCell(t *testing.T) {
 	if !position.active {
 		t.Fatalf("cursor position = %#v", position)
 	}
-	if position.upFromBottom != 1 {
-		t.Fatalf("upFromBottom = %d, want input content row", position.upFromBottom)
+	wantUpFromBottom := maxInt(0, lipgloss.Height(model.renderActiveInputPanel())-2)
+	if position.upFromBottom != wantUpFromBottom {
+		t.Fatalf("upFromBottom = %d, want input content row %d", position.upFromBottom, wantUpFromBottom)
 	}
 	if position.column <= 2 {
 		t.Fatalf("column = %d, want input cell position", position.column)
@@ -1536,8 +1735,9 @@ func TestViewAnchorsTerminalCursorWithLegacyInputTitle(t *testing.T) {
 	if !ok || !position.active {
 		t.Fatalf("anchor = %#v/%v, want active", position, ok)
 	}
-	if position.upFromBottom != 1 {
-		t.Fatalf("upFromBottom = %d, want input content row", position.upFromBottom)
+	wantUpFromBottom := maxInt(0, lipgloss.Height(model.renderActiveInputPanel())-2)
+	if position.upFromBottom != wantUpFromBottom {
+		t.Fatalf("upFromBottom = %d, want input content row %d", position.upFromBottom, wantUpFromBottom)
 	}
 }
 
@@ -2116,6 +2316,10 @@ func TestInputBoxExpandsForLongWrappedInput(t *testing.T) {
 	model.height = 40
 	model.relayout()
 
+	if got := model.input.Height(); got != inputMinVisibleLines {
+		t.Fatalf("empty input height = %d, want %d", got, inputMinVisibleLines)
+	}
+
 	singleLineHeight := lipgloss.Height(model.renderInputBox())
 	wrappedWidth := maxInt(1, model.input.Width())
 	model.input.SetValue(strings.Repeat("x", wrappedWidth*3+5))
@@ -2132,6 +2336,133 @@ func TestInputBoxExpandsForLongWrappedInput(t *testing.T) {
 	model.relayout()
 	if got := model.input.Height(); got != inputMaxVisibleLines {
 		t.Fatalf("input height = %d, want capped at %d", got, inputMaxVisibleLines)
+	}
+}
+
+func TestInputMaxVisibleLinesRemainsTen(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 120
+	model.height = 40
+	model.input.SetValue(strings.Join([]string{
+		"line 01", "line 02", "line 03", "line 04", "line 05",
+		"line 06", "line 07", "line 08", "line 09", "line 10",
+		"line 11", "line 12", "line 13", "line 14", "line 15",
+	}, "\n"))
+	model.relayout()
+
+	if inputMaxVisibleLines != 10 {
+		t.Fatalf("inputMaxVisibleLines = %d, want 10", inputMaxVisibleLines)
+	}
+	if got := model.input.Height(); got != 10 {
+		t.Fatalf("input height = %d, want 10", got)
+	}
+}
+
+func TestInputAllowsMoreLogicalLinesThanVisibleLimit(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 120
+	model.height = 40
+	model.relayout()
+
+	for i := 1; i <= inputMaxVisibleLines+3; i++ {
+		next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(fmt.Sprintf("line %02d", i))})
+		model = next.(appModel)
+		if i < inputMaxVisibleLines+3 {
+			next, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+			model = next.(appModel)
+		}
+	}
+
+	if got := model.input.LineCount(); got != inputMaxVisibleLines+3 {
+		t.Fatalf("line count = %d, want %d", got, inputMaxVisibleLines+3)
+	}
+	if got := model.input.Height(); got != inputMaxVisibleLines {
+		t.Fatalf("input height = %d, want capped at %d", got, inputMaxVisibleLines)
+	}
+	if !strings.Contains(model.input.Value(), "line 13") {
+		t.Fatalf("input value missing final logical line: %q", model.input.Value())
+	}
+}
+
+func TestLargePastedInputFoldsInInputBoxButSubmitsFullText(t *testing.T) {
+	runner := &fakeRunner{}
+	model := newTestModel(runner)
+	model.ready = true
+	model.width = 120
+	model.height = 40
+	model.relayout()
+	pasted := strings.Join([]string{
+		"line 01", "line 02", "line 03", "line 04",
+		"line 05", "line 06", "line 07", "line 08",
+	}, "\n")
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(pasted)})
+	model = next.(appModel)
+
+	if !model.inputPasteFoldActive {
+		t.Fatalf("inputPasteFoldActive = false, want true")
+	}
+	rendered := ansi.Strip(model.renderInputBox())
+	for _, want := range []string{"line 01", "line 03", "... 3 lines folded ...", "line 07", "line 08"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("folded input box missing %q:\n%s", want, rendered)
+		}
+	}
+	for _, hidden := range []string{"line 04", "line 05", "line 06"} {
+		if strings.Contains(rendered, hidden) {
+			t.Fatalf("folded input box should hide %q:\n%s", hidden, rendered)
+		}
+	}
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if cmd == nil {
+		t.Fatalf("enter after folded paste returned nil cmd")
+	}
+	_ = cmd()
+	if len(runner.inputs) != 1 || runner.inputs[0] != pasted {
+		t.Fatalf("runner.inputs = %#v, want full pasted text", runner.inputs)
+	}
+	if model.inputPasteFoldActive {
+		t.Fatalf("inputPasteFoldActive = true after submit, want false")
+	}
+}
+
+func TestFoldedPasteUnfoldsWhenCursorMovesIntoHiddenMiddle(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 120
+	model.height = 40
+	model.relayout()
+	pasted := strings.Join([]string{
+		"line 01", "line 02", "line 03", "line 04",
+		"line 05", "line 06", "line 07", "line 08",
+	}, "\n")
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(pasted)})
+	model = next.(appModel)
+	if !model.shouldRenderFoldedInput() {
+		t.Fatalf("folded input should render immediately after large paste")
+	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyUp})
+	model = next.(appModel)
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyUp})
+	model = next.(appModel)
+
+	if !model.inputPasteFoldActive {
+		t.Fatalf("inputPasteFoldActive = false, want state retained")
+	}
+	if model.shouldRenderFoldedInput() {
+		t.Fatalf("folded input should temporarily unfold when cursor is in hidden middle")
+	}
+	rendered := ansi.Strip(model.renderInputBox())
+	for _, want := range []string{"line 04", "line 05", "line 06"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("unfolded input box missing %q:\n%s", want, rendered)
+		}
 	}
 }
 
@@ -2210,19 +2541,16 @@ func TestContextCardCompactsStatusAndWorkCounts(t *testing.T) {
 
 	card := ansi.Strip(model.renderContextCardContent(48))
 	lines := strings.Split(card, "\n")
-	if len(lines) != 4 {
-		t.Fatalf("context card lines = %#v, want token/bar/status/work", lines)
+	if len(lines) != 3 {
+		t.Fatalf("context card lines = %#v, want token/bar/work", lines)
 	}
-	status := lines[2]
-	for _, want := range []string{"cache 5%", "free 75%", "turns 1"} {
-		if !strings.Contains(status, want) {
-			t.Fatalf("status line = %q, want %q", status, want)
+	topLine := lines[0]
+	for _, want := range []string{"cache 20%", "free(75%)"} {
+		if !strings.Contains(topLine, want) {
+			t.Fatalf("top line = %q, want %q", topLine, want)
 		}
 	}
-	if strings.Contains(status, "supplements") || strings.Contains(status, "queued") {
-		t.Fatalf("status line = %q, should keep work counts separate", status)
-	}
-	work := lines[3]
+	work := lines[2]
 	for _, want := range []string{"supplements 1", "queued 1"} {
 		if !strings.Contains(work, want) {
 			t.Fatalf("work line = %q, want %q", work, want)
@@ -2242,17 +2570,14 @@ func TestContextCardStatusStaysOneLineWhenNarrow(t *testing.T) {
 
 	card := ansi.Strip(model.renderContextCardContent(20))
 	lines := strings.Split(card, "\n")
-	if len(lines) != 3 {
-		t.Fatalf("context card lines = %#v, want compact token/bar/status only", lines)
+	if len(lines) != 2 {
+		t.Fatalf("context card lines = %#v, want token/bar only", lines)
 	}
-	status := lines[2]
-	for _, want := range []string{"c0%", "f100%", "t0"} {
-		if !strings.Contains(status, want) {
-			t.Fatalf("status line = %q, want %q", status, want)
+	topLine := lines[0]
+	for _, want := range []string{"cache 0%", "free(100%)"} {
+		if !strings.Contains(topLine, want) {
+			t.Fatalf("top line = %q, want %q", topLine, want)
 		}
-	}
-	if lipgloss.Width(status) > 20 {
-		t.Fatalf("status line width = %d, want <= 20: %q", lipgloss.Width(status), status)
 	}
 }
 

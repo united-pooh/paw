@@ -2,7 +2,7 @@ package headless
 
 import (
 	"bytes"
-	uiiface "gocode/internal/ui"
+	uiiface "codex-agent-go/internal/ui"
 	"testing"
 )
 

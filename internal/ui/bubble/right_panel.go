@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"gocode/internal/subagent"
+	"codex-agent-go/internal/subagent"
 )
 
 const (
@@ -251,6 +251,7 @@ func (m appModel) renderSubagentsCardContentHeight(width, height int) string {
 	dotDoneStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	dotFailStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 	dotStopStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	spinnerFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 	availableTaskRows := len(tasks)
 	moreCount := 0
@@ -274,8 +275,8 @@ func (m appModel) renderSubagentsCardContentHeight(width, height int) string {
 		lineStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("248"))
 		switch t.Status {
 		case subagent.TaskRunning:
-			dot = "⟳"
-			status = "running"
+			dot = spinnerFrames[m.spinnerFrameIdx%len(spinnerFrames)]
+			status = formatElapsedTime(time.Since(t.StartedAt))
 			dotStyle = dotRunStyle
 			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("84"))
 		case subagent.TaskFailed:
@@ -515,4 +516,21 @@ func padDisplayWidth(text string, width int) string {
 		return text
 	}
 	return text + strings.Repeat(" ", width-lipgloss.Width(text))
+}
+
+func formatElapsedTime(d time.Duration) string {
+	s := int(d.Seconds())
+	if s < 0 {
+		s = 0
+	}
+	if s < 60 {
+		return fmt.Sprintf("%ds", s)
+	}
+	h := s / 3600
+	m := (s % 3600) / 60
+	sec := s % 60
+	if h > 0 {
+		return fmt.Sprintf("%dh %dm %ds", h, m, sec)
+	}
+	return fmt.Sprintf("%dm %ds", m, sec)
 }

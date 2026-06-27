@@ -10,11 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"gocode/internal/message"
-	"gocode/internal/model"
-	"gocode/internal/session"
-	"gocode/internal/settings"
-	"gocode/internal/ui"
+	"codex-agent-go/internal/loop"
+	"codex-agent-go/internal/message"
+	"codex-agent-go/internal/model"
+	"codex-agent-go/internal/session"
+	"codex-agent-go/internal/settings"
+	"codex-agent-go/internal/ui"
 )
 
 type fakeRound struct {
@@ -101,6 +102,45 @@ func (m *recordingModel) callsSnapshot() [][]message.Message {
 	return out
 }
 
+type blockingStreamModel struct {
+	firstSent   chan struct{}
+	releaseDone chan struct{}
+}
+
+func newBlockingStreamModel() *blockingStreamModel {
+	return &blockingStreamModel{
+		firstSent:   make(chan struct{}),
+		releaseDone: make(chan struct{}),
+	}
+}
+
+func (m *blockingStreamModel) StreamMessage(ctx context.Context, _ []message.Message, _ []model.ToolDefinition) (<-chan model.StreamEvent, error) {
+	ch := make(chan model.StreamEvent)
+	go func() {
+		defer close(ch)
+		if !sendTestModelEvent(ctx, ch, model.StreamEvent{Delta: "early step\nEND_STEP\n"}) {
+			return
+		}
+		close(m.firstSent)
+		select {
+		case <-ctx.Done():
+			return
+		case <-m.releaseDone:
+		}
+		_ = sendTestModelEvent(ctx, ch, model.StreamEvent{Done: true})
+	}()
+	return ch, nil
+}
+
+func sendTestModelEvent(ctx context.Context, ch chan<- model.StreamEvent, ev model.StreamEvent) bool {
+	select {
+	case ch <- ev:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 type fakeSettingsProvider struct {
 	cfg settings.Config
 }
@@ -141,7 +181,39 @@ func (n *fakeNotifier) wait(t *testing.T) ui.SystemEvent {
 	}
 }
 
-func newTestManager(t *testing.T, modelStreamer *recordingModel, cfg settings.Config, notifier Notifier) (*Manager, *session.JSONLStore, string) {
+type fakeContextSink struct {
+	mu     sync.Mutex
+	inputs []string
+	ch     chan string
+}
+
+func newFakeContextSink() *fakeContextSink {
+	return &fakeContextSink{ch: make(chan string, 4)}
+}
+
+func (s *fakeContextSink) SubmitSupplement(input string) bool {
+	s.mu.Lock()
+	s.inputs = append(s.inputs, input)
+	s.mu.Unlock()
+	select {
+	case s.ch <- input:
+	default:
+	}
+	return true
+}
+
+func (s *fakeContextSink) wait(t *testing.T) string {
+	t.Helper()
+	select {
+	case input := <-s.ch:
+		return input
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for context supplement")
+		return ""
+	}
+}
+
+func newTestManager(t *testing.T, modelStreamer loop.ModelStreamer, cfg settings.Config, notifier Notifier) (*Manager, *session.JSONLStore, string) {
 	t.Helper()
 	root := t.TempDir()
 	store, err := session.NewJSONLStore(filepath.Join(root, ".ccagent"))
@@ -253,6 +325,137 @@ func TestRunEmptyContextStartsIndependentRootSession(t *testing.T) {
 	}
 	if got := messageContents(history); len(got) != 2 || got[0] != "child prompt" || got[1] != "child answer" {
 		t.Fatalf("resolved history = %#v", got)
+	}
+}
+
+func TestStreamEmitsDeltaBeforeModelDone(t *testing.T) {
+	modelStreamer := newBlockingStreamModel()
+	manager, _, _ := newTestManager(t, modelStreamer, settings.DefaultConfig(), nil)
+
+	stream, err := manager.Stream(context.Background(), Request{
+		Prompt:      "stream prompt",
+		ContextMode: settings.ContextModeEmpty,
+	})
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	select {
+	case <-modelStreamer.firstSent:
+	case <-time.After(time.Second):
+		t.Fatal("model did not send first delta")
+	}
+	select {
+	case ev := <-stream.Events:
+		if ev.Delta != "early step\nEND_STEP\n" || ev.Done {
+			t.Fatalf("first stream event = %#v", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Stream() did not emit delta before model Done")
+	}
+	if task, ok := manager.Status(stream.SessionID); !ok || task.Status != TaskRunning {
+		t.Fatalf("task status before Done = %#v/%v, want running", task, ok)
+	}
+
+	close(modelStreamer.releaseDone)
+	var sawDone bool
+	for ev := range stream.Events {
+		if ev.Err != nil {
+			t.Fatalf("stream error = %v", ev.Err)
+		}
+		if ev.Done {
+			sawDone = true
+		}
+	}
+	if !sawDone {
+		t.Fatal("stream did not emit Done")
+	}
+	completed := waitForTask(t, manager, stream.SessionID, TaskCompleted)
+	if completed.Content != "early step\nEND_STEP" {
+		t.Fatalf("completed content = %q", completed.Content)
+	}
+}
+
+func TestStreamReusesRequestedSessionAndDoesNotDuplicateBootstrapPrompt(t *testing.T) {
+	modelStreamer := &recordingModel{
+		rounds: []fakeRound{
+			{events: []model.StreamEvent{{Delta: "first step\nEND_STEP\n"}, {Done: true}}},
+			{events: []model.StreamEvent{{Delta: "second step\nEND_STEP\n"}, {Done: true}}},
+		},
+	}
+	manager, store, _ := newTestManager(t, modelStreamer, settings.DefaultConfig(), nil)
+	ctx := context.Background()
+	sessionID := "streamma-a-session"
+
+	first, err := manager.Stream(ctx, Request{
+		SessionID: sessionID,
+		Prompt:    "StreamMA logical agent bootstrap.\n\nOriginal problem:\nMake a thing.\n",
+		SystemPrompt: "streamma_agent_id=a\nstreamma_role=tester\n" +
+			"The final non-whitespace line of every assistant message must be exactly END_STEP.",
+		ContextMode: settings.ContextModeEmpty,
+	})
+	if err != nil {
+		t.Fatalf("first Stream() error = %v", err)
+	}
+	drainSubagentStream(t, first.Events)
+	waitForTask(t, manager, sessionID, TaskCompleted)
+
+	second, err := manager.Stream(ctx, Request{
+		SessionID:   sessionID,
+		Prompt:      "StreamMA incremental invocation.\n\nNew inbound step from planner:\nUse the existing ctx_a.\n",
+		ContextMode: settings.ContextModeEmpty,
+	})
+	if err != nil {
+		t.Fatalf("second Stream() error = %v", err)
+	}
+	if second.SessionID != sessionID {
+		t.Fatalf("second SessionID = %q, want %q", second.SessionID, sessionID)
+	}
+	drainSubagentStream(t, second.Events)
+	waitForTask(t, manager, sessionID, TaskCompleted)
+
+	history, err := store.LoadResolvedHistory(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("LoadResolvedHistory() error = %v", err)
+	}
+	if len(history) != 4 {
+		t.Fatalf("history len = %d, want 4 messages: %#v", len(history), history)
+	}
+	if !strings.Contains(history[0].Content, "Original problem:") {
+		t.Fatalf("first user prompt missing bootstrap problem: %#v", history[0])
+	}
+	if strings.Contains(history[2].Content, "Original problem:") {
+		t.Fatalf("second user prompt duplicated bootstrap problem: %#v", history[2])
+	}
+	if !strings.Contains(history[2].Content, "New inbound step from planner") {
+		t.Fatalf("second user prompt missing incremental inbound step: %#v", history[2])
+	}
+	combined := history[0].Content + "\n" + history[2].Content
+	if strings.Count(combined, "Original problem:") != 1 {
+		t.Fatalf("bootstrap problem appears %d times in user prompts", strings.Count(combined, "Original problem:"))
+	}
+	calls := modelStreamer.callsSnapshot()
+	if len(calls) == 0 || len(calls[0]) == 0 {
+		t.Fatalf("model calls = %#v, want first call with system prompt", calls)
+	}
+	system := calls[0][0]
+	if system.Role != message.RoleSystem || !strings.Contains(system.Content, "streamma_agent_id=a") || !strings.Contains(system.Content, "exactly END_STEP") {
+		t.Fatalf("first model system prompt = %#v, want StreamMA system supplement", system)
+	}
+	if strings.Contains(system.Content, "input_schema=") {
+		t.Fatalf("StreamMA system prompt should use compact tool descriptions, got: %q", system.Content)
+	}
+	if strings.Contains(history[0].Content, "streamma_agent_id=a") {
+		t.Fatalf("StreamMA system prompt leaked into user history: %#v", history[0])
+	}
+}
+
+func drainSubagentStream(t *testing.T, events <-chan model.StreamEvent) {
+	t.Helper()
+	for ev := range events {
+		if ev.Err != nil {
+			t.Fatalf("stream error = %v", ev.Err)
+		}
 	}
 }
 
@@ -443,6 +646,79 @@ func TestLaunchTracksStatusListAndNotification(t *testing.T) {
 	event := notifier.wait(t)
 	if event.Title != "subagent" || !strings.Contains(event.Body, "status=completed") || !strings.Contains(event.Body, "background answer") {
 		t.Fatalf("system event = %#v", event)
+	}
+}
+
+func TestBackgroundCompletionSubmitsParentContext(t *testing.T) {
+	longResult := strings.Repeat("x", parentContextResultMaxRunes+20)
+	modelStreamer := &recordingModel{
+		rounds: []fakeRound{
+			{events: []model.StreamEvent{{Delta: longResult}, {Done: true}}},
+		},
+	}
+	sink := newFakeContextSink()
+	manager, _, _ := newTestManager(t, modelStreamer, settings.DefaultConfig(), nil)
+	manager.contextSink = sink
+
+	task, err := manager.Launch(context.Background(), Request{
+		ParentSessionID: "parent-session",
+		Prompt:          "background prompt",
+		Description:     "collect context",
+	})
+	if err != nil {
+		t.Fatalf("Launch() error = %v", err)
+	}
+	completed := waitForTask(t, manager, task.ID, TaskCompleted)
+	if completed.Content != longResult {
+		t.Fatalf("completed.Content length = %d, want %d", len(completed.Content), len(longResult))
+	}
+
+	update := sink.wait(t)
+	for _, want := range []string{
+		"Background subagent completed.",
+		"id: " + task.ID,
+		"description: collect context",
+		"status: completed",
+		"result:",
+		"[truncated; full result: " + completed.OutputPath + "]",
+	} {
+		if !strings.Contains(update, want) {
+			t.Fatalf("context update = %q, want %q", update, want)
+		}
+	}
+	_, afterResult, ok := strings.Cut(update, "result:\n")
+	if !ok {
+		t.Fatalf("context update = %q, want result section", update)
+	}
+	resultSection, _, ok := strings.Cut(afterResult, "\n[truncated; full result:")
+	if !ok {
+		t.Fatalf("context update = %q, want truncated marker after result", update)
+	}
+	if len([]rune(resultSection)) != parentContextResultMaxRunes {
+		t.Fatalf("context result rune length = %d, want %d", len([]rune(resultSection)), parentContextResultMaxRunes)
+	}
+}
+
+func TestSyncCompletionDoesNotSubmitParentContext(t *testing.T) {
+	modelStreamer := &recordingModel{
+		rounds: []fakeRound{
+			{events: []model.StreamEvent{{Delta: "sync answer"}, {Done: true}}},
+		},
+	}
+	sink := newFakeContextSink()
+	manager, _, _ := newTestManager(t, modelStreamer, settings.DefaultConfig(), nil)
+	manager.contextSink = sink
+
+	if _, err := manager.Run(context.Background(), Request{
+		ParentSessionID: "parent-session",
+		Prompt:          "sync prompt",
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	select {
+	case update := <-sink.ch:
+		t.Fatalf("unexpected context update for sync task: %q", update)
+	default:
 	}
 }
 

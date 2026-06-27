@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"gocode/internal/message"
+	"codex-agent-go/internal/message"
 	"io"
 	"net/http"
 	"strings"
@@ -18,11 +18,23 @@ const (
 
 type anthropicMessagesRequest struct {
 	Model     string             `json:"model"`
-	System    string             `json:"system,omitempty"`
+	System    json.RawMessage    `json:"system,omitempty"`
 	Messages  []anthropicMessage `json:"messages"`
 	MaxTokens int                `json:"max_tokens"`
 	Stream    bool               `json:"stream"`
 	Tools     []anthropicTool    `json:"tools,omitempty"`
+}
+
+// anthropicSystemContent 带 cache_control 的 system prompt 内容块。
+type anthropicSystemContent struct {
+	Type         string                  `json:"type"`
+	Text         string                  `json:"text"`
+	CacheControl *anthropicCacheControl  `json:"cache_control,omitempty"`
+}
+
+// anthropicCacheControl Anthropic prompt cache 控制，type="ephemeral" 表示开启缓存。
+type anthropicCacheControl struct {
+	Type string `json:"type"`
 }
 
 // anthropicTool 是 Anthropic Messages API 的工具定义格式。
@@ -122,10 +134,21 @@ func buildAnthropicMessagesRequest(cfg Config, messages []message.Message, tools
 	}
 	req := anthropicMessagesRequest{
 		Model:     cfg.Model,
-		System:    strings.Join(systemParts, "\n\n"),
 		Messages:  apiMessages,
 		MaxTokens: anthropicDefaultMaxTokens,
 		Stream:    true,
+	}
+	// 将 system prompt 编码为带 cache_control 的结构体数组，启用 Anthropic prompt caching。
+	// 这样 Anthropic API 会在后续相同 system 的请求中命中缓存，cache_read_input_tokens 将反映真实缓存命中。
+	if systemText := strings.Join(systemParts, "\n\n"); systemText != "" {
+		systemBlocks := []anthropicSystemContent{{
+			Type:         "text",
+			Text:         systemText,
+			CacheControl: &anthropicCacheControl{Type: "ephemeral"},
+		}}
+		if encoded, err := json.Marshal(systemBlocks); err == nil {
+			req.System = encoded
+		}
 	}
 	for _, t := range tools {
 		req.Tools = append(req.Tools, anthropicTool{

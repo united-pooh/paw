@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>群鸟鼠标追踪</title>
+  <style>
+    /* ===== 全局样式：全屏深色背景 ===== */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      background: #0a0a12;
+      overflow: hidden;
+      font-family: 'Segoe UI', sans-serif;
+    }
+    canvas {
+      display: block;
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: radial-gradient(ellipse at center, #14142a 0%, #0a0a12 70%);
+      cursor: none;
+    }
+    /* 提示信息 - 短暂显示后淡出 */
+    #hint {
+      position: fixed;
+      bottom: 32px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255, 255, 255, 0.25);
+      font-size: 14px;
+      letter-spacing: 1px;
+      pointer-events: none;
+      user-select: none;
+      animation: fadeOut 4s ease-out forwards;
+    }
+    @keyframes fadeOut {
+      0%   { opacity: 1; }
+      60%  { opacity: 1; }
+      100% { opacity: 0; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="boidCanvas"></canvas>
+  <div id="hint">🕊️ 移动鼠标 — 鸟群将跟随您的光标</div>
+
+  <script>
+    // ============================================================
+    //  配置区 — 调整这些变量改变鸟群行为
+    // ============================================================
+
+    /** 鸟的数量（1 ~ 200） */
+    const BOID_COUNT = 60;
+
+    /** 最大飞行速度（像素/帧） */
+    const MAX_SPEED = 4.5;
+
+    /** 最大转向力（加速度幅值） */
+    const MAX_FORCE = 0.3;
+
+    /** 分离半径 — 低于此距离的相邻鸟会产生排斥力 */
+    const SEPARATION_DISTANCE = 28;
+
+    /** 感知半径 — 此范围内的邻居参与对齐和聚集 */
+    const PERCEPTION_RADIUS = 60;
+
+    /** 分离力权重 */
+    const WEIGHT_SEPARATION = 1.8;
+
+    /** 对齐力权重 */
+    const WEIGHT_ALIGNMENT = 1.0;
+
+    /** 聚集力权重 */
+    const WEIGHT_COHESION = 0.8;
+
+    /** 目标追踪力权重（鼠标吸引） */
+    const WEIGHT_SEEK = 0.6;
+
+    /** 到达减速半径 — 距离鼠标进入此范围时开始减速 */
+    const ARRIVAL_SLOW_RADIUS = 120;
+
+    /** 鸟绘制尺寸（三角形边长） */
+    const BOID_SIZE = 14;
+
+    // ============================================================
+    //  Canvas 初始化
+    // ============================================================
+
+    const canvas = document.getElementById('boidCanvas');
+    const ctx = canvas.getContext('2d');
+
+    /** 调整 Canvas 尺寸以匹配视口 */
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    // ============================================================
+    //  鼠标追踪
+    // ============================================================
+
+    /** 鼠标在 Canvas 坐标系中的位置 */
+    let mouseX = canvas.width / 2;
+    let mouseY = canvas.height / 2;
+
+    /** 鼠标是否在画布内 */
+    let mouseInside = false;
+
+    canvas.addEventListener('mousemove', (e) => {
+      mouseX = e.clientX;
+      mouseY = e.clientY;
+      mouseInside = true;
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+      mouseInside = false;
+    });
+
+    // ============================================================
+    //  向量工具 — 2D 向量运算（避免第三方依赖）
+    // ============================================================
+
+    class Vec2 {
+      constructor(x = 0, y = 0) {
+        this.x = x;
+        this.y = y;
+      }
+
+      add(v) { this.x += v.x; this.y += v.y; return this; }
+      sub(v) { this.x -= v.x; this.y -= v.y; return this; }
+      mult(n) { this.x *= n; this.y *= n; return this; }
+      div(n) { if (n !== 0) { this.x /= n; this.y /= n; } return this; }
+
+      mag() { return Math.sqrt(this.x * this.x + this.y * this.y); }
+      magSq() { return this.x * this.x + this.y * this.y; }
+
+      normalize() {
+        const m = this.mag();
+        if (m > 0) this.div(m);
+        return this;
+      }
+
+      limit(max) {
+        if (this.magSq() > max * max) {
+          this.normalize().mult(max);
+        }
+        return this;
+      }
+
+      clone() { return new Vec2(this.x, this.y); }
+
+      /** 两点之间的方向向量 */
+      static sub(a, b) { return new Vec2(a.x - b.x, a.y - b.y); }
+    }
+
+    // ============================================================
+    //  Boid（鸟）类 — 位置、速度、加速度、行为
+    // ============================================================
+
+    class Boid {
+      constructor() {
+        // 在画布范围内随机初始化
+        this.position = new Vec2(
+          Math.random() * canvas.width,
+          Math.random() * canvas.height
+        );
+        // 初始速度：随机方向，幅值在 1~MAX_SPEED 之间
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 1 + Math.random() * (MAX_SPEED - 1);
+        this.velocity = new Vec2(Math.cos(angle) * speed, Math.sin(angle) * speed);
+        this.acceleration = new Vec2(0, 0);
+      }
+
+      /**
+       * 应用一个力（修改加速度）
+       * @param {Vec2} force - 转向力向量
+       */
+      applyForce(force) {
+        this.acceleration.add(force);
+      }
+
+      /**
+       * 物理更新：加速度 → 速度 → 位置
+       * 每帧调用一次
+       */
+      update() {
+        // 加速度驱动速度
+        this.velocity.add(this.acceleration);
+        // 限制最大速度
+        this.velocity.limit(MAX_SPEED);
+        // 速度驱动位置
+        this.position.add(this.velocity);
+        // 每帧重置加速度
+        this.acceleration.mult(0);
+        // 边界环绕
+        this.wrapAround();
+      }
+
+      /**
+       * 边界环绕：鸟从一侧飞出后从对侧进入
+       */
+      wrapAround() {
+        const w = canvas.width;
+        const h = canvas.height;
+        if (this.position.x > w) this.position.x = 0;
+        if (this.position.x < 0) this.position.x = w;
+        if (this.position.y > h) this.position.y = 0;
+        if (this.position.y < 0) this.position.y = h;
+      }
+
+      /**
+       * 计算朝向角（弧度），用于渲染
+       * @returns {number} 速度方向的角度
+       */
+      getHeading() {
+        return Math.atan2(this.velocity.y, this.velocity.x);
+      }
+
+      // ---- 转向行为 ----
+
+      /**
+       * 向目标位置产生一个转向力
+       * @param {Vec2} target - 目标坐标
+       * @param {number} slowRadius - 到达减速半径（可选）
+       * @returns {Vec2} 转向力向量
+       */
+      seek(target, slowRadius = 0) {
+        const desired = Vec2.sub(target, this.position);
+        const distance = desired.mag();
+
+        // 如果没有到达减速或距离很远，全速前往
+        let speed = MAX_SPEED;
+        if (slowRadius > 0 && distance < slowRadius) {
+          // 距离越近，速度越慢（Arrival 行为）
+          speed = MAX_SPEED * (distance / slowRadius);
+          speed = Math.max(speed, 0.5); // 确保不会完全停止
+        }
+
+        desired.normalize().mult(speed);
+        const steer = Vec2.sub(desired, this.velocity);
+        steer.limit(MAX_FORCE);
+        return steer;
+      }
+
+      /**
+       * 分离：远离附近的其他鸟
+       * @param {Boid[]} boids - 所有鸟
+       * @returns {Vec2} 分离力
+       */
+      separate(boids) {
+        const steer = new Vec2(0, 0);
+        let count = 0;
+
+        for (const other of boids) {
+          if (other === this) continue;
+          const diff = Vec2.sub(this.position, other.position);
+          const d = diff.mag();
+
+          if (d > 0 && d < SEPARATION_DISTANCE) {
+            // 距离越近，排斥力越强（1/d 加权）
+            diff.normalize().div(d);
+            steer.add(diff);
+            count++;
+          }
+        }
+
+        if (count > 0) {
+          steer.div(count);
+          steer.normalize().mult(MAX_SPEED);
+          const force = Vec2.sub(steer, this.velocity);
+          force.limit(MAX_FORCE);
+          return force;
+        }
+        return steer;
+      }
+
+      /**
+       * 对齐：与附近邻居的平均方向对齐
+       * @param {Boid[]} boids - 所有鸟
+       * @returns {Vec2} 对齐力
+       */
+      align(boids) {
+        const avgVelocity = new Vec2(0, 0);
+        let count = 0;
+
+        for (const other of boids) {
+          if (other === this) continue;
+          const d = Vec2.sub(this.position, other.position).mag();
+          if (d > 0 && d < PERCEPTION_RADIUS) {
+            avgVelocity.add(other.velocity);
+            count++;
+          }
+        }
+
+        if (count > 0) {
+          avgVelocity.div(count);
+          avgVelocity.normalize().mult(MAX_SPEED);
+          const force = Vec2.sub(avgVelocity, this.velocity);
+          force.limit(MAX_FORCE);
+          return force;
+        }
+        return new Vec2(0, 0);
+      }
+
+      /**
+       * 聚集：向附近邻居的平均位置移动
+       * @param {Boid[]} boids - 所有鸟
+       * @returns {Vec2} 聚集力
+       */
+      cohesion(boids) {
+        const avgPosition = new Vec2(0, 0);
+        let count = 0;
+
+        for (const other of boids) {
+          if (other === this) continue;
+          const d = Vec2.sub(this.position, other.position).mag();
+          if (d > 0 && d < PERCEPTION_RADIUS) {
+            avgPosition.add(other.position);
+            count++;
+          }
+        }
+
+        if (count > 0) {
+          avgPosition.div(count);
+          // 使用 seek 飞向平均位置
+          return this.seek(avgPosition, 0);
+        }
+        return new Vec2(0, 0);
+      }
+
+      /**
+       * 综合群游（Flocking）行为：
+       * 计算分离 + 对齐 + 聚集 + 鼠标追踪四种力，加权求和
+       * @param {Boid[]} boids - 所有鸟
+       */
+      flock(boids) {
+        // 分离力
+        const sep = this.separate(boids);
+        sep.mult(WEIGHT_SEPARATION);
+        this.applyForce(sep);
+
+        // 对齐力
+        const ali = this.align(boids);
+        ali.mult(WEIGHT_ALIGNMENT);
+        this.applyForce(ali);
+
+        // 聚集力
+        const coh = this.cohesion(boids);
+        coh.mult(WEIGHT_COHESION);
+        this.applyForce(coh);
+
+        // 鼠标追踪（如果鼠标在画布内）
+        if (mouseInside) {
+          const seekForce = this.seek(
+            new Vec2(mouseX, mouseY),
+            ARRIVAL_SLOW_RADIUS
+          );
+          seekForce.mult(WEIGHT_SEEK);
+          this.applyForce(seekForce);
+        }
+      }
+    }
+
+    // ============================================================
+    //  初始化鸟群
+    // ============================================================
+
+    /** @type {Boid[]} */
+    const flock = [];
+    for (let i = 0; i < BOID_COUNT; i++) {
+      flock.push(new Boid());
+    }
+
+    // ============================================================
+    //  渲染 — 在 Canvas 上绘制每只鸟
+    // ============================================================
+
+    /**
+     * 绘制单只 Bird（三角形）
+     * 三角形尖端指向速度方向，颜色带有随机偏移
+     * @param {Boid} boid - 要绘制的鸟
+     * @param {number} index - 鸟的索引（用于颜色变化）
+     */
+    function drawBoid(boid, index) {
+      const x = boid.position.x;
+      const y = boid.position.y;
+      const angle = boid.getHeading();
+      const size = BOID_SIZE;
+
+      // 根据索引产生渐变色（蓝→紫→青）
+      const hue = 210 + (index / BOID_COUNT) * 60;
+      const fillColor = `hsla(${hue}, 80%, 70%, 0.9)`;
+      const strokeColor = `hsla(${hue}, 90%, 85%, 0.6)`;
+
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+
+      // 绘制三角形（尖端向前，底部平）
+      ctx.beginPath();
+      ctx.moveTo(size, 0);              // 尖端
+      ctx.lineTo(-size * 0.5, -size * 0.4); // 左下
+      ctx.lineTo(-size * 0.3, 0);            // 中后
+      ctx.lineTo(-size * 0.5, size * 0.4);  // 右下
+      ctx.closePath();
+
+      ctx.fillStyle = fillColor;
+      ctx.fill();
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      ctx.restore();
+
+      // ---- 可选：绘制连接线（让鸟群结构更明显） ----
+      // 仅对部分鸟绘制连接线以保持视觉干净
+      if (index % 3 === 0) {
+        for (let j = index + 1; j < flock.length; j++) {
+          const other = flock[j];
+          const d = Vec2.sub(boid.position, other.position).mag();
+          if (d < PERCEPTION_RADIUS && d > 0) {
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(other.position.x, other.position.y);
+            ctx.strokeStyle = `rgba(180, 180, 255, ${0.08 * (1 - d / PERCEPTION_RADIUS)})`;
+            ctx.lineWidth = 0.5;
+            ctx.stroke();
+          }
+        }
+      }
+    }
+
+    // ============================================================
+    //  动画主循环
+    // ============================================================
+
+    let frameCount = 0;
+    let lastFpsTime = performance.now();
+    let fps = 0;
+
+    function animate() {
+      // ---- FPS 统计（每 60 帧更新一次） ----
+      frameCount++;
+      if (frameCount % 60 === 0) {
+        const now = performance.now();
+        fps = Math.round(60000 / (now - lastFpsTime));
+        lastFpsTime = now;
+      }
+
+      // ---- 清空画布 ----
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // ---- 如果没有鼠标交互，鸟群在画布中心附近悠闲游荡 ----
+      // （引导注意力）
+      if (!mouseInside) {
+        const centerTarget = new Vec2(canvas.width / 2, canvas.height / 2);
+        // 添加小幅随机偏移，让鸟在中心区域自然游荡
+      }
+
+      // ---- 更新每只鸟 ----
+      for (let i = 0; i < flock.length; i++) {
+        flock[i].flock(flock);
+      }
+
+      // ---- 物理推进 ----
+      for (let i = 0; i < flock.length; i++) {
+        flock[i].update();
+      }
+
+      // ---- 绘制所有鸟 ----
+      for (let i = 0; i < flock.length; i++) {
+        drawBoid(flock[i], i);
+      }
+
+      // ---- 绘制 FPS（仅调试，可注释掉） ----
+      // ctx.fillStyle = 'rgba(255,255,255,0.3)';
+      // ctx.font = '12px monospace';
+      // ctx.fillText(`${fps} FPS · ${BOID_COUNT} boids`, 12, 24);
+
+      requestAnimationFrame(animate);
+    }
+
+    // ============================================================
+    //  启动动画
+    // ============================================================
+
+    animate();
+
+    console.log(`🐦 群鸟模拟已启动 — ${BOID_COUNT} 只鸟`);
+  </script>
+</body>
+</html>

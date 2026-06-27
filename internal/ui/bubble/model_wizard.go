@@ -4,7 +4,7 @@ package bubble
 import (
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
-	"gocode/internal/model"
+	"codex-agent-go/internal/model"
 	"os"
 	"strings"
 	"time"
