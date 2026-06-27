@@ -15,6 +15,7 @@ import (
 	"codex-agent-go/internal/model"
 	"codex-agent-go/internal/session"
 	"codex-agent-go/internal/settings"
+	"codex-agent-go/internal/tokentracer"
 	"codex-agent-go/internal/ui"
 )
 
@@ -61,6 +62,38 @@ func (p *blockingProcess) Wait() (WorkerResult, error) {
 
 func (p *blockingProcess) Stop() error {
 	p.once.Do(func() { close(p.done) })
+	return nil
+}
+
+type immediateLauncher struct {
+	result func(WorkerRequest) WorkerResult
+}
+
+func (l immediateLauncher) Start(ctx context.Context, req WorkerRequest) (Process, error) {
+	result := WorkerResult{
+		TaskID:    req.TaskID,
+		SessionID: req.SessionID,
+		ExitCode:  0,
+	}
+	if l.result != nil {
+		result = l.result(req)
+	}
+	return immediateProcess{result: result}, nil
+}
+
+type immediateProcess struct {
+	result WorkerResult
+}
+
+func (p immediateProcess) PID() int {
+	return 5150
+}
+
+func (p immediateProcess) Wait() (WorkerResult, error) {
+	return p.result, nil
+}
+
+func (p immediateProcess) Stop() error {
 	return nil
 }
 
@@ -328,6 +361,38 @@ func TestRunEmptyContextStartsIndependentRootSession(t *testing.T) {
 	}
 }
 
+func TestRunPersistsStructuredUsageFromInProcessWorker(t *testing.T) {
+	usage := model.Usage{PromptTokens: 80, CompletionTokens: 6, PromptCacheHitTokens: 30}
+	modelStreamer := &recordingModel{
+		rounds: []fakeRound{
+			{events: []model.StreamEvent{{Delta: "usage answer"}, {Usage: &usage}, {Done: true}}},
+		},
+	}
+	manager, _, _ := newTestManager(t, modelStreamer, settings.DefaultConfig(), nil)
+
+	result, err := manager.Run(context.Background(), Request{
+		SessionID:   "run-usage-session",
+		Prompt:      "run usage prompt",
+		ContextMode: settings.ContextModeEmpty,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	task, ok := manager.Status(result.SessionID)
+	if !ok {
+		t.Fatalf("Status(%q) not found", result.SessionID)
+	}
+	if task.Usage == nil {
+		t.Fatalf("completed task missing usage: %#v", task)
+	}
+	if task.Usage.Input != 50 || task.Usage.CacheRead != 30 || task.Usage.Output != 6 {
+		t.Fatalf("task usage = %#v, want normalized in-process worker usage", task.Usage)
+	}
+	if task.UsedTokens != 86 {
+		t.Fatalf("task UsedTokens = %d, want compatibility total 86", task.UsedTokens)
+	}
+}
+
 func TestStreamEmitsDeltaBeforeModelDone(t *testing.T) {
 	modelStreamer := newBlockingStreamModel()
 	manager, _, _ := newTestManager(t, modelStreamer, settings.DefaultConfig(), nil)
@@ -373,6 +438,60 @@ func TestStreamEmitsDeltaBeforeModelDone(t *testing.T) {
 	completed := waitForTask(t, manager, stream.SessionID, TaskCompleted)
 	if completed.Content != "early step\nEND_STEP" {
 		t.Fatalf("completed content = %q", completed.Content)
+	}
+}
+
+func TestStreamPersistsStructuredUsageFromModel(t *testing.T) {
+	usage := model.Usage{PromptTokens: 100, CompletionTokens: 5, PromptCacheHitTokens: 40}
+	modelStreamer := &recordingModel{
+		rounds: []fakeRound{
+			{events: []model.StreamEvent{{Delta: "usage answer"}, {Usage: &usage}, {Done: true}}},
+		},
+	}
+	manager, _, _ := newTestManager(t, modelStreamer, settings.DefaultConfig(), nil)
+
+	stream, err := manager.Stream(context.Background(), Request{
+		Prompt:      "stream usage prompt",
+		ContextMode: settings.ContextModeEmpty,
+	})
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	drainSubagentStream(t, stream.Events)
+	completed := waitForTask(t, manager, stream.SessionID, TaskCompleted)
+
+	if completed.Usage == nil {
+		t.Fatalf("completed task missing usage: %#v", completed)
+	}
+	if completed.Usage.Input != 60 || completed.Usage.CacheRead != 40 || completed.Usage.Output != 5 {
+		t.Fatalf("completed usage = %#v, want normalized model usage", completed.Usage)
+	}
+	if completed.UsedTokens != 105 {
+		t.Fatalf("completed UsedTokens = %d, want 105 compatibility total", completed.UsedTokens)
+	}
+}
+
+func TestStreamingUICapturesAndForwardsModelUsage(t *testing.T) {
+	events := make(chan model.StreamEvent, 1)
+	streamUI := &streamingUI{ctx: context.Background(), events: events}
+	usage := model.Usage{PromptTokens: 100, CompletionTokens: 7, PromptCacheHitTokens: 40}
+
+	streamUI.OnModelUsage(usage)
+
+	got := streamUI.Usage()
+	if got == nil {
+		t.Fatal("Usage() = nil, want captured structured usage")
+	}
+	if got.Input != 60 || got.CacheRead != 40 || got.Output != 7 {
+		t.Fatalf("Usage() = %#v, want normalized model usage", got)
+	}
+	select {
+	case ev := <-events:
+		if ev.Usage == nil || ev.Usage.PromptTokens != 100 || ev.Usage.CompletionTokens != 7 {
+			t.Fatalf("forwarded event = %#v, want original model usage", ev)
+		}
+	default:
+		t.Fatal("OnModelUsage did not forward usage event")
 	}
 }
 
@@ -646,6 +765,71 @@ func TestLaunchTracksStatusListAndNotification(t *testing.T) {
 	event := notifier.wait(t)
 	if event.Title != "subagent" || !strings.Contains(event.Body, "status=completed") || !strings.Contains(event.Body, "background answer") {
 		t.Fatalf("system event = %#v", event)
+	}
+}
+
+func TestWorkerResultUsagePersistsToTaskSnapshotAndTracerEvent(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".ccagent"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	usage := tokentracer.Usage{Input: 12, CacheRead: 5, CacheCreation: 2, Output: 3}.Normalized()
+	tracer := tokentracer.New("usage-test")
+	manager := NewManager(Config{
+		Store:    store,
+		Root:     root,
+		Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+		Launcher: immediateLauncher{result: func(req WorkerRequest) WorkerResult {
+			copied := usage
+			return WorkerResult{
+				TaskID:     req.TaskID,
+				SessionID:  req.SessionID,
+				Content:    "done with usage",
+				ExitCode:   0,
+				UsedTokens: 9999,
+				Usage:      &copied,
+			}
+		}},
+		Tracer: tracer,
+	})
+
+	if _, err := manager.Run(context.Background(), Request{
+		SessionID:   "usage-session",
+		Prompt:      "collect structured usage",
+		ContextMode: settings.ContextModeEmpty,
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	task, ok := manager.Status("usage-session")
+	if !ok {
+		t.Fatal("Status(usage-session) not found")
+	}
+	if task.UsedTokens != 9999 {
+		t.Fatalf("task UsedTokens = %d, want compatibility value 9999", task.UsedTokens)
+	}
+	if task.Usage == nil || task.Usage.Input != 12 || task.Usage.CacheRead != 5 || task.Usage.CacheCreation != 2 || task.Usage.Output != 3 {
+		t.Fatalf("task Usage = %#v, want structured usage", task.Usage)
+	}
+
+	var end tokentracer.Event
+	for _, event := range tracer.Snapshot().Events {
+		if event.Type == "subagent_task_end" {
+			end = event
+		}
+	}
+	if end.Type == "" {
+		t.Fatal("subagent_task_end event not recorded")
+	}
+	if got, ok := end.Data["used_tokens"].(int); !ok || got != 9999 {
+		t.Fatalf("event used_tokens = %#v, want 9999", end.Data["used_tokens"])
+	}
+	gotUsage, ok := end.Data["usage"].(tokentracer.Usage)
+	if !ok {
+		t.Fatalf("event usage = %#v, want tokentracer.Usage", end.Data["usage"])
+	}
+	if gotUsage.Input != 12 || gotUsage.CacheRead != 5 || gotUsage.CacheCreation != 2 || gotUsage.Output != 3 {
+		t.Fatalf("event usage = %#v, want structured usage", gotUsage)
 	}
 }
 

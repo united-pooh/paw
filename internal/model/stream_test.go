@@ -1,10 +1,10 @@
 package model
 
 import (
+	"codex-agent-go/internal/message"
 	"context"
 	"encoding/json"
 	"fmt"
-	"codex-agent-go/internal/message"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -160,6 +160,145 @@ func TestStreamMessageEmitsAnthropicToolCalls(t *testing.T) {
 	}
 }
 
+func TestStreamMessageEmitsAnthropicToolCallInputFromStartBlock(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = r.Body.Close() }()
+		if r.URL.Path != "/anthropic/v1/messages" {
+			t.Fatalf("path = %q, want /anthropic/v1/messages", r.URL.Path)
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "event: content_block_start\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_read\",\"name\":\"Read\",\"input\":{\"file_path\":\"go.mod\"}}}\n\n")
+		_, _ = fmt.Fprint(w, "event: content_block_stop\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"content_block_stop\"}\n\n")
+		_, _ = fmt.Fprint(w, "event: message_stop\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Provider:      ProviderDeepSeek,
+		APIBaseURL:    server.URL,
+		APIPath:       "/chat/completions",
+		APIKey:        "sk-test",
+		APIKeyEnvName: DeepSeekAPIKeyEnvName,
+		Model:         DeepSeekDefaultModel,
+		Timeout:       time.Minute,
+	})
+
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "read"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+
+	var calls []message.ToolCall
+	for ev := range events {
+		if ev.Err != nil {
+			t.Fatalf("stream error = %v", ev.Err)
+		}
+		calls = append(calls, ev.ToolCalls...)
+	}
+	if len(calls) != 1 || calls[0].ID != "call_read" || calls[0].Name != "Read" {
+		t.Fatalf("tool calls = %#v, want Read call", calls)
+	}
+	if string(calls[0].Input) != `{"file_path":"go.mod"}` {
+		t.Fatalf("tool call input = %s", calls[0].Input)
+	}
+}
+
+func TestStreamMessageEmitsAnthropicToolCallInputFromStringStartBlock(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = r.Body.Close() }()
+		if r.URL.Path != "/anthropic/v1/messages" {
+			t.Fatalf("path = %q, want /anthropic/v1/messages", r.URL.Path)
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "event: content_block_start\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_read\",\"name\":\"Read\",\"input\":\"{\\\"file_path\\\":\\\"go.mod\\\"}\"}}\n\n")
+		_, _ = fmt.Fprint(w, "event: content_block_stop\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"content_block_stop\"}\n\n")
+		_, _ = fmt.Fprint(w, "event: message_stop\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Provider:      ProviderDeepSeek,
+		APIBaseURL:    server.URL,
+		APIPath:       "/chat/completions",
+		APIKey:        "sk-test",
+		APIKeyEnvName: DeepSeekAPIKeyEnvName,
+		Model:         DeepSeekDefaultModel,
+		Timeout:       time.Minute,
+	})
+
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "read"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+
+	var calls []message.ToolCall
+	for ev := range events {
+		if ev.Err != nil {
+			t.Fatalf("stream error = %v", ev.Err)
+		}
+		calls = append(calls, ev.ToolCalls...)
+	}
+	if len(calls) != 1 || string(calls[0].Input) != `{"file_path":"go.mod"}` {
+		t.Fatalf("tool calls = %#v, want string start-block input normalized", calls)
+	}
+}
+
+func TestStreamMessageAnthropicToolCallDeltaOverridesStartBlockInput(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = r.Body.Close() }()
+		if r.URL.Path != "/anthropic/v1/messages" {
+			t.Fatalf("path = %q, want /anthropic/v1/messages", r.URL.Path)
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "event: content_block_start\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_read\",\"name\":\"Read\",\"input\":{\"file_path\":\"stale.go\"}}}\n\n")
+		_, _ = fmt.Fprint(w, "event: content_block_delta\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"file_path\\\":\"}}\n\n")
+		_, _ = fmt.Fprint(w, "event: content_block_delta\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"fresh.go\\\"}\"}}\n\n")
+		_, _ = fmt.Fprint(w, "event: content_block_stop\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"content_block_stop\"}\n\n")
+		_, _ = fmt.Fprint(w, "event: message_stop\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Provider:      ProviderDeepSeek,
+		APIBaseURL:    server.URL,
+		APIPath:       "/chat/completions",
+		APIKey:        "sk-test",
+		APIKeyEnvName: DeepSeekAPIKeyEnvName,
+		Model:         DeepSeekDefaultModel,
+		Timeout:       time.Minute,
+	})
+
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "read"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+
+	var calls []message.ToolCall
+	for ev := range events {
+		if ev.Err != nil {
+			t.Fatalf("stream error = %v", ev.Err)
+		}
+		calls = append(calls, ev.ToolCalls...)
+	}
+	if len(calls) != 1 || string(calls[0].Input) != `{"file_path":"fresh.go"}` {
+		t.Fatalf("tool calls = %#v, want delta input to override start-block input", calls)
+	}
+}
+
 func TestStreamMessageFallsBackToOpenAIAndParsesDeepSeekUsage(t *testing.T) {
 	anthropicChecked := false
 	openAIChecked := false
@@ -287,6 +426,72 @@ func TestStreamMessageEmitsOpenAIToolCalls(t *testing.T) {
 	}
 	if calls[1].ID != "call_ls" || calls[1].Name != "LS" || string(calls[1].Input) != `{}` {
 		t.Fatalf("second call = %#v", calls[1])
+	}
+}
+
+func TestStreamMessageSendsOpenAIToolsWithParametersSchema(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = r.Body.Close() }()
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("path = %q, want /chat/completions", r.URL.Path)
+		}
+
+		var raw map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		var tools []map[string]json.RawMessage
+		if err := json.Unmarshal(raw["tools"], &tools); err != nil {
+			t.Fatalf("decode tools: %v", err)
+		}
+		if len(tools) != 1 {
+			t.Fatalf("tools = %#v, want one tool", tools)
+		}
+		var fn map[string]json.RawMessage
+		if err := json.Unmarshal(tools[0]["function"], &fn); err != nil {
+			t.Fatalf("decode function: %v", err)
+		}
+		if _, exists := fn["input_schema"]; exists {
+			t.Fatalf("function contains input_schema, want OpenAI parameters: %s", tools[0]["function"])
+		}
+		if _, exists := fn["parameters"]; !exists {
+			t.Fatalf("function = %s, want parameters", tools[0]["function"])
+		}
+		var params map[string]json.RawMessage
+		if err := json.Unmarshal(fn["parameters"], &params); err != nil {
+			t.Fatalf("decode parameters: %v", err)
+		}
+		if string(params["required"]) != `["file_path"]` {
+			t.Fatalf("required = %s, want file_path", params["required"])
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Provider:      ProviderCustom,
+		APIBaseURL:    server.URL,
+		APIPath:       "/chat/completions",
+		APIKey:        "sk-test",
+		APIKeyEnvName: CustomAPIKeyEnvName,
+		Model:         CustomDefaultModel,
+		Timeout:       time.Minute,
+	})
+
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "inspect"}}, []ToolDefinition{{
+		Name:        "Read",
+		Description: "read a file",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}`),
+	}})
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+	for ev := range events {
+		if ev.Err != nil {
+			t.Fatalf("stream error = %v", ev.Err)
+		}
 	}
 }
 

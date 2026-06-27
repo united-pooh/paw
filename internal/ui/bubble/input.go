@@ -40,8 +40,12 @@ func (m appModel) handleSubmit() (tea.Model, tea.Cmd) {
 		return m.submitShellCommand(command)
 	}
 
-	if handled, cmd := m.handleCommand(line); handled {
-		return m, cmd
+	if rewritten, ok := m.rewriteSlashSkillInput(line); ok {
+		line = rewritten
+	} else {
+		if handled, cmd := m.handleCommand(line); handled {
+			return m, cmd
+		}
 	}
 
 	if m.isModelWorkRunning() {
@@ -54,6 +58,31 @@ func (m appModel) handleSubmit() (tea.Model, tea.Cmd) {
 
 	m.rememberInputHistory(line)
 	return m.startChatTurn(line)
+}
+
+func (m appModel) rewriteSlashSkillInput(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "/") {
+		return "", false
+	}
+	token := commandToken(trimmed)
+	if token == "" || token == "/" {
+		return "", false
+	}
+	if m.commandRegistry != nil {
+		if _, ok := m.commandRegistry.Lookup(token); ok {
+			return "", false
+		}
+	}
+	ref, ok := m.slashSkillReference(token)
+	if !ok {
+		return "", false
+	}
+	args := strings.TrimSpace(strings.TrimPrefix(trimmed, token))
+	if args == "" {
+		return ref, true
+	}
+	return ref + " " + args, true
 }
 
 func (m appModel) handleQueueSubmit() (tea.Model, tea.Cmd) {

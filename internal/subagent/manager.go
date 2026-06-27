@@ -6,6 +6,7 @@ import (
 	"codex-agent-go/internal/session"
 	"codex-agent-go/internal/settings"
 	"codex-agent-go/internal/skill"
+	"codex-agent-go/internal/tokentracer"
 	"codex-agent-go/internal/tool"
 	toolexec "codex-agent-go/internal/tool/exec"
 	toolfile "codex-agent-go/internal/tool/file"
@@ -47,6 +48,7 @@ type Config struct {
 	Notifier Notifier
 	Context  ContextSink
 	Launcher Launcher
+	Tracer   *tokentracer.Tracer
 
 	Depth        int
 	MaxDepth     int
@@ -61,6 +63,7 @@ type Manager struct {
 	notifier     Notifier
 	contextSink  ContextSink
 	launcher     Launcher
+	tracer       *tokentracer.Tracer
 	registry     taskRegistry
 	depth        int
 	maxDepth     int
@@ -139,6 +142,7 @@ type TaskSnapshot struct {
 	Content         string               `json:"content,omitempty"`
 	Error           string               `json:"error,omitempty"`
 	UsedTokens      int                  `json:"used_tokens,omitempty"`
+	Usage           *tokentracer.Usage   `json:"usage,omitempty"`
 }
 
 type sinkUI struct{}
@@ -154,6 +158,7 @@ func NewManager(cfg Config) *Manager {
 		notifier:     cfg.Notifier,
 		contextSink:  cfg.Context,
 		launcher:     cfg.Launcher,
+		tracer:       cfg.Tracer,
 		registry:     newTaskRegistry(cfg.Root),
 		depth:        cfg.Depth,
 		maxDepth:     cfg.MaxDepth,
@@ -168,6 +173,15 @@ func NewManager(cfg Config) *Manager {
 		m.launcher = newInProcessLauncher(m.runWorkerInProcess)
 	}
 	return m
+}
+
+func (m *Manager) SetTokenTracer(tracer *tokentracer.Tracer) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tracer = tracer
 }
 
 func (m *Manager) Run(ctx context.Context, req Request) (Result, error) {
@@ -518,6 +532,7 @@ func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Pro
 		_ = m.registry.saveTask(ctx, task)
 		return TaskSnapshot{}, nil, err
 	}
+	m.recordTaskStarted(task)
 	return task, process, nil
 }
 
@@ -564,19 +579,21 @@ func (m *Manager) startStreamingTask(ctx context.Context, req Request) (TaskSnap
 		return TaskSnapshot{}, err
 	}
 	m.setTask(task)
+	m.recordTaskStarted(task)
 	return task, nil
 }
 
 func (m *Manager) runStreamingTask(ctx context.Context, task TaskSnapshot, events chan<- model.StreamEvent) {
 	defer close(events)
 
-	content, usedTokens, done, err := m.runStreamingSession(ctx, task.SessionID, task.Prompt, task.SystemPrompt, events)
+	content, usedTokens, usage, done, err := m.runStreamingSession(ctx, task.SessionID, task.Prompt, task.SystemPrompt, events)
 	result := WorkerResult{
 		TaskID:     task.ID,
 		SessionID:  task.SessionID,
 		Content:    content,
 		ExitCode:   0,
 		UsedTokens: usedTokens,
+		Usage:      usage,
 	}
 	if err != nil {
 		result.Error = err.Error()
@@ -620,6 +637,12 @@ func (m *Manager) finishTask(ctx context.Context, taskID string, result WorkerRe
 	if result.UsedTokens > 0 {
 		task.UsedTokens = result.UsedTokens
 	}
+	if usage := normalizedUsage(result.Usage); usage != nil {
+		task.Usage = usage
+		if task.UsedTokens == 0 {
+			task.UsedTokens = usageTokenTotal(*usage)
+		}
+	}
 	if err != nil || result.Error != "" {
 		task.Status = TaskFailed
 		task.Error = strings.TrimSpace(result.Error)
@@ -636,6 +659,7 @@ func (m *Manager) finishTask(ctx context.Context, taskID string, result WorkerRe
 	_ = m.registry.saveOutput(ctx, taskID, result)
 	_ = m.registry.saveTask(ctx, task)
 	m.submitTaskContext(task)
+	m.recordTaskFinished(task)
 	return task
 }
 
@@ -723,16 +747,19 @@ func (m *Manager) ensureSessionExists(ctx context.Context, sessionID string) err
 	return nil
 }
 
-func (m *Manager) runSession(ctx context.Context, sessionID, prompt string) (string, error) {
-	runner := loop.NewRunnerWithInstructionRoot(m.model, sinkUI{}, newBaseToolRegistry(m.root), m.store, sessionID, m.root)
+func (m *Manager) runSession(ctx context.Context, sessionID, prompt string) (string, int, *tokentracer.Usage, error) {
+	usageUI := &usageSinkUI{}
+	runner := loop.NewRunnerWithInstructionRoot(m.model, usageUI, newBaseToolRegistry(m.root), m.store, sessionID, m.root)
 	msg, err := runner.RunTurn(ctx, prompt)
+	usedTokens := runner.ContextStats(1<<30, "").UsedTokens
+	usage := usageUI.Usage()
 	if err != nil {
-		return "", err
+		return "", usedTokens, usage, err
 	}
-	return strings.TrimSpace(msg.Content), nil
+	return strings.TrimSpace(msg.Content), usedTokens, usage, nil
 }
 
-func (m *Manager) runStreamingSession(ctx context.Context, sessionID, prompt, systemPrompt string, events chan<- model.StreamEvent) (string, int, bool, error) {
+func (m *Manager) runStreamingSession(ctx context.Context, sessionID, prompt, systemPrompt string, events chan<- model.StreamEvent) (string, int, *tokentracer.Usage, bool, error) {
 	streamUI := &streamingUI{ctx: ctx, events: events}
 	runner := loop.NewRunnerWithInstructionRoot(m.model, streamUI, newBaseToolRegistry(m.root), m.store, sessionID, m.root)
 	runner.SetSystemSupplement(systemPrompt)
@@ -741,11 +768,12 @@ func (m *Manager) runStreamingSession(ctx context.Context, sessionID, prompt, sy
 	}
 	msg, err := runner.RunTurn(ctx, prompt)
 	usedTokens := runner.ContextStats(1<<30, "").UsedTokens
+	usage := streamUI.Usage()
 	done := streamUI.Done()
 	if err != nil {
-		return streamUI.Content(), usedTokens, done, err
+		return streamUI.Content(), usedTokens, usage, done, err
 	}
-	return strings.TrimSpace(msg.Content), usedTokens, done, nil
+	return strings.TrimSpace(msg.Content), usedTokens, usage, done, nil
 }
 
 func isStreamMASystemPrompt(systemPrompt string) bool {
@@ -753,12 +781,14 @@ func isStreamMASystemPrompt(systemPrompt string) bool {
 }
 
 func (m *Manager) runWorkerInProcess(ctx context.Context, req WorkerRequest) (WorkerResult, error) {
-	content, err := m.runSession(ctx, req.SessionID, req.Prompt)
+	content, usedTokens, usage, err := m.runSession(ctx, req.SessionID, req.Prompt)
 	result := WorkerResult{
-		TaskID:    req.TaskID,
-		SessionID: req.SessionID,
-		Content:   content,
-		ExitCode:  0,
+		TaskID:     req.TaskID,
+		SessionID:  req.SessionID,
+		Content:    content,
+		ExitCode:   0,
+		UsedTokens: usedTokens,
+		Usage:      usage,
 	}
 	if err != nil {
 		result.Error = err.Error()
@@ -772,6 +802,78 @@ func (m *Manager) setTask(task TaskSnapshot) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.tasks[task.ID] = task
+}
+
+func (m *Manager) currentTokenTracer() *tokentracer.Tracer {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.tracer
+}
+
+func (m *Manager) recordTaskStarted(task TaskSnapshot) {
+	tracer := m.currentTokenTracer()
+	if tracer == nil {
+		return
+	}
+	tracer.RecordEvent("subagent_task_start", map[string]any{
+		"task_id":           task.ID,
+		"name":              task.Name,
+		"session_id":        task.SessionID,
+		"parent_session_id": task.ParentSessionID,
+		"description":       task.Description,
+		"context_mode":      task.ContextMode,
+		"run_mode":          task.RunMode,
+		"pid":               task.PID,
+		"depth":             task.Depth,
+		"started_at":        task.StartedAt.Format(time.RFC3339Nano),
+	})
+}
+
+func (m *Manager) recordTaskFinished(task TaskSnapshot) {
+	tracer := m.currentTokenTracer()
+	if tracer == nil {
+		return
+	}
+	data := map[string]any{
+		"task_id":           task.ID,
+		"name":              task.Name,
+		"session_id":        task.SessionID,
+		"parent_session_id": task.ParentSessionID,
+		"description":       task.Description,
+		"status":            task.Status,
+		"run_mode":          task.RunMode,
+		"used_tokens":       task.UsedTokens,
+		"exit_code":         task.ExitCode,
+	}
+	if task.FinishedAt != nil {
+		data["finished_at"] = task.FinishedAt.Format(time.RFC3339Nano)
+	}
+	if task.Error != "" {
+		data["error"] = task.Error
+	}
+	if usage := normalizedUsage(task.Usage); usage != nil {
+		data["usage"] = *usage
+	}
+	tracer.RecordEvent("subagent_task_end", data)
+}
+
+func normalizedUsage(usage *tokentracer.Usage) *tokentracer.Usage {
+	if usage == nil {
+		return nil
+	}
+	normalized := usage.Normalized()
+	if normalized.Empty() {
+		return nil
+	}
+	return &normalized
+}
+
+func usageTokenTotal(usage tokentracer.Usage) int {
+	usage = usage.Normalized()
+	return usage.Input + usage.CacheRead + usage.CacheCreation + usage.Output
 }
 
 func (m *Manager) notifyTaskFinished(task TaskSnapshot) {
@@ -872,7 +974,7 @@ func resultFromTask(task TaskSnapshot) Result {
 func newBaseToolRegistry(root string) *tool.Registry {
 	registry := tool.NewRegistry()
 	readRoots := skill.DefaultRoots(root)
-	registry.Register(&toolfile.LSTool{Root: root})
+	registry.Register(&toolfile.LSTool{Root: root, ReadRoots: readRoots})
 	registry.Register(&toolfile.ReadTool{Root: root, ReadRoots: readRoots})
 	registry.Register(&toolfile.WriteTool{Root: root})
 	registry.Register(&toolfile.GrepTool{Root: root, ReadRoots: readRoots})
@@ -921,6 +1023,14 @@ type streamingUI struct {
 	mu      sync.RWMutex
 	done    bool
 	content strings.Builder
+	usage   *tokentracer.Usage
+}
+
+type usageSinkUI struct {
+	sinkUI
+
+	mu    sync.RWMutex
+	usage *tokentracer.Usage
 }
 
 func (u *streamingUI) OnAssistantDelta(text string) error {
@@ -950,6 +1060,12 @@ func (u *streamingUI) OnDone() error {
 
 func (u *streamingUI) OnModelUsage(usage model.Usage) {
 	copied := usage
+	structured := tokentracer.UsageFromModelUsage(usage)
+	if !structured.Empty() {
+		u.mu.Lock()
+		u.usage = &structured
+		u.mu.Unlock()
+	}
 	_ = sendModelStreamEvent(u.ctx, u.events, model.StreamEvent{Usage: &copied})
 }
 
@@ -963,6 +1079,36 @@ func (u *streamingUI) Content() string {
 	u.mu.RLock()
 	defer u.mu.RUnlock()
 	return strings.TrimSpace(u.content.String())
+}
+
+func (u *streamingUI) Usage() *tokentracer.Usage {
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	if u.usage == nil {
+		return nil
+	}
+	copied := *u.usage
+	return &copied
+}
+
+func (u *usageSinkUI) OnModelUsage(usage model.Usage) {
+	structured := tokentracer.UsageFromModelUsage(usage)
+	if structured.Empty() {
+		return
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.usage = &structured
+}
+
+func (u *usageSinkUI) Usage() *tokentracer.Usage {
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	if u.usage == nil {
+		return nil
+	}
+	copied := *u.usage
+	return &copied
 }
 
 func sendModelStreamEvent(ctx context.Context, events chan<- model.StreamEvent, event model.StreamEvent) error {

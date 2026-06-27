@@ -21,16 +21,16 @@ func TestBashToolRunsCommandInWorkspace(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 
-	if got := strings.TrimSpace(output); got != root {
-		t.Fatalf("output = %q, want %q", got, root)
+	if got, want := canonicalPathForTest(t, strings.TrimSpace(output)), canonicalPathForTest(t, root); got != want {
+		t.Fatalf("output = %q, want %q", got, want)
 	}
 
 	output, err = tool.Run(context.Background(), []byte(`{"command":"pwd","cwd":"subdir"}`))
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if got := strings.TrimSpace(output); got != subdir {
-		t.Fatalf("output = %q, want %q", got, subdir)
+	if got, want := canonicalPathForTest(t, strings.TrimSpace(output)), canonicalPathForTest(t, subdir); got != want {
+		t.Fatalf("output = %q, want %q", got, want)
 	}
 }
 
@@ -41,6 +41,32 @@ func TestBashToolRejectsWorkingDirOutsideRoot(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "escapes workspace root") {
 		t.Fatalf("Run() error = %v, want workspace escape error", err)
 	}
+}
+
+func TestBashToolAcceptsAbsoluteWorkingDirInsideRoot(t *testing.T) {
+	root := t.TempDir()
+	subdir := filepath.Join(root, "subdir")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	tool := &BashTool{Root: root}
+	output, err := tool.Run(context.Background(), []byte(`{"command":"pwd","cwd":"`+subdir+`"}`))
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got, want := canonicalPathForTest(t, strings.TrimSpace(output)), canonicalPathForTest(t, subdir); got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
+func canonicalPathForTest(t *testing.T, path string) string {
+	t.Helper()
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return canonical
 }
 
 func TestBashToolTimesOut(t *testing.T) {

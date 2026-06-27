@@ -4,7 +4,9 @@ import (
 	"codex-agent-go/internal/message"
 	"codex-agent-go/internal/model"
 	"codex-agent-go/internal/session"
+	"codex-agent-go/internal/skill"
 	"codex-agent-go/internal/streamma"
+	"codex-agent-go/internal/tokentracer"
 	"codex-agent-go/internal/tool"
 	"codex-agent-go/internal/ui"
 	"context"
@@ -120,6 +122,19 @@ func promptTextForTest(messages []message.Message) string {
 		builder.WriteByte('\n')
 	}
 	return builder.String()
+}
+
+func writeLoopTestSkill(t *testing.T, root, name, body string) string {
+	t.Helper()
+	dir := filepath.Join(root, name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, skill.SkillFileName)
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 type fakeStreamMASubagentRunner struct {
@@ -355,6 +370,97 @@ func TestRunTurnStreamsAndReturnsFinalMessage(t *testing.T) {
 	}
 }
 
+func TestRunTurnRecordsTokenTracerUsage(t *testing.T) {
+	usage := model.Usage{
+		PromptTokens:     100,
+		CompletionTokens: 5,
+		PromptTokensDetails: model.TokenDetails{
+			CachedTokens: 20,
+		},
+	}
+	streamer := &fakeModel{rounds: []fakeRound{{
+		events: []model.StreamEvent{
+			{Usage: &usage},
+			{Delta: "hello"},
+			{Done: true},
+		},
+	}}}
+	runner := NewRunner(streamer, &fakeUI{}, tool.NewRegistry(), &fakeStore{}, "trace-session")
+	tracer := tokentracer.New("test")
+	runner.SetTokenTracer(tracer)
+
+	if _, err := runner.RunTurn(context.Background(), "hello"); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	snapshot := tracer.Snapshot()
+	if snapshot.Pipeline.Calls != 1 {
+		t.Fatalf("pipeline calls = %d, want 1", snapshot.Pipeline.Calls)
+	}
+	total := snapshot.Pipeline.Total
+	if total.Input != 80 || total.CacheRead != 20 || total.Output != 5 || total.TotalContext != 100 {
+		t.Fatalf("pipeline total = %#v, want input=80 cache=20 output=5 total_context=100", total)
+	}
+	if len(snapshot.Pipeline.Stages) != 1 || snapshot.Pipeline.Stages[0].Status != "completed" {
+		t.Fatalf("stages = %#v, want one completed stage", snapshot.Pipeline.Stages)
+	}
+	if !tokenTracerEventsContain(snapshot.Events, "api_call") || !tokenTracerEventsContain(snapshot.Events, "assistant_delta") {
+		t.Fatalf("events = %#v, want api_call and assistant_delta", snapshot.Events)
+	}
+}
+
+func TestRunTurnInjectsMentionedSkillContextForOneTurn(t *testing.T) {
+	root := t.TempDir()
+	writeLoopTestSkill(t, root, "design", `---
+description: Design discipline
+---
+Design body line.`)
+	ui := &fakeUI{}
+	model := &fakeModel{
+		rounds: []fakeRound{
+			{events: []model.StreamEvent{{Delta: "first"}, {Done: true}}},
+			{events: []model.StreamEvent{{Delta: "second"}, {Done: true}}},
+		},
+	}
+	runner := NewRunner(model, ui, tool.NewRegistry(), nil, "")
+	runner.SetSkillRegistry(skill.NewRegistry([]string{root}))
+
+	if _, err := runner.RunTurn(context.Background(), "use $design"); err != nil {
+		t.Fatalf("RunTurn(skill) error = %v", err)
+	}
+	if _, err := runner.RunTurn(context.Background(), "plain follow-up"); err != nil {
+		t.Fatalf("RunTurn(follow-up) error = %v", err)
+	}
+	if got := promptTextForTest(model.calls[0]); !strings.Contains(got, "Selected skill instructions") || !strings.Contains(got, "Design body line.") {
+		t.Fatalf("first prompt = %q, want skill context", got)
+	}
+	if got := promptTextForTest(model.calls[1]); strings.Contains(got, "Design body line.") {
+		t.Fatalf("second prompt = %q, should not carry skill context", got)
+	}
+}
+
+func TestRunTurnStreamMAWorkersReceiveSkillContext(t *testing.T) {
+	root := t.TempDir()
+	writeLoopTestSkill(t, root, "design", "# Design\nStreamMA skill body.")
+	output := &fakeUI{}
+	subagents := &fakeStreamMASubagentRunner{}
+	store := &fakeStore{}
+	runner := NewRunner(&fakeModel{}, output, tool.NewRegistry(), store, "streamma-skill-session")
+	runner.SetSkillRegistry(skill.NewRegistry([]string{root}))
+	runner.SetStreamMASubagentRunner(subagents)
+
+	if _, err := runner.RunTurn(context.Background(), "/streamma explain $design"); err != nil {
+		t.Fatalf("RunTurn(streamma skill) error = %v", err)
+	}
+	requests := subagents.Requests()
+	if len(requests) == 0 {
+		t.Fatalf("requests = nil, want StreamMA subagent requests")
+	}
+	if !strings.Contains(requests[0].SystemPrompt, "StreamMA skill body.") {
+		t.Fatalf("first StreamMA system prompt = %q, want skill context", requests[0].SystemPrompt)
+	}
+}
+
 func TestRunTurnStreamMACommandUsesRuntime(t *testing.T) {
 	output := &fakeUI{}
 	streamer := &fakeModel{}
@@ -485,6 +591,37 @@ func TestRunTurnStreamMATraceEmitsRuntimeEvents(t *testing.T) {
 	if !sawStarted || !sawStep || !sawUsage {
 		t.Fatalf("trace events = %#v, want planner start, committed step, and usage", output.system)
 	}
+}
+
+func TestRunTurnStreamMARecordsTokenTracerEvents(t *testing.T) {
+	runner := NewRunner(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), &fakeStore{}, "streamma-session")
+	runner.SetStreamMASubagentRunner(&fakeStreamMASubagentRunner{})
+	tracer := tokentracer.New("streamma-test")
+	runner.SetTokenTracer(tracer)
+
+	if _, err := runner.RunTurn(context.Background(), "/streamma 制作一个临时游戏"); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	snapshot := tracer.Snapshot()
+	if snapshot.Pipeline.Calls == 0 || snapshot.Pipeline.Total.TotalContext == 0 {
+		t.Fatalf("snapshot total = %#v, want StreamMA usage", snapshot.Pipeline.Total)
+	}
+	if !tokenTracerEventsContain(snapshot.Events, "streamma.agent.step.committed") {
+		t.Fatalf("events = %#v, want streamma step events", snapshot.Events)
+	}
+	if !tokenTracerEventsContain(snapshot.Events, "streamma.subagent_start") {
+		t.Fatalf("events = %#v, want streamma subagent start events", snapshot.Events)
+	}
+}
+
+func tokenTracerEventsContain(events []tokentracer.Event, eventType string) bool {
+	for _, event := range events {
+		if event.Type == eventType {
+			return true
+		}
+	}
+	return false
 }
 
 func TestStreamMAConversationContextIsByteCapped(t *testing.T) {
@@ -621,6 +758,22 @@ func TestRunTurnStreamMARequiresSubagentBackend(t *testing.T) {
 	_, err := runner.RunTurn(context.Background(), "/streamma explain the design")
 	if err == nil || !strings.Contains(err.Error(), "requires subagent backend") {
 		t.Fatalf("RunTurn() error = %v, want subagent backend error", err)
+	}
+}
+
+func TestRunTurnStreamMADisabledRejectsCommandBeforeRuntime(t *testing.T) {
+	output := &fakeUI{}
+	subagents := &fakeStreamMASubagentRunner{}
+	runner := NewRunner(&fakeModel{}, output, tool.NewRegistry(), nil, "")
+	runner.SetStreamMASubagentRunner(subagents)
+	runner.SetStreamMAEnabled(false)
+
+	_, err := runner.RunTurn(context.Background(), "/streamma-trace explain the design")
+	if err == nil || !strings.Contains(err.Error(), "streamma is disabled") {
+		t.Fatalf("RunTurn() error = %v, want disabled error", err)
+	}
+	if got := len(subagents.Requests()); got != 0 {
+		t.Fatalf("subagent requests = %d, want 0 when StreamMA is disabled", got)
 	}
 }
 

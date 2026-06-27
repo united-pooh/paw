@@ -105,6 +105,33 @@ func NewCommandRegistry() *CommandRegistry {
 		},
 	})
 	registry.Register(Command{
+		Name:              "/skills",
+		Description:       "show discovered skills",
+		AllowWhileRunning: true,
+		Handler: func(m *appModel, invocation string) tea.Cmd {
+			m.handleSkillsCommand()
+			return nil
+		},
+	})
+	registry.Register(Command{
+		Name:              "/token-tracer",
+		Aliases:           []string{"/tt"},
+		Description:       "show the live Token Tracer dashboard URL",
+		AllowWhileRunning: true,
+		Handler: func(m *appModel, invocation string) tea.Cmd {
+			url := ""
+			if provider, ok := m.runner.(tokenTracerURLProvider); ok {
+				url = strings.TrimSpace(provider.TokenTracerURL())
+			}
+			if url == "" {
+				m.addEntry(transcriptEntry{kind: entrySystem, title: "token-tracer", body: "Token Tracer dashboard is not running."})
+				return nil
+			}
+			m.addEntry(transcriptEntry{kind: entrySystem, title: "token-tracer", body: "Token Tracer dashboard: " + url})
+			return nil
+		},
+	})
+	registry.Register(Command{
 		Name:              "/status",
 		Description:       "show session status",
 		AllowWhileRunning: true,

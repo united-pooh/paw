@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"codex-agent-go/internal/skill"
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -51,6 +52,7 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 	input.Focus()
 
 	vp := viewport.New(80, 20)
+	skillRoot, _ := os.Getwd()
 	model := appModel{
 		ctx:                 ctx,
 		runner:              runner,
@@ -60,6 +62,7 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 		subagents:           subagentController,
 		sessionStore:        sessionStore,
 		commandRegistry:     NewCommandRegistry(),
+		skillRegistry:       skill.NewRegistry(skill.DefaultRoots(skillRoot)),
 		cursorAnchor:        anchor,
 		input:               input,
 		viewport:            vp,
@@ -74,6 +77,15 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 				body:  "Interactive mode is running on Bubble Tea. Use /help for commands.",
 			},
 		},
+	}
+	if provider, ok := runner.(tokenTracerURLProvider); ok {
+		if url := strings.TrimSpace(provider.TokenTracerURL()); url != "" {
+			model.transcript = append(model.transcript, transcriptEntry{
+				kind:  entrySystem,
+				title: "token-tracer",
+				body:  "Token Tracer dashboard: " + url + "\nUse /token-tracer to show this link again.",
+			})
+		}
 	}
 	model.applyCursorAnimation()
 	model.refreshViewport()
@@ -286,7 +298,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				visible := m.completion.visibleItems()
 				if !m.completion.loading && len(visible) > 0 {
 					selected := visible[m.completion.selectedIndex]
-					if m.completion.kind == completionKindFile {
+					switch m.completion.kind {
+					case completionKindFile:
 						isDir := strings.HasSuffix(selected, "/")
 						if isDir {
 							// 目录：不加空格，候选框保持开启以继续浏览
@@ -298,7 +311,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 						// 文件：行为与 Enter 一致（加空格 + 关闭候选框）
 						m = m.applyFileCompletion(selected, true)
-					} else {
+					case completionKindSkill:
+						m = m.applySkillCompletion(selected)
+					default:
 						m = m.applyCommandCompletion(selected)
 					}
 				}
@@ -308,10 +323,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				visible := m.completion.visibleItems()
 				if !m.completion.loading && len(visible) > 0 {
 					selected := visible[m.completion.selectedIndex]
-					if m.completion.kind == completionKindFile {
+					switch m.completion.kind {
+					case completionKindFile:
 						// Enter：补全路径并追加空格，结束引用
 						m = m.applyFileCompletion(selected, true)
-					} else {
+					case completionKindSkill:
+						m = m.applySkillCompletion(selected)
+					default:
 						m = m.applyCommandCompletion(selected)
 					}
 				}
@@ -393,6 +411,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if isTextEditingKey(msg) || textChanged {
 			// / 命令补全：整个输入以 / 开头时触发
 			m.syncCommandCompletion()
+			// $ skill 补全：词边界 $ 触发（只要 / 补全未激活）
+			m.syncSkillCompletion()
 			// @ 文件补全：词边界 @ 触发（只要 / 补全未激活）
 			if cmd := m.syncAtCompletion(); cmd != nil {
 				cmds = append(cmds, cmd)

@@ -3,6 +3,7 @@ package bubble
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 
 const toolExpandDuration = 650 * time.Millisecond
 const transcriptStreamingRefreshInterval = cursorFrameInterval
+const maxRenderedToolDetailLines = 32
 
 type transcriptRenderCacheEntry struct {
 	key      transcriptRenderCacheKey
@@ -650,7 +652,7 @@ func renderToolEntryBodyWithMarker(body string, width int, progress float64, bor
 		return borderStyle.Width(contentWidth).Render(header)
 	}
 
-	detailLines := strings.Split(detail, "\n")
+	detailLines := limitRenderedDetailLines(strings.Split(detail, "\n"), maxRenderedToolDetailLines)
 	visibleLines := maxInt(1, int(float64(len(detailLines))*progress+0.999))
 	if visibleLines > len(detailLines) {
 		visibleLines = len(detailLines)
@@ -666,7 +668,18 @@ func toolEntryContentWidth(width int, borderStyle lipgloss.Style) int {
 
 const toolEntryNoWrapSafetyCells = transcriptPanelHorizontalFrame + 1
 
+func limitRenderedDetailLines(lines []string, maxLines int) []string {
+	if maxLines <= 0 || len(lines) <= maxLines {
+		return lines
+	}
+	hidden := len(lines) - maxLines
+	out := append([]string(nil), lines[:maxLines]...)
+	out = append(out, "... "+strconv.Itoa(hidden)+" more lines hidden")
+	return out
+}
+
 func renderToolDetailLines(lines []string, width int) string {
+	diffRowWidth := diffDetailRowsWidth(lines, width)
 	rendered := make([]string, 0, len(lines))
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -692,14 +705,19 @@ func renderToolDetailLines(lines []string, width int) string {
 			isDiffLine = true
 		}
 		if isDiffLine {
-			renderedLine = truncateDisplayWidth(renderedLine, width)
-			rendered = append(rendered, style.Width(width).Render(renderedLine))
+			renderedLine = padDisplayWidth(truncateDisplayWidth(renderedLine, diffRowWidth), diffRowWidth)
+			rendered = append(rendered, style.Render(renderedLine))
 			continue
 		}
 		renderedLine = truncateDisplayWidth(renderedLine, width)
 		rendered = append(rendered, style.Width(width).Render(renderedLine))
 	}
 	return strings.Join(rendered, "\n")
+}
+
+func diffDetailRowsWidth(_ []string, width int) int {
+	maxAllowed := maxInt(1, width-2)
+	return maxAllowed
 }
 
 func diffDetailLineMarker(line string) string {

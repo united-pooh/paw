@@ -3,10 +3,10 @@ package model
 import (
 	"bufio"
 	"bytes"
+	"codex-agent-go/internal/message"
 	"context"
 	"encoding/json"
 	"fmt"
-	"codex-agent-go/internal/message"
 	"io"
 	"net/http"
 	"sort"
@@ -86,7 +86,14 @@ func (c *Client) streamOpenAIMessage(ctx context.Context, cfg Config, messages [
 		StreamOptions: &StreamOptions{IncludeUsage: true},
 	}
 	for _, t := range tools {
-		reqBody.Tools = append(reqBody.Tools, openAITool{Type: "function", Function: t})
+		reqBody.Tools = append(reqBody.Tools, openAITool{
+			Type: "function",
+			Function: openAIToolFunction{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  t.InputSchema,
+			},
+		})
 	}
 
 	// 组装 JSON 请求体。

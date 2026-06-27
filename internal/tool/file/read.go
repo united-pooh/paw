@@ -45,7 +45,7 @@ func (t *ReadTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 		return "", fmt.Errorf("file_path is required")
 	}
 
-	target, _, err := resolvePathWithinRoots(t.Root, t.ReadRoots, in.FilePath)
+	target, err := resolvePathWithinRoots(t.Root, in.FilePath, t.ReadRoots)
 	if err != nil {
 		return "", err
 	}

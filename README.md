@@ -36,6 +36,7 @@ internal/tool/webfetch/webfetch.go
 
 internal/session/jsonl_store.go
 internal/settings/settings.go
+internal/skill/registry.go
 internal/subagent/manager.go
 internal/streamma/
 
@@ -146,6 +147,8 @@ go run ./cmd/agent -s <session-id>
 - `/streamma <prompt>`
 - `/streamma-trace <prompt>`
 - `/tasks`
+- `/skills`
+- `/token-tracer` / `/tt`
 - `/status`
 - `/clear`
 - `/exit` / `/quit`
@@ -158,7 +161,17 @@ go run ./cmd/agent -s <session-id>
 - `/subagent` 支持 `empty` 与 `fork` 两种上下文模式，以及 `sync` 与 `background` 两种运行模式；后台任务完成后会发 UI 系统通知，并把截断后的结果作为补充上下文注入后续模型轮次（完整结果仍在任务 output/transcript 路径中）
 - `/streamma <prompt>` 显式把当前任务交给 StreamMA runtime；runtime 会按任务选择一个小型 DAG，并把每个 StreamMA worker 映射为真实 subagent。一次 run 内同一个 logical agent 复用同一个 subagent session 作为真实 `ctx_a`；首次调用写入 agent base context + problem，后续调用只追加新 inbound step。只有同步到精确 `END_STEP` step 后才继续在 DAG 中传播；缺失 `END_STEP` 会失败而不是在 agent `Done` 时兜底传播，最终由 finalizer 的最后一步作为 assistant 回复写回会话历史
 - `/streamma-trace <prompt>` 使用同一套真实 StreamMA/subagent 路径，并额外输出 live runtime trace（如 `subagent.started`、`agent.step.committed`、`control.upstream_eof`、per-invocation usage/cache），用于观察 step fanout 是否发生在上游 agent `Done` 前，以及同一 agent 是否复用同一 session
+- `multi-agent-pipeline` skill 是 Codex/GoCode 的阶段化工作流指导，不会自动要求 StreamMA runtime。`/streamma` 和 `/streamma-trace` 是显式 runtime 调试入口；如果只想测试 skill、slash completion、普通 subagent 或 Token Tracer，可用 `GOCODE_STREAMMA=0` 或 `-streamma=false` 关闭这两个入口
 - `/tasks` 展示当前后台 subagent 任务及 transcript 路径
+- `/skills` 展示当前可发现的本地 skills 及其 `SKILL.md` 路径
+- `/token-tracer` 展示当前启动的 Token Tracer dashboard URL；交互模式默认启动本地 HTTP 服务，`/` 为实时页面，`/api/state` 为完整快照，`/events` 为 SSE 实时事件流
+
+Token Tracer:
+- StreamMA 可用 `GOCODE_STREAMMA=0` 或 `-streamma=false` 手动关闭；关闭后输入 `/streamma` 或 `/streamma-trace` 会直接提示已禁用，不会启动 worker，也不会触发 `END_STEP` parser
+- 交互模式启动时默认拉起本地 dashboard；可用 `GOCODE_TOKEN_TRACER=0` 或 `-token-tracer=false` 关闭
+- `-token-tracer-port <port>` 指定端口，默认 `8999`；`GOCODE_TOKEN_TRACER_PORT` 也可设置默认端口
+- `-token-tracer-open` 或 `GOCODE_TOKEN_TRACER_OPEN=1` 会自动在浏览器打开 dashboard
+- Dashboard 聚合普通对话、工具调用、StreamMA runtime events、StreamMA subagent usage/cache、后台 subagent 任务生命周期，并按 `pipeline -> stage -> agent` 语义展示 token lane；output token 单独统计，不参与 context lane 宽度
 
 #### 当前输入区状态
 
@@ -167,7 +180,14 @@ context meter 默认展示在消息历史区下方、输入框上方；输入框
 输入补全:
 - 在输入框中输入 `/` 会弹出斜杠命令候选列表
 - 在输入框中输入 `@` 会弹出工作区文件路径候选列表
+- 在输入框中输入 `$` 会弹出 skill 候选列表；Tab 或 Enter 会写入 `[$skill](.../SKILL.md)` 引用
 - 使用 ↑↓ 键在候选项之间导航，Tab 或 Enter 确认补全，Esc 关闭弹窗
+
+Skills:
+- 当前仓库内置项目级 `multi-agent-pipeline` skill，路径为 `.codex/skills/multi-agent-pipeline/SKILL.md`，适配说明见 `.codex/skills/multi-agent-pipeline/references/gocode-adapter.md`
+- 支持的本地 skill 目录为当前工作区 `.codex/skills/<name>/SKILL.md`、`.claude/skills/<name>/SKILL.md`，以及 `$CODEX_HOME/skills/<name>/SKILL.md`、`~/.codex/skills/<name>/SKILL.md`、`~/.claude/skills/<name>/SKILL.md`
+- 输入中出现 `$skill` 或 `[$skill](/abs/path/SKILL.md)` 时，Runner 会在本轮 system prompt 中注入对应 `SKILL.md` 的完整内容；该注入只对当前 turn 生效，不写入会话历史
+- `/subagent` 的 prompt 中显式提到 skill 时，subagent worker 会按同样规则加载；`/streamma` 和 `/streamma-trace` 会把本轮选中的 skill context 传入每个 StreamMA worker 的 system prompt
 
 context meter 的 token 数只来自模型服务端返回的真实 `usage` 字段；不会根据草稿、历史文本或本地字符数做估算。左侧 `↑/↓` 数字展示本次打开后的 session 累计 token 消耗，每次启动从 0 开始，`/clear` 也会清零；每次模型请求的 input/prompt、output/completion 与 cache hit 会按 provider 返回值入账，同一条流里多次 `usage` 会先合并成该请求的累计值再计入 session，避免 `message_start` / `message_delta` 重复计数。进度条、used 百分比、cache hit 百分比和 `free(...)` 仍然展示最近一次真实 usage 对应的当前上下文窗口占用；新一轮请求尚未返回 usage 时，会继续显示上一条上下文窗口 usage。
 
@@ -197,6 +217,7 @@ context meter 左侧显示紧凑 token 与比例，例如 `260k↑ 2.05k↓ 25%(
 
 补充:
 - `session`、`settings`、`subagent`、`streamma` 是新增的运行时支撑模块，负责 `.ccagent/` 持久化、用户默认配置、子代理调度和 StreamMA runtime；主对话链路仍按下面的 5 层理解即可。
+- `internal/skill` 负责发现本地 `skill-name/SKILL.md`、解析输入中的 skill 引用，并把选中的 skill 文件格式化为当前 turn 的 system context。
 - `internal/streamma` 是独立的内存版 multi-agent runtime，目前覆盖 fake model + runtime 验收，并通过 `/streamma <prompt>` 接入 `loop.Runner` 的显式分支；交互入口会使用真实 subagent worker 作为 StreamMA agent，生产版 NATS、Postgres、MinIO 适配器仍未接入。
 
 ### 1. `message`
@@ -1082,6 +1103,7 @@ main (-subagent-worker)
 - `history` — 已成功完成的多轮对话消息列表（内存缓存）
 - `usage` / `sessionUsage` — 当前轮/整个会话的 token 用量统计
 - `supplements` — 用户在当前轮运行期间提交的补充指令（支持并发注入）
+- `skillRegistry` / `activeSkillContext` — 本地 skill 发现与当前 turn 的临时 skill 指令上下文
 
 职责:
 - 驱动单次 agent turn
@@ -1099,7 +1121,7 @@ main (-subagent-worker)
 - 执行一次完整 turn
 
 当前逻辑:
-1. 验证与初始化：检查 runner 初始化状态；首次运行时从 store 加载历史
+1. 验证与初始化：检查 runner 初始化状态；按输入中的 `$skill` 或 `[$skill](.../SKILL.md)` 解析并加载当前 turn 的 skill 指令；首次运行时从 store 加载历史
 2. 构建本轮历史副本：复制已提交历史，插入未注入的 supplements，再追加当前用户输入（失败时不污染已提交历史）
 3. 多轮工具循环（最多 500 轮）：
    - 每轮开始时检查是否有新注入的 supplements 并追加
@@ -1126,7 +1148,7 @@ main (-subagent-worker)
 
 职责:
 - 生成 system prompt
-- 注入工具说明和输入 schema
+- 注入工具说明、输入 schema、当前 turn 的 skill 指令和额外 system supplement
 
 #### `renderMessageForModel(msg) message.Message`
 

@@ -5,8 +5,8 @@ import (
 	"codex-agent-go/internal/model"
 	"codex-agent-go/internal/session"
 	"codex-agent-go/internal/settings"
-	"codex-agent-go/internal/skill"
 	"codex-agent-go/internal/subagent"
+	"codex-agent-go/internal/tokentracer"
 	"codex-agent-go/internal/tool"
 	toolexec "codex-agent-go/internal/tool/exec"
 	toolfile "codex-agent-go/internal/tool/file"
@@ -21,26 +21,68 @@ import (
 	"io"
 	"log"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 type options struct {
-	prompt         string
-	sessionID      string
-	subagentWorker bool
+	prompt          string
+	sessionID       string
+	subagentWorker  bool
+	streamMA        bool
+	tokenTracer     bool
+	tokenTracerOpen bool
+	tokenTracerPort int
 }
 
 func parseOptions() options {
 	prompt := flag.String("p", "", "single-turn prompt; omit to start Bubble Tea UI")
 	sessionID := flag.String("s", "", "session ID; omit to resume/create by cwd")
 	subagentWorker := flag.Bool("subagent-worker", false, "run hidden subagent worker")
+	streamMA := flag.Bool("streamma", defaultStreamMAEnabled(), "enable /streamma and /streamma-trace commands")
+	tokenTracer := flag.Bool("token-tracer", defaultTokenTracerEnabled(), "start local Token Tracer dashboard in interactive mode")
+	tokenTracerOpen := flag.Bool("token-tracer-open", defaultTokenTracerOpen(), "open Token Tracer dashboard in the default browser")
+	tokenTracerPort := flag.Int("token-tracer-port", defaultTokenTracerPort(), "Token Tracer dashboard port; 0 selects a free port")
 	flag.Parse()
 
 	return options{
-		prompt:         *prompt,
-		sessionID:      *sessionID,
-		subagentWorker: *subagentWorker,
+		prompt:          *prompt,
+		sessionID:       *sessionID,
+		subagentWorker:  *subagentWorker,
+		streamMA:        *streamMA,
+		tokenTracer:     *tokenTracer,
+		tokenTracerOpen: *tokenTracerOpen,
+		tokenTracerPort: *tokenTracerPort,
 	}
+}
+
+func defaultStreamMAEnabled() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("GOCODE_STREAMMA")))
+	return value != "0" && value != "false" && value != "off" && value != "no"
+}
+
+func defaultTokenTracerEnabled() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("GOCODE_TOKEN_TRACER")))
+	return value != "0" && value != "false" && value != "off" && value != "no"
+}
+
+func defaultTokenTracerOpen() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("GOCODE_TOKEN_TRACER_OPEN")))
+	return value == "1" || value == "true" || value == "on" || value == "yes"
+}
+
+func defaultTokenTracerPort() int {
+	value := strings.TrimSpace(os.Getenv("GOCODE_TOKEN_TRACER_PORT"))
+	if value == "" {
+		return 8999
+	}
+	port, err := strconv.Atoi(value)
+	if err != nil || port < 0 {
+		return 8999
+	}
+	return port
 }
 
 func main() {
@@ -72,6 +114,7 @@ func runSingleTurnMode(ctx context.Context, opts options) error {
 	if err != nil {
 		return err
 	}
+	runner.SetStreamMAEnabled(opts.streamMA)
 
 	fmt.Fprintf(os.Stderr, "session: %s\n", sessionID)
 	_, err = runner.RunTurn(ctx, opts.prompt)
@@ -86,12 +129,43 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	if err != nil {
 		return err
 	}
+	runner.SetStreamMAEnabled(opts.streamMA)
+	if opts.tokenTracer {
+		tracer, server, err := startTokenTracer(ctx, sessionID, opts)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_ = server.Shutdown(shutdownCtx)
+		}()
+		runner.SetTokenTracer(tracer)
+		subagentManager.SetTokenTracer(tracer)
+	}
 
 	output.SetModelConfigController(client)
 	output.SetSettingsController(settingsController)
 	output.SetSubagentController(subagentManager)
 	output.SetSessionStore(store)
 	return output.Run(ctx, runner, sessionID)
+}
+
+func startTokenTracer(ctx context.Context, sessionID string, opts options) (*tokentracer.Tracer, *tokentracer.Server, error) {
+	tracer := tokentracer.New("GoCode")
+	tracer.SetSessionID(sessionID)
+	if cwd, err := os.Getwd(); err == nil {
+		tracer.SetWorkspace(cwd)
+	}
+	server := tokentracer.NewServer(tracer, tokentracer.ServerConfig{
+		Host:        "127.0.0.1",
+		Port:        opts.tokenTracerPort,
+		OpenBrowser: opts.tokenTracerOpen,
+	})
+	if err := server.Start(ctx); err != nil {
+		return nil, nil, err
+	}
+	return tracer, server, nil
 }
 
 func runSubagentWorkerMode(ctx context.Context, input io.Reader, output io.Writer) error {
@@ -103,7 +177,8 @@ func runSubagentWorkerMode(ctx context.Context, input io.Reader, output io.Write
 		return fmt.Errorf("subagent worker session_id is required")
 	}
 
-	runner, sessionID, _, _, _, _, err := buildRunnerWithSubagentContext(ctx, req.SessionID, headless.New(io.Discard), subagentRuntimeContext{
+	workerUI := &workerUsageUI{UI: headless.New(io.Discard)}
+	runner, sessionID, _, _, _, _, err := buildRunnerWithSubagentContext(ctx, req.SessionID, workerUI, subagentRuntimeContext{
 		depth:        req.Depth,
 		maxDepth:     req.MaxDepth,
 		parentTaskID: req.TaskID,
@@ -124,11 +199,40 @@ func runSubagentWorkerMode(ctx context.Context, input io.Reader, output io.Write
 		result.Error = err.Error()
 		result.ExitCode = 1
 		result.UsedTokens = runner.ContextStats(1<<30, "").UsedTokens
+		result.Usage = workerUI.Usage()
 		return json.NewEncoder(output).Encode(result)
 	}
 	result.Content = strings.TrimSpace(msg.Content)
 	result.UsedTokens = runner.ContextStats(1<<30, "").UsedTokens
+	result.Usage = workerUI.Usage()
 	return json.NewEncoder(output).Encode(result)
+}
+
+type workerUsageUI struct {
+	uiiface.UI
+
+	mu    sync.RWMutex
+	usage *tokentracer.Usage
+}
+
+func (u *workerUsageUI) OnModelUsage(usage model.Usage) {
+	structured := tokentracer.UsageFromModelUsage(usage)
+	if structured.Empty() {
+		return
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.usage = &structured
+}
+
+func (u *workerUsageUI) Usage() *tokentracer.Usage {
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	if u.usage == nil {
+		return nil
+	}
+	copied := *u.usage
+	return &copied
 }
 
 func clearTerminalWindow(w io.Writer) {
@@ -201,7 +305,7 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 		parentSessionID: sessionID,
 	})
 	runner.SetSubagentTokensProvider(subagentManager)
-	registerTools(registry, root, subagentManager, sessionID)
+	registerTools(registry, root, runner.SkillRoots(), subagentManager, sessionID)
 
 	return runner, sessionID, client, settingsController, subagentManager, store, nil
 }
@@ -235,12 +339,11 @@ func (a streamMASubagentAdapter) StreamSubagent(ctx context.Context, req loop.St
 	}, nil
 }
 
-func registerTools(registry *tool.Registry, root string, subagentManager *subagent.Manager, sessionID string) {
+func registerTools(registry *tool.Registry, root string, readRoots []string, subagentManager *subagent.Manager, sessionID string) {
 	if registry == nil {
 		return
 	}
-	readRoots := skill.DefaultRoots(root)
-	registry.Register(&toolfile.LSTool{Root: root})
+	registry.Register(&toolfile.LSTool{Root: root, ReadRoots: readRoots})
 	registry.Register(&toolfile.ReadTool{Root: root, ReadRoots: readRoots})
 	registry.Register(&toolfile.WriteTool{Root: root})
 	registry.Register(&toolfile.GrepTool{Root: root, ReadRoots: readRoots})
