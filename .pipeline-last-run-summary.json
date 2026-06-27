@@ -1,42 +1,141 @@
 {
   "version": "1.0",
-  "pipeline": "multi-agent-pipeline",
-  "status": "accepted",
-  "branch": "feat/streamma",
-  "task": "Implement strict StreamMA incremental step fanout runtime",
-  "changed_files": [
-    "README.md",
-    "internal/streamma/broker.go",
-    "internal/streamma/broker_test.go",
-    "internal/streamma/context.go",
-    "internal/streamma/context_test.go",
-    "internal/streamma/eof_drain_test.go",
-    "internal/streamma/event_log.go",
-    "internal/streamma/event_log_test.go",
-    "internal/streamma/failure_test.go",
-    "internal/streamma/fake_model_test.go",
-    "internal/streamma/parser.go",
-    "internal/streamma/parser_test.go",
-    "internal/streamma/prompt.go",
-    "internal/streamma/prompt_test.go",
-    "internal/streamma/replay.go",
-    "internal/streamma/replay_test.go",
-    "internal/streamma/runtime.go",
-    "internal/streamma/runtime_streaming_test.go",
-    "internal/streamma/runtime_test.go",
-    "internal/streamma/runtime_topology_test.go",
-    "internal/streamma/types.go"
+  "run_id": "RUN-20260627-001",
+  "completed_at": "2026-06-27T11:52:00.000Z",
+  "verdict": "accept",
+  "restart_from": null,
+  "skill_usage_summary": [
+    {
+      "scope": "spec",
+      "required_skills": [],
+      "applied_skills": [],
+      "issues": []
+    },
+    {
+      "scope": "plan",
+      "required_skills": [],
+      "applied_skills": [],
+      "issues": []
+    },
+    {
+      "scope": "GROUP-1/execution",
+      "required_skills": ["ce-frontend-design"],
+      "applied_skills": ["ce-frontend-design"],
+      "issues": []
+    },
+    {
+      "scope": "GROUP-1/grading",
+      "required_skills": [],
+      "applied_skills": [],
+      "issues": []
+    }
   ],
-  "verification": [
-    {"command": "go test ./internal/streamma -count=1", "status": "passed"},
-    {"command": "go test -race ./internal/streamma -count=1", "status": "passed"},
-    {"command": "go vet ./...", "status": "passed"},
-    {"command": "go test ./...", "status": "failed_unrelated", "details": "Pre-existing internal/ui/bubble TestToolDiffDetailLinesUseBackgroundColors failure; internal/streamma passed in the full run."}
+  "merge_summary": {
+    "merged_groups": ["GROUP-1"],
+    "conflicted_groups": [],
+    "noop_groups": []
+  },
+  "tree_grading_summary": [
+    {
+      "group_id": "GROUP-1",
+      "verdict": "pass",
+      "weighted_score": 1.0,
+      "nodes_failed": []
+    }
   ],
-  "final_assessment": {
-    "verdict": "accept",
-    "readability_conclusion": "high",
-    "complexity_conclusion": "low",
-    "tree_grading": "unanimous_pass"
-  }
+  "qa_summary": [
+    {
+      "group_id": "GROUP-1",
+      "status": "pass"
+    }
+  ],
+  "validation_summary": [
+    {
+      "group_id": "GROUP-1",
+      "status": "passed",
+      "note": "Pre-existing Go test failure in internal/ui/bubble (unrelated to snake.html)"
+    }
+  ],
+  "complexity_summary": [
+    {
+      "group_id": "GROUP-1",
+      "ref": "complexity/GROUP-1/iteration-1-complexity-report.json",
+      "status": "skipped",
+      "readability_conclusion": "high",
+      "complexity_conclusion": "low",
+      "function_count": 0,
+      "max_total_points": 0
+    }
+  ],
+  "cleanup_summary": {
+    "deleted_workspace": true,
+    "deleted_paths": [".pipeline-workspace"],
+    "retained_file": ".pipeline-last-run-summary.json"
+  },
+  "codex_pet_events": [
+    {
+      "state": "running",
+      "reason": "Pipeline started - Brainstorming",
+      "scope": "pipeline.brainstorming",
+      "duration_ms": 1000,
+      "created_at": "2026-06-27T11:46:00.000Z",
+      "directive": "::codex-pet{state=\"running\" durationMs=1000 scope=\"pipeline.brainstorming\"}"
+    },
+    {
+      "state": "running",
+      "reason": "Spec stage",
+      "scope": "pipeline.spec",
+      "duration_ms": 2000,
+      "created_at": "2026-06-27T11:46:30.000Z",
+      "directive": "::codex-pet{state=\"running\" durationMs=2000 scope=\"pipeline.spec\"}"
+    },
+    {
+      "state": "running",
+      "reason": "Plan stage",
+      "scope": "pipeline.plan",
+      "duration_ms": 1500,
+      "created_at": "2026-06-27T11:47:00.000Z",
+      "directive": "::codex-pet{state=\"running\" durationMs=1500 scope=\"pipeline.plan\"}"
+    },
+    {
+      "state": "running",
+      "reason": "Architecture stage",
+      "scope": "pipeline.architecture",
+      "duration_ms": 2000,
+      "created_at": "2026-06-27T11:47:20.000Z",
+      "directive": "::codex-pet{state=\"running\" durationMs=2000 scope=\"pipeline.architecture\"}"
+    },
+    {
+      "state": "running",
+      "reason": "Dispatch stage",
+      "scope": "pipeline.dispatch",
+      "duration_ms": 1000,
+      "created_at": "2026-06-27T11:47:30.000Z",
+      "directive": "::codex-pet{state=\"running\" durationMs=1000 scope=\"pipeline.dispatch\"}"
+    },
+    {
+      "state": "running",
+      "reason": "Execution stage - creating snake.html",
+      "scope": "pipeline.execution.group-group-1.iteration-1",
+      "duration_ms": 3000,
+      "created_at": "2026-06-27T11:48:00.000Z",
+      "directive": "::codex-pet{state=\"running\" durationMs=3000 scope=\"pipeline.execution.group-group-1.iteration-1\"}"
+    },
+    {
+      "state": "review",
+      "reason": "Tree Rubrics and Grading",
+      "scope": "pipeline.grading.group-group-1.iteration-1",
+      "duration_ms": 5000,
+      "created_at": "2026-06-27T11:50:00.000Z",
+      "directive": "::codex-pet{state=\"review\" durationMs=5000 scope=\"pipeline.grading.group-group-1.iteration-1\"}"
+    },
+    {
+      "state": "waving",
+      "reason": "Pipeline accepted - snake.html delivered",
+      "scope": "pipeline.accept",
+      "duration_ms": 2000,
+      "created_at": "2026-06-27T11:52:00.000Z",
+      "directive": "::codex-pet{state=\"waving\" durationMs=2000 scope=\"pipeline.accept\"}"
+    }
+  ]
 }

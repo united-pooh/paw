@@ -20,6 +20,7 @@ import (
 	"codex-agent-go/internal/message"
 	modelcfg "codex-agent-go/internal/model"
 	"codex-agent-go/internal/settings"
+	"codex-agent-go/internal/skill"
 	"codex-agent-go/internal/subagent"
 	"codex-agent-go/internal/ui"
 )
@@ -200,6 +201,19 @@ func newTestModel(runner Runner) appModel {
 	}, nil, nil, nil, newTerminalCursorAnchor())
 }
 
+func writeBubbleTestSkill(t *testing.T, root, name, body string) string {
+	t.Helper()
+	dir := filepath.Join(root, name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, skill.SkillFileName)
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -210,6 +224,15 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func assertRenderedLineWidthsAtMost(t *testing.T, rendered string, width int) {
@@ -298,11 +321,60 @@ func TestHelpComesFromCommandRegistry(t *testing.T) {
 		"/streamma <prompt> - run a prompt through StreamMA subagents",
 		"/streamma-trace <prompt> - run StreamMA with live event trace",
 		"/tasks - show background subagent tasks",
+		"/skills - show discovered skills",
+		"/token-tracer (/tt) - show the live Token Tracer dashboard URL",
 		"/exit (/quit, exit, quit) - quit the TUI",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("help body = %q, want %q", body, want)
 		}
+	}
+}
+
+func TestSkillsCommandListsDiscoveredSkills(t *testing.T) {
+	root := t.TempDir()
+	path := writeBubbleTestSkill(t, root, "design", `---
+description: Design discipline
+---
+Design body.`)
+	model := newTestModel(&fakeRunner{})
+	model.skillRegistry = skill.NewRegistry([]string{root})
+
+	handled, cmd := model.handleCommand("/skills")
+	if !handled || cmd != nil {
+		t.Fatalf("/skills handled/cmd = %v/%v", handled, cmd)
+	}
+	body := model.transcript[len(model.transcript)-1].body
+	for _, want := range []string{"Skills:", "design - Design discipline", path} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("skills body = %q, want %q", body, want)
+		}
+	}
+}
+
+func TestSlashSkillSubmitRewritesToSkillReference(t *testing.T) {
+	root := t.TempDir()
+	path := writeBubbleTestSkill(t, root, "multi-agent-pipeline", "# Pipeline\n")
+	runner := &fakeRunner{}
+	model := newTestModel(runner)
+	model.skillRegistry = skill.NewRegistry([]string{root})
+	model.input.SetValue("/multi-agent-pipeline implement staged fix")
+
+	updatedModel, cmd := model.handleSubmit()
+	updated := updatedModel.(appModel)
+	if cmd == nil {
+		t.Fatalf("handleSubmit() cmd is nil")
+	}
+	if !updated.running {
+		t.Fatalf("updated.running = false, want true")
+	}
+	msg := cmd()
+	if _, ok := msg.(turnFinishedMsg); !ok {
+		t.Fatalf("cmd() = %#v, want turnFinishedMsg", msg)
+	}
+	want := "[$multi-agent-pipeline](" + path + ") implement staged fix"
+	if len(runner.inputs) != 1 || runner.inputs[0] != want {
+		t.Fatalf("runner.inputs = %#v, want %q", runner.inputs, want)
 	}
 }
 
@@ -3156,6 +3228,49 @@ func TestAtPrefixTriggersFileCompletion(t *testing.T) {
 	}
 }
 
+// TestDollarPrefixTriggersSkillCompletion 验证输入 $ 前缀触发 skill 补全。
+func TestDollarPrefixTriggersSkillCompletion(t *testing.T) {
+	root := t.TempDir()
+	writeBubbleTestSkill(t, root, "design", "# Design\n")
+	model := newTestModel(&fakeRunner{})
+	model.skillRegistry = skill.NewRegistry([]string{root})
+
+	model.input.SetValue("$")
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	model = next.(appModel)
+
+	if model.completion == nil {
+		t.Fatalf("completion = nil, want skill completion after $ input")
+	}
+	if model.completion.kind != completionKindSkill {
+		t.Fatalf("completion.kind = %v, want completionKindSkill", model.completion.kind)
+	}
+	if got := model.completion.visibleItems(); len(got) != 1 || got[0] != "design" {
+		t.Fatalf("visible skill items = %#v, want design", got)
+	}
+}
+
+func TestSlashPrefixIncludesSkillCompletion(t *testing.T) {
+	root := t.TempDir()
+	writeBubbleTestSkill(t, root, "multi-agent-pipeline", "# Pipeline\n")
+	model := newTestModel(&fakeRunner{})
+	model.skillRegistry = skill.NewRegistry([]string{root})
+
+	model.input.SetValue("/m")
+	model.syncCommandCompletion()
+
+	if model.completion == nil {
+		t.Fatalf("completion = nil, want command completion")
+	}
+	if model.completion.kind != completionKindCommand {
+		t.Fatalf("completion.kind = %v, want completionKindCommand", model.completion.kind)
+	}
+	items := model.completion.visibleItems()
+	if !containsString(items, "/model") || !containsString(items, "/multi-agent-pipeline") {
+		t.Fatalf("visible command items = %#v, want /model and /multi-agent-pipeline", items)
+	}
+}
+
 // TestCompletionEscClears 验证 esc 键清除补全弹窗。
 func TestCompletionEscClears(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
@@ -3220,6 +3335,73 @@ func TestCompletionTabAppliesSelection(t *testing.T) {
 	}
 }
 
+func TestSkillCompletionTabAppliesMarkdownReference(t *testing.T) {
+	root := t.TempDir()
+	path := writeBubbleTestSkill(t, root, "design", "# Design\n")
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 20
+	model.skillRegistry = skill.NewRegistry([]string{root})
+	model.input.SetValue("$de")
+	model.input.CursorEnd()
+	model.completion = &completion{
+		kind:          completionKindSkill,
+		items:         []string{"design"},
+		selectedIndex: 0,
+		loading:       false,
+	}
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = next.(appModel)
+	if model.completion != nil {
+		t.Fatalf("completion = %#v, want nil after tab", model.completion)
+	}
+	want := "[$design](" + path + ") "
+	if got := model.input.Value(); got != want {
+		t.Fatalf("input value = %q, want %q", got, want)
+	}
+}
+
+func TestSlashSkillCompletionTabAppliesMarkdownReference(t *testing.T) {
+	root := t.TempDir()
+	path := writeBubbleTestSkill(t, root, "multi-agent-pipeline", "# Pipeline\n")
+	model := newTestModel(&fakeRunner{})
+	model.skillRegistry = skill.NewRegistry([]string{root})
+	model.completion = &completion{
+		kind:          completionKindCommand,
+		items:         []string{"/multi-agent-pipeline"},
+		selectedIndex: 0,
+		loading:       false,
+	}
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = next.(appModel)
+	want := "[$multi-agent-pipeline](" + path + ") "
+	if got := model.input.Value(); got != want {
+		t.Fatalf("input value = %q, want %q", got, want)
+	}
+}
+
+func TestCompletionBoxAlignsWithInputBoxWidth(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 120
+	model.height = 30
+	model.completion = &completion{
+		kind:    completionKindCommand,
+		items:   []string{"/model"},
+		loading: false,
+	}
+	model.relayout()
+
+	completionWidth := lipgloss.Width(model.renderCompletionBox())
+	inputWidth := lipgloss.Width(model.renderInputBox())
+	if completionWidth != inputWidth {
+		t.Fatalf("completion width = %d, want input width %d", completionWidth, inputWidth)
+	}
+}
+
 func TestCompletionBackspaceRelayoutsWhenTriggerDeleted(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -3239,6 +3421,15 @@ func TestCompletionBackspaceRelayoutsWhenTriggerDeleted(t *testing.T) {
 			name:       "command trigger",
 			value:      "/",
 			completion: newCommandCompletion("", NewCommandRegistry()),
+		},
+		{
+			name:  "skill trigger",
+			value: "$",
+			completion: &completion{
+				kind:    completionKindSkill,
+				items:   []string{"design"},
+				loading: false,
+			},
 		},
 	}
 

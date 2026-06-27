@@ -9,7 +9,8 @@ import (
 )
 
 type LSTool struct {
-	Root string
+	Root      string
+	ReadRoots []string
 }
 
 type lsInput struct {
@@ -44,7 +45,7 @@ func (t *LSTool) Run(ctx context.Context, input json.RawMessage) (string, error)
 		}
 	}
 
-	target, err := resolvePathWithinRoot(t.Root, in.Path)
+	target, err := resolvePathWithinRoots(t.Root, in.Path, t.ReadRoots)
 	if err != nil {
 		return "", err
 	}

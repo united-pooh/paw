@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	osexec "os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -85,6 +87,7 @@ func (t *BashTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 
 	cmd := osexec.CommandContext(execCtx, "bash", "-c", in.Command)
 	cmd.Dir = workdir
+	cmd.Env = shellEnv(t.Root)
 
 	var output limitedBuffer
 	cmd.Stdout = &output
@@ -155,7 +158,11 @@ func resolveWorkingDir(root, cwd string) (string, error) {
 
 	target := absRoot
 	if strings.TrimSpace(cwd) != "" {
-		target = filepath.Join(absRoot, cwd)
+		if filepath.IsAbs(cwd) {
+			target = cwd
+		} else {
+			target = filepath.Join(absRoot, cwd)
+		}
 	}
 
 	absTarget, err := filepath.Abs(target)
@@ -173,6 +180,52 @@ func resolveWorkingDir(root, cwd string) (string, error) {
 
 	// TODO: 如果后续安全边界要更严格，这里还要补 symlink-aware 校验，防止软链接逃逸。
 	return absTarget, nil
+}
+
+func shellEnv(root string) []string {
+	env := os.Environ()
+	home := defaultHome(root)
+	if home != "" {
+		env = setEnv(env, "HOME", home)
+		if os.Getenv("CODEX_HOME") == "" {
+			env = setEnv(env, "CODEX_HOME", filepath.Join(home, ".codex"))
+		}
+	}
+	return env
+}
+
+func defaultHome(root string) string {
+	if current, err := user.Current(); err == nil && usableHome(current.HomeDir) {
+		return current.HomeDir
+	}
+	if home := os.Getenv("HOME"); usableHome(home) {
+		return home
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return ""
+	}
+	parts := strings.Split(filepath.Clean(absRoot), string(filepath.Separator))
+	if len(parts) >= 3 && parts[1] == "Users" && parts[2] != "" {
+		return string(filepath.Separator) + filepath.Join(parts[1], parts[2])
+	}
+	return ""
+}
+
+func usableHome(home string) bool {
+	home = strings.TrimSpace(home)
+	return home != "" && home != "/tmp"
+}
+
+func setEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	for i, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
 }
 
 type limitedBuffer struct {

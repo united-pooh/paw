@@ -2,11 +2,12 @@ package subagent
 
 import (
 	"bytes"
+	"codex-agent-go/internal/settings"
+	"codex-agent-go/internal/tokentracer"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"codex-agent-go/internal/settings"
 	"os"
 	"os/exec"
 	"strings"
@@ -27,12 +28,13 @@ type WorkerRequest struct {
 }
 
 type WorkerResult struct {
-	TaskID     string `json:"task_id"`
-	SessionID  string `json:"session_id"`
-	Content    string `json:"content,omitempty"`
-	Error      string `json:"error,omitempty"`
-	ExitCode   int    `json:"exit_code"`
-	UsedTokens int    `json:"used_tokens,omitempty"`
+	TaskID     string             `json:"task_id"`
+	SessionID  string             `json:"session_id"`
+	Content    string             `json:"content,omitempty"`
+	Error      string             `json:"error,omitempty"`
+	ExitCode   int                `json:"exit_code"`
+	UsedTokens int                `json:"used_tokens,omitempty"`
+	Usage      *tokentracer.Usage `json:"usage,omitempty"`
 }
 
 type Launcher interface {

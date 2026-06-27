@@ -7,34 +7,20 @@ import (
 )
 
 func resolvePathWithinRoot(root, target string) (string, error) {
-	resolved, _, err := resolvePathWithinRoots(root, nil, target)
-	return resolved, err
+	return resolvePathWithinRoots(root, target, nil)
 }
 
-func resolvePathWithinRoots(root string, readRoots []string, target string) (string, string, error) {
+func resolvePathWithinRoots(root, target string, extraRoots []string) (string, error) {
 	if strings.TrimSpace(root) == "" {
-		return "", "", fmt.Errorf("tool root is empty")
+		return "", fmt.Errorf("tool root is empty")
 	}
 
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 
-	var roots []string
-	roots = append(roots, absRoot)
-	for _, readRoot := range readRoots {
-		readRoot = strings.TrimSpace(readRoot)
-		if readRoot == "" {
-			continue
-		}
-		absReadRoot, err := filepath.Abs(readRoot)
-		if err != nil {
-			return "", "", err
-		}
-		roots = append(roots, absReadRoot)
-	}
-
+	allowedRoots := append([]string{filepath.Clean(absRoot)}, cleanExtraRoots(extraRoots)...)
 	target = strings.TrimSpace(target)
 	resolvedTarget := absRoot
 	if target != "" {
@@ -47,30 +33,37 @@ func resolvePathWithinRoots(root string, readRoots []string, target string) (str
 
 	absTarget, err := filepath.Abs(resolvedTarget)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
+	absTarget = filepath.Clean(absTarget)
 
-	for _, allowedRoot := range roots {
-		if isPathWithinRoot(allowedRoot, absTarget) {
-			return absTarget, allowedRoot, nil
+	for _, allowedRoot := range allowedRoots {
+		if isWithinRoot(allowedRoot, absTarget) {
+			return absTarget, nil
 		}
 	}
 
-	return "", "", fmt.Errorf("path escapes allowed roots: %s", target)
-}
-
-func isPathWithinRoot(root, target string) bool {
-	rel, err := filepath.Rel(root, target)
-	if err != nil {
-		return false
-	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	return "", fmt.Errorf("path escapes allowed roots: %s", target)
 }
 
 func relativePath(root, target string) string {
-	rel, err := filepath.Rel(root, target)
+	if strings.TrimSpace(root) == "" {
+		return filepath.ToSlash(target)
+	}
+	absRoot, err := filepath.Abs(root)
 	if err != nil {
-		return target
+		return filepath.ToSlash(target)
+	}
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return filepath.ToSlash(target)
+	}
+	rel, err := filepath.Rel(absRoot, absTarget)
+	if err != nil {
+		return filepath.ToSlash(absTarget)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return filepath.ToSlash(absTarget)
 	}
 	return filepath.ToSlash(rel)
 }
@@ -84,8 +77,38 @@ func displayPath(root, target string) string {
 	if err != nil {
 		return filepath.ToSlash(target)
 	}
-	if isPathWithinRoot(absRoot, absTarget) {
+	if isWithinRoot(filepath.Clean(absRoot), filepath.Clean(absTarget)) {
 		return relativePath(absRoot, absTarget)
 	}
 	return filepath.ToSlash(absTarget)
+}
+
+func cleanExtraRoots(roots []string) []string {
+	cleaned := make([]string, 0, len(roots))
+	seen := make(map[string]bool, len(roots))
+	for _, root := range roots {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		abs, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		abs = filepath.Clean(abs)
+		if seen[abs] {
+			continue
+		}
+		seen[abs] = true
+		cleaned = append(cleaned, abs)
+	}
+	return cleaned
+}
+
+func isWithinRoot(root, target string) bool {
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }

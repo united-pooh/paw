@@ -53,7 +53,7 @@ func (t *GlobTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 		return "", fmt.Errorf("pattern is required")
 	}
 
-	searchRoot, _, err := resolvePathWithinRoots(t.Root, t.ReadRoots, in.Path)
+	searchRoot, err := resolvePathWithinRoots(t.Root, in.Path, t.ReadRoots)
 	if err != nil {
 		return "", err
 	}

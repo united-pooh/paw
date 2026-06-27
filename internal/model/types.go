@@ -25,8 +25,14 @@ type ChatCompletionsRequest struct {
 
 // openAITool 是 OpenAI 兼容接口的工具定义格式。
 type openAITool struct {
-	Type     string          `json:"type"` // "function"
-	Function ToolDefinition  `json:"function"`
+	Type     string             `json:"type"` // "function"
+	Function openAIToolFunction `json:"function"`
+}
+
+type openAIToolFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
 }
 
 type StreamOptions struct {

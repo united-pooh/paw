@@ -1,12 +1,12 @@
 package bubble
 
 import (
-	"context"
-	"fmt"
-	tea "github.com/charmbracelet/bubbletea"
 	"codex-agent-go/internal/model"
 	"codex-agent-go/internal/settings"
 	"codex-agent-go/internal/subagent"
+	"context"
+	"fmt"
+	tea "github.com/charmbracelet/bubbletea"
 	"os"
 	"path/filepath"
 	"strings"
@@ -218,6 +218,42 @@ func (m *appModel) handleTasksCommand() {
 		lines = append(lines, renderTask(task))
 	}
 	m.addEntry(transcriptEntry{kind: entrySystem, title: "tasks", body: strings.Join(lines, "\n\n")})
+}
+
+func (m *appModel) handleSkillsCommand() {
+	if m.skillRegistry == nil {
+		m.addEntry(transcriptEntry{kind: entryError, title: "skills", body: "skill registry is unavailable"})
+		return
+	}
+	skills := m.skillRegistry.Skills()
+	if len(skills) == 0 {
+		roots := m.skillRegistry.Roots()
+		body := "no skills found"
+		if len(roots) > 0 {
+			body += "\nroots:\n- " + strings.Join(roots, "\n- ")
+		}
+		if err := m.skillRegistry.LastErr(); err != nil {
+			body += "\nerror: " + err.Error()
+		}
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "skills", body: body})
+		return
+	}
+	lines := make([]string, 0, len(skills))
+	for _, sk := range skills {
+		label := sk.Name
+		if strings.TrimSpace(sk.Description) != "" {
+			label += " - " + strings.TrimSpace(sk.Description)
+		}
+		if strings.TrimSpace(sk.Path) != "" {
+			label += "\n  " + sk.Path
+		}
+		lines = append(lines, label)
+	}
+	body := "Skills:\n- " + strings.Join(lines, "\n- ")
+	if err := m.skillRegistry.LastErr(); err != nil {
+		body += "\nerror: " + err.Error()
+	}
+	m.addEntry(transcriptEntry{kind: entrySystem, title: "skills", body: body})
 }
 
 func (m appModel) statusText(sessionID string) string {

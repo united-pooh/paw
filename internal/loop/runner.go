@@ -3,6 +3,7 @@ package loop
 import (
 	"codex-agent-go/internal/message"
 	"codex-agent-go/internal/model"
+	"codex-agent-go/internal/skill"
 	"codex-agent-go/internal/tokentracer"
 	"codex-agent-go/internal/tool"
 	"codex-agent-go/internal/ui"
@@ -69,8 +70,11 @@ type Runner struct {
 	supplements            []string
 	systemSupplement       string
 	compactToolPrompt      bool
+	streamMAEnabled        bool
 	streamMASubagents      StreamMASubagentRunner
 	subagentTokensProvider SubagentTokensProvider
+	skillRegistry          *skill.Registry
+	activeSkillContext     string
 	tokenTracer            *tokentracer.Tracer
 	traceStageID           string
 	traceAgentID           string
@@ -97,13 +101,15 @@ const (
 )
 
 type turnState struct {
-	content     strings.Builder
-	pending     strings.Builder
-	toolCalls   []message.ToolCall
-	wroteOutput bool
-	outputMode  outputMode
-	usage       model.Usage
-	usageKnown  bool
+	content      strings.Builder
+	pending      strings.Builder
+	toolCalls    []message.ToolCall
+	wroteOutput  bool
+	outputMode   outputMode
+	usage        model.Usage
+	usageKnown   bool
+	traceStageID string
+	traceAgentID string
 }
 
 type toolUseEnvelope struct {
@@ -121,21 +127,25 @@ func NewRunner(model ModelStreamer, output ui.UI, registry *tool.Registry, store
 // NewRunnerWithInstructionRoot 创建带项目指令根目录的调度器。
 func NewRunnerWithInstructionRoot(model ModelStreamer, output ui.UI, registry *tool.Registry, store HistoryStore, sessionID, instructionRoot string) *Runner {
 	return &Runner{
-		model:     model,
-		ui:        output,
-		registry:  registry,
-		store:     store,
-		sessionID: sessionID,
-		workRoot:  instructionRoot,
-		prompt:    NewPromptBuilder(NewInstructionManager(instructionRoot)),
+		model:           model,
+		ui:              output,
+		registry:        registry,
+		store:           store,
+		sessionID:       sessionID,
+		workRoot:        instructionRoot,
+		prompt:          NewPromptBuilder(NewInstructionManager(instructionRoot)),
+		skillRegistry:   skill.NewRegistry(skill.DefaultRoots(instructionRoot)),
+		streamMAEnabled: true,
 	}
 }
 
 // RunTurn 执行一次最小工具闭环流程，并返回最终 assistant 消息。
-func (runner *Runner) RunTurn(ctx context.Context, input string) (message.Message, error) {
+func (runner *Runner) RunTurn(ctx context.Context, input string) (msg message.Message, err error) {
 	if err := runner.validate(); err != nil {
 		return message.Message{}, err
 	}
+	runner.activateSkillContext(input)
+	defer runner.clearActiveSkillContext()
 
 	if runner.historyIsNil() && runner.store != nil {
 		messages, err := runner.store.LoadResolvedHistory(ctx, runner.sessionID)
@@ -159,8 +169,16 @@ func (runner *Runner) RunTurn(ctx context.Context, input string) (message.Messag
 	}
 
 	if invocation, ok := parseStreamMAInvocation(input); ok {
+		if !runner.currentStreamMAEnabled() {
+			return message.Message{}, fmt.Errorf("streamma is disabled; start with -streamma=true or set GOCODE_STREAMMA=1 to enable /streamma")
+		}
 		return runner.runStreamMATurn(ctx, input, invocation)
 	}
+
+	trace := runner.beginTraceTurn(input, "conversation")
+	defer func() {
+		runner.finishTraceTurn(trace, err)
+	}()
 
 	// 每一轮都基于“已提交的历史副本”工作。
 	// 这样即使当前轮中途失败，也不会污染下一轮上下文。
@@ -207,6 +225,81 @@ func (runner *Runner) validate() error {
 		return fmt.Errorf("runner 未初始化: model 或 ui 为空")
 	}
 	return nil
+}
+
+// SetSkillRegistry overrides the local skill registry. It is primarily useful
+// for tests and embedded callers that want a constrained skill search path.
+func (runner *Runner) SetSkillRegistry(registry *skill.Registry) {
+	if runner == nil {
+		return
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	runner.skillRegistry = registry
+}
+
+// SkillRoots returns the active skill search roots for tools that need to read
+// selected skill references without opening write access outside the workspace.
+func (runner *Runner) SkillRoots() []string {
+	registry := runner.currentSkillRegistry()
+	if registry == nil {
+		return nil
+	}
+	return registry.Roots()
+}
+
+func (runner *Runner) activateSkillContext(input string) {
+	if runner == nil {
+		return
+	}
+	registry := runner.currentSkillRegistry()
+	if registry == nil {
+		runner.clearActiveSkillContext()
+		return
+	}
+	contextText, loaded, errs := registry.InstructionContext(input)
+	runner.mu.Lock()
+	runner.activeSkillContext = contextText
+	runner.mu.Unlock()
+	if len(loaded) > 0 {
+		names := make([]string, 0, len(loaded))
+		for _, sk := range loaded {
+			names = append(names, sk.Name)
+		}
+		runner.notifySystem("skills", "loaded "+strings.Join(names, ", "))
+	}
+	for _, err := range errs {
+		if err != nil {
+			runner.notifySystem("skills", err.Error())
+		}
+	}
+}
+
+func (runner *Runner) clearActiveSkillContext() {
+	if runner == nil {
+		return
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	runner.activeSkillContext = ""
+}
+
+func (runner *Runner) currentSkillRegistry() *skill.Registry {
+	if runner == nil {
+		return nil
+	}
+	runner.mu.RLock()
+	defer runner.mu.RUnlock()
+	return runner.skillRegistry
+}
+
+func (runner *Runner) currentSkillContext() string {
+	if runner == nil {
+		return ""
+	}
+	runner.mu.RLock()
+	defer runner.mu.RUnlock()
+	return runner.activeSkillContext
 }
 
 func (runner *Runner) runModelTurn(ctx context.Context, history []message.Message) (message.Message, error) {
@@ -509,11 +602,19 @@ func (runner *Runner) buildSystemPrompt() string {
 	prompt := runner.prompt.Build(descriptions)
 	runner.mu.RLock()
 	supplement := runner.systemSupplement
+	skillContext := runner.activeSkillContext
 	runner.mu.RUnlock()
-	if strings.TrimSpace(supplement) == "" {
+	var sections []string
+	if strings.TrimSpace(skillContext) != "" {
+		sections = append(sections, "Selected skill instructions:\n"+strings.TrimSpace(skillContext))
+	}
+	if strings.TrimSpace(supplement) != "" {
+		sections = append(sections, "Additional system instructions:\n"+strings.TrimSpace(supplement))
+	}
+	if len(sections) == 0 {
 		return prompt
 	}
-	return strings.TrimRight(prompt, "\n") + "\n\nAdditional system instructions:\n" + strings.TrimSpace(supplement) + "\n"
+	return strings.TrimRight(prompt, "\n") + "\n\n" + strings.Join(sections, "\n\n") + "\n"
 }
 
 func renderMessageForModel(msg message.Message) message.Message {
@@ -560,6 +661,7 @@ func marshalJSON(v any) string {
 
 func (runner *Runner) consumeStream(ctx context.Context, events <-chan model.StreamEvent) (message.Message, error) {
 	var state turnState
+	state.traceStageID, state.traceAgentID = runner.currentTraceIDs()
 
 	for ev := range events {
 		msg, done, err := runner.handleEvent(&state, ev)
@@ -599,6 +701,7 @@ func (runner *Runner) handleEvent(state *turnState, ev model.StreamEvent) (messa
 }
 
 func (runner *Runner) recordUsageEvent(state *turnState, usage model.Usage) {
+	previousTrace := tokentracer.UsageFromModelUsage(state.usage)
 	previous := usageTotalsFromUsage(state.usage, state.usageKnown)
 	state.usage = mergeUsageSnapshot(state.usage, usage)
 	state.usageKnown = true
@@ -606,6 +709,10 @@ func (runner *Runner) recordUsageEvent(state *turnState, usage model.Usage) {
 	runner.setCurrentUsage(state.usage)
 	runner.addSessionUsage(current.delta(previous))
 	runner.emitModelUsage(state.usage)
+	currentTrace := tokentracer.UsageFromModelUsage(state.usage)
+	runner.recordTraceUsage(state.traceStageID, state.traceAgentID, currentTrace.Delta(previousTrace), map[string]any{
+		"source": "model_stream",
+	})
 }
 
 func (runner *Runner) emitModelUsage(usage model.Usage) {
@@ -889,6 +996,10 @@ func (runner *Runner) appendThinking(thinking string) error {
 	if thinking == "" {
 		return nil
 	}
+	runner.recordTraceEvent("thinking_delta", map[string]any{
+		"text":  thinking,
+		"bytes": len([]byte(thinking)),
+	})
 	if sink, ok := runner.ui.(ui.ThinkingDeltaReceiver); ok {
 		if err := sink.OnThinkingDelta(thinking); err != nil {
 			return err
@@ -901,6 +1012,10 @@ func (runner *Runner) writeDelta(state *turnState, delta string) error {
 	if delta == "" {
 		return nil
 	}
+	runner.recordTraceEvent("assistant_delta", map[string]any{
+		"text":  delta,
+		"bytes": len([]byte(delta)),
+	})
 
 	if err := runner.ui.OnAssistantDelta(delta); err != nil {
 		return runner.failAfterPartialOutput(state.wroteOutput, err)
@@ -1666,10 +1781,21 @@ func (runner *Runner) emitToolCall(call message.ToolCall) error {
 			}
 		}
 	}
+	runner.recordTraceEvent("tool_call", map[string]any{
+		"tool_use_id": call.ID,
+		"name":        call.Name,
+		"input":       json.RawMessage(append([]byte(nil), call.Input...)),
+	})
 	return runner.ui.OnToolCall(event)
 }
 
 func (runner *Runner) emitToolResult(call message.ToolCall, result message.ToolResult) error {
+	runner.recordTraceEvent("tool_result", map[string]any{
+		"tool_use_id": result.ToolUseID,
+		"name":        call.Name,
+		"is_error":    result.IsError,
+		"content":     result.Content,
+	})
 	return runner.ui.OnToolResult(ui.ToolResultEvent{
 		ToolUseID: result.ToolUseID,
 		Name:      call.Name,

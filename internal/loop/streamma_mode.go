@@ -4,6 +4,7 @@ import (
 	"codex-agent-go/internal/message"
 	"codex-agent-go/internal/model"
 	"codex-agent-go/internal/streamma"
+	"codex-agent-go/internal/tokentracer"
 	"codex-agent-go/internal/ui"
 	"context"
 	"fmt"
@@ -60,6 +61,15 @@ func (runner *Runner) SetStreamMASubagentRunner(subagents StreamMASubagentRunner
 	runner.streamMASubagents = subagents
 }
 
+func (runner *Runner) SetStreamMAEnabled(enabled bool) {
+	if runner == nil {
+		return
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	runner.streamMAEnabled = enabled
+}
+
 func (runner *Runner) SetSubagentTokensProvider(p SubagentTokensProvider) {
 	if runner == nil {
 		return
@@ -112,7 +122,7 @@ func parseStreamMAInvocation(input string) (streamMAInvocation, bool) {
 	return streamMAInvocation{}, false
 }
 
-func (runner *Runner) runStreamMATurn(ctx context.Context, input string, invocation streamMAInvocation) (message.Message, error) {
+func (runner *Runner) runStreamMATurn(ctx context.Context, input string, invocation streamMAInvocation) (msg message.Message, err error) {
 	task := invocation.Task
 	if strings.TrimSpace(task) == "" {
 		if invocation.Trace {
@@ -134,6 +144,17 @@ func (runner *Runner) runStreamMATurn(ctx context.Context, input string, invocat
 	}()
 
 	spec := defaultStreamMAGraph(task)
+	trace := runner.beginTraceTurn(input, "streamma")
+	defer func() {
+		runner.finishTraceTurn(trace, err)
+	}()
+	runner.recordTraceEvent("streamma_start", map[string]any{
+		"stage_id": trace.stageID,
+		"run_id":   spec.RunID,
+		"task":     task,
+		"agents":   streamMAAgentIDs(spec),
+		"edges":    spec.Edges,
+	})
 	if invocation.Trace {
 		runner.notifySystem("streamma-trace", fmt.Sprintf("running %s with live runtime events", describeStreamMAGraph(spec)))
 	} else {
@@ -142,9 +163,9 @@ func (runner *Runner) runStreamMATurn(ctx context.Context, input string, invocat
 	result, err := streamma.RunGraphWithAgentEventSink(
 		ctx,
 		spec,
-		newStreamMASubagentModel(subagents, runner.notifySystem, invocation.Trace),
+		newStreamMASubagentModel(subagents, runner.notifySystem, invocation.Trace, runner.currentSkillContext(), runner.currentTokenTracer(), trace.stageID, runner.currentModelLabels),
 		buildStreamMAProblem(task, history),
-		runner.streamMATraceSink(invocation.Trace),
+		mergeStreamMASinks(runner.streamMATraceSink(invocation.Trace), runner.streamMATokenTraceSink(trace.stageID)),
 	)
 	if err != nil {
 		return message.Message{}, err
@@ -167,6 +188,11 @@ func (runner *Runner) runStreamMATurn(ctx context.Context, input string, invocat
 	if err := runner.ui.OnDone(); err != nil {
 		return message.Message{}, err
 	}
+	runner.recordTraceEvent("streamma_end", map[string]any{
+		"stage_id": trace.stageID,
+		"run_id":   result.RunID,
+		"status":   result.Status,
+	})
 	return assistant, nil
 }
 
@@ -229,6 +255,15 @@ func (runner *Runner) currentStreamMASubagents() StreamMASubagentRunner {
 	runner.mu.RLock()
 	defer runner.mu.RUnlock()
 	return runner.streamMASubagents
+}
+
+func (runner *Runner) currentStreamMAEnabled() bool {
+	if runner == nil {
+		return false
+	}
+	runner.mu.RLock()
+	defer runner.mu.RUnlock()
+	return runner.streamMAEnabled
 }
 
 func defaultStreamMAGraph(task string) streamma.GraphSpec {
@@ -425,20 +460,28 @@ func (runner *Runner) notifySystem(title, body string) {
 }
 
 type streamMASubagentModel struct {
-	subagents StreamMASubagentRunner
-	notify    func(string, string)
-	trace     bool
+	subagents    StreamMASubagentRunner
+	notify       func(string, string)
+	trace        bool
+	skillContext string
+	tokenTracer  *tokentracer.Tracer
+	traceStageID string
+	modelLabels  func() (string, string)
 
 	mu       sync.Mutex
 	sessions map[string]string
 }
 
-func newStreamMASubagentModel(subagents StreamMASubagentRunner, notify func(string, string), trace bool) *streamMASubagentModel {
+func newStreamMASubagentModel(subagents StreamMASubagentRunner, notify func(string, string), trace bool, skillContext string, tokenTracer *tokentracer.Tracer, traceStageID string, modelLabels func() (string, string)) *streamMASubagentModel {
 	return &streamMASubagentModel{
-		subagents: subagents,
-		notify:    notify,
-		trace:     trace,
-		sessions:  map[string]string{},
+		subagents:    subagents,
+		notify:       notify,
+		trace:        trace,
+		skillContext: strings.TrimSpace(skillContext),
+		tokenTracer:  tokenTracer,
+		traceStageID: strings.TrimSpace(traceStageID),
+		modelLabels:  modelLabels,
+		sessions:     map[string]string{},
 	}
 }
 
@@ -458,6 +501,10 @@ func (m *streamMASubagentModel) StreamAgent(ctx context.Context, invocation stre
 	sessionID := m.sessionID(sessionKey)
 	firstInvocation := sessionID == ""
 	prompt := buildStreamMAIncrementalPrompt(invocation, firstInvocation)
+	systemPrompt := invocation.SystemPrompt
+	if strings.TrimSpace(m.skillContext) != "" {
+		systemPrompt = strings.TrimRight(systemPrompt, "\n") + "\n\nSelected skill instructions for this StreamMA worker:\n" + m.skillContext + "\n"
+	}
 	stream, err := m.subagents.StreamSubagent(ctx, StreamMASubagentRequest{
 		RunID:           invocation.RunID,
 		SessionID:       sessionID,
@@ -466,7 +513,7 @@ func (m *streamMASubagentModel) StreamAgent(ctx context.Context, invocation stre
 		AgentID:         agentID,
 		Role:            role,
 		Description:     "streamma " + agentID + " " + role,
-		SystemPrompt:    invocation.SystemPrompt,
+		SystemPrompt:    systemPrompt,
 		Problem:         invocation.Problem,
 		InboundFrom:     invocation.InboundFrom,
 		InboundStep:     cloneLoopStreamMAStep(invocation.InboundStep),
@@ -487,6 +534,17 @@ func (m *streamMASubagentModel) StreamAgent(ctx context.Context, invocation stre
 		} else {
 			m.notify(agentID, fmt.Sprintf("(%s) started", role))
 		}
+	}
+	if m.tokenTracer != nil {
+		m.tokenTracer.RecordEvent("streamma.subagent_start", map[string]any{
+			"stage_id":          m.traceStageID,
+			"agent_id":          agentID,
+			"role":              role,
+			"invocation_index":  invocation.InvocationIndex,
+			"session_id":        sessionID,
+			"inbound_from":      invocation.InboundFrom,
+			"input_event_count": len(invocation.InputEvents),
+		})
 	}
 	return m.wrapStream(ctx, invocation, stream), nil
 }
@@ -513,11 +571,20 @@ func (m *streamMASubagentModel) wrapStream(ctx context.Context, invocation strea
 		defer close(out)
 		var lastUsage *model.Usage
 		defer func() {
-			if m.notify == nil {
-				return
-			}
 			agentID := strings.TrimSpace(invocation.AgentID)
 			role := strings.TrimSpace(invocation.Role)
+			if m.notify == nil {
+				if m.tokenTracer != nil {
+					m.tokenTracer.RecordEvent("streamma.subagent_end", map[string]any{
+						"stage_id":         m.traceStageID,
+						"agent_id":         agentID,
+						"role":             role,
+						"invocation_index": invocation.InvocationIndex,
+						"session_id":       stream.SessionID,
+					})
+				}
+				return
+			}
 			detail := fmt.Sprintf("(%s) finished", role)
 			if strings.TrimSpace(stream.SessionID) != "" {
 				detail += " session=" + stream.SessionID
@@ -532,11 +599,48 @@ func (m *streamMASubagentModel) wrapStream(ctx context.Context, invocation strea
 			} else {
 				m.notify(agentID, detail)
 			}
+			if m.tokenTracer != nil {
+				m.tokenTracer.RecordEvent("streamma.subagent_end", map[string]any{
+					"stage_id":         m.traceStageID,
+					"agent_id":         agentID,
+					"role":             role,
+					"invocation_index": invocation.InvocationIndex,
+					"session_id":       stream.SessionID,
+				})
+			}
 		}()
+		var previousUsage tokentracer.Usage
 		for ev := range stream.Events {
 			if ev.Usage != nil {
 				usage := *ev.Usage
 				lastUsage = &usage
+				currentUsage := tokentracer.UsageFromModelUsage(usage)
+				delta := currentUsage.Delta(previousUsage)
+				previousUsage = currentUsage
+				if m.tokenTracer != nil && !delta.Empty() {
+					provider, modelName := "", ""
+					if m.modelLabels != nil {
+						provider, modelName = m.modelLabels()
+					}
+					agentID := strings.TrimSpace(invocation.AgentID)
+					role := strings.TrimSpace(invocation.Role)
+					m.tokenTracer.RecordAPICall(
+						m.traceStageID,
+						"",
+						agentID,
+						streamMATraceAgentName(agentID, role),
+						provider,
+						modelName,
+						delta,
+						map[string]any{
+							"source":           "streamma_subagent",
+							"run_id":           invocation.RunID,
+							"role":             role,
+							"invocation_index": invocation.InvocationIndex,
+							"session_id":       stream.SessionID,
+						},
+					)
+				}
 			}
 			if !sendStreamMAEvent(ctx, out, ev) {
 				drainStreamMAEvents(stream.Events, &lastUsage)
@@ -696,4 +800,12 @@ func describeStreamMAGraph(spec streamma.GraphSpec) string {
 		ids = append(ids, agent.ID)
 	}
 	return strings.Join(ids, " -> ")
+}
+
+func streamMAAgentIDs(spec streamma.GraphSpec) []string {
+	ids := make([]string, 0, len(spec.Agents))
+	for _, agent := range spec.Agents {
+		ids = append(ids, agent.ID)
+	}
+	return ids
 }

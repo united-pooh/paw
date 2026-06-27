@@ -3,10 +3,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
+	"codex-agent-go/internal/model"
 	"codex-agent-go/internal/session"
+	"codex-agent-go/internal/tokentracer"
 )
 
 func TestClearTerminalWindowWritesClearAndScrollbackSequence(t *testing.T) {
@@ -16,6 +21,88 @@ func TestClearTerminalWindowWritesClearAndScrollbackSequence(t *testing.T) {
 
 	if got, want := output.String(), "\x1b[H\x1b[2J\x1b[3J"; got != want {
 		t.Fatalf("clearTerminalWindow() wrote %q, want %q", got, want)
+	}
+}
+
+func TestTokenTracerDefaultsFromEnv(t *testing.T) {
+	t.Setenv("GOCODE_TOKEN_TRACER", "0")
+	if defaultTokenTracerEnabled() {
+		t.Fatalf("defaultTokenTracerEnabled() = true, want false when disabled by env")
+	}
+	t.Setenv("GOCODE_TOKEN_TRACER", "")
+	if !defaultTokenTracerEnabled() {
+		t.Fatalf("defaultTokenTracerEnabled() = false, want true by default")
+	}
+	t.Setenv("GOCODE_TOKEN_TRACER_OPEN", "true")
+	if !defaultTokenTracerOpen() {
+		t.Fatalf("defaultTokenTracerOpen() = false, want true")
+	}
+	t.Setenv("GOCODE_TOKEN_TRACER_PORT", "43210")
+	if got := defaultTokenTracerPort(); got != 43210 {
+		t.Fatalf("defaultTokenTracerPort() = %d, want 43210", got)
+	}
+}
+
+func TestStreamMADefaultFromEnv(t *testing.T) {
+	t.Setenv("GOCODE_STREAMMA", "0")
+	if defaultStreamMAEnabled() {
+		t.Fatalf("defaultStreamMAEnabled() = true, want false when disabled by env")
+	}
+	t.Setenv("GOCODE_STREAMMA", "off")
+	if defaultStreamMAEnabled() {
+		t.Fatalf("defaultStreamMAEnabled() = true, want false for off")
+	}
+	t.Setenv("GOCODE_STREAMMA", "")
+	if !defaultStreamMAEnabled() {
+		t.Fatalf("defaultStreamMAEnabled() = false, want true by default")
+	}
+}
+
+func TestStartTokenTracerStartsDashboardService(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, server, err := startTokenTracer(ctx, "session-test", options{tokenTracerPort: 0})
+	if err != nil {
+		t.Fatalf("startTokenTracer() error = %v", err)
+	}
+	defer func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Second)
+		defer shutdownCancel()
+		_ = server.Shutdown(shutdownCtx)
+	}()
+
+	resp, err := http.Get(server.URL() + "/api/state")
+	if err != nil {
+		t.Fatalf("GET /api/state error = %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var snapshot tokentracer.Snapshot
+	if err := json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
+		t.Fatalf("decode state: %v", err)
+	}
+	if snapshot.SessionID != "session-test" || snapshot.ServerURL == "" {
+		t.Fatalf("snapshot = %#v, want session and server url", snapshot)
+	}
+}
+
+func TestWorkerUsageUICapturesStructuredUsage(t *testing.T) {
+	workerUI := &workerUsageUI{}
+
+	workerUI.OnModelUsage(model.Usage{
+		PromptTokens:         120,
+		CompletionTokens:     9,
+		PromptCacheHitTokens: 50,
+	})
+
+	usage := workerUI.Usage()
+	if usage == nil {
+		t.Fatal("Usage() = nil, want structured usage")
+	}
+	if usage.Input != 70 || usage.CacheRead != 50 || usage.Output != 9 {
+		t.Fatalf("Usage() = %#v, want input/cache/output split", usage)
 	}
 }
 

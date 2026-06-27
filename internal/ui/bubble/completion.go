@@ -2,6 +2,7 @@
 package bubble
 
 import (
+	"codex-agent-go/internal/skill"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ type completionKind int
 const (
 	completionKindCommand completionKind = iota
 	completionKindFile
+	completionKindSkill
 )
 
 // completion 保存补全弹窗的临时 UI 状态。
@@ -71,6 +73,15 @@ func (c *completion) navigateDown() {
 // query 为 @ 之后到字符串末尾的内容；query 内不能含空白符（否则说明词已结束）。
 // 如果未找到满足条件的 @，返回 (-1, "")。
 func detectAtTrigger(value string) (atByteIndex int, query string) {
+	return detectWordTrigger(value, '@')
+}
+
+// detectSkillTrigger 在 value 中找到最末尾的词边界 $ 触发点。
+func detectSkillTrigger(value string) (dollarByteIndex int, query string) {
+	return detectWordTrigger(value, '$')
+}
+
+func detectWordTrigger(value string, trigger rune) (byteIndex int, query string) {
 	runes := []rune(value)
 	n := len(runes)
 	if n == 0 {
@@ -92,23 +103,23 @@ func detectAtTrigger(value string) (atByteIndex int, query string) {
 		return -1, "" // 当前词为空（末尾是空白）
 	}
 
-	// 当前词必须以 @ 开头
-	if runes[wordStart] != '@' {
+	// 当前词必须以触发字符开头
+	if runes[wordStart] != trigger {
 		return -1, ""
 	}
 
-	// 词边界：@ 在行首，或前一个字符为空白
+	// 词边界：触发字符在行首，或前一个字符为空白
 	if wordStart > 0 && !unicode.IsSpace(runes[wordStart-1]) {
-		return -1, "" // @ 紧跟非空白字符，不是词边界（如 "text@foo"）
+		return -1, ""
 	}
 
-	// 计算 @ 在原始字节串中的偏移
+	// 计算触发字符在原始字节串中的偏移
 	byteOff := 0
 	for _, r := range runes[:wordStart] {
 		byteOff += utf8.RuneLen(r)
 	}
 
-	// query = @ 之后的全部文本
+	// query = 触发字符之后的全部文本
 	q := string(runes[wordStart+1:])
 	return byteOff, q
 }
@@ -174,8 +185,8 @@ func resolvePathParts(base, rest string) (dir, prefix string) {
 // syncAtCompletion 检测 @ 触发并更新 m.completion。
 // 需要重新加载文件时返回 tea.Cmd，否则返回 nil。
 func (m *appModel) syncAtCompletion() tea.Cmd {
-	// / 命令补全优先，不与 @ 同时激活
-	if m.completion != nil && m.completion.kind == completionKindCommand {
+	// / 命令和 $ skill 补全优先，不与 @ 同时激活
+	if m.completion != nil && (m.completion.kind == completionKindCommand || m.completion.kind == completionKindSkill) {
 		return nil
 	}
 
@@ -222,6 +233,44 @@ func (m *appModel) syncAtCompletion() tea.Cmd {
 	return nil
 }
 
+// syncSkillCompletion 检测 $ skill 补全并更新 m.completion。
+func (m *appModel) syncSkillCompletion() {
+	if m.completion != nil && m.completion.kind == completionKindCommand {
+		return
+	}
+	val := m.input.Value()
+	dollarIdx, query := detectSkillTrigger(val)
+	if dollarIdx < 0 {
+		if m.completion != nil && m.completion.kind == completionKindSkill {
+			m.clearCompletionAndRelayout()
+		}
+		return
+	}
+	items := skillCompletionItems(query, m.skillRegistry)
+	if len(items) == 0 {
+		if m.completion != nil && m.completion.kind == completionKindSkill {
+			m.clearCompletionAndRelayout()
+		}
+		return
+	}
+	if m.completion == nil || m.completion.kind != completionKindSkill {
+		m.completion = &completion{
+			kind:        completionKindSkill,
+			items:       items,
+			atByteIndex: dollarIdx,
+			prefix:      query,
+		}
+		m.sessionPicker = nil
+	} else {
+		m.completion.items = items
+		m.completion.atByteIndex = dollarIdx
+		m.completion.prefix = query
+		if m.completion.selectedIndex >= len(items) {
+			m.completion.selectedIndex = 0
+		}
+	}
+}
+
 // syncCommandCompletion 检测 / 命令补全并更新 m.completion。
 func (m *appModel) syncCommandCompletion() {
 	val := m.input.Value()
@@ -232,7 +281,7 @@ func (m *appModel) syncCommandCompletion() {
 		return
 	}
 	query := strings.TrimPrefix(val, "/")
-	items := commandCompletionItems(query, m.commandRegistry)
+	items := commandCompletionItems(query, m.commandRegistry, m.skillRegistry)
 	if len(items) == 0 {
 		m.clearCompletionAndRelayout()
 		return
@@ -322,15 +371,46 @@ func newCommandCompletion(prefix string, registry *CommandRegistry) *completion 
 }
 
 // commandCompletionItems 从注册表中筛选匹配前缀的命令名。
-func commandCompletionItems(prefix string, registry *CommandRegistry) []string {
-	if registry == nil {
+func commandCompletionItems(prefix string, registry *CommandRegistry, skillRegistries ...*skill.Registry) []string {
+	if registry == nil && len(skillRegistries) == 0 {
 		return nil
 	}
 	var items []string
-	for _, name := range registry.order {
-		if prefix == "" || strings.HasPrefix(name, "/"+prefix) {
-			items = append(items, name)
+	if registry != nil {
+		for _, name := range registry.order {
+			if prefix == "" || strings.HasPrefix(name, "/"+prefix) {
+				items = append(items, name)
+			}
 		}
+	}
+	seen := map[string]bool{}
+	for _, item := range items {
+		seen[item] = true
+	}
+	for _, skillRegistry := range skillRegistries {
+		for _, name := range skillCompletionItems(prefix, skillRegistry) {
+			item := "/" + name
+			if !seen[item] {
+				items = append(items, item)
+				seen[item] = true
+			}
+		}
+	}
+	return items
+}
+
+// skillCompletionItems 从 skill 注册表中筛选匹配前缀的技能名。
+func skillCompletionItems(prefix string, registry *skill.Registry) []string {
+	if registry == nil {
+		return nil
+	}
+	matches := registry.Find(prefix)
+	if len(matches) > 8 {
+		matches = matches[:8]
+	}
+	items := make([]string, 0, len(matches))
+	for _, sk := range matches {
+		items = append(items, sk.Name)
 	}
 	return items
 }
@@ -377,9 +457,60 @@ func buildAtRef(query, searchDir, selected string) string {
 
 // applyCommandCompletion 将命令填入输入框。
 func (m appModel) applyCommandCompletion(selected string) appModel {
+	if m.commandRegistry != nil {
+		if _, ok := m.commandRegistry.Lookup(selected); ok {
+			m.input.SetValue(selected + " ")
+			m.input.CursorEnd()
+			return m
+		}
+	}
+	if ref, ok := m.slashSkillReference(selected); ok {
+		m.input.SetValue(ref + " ")
+		m.input.CursorEnd()
+		return m
+	}
 	m.input.SetValue(selected + " ")
 	m.input.CursorEnd()
 	return m
+}
+
+// applySkillCompletion 将选中 skill 写成 Codex 风格的 markdown reference。
+func (m appModel) applySkillCompletion(selected string) appModel {
+	val := m.input.Value()
+	dollarIdx, _ := detectSkillTrigger(val)
+	if dollarIdx < 0 {
+		return m
+	}
+	before := val[:dollarIdx]
+	ref := "$" + selected
+	if m.skillRegistry != nil {
+		if sk, ok := m.skillRegistry.Resolve(selected); ok && strings.TrimSpace(sk.Path) != "" {
+			ref = skillMarkdownReference(sk)
+		}
+	}
+	m.input.SetValue(before + ref + " ")
+	m.input.CursorEnd()
+	m.relayout()
+	return m
+}
+
+func (m appModel) slashSkillReference(selected string) (string, bool) {
+	if m.skillRegistry == nil {
+		return "", false
+	}
+	name := strings.TrimPrefix(strings.TrimSpace(selected), "/")
+	if name == "" {
+		return "", false
+	}
+	sk, ok := m.skillRegistry.Resolve(name)
+	if !ok || strings.TrimSpace(sk.Path) == "" {
+		return "", false
+	}
+	return skillMarkdownReference(sk), true
+}
+
+func skillMarkdownReference(sk skill.Skill) string {
+	return fmt.Sprintf("[$%s](%s)", sk.Name, sk.Path)
 }
 
 func (m *appModel) clearCompletionAndRelayout() {
@@ -399,7 +530,7 @@ func (m appModel) renderCompletionBox() string {
 	if m.completion == nil {
 		return ""
 	}
-	width := maxInt(32, m.width-2)
+	width := m.leftPanelContentWidth(20)
 	return completionPanelStyle.Width(width).Render(m.renderCompletionContent())
 }
 
@@ -412,6 +543,8 @@ func (m appModel) renderCompletionContent() string {
 		title = wizardTitleStyle.Render("Commands")
 	case completionKindFile:
 		title = wizardTitleStyle.Render("Files")
+	case completionKindSkill:
+		title = wizardTitleStyle.Render("Skills")
 	}
 	lines := []string{title}
 

@@ -2,10 +2,10 @@ package model
 
 import (
 	"bytes"
+	"codex-agent-go/internal/message"
 	"context"
 	"encoding/json"
 	"fmt"
-	"codex-agent-go/internal/message"
 	"io"
 	"net/http"
 	"strings"
@@ -27,9 +27,9 @@ type anthropicMessagesRequest struct {
 
 // anthropicSystemContent 带 cache_control 的 system prompt 内容块。
 type anthropicSystemContent struct {
-	Type         string                  `json:"type"`
-	Text         string                  `json:"text"`
-	CacheControl *anthropicCacheControl  `json:"cache_control,omitempty"`
+	Type         string                 `json:"type"`
+	Text         string                 `json:"text"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 
 // anthropicCacheControl Anthropic prompt cache 控制，type="ephemeral" 表示开启缓存。
@@ -59,8 +59,9 @@ type anthropicStreamResponse struct {
 		Text     string `json:"text,omitempty"`
 		Thinking string `json:"thinking,omitempty"`
 		// tool_use 类型的额外字段
-		ID   string `json:"id,omitempty"`
-		Name string `json:"name,omitempty"`
+		ID    string          `json:"id,omitempty"`
+		Name  string          `json:"name,omitempty"`
+		Input json.RawMessage `json:"input,omitempty"`
 	} `json:"content_block,omitempty"`
 	Delta *struct {
 		Type        string  `json:"type"`
@@ -189,9 +190,11 @@ func setAnthropicRequestHeaders(req *http.Request, cfg Config) {
 
 // activeAnthropicToolCall 追踪正在流式接收的原生 tool_use 块。
 type activeAnthropicToolCall struct {
-	id   string
-	name string
-	args strings.Builder
+	id           string
+	name         string
+	initialInput json.RawMessage
+	args         strings.Builder
+	sawDelta     bool
 }
 
 func (c *Client) consumeAnthropicStream(ctx context.Context, resp *http.Response, events chan<- StreamEvent) {
@@ -230,25 +233,26 @@ func (c *Client) consumeAnthropicStream(ctx context.Context, resp *http.Response
 		// 原生工具调用：content_block_start type=tool_use
 		if chunk.ContentBlock != nil && chunk.ContentBlock.Type == "tool_use" {
 			activeTool = &activeAnthropicToolCall{
-				id:   chunk.ContentBlock.ID,
-				name: chunk.ContentBlock.Name,
+				id:           chunk.ContentBlock.ID,
+				name:         chunk.ContentBlock.Name,
+				initialInput: append(json.RawMessage(nil), chunk.ContentBlock.Input...),
 			}
 			continue
 		}
 
 		// 原生工具调用：input_json_delta → 累积参数
 		if chunk.Delta != nil && chunk.Delta.Type == "input_json_delta" && activeTool != nil {
+			if !activeTool.sawDelta {
+				activeTool.args.Reset()
+				activeTool.sawDelta = true
+			}
 			activeTool.args.WriteString(chunk.Delta.PartialJSON)
 			continue
 		}
 
 		// 原生工具调用：content_block_stop → 发出完整工具调用
 		if chunk.Type == "content_block_stop" && activeTool != nil {
-			args := activeTool.args.String()
-			input := json.RawMessage(`{}`)
-			if len(args) > 0 && json.Valid([]byte(args)) {
-				input = json.RawMessage(args)
-			}
+			input := activeTool.input()
 			if !emitStreamEvent(ctx, events, StreamEvent{ToolCalls: []message.ToolCall{{
 				ID:    activeTool.id,
 				Name:  activeTool.name,
@@ -271,6 +275,44 @@ func (c *Client) consumeAnthropicStream(ctx context.Context, resp *http.Response
 		return
 	}
 	_ = emitStreamEvent(ctx, events, StreamEvent{Done: true})
+}
+
+func (t *activeAnthropicToolCall) input() json.RawMessage {
+	if t == nil {
+		return json.RawMessage(`{}`)
+	}
+	if t.sawDelta {
+		args := t.args.String()
+		if input, ok := normalizeAnthropicToolInput(json.RawMessage(args)); ok {
+			return input
+		}
+		return json.RawMessage(`{}`)
+	}
+	if input, ok := normalizeAnthropicToolInput(t.initialInput); ok {
+		return input
+	}
+	return json.RawMessage(`{}`)
+}
+
+func normalizeAnthropicToolInput(raw json.RawMessage) (json.RawMessage, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, false
+	}
+	if !json.Valid(trimmed) {
+		return nil, false
+	}
+	if len(trimmed) > 0 && trimmed[0] == '"' {
+		var nested string
+		if err := json.Unmarshal(trimmed, &nested); err != nil {
+			return nil, false
+		}
+		trimmed = bytes.TrimSpace([]byte(nested))
+		if len(trimmed) == 0 || !json.Valid(trimmed) {
+			return nil, false
+		}
+	}
+	return append(json.RawMessage(nil), trimmed...), true
 }
 
 func (c *Client) handleAnthropicStreamLine(ctx context.Context, line string, events chan<- StreamEvent) (done bool, err error) {

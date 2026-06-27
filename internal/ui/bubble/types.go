@@ -5,6 +5,7 @@ import (
 	"codex-agent-go/internal/loop"
 	"codex-agent-go/internal/model"
 	"codex-agent-go/internal/settings"
+	"codex-agent-go/internal/skill"
 	"codex-agent-go/internal/subagent"
 	"codex-agent-go/internal/ui"
 	"context"
@@ -234,6 +235,7 @@ type appModel struct {
 	subagents                SubagentController
 	sessionStore             SessionStore
 	commandRegistry          *CommandRegistry
+	skillRegistry            *skill.Registry
 	queryGuard               QueryGuard
 	chatQueue                CommandQueue
 	cursorAnchor             *terminalCursorAnchor
@@ -312,4 +314,8 @@ type pipelineStateUpdatedMsg struct {
 
 type contextStatsProvider interface {
 	ContextStats(limitTokens int, draft string) loop.ContextStats
+}
+
+type tokenTracerURLProvider interface {
+	TokenTracerURL() string
 }
