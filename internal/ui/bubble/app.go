@@ -338,6 +338,25 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// 其他键：不 return，继续走下面的 switch 和 textarea 更新
 		}
+		if m.transcriptKeyScrollActive {
+			switch msg.String() {
+			case "up":
+				m.viewport.ScrollUp(1)
+				return m, nil
+			case "down":
+				m.viewport.ScrollDown(1)
+				if m.viewport.AtBottom() {
+					m.transcriptKeyScrollActive = false
+				}
+				return m, nil
+			case "esc":
+				m.transcriptKeyScrollActive = false
+				return m, nil
+			}
+			if isTextEditingKey(msg) || msg.String() == "tab" || msg.String() == "ctrl+c" {
+				m.transcriptKeyScrollActive = false
+			}
+		}
 		switch msg.String() {
 		case "ctrl+c":
 			now := time.Now()
@@ -374,12 +393,14 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tea.MouseMsg:
 		if next, handled, cmd := m.handleTranscriptMouse(msg); handled {
+			next.transcriptKeyScrollActive = true
 			return next, cmd
 		}
 		if isMouseWheel(msg) {
 			if m.isTranscriptViewportMouse(msg) {
 				var viewportCmd tea.Cmd
 				m.viewport, viewportCmd = m.viewport.Update(msg)
+				m.transcriptKeyScrollActive = true
 				return m, viewportCmd
 			}
 			return m, nil

@@ -1999,6 +1999,89 @@ func TestMouseWheelOverTranscriptDoesNotScrollInputViewport(t *testing.T) {
 	}
 }
 
+func TestArrowKeysAfterTranscriptWheelScrollViewportNotInput(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 10
+	model.inputHistory = []string{"old input"}
+	model.input.SetValue("draft")
+	model.relayout()
+	model.transcript = nil
+	for i := 0; i < 30; i++ {
+		model.transcript = append(model.transcript, transcriptEntry{
+			kind:  entryAssistant,
+			title: "assistant",
+			body:  fmt.Sprintf("line %02d", i),
+		})
+	}
+	model.refreshViewport()
+
+	next, _ := model.Update(tea.MouseMsg{
+		X:      10,
+		Y:      3,
+		Type:   tea.MouseWheelUp,
+		Button: tea.MouseButtonWheelUp,
+		Action: tea.MouseActionPress,
+	})
+	model = next.(appModel)
+	offsetAfterWheel := model.viewport.YOffset
+	if !model.transcriptKeyScrollActive {
+		t.Fatalf("transcriptKeyScrollActive = false after transcript wheel")
+	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyUp})
+	model = next.(appModel)
+	if got := model.input.Value(); got != "draft" {
+		t.Fatalf("input value = %q, want draft unchanged after transcript up", got)
+	}
+	if model.historyIndex != -1 {
+		t.Fatalf("historyIndex = %d, want -1 after transcript up", model.historyIndex)
+	}
+	if model.viewport.YOffset >= offsetAfterWheel {
+		t.Fatalf("YOffset = %d, want less than %d after transcript up", model.viewport.YOffset, offsetAfterWheel)
+	}
+}
+
+func TestTypingClearsTranscriptKeyScrollFocus(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 10
+	model.input.SetValue("draft")
+	model.relayout()
+	model.transcript = nil
+	for i := 0; i < 30; i++ {
+		model.transcript = append(model.transcript, transcriptEntry{
+			kind:  entryAssistant,
+			title: "assistant",
+			body:  fmt.Sprintf("line %02d", i),
+		})
+	}
+	model.refreshViewport()
+
+	next, _ := model.Update(tea.MouseMsg{
+		X:      10,
+		Y:      3,
+		Type:   tea.MouseWheelUp,
+		Button: tea.MouseButtonWheelUp,
+		Action: tea.MouseActionPress,
+	})
+	model = next.(appModel)
+	if !model.transcriptKeyScrollActive {
+		t.Fatalf("transcriptKeyScrollActive = false after transcript wheel")
+	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	model = next.(appModel)
+	if model.transcriptKeyScrollActive {
+		t.Fatalf("transcriptKeyScrollActive = true after typing")
+	}
+	if got := model.input.Value(); got != "draftx" {
+		t.Fatalf("input value = %q, want draftx", got)
+	}
+}
+
 func TestSidebarMouseWheelDoesNotScrollTranscriptViewport(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
