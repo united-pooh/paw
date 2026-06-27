@@ -1,10 +1,10 @@
 package streamma
 
 import (
-	"context"
-	"fmt"
 	"codex-agent-go/internal/message"
 	"codex-agent-go/internal/model"
+	"context"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -31,6 +31,8 @@ type AgentInvocation struct {
 	SystemPrompt    string
 	Problem         string
 	InvocationIndex int
+	Attempt         int
+	StepCountHint   int
 	StartStepIndex  int
 	Boundary        string
 	RequireBoundary bool
@@ -39,6 +41,13 @@ type AgentInvocation struct {
 	InboundStep     *StepPacket
 	Transcript      []TranscriptEntry
 }
+
+type AgentInvokePolicy string
+
+const (
+	InvokeOnArrival AgentInvokePolicy = "arrival"
+	InvokeOnEOF     AgentInvokePolicy = "eof"
+)
 
 type GraphSpec struct {
 	RunID      string      `json:"run_id,omitempty"`
@@ -52,12 +61,15 @@ type StepPolicy struct {
 	Boundary        string `json:"boundary,omitempty"`
 	MaxStepBytes    int    `json:"max_step_bytes,omitempty"`
 	RequireBoundary bool   `json:"require_boundary,omitempty"`
+	MaxAttempts     int    `json:"max_attempts,omitempty"`
 }
 
 type AgentSpec struct {
-	ID           string `json:"id"`
-	Role         string `json:"role,omitempty"`
-	SystemPrompt string `json:"system_prompt,omitempty"`
+	ID            string `json:"id"`
+	Role          string `json:"role,omitempty"`
+	SystemPrompt  string `json:"system_prompt,omitempty"`
+	InvokePolicy  string `json:"invoke_policy,omitempty"`
+	StepCountHint int    `json:"step_count_hint,omitempty"`
 }
 
 type EdgeSpec struct {
@@ -85,6 +97,7 @@ type EventType string
 const (
 	EventProblem       EventType = "problem"
 	EventStepCommitted EventType = "agent.step.committed"
+	EventAgentRetry    EventType = "agent.retry"
 	EventUpstreamEOF   EventType = "control.upstream_eof"
 	EventFinalAnswer   EventType = "agent.final"
 	EventRunFailed     EventType = "run.failed"
@@ -223,6 +236,7 @@ type compiledGraph struct {
 	boundary        string
 	maxStepBytes    int
 	requireBoundary bool
+	maxAttempts     int
 	agents          map[string]AgentSpec
 	agentOrder      []string
 	predecessors    map[string][]string
@@ -256,10 +270,14 @@ func compileGraph(spec GraphSpec) (*compiledGraph, error) {
 		boundary:        boundary,
 		maxStepBytes:    spec.StepPolicy.MaxStepBytes,
 		requireBoundary: spec.StepPolicy.RequireBoundary,
+		maxAttempts:     spec.StepPolicy.MaxAttempts,
 		agents:          map[string]AgentSpec{},
 		predecessors:    map[string][]string{},
 		successors:      map[string][]string{},
 		edgeIDs:         map[string]string{},
+	}
+	if graph.maxAttempts < 1 {
+		graph.maxAttempts = 1
 	}
 	for _, agent := range spec.Agents {
 		agent.ID = strings.TrimSpace(agent.ID)
@@ -317,6 +335,22 @@ func compileGraph(spec GraphSpec) (*compiledGraph, error) {
 		return nil, err
 	}
 	return graph, nil
+}
+
+func (g *compiledGraph) invokePolicy(agentID string) AgentInvokePolicy {
+	if g == nil {
+		return InvokeOnArrival
+	}
+	agent, ok := g.agents[agentID]
+	if !ok {
+		return InvokeOnArrival
+	}
+	switch AgentInvokePolicy(strings.TrimSpace(agent.InvokePolicy)) {
+	case InvokeOnEOF:
+		return InvokeOnEOF
+	default:
+		return InvokeOnArrival
+	}
 }
 
 func (g *compiledGraph) validateAcyclic() error {

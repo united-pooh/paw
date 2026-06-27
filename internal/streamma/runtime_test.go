@@ -1,9 +1,9 @@
 package streamma
 
 import (
-	"context"
 	"codex-agent-go/internal/message"
 	"codex-agent-go/internal/model"
+	"context"
 	"strings"
 	"sync"
 	"testing"
@@ -66,7 +66,7 @@ func TestRuntimePassesStructuredAgentInvocation(t *testing.T) {
 	spec := GraphSpec{
 		RunID: "run-agent-invocation",
 		Agents: []AgentSpec{
-			{ID: "a", Role: "source", SystemPrompt: "agent A system"},
+			{ID: "a", Role: "source", SystemPrompt: "agent A system", StepCountHint: 2},
 			{ID: "b", Role: "sink", SystemPrompt: "agent B system"},
 		},
 		Edges: []EdgeSpec{{From: "a", To: "b"}},
@@ -87,6 +87,12 @@ func TestRuntimePassesStructuredAgentInvocation(t *testing.T) {
 	}
 	if calls[0].RunID != spec.RunID || calls[0].AgentID != "a" || calls[0].InvocationIndex != 1 {
 		t.Fatalf("source invocation metadata = %#v", calls[0])
+	}
+	if calls[0].Attempt != 1 {
+		t.Fatalf("source attempt = %d, want 1", calls[0].Attempt)
+	}
+	if calls[0].StepCountHint != 2 {
+		t.Fatalf("source StepCountHint = %d, want 2", calls[0].StepCountHint)
 	}
 	if calls[0].Problem != "fixed problem" || calls[0].InboundStep != nil || len(calls[0].Transcript) != 0 {
 		t.Fatalf("source invocation context = %#v", calls[0])
@@ -147,4 +153,103 @@ func streamAgentTextForTest(ctx context.Context, text string) <-chan model.Strea
 	}
 	close(ch)
 	return ch
+}
+
+type scriptedAgentResponse struct {
+	events []model.StreamEvent
+	err    error
+}
+
+type scriptedAgentStreamer struct {
+	mu        sync.Mutex
+	calls     []AgentInvocation
+	responses []scriptedAgentResponse
+}
+
+func (s *scriptedAgentStreamer) StreamAgent(ctx context.Context, invocation AgentInvocation) (<-chan model.StreamEvent, error) {
+	s.mu.Lock()
+	s.calls = append(s.calls, cloneAgentInvocationForTest(invocation))
+	index := len(s.calls) - 1
+	var response scriptedAgentResponse
+	if index < len(s.responses) {
+		response = s.responses[index]
+	} else if len(s.responses) > 0 {
+		response = s.responses[len(s.responses)-1]
+	}
+	s.mu.Unlock()
+	if response.err != nil {
+		return nil, response.err
+	}
+	ch := make(chan model.StreamEvent, len(response.events))
+	go func() {
+		defer close(ch)
+		for _, event := range response.events {
+			select {
+			case ch <- event:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return ch, nil
+}
+
+func (s *scriptedAgentStreamer) Calls() []AgentInvocation {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]AgentInvocation, len(s.calls))
+	for i := range s.calls {
+		out[i] = cloneAgentInvocationForTest(s.calls[i])
+	}
+	return out
+}
+
+func TestRuntimeRetriesParserFatalBeforeFirstStep(t *testing.T) {
+	spec := GraphSpec{
+		RunID:      "run-retry-parser",
+		StepPolicy: StepPolicy{RequireBoundary: true, MaxAttempts: 2},
+		Agents:     []AgentSpec{{ID: "a"}},
+	}
+	agent := &scriptedAgentStreamer{
+		responses: []scriptedAgentResponse{
+			{events: []model.StreamEvent{{Delta: "missing boundary"}, {Done: true}}},
+			{events: []model.StreamEvent{{Delta: "recovered\nEND_STEP\n"}, {Done: true}}},
+		},
+	}
+
+	result, err := RunGraphWithAgent(context.Background(), spec, agent, "problem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != RunCompleted {
+		t.Fatalf("status = %s, want completed", result.Status)
+	}
+	if result.Final == nil || result.Final.Answer.Text != "recovered" {
+		t.Fatalf("unexpected final: %#v", result.Final)
+	}
+
+	calls := agent.Calls()
+	if len(calls) != 2 {
+		t.Fatalf("calls = %d, want 2", len(calls))
+	}
+	if calls[0].Attempt != 1 || calls[1].Attempt != 2 {
+		t.Fatalf("attempts = %#v, want [1 2]", []int{calls[0].Attempt, calls[1].Attempt})
+	}
+
+	retryEvents := 0
+	var committedStep *StepPacket
+	for _, event := range result.Events {
+		if event.Type == EventAgentRetry {
+			retryEvents++
+		}
+		if event.Type == EventStepCommitted {
+			committedStep = event.Step
+		}
+	}
+	if retryEvents != 1 {
+		t.Fatalf("retry events = %d, want 1", retryEvents)
+	}
+	if committedStep == nil || committedStep.Attempt != 2 {
+		t.Fatalf("committed step = %#v, want attempt 2", committedStep)
+	}
 }

@@ -1,9 +1,9 @@
 package streamma
 
 import (
+	"codex-agent-go/internal/model"
 	"context"
 	"errors"
-	"codex-agent-go/internal/model"
 	"strings"
 	"testing"
 	"time"
@@ -165,6 +165,26 @@ func TestParserRequireBoundaryRejectsTrailingContentWithoutFinalSentinel(t *test
 	_, err := parseTextForTest(t, "tail without sentinel", ParserConfig{RunID: "run", AgentID: "a", RequireBoundary: true})
 	if err == nil || !IsParserFatal(err) || !strings.Contains(err.Error(), "stream ended before exact boundary") {
 		t.Fatalf("ParseStream() error = %v, want parser fatal missing boundary", err)
+	}
+}
+
+func TestParserRequireBoundaryRecoversTrailingInlineSentinel(t *testing.T) {
+	steps, err := parseTextForTest(t, "tail with inline sentinel END_STEP", ParserConfig{
+		RunID:           "run",
+		AgentID:         "a",
+		RequireBoundary: true,
+	})
+	if err != nil {
+		t.Fatalf("ParseStream() error = %v", err)
+	}
+	if len(steps) != 1 {
+		t.Fatalf("len(steps) = %d, want 1", len(steps))
+	}
+	if steps[0].Content.Text != "tail with inline sentinel\n" {
+		t.Fatalf("step text = %q", steps[0].Content.Text)
+	}
+	if !steps[0].Boundary.BoundaryRecovered {
+		t.Fatalf("BoundaryRecovered = false, want true")
 	}
 }
 

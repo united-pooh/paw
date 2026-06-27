@@ -144,8 +144,8 @@ go run ./cmd/agent -s <session-id>
 - `/setting`
 - `/sessions`
 - `/subagent [--fork|--empty] [--background|--sync] <prompt>`
-- `/streamma <prompt>`
-- `/streamma-trace <prompt>`
+- `/streamma [--profile adaptive|paper] [--topology adaptive|chain|tree|graph] [--agents N] [--steps N] [--protocol stream|single] <prompt>`
+- `/streamma-trace [--profile adaptive|paper] [--topology adaptive|chain|tree|graph] [--agents N] [--steps N] [--protocol stream|single] <prompt>`
 - `/tasks`
 - `/skills`
 - `/token-tracer` / `/tt`
@@ -159,7 +159,7 @@ go run ./cmd/agent -s <session-id>
 - `/setting` 通过向导保存默认 subagent context/run mode，以及 context meter 的位置和 token limit
 - `/sessions` 列出所有历史会话（ID 前缀、日期、文件大小、首条消息），选中条目后直接恢复该会话
 - `/subagent` 支持 `empty` 与 `fork` 两种上下文模式，以及 `sync` 与 `background` 两种运行模式；后台任务完成后会发 UI 系统通知，并把截断后的结果作为补充上下文注入后续模型轮次（完整结果仍在任务 output/transcript 路径中）
-- `/streamma <prompt>` 显式把当前任务交给 StreamMA runtime；runtime 会按任务选择一个小型 DAG，并把每个 StreamMA worker 映射为真实 subagent。一次 run 内同一个 logical agent 复用同一个 subagent session 作为真实 `ctx_a`；首次调用写入 agent base context + problem，后续调用只追加新 inbound step。只有同步到精确 `END_STEP` step 后才继续在 DAG 中传播；缺失 `END_STEP` 会失败而不是在 agent `Done` 时兜底传播，最终由 finalizer 的最后一步作为 assistant 回复写回会话历史
+- `/streamma <prompt>` 显式把当前任务交给 StreamMA runtime；runtime 会按任务选择一个小型 DAG，并把每个 StreamMA worker 映射为真实 subagent。一次 run 内同一个 logical agent 复用同一个 subagent session 作为真实 `ctx_a`；首次调用写入 agent base context + problem，后续调用只追加新 inbound step。只有同步到精确 `END_STEP` step 后才继续在 DAG 中传播；缺失 `END_STEP` 会失败而不是在 agent `Done` 时兜底传播，最终由 finalizer 的最后一步作为 assistant 回复写回会话历史。可选参数包括 `--profile`、`--topology`、`--agents`/`--a`、`--steps`/`--s`、`--protocol`；默认 `adaptive` profile 会保留任务模板图，显式 `--topology` 或 `paper` profile 可按指定拓扑生成 chain/tree/graph 形状
 - `/streamma-trace <prompt>` 使用同一套真实 StreamMA/subagent 路径，并额外输出 live runtime trace（如 `subagent.started`、`agent.step.committed`、`control.upstream_eof`、per-invocation usage/cache），用于观察 step fanout 是否发生在上游 agent `Done` 前，以及同一 agent 是否复用同一 session
 - `multi-agent-pipeline` skill 是 Codex/GoCode 的阶段化工作流指导，不会自动要求 StreamMA runtime。`/streamma` 和 `/streamma-trace` 是显式 runtime 调试入口；如果只想测试 skill、slash completion、普通 subagent 或 Token Tracer，可用 `GOCODE_STREAMMA=0` 或 `-streamma=false` 关闭这两个入口
 - `/tasks` 展示当前后台 subagent 任务及 transcript 路径
@@ -195,6 +195,7 @@ context meter 左侧显示紧凑 token 与比例，例如 `260k↑ 2.05k↓ 25%(
 
 快捷键:
 - `ctrl+o`: 展开/折叠模型 thinking 过程；折叠时 thinking 仍保存在 transcript 中，但不渲染到 viewport。
+- `ctrl+g`: 打开右侧 Subagents 选择器；使用 ↑↓ 选择，Enter 预览该 subagent transcript，Esc 返回主 session transcript；输入框内容和提交目标保持主 session 不变。
 
 当前默认 settings:
 

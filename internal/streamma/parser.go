@@ -1,10 +1,10 @@
 package streamma
 
 import (
+	"codex-agent-go/internal/model"
 	"context"
 	"errors"
 	"fmt"
-	"codex-agent-go/internal/model"
 	"strings"
 )
 
@@ -14,6 +14,7 @@ type ParserConfig struct {
 	Boundary        string
 	MaxStepBytes    int
 	RequireBoundary bool
+	Attempt         int
 	StartIndex      int
 	InputEvents     []string
 }
@@ -93,6 +94,9 @@ func newStepParser(config ParserConfig) *stepParser {
 	if boundary == "" {
 		boundary = DefaultBoundary
 	}
+	if config.Attempt < 1 {
+		config.Attempt = 1
+	}
 	start := config.StartIndex
 	if start < 1 {
 		start = 1
@@ -161,6 +165,14 @@ func (p *stepParser) finish() ([]StepPacket, error) {
 	}
 	if strings.TrimSpace(p.current.String()) != "" {
 		if p.config.RequireBoundary {
+			if recovered, ok := recoverTrailingInlineBoundary(p.current.String(), p.boundary); ok {
+				p.current.Reset()
+				p.current.WriteString(recovered)
+				if err := p.commit(true); err != nil {
+					return nil, err
+				}
+				return append([]StepPacket(nil), p.steps...), nil
+			}
 			return nil, &ParserFatalError{
 				AgentID: p.config.AgentID,
 				Reason:  fmt.Sprintf("stream ended before exact boundary %q", p.boundary),
@@ -171,6 +183,32 @@ func (p *stepParser) finish() ([]StepPacket, error) {
 		}
 	}
 	return append([]StepPacket(nil), p.steps...), nil
+}
+
+func recoverTrailingInlineBoundary(text, boundary string) (string, bool) {
+	boundary = strings.TrimSpace(boundary)
+	if boundary == "" {
+		boundary = DefaultBoundary
+	}
+	trimmed := strings.TrimRight(text, " \t\r\n")
+	if !strings.HasSuffix(trimmed, boundary) {
+		return "", false
+	}
+	withoutBoundary := strings.TrimSuffix(trimmed, boundary)
+	if withoutBoundary == "" {
+		return "", false
+	}
+	if !strings.HasSuffix(withoutBoundary, " ") &&
+		!strings.HasSuffix(withoutBoundary, "\t") &&
+		!strings.HasSuffix(withoutBoundary, "\r") &&
+		!strings.HasSuffix(withoutBoundary, "\n") {
+		return "", false
+	}
+	recovered := strings.TrimRight(withoutBoundary, " \t\r\n")
+	if strings.TrimSpace(recovered) == "" {
+		return "", false
+	}
+	return recovered + "\n", true
 }
 
 func (p *stepParser) commit(recovered bool) error {
@@ -185,7 +223,7 @@ func (p *stepParser) commit(recovered bool) error {
 		AgentID:       p.config.AgentID,
 		StepID:        fmt.Sprintf("%s:%d", p.config.AgentID, p.nextIndex),
 		StepIndex:     p.nextIndex,
-		Attempt:       1,
+		Attempt:       p.config.Attempt,
 		Content: StepContent{
 			Format:              "text",
 			Text:                text,

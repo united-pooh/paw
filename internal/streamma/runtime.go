@@ -1,9 +1,10 @@
 package streamma
 
 import (
+	"codex-agent-go/internal/model"
 	"context"
 	"fmt"
-	"codex-agent-go/internal/model"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -41,6 +42,13 @@ type agentRuntimeState struct {
 	started       bool
 	active        bool
 	completed     bool
+
+	activeAttempt       int
+	activeInputEvents   []string
+	activeInboundFrom   string
+	activeInboundStep   *StepPacket
+	activeProducedSteps int
+	pendingInputEvents  []string
 }
 
 type runtimeSignal struct {
@@ -134,7 +142,7 @@ func (r *Runtime) Run(ctx context.Context, problem string) (RunResult, error) {
 		if r.activeInvocationCount() > 0 {
 			select {
 			case signal := <-signals:
-				r.handleSignal(signal)
+				r.handleSignal(runCtx, signals, signal)
 			case <-runCtx.Done():
 				r.fail("", runCtx.Err())
 			}
@@ -202,6 +210,16 @@ func (r *Runtime) advance(ctx context.Context, signals chan<- runtimeSignal) boo
 					}
 				}
 			}
+			if !state.completed && r.canInvokeEOFTriggered(agentID) {
+				progress = true
+				madeProgress = true
+				inputEvents := append([]string(nil), state.pendingInputEvents...)
+				if err := r.invokeAgent(ctx, agentID, inputEvents, "", nil, 1, signals); err != nil {
+					r.fail(agentID, err)
+					return true
+				}
+				state.pendingInputEvents = nil
+			}
 			if !state.completed && r.canComplete(agentID) {
 				progress = true
 				madeProgress = true
@@ -220,7 +238,7 @@ func (r *Runtime) handleDelivery(ctx context.Context, agentID string, delivery B
 	switch event.Type {
 	case EventProblem:
 		state.started = true
-		return r.invokeAgent(ctx, agentID, []string{event.EventID}, "", nil, signals)
+		return r.invokeAgent(ctx, agentID, []string{event.EventID}, "", nil, 1, signals)
 	case EventStepCommitted:
 		if event.Step == nil {
 			return fmt.Errorf("step delivery to %s missing step packet", agentID)
@@ -228,7 +246,11 @@ func (r *Runtime) handleDelivery(ctx context.Context, agentID string, delivery B
 		inbound := cloneStepPacket(*event.Step)
 		state.transcript.AppendInbound(event.ProducerAgentID, inbound)
 		state.started = true
-		return r.invokeAgent(ctx, agentID, []string{event.EventID}, event.ProducerAgentID, &inbound, signals)
+		if r.graph.invokePolicy(agentID) == InvokeOnEOF {
+			state.pendingInputEvents = append(state.pendingInputEvents, event.EventID)
+			return nil
+		}
+		return r.invokeAgent(ctx, agentID, []string{event.EventID}, event.ProducerAgentID, &inbound, 1, signals)
 	case EventUpstreamEOF:
 		r.broker.MarkEOF(agentID, event.ProducerAgentID)
 		r.appendEvent(event)
@@ -238,10 +260,13 @@ func (r *Runtime) handleDelivery(ctx context.Context, agentID string, delivery B
 	}
 }
 
-func (r *Runtime) invokeAgent(ctx context.Context, agentID string, inputEvents []string, inboundFrom string, inboundStep *StepPacket, signals chan<- runtimeSignal) error {
+func (r *Runtime) invokeAgent(ctx context.Context, agentID string, inputEvents []string, inboundFrom string, inboundStep *StepPacket, attempt int, signals chan<- runtimeSignal) error {
 	state := r.states[agentID]
 	if state.active {
 		return fmt.Errorf("agent %s already has an active invocation", agentID)
+	}
+	if attempt < 1 {
+		attempt = 1
 	}
 	state.invocations++
 	agent := r.graph.agents[agentID]
@@ -252,6 +277,8 @@ func (r *Runtime) invokeAgent(ctx context.Context, agentID string, inputEvents [
 		SystemPrompt:    agent.SystemPrompt,
 		Problem:         state.transcript.Problem,
 		InvocationIndex: state.invocations,
+		Attempt:         attempt,
+		StepCountHint:   agent.StepCountHint,
 		StartStepIndex:  state.nextStepIndex,
 		Boundary:        r.graph.boundary,
 		RequireBoundary: r.graph.requireBoundary,
@@ -269,10 +296,21 @@ func (r *Runtime) invokeAgent(ctx context.Context, agentID string, inputEvents [
 		Boundary:        r.graph.boundary,
 		MaxStepBytes:    r.graph.maxStepBytes,
 		RequireBoundary: r.graph.requireBoundary,
+		Attempt:         attempt,
 		StartIndex:      state.nextStepIndex,
 		InputEvents:     append([]string(nil), inputEvents...),
 	}
 	state.active = true
+	state.activeAttempt = attempt
+	state.activeInputEvents = append([]string(nil), inputEvents...)
+	state.activeInboundFrom = inboundFrom
+	state.activeProducedSteps = 0
+	if inboundStep != nil {
+		step := cloneStepPacket(*inboundStep)
+		state.activeInboundStep = &step
+	} else {
+		state.activeInboundStep = nil
+	}
 	r.activeCount++
 
 	go func() {
@@ -308,12 +346,30 @@ func sendRuntimeSignal(ctx context.Context, signals chan<- runtimeSignal, signal
 	}
 }
 
-func (r *Runtime) handleSignal(signal runtimeSignal) {
+func (r *Runtime) handleSignal(ctx context.Context, signals chan<- runtimeSignal, signal runtimeSignal) {
 	if signal.err != nil {
 		state := r.states[signal.agentID]
 		if state != nil {
 			state.active = false
 			r.activeCount--
+			if signals != nil && (ctx == nil || ctx.Err() == nil) && r.shouldRetry(state, signal.err) {
+				retryAttempt := state.activeAttempt + 1
+				r.appendEvent(Event{
+					RunID:           r.graph.runID,
+					Type:            EventAgentRetry,
+					ProducerAgentID: signal.agentID,
+					Trace: map[string]string{
+						"attempt":      strconv.Itoa(retryAttempt),
+						"max_attempts": strconv.Itoa(r.graph.maxAttempts),
+					},
+					Error: signal.err.Error(),
+				})
+				if err := r.invokeAgent(ctx, signal.agentID, state.activeInputEvents, state.activeInboundFrom, state.activeInboundStep, retryAttempt, signals); err != nil {
+					r.fail(signal.agentID, err)
+					return
+				}
+				return
+			}
 		}
 		r.fail(signal.agentID, signal.err)
 		return
@@ -336,6 +392,7 @@ func (r *Runtime) handleSignal(signal runtimeSignal) {
 		})
 		state.lastStepIndex = step.StepIndex
 		state.lastStepText = step.Content.Text
+		state.activeProducedSteps++
 		if step.StepIndex >= state.nextStepIndex {
 			state.nextStepIndex = step.StepIndex + 1
 		}
@@ -350,13 +407,27 @@ func (r *Runtime) handleSignal(signal runtimeSignal) {
 
 func (r *Runtime) canComplete(agentID string) bool {
 	state := r.states[agentID]
-	if state.completed || state.active || r.broker.QueueLen(agentID) > 0 {
+	if state.completed || state.active || r.broker.QueueLen(agentID) > 0 || len(state.pendingInputEvents) > 0 {
 		return false
 	}
 	if len(r.graph.predecessors[agentID]) == 0 {
 		return state.started
 	}
 	return r.broker.AllPredecessorsEOF(agentID)
+}
+
+func (r *Runtime) canInvokeEOFTriggered(agentID string) bool {
+	state := r.states[agentID]
+	if state == nil || state.completed || state.active {
+		return false
+	}
+	if r.graph.invokePolicy(agentID) != InvokeOnEOF {
+		return false
+	}
+	if len(state.pendingInputEvents) == 0 {
+		return false
+	}
+	return r.broker.QueueLen(agentID) == 0 && r.broker.AllPredecessorsEOF(agentID)
 }
 
 func (r *Runtime) completeAgent(agentID string) {
@@ -411,10 +482,28 @@ func (r *Runtime) fail(agentID string, err error) {
 	}
 	r.err = err
 	r.appendEvent(Event{
-		RunID: r.graph.runID,
-		Type:  EventRunFailed,
-		Error: err.Error(),
+		RunID:           r.graph.runID,
+		Type:            EventRunFailed,
+		ProducerAgentID: agentID,
+		Error:           err.Error(),
 	})
+}
+
+func (r *Runtime) shouldRetry(state *agentRuntimeState, err error) bool {
+	if r == nil || state == nil || err == nil {
+		return false
+	}
+	if r.graph.maxAttempts <= 1 || state.activeAttempt >= r.graph.maxAttempts {
+		return false
+	}
+	if state.activeProducedSteps > 0 {
+		return false
+	}
+	return !isContextCanceledError(err)
+}
+
+func isContextCanceledError(err error) bool {
+	return err == context.Canceled || err == context.DeadlineExceeded || strings.Contains(strings.ToLower(err.Error()), "context canceled")
 }
 
 func (r *Runtime) appendEvent(event Event) Event {
@@ -439,7 +528,7 @@ func (r *Runtime) drainAfterCancel(signals <-chan runtimeSignal, timeout time.Du
 	for r.activeInvocationCount() > 0 {
 		select {
 		case signal := <-signals:
-			r.handleSignal(signal)
+			r.handleSignal(context.Background(), nil, signal)
 		case <-timer.C:
 			return
 		}
@@ -447,7 +536,7 @@ func (r *Runtime) drainAfterCancel(signals <-chan runtimeSignal, timeout time.Du
 	for {
 		select {
 		case signal := <-signals:
-			r.handleSignal(signal)
+			r.handleSignal(context.Background(), nil, signal)
 		default:
 			return
 		}

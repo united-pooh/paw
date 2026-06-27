@@ -3375,6 +3375,149 @@ func TestSessionRestoredMsgUpdatesSessionID(t *testing.T) {
 	}
 }
 
+func TestCtrlGSubagentPickerEnterPreviewsSelectedSubagent(t *testing.T) {
+	transcriptPath := filepath.Join(t.TempDir(), "agent-2.jsonl")
+	transcript := strings.Join([]string{
+		`{"seq":0,"message":{"role":"user","content":"subagent prompt"},"created_at":"2026-06-28T00:00:00Z"}`,
+		`{"seq":1,"message":{"role":"assistant","content":"subagent answer"},"created_at":"2026-06-28T00:00:01Z"}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(transcript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &fakeRunner{}
+	model := newTestModel(runner)
+	model.subagents = &fakeSubagentController{tasks: []subagent.TaskSnapshot{
+		{ID: "agent-1", SessionID: "agent-1", ParentSessionID: "session-1", Status: subagent.TaskCompleted, Description: "first"},
+		{ID: "agent-2", SessionID: "agent-2", ParentSessionID: "session-1", Status: subagent.TaskRunning, Description: "second", TranscriptPath: transcriptPath},
+	}}
+	model.transcript = []transcriptEntry{{kind: entryUser, title: "you", body: "main draft"}}
+	model.input.SetValue("main input")
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
+	model = next.(appModel)
+	if model.subagentPicker == nil {
+		t.Fatalf("subagentPicker = nil, want picker")
+	}
+	if got := model.input.Value(); got != "main input" {
+		t.Fatalf("input value after ctrl+g = %q, want preserved", got)
+	}
+	inputPanel := ansi.Strip(model.renderActiveInputPanel())
+	for _, hidden := range []string{"Subagents", "first", "second"} {
+		if strings.Contains(inputPanel, hidden) {
+			t.Fatalf("input panel = %q, should not render subagent picker text %q", inputPanel, hidden)
+		}
+	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = next.(appModel)
+	if model.subagentPicker.selectedIndex != 1 {
+		t.Fatalf("selectedIndex = %d, want second subagent", model.subagentPicker.selectedIndex)
+	}
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if cmd == nil {
+		t.Fatalf("enter on subagent picker returned nil cmd")
+	}
+	next, _ = model.Update(cmd())
+	model = next.(appModel)
+
+	if model.sessionID != "session-1" {
+		t.Fatalf("sessionID = %q, want main session", model.sessionID)
+	}
+	if model.subagentPreview == nil || model.subagentPreview.parentSessionID != "session-1" {
+		t.Fatalf("subagentPreview = %#v, want parent session-1", model.subagentPreview)
+	}
+	if got := runner.loadHistoryCalls; len(got) != 0 {
+		t.Fatalf("loadHistoryCalls = %#v, want no runner history switch", got)
+	}
+	rendered := renderTranscript(model.transcript, 80, true)
+	if !strings.Contains(rendered, "subagent") ||
+		!strings.Contains(rendered, "subagent prompt") ||
+		!strings.Contains(rendered, "subagent answer") {
+		t.Fatalf("rendered transcript = %q, want selected subagent history", rendered)
+	}
+	if got := model.input.Value(); got != "main input" {
+		t.Fatalf("input value = %q, want preserved main input", got)
+	}
+
+	next, cmd = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if cmd == nil {
+		t.Fatalf("main submit while previewing returned nil cmd")
+	}
+	_ = cmd()
+	if model.subagentPreview != nil {
+		t.Fatalf("subagentPreview = %#v, want nil after main submit", model.subagentPreview)
+	}
+	if got := runner.inputs; !equalStrings(got, []string{"main input"}) {
+		t.Fatalf("runner.inputs = %#v, want main input", got)
+	}
+}
+
+func TestSubagentPickerEscAndCtrlGCloseSelection(t *testing.T) {
+	for _, key := range []tea.KeyType{tea.KeyEsc, tea.KeyCtrlG} {
+		model := newTestModel(&fakeRunner{})
+		model.subagents = &fakeSubagentController{tasks: []subagent.TaskSnapshot{
+			{ID: "agent-1", SessionID: "agent-1", ParentSessionID: "session-1", Status: subagent.TaskCompleted},
+		}}
+		model.input.SetValue("main input")
+
+		next, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
+		model = next.(appModel)
+		if model.subagentPicker == nil {
+			t.Fatalf("key %v: subagentPicker = nil after ctrl+g", key)
+		}
+
+		next, _ = model.Update(tea.KeyMsg{Type: key})
+		model = next.(appModel)
+		if model.subagentPicker != nil {
+			t.Fatalf("key %v: subagentPicker = %#v, want nil", key, model.subagentPicker)
+		}
+		if got := model.input.Value(); got != "main input" {
+			t.Fatalf("key %v: input value = %q, want preserved", key, got)
+		}
+		if !model.input.Focused() {
+			t.Fatalf("key %v: input should remain focused", key)
+		}
+	}
+}
+
+func TestEscReturnsFromSubagentPreviewToMainTranscript(t *testing.T) {
+	mainTranscript := []transcriptEntry{{kind: entryUser, title: "you", body: "main message"}}
+	model := newTestModel(&fakeRunner{})
+	model.sessionID = "session-1"
+	model.viewport.Width = 80
+	model.viewport.Height = 2
+	model.subagentPreview = &subagentTranscriptPreview{
+		task:             subagent.TaskSnapshot{ID: "agent-2", SessionID: "agent-2"},
+		parentSessionID:  "session-1",
+		parentTranscript: copyTranscriptEntries(mainTranscript),
+	}
+	model.input.SetValue("main input")
+	model.transcript = []transcriptEntry{{kind: entryAssistant, title: "assistant", body: "subagent message"}}
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = next.(appModel)
+
+	if model.sessionID != "session-1" {
+		t.Fatalf("sessionID = %q, want session-1", model.sessionID)
+	}
+	if model.subagentPreview != nil {
+		t.Fatalf("subagentPreview = %#v, want nil", model.subagentPreview)
+	}
+	if len(model.transcript) != 1 || model.transcript[0].body != "main message" {
+		t.Fatalf("transcript = %#v, want restored main transcript", model.transcript)
+	}
+	if got := model.input.Value(); got != "main input" {
+		t.Fatalf("input value = %q, want preserved", got)
+	}
+	if !model.viewport.AtBottom() {
+		t.Fatalf("viewport should return to bottom")
+	}
+}
+
 // TestSlashPrefixTriggersCommandCompletion 验证输入 / 前缀触发命令补全。
 func TestSlashPrefixTriggersCommandCompletion(t *testing.T) {
 	model := newTestModel(&fakeRunner{})

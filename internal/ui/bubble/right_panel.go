@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
 	"codex-agent-go/internal/subagent"
+	"github.com/charmbracelet/lipgloss"
 )
 
 const (
@@ -254,6 +254,7 @@ func (m appModel) renderSubagentsCardContentHeight(width, height int) string {
 	spinnerFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 	availableTaskRows := len(tasks)
+	windowStart := 0
 	moreCount := 0
 	if maxLines > 0 {
 		availableTaskRows = maxInt(0, maxLines-1)
@@ -267,9 +268,27 @@ func (m appModel) renderSubagentsCardContentHeight(width, height int) string {
 			}
 		}
 	}
+	if m.subagentPicker != nil && availableTaskRows > 0 {
+		selected := clampInt(m.subagentPicker.selectedIndex, 0, len(tasks)-1)
+		if selected < windowStart {
+			windowStart = selected
+		}
+		if selected >= windowStart+availableTaskRows {
+			windowStart = selected - availableTaskRows + 1
+		}
+		maxStart := maxInt(0, len(tasks)-availableTaskRows)
+		if windowStart > maxStart {
+			windowStart = maxStart
+		}
+		if windowStart > 0 || windowStart+availableTaskRows < len(tasks) {
+			moreCount = windowStart + maxInt(0, len(tasks)-(windowStart+availableTaskRows))
+		}
+	}
 
 	lines := []string{hdr}
-	for _, t := range tasks[:minInt(len(tasks), availableTaskRows)] {
+	windowEnd := minInt(len(tasks), windowStart+availableTaskRows)
+	for idx := windowStart; idx < windowEnd; idx++ {
+		t := tasks[idx]
 		var dot, status string
 		dotStyle := dotDoneStyle
 		lineStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("248"))
@@ -296,6 +315,12 @@ func (m appModel) renderSubagentsCardContentHeight(width, height int) string {
 		nameStyle := lineStyle
 		if color := strings.TrimSpace(t.Color); color != "" {
 			nameStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(color))
+		}
+		if m.subagentPicker != nil && idx == clampInt(m.subagentPicker.selectedIndex, 0, len(tasks)-1) {
+			dot = ">"
+			dotStyle = selectedProviderStyle
+			nameStyle = selectedProviderStyle
+			lineStyle = selectedProviderStyle
 		}
 		lines = append(lines, renderSubagentSidebarRow(width, dot, taskDisplayName(t), status, dotStyle, nameStyle, lineStyle))
 	}

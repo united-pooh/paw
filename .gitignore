@@ -4,6 +4,8 @@
 .playwright-cli/
 /agent
 .ccagent/
+.codewhale/
+.env
 .env.local
 .pipeline-workspace/
 .mockups/

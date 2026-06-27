@@ -327,12 +327,15 @@ func (a streamMASubagentAdapter) StreamSubagent(ctx context.Context, req loop.St
 		Description:     req.Description,
 		ContextMode:     settings.ContextMode(req.ContextMode),
 		RunMode:         settings.RunModeSync,
+		DisableTools:    req.DisableTools,
 	})
 	if err != nil {
 		return loop.StreamMASubagentStream{}, err
 	}
 	return loop.StreamMASubagentStream{
 		Events:         stream.Events,
+		AgentName:      stream.AgentName,
+		AgentColor:     stream.AgentColor,
 		SessionID:      stream.SessionID,
 		TranscriptPath: stream.TranscriptPath,
 		OutputPath:     stream.OutputPath,

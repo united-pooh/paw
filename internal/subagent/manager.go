@@ -83,6 +83,7 @@ type Request struct {
 	Description     string
 	ContextMode     settings.ContextMode
 	RunMode         settings.RunMode
+	DisableTools    bool
 }
 
 type Result struct {
@@ -128,6 +129,7 @@ type TaskSnapshot struct {
 	Description     string               `json:"description,omitempty"`
 	Prompt          string               `json:"prompt"`
 	SystemPrompt    string               `json:"system_prompt,omitempty"`
+	DisableTools    bool                 `json:"disable_tools,omitempty"`
 	ContextMode     settings.ContextMode `json:"context_mode"`
 	RunMode         settings.RunMode     `json:"run_mode"`
 	Status          TaskStatus           `json:"status"`
@@ -461,6 +463,7 @@ func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Pro
 		Description:     req.Description,
 		Prompt:          req.Prompt,
 		SystemPrompt:    strings.TrimSpace(req.SystemPrompt),
+		DisableTools:    req.DisableTools,
 		ContextMode:     req.ContextMode,
 		RunMode:         req.RunMode,
 		Status:          TaskRunning,
@@ -477,6 +480,7 @@ func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Pro
 		ParentTaskID:    task.ParentTaskID,
 		Prompt:          req.Prompt,
 		Description:     req.Description,
+		DisableTools:    req.DisableTools,
 		ContextMode:     req.ContextMode,
 		RunMode:         req.RunMode,
 		Depth:           task.Depth,
@@ -564,6 +568,7 @@ func (m *Manager) startStreamingTask(ctx context.Context, req Request) (TaskSnap
 		Description:     req.Description,
 		Prompt:          req.Prompt,
 		SystemPrompt:    strings.TrimSpace(req.SystemPrompt),
+		DisableTools:    req.DisableTools,
 		ContextMode:     req.ContextMode,
 		RunMode:         req.RunMode,
 		Status:          TaskRunning,
@@ -586,7 +591,7 @@ func (m *Manager) startStreamingTask(ctx context.Context, req Request) (TaskSnap
 func (m *Manager) runStreamingTask(ctx context.Context, task TaskSnapshot, events chan<- model.StreamEvent) {
 	defer close(events)
 
-	content, usedTokens, usage, done, err := m.runStreamingSession(ctx, task.SessionID, task.Prompt, task.SystemPrompt, events)
+	content, usedTokens, usage, done, err := m.runStreamingSession(ctx, task.SessionID, task.Prompt, task.SystemPrompt, task.DisableTools, events)
 	result := WorkerResult{
 		TaskID:     task.ID,
 		SessionID:  task.SessionID,
@@ -747,9 +752,9 @@ func (m *Manager) ensureSessionExists(ctx context.Context, sessionID string) err
 	return nil
 }
 
-func (m *Manager) runSession(ctx context.Context, sessionID, prompt string) (string, int, *tokentracer.Usage, error) {
+func (m *Manager) runSession(ctx context.Context, sessionID, prompt string, disableTools bool) (string, int, *tokentracer.Usage, error) {
 	usageUI := &usageSinkUI{}
-	runner := loop.NewRunnerWithInstructionRoot(m.model, usageUI, newBaseToolRegistry(m.root), m.store, sessionID, m.root)
+	runner := loop.NewRunnerWithInstructionRoot(m.model, usageUI, m.toolRegistry(disableTools), m.store, sessionID, m.root)
 	msg, err := runner.RunTurn(ctx, prompt)
 	usedTokens := runner.ContextStats(1<<30, "").UsedTokens
 	usage := usageUI.Usage()
@@ -759,9 +764,9 @@ func (m *Manager) runSession(ctx context.Context, sessionID, prompt string) (str
 	return strings.TrimSpace(msg.Content), usedTokens, usage, nil
 }
 
-func (m *Manager) runStreamingSession(ctx context.Context, sessionID, prompt, systemPrompt string, events chan<- model.StreamEvent) (string, int, *tokentracer.Usage, bool, error) {
+func (m *Manager) runStreamingSession(ctx context.Context, sessionID, prompt, systemPrompt string, disableTools bool, events chan<- model.StreamEvent) (string, int, *tokentracer.Usage, bool, error) {
 	streamUI := &streamingUI{ctx: ctx, events: events}
-	runner := loop.NewRunnerWithInstructionRoot(m.model, streamUI, newBaseToolRegistry(m.root), m.store, sessionID, m.root)
+	runner := loop.NewRunnerWithInstructionRoot(m.model, streamUI, m.toolRegistry(disableTools), m.store, sessionID, m.root)
 	runner.SetSystemSupplement(systemPrompt)
 	if isStreamMASystemPrompt(systemPrompt) {
 		runner.SetCompactToolPrompt(true)
@@ -781,7 +786,7 @@ func isStreamMASystemPrompt(systemPrompt string) bool {
 }
 
 func (m *Manager) runWorkerInProcess(ctx context.Context, req WorkerRequest) (WorkerResult, error) {
-	content, usedTokens, usage, err := m.runSession(ctx, req.SessionID, req.Prompt)
+	content, usedTokens, usage, err := m.runSession(ctx, req.SessionID, req.Prompt, req.DisableTools)
 	result := WorkerResult{
 		TaskID:     req.TaskID,
 		SessionID:  req.SessionID,
@@ -969,6 +974,17 @@ func resultFromTask(task TaskSnapshot) Result {
 		ParentTaskID:   task.ParentTaskID,
 		Content:        task.Content,
 	}
+}
+
+func (m *Manager) toolRegistry(disableTools bool) *tool.Registry {
+	if disableTools {
+		return tool.NewRegistry()
+	}
+	root := ""
+	if m != nil {
+		root = m.root
+	}
+	return newBaseToolRegistry(root)
 }
 
 func newBaseToolRegistry(root string) *tool.Registry {

@@ -1,10 +1,10 @@
 package streamma
 
 import (
-	"context"
-	"fmt"
 	"codex-agent-go/internal/message"
 	"codex-agent-go/internal/model"
+	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -97,6 +97,52 @@ func TestRuntimeTreeBroadcastsToMultipleDirectSuccessors(t *testing.T) {
 	dFinalPrompt := promptText(calls[4].Messages)
 	if !strings.Contains(dFinalPrompt, "B.fromA") || !strings.Contains(dFinalPrompt, "C.fromA") {
 		t.Fatalf("D final prompt did not include both B and C outputs: %q", dFinalPrompt)
+	}
+}
+
+func TestRuntimeEOFTriggeredSinkRunsOnceAfterAllPredecessorsComplete(t *testing.T) {
+	spec := GraphSpec{
+		RunID: "run-tree-eof-sink",
+		Agents: []AgentSpec{
+			{ID: "a", SystemPrompt: "agent A"},
+			{ID: "b", SystemPrompt: "agent B"},
+			{ID: "c", SystemPrompt: "agent C"},
+			{ID: "d", SystemPrompt: "agent D", InvokePolicy: string(InvokeOnEOF)},
+		},
+		Edges: []EdgeSpec{
+			{From: "a", To: "b"},
+			{From: "a", To: "c"},
+			{From: "b", To: "d"},
+			{From: "c", To: "d"},
+		},
+	}
+	model := newFakeModel(
+		fakeTextResponse("A.step1\nEND_STEP\n"),
+		fakeTextResponse("B.fromA\nEND_STEP\n"),
+		fakeTextResponse("C.fromA\nEND_STEP\n"),
+		fakeTextResponse("D.afterBC\nEND_STEP\n"),
+	)
+
+	result, err := RunGraph(context.Background(), spec, model, "problem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != RunCompleted {
+		t.Fatalf("status = %s", result.Status)
+	}
+	if result.Final == nil || result.Final.Answer.Text != "D.afterBC" {
+		t.Fatalf("unexpected final: %#v", result.Final)
+	}
+	calls := model.Calls()
+	if len(calls) != 4 {
+		t.Fatalf("calls = %d, want 4", len(calls))
+	}
+	dPrompts := promptsForSystem(calls, "agent D")
+	if len(dPrompts) != 1 {
+		t.Fatalf("D calls = %d, want 1: %#v", len(dPrompts), calls)
+	}
+	if !strings.Contains(dPrompts[0], "B.fromA") || !strings.Contains(dPrompts[0], "C.fromA") {
+		t.Fatalf("D prompt did not include both upstream outputs: %q", dPrompts[0])
 	}
 }
 

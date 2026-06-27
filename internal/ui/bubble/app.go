@@ -4,7 +4,6 @@ package bubble
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,6 +126,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinnerFrameIdx++
 		m.applyCursorAnimation()
 		m.updateContextMeterAnimation()
+		m.refreshSubagentPreviewFromTasks()
 		if m.transcriptRefreshPending || m.hasActiveTranscriptAnimation() {
 			if m.viewport.AtBottom() {
 				m.refreshViewport()
@@ -240,12 +240,22 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case sessionRestoredMsg:
 		if msg.err != nil {
-			m.addEntry(transcriptEntry{kind: entryError, title: "sessions", body: msg.err.Error()})
+			title := "sessions"
+			if msg.source == sessionRestoreSubagentEnter {
+				title = "subagent"
+				m.subagentPicker = nil
+			} else {
+				m.sessionPicker = nil
+			}
+			m.addEntry(transcriptEntry{kind: entryError, title: title, body: msg.err.Error()})
 		} else {
-			m.sessionID = msg.sessionID
-			m.addEntry(transcriptEntry{kind: entrySystem, title: "sessions", body: fmt.Sprintf("已切换到会话: %s", msg.sessionID)})
+			switch msg.source {
+			case sessionRestoreSubagentEnter:
+				m.applySubagentPreviewRestore(msg)
+			default:
+				m.applySessionPickerRestore(msg)
+			}
 		}
-		m.sessionPicker = nil
 		cmds = append(cmds, m.input.Focus())
 		return m, tea.Batch(cmds...)
 	case fileCompletionLoadedMsg:
@@ -281,6 +291,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.sessionPicker != nil {
 			return m.handleSessionPickerKey(msg)
+		}
+		if m.subagentPicker != nil {
+			return m.handleSubagentPickerKey(msg)
+		}
+		if msg.String() == "ctrl+g" {
+			return m.openSubagentPicker()
 		}
 		// 补全激活时：只拦截导航键和确认键，其余按键正常透传给输入框
 		if m.completion != nil {
@@ -350,6 +366,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "esc":
+				if m.subagentPreview != nil {
+					m.restoreMainTranscriptFromSubagentPreview()
+					return m, m.input.Focus()
+				}
 				m.transcriptKeyScrollActive = false
 				return m, nil
 			}
@@ -358,6 +378,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		switch msg.String() {
+		case "esc":
+			if m.subagentPreview != nil {
+				m.restoreMainTranscriptFromSubagentPreview()
+				return m, m.input.Focus()
+			}
 		case "ctrl+c":
 			now := time.Now()
 			if !m.lastCtrlCAt.IsZero() && now.Sub(m.lastCtrlCAt) < time.Second {

@@ -205,9 +205,19 @@ type sessionsLoadedMsg struct {
 
 // sessionRestoredMsg 携带历史恢复完成的结果。
 type sessionRestoredMsg struct {
-	sessionID string
-	err       error
+	sessionID       string
+	entries         []transcriptEntry
+	source          sessionRestoreSource
+	subagentPreview *subagentTranscriptPreview
+	err             error
 }
+
+type sessionRestoreSource int
+
+const (
+	sessionRestorePicker sessionRestoreSource = iota
+	sessionRestoreSubagentEnter
+)
 
 // fileCompletionLoadedMsg 携带异步加载完成的文件补全列表。
 type fileCompletionLoadedMsg struct {
@@ -223,6 +233,20 @@ type sessionSummaryItem struct {
 	createdAt      time.Time
 	firstMessage   string
 	transcriptSize int64
+}
+
+type subagentPicker struct {
+	tasks         []subagent.TaskSnapshot
+	selectedIndex int
+}
+
+type subagentTranscriptPreview struct {
+	task             subagent.TaskSnapshot
+	sessionID        string
+	parentSessionID  string
+	parentTranscript []transcriptEntry
+	entries          []transcriptEntry
+	liveContent      string
 }
 
 // appModel 是 Bubble Tea TUI 的唯一状态中心。
@@ -274,6 +298,8 @@ type appModel struct {
 	modelWizard               *modelWizard
 	settingWizard             *settingWizard
 	sessionPicker             *sessionPicker
+	subagentPicker            *subagentPicker
+	subagentPreview           *subagentTranscriptPreview
 	completion                *completion
 	pipelineState             pipelineState
 	pipelineActiveAfter       time.Time

@@ -21,6 +21,7 @@ type WorkerRequest struct {
 	ParentTaskID    string               `json:"parent_task_id,omitempty"`
 	Prompt          string               `json:"prompt"`
 	Description     string               `json:"description,omitempty"`
+	DisableTools    bool                 `json:"disable_tools,omitempty"`
 	ContextMode     settings.ContextMode `json:"context_mode"`
 	RunMode         settings.RunMode     `json:"run_mode"`
 	Depth           int                  `json:"depth"`
