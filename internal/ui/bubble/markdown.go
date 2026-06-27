@@ -2,11 +2,14 @@
 package bubble
 
 import (
+	"strconv"
 	"strings"
 	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 )
+
+const maxRenderedCodeBlockLines = 32
 
 // renderMarkdown 将 assistant 返回的 Markdown 文本转换为带样式的终端文本。
 func renderMarkdown(markdown string, width int) string {
@@ -120,10 +123,11 @@ func renderCodeBlockPanel(code string, width int) string {
 	width = maxInt(1, width)
 	blockWidth := markdownCodeBlockWidth(code, width)
 	if blockWidth < 6 {
-		return markdownCodeBlockStyle.Render(wrapDisplayWidthLines(code, width))
+		lines := limitRenderedCodeBlockLines(strings.Split(wrapDisplayWidthLines(code, width), "\n"), maxRenderedCodeBlockLines)
+		return markdownCodeBlockStyle.Render(strings.Join(lines, "\n"))
 	}
 	textWidth := maxInt(1, blockWidth-4)
-	lines := strings.Split(wrapDisplayWidthLines(code, textWidth), "\n")
+	lines := limitRenderedCodeBlockLines(strings.Split(wrapDisplayWidthLines(code, textWidth), "\n"), maxRenderedCodeBlockLines)
 	rendered := make([]string, 0, len(lines)+2)
 	rendered = append(rendered, renderCodeBlockBorderLine("┌", "─", "┐", blockWidth))
 	for _, line := range lines {
@@ -134,6 +138,16 @@ func renderCodeBlockPanel(code string, width int) string {
 	}
 	rendered = append(rendered, renderCodeBlockBorderLine("└", "─", "┘", blockWidth))
 	return strings.Join(rendered, "\n")
+}
+
+func limitRenderedCodeBlockLines(lines []string, maxLines int) []string {
+	if maxLines <= 0 || len(lines) <= maxLines {
+		return lines
+	}
+	hidden := len(lines) - maxLines
+	out := append([]string(nil), lines[:maxLines]...)
+	out = append(out, "... "+strconv.Itoa(hidden)+" more lines hidden")
+	return out
 }
 
 func markdownCodeBlockWidth(code string, width int) int {

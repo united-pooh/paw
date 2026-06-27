@@ -86,7 +86,7 @@ func (m appModel) updateTerminalCursorAnchor(inputPanel string) {
 // shouldAnchorTextInputCursor 判断当前是否应该把终端真实光标移动到输入单元格。
 func (m appModel) shouldAnchorTextInputCursor() bool {
 	// 补全弹窗开启时输入框仍然可见，光标仍需锚定
-	return m.ready && !m.running && m.modelWizard == nil && m.settingWizard == nil && m.sessionPicker == nil
+	return m.ready && !m.isTerminalWorkRunning() && m.modelWizard == nil && m.settingWizard == nil && m.sessionPicker == nil
 }
 
 // inputCursorTerminalPosition 计算输入框光标相对当前帧底部的位置。

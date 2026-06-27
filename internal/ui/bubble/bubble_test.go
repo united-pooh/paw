@@ -1140,17 +1140,19 @@ func TestUpdateToolCallBodyRendersOldNewDiffPreview(t *testing.T) {
 }
 
 func TestToolDiffDetailLinesUseBackgroundColors(t *testing.T) {
-	rendered := renderToolDetailLines([]string{"1 - │ old", "1 + │ new"}, 40)
-	deleted := lipgloss.NewStyle().Foreground(lipgloss.Color("224")).Background(lipgloss.Color("52")).Bold(true).Width(40).Render("1 - │ old")
-	added := lipgloss.NewStyle().Foreground(lipgloss.Color("194")).Background(lipgloss.Color("22")).Bold(true).Width(40).Render("1 + │ new")
+	lines := []string{"1 - │ old", "1 + │ new"}
+	rendered := renderToolDetailLines(lines, 40)
+	rowWidth := diffDetailRowsWidth(lines, 40)
+	deleted := lipgloss.NewStyle().Foreground(lipgloss.Color("224")).Background(lipgloss.Color("52")).Bold(true).Render(padDisplayWidth("1 - │ old", rowWidth))
+	added := lipgloss.NewStyle().Foreground(lipgloss.Color("194")).Background(lipgloss.Color("22")).Bold(true).Render(padDisplayWidth("1 + │ new", rowWidth))
 	for _, want := range []string{deleted, added} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered diff = %q, want colored line %q", rendered, want)
 		}
 	}
 	for _, line := range strings.Split(ansi.Strip(rendered), "\n") {
-		if got := lipgloss.Width(line); got != 40 {
-			t.Fatalf("diff line width = %d, want full safe row width 40: %q", got, line)
+		if got := lipgloss.Width(line); got != rowWidth {
+			t.Fatalf("diff line width = %d, want safe row width %d: %q", got, rowWidth, line)
 		}
 	}
 }
@@ -1194,6 +1196,40 @@ func TestToolDiffRowsAlignLineNumberWithStatusMarker(t *testing.T) {
 	}
 	if !strings.Contains(diffLine, "…") {
 		t.Fatalf("diff line = %q, want long diff content truncated to avoid soft wrap", diffLine)
+	}
+}
+
+func TestToolEntryClampsLargeDetailBlocks(t *testing.T) {
+	lines := []string{"Bash · running"}
+	for i := 0; i < 80; i++ {
+		lines = append(lines, fmt.Sprintf("line-%02d", i))
+	}
+	rendered := ansi.Strip(renderEntry(transcriptEntry{
+		kind:  entryTool,
+		title: "tool",
+		body:  strings.Join(lines, "\n"),
+	}, 80))
+
+	if strings.Contains(rendered, "line-79") {
+		t.Fatalf("rendered tool entry should hide tail detail lines:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "... 48 more lines hidden") {
+		t.Fatalf("rendered tool entry = %q, want hidden line summary", rendered)
+	}
+}
+
+func TestMarkdownCodeBlockClampsLargeBlocks(t *testing.T) {
+	lines := make([]string, 80)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line-%02d", i)
+	}
+	rendered := ansi.Strip(renderCodeBlock("go", strings.Join(lines, "\n"), 80))
+
+	if strings.Contains(rendered, "line-79") {
+		t.Fatalf("rendered code block should hide tail lines:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "... 48 more lines hidden") {
+		t.Fatalf("rendered code block = %q, want hidden line summary", rendered)
 	}
 }
 
@@ -1782,6 +1818,67 @@ func TestViewAnchorsTerminalCursorOnInputCell(t *testing.T) {
 	}
 	if position.column <= 2 {
 		t.Fatalf("column = %d, want input cell position", position.column)
+	}
+}
+
+func TestViewAnchorsTerminalCursorWithEmptyPlaceholder(t *testing.T) {
+	anchor := newTerminalCursorAnchor()
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, nil, nil, nil, anchor)
+	model.ready = true
+	model.width = 80
+	model.height = 24
+	model.relayout()
+	model.input.SetValue("")
+
+	_ = model.View()
+
+	position, ok := anchor.consume()
+	if !ok || !position.active {
+		t.Fatalf("anchor = %#v/%v, want active", position, ok)
+	}
+	if position.column != 2 {
+		t.Fatalf("column = %d, want input cell start", position.column)
+	}
+}
+
+func TestViewAnchorsTerminalCursorWhileModelRunning(t *testing.T) {
+	anchor := newTerminalCursorAnchor()
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, nil, nil, nil, anchor)
+	model.ready = true
+	model.width = 80
+	model.height = 24
+	model.running = true
+	model.runningTerminal = false
+	model.relayout()
+	model.input.SetValue("queued follow-up")
+
+	_ = model.View()
+
+	position, ok := anchor.consume()
+	if !ok || !position.active {
+		t.Fatalf("anchor = %#v/%v, want active while model is streaming", position, ok)
+	}
+}
+
+func TestViewClearsTerminalCursorAnchorWhileTerminalRunning(t *testing.T) {
+	anchor := newTerminalCursorAnchor()
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, nil, nil, nil, anchor)
+	model.ready = true
+	model.width = 80
+	model.height = 24
+	model.running = true
+	model.runningTerminal = true
+	model.relayout()
+	model.input.SetValue("echo hi")
+
+	_ = model.View()
+
+	position, ok := anchor.consume()
+	if !ok {
+		t.Fatalf("anchor did not receive a clear position")
+	}
+	if position.active {
+		t.Fatalf("cursor position = %#v, want inactive while terminal is running", position)
 	}
 }
 
