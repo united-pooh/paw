@@ -7,35 +7,64 @@ import (
 )
 
 func resolvePathWithinRoot(root, target string) (string, error) {
+	resolved, _, err := resolvePathWithinRoots(root, nil, target)
+	return resolved, err
+}
+
+func resolvePathWithinRoots(root string, readRoots []string, target string) (string, string, error) {
 	if strings.TrimSpace(root) == "" {
-		return "", fmt.Errorf("tool root is empty")
+		return "", "", fmt.Errorf("tool root is empty")
 	}
 
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
+	var roots []string
+	roots = append(roots, absRoot)
+	for _, readRoot := range readRoots {
+		readRoot = strings.TrimSpace(readRoot)
+		if readRoot == "" {
+			continue
+		}
+		absReadRoot, err := filepath.Abs(readRoot)
+		if err != nil {
+			return "", "", err
+		}
+		roots = append(roots, absReadRoot)
+	}
+
+	target = strings.TrimSpace(target)
 	resolvedTarget := absRoot
-	if strings.TrimSpace(target) != "" {
-		resolvedTarget = filepath.Join(absRoot, target)
+	if target != "" {
+		if filepath.IsAbs(target) {
+			resolvedTarget = target
+		} else {
+			resolvedTarget = filepath.Join(absRoot, target)
+		}
 	}
 
 	absTarget, err := filepath.Abs(resolvedTarget)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	rel, err := filepath.Rel(absRoot, absTarget)
+	for _, allowedRoot := range roots {
+		if isPathWithinRoot(allowedRoot, absTarget) {
+			return absTarget, allowedRoot, nil
+		}
+	}
+
+	return "", "", fmt.Errorf("path escapes allowed roots: %s", target)
+}
+
+func isPathWithinRoot(root, target string) bool {
+	rel, err := filepath.Rel(root, target)
 	if err != nil {
-		return "", err
+		return false
 	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("path escapes workspace root: %s", target)
-	}
-
-	// TODO: 如果后续要把文件访问做成严格沙箱，这里还需要补 symlink-aware 校验。
-	return absTarget, nil
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func relativePath(root, target string) string {
@@ -44,4 +73,19 @@ func relativePath(root, target string) string {
 		return target
 	}
 	return filepath.ToSlash(rel)
+}
+
+func displayPath(root, target string) string {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return filepath.ToSlash(target)
+	}
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return filepath.ToSlash(target)
+	}
+	if isPathWithinRoot(absRoot, absTarget) {
+		return relativePath(absRoot, absTarget)
+	}
+	return filepath.ToSlash(absTarget)
 }

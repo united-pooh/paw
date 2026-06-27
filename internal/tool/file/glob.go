@@ -14,7 +14,8 @@ import (
 const defaultGlobMaxResults = 200
 
 type GlobTool struct {
-	Root string
+	Root      string
+	ReadRoots []string
 }
 
 type globInput struct {
@@ -52,7 +53,7 @@ func (t *GlobTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 		return "", fmt.Errorf("pattern is required")
 	}
 
-	searchRoot, err := resolvePathWithinRoot(t.Root, in.Path)
+	searchRoot, _, err := resolvePathWithinRoots(t.Root, t.ReadRoots, in.Path)
 	if err != nil {
 		return "", err
 	}
@@ -84,7 +85,7 @@ func (t *GlobTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 			return nil
 		}
 
-		matches = append(matches, relativePath(t.Root, path))
+		matches = append(matches, displayPath(t.Root, path))
 		if len(matches) >= maxResults {
 			return errGrepLimitReached
 		}

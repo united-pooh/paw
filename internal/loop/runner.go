@@ -3,6 +3,7 @@ package loop
 import (
 	"codex-agent-go/internal/message"
 	"codex-agent-go/internal/model"
+	"codex-agent-go/internal/tokentracer"
 	"codex-agent-go/internal/tool"
 	"codex-agent-go/internal/ui"
 	"context"
@@ -70,6 +71,9 @@ type Runner struct {
 	compactToolPrompt      bool
 	streamMASubagents      StreamMASubagentRunner
 	subagentTokensProvider SubagentTokensProvider
+	tokenTracer            *tokentracer.Tracer
+	traceStageID           string
+	traceAgentID           string
 }
 
 type tokenUsageTotals struct {

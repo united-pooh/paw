@@ -5,6 +5,7 @@ import (
 	"codex-agent-go/internal/model"
 	"codex-agent-go/internal/session"
 	"codex-agent-go/internal/settings"
+	"codex-agent-go/internal/skill"
 	"codex-agent-go/internal/tool"
 	toolexec "codex-agent-go/internal/tool/exec"
 	toolfile "codex-agent-go/internal/tool/file"
@@ -870,11 +871,12 @@ func resultFromTask(task TaskSnapshot) Result {
 
 func newBaseToolRegistry(root string) *tool.Registry {
 	registry := tool.NewRegistry()
+	readRoots := skill.DefaultRoots(root)
 	registry.Register(&toolfile.LSTool{Root: root})
-	registry.Register(&toolfile.ReadTool{Root: root})
+	registry.Register(&toolfile.ReadTool{Root: root, ReadRoots: readRoots})
 	registry.Register(&toolfile.WriteTool{Root: root})
-	registry.Register(&toolfile.GrepTool{Root: root})
-	registry.Register(&toolfile.GlobTool{Root: root})
+	registry.Register(&toolfile.GrepTool{Root: root, ReadRoots: readRoots})
+	registry.Register(&toolfile.GlobTool{Root: root, ReadRoots: readRoots})
 	registry.Register(&toolexec.BashTool{Root: root})
 	registry.Register(&toolwebfetch.Tool{})
 	return registry

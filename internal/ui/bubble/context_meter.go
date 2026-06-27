@@ -1,10 +1,10 @@
 package bubble
 
 import (
-	"fmt"
-	"github.com/charmbracelet/lipgloss"
 	"codex-agent-go/internal/loop"
 	"codex-agent-go/internal/settings"
+	"fmt"
+	"github.com/charmbracelet/lipgloss"
 	"math"
 	"strconv"
 	"strings"
@@ -193,10 +193,11 @@ func renderContextBarWithOverlayStart(used, cache, limit, width int, overlay str
 			cells[i] = contextFreeStyle.Render("▱")
 		}
 	}
-	overlayRunes := []rune(overlay)
-	if len(overlayRunes) > 0 && overlayStart >= 0 && overlayStart+len(overlayRunes) <= width {
-		for i, r := range overlayRunes {
-			cells[overlayStart+i] = contextThinkingStyle.Render(string(r))
+	overlayWidth := lipgloss.Width(overlay)
+	if overlayWidth > 0 && overlayStart >= 0 && overlayStart+overlayWidth <= width {
+		cells[overlayStart] = contextThinkingStyle.Render(overlay)
+		for i := 1; i < overlayWidth; i++ {
+			cells[overlayStart+i] = ""
 		}
 	}
 	return strings.Join(cells, "")

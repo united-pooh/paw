@@ -115,7 +115,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinnerFrameIdx++
 		m.applyCursorAnimation()
 		m.updateContextMeterAnimation()
-		if m.hasActiveTranscriptAnimation() {
+		if m.transcriptRefreshPending || m.hasActiveTranscriptAnimation() {
 			if m.viewport.AtBottom() {
 				m.refreshViewport()
 			} else {

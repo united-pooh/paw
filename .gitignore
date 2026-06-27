@@ -1,6 +1,7 @@
 .gocache/
 .codegraph/
 .idea/
+.playwright-cli/
 /agent
 .ccagent/
 .env.local
@@ -8,6 +9,8 @@
 .mockups/
 tmp/
 .superpowers/
+node_modules/
+.next/
 *.png
 *.jpg
 *.jpeg

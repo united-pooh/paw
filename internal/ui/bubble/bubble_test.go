@@ -845,6 +845,72 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 	}
 }
 
+func TestAssistantDeltaCoalescesTranscriptRefresh(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 20
+	model.relayout()
+	model.refreshViewport()
+	model.lastTranscriptRefreshAt = time.Now().Add(transcriptStreamingRefreshInterval)
+
+	next, _ := model.Update(assistantDeltaMsg("streamed text"))
+	model = next.(appModel)
+
+	if !model.transcriptRefreshPending {
+		t.Fatalf("transcriptRefreshPending = false, want true")
+	}
+	if got := model.transcript[len(model.transcript)-1].body; got != "streamed text" {
+		t.Fatalf("assistant body = %q, want streamed text", got)
+	}
+	if strings.Contains(model.viewport.View(), "streamed text") {
+		t.Fatalf("viewport refreshed immediately despite coalescing: %q", model.viewport.View())
+	}
+
+	next, _ = model.Update(cursorFrameMsg(time.Now().Add(transcriptStreamingRefreshInterval)))
+	model = next.(appModel)
+
+	if model.transcriptRefreshPending {
+		t.Fatalf("transcriptRefreshPending = true, want false after cursor frame")
+	}
+	if !strings.Contains(model.viewport.View(), "streamed text") {
+		t.Fatalf("viewport = %q, want streamed text after cursor frame", model.viewport.View())
+	}
+}
+
+func TestRenderTranscriptContentCachesUnchangedEntries(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.viewport.Width = 80
+	model.transcript = []transcriptEntry{
+		{kind: entryAssistant, title: "assistant", body: "first **bold**", version: 1},
+		{kind: entryAssistant, title: "assistant", body: "second", version: 1},
+	}
+
+	first := model.renderTranscriptContent()
+	if !strings.Contains(ansi.Strip(first), "first bold") || !strings.Contains(first, "second") {
+		t.Fatalf("first render = %q", first)
+	}
+	if len(model.transcriptRenderCache) != len(model.transcript) {
+		t.Fatalf("cache len = %d, want %d", len(model.transcriptRenderCache), len(model.transcript))
+	}
+	cachedFirst := model.transcriptRenderCache[0]
+	cachedSecond := model.transcriptRenderCache[1]
+
+	model.transcript[1].body = "second updated"
+	touchTranscriptEntry(&model.transcript[1])
+	second := model.renderTranscriptContent()
+
+	if !strings.Contains(second, "second updated") {
+		t.Fatalf("second render = %q, want updated body", second)
+	}
+	if model.transcriptRenderCache[0] != cachedFirst {
+		t.Fatalf("first cache entry changed for an untouched transcript entry")
+	}
+	if model.transcriptRenderCache[1].key == cachedSecond.key {
+		t.Fatalf("second cache key did not change after transcript entry mutation")
+	}
+}
+
 func TestAssistantCitationRendersAsBlockquoteUnderMessage(t *testing.T) {
 	entry := transcriptEntry{
 		kind:  entryAssistant,

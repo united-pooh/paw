@@ -3,12 +3,36 @@ package bubble
 
 import (
 	"encoding/json"
-	"github.com/charmbracelet/lipgloss"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 const toolExpandDuration = 650 * time.Millisecond
+const transcriptStreamingRefreshInterval = cursorFrameInterval
+
+type transcriptRenderCacheEntry struct {
+	key      transcriptRenderCacheKey
+	rendered string
+}
+
+type transcriptRenderCacheKey struct {
+	kind            entryKind
+	title           string
+	body            string
+	color           string
+	isError         bool
+	toolUseID       string
+	toolName        string
+	citations       string
+	width           int
+	version         int
+	bodyLen         int
+	citationCount   int
+	createdAtUnixNS int64
+	createdAtIsZero bool
+}
 
 // appendAssistantDelta 将模型流式增量追加到当前 assistant 消息，必要时新建消息。
 func (m *appModel) appendAssistantDelta(delta string) {
@@ -27,7 +51,8 @@ func (m *appModel) appendAssistantDelta(delta string) {
 		m.transcript[m.activeAssistant].citations = append(m.transcript[m.activeAssistant].citations, m.consumePendingToolCitations()...)
 	}
 	m.transcript[m.activeAssistant].body += delta
-	m.refreshViewport()
+	touchTranscriptEntry(&m.transcript[m.activeAssistant])
+	m.refreshViewportForStreaming()
 }
 
 // appendThinkingDelta 将模型 thinking 增量追加到 transcript，渲染时由 showThinking 控制显隐。
@@ -44,7 +69,8 @@ func (m *appModel) appendThinkingDelta(delta string) {
 		})
 	}
 	m.transcript[len(m.transcript)-1].body += delta
-	m.refreshViewport()
+	touchTranscriptEntry(&m.transcript[len(m.transcript)-1])
+	m.refreshViewportForStreaming()
 }
 
 // addEntry 追加一条 transcript 记录并刷新滚动区。
@@ -52,6 +78,7 @@ func (m *appModel) addEntry(entry transcriptEntry) {
 	if entry.createdAt.IsZero() {
 		entry.createdAt = m.animationNow()
 	}
+	touchTranscriptEntry(&entry)
 	m.transcript = append(m.transcript, entry)
 	m.refreshViewport()
 }
@@ -61,6 +88,16 @@ func (m appModel) animationNow() time.Time {
 		return m.cursorFrameAt
 	}
 	return time.Now()
+}
+
+func touchTranscriptEntry(entry *transcriptEntry) {
+	if entry == nil {
+		return
+	}
+	entry.version++
+	if entry.version <= 0 {
+		entry.version = 1
+	}
 }
 
 func (m *appModel) consumePendingToolCitations() []toolCitation {
@@ -76,13 +113,16 @@ func (m *appModel) recordToolCallCitation(toolUseID, name string, input json.Raw
 	cite := newToolCallCitation(toolUseID, name, input)
 	if idx := m.lastAssistantCitationHostIndex(); idx >= 0 {
 		m.transcript[idx].citations = append(m.transcript[idx].citations, cite)
+		touchTranscriptEntry(&m.transcript[idx])
 	} else {
-		m.transcript = append(m.transcript, transcriptEntry{
+		entry := transcriptEntry{
 			kind:      entryAssistant,
 			title:     "assistant",
 			citations: []toolCitation{cite},
 			createdAt: m.animationNow(),
-		})
+		}
+		touchTranscriptEntry(&entry)
+		m.transcript = append(m.transcript, entry)
 	}
 	m.refreshViewport()
 }
@@ -125,6 +165,7 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status string, isError
 		entry.title = "tool"
 		entry.body = completeRunningToolCallBody(entry.body, status)
 		entry.isError = isError
+		touchTranscriptEntry(entry)
 		m.refreshViewport()
 		return
 	}
@@ -154,6 +195,7 @@ func (m *appModel) recordToolResultCitation(toolUseID, name, status, content str
 				entry.citations[citeIdx].status = cite.status
 				entry.citations[citeIdx].preview = cite.preview
 				entry.citations[citeIdx].isError = cite.isError
+				touchTranscriptEntry(entry)
 				m.refreshViewport()
 				return
 			}
@@ -161,13 +203,16 @@ func (m *appModel) recordToolResultCitation(toolUseID, name, status, content str
 	}
 	if idx := m.lastAssistantCitationHostIndex(); idx >= 0 {
 		m.transcript[idx].citations = append(m.transcript[idx].citations, cite)
+		touchTranscriptEntry(&m.transcript[idx])
 	} else {
-		m.transcript = append(m.transcript, transcriptEntry{
+		entry := transcriptEntry{
 			kind:      entryAssistant,
 			title:     "assistant",
 			citations: []toolCitation{cite},
 			createdAt: m.animationNow(),
-		})
+		}
+		touchTranscriptEntry(&entry)
+		m.transcript = append(m.transcript, entry)
 	}
 	m.refreshViewport()
 }
@@ -239,6 +284,7 @@ func (m *appModel) refreshViewport() {
 	if !m.selectionActive {
 		m.viewport.GotoBottom()
 	}
+	m.markTranscriptRefreshed()
 }
 
 // refreshViewportPreservingOffset 刷新 transcript 内容，但保留用户当前滚动位置。
@@ -250,10 +296,121 @@ func (m *appModel) refreshViewportPreservingOffset() {
 	}
 	m.viewport.SetContent(content)
 	m.viewport.SetYOffset(offset)
+	m.markTranscriptRefreshed()
 }
 
-func (m appModel) renderTranscriptContent() string {
-	return renderTranscriptAt(m.transcript, maxInt(20, m.viewport.Width), m.showThinking, m.animationNow())
+func (m *appModel) refreshViewportForStreaming() {
+	if m == nil {
+		return
+	}
+	now := time.Now()
+	if m.lastTranscriptRefreshAt.IsZero() || now.Sub(m.lastTranscriptRefreshAt) >= transcriptStreamingRefreshInterval {
+		m.refreshViewport()
+		return
+	}
+	m.transcriptRefreshPending = true
+}
+
+func (m *appModel) markTranscriptRefreshed() {
+	if m == nil {
+		return
+	}
+	m.transcriptRefreshPending = false
+	m.lastTranscriptRefreshAt = time.Now()
+}
+
+func (m *appModel) renderTranscriptContent() string {
+	return m.renderTranscriptContentAt(maxInt(20, m.viewport.Width), m.showThinking, m.animationNow())
+}
+
+func (m *appModel) renderTranscriptContentAt(width int, showThinking bool, at time.Time) string {
+	if len(m.transcript) == 0 {
+		m.transcriptRenderCache = nil
+		return ""
+	}
+	if len(m.transcriptRenderCache) != len(m.transcript) {
+		next := make([]transcriptRenderCacheEntry, len(m.transcript))
+		copy(next, m.transcriptRenderCache)
+		m.transcriptRenderCache = next
+	}
+	parts := make([]string, 0, len(m.transcript))
+	for idx, entry := range m.transcript {
+		if entry.kind == entryThinking && !showThinking {
+			continue
+		}
+		if !assistantEntryIsRenderable(entry) {
+			continue
+		}
+		key := transcriptRenderKey(entry, width)
+		cacheable := transcriptEntryCacheable(entry, at)
+		if cacheable && m.transcriptRenderCache[idx].key == key {
+			parts = append(parts, m.transcriptRenderCache[idx].rendered)
+			continue
+		}
+		rendered := renderEntryAt(entry, width, at)
+		if cacheable {
+			m.transcriptRenderCache[idx] = transcriptRenderCacheEntry{key: key, rendered: rendered}
+		} else {
+			m.transcriptRenderCache[idx] = transcriptRenderCacheEntry{}
+		}
+		parts = append(parts, rendered)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func transcriptRenderKey(entry transcriptEntry, width int) transcriptRenderCacheKey {
+	key := transcriptRenderCacheKey{
+		kind:            entry.kind,
+		title:           entry.title,
+		color:           entry.color,
+		isError:         entry.isError,
+		toolUseID:       entry.toolUseID,
+		toolName:        entry.toolName,
+		width:           width,
+		version:         entry.version,
+		bodyLen:         len(entry.body),
+		citationCount:   len(entry.citations),
+		createdAtUnixNS: entry.createdAt.UnixNano(),
+		createdAtIsZero: entry.createdAt.IsZero(),
+	}
+	if entry.version == 0 {
+		key.body = entry.body
+		key.citations = transcriptCitationSnapshot(entry.citations)
+	}
+	return key
+}
+
+func transcriptCitationSnapshot(citations []toolCitation) string {
+	if len(citations) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, cite := range citations {
+		b.WriteString(cite.toolUseID)
+		b.WriteByte('\x00')
+		b.WriteString(cite.name)
+		b.WriteByte('\x00')
+		b.WriteString(cite.target)
+		b.WriteByte('\x00')
+		b.WriteString(cite.status)
+		b.WriteByte('\x00')
+		b.WriteString(cite.preview)
+		b.WriteByte('\x00')
+		if cite.isError {
+			b.WriteByte('1')
+		} else {
+			b.WriteByte('0')
+		}
+		b.WriteByte('\x00')
+	}
+	return b.String()
+}
+
+func transcriptEntryCacheable(entry transcriptEntry, at time.Time) bool {
+	if entry.kind != entryTool || entry.createdAt.IsZero() || at.IsZero() {
+		return true
+	}
+	return at.Sub(entry.createdAt) >= toolExpandDuration
 }
 
 func (m appModel) hasActiveTranscriptAnimation() bool {
@@ -498,7 +655,8 @@ func renderToolEntryBodyWithMarker(body string, width int, progress float64, bor
 	if visibleLines > len(detailLines) {
 		visibleLines = len(detailLines)
 	}
-	content := header + "\n" + renderToolDetailLines(detailLines[:visibleLines], contentWidth)
+	detailWidth := maxInt(1, contentWidth-borderStyle.GetHorizontalFrameSize())
+	content := header + "\n" + renderToolDetailLines(detailLines[:visibleLines], detailWidth)
 	return borderStyle.Width(contentWidth).Render(content)
 }
 
@@ -509,7 +667,6 @@ func toolEntryContentWidth(width int, borderStyle lipgloss.Style) int {
 const toolEntryNoWrapSafetyCells = transcriptPanelHorizontalFrame + 1
 
 func renderToolDetailLines(lines []string, width int) string {
-	diffRowWidth := diffDetailRowsWidth(lines, width)
 	rendered := make([]string, 0, len(lines))
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -535,30 +692,14 @@ func renderToolDetailLines(lines []string, width int) string {
 			isDiffLine = true
 		}
 		if isDiffLine {
-			renderedLine = padDisplayWidth(truncateDisplayWidth(renderedLine, diffRowWidth), diffRowWidth)
-			rendered = append(rendered, style.Render(renderedLine))
+			renderedLine = truncateDisplayWidth(renderedLine, width)
+			rendered = append(rendered, style.Width(width).Render(renderedLine))
 			continue
 		}
 		renderedLine = truncateDisplayWidth(renderedLine, width)
 		rendered = append(rendered, style.Width(width).Render(renderedLine))
 	}
 	return strings.Join(rendered, "\n")
-}
-
-func diffDetailRowsWidth(lines []string, width int) int {
-	maxAllowed := maxInt(1, width-2)
-	maxLineWidth := 0
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if diffDetailLineMarker(trimmed) == "" {
-			continue
-		}
-		maxLineWidth = maxInt(maxLineWidth, lipgloss.Width(truncateDisplayWidth(strings.TrimRight(line, " \t\r"), maxAllowed)))
-	}
-	if maxLineWidth == 0 {
-		return maxAllowed
-	}
-	return minInt(maxAllowed, maxLineWidth)
 }
 
 func diffDetailLineMarker(line string) string {

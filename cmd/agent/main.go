@@ -1,14 +1,11 @@
 package main
 
 import (
-	"context"
-	"encoding/json"
-	"flag"
-	"fmt"
 	"codex-agent-go/internal/loop"
 	"codex-agent-go/internal/model"
 	"codex-agent-go/internal/session"
 	"codex-agent-go/internal/settings"
+	"codex-agent-go/internal/skill"
 	"codex-agent-go/internal/subagent"
 	"codex-agent-go/internal/tool"
 	toolexec "codex-agent-go/internal/tool/exec"
@@ -17,6 +14,10 @@ import (
 	uiiface "codex-agent-go/internal/ui"
 	bubbleui "codex-agent-go/internal/ui/bubble"
 	"codex-agent-go/internal/ui/headless"
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -238,11 +239,12 @@ func registerTools(registry *tool.Registry, root string, subagentManager *subage
 	if registry == nil {
 		return
 	}
+	readRoots := skill.DefaultRoots(root)
 	registry.Register(&toolfile.LSTool{Root: root})
-	registry.Register(&toolfile.ReadTool{Root: root})
+	registry.Register(&toolfile.ReadTool{Root: root, ReadRoots: readRoots})
 	registry.Register(&toolfile.WriteTool{Root: root})
-	registry.Register(&toolfile.GrepTool{Root: root})
-	registry.Register(&toolfile.GlobTool{Root: root})
+	registry.Register(&toolfile.GrepTool{Root: root, ReadRoots: readRoots})
+	registry.Register(&toolfile.GlobTool{Root: root, ReadRoots: readRoots})
 	registry.Register(&toolexec.BashTool{Root: root})
 	registry.Register(&toolwebfetch.Tool{})
 	registry.Register(subagent.NewTool(subagentManager, sessionID))
