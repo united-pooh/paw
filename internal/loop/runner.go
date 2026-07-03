@@ -163,6 +163,12 @@ func (runner *Runner) RunTurn(ctx context.Context, input string) (msg message.Me
 	runner.activateSkillContext(input)
 	defer runner.clearActiveSkillContext()
 
+	// Audit: record the user input that started this turn.
+	runner.emitAuditEvent(ctx, SessionEvent{
+		Kind:      EventKindUserInput,
+		UserInput: &SessionUserInputPayload{Text: input},
+	})
+
 	if runner.historyIsNil() && runner.store != nil {
 		messages, err := runner.store.LoadResolvedHistory(ctx, runner.sessionID)
 		if err != nil {
@@ -458,6 +464,14 @@ func (runner *Runner) commitHistory(ctx context.Context, history []message.Messa
 	runner.mu.Lock()
 	runner.history = append([]message.Message(nil), history...)
 	runner.mu.Unlock()
+
+	// Audit: mark the turn as fully committed.
+	if len(newMsgs) > 0 {
+		runner.emitAuditEvent(ctx, SessionEvent{
+			Kind:       EventKindTurnCommitted,
+			TurnCommit: &SessionTurnCommitPayload{MessageCount: len(newMsgs)},
+		})
+	}
 	return nil
 }
 
@@ -832,6 +846,24 @@ func (runner *Runner) SetSnapshotStore(store SnapshotStore) {
 	runner.snapshotStore = store
 }
 
+// emitAuditEvent appends a single best-effort audit event to the event store.
+// It is intentionally non-blocking and silently drops errors — audit events
+// must not disrupt the main turn flow.
+func (runner *Runner) emitAuditEvent(ctx context.Context, event SessionEvent) {
+	if runner == nil {
+		return
+	}
+	runner.mu.RLock()
+	es := runner.eventStore
+	sid := runner.sessionID
+	runner.mu.RUnlock()
+	if es == nil {
+		return
+	}
+	event.SessionID = sid
+	_ = es.Append(ctx, sid, event)
+}
+
 func (runner *Runner) setCurrentUsage(usage model.Usage) {
 	runner.mu.Lock()
 	runner.usage = usage
@@ -1149,6 +1181,14 @@ func (runner *Runner) writeDelta(state *turnState, delta string) error {
 }
 
 func (runner *Runner) finalizeAssistantMessage(state *turnState) (message.Message, error) {
+	// Audit: record the full streamed assistant text (once per turn, not per chunk).
+	if text := state.content.String(); text != "" {
+		runner.emitAuditEvent(context.Background(), SessionEvent{
+			Kind:           EventKindAssistantDelta,
+			AssistantDelta: &SessionAssistantDeltaPayload{Text: text},
+		})
+	}
+
 	if len(state.toolCalls) > 0 {
 		return buildAssistantToolCallMessage(state.toolCalls), nil
 	}
@@ -1910,6 +1950,15 @@ func (runner *Runner) emitToolCall(call message.ToolCall) error {
 		"name":        call.Name,
 		"input":       json.RawMessage(append([]byte(nil), call.Input...)),
 	})
+	// Audit: record the tool call as an event.
+	runner.emitAuditEvent(context.Background(), SessionEvent{
+		Kind: EventKindToolCallFired,
+		ToolCall: &SessionToolCallPayload{
+			ID:    call.ID,
+			Name:  call.Name,
+			Input: append(json.RawMessage(nil), call.Input...),
+		},
+	})
 	return runner.ui.OnToolCall(event)
 }
 
@@ -1919,6 +1968,16 @@ func (runner *Runner) emitToolResult(call message.ToolCall, result message.ToolR
 		"name":        call.Name,
 		"is_error":    result.IsError,
 		"content":     result.Content,
+	})
+	// Audit: record the tool result as an event.
+	runner.emitAuditEvent(context.Background(), SessionEvent{
+		Kind: EventKindToolResult,
+		ToolResult: &SessionToolResultPayload{
+			ToolUseID: result.ToolUseID,
+			Name:      call.Name,
+			Content:   result.Content,
+			IsError:   result.IsError,
+		},
 	})
 	return runner.ui.OnToolResult(ui.ToolResultEvent{
 		ToolUseID: result.ToolUseID,
