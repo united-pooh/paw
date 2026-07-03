@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# paw — project launcher
+# usage: paw [command]
+#   paw           → 一键启动（build + serve + open Paw.app）
+#   paw rebuild   → 强制重建 Paw.app 后启动
+#   paw serve     → 只启动 Agent，不开 Paw
+#   paw build     → 只构建 Go agent
+#   paw test      → 跑测试
+#   paw clean     → 清理产物
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+case "${1:-}" in
+  rebuild) exec "$SCRIPT_DIR/scripts/dev.sh" --rebuild ;;
+  serve)   exec env AGENT_WS_PORT="${AGENT_WS_PORT:-8765}" go run "$SCRIPT_DIR/cmd/agent/..." ;;
+  build)   exec go build "$SCRIPT_DIR/cmd/agent/..." ;;
+  test)    exec go test "$SCRIPT_DIR/..." ;;
+  clean)
+    rm -f /tmp/codex-agent
+    rm -rf /Users/united_pooh/PyProjects/Paw/build
+    echo "cleaned"
+    ;;
+  ""|start)
+    exec "$SCRIPT_DIR/scripts/dev.sh"
+    ;;
+  *)
+    echo "unknown command: $1"
+    echo "usage: paw [rebuild|serve|build|test|clean]"
+    exit 1
+    ;;
+esac
