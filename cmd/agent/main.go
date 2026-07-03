@@ -12,8 +12,8 @@ import (
 	toolfile "codex-agent-go/internal/tool/file"
 	toolwebfetch "codex-agent-go/internal/tool/webfetch"
 	uiiface "codex-agent-go/internal/ui"
-	bubbleui "codex-agent-go/internal/ui/bubble"
 	"codex-agent-go/internal/ui/headless"
+	"codex-agent-go/internal/wsserver"
 	"context"
 	"encoding/json"
 	"flag"
@@ -24,7 +24,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 type options struct {
@@ -103,7 +102,7 @@ func main() {
 		return
 	}
 
-	if err := runInteractiveMode(ctx, opts); err != nil {
+	if err := runWSMode(ctx, opts); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -121,34 +120,32 @@ func runSingleTurnMode(ctx context.Context, opts options) error {
 	return err
 }
 
-func runInteractiveMode(ctx context.Context, opts options) error {
-	clearTerminalWindow(os.Stdout)
+func runWSMode(ctx context.Context, opts options) error {
+	server := wsserver.NewServer()
 
-	output := bubbleui.New()
-	runner, sessionID, client, settingsController, subagentManager, store, err := buildRunner(ctx, opts.sessionID, output)
+	// Create WSUI with empty sessionID initially; we update it after buildRunner
+	// resolves the final session ID.
+	wsui := wsserver.NewWSUI(server, "")
+
+	runner, sessionID, _, _, _, _, err := buildRunner(ctx, opts.sessionID, wsui)
 	if err != nil {
 		return err
 	}
+	wsui.SetSessionID(sessionID)
 	runner.SetStreamMAEnabled(opts.streamMA)
-	if opts.tokenTracer {
-		tracer, server, err := startTokenTracer(ctx, sessionID, opts)
-		if err != nil {
-			return err
-		}
-		defer func() {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			_ = server.Shutdown(shutdownCtx)
-		}()
-		runner.SetTokenTracer(tracer)
-		subagentManager.SetTokenTracer(tracer)
-	}
 
-	output.SetModelConfigController(client)
-	output.SetSettingsController(settingsController)
-	output.SetSubagentController(subagentManager)
-	output.SetSessionStore(store)
-	return output.Run(ctx, runner, sessionID)
+	handler := wsserver.NewHandler(runner)
+
+	go func() {
+		if err := server.ListenAndServe(ctx, handler); err != nil {
+			log.Printf("WS server error: %v", err)
+		}
+	}()
+
+	log.Printf("Agent ready. WS server started. session=%s", sessionID)
+
+	<-ctx.Done()
+	return nil
 }
 
 func startTokenTracer(ctx context.Context, sessionID string, opts options) (*tokentracer.Tracer, *tokentracer.Server, error) {

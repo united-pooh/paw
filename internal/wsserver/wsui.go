@@ -26,6 +26,12 @@ func NewWSUI(server *Server, sessionID string) *WSUI {
 	return &WSUI{server: server, sessionID: sessionID}
 }
 
+// SetSessionID updates the session ID used to tag broadcast events.
+// Call this after the runner has resolved the final session ID.
+func (w *WSUI) SetSessionID(sessionID string) {
+	w.sessionID = sessionID
+}
+
 func (w *WSUI) newEvent(kind loop.SessionEventKind) loop.SessionEvent {
 	return loop.SessionEvent{
 		SessionID: w.sessionID,
