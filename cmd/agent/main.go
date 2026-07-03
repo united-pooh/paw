@@ -23,6 +23,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 	"sync"
 )
 
@@ -136,14 +137,17 @@ func runWSMode(ctx context.Context, opts options) error {
 
 	handler := wsserver.NewHandler(runner)
 
-	go func() {
-		if err := server.ListenAndServe(ctx, handler); err != nil {
-			log.Printf("WS server error: %v", err)
-		}
-	}()
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- server.ListenAndServe(ctx, handler) }()
+
+	// Give the server 300ms to bind; a bind error surfaces immediately.
+	select {
+	case err := <-serverErr:
+		return fmt.Errorf("WS server failed to start (port conflict?): %w", err)
+	case <-time.After(300 * time.Millisecond):
+	}
 
 	log.Printf("Agent ready. WS server started. session=%s", sessionID)
-
 	<-ctx.Done()
 	return nil
 }

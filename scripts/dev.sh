@@ -107,7 +107,16 @@ fi
 
 # 启动 Agent
 PORT="${AGENT_WS_PORT:-8765}"
-log "启动 Agent ws://localhost:$PORT ..."
+
+# 清理旧进程（端口被占会导致 agent 绑定失败）
+OLD_PID=$(lsof -ti :"$PORT" 2>/dev/null || true)
+if [[ -n "$OLD_PID" ]]; then
+    warn "端口 ${PORT} 被占用 (pid ${OLD_PID})，清理中..."
+    kill -9 "$OLD_PID" 2>/dev/null || true
+    sleep 0.3
+fi
+
+log "启动 Agent ws://localhost:${PORT} ..."
 cd "$GO_ROOT"
 /tmp/codex-agent &
 AGENT_PID=$!
