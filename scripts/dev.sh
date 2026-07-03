@@ -34,7 +34,7 @@ else
     die "未设置 API Key。请选一个:\n  DeepSeek:  export DEEPSEEK_API_KEY=sk-...\n  Anthropic: export ANTHROPIC_API_KEY=sk-ant-..."
 fi
 
-ok "Provider: $PROV"
+ok "Provider: ${PROV}"
 
 # 写 model 配置
 CURRENT_PROV=""
@@ -71,9 +71,9 @@ cfg = {
 print(json.dumps(cfg, indent=2))
 " > "$MODEL_CFG"
     fi
-    log "已写入 model 配置 ($PROV)"
+    log "已写入 model 配置 (${PROV})"
 else
-    warn "Model 配置已是 $PROV，跳过覆写"
+    warn "Model 配置已是 ${PROV}，跳过覆写"
 fi
 
 # 构建 Go agent
@@ -116,7 +116,7 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
     nc -z localhost "$PORT" 2>/dev/null && break
     sleep 0.5
 done
-nc -z localhost "$PORT" 2>/dev/null || die "Agent 启动超时（port $PORT）"
+nc -z localhost "$PORT" 2>/dev/null || die "Agent 启动超时 (port ${PORT})"
 ok "Agent 服务已就绪"
 
 open "$PAW_APP"
