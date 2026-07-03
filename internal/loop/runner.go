@@ -80,6 +80,16 @@ type Runner struct {
 	traceAgentID           string
 }
 
+// RunnerCapabilities holds optional capability dependencies for Runner.
+// All fields are nil-safe; Runner checks for nil before use.
+type RunnerCapabilities struct {
+	CompactToolPrompt bool
+	StreamMAEnabled   bool
+	StreamMASubagents StreamMASubagentRunner // may be nil
+	SkillRegistry     *skill.Registry        // may be nil; overrides default
+	TokenTracer       *tokentracer.Tracer    // may be nil
+}
+
 type tokenUsageTotals struct {
 	used   int
 	cache  int
