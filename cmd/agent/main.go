@@ -288,6 +288,8 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 	}
 	registry := tool.NewRegistry()
 	runner := loop.NewRunnerWithInstructionRoot(client, output, registry, store, sessionID, root)
+	runner.SetEventStore(loop.NewInMemorySessionEventStore())
+	runner.SetSnapshotStore(loop.NewInMemorySnapshotStore())
 	subagentManager := subagent.NewManager(subagent.Config{
 		Model:        client,
 		Store:        store,
