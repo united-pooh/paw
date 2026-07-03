@@ -25,7 +25,7 @@ func (runner *Runner) SetTokenTracer(tracer *tokentracer.Tracer) {
 	}
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
-	runner.tokenTracer = tracer
+	runner.caps.TokenTracer = tracer
 }
 
 func (runner *Runner) TokenTracerURL() string {
@@ -42,7 +42,7 @@ func (runner *Runner) currentTokenTracer() *tokentracer.Tracer {
 	}
 	runner.mu.RLock()
 	defer runner.mu.RUnlock()
-	return runner.tokenTracer
+	return runner.caps.TokenTracer
 }
 
 func (runner *Runner) beginTraceTurn(input, mode string) traceContext {
@@ -53,8 +53,8 @@ func (runner *Runner) beginTraceTurn(input, mode string) traceContext {
 	stageID, agentID := tracer.StartTurn(input, mode)
 	ctx := traceContext{stageID: stageID, agentID: agentID, mode: mode}
 	runner.mu.Lock()
-	runner.traceStageID = stageID
-	runner.traceAgentID = agentID
+	runner.traceState.stageID = stageID
+	runner.traceState.agentID = agentID
 	runner.mu.Unlock()
 	return ctx
 }
@@ -68,9 +68,9 @@ func (runner *Runner) finishTraceTurn(ctx traceContext, err error) {
 		tracer.FinishTurn(ctx.stageID, ctx.agentID, err)
 	}
 	runner.mu.Lock()
-	if runner.traceStageID == ctx.stageID && runner.traceAgentID == ctx.agentID {
-		runner.traceStageID = ""
-		runner.traceAgentID = ""
+	if runner.traceState.stageID == ctx.stageID && runner.traceState.agentID == ctx.agentID {
+		runner.traceState.stageID = ""
+		runner.traceState.agentID = ""
 	}
 	runner.mu.Unlock()
 }
@@ -81,7 +81,7 @@ func (runner *Runner) currentTraceIDs() (string, string) {
 	}
 	runner.mu.RLock()
 	defer runner.mu.RUnlock()
-	return runner.traceStageID, runner.traceAgentID
+	return runner.traceState.stageID, runner.traceState.agentID
 }
 
 func (runner *Runner) recordTraceUsage(stageID, agentID string, usage tokentracer.Usage, data map[string]any) {

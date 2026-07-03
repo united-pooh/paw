@@ -68,7 +68,7 @@ func (runner *Runner) SetStreamMASubagentRunner(subagents StreamMASubagentRunner
 	}
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
-	runner.streamMASubagents = subagents
+	runner.caps.StreamMASubagents = subagents
 }
 
 func (runner *Runner) SetStreamMAEnabled(enabled bool) {
@@ -77,7 +77,7 @@ func (runner *Runner) SetStreamMAEnabled(enabled bool) {
 	}
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
-	runner.streamMAEnabled = enabled
+	runner.caps.StreamMAEnabled = enabled
 }
 
 func (runner *Runner) SetSubagentTokensProvider(p SubagentTokensProvider) {
@@ -104,7 +104,7 @@ func (runner *Runner) SetCompactToolPrompt(enabled bool) {
 	}
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
-	runner.compactToolPrompt = enabled
+	runner.caps.CompactToolPrompt = enabled
 }
 
 type streamMAInvocation struct {
@@ -466,7 +466,7 @@ func (runner *Runner) currentStreamMASubagents() StreamMASubagentRunner {
 	}
 	runner.mu.RLock()
 	defer runner.mu.RUnlock()
-	return runner.streamMASubagents
+	return runner.caps.StreamMASubagents
 }
 
 func (runner *Runner) currentStreamMAEnabled() bool {
@@ -475,7 +475,7 @@ func (runner *Runner) currentStreamMAEnabled() bool {
 	}
 	runner.mu.RLock()
 	defer runner.mu.RUnlock()
-	return runner.streamMAEnabled
+	return runner.caps.StreamMAEnabled
 }
 
 func streamMAGraphKindFromPlan(kind string, fallback streamMAGraphKind) streamMAGraphKind {
