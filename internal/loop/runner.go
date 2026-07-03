@@ -59,25 +59,39 @@ type Runner struct {
 	sessionID string
 	workRoot  string // 工具使用的 workspace 根目录，用于解析相对文件路径
 	prompt    *PromptBuilder
-	// history 保存”已经成功完成”的多轮对话消息。
-	// 当前调用路径是串行的，因此这里先不引入锁。
-	// TODO: 如果后续要把 Runner 暴露给并发调用方，需要为 history 增加互斥保护。
-	history                []message.Message
-	usage                  model.Usage
-	usageKnown             bool
-	sessionUsage           model.Usage
-	sessionUsageKnown      bool
-	supplements            []string
+	// history 保存”已经成功完成”的多轮对话消息（in-memory fallback when eventStore is nil）。
+	history           []message.Message
+	usage             model.Usage
+	usageKnown        bool
+	sessionUsage      model.Usage
+	sessionUsageKnown bool
+	// pendingSupplements holds ephemeral supplements (not event-sourced, transient per session).
+	pendingSupplements []string
+	// systemSupplement is a configuration value set at construction time.
 	systemSupplement       string
-	compactToolPrompt      bool
-	streamMAEnabled        bool
-	streamMASubagents      StreamMASubagentRunner
 	subagentTokensProvider SubagentTokensProvider
-	skillRegistry          *skill.Registry
-	activeSkillContext     string
-	tokenTracer            *tokentracer.Tracer
-	traceStageID           string
-	traceAgentID           string
+	// caps bundles optional capability dependencies.
+	caps RunnerCapabilities
+	// activeSkillContext is per-session ephemeral state, not event-sourced.
+	activeSkillContext string
+	// traceState groups the trace IDs that were previously top-level fields.
+	traceState struct {
+		stageID string
+		agentID string
+	}
+	// Event sourcing (optional — nil means fall back to in-memory behavior).
+	eventStore    SessionEventStore
+	snapshotStore SnapshotStore
+}
+
+// RunnerCapabilities holds optional capability dependencies for Runner.
+// All fields are nil-safe; Runner checks for nil before use.
+type RunnerCapabilities struct {
+	CompactToolPrompt bool
+	StreamMAEnabled   bool
+	StreamMASubagents StreamMASubagentRunner // may be nil
+	SkillRegistry     *skill.Registry        // may be nil; overrides default
+	TokenTracer       *tokentracer.Tracer    // may be nil
 }
 
 type tokenUsageTotals struct {
@@ -127,15 +141,17 @@ func NewRunner(model ModelStreamer, output ui.UI, registry *tool.Registry, store
 // NewRunnerWithInstructionRoot 创建带项目指令根目录的调度器。
 func NewRunnerWithInstructionRoot(model ModelStreamer, output ui.UI, registry *tool.Registry, store HistoryStore, sessionID, instructionRoot string) *Runner {
 	return &Runner{
-		model:           model,
-		ui:              output,
-		registry:        registry,
-		store:           store,
-		sessionID:       sessionID,
-		workRoot:        instructionRoot,
-		prompt:          NewPromptBuilder(NewInstructionManager(instructionRoot)),
-		skillRegistry:   skill.NewRegistry(skill.DefaultRoots(instructionRoot)),
-		streamMAEnabled: true,
+		model:     model,
+		ui:        output,
+		registry:  registry,
+		store:     store,
+		sessionID: sessionID,
+		workRoot:  instructionRoot,
+		prompt:    NewPromptBuilder(NewInstructionManager(instructionRoot)),
+		caps: RunnerCapabilities{
+			SkillRegistry:   skill.NewRegistry(skill.DefaultRoots(instructionRoot)),
+			StreamMAEnabled: true,
+		},
 	}
 }
 
@@ -235,7 +251,7 @@ func (runner *Runner) SetSkillRegistry(registry *skill.Registry) {
 	}
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
-	runner.skillRegistry = registry
+	runner.caps.SkillRegistry = registry
 }
 
 // SkillRoots returns the active skill search roots for tools that need to read
@@ -290,7 +306,7 @@ func (runner *Runner) currentSkillRegistry() *skill.Registry {
 	}
 	runner.mu.RLock()
 	defer runner.mu.RUnlock()
-	return runner.skillRegistry
+	return runner.caps.SkillRegistry
 }
 
 func (runner *Runner) currentSkillContext() string {
@@ -332,7 +348,7 @@ func (runner *Runner) SubmitSupplement(input string) bool {
 		return false
 	}
 	runner.mu.Lock()
-	runner.supplements = append(runner.supplements, input)
+	runner.pendingSupplements = append(runner.pendingSupplements, input)
 	runner.mu.Unlock()
 	return true
 }
@@ -344,7 +360,7 @@ func (runner *Runner) PendingSupplementCount() int {
 	}
 	runner.mu.RLock()
 	defer runner.mu.RUnlock()
-	return len(runner.supplements)
+	return len(runner.pendingSupplements)
 }
 
 // buildTurnHistory 复制已完成历史，并在尾部追加当前用户输入。
@@ -373,11 +389,11 @@ func (runner *Runner) drainSupplements() []string {
 	}
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
-	if len(runner.supplements) == 0 {
+	if len(runner.pendingSupplements) == 0 {
 		return nil
 	}
-	supplements := append([]string(nil), runner.supplements...)
-	runner.supplements = nil
+	supplements := append([]string(nil), runner.pendingSupplements...)
+	runner.pendingSupplements = nil
 	return supplements
 }
 
@@ -387,10 +403,10 @@ func (runner *Runner) prependSupplements(supplements []string) {
 	}
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
-	combined := make([]string, 0, len(supplements)+len(runner.supplements))
+	combined := make([]string, 0, len(supplements)+len(runner.pendingSupplements))
 	combined = append(combined, supplements...)
-	combined = append(combined, runner.supplements...)
-	runner.supplements = combined
+	combined = append(combined, runner.pendingSupplements...)
+	runner.pendingSupplements = combined
 }
 
 func buildSupplementMessages(supplements []string) []message.Message {
@@ -411,17 +427,30 @@ func buildSupplementMessages(supplements []string) []message.Message {
 // commitHistory 在一次 turn 成功结束后提交历史。
 // 先计算新增消息，再更新内存、持久化磁盘，两步顺序不能颠倒。
 func (runner *Runner) commitHistory(ctx context.Context, history []message.Message) error {
-	if runner.store != nil {
-		// 在更新 runner.history 之前，先用旧长度算出本轮新增的消息。
-		// runner.history 是上一轮结束时的状态，history 是本轮完整状态。
-		runner.mu.RLock()
-		prevLen := len(runner.history)
-		runner.mu.RUnlock()
-		newMsgs := history[prevLen:]
-		if len(newMsgs) > 0 {
-			if err := runner.store.Append(ctx, runner.sessionID, newMsgs...); err != nil {
-				return fmt.Errorf("保存会话历史失败: %w", err)
-			}
+	runner.mu.RLock()
+	prevLen := len(runner.history)
+	runner.mu.RUnlock()
+
+	newMsgs := history[prevLen:]
+
+	if runner.store != nil && len(newMsgs) > 0 {
+		if err := runner.store.Append(ctx, runner.sessionID, newMsgs...); err != nil {
+			return fmt.Errorf("保存会话历史失败: %w", err)
+		}
+	}
+
+	// Emit event-sourcing events for each new message.
+	if runner.eventStore != nil && len(newMsgs) > 0 {
+		events := make([]SessionEvent, 0, len(newMsgs))
+		for i := range newMsgs {
+			msg := newMsgs[i]
+			events = append(events, SessionEvent{
+				Kind:    EventKindHistoryMessage,
+				Message: &msg,
+			})
+		}
+		if err := runner.eventStore.Append(ctx, runner.sessionID, events...); err != nil {
+			return fmt.Errorf("保存事件历史失败: %w", err)
 		}
 	}
 
@@ -434,7 +463,6 @@ func (runner *Runner) commitHistory(ctx context.Context, history []message.Messa
 
 // ResetHistory 清空当前对话上下文。
 // 交互式 REPL 可以用它实现 /clear 这类命令。
-// TODO: 接入会话持久化后，这里还需要同步清理对应的 session 数据。
 func (runner *Runner) ResetHistory() {
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
@@ -443,7 +471,7 @@ func (runner *Runner) ResetHistory() {
 	runner.usageKnown = false
 	runner.sessionUsage = model.Usage{}
 	runner.sessionUsageKnown = false
-	runner.supplements = nil
+	runner.pendingSupplements = nil
 }
 
 // LoadHistory 从 store 加载指定 session 的历史，并替换当前 runner 的历史。
@@ -464,7 +492,7 @@ func (runner *Runner) LoadHistory(ctx context.Context, sessionID string) error {
 	runner.usageKnown = false
 	runner.sessionUsage = model.Usage{}
 	runner.sessionUsageKnown = false
-	runner.supplements = nil
+	runner.pendingSupplements = nil
 	return nil
 }
 
@@ -507,6 +535,63 @@ func (runner *Runner) setHistoryIfNil(history []message.Message) {
 	if runner.history == nil {
 		runner.history = append([]message.Message(nil), history...)
 	}
+}
+
+// loadSessionState loads the projected history, usage, and supplements from
+// the event store (with optional snapshot acceleration). When eventStore is nil
+// it returns the current in-memory values instead.
+func (runner *Runner) loadSessionState(ctx context.Context) ([]message.Message, UsageState, []string) {
+	runner.mu.RLock()
+	es := runner.eventStore
+	ss := runner.snapshotStore
+	sid := runner.sessionID
+	runner.mu.RUnlock()
+
+	if es == nil {
+		// Fall back to in-memory state.
+		runner.mu.RLock()
+		hist := append([]message.Message(nil), runner.history...)
+		us := UsageState{
+			Usage:             runner.usage,
+			UsageKnown:        runner.usageKnown,
+			SessionUsage:      runner.sessionUsage,
+			SessionUsageKnown: runner.sessionUsageKnown,
+		}
+		runner.mu.RUnlock()
+		return hist, us, nil
+	}
+
+	var snap *SessionSnapshot
+	if ss != nil {
+		if s, ok, err := ss.Load(ctx, sid); err == nil && ok {
+			snap = &s
+		}
+	}
+
+	events, err := es.Load(ctx, sid)
+	if err != nil {
+		// On error, fall back to in-memory state.
+		runner.mu.RLock()
+		hist := append([]message.Message(nil), runner.history...)
+		us := UsageState{
+			Usage:             runner.usage,
+			UsageKnown:        runner.usageKnown,
+			SessionUsage:      runner.sessionUsage,
+			SessionUsageKnown: runner.sessionUsageKnown,
+		}
+		runner.mu.RUnlock()
+		return hist, us, nil
+	}
+
+	history := ApplyHistoryProjection(snap, events)
+	usageState := ApplyUsageProjection(snap, events)
+
+	var supplements []string
+	if snap != nil {
+		supplements = append(supplements, snap.Supplements...)
+	}
+
+	return history, usageState, supplements
 }
 
 func buildSystemMessage(content string) message.Message {
@@ -588,7 +673,7 @@ func (runner *Runner) buildSystemPrompt() string {
 	descriptions := []string{}
 	if runner.registry != nil {
 		runner.mu.RLock()
-		compactToolPrompt := runner.compactToolPrompt
+		compactToolPrompt := runner.caps.CompactToolPrompt
 		runner.mu.RUnlock()
 		if compactToolPrompt {
 			descriptions = runner.registry.DescribeBrief()
@@ -726,21 +811,60 @@ func (runner *Runner) emitModelUsage(usage model.Usage) {
 	receiver.OnModelUsage(usage)
 }
 
-func (runner *Runner) setCurrentUsage(usage model.Usage) {
+// SetEventStore injects an event store for event sourcing.
+// If nil, the runner falls back to pure in-memory behavior.
+func (runner *Runner) SetEventStore(store SessionEventStore) {
+	if runner == nil {
+		return
+	}
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
+	runner.eventStore = store
+}
+
+// SetSnapshotStore injects a snapshot store for event sourcing.
+func (runner *Runner) SetSnapshotStore(store SnapshotStore) {
+	if runner == nil {
+		return
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	runner.snapshotStore = store
+}
+
+func (runner *Runner) setCurrentUsage(usage model.Usage) {
+	runner.mu.Lock()
 	runner.usage = usage
 	runner.usageKnown = true
+	es := runner.eventStore
+	sid := runner.sessionID
+	runner.mu.Unlock()
+
+	if es != nil {
+		_ = es.Append(context.Background(), sid, SessionEvent{
+			Kind:  EventKindUsageUpdate,
+			Usage: &SessionUsagePayload{Usage: usage, IsSession: false},
+		})
+	}
 }
 
 func (runner *Runner) addSessionUsage(delta tokenUsageTotals) {
 	runner.mu.Lock()
-	defer runner.mu.Unlock()
-
 	current := usageTotalsFromUsage(runner.sessionUsage, runner.sessionUsageKnown)
 	current = current.add(delta)
 	runner.sessionUsage = usageFromTotals(current)
 	runner.sessionUsageKnown = true
+	accumulated := runner.sessionUsage
+	es := runner.eventStore
+	sid := runner.sessionID
+	runner.mu.Unlock()
+
+	if es != nil {
+		_ = es.Append(context.Background(), sid, SessionEvent{
+			Kind:  EventKindUsageUpdate,
+			Usage: &SessionUsagePayload{Usage: accumulated, IsSession: true},
+		})
+	}
 }
 
 func mergeUsageSnapshot(current, next model.Usage) model.Usage {
