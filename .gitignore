@@ -28,3 +28,4 @@ node_modules/
 
 # Pipeline artifacts
 .pipeline-last-run-summary.json
+.claude/worktrees/
