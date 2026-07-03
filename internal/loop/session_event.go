@@ -36,6 +36,9 @@ const (
 	EventKindToolResult SessionEventKind = "tool_result"
 	// EventKindTurnCommitted records that a full turn was committed to history.
 	EventKindTurnCommitted SessionEventKind = "turn_committed"
+	// EventKindDeltaChunk records a single streaming text chunk from the assistant,
+	// emitted per chunk during streaming (not once per turn like EventKindAssistantDelta).
+	EventKindDeltaChunk SessionEventKind = "delta_chunk"
 )
 
 // SessionEvent is a single immutable fact recorded for a session.
@@ -57,6 +60,7 @@ type SessionEvent struct {
 	ToolCall       *SessionToolCallPayload       `json:"tool_call,omitempty"`
 	ToolResult     *SessionToolResultPayload     `json:"tool_result,omitempty"`
 	TurnCommit     *SessionTurnCommitPayload     `json:"turn_commit,omitempty"`
+	DeltaChunk     *SessionDeltaChunkPayload     `json:"delta_chunk,omitempty"`
 }
 
 // SessionUsagePayload carries token-usage data.
@@ -100,4 +104,11 @@ type SessionToolResultPayload struct {
 type SessionTurnCommitPayload struct {
 	// MessageCount is the number of new messages committed in this turn.
 	MessageCount int `json:"message_count"`
+}
+
+// SessionDeltaChunkPayload carries a single streaming text chunk from the assistant.
+// Unlike SessionAssistantDeltaPayload (emitted once per completed turn), this is
+// emitted once per streaming chunk for real-time display.
+type SessionDeltaChunkPayload struct {
+	Text string `json:"text"`
 }
