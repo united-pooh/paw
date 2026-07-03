@@ -1,31 +1,71 @@
 #!/usr/bin/env bash
 # paw — project launcher
 # usage: paw [command]
-#   paw           → 一键启动（build + serve + open Paw.app）
-#   paw rebuild   → 强制重建 Paw.app 后启动
-#   paw serve     → 只启动 Agent，不开 Paw
-#   paw build     → 只构建 Go agent
-#   paw test      → 跑测试
-#   paw clean     → 清理产物
+#   paw                    → 一键启动（自动检测 provider）
+#   paw rebuild            → 强制重建 Paw.app 后启动
+#   paw serve              → 只启动 Agent，不开 Paw
+#   paw build              → 只构建 Go agent
+#   paw test               → 跑测试
+#   paw clean              → 清理产物
+#   paw config deepseek    → 切换到 DeepSeek（需设 DEEPSEEK_API_KEY）
+#   paw config anthropic   → 切换到 Anthropic（需设 ANTHROPIC_API_KEY）
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MODEL_CFG="$SCRIPT_DIR/.ccagent/model.json"
+
+write_config() {
+    mkdir -p "$SCRIPT_DIR/.ccagent"
+    case "$1" in
+      deepseek)
+        cat > "$MODEL_CFG" << JSON
+{
+  "provider": "deepseek",
+  "api_base_url": "https://api.deepseek.com",
+  "api_path": "/chat/completions",
+  "api_key_env_name": "DEEPSEEK_API_KEY",
+  "model": "deepseek-chat",
+  "timeout": 120
+}
+JSON
+        echo "✓ 已切换到 deepseek（deepseek-chat）"
+        echo "  记得设置: export DEEPSEEK_API_KEY=sk-..."
+        ;;
+      anthropic)
+        cat > "$MODEL_CFG" << JSON
+{
+  "provider": "anthropic",
+  "api_base_url": "https://api.anthropic.com",
+  "api_path": "/v1/messages",
+  "api_key_env_name": "ANTHROPIC_API_KEY",
+  "model": "claude-opus-4-5-20251101",
+  "timeout": 120
+}
+JSON
+        echo "✓ 已切换到 anthropic（claude-opus-4-5）"
+        echo "  记得设置: export ANTHROPIC_API_KEY=sk-ant-..."
+        ;;
+      *)
+        echo "usage: paw config deepseek|anthropic"
+        exit 1
+        ;;
+    esac
+}
 
 case "${1:-}" in
-  rebuild) exec "$SCRIPT_DIR/scripts/dev.sh" --rebuild ;;
-  serve)   exec env AGENT_WS_PORT="${AGENT_WS_PORT:-8765}" go run "$SCRIPT_DIR/cmd/agent/..." ;;
-  build)   exec go build "$SCRIPT_DIR/cmd/agent/..." ;;
-  test)    exec go test "$SCRIPT_DIR/..." ;;
+  rebuild)       exec "$SCRIPT_DIR/scripts/dev.sh" --rebuild ;;
+  serve)         exec env AGENT_WS_PORT="${AGENT_WS_PORT:-8765}" go run "$SCRIPT_DIR/cmd/agent/..." ;;
+  build)         exec go build "$SCRIPT_DIR/cmd/agent/..." ;;
+  test)          exec go test "$SCRIPT_DIR/..." ;;
   clean)
     rm -f /tmp/codex-agent
     rm -rf /Users/united_pooh/PyProjects/Paw/build
     echo "cleaned"
     ;;
-  ""|start)
-    exec "$SCRIPT_DIR/scripts/dev.sh"
-    ;;
+  config)        write_config "${2:-}" ;;
+  ""|start)      exec "$SCRIPT_DIR/scripts/dev.sh" ;;
   *)
     echo "unknown command: $1"
-    echo "usage: paw [rebuild|serve|build|test|clean]"
+    echo "usage: paw [rebuild|serve|build|test|clean|config deepseek|config anthropic]"
     exit 1
     ;;
 esac
