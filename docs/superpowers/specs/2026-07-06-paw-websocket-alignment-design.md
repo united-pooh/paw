@@ -43,10 +43,10 @@ Paw 是一个 macOS Swift 客户端，通过 `ws://localhost:8765/ws` 与 go-cod
 │    └─ 把 Registry 注入 Handler 和 WSUI              │
 │                                                     │
 │  wsserver/agent_registry.go  ← 新文件               │
-│    AgentRegistry                                    │
+│    AgentRegistry(factory RunnerFactory)             │
 │      personas: map[uuid]PersonaSlot                 │
-│      Activate(name, runner)  → idle→running         │
-│      Deactivate(name)        → running→done         │
+│      Activate(name)  → idle→running, factory()      │
+│      Deactivate(name)→ running→done                 │
 │      RouteInput(ctx,id,text) → runner.RunTurn()     │
 │      Snapshot()              → sorted []AgentInfo   │
 │                                                     │
@@ -59,9 +59,9 @@ Paw 是一个 macOS Swift 客户端，通过 `ws://localhost:8765/ws` 与 go-cod
 │    新连接建立后：单播 history_message × N            │
 │                                                     │
 │  wsserver/wsui.go  ← 改                             │
-│    OnAgentSpawned  → registry.Activate + Broadcast  │
-│    OnAgentFinished → registry.Deactivate + Broadcast│
-│    OnModelUsage    → Broadcast usage_update          │
+│    OnTaskStarted  → registry.Activate + Broadcast   │
+│    OnTaskFinished → registry.Deactivate + Broadcast │
+│    OnModelUsage   → Broadcast usage_update           │
 │                                                     │
 │  loop/session_event.go  ← 改                        │
 │    SessionUserInputPayload += TargetAgentID          │
@@ -84,7 +84,7 @@ Paw 是一个 macOS Swift 客户端，通过 `ws://localhost:8765/ws` 与 go-cod
 
 1. Paw 连上 → Server 单播 `subagents_snapshot`（40个idle槽）+ 历史消息
 2. 用户发 `user_input`（无 target）→ 主 Runner → 流式广播 `delta_chunk`
-3. 主 Runner 调 Subagent 工具 → WSUI 收到 `OnAgentSpawned` → Registry.Activate → 广播新 `subagents_snapshot`
+3. 主 Runner 调 Subagent 工具 → Manager 调用 `OnTaskStarted` → WSUI → Registry.Activate（内部调 factory 创建 Runner）→ 广播新 `subagents_snapshot`
 4. 用户发 `user_input`（带 `target_agent_id`）→ Handler → Registry.RouteInput → 目标 Runner → 流式广播
 
 ---
@@ -183,11 +183,21 @@ type AgentRegistry struct {
 
 | 方法 | 说明 |
 |------|------|
-| `NewAgentRegistry()` | 按 persona.go 40个角色初始化，全部 idle |
-| `Activate(name, runner) (id, ok)` | idle→running，返回稳定 ID |
-| `Deactivate(name)` | running→done |
+| `NewAgentRegistry(factory RunnerFactory)` | 按 persona.go 40个角色初始化，全部 idle；factory 用于在 Activate 时按需创建 Runner |
+| `Activate(name string) (id string, ok bool)` | idle→running，调用 factory 创建 Runner；返回稳定 ID |
+| `Deactivate(name string)` | running→done，Runner 引用置 nil |
 | `RouteInput(ctx, agentID, text) error` | 投递到目标 Runner.RunTurn() |
 | `Snapshot() []AgentInfo` | 返回排序后的全量列表 |
+
+`RunnerFactory` 定义：
+
+```go
+// RunnerFactory 按 sessionID 构造一个新 Runner，供 AgentRegistry 在激活 persona 时使用。
+// sessionID 由 AgentRegistry 内部生成（= personaID）。
+type RunnerFactory func(ctx context.Context, sessionID string) (*loop.Runner, error)
+```
+
+工厂由 `main.go` 注入，内部调用 `buildRunnerWithSubagentContext` 并丢弃不需要的返回值。
 
 **稳定 ID 生成**
 
@@ -273,14 +283,21 @@ type WSUI struct {
 
 func (w *WSUI) SetRegistry(r *AgentRegistry)
 
-// Notifier 接口实现（subagent 生命周期）
-func (w *WSUI) OnAgentSpawned(name string, runner *loop.Runner) {
-    w.registry.Activate(name, runner)
+// subagent.Notifier 扩展实现（生命周期）
+// 当前 Notifier 接口只有 OnSystemMessage；需扩展为：
+//   type Notifier interface {
+//       OnSystemMessage(event ui.SystemEvent) error
+//       OnTaskStarted(task TaskSnapshot)
+//       OnTaskFinished(task TaskSnapshot)
+//   }
+// Manager 在 startTask / finishTask 时调用这两个新方法。
+func (w *WSUI) OnTaskStarted(task subagent.TaskSnapshot) {
+    w.registry.Activate(task.Name)
     w.broadcastSnapshot()
 }
 
-func (w *WSUI) OnAgentFinished(name string) {
-    w.registry.Deactivate(name)
+func (w *WSUI) OnTaskFinished(task subagent.TaskSnapshot) {
+    w.registry.Deactivate(task.Name)
     w.broadcastSnapshot()
 }
 
@@ -292,7 +309,7 @@ func (w *WSUI) OnModelUsage(usage model.Usage) {
 }
 ```
 
-WSUI 同时实现 `subagent.Notifier` 接口以接收 Manager 的生命周期回调。
+WSUI 实现扩展后的 `subagent.Notifier` 接口以接收 Manager 的生命周期回调。
 
 ---
 
@@ -300,28 +317,40 @@ WSUI 同时实现 `subagent.Notifier` 接口以接收 Manager 的生命周期回
 
 ```go
 func runWSMode(ctx context.Context, opts options) error {
-    server   := wsserver.NewServer()
-    registry := wsserver.NewAgentRegistry()
+    server := wsserver.NewServer()
+
+    // factory：为每个被激活的 persona 创建独立 Runner
+    factory := func(fctx context.Context, sessionID string) (*loop.Runner, error) {
+        r, _, _, _, _, _, err := buildRunnerWithSubagentContext(
+            fctx, sessionID, headless.New(io.Discard),
+            subagentRuntimeContext{depth: 1, maxDepth: 4},
+        )
+        return r, err
+    }
+    registry := wsserver.NewAgentRegistry(factory)
 
     wsui := wsserver.NewWSUI(server, "")
     wsui.SetRegistry(registry)
 
-    runner, sessionID, _, _, _, store, err := buildRunner(ctx, opts.sessionID, wsui)
+    runner, sessionID, _, _, _, _, err := buildRunner(ctx, opts.sessionID, wsui)
     // ...
     wsui.SetSessionID(sessionID)
 
     handler := wsserver.NewHandler(runner, registry)
 
+    // runner.EventStore() 是新增的 accessor，返回其内部 InMemorySessionEventStore
     deps := wsserver.ServerDeps{
         Handler:   handler,
         Registry:  registry,
-        Store:     store,
+        Store:     runner.EventStore(),
         SessionID: sessionID,
     }
     go func() { serverErr <- server.ListenAndServe(ctx, deps) }()
     // ...
 }
 ```
+
+`loop.Runner` 需新增 `EventStore() loop.SessionEventStore` 公开 accessor，暴露内部已通过 `runner.SetEventStore(loop.NewInMemorySessionEventStore())` 设置的 store。
 
 ---
 
