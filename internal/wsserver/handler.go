@@ -20,13 +20,15 @@ type AfterHook func(ctx context.Context, event loop.SessionEvent, err error)
 // Handler dispatches inbound WebSocket messages to the loop.Runner.
 type Handler struct {
 	runner     *loop.Runner
+	registry   *AgentRegistry // routes target_agent_id messages
 	preHooks   []PreHook
 	afterHooks []AfterHook
 }
 
-// NewHandler creates a Handler backed by runner.
-func NewHandler(runner *loop.Runner) *Handler {
-	return &Handler{runner: runner}
+// NewHandler creates a Handler. registry routes messages with a target_agent_id;
+// messages without a target go to runner.
+func NewHandler(runner *loop.Runner, registry *AgentRegistry) *Handler {
+	return &Handler{runner: runner, registry: registry}
 }
 
 // UsePre registers a pre-processing hook. Returns self for chaining.
@@ -87,7 +89,11 @@ func (h *Handler) HandleConn(ctx context.Context, conn *websocket.Conn) {
 		switch event.Kind {
 		case loop.EventKindUserInput:
 			if event.UserInput != nil {
-				_, procErr = h.runner.RunTurn(ctx, event.UserInput.Text)
+				if event.UserInput.TargetAgentID != "" && h.registry != nil {
+					procErr = h.registry.RouteInput(ctx, event.UserInput.TargetAgentID, event.UserInput.Text)
+				} else {
+					_, procErr = h.runner.RunTurn(ctx, event.UserInput.Text)
+				}
 			}
 		case loop.EventKindHistoryReset:
 			h.runner.ResetHistory()
