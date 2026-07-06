@@ -1,9 +1,12 @@
 package wsserver
 
 import (
+	"context"
 	"encoding/json"
 
 	"codex-agent-go/internal/loop"
+	"codex-agent-go/internal/model"
+	"codex-agent-go/internal/subagent"
 	"codex-agent-go/internal/ui"
 )
 
@@ -12,6 +15,7 @@ import (
 type WSUI struct {
 	server    *Server
 	sessionID string
+	registry  *AgentRegistry // routes lifecycle callbacks to persona slots
 }
 
 // Ensure WSUI satisfies ui.UI and all optional extensions at compile time.
@@ -30,6 +34,49 @@ func NewWSUI(server *Server, sessionID string) *WSUI {
 // Call this after the runner has resolved the final session ID.
 func (w *WSUI) SetSessionID(sessionID string) {
 	w.sessionID = sessionID
+}
+
+// SetRegistry wires the AgentRegistry so task lifecycle callbacks update persona state.
+func (w *WSUI) SetRegistry(r *AgentRegistry) {
+	w.registry = r
+}
+
+// OnTaskStarted activates the named persona and broadcasts an updated snapshot.
+// Called by subagent.Manager when a task starts (via taskLifecycleNotifier duck-type).
+func (w *WSUI) OnTaskStarted(task subagent.TaskSnapshot) {
+	if w.registry == nil {
+		return
+	}
+	w.registry.Activate(context.Background(), task.Name)
+	w.broadcastSnapshot()
+}
+
+// OnTaskFinished deactivates the named persona and broadcasts an updated snapshot.
+func (w *WSUI) OnTaskFinished(task subagent.TaskSnapshot) {
+	if w.registry == nil {
+		return
+	}
+	w.registry.Deactivate(task.Name)
+	w.broadcastSnapshot()
+}
+
+// OnModelUsage broadcasts a usage_update event after each model response.
+func (w *WSUI) OnModelUsage(usage model.Usage) {
+	ev := w.newEvent(loop.EventKindUsageUpdate)
+	ev.Usage = &loop.SessionUsagePayload{Usage: usage, IsSession: false}
+	w.server.Broadcast(ev)
+}
+
+// broadcastSnapshot calls registry.Snapshot() and broadcasts a subagents_snapshot event.
+func (w *WSUI) broadcastSnapshot() {
+	if w.registry == nil {
+		return
+	}
+	ev := w.newEvent(loop.EventKindSubagentsSnapshot)
+	ev.SubagentsSnapshot = &loop.SessionSubagentsSnapshotPayload{
+		Agents: w.registry.Snapshot(),
+	}
+	w.server.Broadcast(ev)
 }
 
 func (w *WSUI) newEvent(kind loop.SessionEventKind) loop.SessionEvent {
