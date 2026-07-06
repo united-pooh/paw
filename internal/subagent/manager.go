@@ -31,6 +31,13 @@ type Notifier interface {
 	OnSystemMessage(event ui.SystemEvent) error
 }
 
+// taskLifecycleNotifier is an optional extension checked via type assertion.
+// wsserver.WSUI implements this to receive persona lifecycle callbacks.
+type taskLifecycleNotifier interface {
+	OnTaskStarted(task TaskSnapshot)
+	OnTaskFinished(task TaskSnapshot)
+}
+
 type ContextSink interface {
 	SubmitSupplement(input string) bool
 }
@@ -537,6 +544,7 @@ func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Pro
 		return TaskSnapshot{}, nil, err
 	}
 	m.recordTaskStarted(task)
+	m.notifyTaskStarted(task)
 	return task, process, nil
 }
 
@@ -665,6 +673,7 @@ func (m *Manager) finishTask(ctx context.Context, taskID string, result WorkerRe
 	_ = m.registry.saveTask(ctx, task)
 	m.submitTaskContext(task)
 	m.recordTaskFinished(task)
+	m.notifyTaskLifecycleFinished(task)
 	return task
 }
 
@@ -896,6 +905,26 @@ func (m *Manager) notifyTaskFinished(task TaskSnapshot) {
 		Title: "subagent",
 		Body:  body,
 	})
+}
+
+// notifyTaskStarted calls OnTaskStarted on the notifier if it supports it.
+func (m *Manager) notifyTaskStarted(task TaskSnapshot) {
+	if m.notifier == nil {
+		return
+	}
+	if n, ok := m.notifier.(taskLifecycleNotifier); ok {
+		n.OnTaskStarted(task)
+	}
+}
+
+// notifyTaskLifecycleFinished calls OnTaskFinished on the notifier if it supports it.
+func (m *Manager) notifyTaskLifecycleFinished(task TaskSnapshot) {
+	if m.notifier == nil {
+		return
+	}
+	if n, ok := m.notifier.(taskLifecycleNotifier); ok {
+		n.OnTaskFinished(task)
+	}
 }
 
 const parentContextResultMaxRunes = 6000

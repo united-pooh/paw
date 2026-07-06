@@ -112,3 +112,18 @@ func markOccupiedPersona(occupied map[string]struct{}, task TaskSnapshot) {
 	}
 	occupied[name] = struct{}{}
 }
+
+// PersonaDefinition is the exported name/color pair for a persona.
+type PersonaDefinition struct {
+	Name  string
+	Color string
+}
+
+// Personas returns all 40 default persona definitions in their original order.
+func Personas() []PersonaDefinition {
+	result := make([]PersonaDefinition, len(defaultPersonas))
+	for i, p := range defaultPersonas {
+		result[i] = PersonaDefinition{Name: p.Name, Color: p.Color}
+	}
+	return result
+}

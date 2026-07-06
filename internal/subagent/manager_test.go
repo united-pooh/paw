@@ -1086,3 +1086,62 @@ func TestSubagentWorkerHelperProcess(t *testing.T) {
 	})
 	os.Exit(0)
 }
+
+// lifecycleCapture implements Notifier and the duck-type lifecycle shape.
+type lifecycleCapture struct {
+	started  []TaskSnapshot
+	finished []TaskSnapshot
+}
+
+func (c *lifecycleCapture) OnSystemMessage(_ ui.SystemEvent) error { return nil }
+func (c *lifecycleCapture) OnTaskStarted(t TaskSnapshot)           { c.started = append(c.started, t) }
+func (c *lifecycleCapture) OnTaskFinished(t TaskSnapshot)          { c.finished = append(c.finished, t) }
+
+func TestManager_notifyTaskStarted_calls_hook(t *testing.T) {
+	cap := &lifecycleCapture{}
+	m := &Manager{notifier: cap}
+	task := TaskSnapshot{ID: "t1", Name: "TestAgent"}
+	m.notifyTaskStarted(task)
+	if len(cap.started) != 1 {
+		t.Errorf("OnTaskStarted called %d times, want 1", len(cap.started))
+	}
+	if cap.started[0].ID != "t1" {
+		t.Errorf("task ID: got %q want t1", cap.started[0].ID)
+	}
+}
+
+func TestManager_notifyTaskLifecycleFinished_calls_hook(t *testing.T) {
+	cap := &lifecycleCapture{}
+	m := &Manager{notifier: cap}
+	task := TaskSnapshot{ID: "t2", Name: "TestAgent"}
+	m.notifyTaskLifecycleFinished(task)
+	if len(cap.finished) != 1 {
+		t.Errorf("OnTaskFinished called %d times, want 1", len(cap.finished))
+	}
+}
+
+func TestManager_notifyTaskStarted_nil_notifier(t *testing.T) {
+	m := &Manager{notifier: nil}
+	// Must not panic
+	m.notifyTaskStarted(TaskSnapshot{ID: "t3"})
+}
+
+func TestPersonas_count_and_fields(t *testing.T) {
+	ps := Personas()
+	if len(ps) != 40 {
+		t.Errorf("Personas() returned %d, want 40", len(ps))
+	}
+	seen := make(map[string]bool)
+	for _, p := range ps {
+		if p.Name == "" {
+			t.Error("empty persona Name")
+		}
+		if p.Color == "" {
+			t.Error("empty persona Color")
+		}
+		if seen[p.Name] {
+			t.Errorf("duplicate persona name: %q", p.Name)
+		}
+		seen[p.Name] = true
+	}
+}
