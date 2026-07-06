@@ -836,6 +836,17 @@ func (runner *Runner) SetEventStore(store SessionEventStore) {
 	runner.eventStore = store
 }
 
+// EventStore returns the SessionEventStore configured via SetEventStore.
+// Returns nil if the runner is nil or no store has been set.
+func (runner *Runner) EventStore() SessionEventStore {
+	if runner == nil {
+		return nil
+	}
+	runner.mu.RLock()
+	defer runner.mu.RUnlock()
+	return runner.eventStore
+}
+
 // SetSnapshotStore injects a snapshot store for event sourcing.
 func (runner *Runner) SetSnapshotStore(store SnapshotStore) {
 	if runner == nil {

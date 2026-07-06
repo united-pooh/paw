@@ -2079,3 +2079,23 @@ func TestRunTurnExecutesToolCallFormatWithXMLParams(t *testing.T) {
 		t.Fatalf("file_path = %q, want README.md", input.FilePath)
 	}
 }
+
+func TestRunner_EventStore_returns_set_store(t *testing.T) {
+	store := NewInMemorySessionEventStore()
+	runner := &Runner{}
+	runner.SetEventStore(store)
+	got := runner.EventStore()
+	if got == nil {
+		t.Fatal("EventStore() returned nil")
+	}
+	if got != store {
+		t.Error("EventStore() should return the exact store set via SetEventStore()")
+	}
+}
+
+func TestRunner_EventStore_nil_runner(t *testing.T) {
+	var runner *Runner
+	if got := runner.EventStore(); got != nil {
+		t.Error("nil receiver EventStore() should return nil")
+	}
+}
