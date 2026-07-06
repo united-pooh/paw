@@ -39,6 +39,8 @@ const (
 	// EventKindDeltaChunk records a single streaming text chunk from the assistant,
 	// emitted per chunk during streaming (not once per turn like EventKindAssistantDelta).
 	EventKindDeltaChunk SessionEventKind = "delta_chunk"
+	// EventKindSubagentsSnapshot pushes a full snapshot of all persona slots to the client.
+	EventKindSubagentsSnapshot SessionEventKind = "subagents_snapshot"
 )
 
 // SessionEvent is a single immutable fact recorded for a session.
@@ -52,15 +54,16 @@ type SessionEvent struct {
 	CreatedAt time.Time        `json:"created_at"`
 
 	// Payload fields — only one non-nil per event.
-	Message        *message.Message              `json:"message,omitempty"`
-	Usage          *SessionUsagePayload          `json:"usage,omitempty"`
-	Supplement     *SessionSupplementPayload     `json:"supplement,omitempty"`
-	UserInput      *SessionUserInputPayload      `json:"user_input,omitempty"`
-	AssistantDelta *SessionAssistantDeltaPayload `json:"assistant_delta,omitempty"`
-	ToolCall       *SessionToolCallPayload       `json:"tool_call,omitempty"`
-	ToolResult     *SessionToolResultPayload     `json:"tool_result,omitempty"`
-	TurnCommit     *SessionTurnCommitPayload     `json:"turn_commit,omitempty"`
-	DeltaChunk     *SessionDeltaChunkPayload     `json:"delta_chunk,omitempty"`
+	Message              *message.Message                  `json:"message,omitempty"`
+	Usage                *SessionUsagePayload              `json:"usage,omitempty"`
+	Supplement           *SessionSupplementPayload         `json:"supplement,omitempty"`
+	UserInput            *SessionUserInputPayload          `json:"user_input,omitempty"`
+	AssistantDelta       *SessionAssistantDeltaPayload     `json:"assistant_delta,omitempty"`
+	ToolCall             *SessionToolCallPayload           `json:"tool_call,omitempty"`
+	ToolResult           *SessionToolResultPayload         `json:"tool_result,omitempty"`
+	TurnCommit           *SessionTurnCommitPayload         `json:"turn_commit,omitempty"`
+	DeltaChunk           *SessionDeltaChunkPayload         `json:"delta_chunk,omitempty"`
+	SubagentsSnapshot    *SessionSubagentsSnapshotPayload  `json:"subagents_snapshot,omitempty"`
 }
 
 // SessionUsagePayload carries token-usage data.
@@ -76,7 +79,8 @@ type SessionSupplementPayload struct {
 
 // SessionUserInputPayload carries the raw user input that started a turn.
 type SessionUserInputPayload struct {
-	Text string `json:"text"`
+	Text          string `json:"text"`
+	TargetAgentID string `json:"target_agent_id,omitempty"`
 }
 
 // SessionAssistantDeltaPayload carries the full streamed assistant text for one turn.
@@ -111,4 +115,18 @@ type SessionTurnCommitPayload struct {
 // emitted once per streaming chunk for real-time display.
 type SessionDeltaChunkPayload struct {
 	Text string `json:"text"`
+}
+
+// AgentInfo is the state of a single persona slot in a subagents_snapshot event.
+type AgentInfo struct {
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	Color     string     `json:"color"`
+	Status    string     `json:"status"` // "idle" | "pending" | "running" | "done"
+	StartedAt *time.Time `json:"started_at,omitempty"`
+}
+
+// SessionSubagentsSnapshotPayload is the payload for EventKindSubagentsSnapshot.
+type SessionSubagentsSnapshotPayload struct {
+	Agents []AgentInfo `json:"agents"`
 }
