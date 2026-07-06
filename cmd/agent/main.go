@@ -23,8 +23,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 	"sync"
+	"time"
 )
 
 type options struct {
@@ -38,7 +38,7 @@ type options struct {
 }
 
 func parseOptions() options {
-	prompt := flag.String("p", "", "single-turn prompt; omit to start Bubble Tea UI")
+	prompt := flag.String("p", "", "single-turn prompt; omit to start the WebSocket server")
 	sessionID := flag.String("s", "", "session ID; omit to resume/create by cwd")
 	subagentWorker := flag.Bool("subagent-worker", false, "run hidden subagent worker")
 	streamMA := flag.Bool("streamma", defaultStreamMAEnabled(), "enable /streamma and /streamma-trace commands")
@@ -124,9 +124,19 @@ func runSingleTurnMode(ctx context.Context, opts options) error {
 func runWSMode(ctx context.Context, opts options) error {
 	server := wsserver.NewServer()
 
-	// Create WSUI with empty sessionID initially; we update it after buildRunner
-	// resolves the final session ID.
+	// RunnerFactory: create an independent Runner for each activated persona.
+	// Each persona gets its own session (sessionID = persona's stable UUID).
+	factory := wsserver.RunnerFactory(func(fctx context.Context, sessionID string) (*loop.Runner, error) {
+		r, _, _, _, _, _, err := buildRunnerWithSubagentContext(
+			fctx, sessionID, headless.New(io.Discard),
+			subagentRuntimeContext{depth: 1, maxDepth: 4},
+		)
+		return r, err
+	})
+	registry := wsserver.NewAgentRegistry(factory)
+
 	wsui := wsserver.NewWSUI(server, "")
+	wsui.SetRegistry(registry)
 
 	runner, sessionID, _, _, _, _, err := buildRunner(ctx, opts.sessionID, wsui)
 	if err != nil {
@@ -135,10 +145,17 @@ func runWSMode(ctx context.Context, opts options) error {
 	wsui.SetSessionID(sessionID)
 	runner.SetStreamMAEnabled(opts.streamMA)
 
-	handler := wsserver.NewHandler(runner)
+	handler := wsserver.NewHandler(runner, registry)
+
+	deps := wsserver.ServerDeps{
+		Handler:   handler,
+		Registry:  registry,
+		Store:     runner.EventStore(), // InMemorySessionEventStore set in buildRunner
+		SessionID: sessionID,
+	}
 
 	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.ListenAndServe(ctx, handler) }()
+	go func() { serverErr <- server.ListenAndServe(ctx, deps) }()
 
 	// Give the server 300ms to bind; a bind error surfaces immediately.
 	select {
