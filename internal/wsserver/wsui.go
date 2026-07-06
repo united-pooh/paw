@@ -24,6 +24,13 @@ var _ ui.ThinkingDeltaReceiver = (*WSUI)(nil)
 var _ ui.SystemNotifier = (*WSUI)(nil)
 var _ ui.OldContentConsumer = (*WSUI)(nil)
 
+// Ensure WSUI satisfies taskLifecycleNotifier at compile time.
+// taskLifecycleNotifier is defined (unexported) in internal/subagent/manager.go.
+var _ interface {
+	OnTaskStarted(task subagent.TaskSnapshot)
+	OnTaskFinished(task subagent.TaskSnapshot)
+} = (*WSUI)(nil)
+
 // NewWSUI creates a WSUI that broadcasts events via server, tagging each event
 // with the given sessionID.
 func NewWSUI(server *Server, sessionID string) *WSUI {

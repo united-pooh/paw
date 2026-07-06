@@ -94,15 +94,18 @@ func (s *Server) handleWSWithDeps(deps ServerDeps) http.HandlerFunc {
 			log.Printf("ws upgrade error: %v", err)
 			return
 		}
+
+		// Send initial state BEFORE registering in clients map.
+		// This prevents concurrent Broadcast() calls from racing with setup writes.
+		s.pushSnapshot(conn, deps.Registry, deps.SessionID)
+		s.pushHistory(r.Context(), conn, deps.Store, deps.SessionID)
+
 		id := s.nextID.Add(1)
 		s.clients.Store(id, conn)
 		defer func() {
 			s.clients.Delete(id)
 			conn.Close()
 		}()
-
-		s.pushSnapshot(conn, deps.Registry)
-		s.pushHistory(conn, deps.Store, deps.SessionID)
 
 		if deps.Handler != nil {
 			deps.Handler.HandleConn(r.Context(), conn)
@@ -111,12 +114,13 @@ func (s *Server) handleWSWithDeps(deps ServerDeps) http.HandlerFunc {
 }
 
 // pushSnapshot sends a subagents_snapshot event to one connection.
-func (s *Server) pushSnapshot(conn *websocket.Conn, registry *AgentRegistry) {
+func (s *Server) pushSnapshot(conn *websocket.Conn, registry *AgentRegistry, sessionID string) {
 	if registry == nil {
 		return
 	}
 	ev := loop.SessionEvent{
-		Kind: loop.EventKindSubagentsSnapshot,
+		SessionID: sessionID,
+		Kind:      loop.EventKindSubagentsSnapshot,
 		SubagentsSnapshot: &loop.SessionSubagentsSnapshotPayload{
 			Agents: registry.Snapshot(),
 		},
@@ -133,11 +137,11 @@ func (s *Server) pushSnapshot(conn *websocket.Conn, registry *AgentRegistry) {
 
 // pushHistory replays history_message events from the store to one connection.
 // Other event kinds (delta_chunk, tool_call_fired, etc.) are skipped.
-func (s *Server) pushHistory(conn *websocket.Conn, store loop.SessionEventStore, sessionID string) {
+func (s *Server) pushHistory(ctx context.Context, conn *websocket.Conn, store loop.SessionEventStore, sessionID string) {
 	if store == nil || sessionID == "" {
 		return
 	}
-	events, err := store.Load(context.Background(), sessionID)
+	events, err := store.Load(ctx, sessionID)
 	if err != nil {
 		log.Printf("ws pushHistory load: %v", err)
 		return

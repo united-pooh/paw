@@ -91,12 +91,14 @@ func (h *Handler) HandleConn(ctx context.Context, conn *websocket.Conn) {
 			if event.UserInput != nil {
 				if event.UserInput.TargetAgentID != "" && h.registry != nil {
 					procErr = h.registry.RouteInput(ctx, event.UserInput.TargetAgentID, event.UserInput.Text)
-				} else {
+				} else if h.runner != nil {
 					_, procErr = h.runner.RunTurn(ctx, event.UserInput.Text)
 				}
 			}
 		case loop.EventKindHistoryReset:
-			h.runner.ResetHistory()
+			if h.runner != nil {
+				h.runner.ResetHistory()
+			}
 		default:
 			log.Printf("ws handler: unhandled event kind %s", event.Kind)
 		}

@@ -100,7 +100,8 @@ func (r *AgentRegistry) Activate(ctx context.Context, name string) (id string, o
 		r.mu.Unlock()
 		return "", false
 	}
-	slot.status = AgentStatusRunning
+	// Use pending while factory creates the runner.
+	slot.status = AgentStatusPending
 	now := time.Now().UTC()
 	slot.startedAt = &now
 	id = slot.id
@@ -118,6 +119,7 @@ func (r *AgentRegistry) Activate(ctx context.Context, name string) (id string, o
 	}
 
 	r.mu.Lock()
+	slot.status = AgentStatusRunning // Now truly running with a valid runner.
 	slot.runner = runner
 	r.mu.Unlock()
 	return id, true
