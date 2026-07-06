@@ -17,6 +17,14 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true }, // allow all origins for local dev
 }
 
+// ServerDeps bundles all dependencies the WebSocket server needs per-session.
+type ServerDeps struct {
+	Handler   *Handler
+	Registry  *AgentRegistry
+	Store     loop.SessionEventStore
+	SessionID string
+}
+
 // Server manages WebSocket connections and broadcasts SessionEvents to all clients.
 type Server struct {
 	addr    string
@@ -53,9 +61,33 @@ func (s *Server) Broadcast(event loop.SessionEvent) {
 	})
 }
 
-// HandleWS returns an http.HandlerFunc that upgrades HTTP connections to WebSocket
-// and delegates each connection to handler.HandleConn.
-func (s *Server) HandleWS(handler *Handler) http.HandlerFunc {
+// BuildMux returns an http.ServeMux with /ws registered. Used by ListenAndServe
+// and directly by tests via httptest.NewServer.
+func (s *Server) BuildMux(deps ServerDeps) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", s.handleWSWithDeps(deps))
+	return mux
+}
+
+// ListenAndServe starts the WebSocket server and blocks until ctx is cancelled.
+func (s *Server) ListenAndServe(ctx context.Context, deps ServerDeps) error {
+	mux := s.BuildMux(deps)
+	srv := &http.Server{Addr: s.addr, Handler: mux}
+	go func() {
+		<-ctx.Done()
+		srv.Close()
+	}()
+	log.Printf("WS server listening on %s", s.addr)
+	err := srv.ListenAndServe()
+	if err == http.ErrServerClosed {
+		return nil
+	}
+	return err
+}
+
+// handleWSWithDeps returns an http.HandlerFunc that upgrades to WebSocket,
+// sends the initial snapshot + history, then delegates to handler.HandleConn.
+func (s *Server) handleWSWithDeps(deps ServerDeps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -68,24 +100,59 @@ func (s *Server) HandleWS(handler *Handler) http.HandlerFunc {
 			s.clients.Delete(id)
 			conn.Close()
 		}()
-		handler.HandleConn(r.Context(), conn)
+
+		s.pushSnapshot(conn, deps.Registry)
+		s.pushHistory(conn, deps.Store, deps.SessionID)
+
+		if deps.Handler != nil {
+			deps.Handler.HandleConn(r.Context(), conn)
+		}
 	}
 }
 
-// ListenAndServe starts the HTTP/WebSocket server on s.addr and blocks until ctx
-// is cancelled or a fatal error occurs.
-func (s *Server) ListenAndServe(ctx context.Context, handler *Handler) error {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", s.HandleWS(handler))
-	srv := &http.Server{Addr: s.addr, Handler: mux}
-	go func() {
-		<-ctx.Done()
-		srv.Close()
-	}()
-	log.Printf("WS server listening on %s", s.addr)
-	err := srv.ListenAndServe()
-	if err == http.ErrServerClosed {
-		return nil
+// pushSnapshot sends a subagents_snapshot event to one connection.
+func (s *Server) pushSnapshot(conn *websocket.Conn, registry *AgentRegistry) {
+	if registry == nil {
+		return
 	}
-	return err
+	ev := loop.SessionEvent{
+		Kind: loop.EventKindSubagentsSnapshot,
+		SubagentsSnapshot: &loop.SessionSubagentsSnapshotPayload{
+			Agents: registry.Snapshot(),
+		},
+	}
+	data, err := json.Marshal(ev)
+	if err != nil {
+		log.Printf("ws pushSnapshot marshal: %v", err)
+		return
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		log.Printf("ws pushSnapshot write: %v", err)
+	}
+}
+
+// pushHistory replays history_message events from the store to one connection.
+// Other event kinds (delta_chunk, tool_call_fired, etc.) are skipped.
+func (s *Server) pushHistory(conn *websocket.Conn, store loop.SessionEventStore, sessionID string) {
+	if store == nil || sessionID == "" {
+		return
+	}
+	events, err := store.Load(context.Background(), sessionID)
+	if err != nil {
+		log.Printf("ws pushHistory load: %v", err)
+		return
+	}
+	for _, ev := range events {
+		if ev.Kind != loop.EventKindHistoryMessage {
+			continue
+		}
+		data, err := json.Marshal(ev)
+		if err != nil {
+			continue
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+			log.Printf("ws pushHistory write: %v", err)
+			return
+		}
+	}
 }
