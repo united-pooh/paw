@@ -22,9 +22,14 @@ type ToolResultEvent struct {
 
 // SystemEvent 描述由后台任务或控制器产生的系统消息。
 type SystemEvent struct {
-	Title string
-	Body  string
-	Color string // 可选：标题颜色（lipgloss 颜色字符串），与 subagents 面板保持一致
+	Title     string
+	Body      string
+	Color     string // 可选：标题颜色字符串，与 subagents 面板保持一致
+	TaskID    string
+	AgentID   string
+	AgentName string
+	Status    string
+	IsError   bool
 }
 
 // UI 定义 loop 层依赖的最小输出接口。

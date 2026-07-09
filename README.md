@@ -42,7 +42,7 @@ internal/streamma/
 
 internal/ui/ui.go
 internal/ui/headless/headless.go
-internal/ui/bubble/
+internal/wsserver/
 
 internal/loop/runner.go
 ```
@@ -56,7 +56,8 @@ go run ./cmd/agent -s <session-id>
 ```
 
 - 不加参数直接启动时，每次都会创建一个全新的空会话。
-- 需要恢复历史会话时，使用 `-s <session-id>` 指定会话 ID；也可在交互界面输入 `/sessions` 浏览并恢复历史会话。
+- 不加参数时启动本地 WebSocket Agent 服务，默认监听 `ws://localhost:8765/ws`。
+- 需要恢复历史会话时，使用 `-s <session-id>` 指定会话 ID。
 
 当前运行目录会作为工作区 root，同时也是 `.ccagent/` 状态目录的基准路径。
 
@@ -72,7 +73,7 @@ go run ./cmd/agent -s <session-id>
 - 三选一运行不同模式：
   1. `-subagent-worker` → `runSubagentWorkerMode()`
   2. `-p "xxx"` → `runSingleTurnMode()`
-  3. 无参数 → `runInteractiveMode()`
+  3. 无参数 → `runWSMode()`
 
 不负责:
 - 直接调用模型
@@ -88,7 +89,7 @@ go run ./cmd/agent -s <session-id>
 
 行为:
 - `-p` 有值: 执行单轮
-- `-p` 为空: 进入交互式对话界面
+- `-p` 为空: 启动 WebSocket Agent 服务
 - `-s` 有值: 绑定到指定 session 并恢复历史
 - `-s` 为空: 每次启动都创建一个全新空 session
 - `-subagent-worker`: 以子进程方式运行，从 stdin 读取 `WorkerRequest`（JSON），执行后输出 `WorkerResult` 到 stdout
@@ -119,12 +120,12 @@ go run ./cmd/agent -s <session-id>
 - assistant 最终结果写 stdout
 - 当前 sessionID 写 stderr
 
-#### `runInteractiveMode(ctx, opts) error`
+#### `runWSMode(ctx, opts) error`
 
 职责:
-- 启动 Bubble Tea 主界面
-- 注入模型配置、settings、subagent 控制器
-- 以当前 session 进入可恢复的交互式对话
+- 启动本地 WebSocket 服务
+- 用 `WSUI` 将 assistant 流式输出、工具调用、工具结果和 turn 完成事件广播给客户端
+- 从 `/ws` 接收 `user_input`、`history_reset` 等事件并驱动 `Runner`
 
 #### `runSubagentWorkerMode(ctx)`
 
@@ -134,24 +135,15 @@ go run ./cmd/agent -s <session-id>
 - 构建带有 subagent 上下文的 Runner（通过 `subagentRuntimeContext` 控制递归深度）
 - 执行 `runner.RunTurn()`，将 `WorkerResult`（含 TaskID、SessionID、Content、Error、ExitCode）写入 stdout
 
-#### 当前交互命令
+#### 当前 WebSocket 事件
 
-当前 slash command 由 `internal/ui/bubble/command_registry.go` 统一注册，`/help` 会显示参数提示。
+`internal/wsserver` 使用 `loop.SessionEvent` 作为前后端通信协议。
 
-- `/help`
-- `/model [status|custom|deepseek]`
-- `/export [filename]`
-- `/setting`
-- `/sessions`
-- `/subagent [--fork|--empty] [--background|--sync] <prompt>`
-- `/streamma [--profile adaptive|paper] [--topology adaptive|chain|tree|graph] [--agents N] [--steps N] [--protocol stream|single] <prompt>`
-- `/streamma-trace [--profile adaptive|paper] [--topology adaptive|chain|tree|graph] [--agents N] [--steps N] [--protocol stream|single] <prompt>`
-- `/tasks`
-- `/skills`
-- `/token-tracer` / `/tt`
-- `/status`
-- `/clear`
-- `/exit` / `/quit`
+- 客户端输入: `user_input`
+- 清空历史: `history_reset`
+- 服务端输出: `delta_chunk`
+- 工具状态: `tool_call_fired`、`tool_result`
+- turn 完成: `turn_committed`
 
 当前行为:
 - `/model` 无参数时打开 provider 向导；`status` 只输出当前配置；`custom`、`deepseek` 直接切换并持久化到 `.ccagent/model.json`；`deepseek` 需要 `DEEPSEEK_API_KEY`
@@ -1348,7 +1340,7 @@ Manager 同文件中实现了三个供 LLM 调用的工具：
 - 隔离 loop 和具体输出方式
 
 替换方式:
-- 可将 `headless` 换成 TUI、日志型 UI、测试 UI
+- 可将 `headless` 换成 WebSocket UI、日志型 UI、测试 UI
 
 ## 扩展点
 
@@ -1388,10 +1380,10 @@ Manager 同文件中实现了三个供 LLM 调用的工具：
 - 新建一个实现 `loop.ModelStreamer` 的客户端
 - 在 `buildRunner()` 中替换 `model.NewClient(cfg)`
 
-### 增加本地命令
+### 增加 WebSocket 输入事件
 
 接入点:
-- Bubble Tea 命令注册表 `internal/ui/bubble/command_registry.go`
+- `internal/wsserver/handler.go`
 
 ### 自定义 Subagent 行为
 

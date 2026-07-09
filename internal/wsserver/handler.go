@@ -67,6 +67,7 @@ func (h *Handler) runAfterHooks(ctx context.Context, event loop.SessionEvent, er
 func (h *Handler) HandleConn(ctx context.Context, conn *websocket.Conn) {
 	for {
 		_, msg, err := conn.ReadMessage()
+		log.Printf("ws handler: received message: %s", string(msg))
 		if err != nil {
 			return // connection closed or context cancelled
 		}

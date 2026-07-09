@@ -25,13 +25,30 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+load_longcat_api_key() {
+    if [[ -n "${LONGCAT_API_KEY:-}" ]]; then
+        return
+    fi
+    if command -v zsh >/dev/null 2>&1 && [[ -f "$HOME/.zshrc" ]]; then
+        local value
+        value="$(zsh -lic 'printf "%s" "${LONGCAT_API_KEY:-}"' 2>/dev/null || true)"
+        if [[ -n "$value" ]]; then
+            export LONGCAT_API_KEY="$value"
+        fi
+    fi
+}
+
+load_longcat_api_key
+
 # 检测 provider
-if [[ -n "${DEEPSEEK_API_KEY:-}" ]]; then
+if [[ -n "${LONGCAT_API_KEY:-}" ]]; then
+    PROV="longcat"
+elif [[ -n "${DEEPSEEK_API_KEY:-}" ]]; then
     PROV="deepseek"
 elif [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
     PROV="anthropic"
 else
-    die "未设置 API Key。请选一个:\n  DeepSeek:  export DEEPSEEK_API_KEY=sk-...\n  Anthropic: export ANTHROPIC_API_KEY=sk-ant-..."
+    die "未设置 API Key。请选一个:\n  LongCat:   export LONGCAT_API_KEY=...\n  DeepSeek:  export DEEPSEEK_API_KEY=sk-...\n  Anthropic: export ANTHROPIC_API_KEY=sk-ant-..."
 fi
 
 ok "Provider: ${PROV}"
@@ -39,12 +56,36 @@ ok "Provider: ${PROV}"
 # 写 model 配置
 CURRENT_PROV=""
 if [[ -f "$MODEL_CFG" ]]; then
-    CURRENT_PROV=$(python3 -c "import json; d=json.load(open('$MODEL_CFG')); print(d.get('provider',''))" 2>/dev/null || echo "")
+    CURRENT_PROV=$(python3 -c "
+import json
+d=json.load(open('$MODEL_CFG'))
+base=d.get('api_base_url','')
+model=d.get('model','')
+key=d.get('api_key_env_name','')
+provider=d.get('provider','')
+if key == 'LONGCAT_API_KEY' and base.rstrip('/') == 'https://api.longcat.chat/openai' and model == 'LongCat-2.0':
+    print('longcat')
+else:
+    print(provider)
+" 2>/dev/null || echo "")
 fi
 
 if [[ "$CURRENT_PROV" != "$PROV" ]]; then
     mkdir -p "$(dirname "$MODEL_CFG")"
-    if [[ "$PROV" == "deepseek" ]]; then
+    if [[ "$PROV" == "longcat" ]]; then
+        python3 -c "
+import json
+cfg = {
+    'provider': 'custom',
+    'api_base_url': 'https://api.longcat.chat/openai',
+    'api_path': '/chat/completions',
+    'api_key_env_name': 'LONGCAT_API_KEY',
+    'model': 'LongCat-2.0',
+    'timeout_seconds': 120
+}
+print(json.dumps(cfg, indent=2))
+" > "$MODEL_CFG"
+    elif [[ "$PROV" == "deepseek" ]]; then
         python3 -c "
 import json
 cfg = {
@@ -53,7 +94,7 @@ cfg = {
     'api_path': '/chat/completions',
     'api_key_env_name': 'DEEPSEEK_API_KEY',
     'model': 'deepseek-chat',
-    'timeout': 120
+    'timeout_seconds': 120
 }
 print(json.dumps(cfg, indent=2))
 " > "$MODEL_CFG"
@@ -66,7 +107,7 @@ cfg = {
     'api_path': '/v1/messages',
     'api_key_env_name': 'ANTHROPIC_API_KEY',
     'model': 'claude-opus-4-5-20251101',
-    'timeout': 120
+    'timeout_seconds': 120
 }
 print(json.dumps(cfg, indent=2))
 " > "$MODEL_CFG"

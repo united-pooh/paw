@@ -47,6 +47,7 @@ func NewServer() *Server {
 // Broadcast marshals event as JSON and sends it to all connected clients.
 // Connections that fail to receive are removed.
 func (s *Server) Broadcast(event loop.SessionEvent) {
+	log.Printf("broadcast: kind=%s clients=%d", event.Kind, s.clientCount())
 	data, err := json.Marshal(event)
 	if err != nil {
 		return
@@ -159,4 +160,10 @@ func (s *Server) pushHistory(ctx context.Context, conn *websocket.Conn, store lo
 			return
 		}
 	}
+}
+
+func (s *Server) clientCount() int {
+    n := 0
+    s.clients.Range(func(_, _ any) bool { n++; return true })
+    return n
 }

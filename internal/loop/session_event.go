@@ -36,6 +36,8 @@ const (
 	EventKindToolResult SessionEventKind = "tool_result"
 	// EventKindTurnCommitted records that a full turn was committed to history.
 	EventKindTurnCommitted SessionEventKind = "turn_committed"
+	// EventKindSystemMessage records a runtime/system notification.
+	EventKindSystemMessage SessionEventKind = "system_message"
 	// EventKindDeltaChunk records a single streaming text chunk from the assistant,
 	// emitted per chunk during streaming (not once per turn like EventKindAssistantDelta).
 	EventKindDeltaChunk SessionEventKind = "delta_chunk"
@@ -54,16 +56,17 @@ type SessionEvent struct {
 	CreatedAt time.Time        `json:"created_at"`
 
 	// Payload fields — only one non-nil per event.
-	Message              *message.Message                  `json:"message,omitempty"`
-	Usage                *SessionUsagePayload              `json:"usage,omitempty"`
-	Supplement           *SessionSupplementPayload         `json:"supplement,omitempty"`
-	UserInput            *SessionUserInputPayload          `json:"user_input,omitempty"`
-	AssistantDelta       *SessionAssistantDeltaPayload     `json:"assistant_delta,omitempty"`
-	ToolCall             *SessionToolCallPayload           `json:"tool_call,omitempty"`
-	ToolResult           *SessionToolResultPayload         `json:"tool_result,omitempty"`
-	TurnCommit           *SessionTurnCommitPayload         `json:"turn_commit,omitempty"`
-	DeltaChunk           *SessionDeltaChunkPayload         `json:"delta_chunk,omitempty"`
-	SubagentsSnapshot    *SessionSubagentsSnapshotPayload  `json:"subagents_snapshot,omitempty"`
+	Message           *message.Message                 `json:"message,omitempty"`
+	Usage             *SessionUsagePayload             `json:"usage,omitempty"`
+	Supplement        *SessionSupplementPayload        `json:"supplement,omitempty"`
+	UserInput         *SessionUserInputPayload         `json:"user_input,omitempty"`
+	AssistantDelta    *SessionAssistantDeltaPayload    `json:"assistant_delta,omitempty"`
+	ToolCall          *SessionToolCallPayload          `json:"tool_call,omitempty"`
+	ToolResult        *SessionToolResultPayload        `json:"tool_result,omitempty"`
+	TurnCommit        *SessionTurnCommitPayload        `json:"turn_commit,omitempty"`
+	SystemMessage     *SessionSystemMessagePayload     `json:"system_message,omitempty"`
+	DeltaChunk        *SessionDeltaChunkPayload        `json:"delta_chunk,omitempty"`
+	SubagentsSnapshot *SessionSubagentsSnapshotPayload `json:"subagents_snapshot,omitempty"`
 }
 
 // SessionUsagePayload carries token-usage data.
@@ -108,6 +111,18 @@ type SessionToolResultPayload struct {
 type SessionTurnCommitPayload struct {
 	// MessageCount is the number of new messages committed in this turn.
 	MessageCount int `json:"message_count"`
+}
+
+// SessionSystemMessagePayload carries system/runtime notifications.
+type SessionSystemMessagePayload struct {
+	Title     string `json:"title"`
+	Body      string `json:"body"`
+	Color     string `json:"color,omitempty"`
+	TaskID    string `json:"task_id,omitempty"`
+	AgentID   string `json:"agent_id,omitempty"`
+	AgentName string `json:"agent_name,omitempty"`
+	Status    string `json:"status,omitempty"`
+	IsError   bool   `json:"is_error,omitempty"`
 }
 
 // SessionDeltaChunkPayload carries a single streaming text chunk from the assistant.

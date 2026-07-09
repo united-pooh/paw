@@ -763,7 +763,10 @@ func TestLaunchTracksStatusListAndNotification(t *testing.T) {
 	}
 
 	event := notifier.wait(t)
-	if event.Title != "subagent" || !strings.Contains(event.Body, "status=completed") || !strings.Contains(event.Body, "background answer") {
+	if event.Title == "" || event.Title == "subagent" {
+		t.Fatalf("system event title = %q, want assigned agent name", event.Title)
+	}
+	if event.Body != "background answer" || event.TaskID != task.ID || event.AgentID != task.SessionID || event.AgentName != event.Title || event.Status != string(TaskCompleted) || event.IsError {
 		t.Fatalf("system event = %#v", event)
 	}
 }

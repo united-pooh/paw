@@ -143,8 +143,20 @@ func (w *WSUI) OnDone() error {
 	return nil
 }
 
-// OnSystemMessage satisfies ui.SystemNotifier; system messages are not broadcast.
+// OnSystemMessage broadcasts a system_message event.
 func (w *WSUI) OnSystemMessage(event ui.SystemEvent) error {
+	ev := w.newEvent(loop.EventKindSystemMessage)
+	ev.SystemMessage = &loop.SessionSystemMessagePayload{
+		Title:     event.Title,
+		Body:      event.Body,
+		Color:     event.Color,
+		TaskID:    event.TaskID,
+		AgentID:   event.AgentID,
+		AgentName: event.AgentName,
+		Status:    event.Status,
+		IsError:   event.IsError,
+	}
+	w.server.Broadcast(ev)
 	return nil
 }
 

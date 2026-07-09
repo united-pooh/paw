@@ -71,6 +71,38 @@ func TestEventKindSubagentsSnapshot_roundtrip(t *testing.T) {
 	}
 }
 
+func TestEventKindSystemMessage_roundtrip(t *testing.T) {
+	ev := loop.SessionEvent{
+		Kind: loop.EventKindSystemMessage,
+		SystemMessage: &loop.SessionSystemMessagePayload{
+			Title:     "Agent",
+			Body:      "final answer",
+			Color:     "#FFAA00",
+			TaskID:    "task-1",
+			AgentID:   "agent-session",
+			AgentName: "Agent",
+			Status:    "completed",
+		},
+	}
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got loop.SessionEvent
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != loop.EventKindSystemMessage {
+		t.Errorf("kind: got %q want %q", got.Kind, loop.EventKindSystemMessage)
+	}
+	if got.SystemMessage == nil {
+		t.Fatal("SystemMessage is nil")
+	}
+	if got.SystemMessage.Body != "final answer" || got.SystemMessage.TaskID != "task-1" || got.SystemMessage.Status != "completed" {
+		t.Fatalf("SystemMessage = %#v", got.SystemMessage)
+	}
+}
+
 func TestAgentInfo_StartedAt_omitempty(t *testing.T) {
 	ai := loop.AgentInfo{ID: "x", Name: "X", Color: "#000", Status: "idle"}
 	data, _ := json.Marshal(ai)

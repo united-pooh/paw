@@ -895,15 +895,27 @@ func (m *Manager) notifyTaskFinished(task TaskSnapshot) {
 		return
 	}
 	status := string(task.Status)
-	body := fmt.Sprintf("%s finished with status=%s", shortID(task.ID), status)
-	if task.Error != "" {
-		body += ": " + task.Error
-	} else if task.Content != "" {
-		body += ": " + summarize(task.Content)
+	body := strings.TrimSpace(task.Content)
+	isError := task.Status == TaskFailed || task.Status == TaskStopped || strings.TrimSpace(task.Error) != ""
+	if isError {
+		body = strings.TrimSpace(task.Error)
+	}
+	if body == "" {
+		body = fmt.Sprintf("%s finished with status=%s", shortID(task.ID), status)
+	}
+	title := strings.TrimSpace(task.Name)
+	if title == "" {
+		title = "subagent"
 	}
 	_ = m.notifier.OnSystemMessage(ui.SystemEvent{
-		Title: "subagent",
-		Body:  body,
+		Title:     title,
+		Body:      body,
+		Color:     task.Color,
+		TaskID:    task.ID,
+		AgentID:   task.SessionID,
+		AgentName: title,
+		Status:    status,
+		IsError:   isError,
 	})
 }
 
@@ -1034,15 +1046,6 @@ func shortID(id string) string {
 		return id
 	}
 	return id[:8]
-}
-
-func summarize(text string) string {
-	fields := strings.Join(strings.Fields(text), " ")
-	runes := []rune(fields)
-	if len(runes) <= 160 {
-		return fields
-	}
-	return string(runes[:160]) + "..."
 }
 
 func (sinkUI) OnAssistantDelta(string) error {
