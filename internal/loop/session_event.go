@@ -134,11 +134,14 @@ type SessionDeltaChunkPayload struct {
 
 // AgentInfo is the state of a single persona slot in a subagents_snapshot event.
 type AgentInfo struct {
-	ID        string     `json:"id"`
-	Name      string     `json:"name"`
-	Color     string     `json:"color"`
-	Status    string     `json:"status"` // "idle" | "pending" | "running" | "done"
-	StartedAt *time.Time `json:"started_at,omitempty"`
+	ID                    string     `json:"id"`
+	Name                  string     `json:"name"`
+	Color                 string     `json:"color"`
+	Status                string     `json:"status"` // "idle" | "pending" | "running" | "done" | "failed" | "stopped"
+	TaskID                string     `json:"task_id,omitempty"`
+	StartedAt             *time.Time `json:"started_at,omitempty"`
+	FinishedAt            *time.Time `json:"finished_at,omitempty"`
+	ConversationAvailable bool       `json:"conversation_available,omitempty"`
 }
 
 // SessionSubagentsSnapshotPayload is the payload for EventKindSubagentsSnapshot.

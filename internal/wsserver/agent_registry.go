@@ -20,6 +20,8 @@ const (
 	AgentStatusPending AgentStatus = "pending"
 	AgentStatusRunning AgentStatus = "running"
 	AgentStatusDone    AgentStatus = "done"
+	AgentStatusFailed  AgentStatus = "failed"
+	AgentStatusStopped AgentStatus = "stopped"
 )
 
 // RunnerFactory creates a new Runner for a persona's conversation session.
@@ -28,13 +30,16 @@ type RunnerFactory func(ctx context.Context, sessionID string) (*loop.Runner, er
 
 // personaSlot holds the state of a single persona.
 type personaSlot struct {
-	id        string
-	name      string
-	color     string
-	status    AgentStatus
-	runner    *loop.Runner // nil when idle or done
-	startedAt *time.Time
-	index     int // original order in defaultPersonas, for stable idle sorting
+	id         string
+	name       string
+	color      string
+	status     AgentStatus
+	runner     *loop.Runner // independent conversation; retained after task completion
+	startedAt  *time.Time
+	finishedAt *time.Time
+	taskID     string
+	seenTasks  map[string]struct{}
+	index      int // original order in defaultPersonas, for stable idle sorting
 }
 
 // AgentRegistry manages all 40 persona slots and routes user input to their Runners.
@@ -51,6 +56,8 @@ var statusPriority = map[AgentStatus]int{
 	AgentStatusRunning: 0,
 	AgentStatusPending: 1,
 	AgentStatusDone:    2,
+	AgentStatusFailed:  2,
+	AgentStatusStopped: 2,
 	AgentStatusIdle:    3,
 }
 
@@ -77,11 +84,12 @@ func NewAgentRegistry(factory RunnerFactory) *AgentRegistry {
 	for i, p := range personas {
 		id := personaID(p.Name)
 		slot := &personaSlot{
-			id:     id,
-			name:   p.Name,
-			color:  p.Color,
-			status: AgentStatusIdle,
-			index:  i,
+			id:        id,
+			name:      p.Name,
+			color:     p.Color,
+			status:    AgentStatusIdle,
+			seenTasks: make(map[string]struct{}),
+			index:     i,
 		}
 		r.slots = append(r.slots, slot)
 		r.byID[id] = slot
@@ -94,16 +102,39 @@ func NewAgentRegistry(factory RunnerFactory) *AgentRegistry {
 // Returns the persona's stable ID and ok=true on success.
 // Returns ok=false if the name is unknown or the factory returns an error (slot is rolled back).
 func (r *AgentRegistry) Activate(ctx context.Context, name string) (id string, ok bool) {
+	return r.ActivateTask(ctx, name, "")
+}
+
+// ActivateTask binds an activation to one task generation. Duplicate or stale
+// task IDs cannot replace a running generation or overwrite its terminal state.
+func (r *AgentRegistry) ActivateTask(ctx context.Context, name, taskID string) (id string, ok bool) {
 	r.mu.Lock()
 	slot, exists := r.byName[name]
 	if !exists {
 		r.mu.Unlock()
 		return "", false
 	}
+	if slot.status == AgentStatusPending || slot.status == AgentStatusRunning {
+		r.mu.Unlock()
+		return slot.id, false
+	}
+	if taskID != "" {
+		if _, seen := slot.seenTasks[taskID]; seen {
+			r.mu.Unlock()
+			return slot.id, false
+		}
+		slot.seenTasks[taskID] = struct{}{}
+	}
+	previousStatus := slot.status
+	previousTaskID := slot.taskID
+	previousStartedAt := slot.startedAt
+	previousFinishedAt := slot.finishedAt
 	// Use pending while factory creates the runner.
 	slot.status = AgentStatusPending
+	slot.taskID = taskID
 	now := time.Now().UTC()
 	slot.startedAt = &now
+	slot.finishedAt = nil
 	id = slot.id
 	factory := r.factory
 	r.mu.Unlock()
@@ -112,40 +143,76 @@ func (r *AgentRegistry) Activate(ctx context.Context, name string) (id string, o
 	runner, err := factory(ctx, id)
 	if err != nil {
 		r.mu.Lock()
-		slot.status = AgentStatusIdle
-		slot.startedAt = nil
+		if slot.status == AgentStatusPending && slot.taskID == taskID {
+			slot.status = previousStatus
+			slot.taskID = previousTaskID
+			slot.startedAt = previousStartedAt
+			slot.finishedAt = previousFinishedAt
+			delete(slot.seenTasks, taskID)
+		}
 		r.mu.Unlock()
 		return "", false
 	}
 
 	r.mu.Lock()
+	if slot.status != AgentStatusPending || slot.taskID != taskID {
+		r.mu.Unlock()
+		return id, false
+	}
 	slot.status = AgentStatusRunning // Now truly running with a valid runner.
 	slot.runner = runner
 	r.mu.Unlock()
 	return id, true
 }
 
-// Deactivate transitions the named persona to done and releases its Runner.
-// No-op if the name is unknown.
+// Deactivate preserves the legacy completed-task behavior.
 func (r *AgentRegistry) Deactivate(name string) {
+	r.FinishTask(name, "", AgentStatusDone)
+}
+
+// Finish transitions the named persona to an exact terminal state.
+func (r *AgentRegistry) Finish(name string, status AgentStatus) bool {
+	return r.FinishTask(name, "", status)
+}
+
+// FinishTask accepts the first terminal transition for the active task
+// generation and retains the independent conversation Runner.
+func (r *AgentRegistry) FinishTask(name, taskID string, status AgentStatus) bool {
+	if !isTerminalAgentStatus(status) {
+		return false
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	slot, ok := r.byName[name]
 	if !ok {
-		return
+		return false
 	}
-	slot.status = AgentStatusDone
-	slot.runner = nil
+	if slot.taskID != taskID || isTerminalAgentStatus(slot.status) {
+		return false
+	}
+	slot.status = status
+	now := time.Now().UTC()
+	slot.finishedAt = &now
+	return true
 }
 
-// RouteInput delivers text to the named agent's Runner.RunTurn().
-// Returns an error if agentID is unknown or the slot has no active Runner.
+func isTerminalAgentStatus(status AgentStatus) bool {
+	switch status {
+	case AgentStatusDone, AgentStatusFailed, AgentStatusStopped:
+		return true
+	default:
+		return false
+	}
+}
+
+// RouteInput delivers text to the named agent's independent conversation.
+// Returns an error if the conversation has never been activated.
 func (r *AgentRegistry) RouteInput(ctx context.Context, agentID string, text string) error {
 	r.mu.RLock()
 	slot, ok := r.byID[agentID]
 	if !ok || slot.runner == nil {
 		r.mu.RUnlock()
-		return fmt.Errorf("agent %s: not found or not running", agentID)
+		return fmt.Errorf("agent %s: conversation unavailable", agentID)
 	}
 	runner := slot.runner
 	r.mu.RUnlock()
@@ -155,7 +222,7 @@ func (r *AgentRegistry) RouteInput(ctx context.Context, agentID string, text str
 }
 
 // Snapshot returns a sorted copy of all agent states.
-// Order: running (newest first) > pending > done > idle (original persona order).
+// Order: running (newest first) > pending > terminal > idle (original persona order).
 func (r *AgentRegistry) Snapshot() []loop.AgentInfo {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -163,11 +230,14 @@ func (r *AgentRegistry) Snapshot() []loop.AgentInfo {
 	infos := make([]loop.AgentInfo, len(r.slots))
 	for i, slot := range r.slots {
 		infos[i] = loop.AgentInfo{
-			ID:        slot.id,
-			Name:      slot.name,
-			Color:     slot.color,
-			Status:    string(slot.status),
-			StartedAt: slot.startedAt,
+			ID:                    slot.id,
+			Name:                  slot.name,
+			Color:                 slot.color,
+			Status:                string(slot.status),
+			TaskID:                slot.taskID,
+			StartedAt:             slot.startedAt,
+			FinishedAt:            slot.finishedAt,
+			ConversationAvailable: slot.runner != nil,
 		}
 	}
 

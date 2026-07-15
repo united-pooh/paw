@@ -7,8 +7,39 @@ import (
 	"time"
 
 	"codex-agent-go/internal/loop"
+	"codex-agent-go/internal/message"
+	"codex-agent-go/internal/model"
+	"codex-agent-go/internal/tool"
+	"codex-agent-go/internal/ui"
 	"codex-agent-go/internal/wsserver"
 )
+
+type registryConversationModel struct{}
+
+func (*registryConversationModel) StreamMessage(context.Context, []message.Message, []model.ToolDefinition) (<-chan model.StreamEvent, error) {
+	events := make(chan model.StreamEvent, 2)
+	events <- model.StreamEvent{Delta: "conversation reply"}
+	events <- model.StreamEvent{Done: true}
+	close(events)
+	return events, nil
+}
+
+type registryConversationUI struct{}
+
+func (*registryConversationUI) OnAssistantDelta(string) error         { return nil }
+func (*registryConversationUI) OnToolCall(ui.ToolCallEvent) error     { return nil }
+func (*registryConversationUI) OnToolResult(ui.ToolResultEvent) error { return nil }
+func (*registryConversationUI) OnDone() error                         { return nil }
+
+func newRegistryConversationRunner(sessionID string) *loop.Runner {
+	return loop.NewRunner(
+		&registryConversationModel{},
+		&registryConversationUI{},
+		tool.NewRegistry(),
+		nil,
+		sessionID,
+	)
+}
 
 // noopFactory returns a nil Runner with no error (for unit tests that don't need routing).
 var noopFactory = wsserver.RunnerFactory(func(_ context.Context, _ string) (*loop.Runner, error) {
@@ -65,6 +96,9 @@ func TestAgentRegistry_Activate_sets_running(t *testing.T) {
 			if a.StartedAt == nil {
 				t.Error("StartedAt must be set after Activate")
 			}
+			if a.FinishedAt != nil {
+				t.Error("FinishedAt must stay nil while running")
+			}
 			return
 		}
 	}
@@ -113,6 +147,73 @@ func TestAgentRegistry_Deactivate_sets_done(t *testing.T) {
 		}
 	}
 	t.Error("slot not found after Deactivate")
+}
+
+func TestAgentRegistry_Finish_preserves_terminal_conversation_and_duration(t *testing.T) {
+	tests := []struct {
+		name   string
+		status wsserver.AgentStatus
+	}{
+		{name: "done", status: wsserver.AgentStatusDone},
+		{name: "failed", status: wsserver.AgentStatusFailed},
+		{name: "stopped", status: wsserver.AgentStatusStopped},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := wsserver.NewAgentRegistry(func(_ context.Context, sessionID string) (*loop.Runner, error) {
+				return newRegistryConversationRunner(sessionID), nil
+			})
+			name := r.Snapshot()[0].Name
+			id, ok := r.ActivateTask(context.Background(), name, "task-a")
+			if !ok {
+				t.Fatal("ActivateTask returned ok=false")
+			}
+			if !r.FinishTask(name, "task-a", tt.status) {
+				t.Fatal("FinishTask returned false")
+			}
+
+			for _, agent := range r.Snapshot() {
+				if agent.Name != name {
+					continue
+				}
+				if agent.Status != string(tt.status) || agent.TaskID != "task-a" || agent.FinishedAt == nil || !agent.ConversationAvailable {
+					t.Fatalf("terminal snapshot = %#v", agent)
+				}
+			}
+			if err := r.RouteInput(context.Background(), id, "continue the conversation"); err != nil {
+				t.Fatalf("RouteInput after terminal task returned error: %v", err)
+			}
+			if r.FinishTask(name, "task-a", wsserver.AgentStatusDone) {
+				t.Fatal("duplicate terminal transition was accepted")
+			}
+		})
+	}
+}
+
+func TestAgentRegistry_TaskGenerationRejectsStaleCallbacksAndClearsFinishTime(t *testing.T) {
+	r := wsserver.NewAgentRegistry(func(_ context.Context, _ string) (*loop.Runner, error) {
+		return &loop.Runner{}, nil
+	})
+	name := r.Snapshot()[0].Name
+
+	if _, ok := r.ActivateTask(context.Background(), name, "task-a"); !ok {
+		t.Fatal("ActivateTask(task-a) returned ok=false")
+	}
+	if !r.FinishTask(name, "task-a", wsserver.AgentStatusDone) {
+		t.Fatal("FinishTask(task-a) returned false")
+	}
+	if _, ok := r.ActivateTask(context.Background(), name, "task-b"); !ok {
+		t.Fatal("persona was not reusable by task-b")
+	}
+	if r.FinishTask(name, "task-a", wsserver.AgentStatusFailed) {
+		t.Fatal("stale task-a callback was accepted")
+	}
+	for _, agent := range r.Snapshot() {
+		if agent.Name == name && (agent.Status != string(wsserver.AgentStatusRunning) || agent.TaskID != "task-b" || agent.FinishedAt != nil) {
+			t.Fatalf("task-b snapshot = %#v", agent)
+		}
+	}
 }
 
 func TestAgentRegistry_RouteInput_nil_runner_returns_error(t *testing.T) {

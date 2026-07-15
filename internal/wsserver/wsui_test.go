@@ -21,7 +21,7 @@ func TestWSUI_SetRegistry_and_OnTaskStarted_activates_slot(t *testing.T) {
 	wsui.SetRegistry(registry)
 
 	name := registry.Snapshot()[0].Name
-	wsui.OnTaskStarted(subagent.TaskSnapshot{Name: name})
+	wsui.OnTaskStarted(subagent.TaskSnapshot{ID: "task-started", Name: name, Status: subagent.TaskRunning})
 
 	for _, a := range registry.Snapshot() {
 		if a.Name == name {
@@ -43,8 +43,8 @@ func TestWSUI_OnTaskFinished_deactivates_slot(t *testing.T) {
 	wsui.SetRegistry(registry)
 
 	name := registry.Snapshot()[0].Name
-	wsui.OnTaskStarted(subagent.TaskSnapshot{Name: name})
-	wsui.OnTaskFinished(subagent.TaskSnapshot{Name: name})
+	wsui.OnTaskStarted(subagent.TaskSnapshot{ID: "task-finished", Name: name, Status: subagent.TaskRunning})
+	wsui.OnTaskFinished(subagent.TaskSnapshot{ID: "task-finished", Name: name, Status: subagent.TaskCompleted})
 
 	for _, a := range registry.Snapshot() {
 		if a.Name == name {

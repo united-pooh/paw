@@ -54,17 +54,35 @@ func (w *WSUI) OnTaskStarted(task subagent.TaskSnapshot) {
 	if w.registry == nil {
 		return
 	}
-	w.registry.Activate(context.Background(), task.Name)
+	if _, accepted := w.registry.ActivateTask(context.Background(), task.Name, task.ID); !accepted {
+		return
+	}
 	w.broadcastSnapshot()
 }
 
-// OnTaskFinished deactivates the named persona and broadcasts an updated snapshot.
+// OnTaskFinished records the exact terminal task state and broadcasts a snapshot.
 func (w *WSUI) OnTaskFinished(task subagent.TaskSnapshot) {
 	if w.registry == nil {
 		return
 	}
-	w.registry.Deactivate(task.Name)
+	status, valid := agentStatusForTask(task.Status)
+	if !valid || !w.registry.FinishTask(task.Name, task.ID, status) {
+		return
+	}
 	w.broadcastSnapshot()
+}
+
+func agentStatusForTask(status subagent.TaskStatus) (AgentStatus, bool) {
+	switch status {
+	case subagent.TaskCompleted:
+		return AgentStatusDone, true
+	case subagent.TaskFailed:
+		return AgentStatusFailed, true
+	case subagent.TaskStopped:
+		return AgentStatusStopped, true
+	default:
+		return "", false
+	}
 }
 
 // OnModelUsage broadcasts a usage_update event after each model response.

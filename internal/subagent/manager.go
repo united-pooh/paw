@@ -319,6 +319,7 @@ func (m *Manager) Stop(ctx context.Context, id string) (TaskSnapshot, error) {
 		Error:     task.Error,
 		ExitCode:  exitCode,
 	})
+	m.notifyTaskLifecycleFinished(task)
 	m.notifyTaskFinished(task)
 	return task, nil
 }
@@ -593,6 +594,7 @@ func (m *Manager) startStreamingTask(ctx context.Context, req Request) (TaskSnap
 	}
 	m.setTask(task)
 	m.recordTaskStarted(task)
+	m.notifyTaskStarted(task)
 	return task, nil
 }
 

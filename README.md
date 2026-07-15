@@ -145,6 +145,10 @@ go run ./cmd/agent -s <session-id>
 - 工具状态: `tool_call_fired`、`tool_result`
 - turn 完成: `turn_committed`
 
+`subagents_snapshot` 会发布 persona slot 的全量状态。每个 agent 包含稳定的 `id`、`name`、`color`、`status`，以及可选的 `task_id`、`started_at`、`finished_at` 和 `conversation_available`。客户端可用开始/结束时间实时计算并冻结运行时长；`task_id` 用于把启动请求和后续独立会话关联起来。
+
+后台任务进入 `done`、`failed` 或 `stopped` 后不会释放 persona 的独立会话 Runner；此时任务状态已经终结，但 `conversation_available=true`，用户仍可向对应 `target_agent_id` 继续发送消息。persona 被新任务复用时会清空旧的 `finished_at`，陈旧或重复的 task generation 回调不会覆盖当前状态。
+
 当前行为:
 - `/model` 无参数时打开 provider 向导；`status` 只输出当前配置；`custom`、`deepseek` 直接切换并持久化到 `.ccagent/model.json`；`deepseek` 需要 `DEEPSEEK_API_KEY`
 - `/export` 默认导出到 `.ccagent/exports/conversation-YYYY-MM-DD-HHMMSS.txt`，也支持工作区内显式路径；导出文件权限为 `0600`
