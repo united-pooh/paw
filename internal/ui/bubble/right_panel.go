@@ -1,4 +1,4 @@
-// 本文件定义右侧 30% 面板的三个卡片渲染逻辑。
+// 本文件定义 Activity modal 使用的 Subagents 与 Pipeline 内容渲染逻辑。
 package bubble
 
 import (
@@ -14,8 +14,7 @@ import (
 )
 
 const (
-	pipelineCardMaxContentHeight = 12
-	pipelineMaxStageRows         = 6
+	pipelineMaxStageRows = 6
 )
 
 // pipelineArtifacts lists the 18 pipeline phases in order, each with display name and artifact filename.
@@ -165,60 +164,6 @@ func maxTime(a, b time.Time) time.Time {
 		return b
 	}
 	return a
-}
-
-// renderRightPanel 渲染右侧面板：Pipeline 卡片（仅检测到任务时）+ Subagents 卡片 + Context 卡片。
-// 整体高度被钳制为 totalHeight，防止右侧面板撑高终端布局。
-func (m appModel) renderRightPanel(width, totalHeight int) string {
-	cardWidth := rightCardWidth(width)
-	contentWidth := rightCardContentWidth(width)
-
-	contextContent := m.renderContextCardContent(contentWidth)
-	contextCard := rightCardStyle.Width(cardWidth).Render(contextContent)
-	ctxH := lipgloss.Height(contextCard)
-
-	cards := []string{}
-	if m.pipelineState.detected {
-		reservedSubagentsHeight := rightCardVerticalFrame + 1
-		maxPipelineContentHeight := maxInt(1, totalHeight-ctxH-reservedSubagentsHeight-rightCardVerticalFrame)
-		pipelineContentHeight := minInt(pipelineCardMaxContentHeight, maxPipelineContentHeight)
-		pipelineContent := m.renderPipelineContent(contentWidth, pipelineContentHeight)
-		pipelineCard := rightCardStyle.Width(cardWidth).Height(pipelineContentHeight).Render(pipelineContent)
-		cards = append(cards, pipelineCard)
-
-		subagentsContentHeight := maxInt(1, totalHeight-lipgloss.Height(pipelineCard)-ctxH-rightCardVerticalFrame)
-		subagentsContent := m.renderSubagentsCardContentHeight(contentWidth, subagentsContentHeight)
-		subagentsCard := rightCardStyle.Width(cardWidth).Height(subagentsContentHeight).Render(subagentsContent)
-		cards = append(cards, subagentsCard)
-	} else {
-		subagentsContentHeight := maxInt(1, totalHeight-ctxH-rightCardVerticalFrame)
-		subagentsContent := m.renderSubagentsCardContentHeight(contentWidth, subagentsContentHeight)
-		cards = append(cards, rightCardStyle.Width(cardWidth).Height(subagentsContentHeight).Render(subagentsContent))
-	}
-	cards = append(cards, contextCard)
-
-	joined := lipgloss.JoinVertical(lipgloss.Left, cards...)
-	// Clamp the right panel to totalHeight so it never exceeds the terminal height.
-	return lipgloss.NewStyle().
-		Width(width).
-		Height(totalHeight).
-		MaxHeight(totalHeight).
-		Render(joined)
-}
-
-// renderContextCard 返回 Context 卡片（用于测试）。
-func (m appModel) renderContextCard(width int) string {
-	cardWidth := rightCardWidth(width)
-	contentWidth := rightCardContentWidth(width)
-	return rightCardStyle.Width(cardWidth).Render(m.renderContextCardContent(contentWidth))
-}
-
-func rightCardWidth(totalWidth int) int {
-	return maxInt(4, totalWidth-rightCardBorderFrame)
-}
-
-func rightCardContentWidth(totalWidth int) int {
-	return maxInt(1, rightCardWidth(totalWidth)-rightCardHorizontalPadding)
 }
 
 // renderSubagentsCardContent 渲染 Subagents 内容（Task 4 实现）。

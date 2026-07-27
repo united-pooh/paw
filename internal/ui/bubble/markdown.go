@@ -7,6 +7,7 @@ import (
 	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rivo/uniseg"
 )
 
 const maxRenderedCodeBlockLines = 32
@@ -363,14 +364,18 @@ func truncateDisplayWidth(text string, width int) string {
 	if lipgloss.Width(text) <= width {
 		return text
 	}
-	runes := []rune(text)
-	for len(runes) > 0 && lipgloss.Width(string(runes)+"…") > width {
-		runes = runes[:len(runes)-1]
+	graphemes := uniseg.NewGraphemes(text)
+	var clusters []string
+	for graphemes.Next() {
+		clusters = append(clusters, graphemes.Str())
 	}
-	if len(runes) == 0 {
+	for len(clusters) > 0 && lipgloss.Width(strings.Join(clusters, "")+"…") > width {
+		clusters = clusters[:len(clusters)-1]
+	}
+	if len(clusters) == 0 {
 		return "…"
 	}
-	return string(runes) + "…"
+	return strings.Join(clusters, "") + "…"
 }
 
 func wrapDisplayWidthLines(text string, width int) string {

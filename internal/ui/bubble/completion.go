@@ -431,14 +431,24 @@ func (m appModel) applyFileCompletion(selected string, trailingSpace bool) appMo
 		return m
 	}
 
-	before := val[:atIdx]
 	ref := buildAtRef(query, m.completion.searchDir, selected)
-	suffix := ""
-	if trailingSpace {
-		suffix = " "
+	start := len([]rune(val[:atIdx]))
+	end := len([]rune(val))
+	if !trailingSpace {
+		// Directory traversal is an intermediate completion step and remains
+		// ordinary editable text.
+		m.replaceInputRange(start, end, ref)
+		m.relayout()
+		return m
 	}
-	m.input.SetValue(before + ref + suffix)
-	m.input.CursorEnd()
+	m.replaceInputRangeWithToken(
+		start,
+		end,
+		ref,
+		strings.TrimPrefix(ref, "@"),
+		inputTokenFile,
+		true,
+	)
 	m.relayout()
 	return m
 }
@@ -457,20 +467,23 @@ func buildAtRef(query, searchDir, selected string) string {
 
 // applyCommandCompletion 将命令填入输入框。
 func (m appModel) applyCommandCompletion(selected string) appModel {
+	raw := selected
+	label := strings.TrimPrefix(strings.TrimSpace(selected), "/")
 	if m.commandRegistry != nil {
 		if _, ok := m.commandRegistry.Lookup(selected); ok {
-			m.input.SetValue(selected + " ")
-			m.input.CursorEnd()
+			m.replaceInputRangeWithToken(0, len([]rune(m.input.Value())), raw, label, inputTokenCommand, true)
+			m.relayout()
 			return m
 		}
 	}
 	if ref, ok := m.slashSkillReference(selected); ok {
-		m.input.SetValue(ref + " ")
-		m.input.CursorEnd()
+		raw = ref
+		m.replaceInputRangeWithToken(0, len([]rune(m.input.Value())), raw, label, inputTokenSkill, true)
+		m.relayout()
 		return m
 	}
-	m.input.SetValue(selected + " ")
-	m.input.CursorEnd()
+	m.replaceInputRangeWithToken(0, len([]rune(m.input.Value())), raw, label, inputTokenCommand, true)
+	m.relayout()
 	return m
 }
 
@@ -481,15 +494,21 @@ func (m appModel) applySkillCompletion(selected string) appModel {
 	if dollarIdx < 0 {
 		return m
 	}
-	before := val[:dollarIdx]
 	ref := "$" + selected
 	if m.skillRegistry != nil {
 		if sk, ok := m.skillRegistry.Resolve(selected); ok && strings.TrimSpace(sk.Path) != "" {
 			ref = skillMarkdownReference(sk)
 		}
 	}
-	m.input.SetValue(before + ref + " ")
-	m.input.CursorEnd()
+	start := len([]rune(val[:dollarIdx]))
+	m.replaceInputRangeWithToken(
+		start,
+		len([]rune(val)),
+		ref,
+		selected,
+		inputTokenSkill,
+		true,
+	)
 	m.relayout()
 	return m
 }
@@ -530,8 +549,7 @@ func (m appModel) renderCompletionBox() string {
 	if m.completion == nil {
 		return ""
 	}
-	width := m.leftPanelContentWidth(20)
-	return completionPanelStyle.Width(width).Render(m.renderCompletionContent())
+	return m.renderCompletionPanel(m.renderCompletionContent())
 }
 
 // renderCompletionContent 渲染补全弹窗内容。

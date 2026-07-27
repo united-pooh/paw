@@ -37,6 +37,8 @@ const (
 	colorInputWaitingBorder     colorRole = "input.waiting.border"
 	colorInputMultilineBorder   colorRole = "input.multiline.border"
 	colorInputTerminal          colorRole = "input.terminal"
+	colorInputTokenCommand      colorRole = "input.token.command"
+	colorInputTokenFile         colorRole = "input.token.file"
 	colorSelectedProviderBg     colorRole = "provider.selected.background"
 	colorSelectedProviderFg     colorRole = "provider.selected.foreground"
 	colorUnselectedProvider     colorRole = "provider.unselected"
@@ -86,6 +88,8 @@ func NewColorManager() ColorManager {
 			colorInputWaitingBorder:     "244",
 			colorInputMultilineBorder:   "214",
 			colorInputTerminal:          "#ff5ac8",
+			colorInputTokenCommand:      "#a77fbd",
+			colorInputTokenFile:         "#6fa878",
 			colorSelectedProviderBg:     "62",
 			colorSelectedProviderFg:     "231",
 			colorUnselectedProvider:     "245",

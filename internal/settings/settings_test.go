@@ -58,7 +58,7 @@ func TestSaveLoadAndControllerRoundTrip(t *testing.T) {
 		},
 		UI: UIConfig{
 			ContextLimitTokens:   200000,
-			ContextMeterLocation: MeterLocationHeader,
+			ContextMeterLocation: MeterLocationInputAbove,
 		},
 	}
 

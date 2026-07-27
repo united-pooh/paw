@@ -94,9 +94,8 @@ func (m appModel) renderSessionPickerBox() string {
 	if m.sessionPicker == nil {
 		return ""
 	}
-	width := maxInt(32, m.width-2)
 	body := m.renderSessionPickerContent()
-	return wizardPanelStyle.Width(width).Render(body)
+	return m.renderModalPanel(body)
 }
 
 // renderSessionPickerContent 渲染会话列表内容。
@@ -121,7 +120,8 @@ func (m appModel) renderSessionPickerContent() string {
 		return strings.Join(lines, "\n")
 	}
 
-	maxItems := 8
+	// modal 的可见行数随 transcript 高度缩放；selectedIndex 始终留在窗口内。
+	maxItems := clampInt(m.currentLayout().transcriptHeight-7, 1, 8)
 	start := 0
 	if picker.selectedIndex >= maxItems {
 		start = picker.selectedIndex - maxItems + 1

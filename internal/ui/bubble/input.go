@@ -96,8 +96,11 @@ func (m appModel) handleQueueSubmit() (tea.Model, tea.Cmd) {
 	if m.isModelWorkRunning() {
 		return m.queueChatInput(line), nil
 	}
-	m.input.SetValue(line)
-	m.input.CursorEnd()
+	draft := m.submittedDraft
+	if strings.TrimSpace(draft.Text) != line {
+		draft = inputDraft{Text: line}
+	}
+	m.setInputDraft(draft)
 	m.inputPasteFoldActive = false
 	m.syncInputMode()
 	m.relayout()
@@ -105,29 +108,32 @@ func (m appModel) handleQueueSubmit() (tea.Model, tea.Cmd) {
 }
 
 func (m appModel) consumeSubmittedInput() (appModel, string, bool) {
-	line := strings.TrimSpace(m.input.Value())
-	if line == "" {
+	draft := trimInputDraft(m.currentInputDraft())
+	if draft.Text == "" {
 		return m, "", false
 	}
 	m.input.Reset()
+	m.inputTokens = nil
 	m.inputPasteFoldActive = false
 	m.resetHistoryNavigation()
 	m.syncInputMode()
 	m.relayout()
 
-	if continued, text := splitContinuation(line); continued {
-		m.rememberInputHistory(line)
+	if continued, text := stripContinuationDraft(draft); continued {
+		m.submittedDraft = cloneInputDraft(draft)
+		m.rememberInputHistory(draft.Text)
 		m.pending = append(m.pending, text)
 		m.refreshViewport()
 		return m, "", false
 	}
 
 	if len(m.pending) > 0 {
-		m.pending = append(m.pending, line)
-		line = strings.Join(m.pending, "\n")
+		m.pending = append(m.pending, draft)
+		draft = joinInputDrafts(m.pending, "\n")
 		m.pending = nil
 	}
-	return m, line, true
+	m.submittedDraft = cloneInputDraft(draft)
+	return m, draft.Text, true
 }
 
 // handleCommand 处理内置 TUI 命令。除 exit/quit 外，命令仍要求以斜杠开头。
@@ -252,6 +258,7 @@ func (m appModel) startChatTurn(line string) (appModel, tea.Cmd) {
 		m.addEntry(transcriptEntry{kind: entrySystem, title: "busy", body: "assistant is already running"})
 		return m, nil
 	}
+	m.resetStreamingBuffers()
 	m.addEntry(transcriptEntry{
 		kind:  entryUser,
 		title: "you",
@@ -259,7 +266,6 @@ func (m appModel) startChatTurn(line string) (appModel, tea.Cmd) {
 	})
 	m.turnStartedAt = time.Now()
 	m.syncRunningFlags()
-	m.activeAssistant = -1
 	return m, runTurnCmd(m.ctx, m.runner, line)
 }
 
@@ -287,8 +293,7 @@ func (m appModel) queueChatInput(line string) appModel {
 
 // updateInputWithKey 将按键交给 textarea 处理，并同步输入模式、布局和光标动画。
 func (m appModel) updateInputWithKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	input, cmd := m.input.Update(msg)
-	m.input = input
+	cmd := m.updateTokenAwareInput(msg)
 	m.syncInputMode()
 	m.relayout()
 	m.applyCursorAnimation()
@@ -327,13 +332,9 @@ func textareaCursorAtStart(input textarea.Model) bool {
 		return false
 	}
 	lineInfo := input.LineInfo()
-	cursorLine := input.Line()
-	copyInput := input
-	copyInput.CursorStart()
-	startInfo := copyInput.LineInfo()
-	return cursorLine == copyInput.Line() &&
-		lineInfo.RowOffset == startInfo.RowOffset &&
-		lineInfo.ColumnOffset == startInfo.ColumnOffset
+	return input.Line() == 0 &&
+		lineInfo.RowOffset == 0 &&
+		lineInfo.CharOffset == 0
 }
 
 // textareaCursorAtEnd 判断 textarea 光标是否位于当前输入的逻辑末尾。
@@ -360,13 +361,12 @@ func (m appModel) handleHistoryNavigation(direction int) (tea.Model, tea.Cmd) {
 	if direction < 0 {
 		m.historyDownLock = false
 		if m.historyIndex == -1 {
-			m.historyDraft = m.input.Value()
+			m.historyDraft = m.currentInputDraft()
 			m.historyIndex = len(m.inputHistory) - 1
 		} else if m.historyIndex > 0 {
 			m.historyIndex--
 		}
-		m.input.SetValue(m.inputHistory[m.historyIndex])
-		m.input.CursorEnd()
+		m.setInputDraft(m.inputHistory[m.historyIndex])
 		m.inputPasteFoldActive = false
 		m.syncInputMode()
 		m.relayout()
@@ -379,12 +379,12 @@ func (m appModel) handleHistoryNavigation(direction int) (tea.Model, tea.Cmd) {
 	}
 	if m.historyIndex < len(m.inputHistory)-1 {
 		m.historyIndex++
-		m.input.SetValue(m.inputHistory[m.historyIndex])
+		m.setInputDraft(m.inputHistory[m.historyIndex])
 		m.historyDownLock = true
 	} else {
 		m.historyIndex = -1
-		m.input.SetValue(m.historyDraft)
-		m.historyDraft = ""
+		m.setInputDraft(m.historyDraft)
+		m.historyDraft = inputDraft{}
 		m.historyDownLock = false
 	}
 	m.input.CursorEnd()
@@ -401,16 +401,23 @@ func (m *appModel) rememberInputHistory(line string) {
 	if line == "" {
 		return
 	}
-	if len(m.inputHistory) > 0 && m.inputHistory[len(m.inputHistory)-1] == line {
+	draft := inputDraft{Text: line}
+	if strings.TrimSpace(m.submittedDraft.Text) == line {
+		draft = trimInputDraft(m.submittedDraft)
+	}
+	if len(m.inputHistory) > 0 && m.inputHistory[len(m.inputHistory)-1].Text == line {
+		if !inputDraftEqual(m.inputHistory[len(m.inputHistory)-1], draft) {
+			m.inputHistory[len(m.inputHistory)-1] = cloneInputDraft(draft)
+		}
 		return
 	}
-	m.inputHistory = append(m.inputHistory, line)
+	m.inputHistory = append(m.inputHistory, cloneInputDraft(draft))
 }
 
 // resetHistoryNavigation 清除当前历史浏览状态，回到普通编辑模式。
 func (m *appModel) resetHistoryNavigation() {
 	m.historyIndex = -1
-	m.historyDraft = ""
+	m.historyDraft = inputDraft{}
 	m.historyDownLock = false
 }
 

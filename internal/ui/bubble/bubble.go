@@ -2,16 +2,16 @@
 package bubble
 
 import (
-	"context"
-	"errors"
-	"fmt"
-	tea "github.com/charmbracelet/bubbletea"
 	"codex-agent-go/internal/message"
 	"codex-agent-go/internal/model"
 	"codex-agent-go/internal/session"
 	"codex-agent-go/internal/settings"
 	"codex-agent-go/internal/subagent"
 	"codex-agent-go/internal/ui"
+	"context"
+	"errors"
+	"fmt"
+	tea "github.com/charmbracelet/bubbletea"
 	"os"
 	"sync"
 )
@@ -125,7 +125,7 @@ func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 		tea.WithContext(ctx),
 		tea.WithOutput(newAnchoredOutput(os.Stdout, anchor)),
 		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
+		tea.WithMouseAllMotion(),
 	)
 
 	u.mu.Lock()

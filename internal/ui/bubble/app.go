@@ -51,6 +51,7 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 	input.Focus()
 
 	vp := viewport.New(80, 20)
+	vp.MouseWheelDelta = 1
 	skillRoot, _ := os.Getwd()
 	model := appModel{
 		ctx:                 ctx,
@@ -68,6 +69,10 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 		cursorFrameAt:       now,
 		pipelineActiveAfter: now,
 		activeAssistant:     -1,
+		activeThinking:      -1,
+		doneAssistant:       -1,
+		toolInspectIndex:    -1,
+		toolHoverIndex:      -1,
 		historyIndex:        -1,
 		transcript: []transcriptEntry{
 			{
@@ -119,6 +124,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.relayout()
+		m.resizeStreamingBuffers()
 		m.refreshViewport()
 		return m, nil
 	case cursorFrameMsg:
@@ -126,8 +132,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinnerFrameIdx++
 		m.applyCursorAnimation()
 		m.updateContextMeterAnimation()
+		m.refreshActivityTasks()
 		m.refreshSubagentPreviewFromTasks()
-		if m.transcriptRefreshPending || m.hasActiveTranscriptAnimation() {
+		if m.transcriptRefreshPending {
 			if m.viewport.AtBottom() {
 				m.refreshViewport()
 			} else {
@@ -137,24 +144,26 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cursorFrameTick(), pipelinePollCmd(m.pipelineActiveAfter))
 	case assistantDeltaMsg:
 		m.isGenerating = true
-		m.appendAssistantDelta(string(msg))
+		m.consumeAssistantStreamDelta(string(msg))
 		return m, nil
 	case thinkingDeltaMsg:
 		m.isGenerating = true
-		m.appendThinkingDelta(string(msg))
+		m.consumeThinkingStreamDelta(string(msg))
 		return m, nil
 	case toolCallMsg:
+		m.finalizeThinkingStream()
+		m.finalizeAssistantStream(transcriptRenderFormatted)
 		m.isGenerating = false
-		m.activeAssistant = -1
 		m.recordToolCallEntry(msg.ID, msg.Name, json.RawMessage(msg.Input), msg.OldContent)
 		return m, nil
 	case toolResultMsg:
-		m.activeAssistant = -1
+		m.finalizeThinkingStream()
+		m.finalizeAssistantStream(transcriptRenderFormatted)
 		status := "ok"
 		if msg.IsError {
 			status = "error"
 		}
-		m.recordToolResultEntry(msg.ToolUseID, msg.Name, status, msg.IsError)
+		m.recordToolResultEntry(msg.ToolUseID, msg.Name, status, msg.Content, msg.IsError)
 		return m, nil
 	case systemEventMsg:
 		title := strings.TrimSpace(msg.Title)
@@ -169,11 +178,20 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 		return m, nil
 	case doneMsg:
+		m.finalizeThinkingStream()
+		m.doneAssistant = m.finalizeAssistantStream(transcriptRenderFormatted)
 		m.isGenerating = false
-		m.activeAssistant = -1
 		m.refreshViewport()
 		return m, nil
 	case turnFinishedMsg:
+		m.finalizeThinkingStream()
+		if msg.err != nil {
+			m.finalizeAssistantStream(transcriptRenderPlain)
+			m.setAssistantRenderMode(m.doneAssistant, transcriptRenderPlain)
+		} else {
+			m.finalizeAssistantStream(transcriptRenderFormatted)
+		}
+		m.doneAssistant = -1
 		m.isGenerating = false
 		m.queryGuard.FinishModel()
 		m.turnStartedAt = time.Time{}
@@ -239,6 +257,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case sessionRestoredMsg:
+		m.resetStreamingBuffers()
+		m.resetToolInspect()
+		m.clearInputTokens()
 		if msg.err != nil {
 			title := "sessions"
 			if msg.source == sessionRestoreSubagentEnter {
@@ -294,6 +315,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.subagentPicker != nil {
 			return m.handleSubagentPickerKey(msg)
+		}
+		if m.toolInspectActive {
+			return m.handleToolInspectKey(msg)
+		}
+		if msg.String() == "ctrl+t" {
+			return m.openToolInspect()
 		}
 		if msg.String() == "ctrl+g" {
 			return m.openSubagentPicker()
@@ -395,6 +422,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastCtrlCAt = now
 			m.input.SetValue("")
 			m.input.CursorEnd()
+			m.clearInputTokens()
 			m.pending = nil
 			m.inputPasteFoldActive = false
 			m.clearCompletionAndRelayout()
@@ -418,7 +446,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tea.MouseMsg:
 		if next, handled, cmd := m.handleTranscriptMouse(msg); handled {
-			next.transcriptKeyScrollActive = true
+			if msg.Action != tea.MouseActionMotion || next.selecting {
+				next.transcriptKeyScrollActive = true
+			}
 			return next, cmd
 		}
 		if isMouseWheel(msg) {
@@ -428,9 +458,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.transcriptKeyScrollActive = true
 				return m, viewportCmd
 			}
-			return m, nil
-		}
-		if m.isSidebarMouse(msg) {
 			return m, nil
 		}
 	}
@@ -443,7 +470,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var inputCmd tea.Cmd
 		beforeValue := m.input.Value()
 		m.input.SetHeight(inputMaxVisibleLines)
-		m.input, inputCmd = m.input.Update(msg)
+		inputCmd = m.updateTokenAwareInput(msg)
 		textChanged := beforeValue != m.input.Value()
 		if isTextEditingKey(msg) || textChanged {
 			m.resetHistoryNavigation()

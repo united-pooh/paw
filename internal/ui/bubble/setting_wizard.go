@@ -1,9 +1,9 @@
 package bubble
 
 import (
+	"codex-agent-go/internal/settings"
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
-	"codex-agent-go/internal/settings"
 	"strings"
 )
 
@@ -16,7 +16,6 @@ func newSettingWizard(current settings.Config) *settingWizard {
 	}
 	w.selected[settingWizardContext] = selectedSettingIndex(settingOptions(settingWizardContext), string(current.Subagent.DefaultContextMode))
 	w.selected[settingWizardRunMode] = selectedSettingIndex(settingOptions(settingWizardRunMode), string(current.Subagent.DefaultRunMode))
-	w.selected[settingWizardMeterLocation] = selectedSettingIndex(settingOptions(settingWizardMeterLocation), string(current.UI.ContextMeterLocation))
 	w.selected[settingWizardLimit] = selectedSettingLimitIndex(settingOptions(settingWizardLimit), current.UI.ContextLimitTokens)
 	return w
 }
@@ -47,11 +46,6 @@ func settingOptions(step settingWizardStep) []settingOption {
 			{label: string(settings.RunModeSync), description: "wait for subagent result", apply: func(cfg *settings.Config) { cfg.Subagent.DefaultRunMode = settings.RunModeSync }},
 			{label: string(settings.RunModeBackground), description: "return a task id immediately", apply: func(cfg *settings.Config) { cfg.Subagent.DefaultRunMode = settings.RunModeBackground }},
 		}
-	case settingWizardMeterLocation:
-		return []settingOption{
-			{label: string(settings.MeterLocationInputAbove), description: "show context meter in the right sidebar", apply: func(cfg *settings.Config) { cfg.UI.ContextMeterLocation = settings.MeterLocationInputAbove }},
-			{label: string(settings.MeterLocationHeader), description: "show context meter in the header", apply: func(cfg *settings.Config) { cfg.UI.ContextMeterLocation = settings.MeterLocationHeader }},
-		}
 	case settingWizardLimit:
 		return []settingOption{
 			{label: fmt.Sprintf("%d", settings.DefaultContextLimitTokens), description: "1024 * 1024 default", apply: func(cfg *settings.Config) { cfg.UI.ContextLimitTokens = settings.DefaultContextLimitTokens }},
@@ -69,8 +63,6 @@ func settingStepTitle(step settingWizardStep) string {
 		return "Subagent context"
 	case settingWizardRunMode:
 		return "Subagent run mode"
-	case settingWizardMeterLocation:
-		return "Context meter"
 	case settingWizardLimit:
 		return "Context limit"
 	default:
@@ -163,28 +155,35 @@ func (m appModel) renderSettingWizardBox() string {
 	if m.settingWizard == nil {
 		return ""
 	}
-	width := maxInt(32, m.width-2)
 	var body string
 	if m.settingWizard.step == settingWizardConfirm {
 		body = m.renderSettingConfirmStep()
 	} else {
 		body = m.renderSettingChoiceStep()
 	}
-	return wizardPanelStyle.Width(width).Render(body)
+	return m.renderModalPanel(body)
 }
 
 func (m appModel) renderSettingChoiceStep() string {
 	step := m.settingWizard.step
 	lines := []string{wizardTitleStyle.Render(settingStepTitle(step))}
 	options := settingOptions(step)
-	for i, option := range options {
+	maxItems := clampInt(m.currentLayout().transcriptHeight-7, 1, len(options))
+	selected := m.settingWizard.selected[step]
+	start := maxInt(0, selected-maxItems+1)
+	end := minInt(len(options), start+maxItems)
+	for i := start; i < end; i++ {
+		option := options[i]
 		text := "  " + option.label + "  " + option.description
-		if i == m.settingWizard.selected[step] {
+		if i == selected {
 			text = selectedProviderStyle.Render("> " + option.label + "  " + option.description)
 		} else {
 			text = unselectedProviderStyle.Render(text)
 		}
 		lines = append(lines, text)
+	}
+	if maxItems < len(options) {
+		lines = append(lines, fmt.Sprintf("(%d/%d) Use up/down to scroll", selected+1, len(options)))
 	}
 	lines = append(lines, "Enter next, b back, esc cancel.")
 	return strings.Join(lines, "\n")
@@ -206,10 +205,9 @@ func (m appModel) renderSettingConfirmStep() string {
 func renderSettingsSummary(cfg settings.Config) string {
 	cfg = settings.Normalize(cfg)
 	return fmt.Sprintf(
-		"subagent.context=%s\nsubagent.run=%s\nui.context_limit=%d\nui.context_meter=%s",
+		"subagent.context=%s\nsubagent.run=%s\nui.context_limit=%d",
 		cfg.Subagent.DefaultContextMode,
 		cfg.Subagent.DefaultRunMode,
 		cfg.UI.ContextLimitTokens,
-		cfg.UI.ContextMeterLocation,
 	)
 }

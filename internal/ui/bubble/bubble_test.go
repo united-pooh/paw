@@ -402,7 +402,7 @@ func TestStreamMACommandStartsTurn(t *testing.T) {
 	if len(runner.inputs) != 1 || runner.inputs[0] != "/streamma design the runtime" {
 		t.Fatalf("runner.inputs = %#v", runner.inputs)
 	}
-	if len(updated.inputHistory) != 1 || updated.inputHistory[0] != "/streamma design the runtime" {
+	if len(updated.inputHistory) != 1 || updated.inputHistory[0].Text != "/streamma design the runtime" {
 		t.Fatalf("inputHistory = %#v", updated.inputHistory)
 	}
 }
@@ -424,7 +424,7 @@ func TestStreamMATraceCommandStartsTurn(t *testing.T) {
 	if len(runner.inputs) != 1 || runner.inputs[0] != "/streamma-trace design the runtime" {
 		t.Fatalf("runner.inputs = %#v", runner.inputs)
 	}
-	if len(updated.inputHistory) != 1 || updated.inputHistory[0] != "/streamma-trace design the runtime" {
+	if len(updated.inputHistory) != 1 || updated.inputHistory[0].Text != "/streamma-trace design the runtime" {
 		t.Fatalf("inputHistory = %#v", updated.inputHistory)
 	}
 }
@@ -586,11 +586,6 @@ func TestSettingCommandPersistsWizardSelections(t *testing.T) {
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
 
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
-	model = next.(appModel)
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = next.(appModel)
-
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
 
@@ -603,7 +598,7 @@ func TestSettingCommandPersistsWizardSelections(t *testing.T) {
 	got := settingsController.saved[0]
 	if got.Subagent.DefaultContextMode != settings.ContextModeEmpty ||
 		got.Subagent.DefaultRunMode != settings.RunModeBackground ||
-		got.UI.ContextMeterLocation != settings.MeterLocationHeader ||
+		got.UI.ContextMeterLocation != settings.MeterLocationInputAbove ||
 		got.UI.ContextLimitTokens != 200000 {
 		t.Fatalf("saved config = %#v", got)
 	}
@@ -612,7 +607,6 @@ func TestSettingCommandPersistsWizardSelections(t *testing.T) {
 		"subagent.context=empty",
 		"subagent.run=background",
 		"ui.context_limit=200000",
-		"ui.context_meter=header",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("settings summary = %q, want %q", body, want)
@@ -866,7 +860,7 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 	next, _ = model.Update(toolCallMsg(ui.ToolCallEvent{Name: "Read", Input: []byte(`{"file_path":"go.mod"}`)}))
 	model = next.(appModel)
 	runningRendered := renderTranscript(model.transcript, 80, model.showThinking)
-	for _, want := range []string{"hello", "Read · running", "go.mod"} {
+	for _, want := range []string{"hello", "◌ Read go.mod · running"} {
 		if !strings.Contains(runningRendered, want) {
 			t.Fatalf("running transcript = %q, want %q", runningRendered, want)
 		}
@@ -885,15 +879,15 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{Name: "Read", Content: "module gocode"}))
 	model = next.(appModel)
 	okRendered := renderTranscript(model.transcript, 80, model.showThinking)
-	for _, want := range []string{"hello", "Read · ok", "go.mod"} {
+	for _, want := range []string{"hello", "✓ Read go.mod · ok"} {
 		if !strings.Contains(okRendered, want) {
 			t.Fatalf("ok transcript = %q, want %q", okRendered, want)
 		}
 	}
-	if strings.Contains(okRendered, "[Read]") || strings.Contains(okRendered, "Read · running") || strings.Contains(okRendered, "file_path=") || strings.Contains(okRendered, "file_path  ") {
+	if strings.Contains(okRendered, "[Read]") || strings.Contains(okRendered, "◌ Read go.mod · running") || strings.Contains(okRendered, "file_path=") || strings.Contains(okRendered, "file_path  ") {
 		t.Fatalf("ok transcript = %q, should replace running status", okRendered)
 	}
-	if !strings.Contains(okRendered, "Read · ok") {
+	if !strings.Contains(okRendered, "✓ Read go.mod · ok") {
 		t.Fatalf("ok transcript = %q, want completed tool block", okRendered)
 	}
 	for _, hidden := range []string{"\n  tool\n", "\n  result\n"} {
@@ -903,21 +897,23 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 	}
 	next, _ = model.Update(assistantDeltaMsg("loaded go.mod"))
 	model = next.(appModel)
+	next, _ = model.Update(doneMsg{})
+	model = next.(appModel)
 
 	rendered := renderTranscript(model.transcript, 80, model.showThinking)
-	for _, want := range []string{"loaded go.mod", "Read · ok", "go.mod"} {
+	for _, want := range []string{"loaded go.mod", "✓ Read go.mod · ok"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered transcript = %q, want %q", rendered, want)
 		}
 	}
-	for _, hidden := range []string{"\n  tool\n", "\n  result\n", "[Read]", "file_path=", "file_path  ", "Read · running", "module gocode", "tool cites"} {
+	for _, hidden := range []string{"\n  tool\n", "\n  result\n", "[Read]", "file_path=", "file_path  ", "◌ Read go.mod · running", "module gocode", "tool cites"} {
 		if strings.Contains(rendered, hidden) {
 			t.Fatalf("rendered transcript = %q, should not contain old tool block marker/content %q", rendered, hidden)
 		}
 	}
 }
 
-func TestAssistantDeltaCoalescesTranscriptRefresh(t *testing.T) {
+func TestAssistantDeltaBuffersTailAndCoalescesCompletedLineRefresh(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
 	model.width = 80
@@ -929,14 +925,24 @@ func TestAssistantDeltaCoalescesTranscriptRefresh(t *testing.T) {
 	next, _ := model.Update(assistantDeltaMsg("streamed text"))
 	model = next.(appModel)
 
-	if !model.transcriptRefreshPending {
-		t.Fatalf("transcriptRefreshPending = false, want true")
+	if model.transcriptRefreshPending {
+		t.Fatalf("transcriptRefreshPending = true, want false for hidden tail")
 	}
-	if got := model.transcript[len(model.transcript)-1].body; got != "streamed text" {
-		t.Fatalf("assistant body = %q, want streamed text", got)
+	if got := model.transcript[len(model.transcript)-1].body; got != "" {
+		t.Fatalf("assistant body = %q, want hidden tail", got)
 	}
 	if strings.Contains(model.viewport.View(), "streamed text") {
-		t.Fatalf("viewport refreshed immediately despite coalescing: %q", model.viewport.View())
+		t.Fatalf("viewport leaked incomplete tail: %q", model.viewport.View())
+	}
+
+	next, _ = model.Update(assistantDeltaMsg("\n"))
+	model = next.(appModel)
+
+	if !model.transcriptRefreshPending {
+		t.Fatalf("transcriptRefreshPending = false, want true for completed line")
+	}
+	if got := model.transcript[len(model.transcript)-1].body; got != "streamed text\n" {
+		t.Fatalf("assistant body = %q, want completed line", got)
 	}
 
 	next, _ = model.Update(cursorFrameMsg(time.Now().Add(transcriptStreamingRefreshInterval)))
@@ -1027,10 +1033,10 @@ func TestToolResultEntryMatchesByToolUseID(t *testing.T) {
 	model = next.(appModel)
 
 	rendered := renderTranscript(model.transcript, 80, model.showThinking)
-	if !strings.Contains(rendered, "Read · ok") || !strings.Contains(rendered, "first.go") {
+	if !strings.Contains(rendered, "✓ Read first.go · ok") {
 		t.Fatalf("rendered transcript = %q, want call_1 completed", rendered)
 	}
-	if !strings.Contains(rendered, "Read · running") || !strings.Contains(rendered, "second.go") {
+	if !strings.Contains(rendered, "◌ Read second.go · running") {
 		t.Fatalf("rendered transcript = %q, want call_2 still running", rendered)
 	}
 }
@@ -1041,7 +1047,7 @@ func TestToolCallWithoutAssistantTextRendersRunningEntry(t *testing.T) {
 	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{Name: "LS", Input: []byte(`{"path":"."}`)}))
 	model = next.(appModel)
 	rendered := renderTranscript(model.transcript, 54, model.showThinking)
-	for _, want := range []string{"LS · running", "."} {
+	for _, want := range []string{"◌ LS . · running"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("running-only tool entry = %q, want %q", rendered, want)
 		}
@@ -1053,12 +1059,12 @@ func TestToolCallWithoutAssistantTextRendersRunningEntry(t *testing.T) {
 	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{Name: "LS", Content: "README.md"}))
 	model = next.(appModel)
 	rendered = renderTranscript(model.transcript, 54, model.showThinking)
-	for _, want := range []string{"LS · ok", "."} {
+	for _, want := range []string{"✓ LS . · ok"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("completed-only tool entry = %q, want %q", rendered, want)
 		}
 	}
-	if strings.Contains(rendered, "[LS]") || strings.Contains(rendered, "path=") || strings.Contains(rendered, "path  ") || strings.Contains(rendered, "LS · running") || strings.Contains(rendered, "README.md") {
+	if strings.Contains(rendered, "[LS]") || strings.Contains(rendered, "path=") || strings.Contains(rendered, "path  ") || strings.Contains(rendered, "◌ LS . · running") || strings.Contains(rendered, "README.md") {
 		t.Fatalf("completed-only tool entry = %q, should hide duplicate citation/running state/long output", rendered)
 	}
 }
@@ -1168,14 +1174,18 @@ func TestToolEntryContentWidthLeavesTranscriptNoWrapCell(t *testing.T) {
 func TestToolDiffRowsAlignLineNumberWithStatusMarker(t *testing.T) {
 	longLine := strings.Repeat("这是一个测试文件的内容。", 20)
 	rendered := ansi.Strip(renderEntry(transcriptEntry{
-		kind:  entryTool,
-		title: "tool",
-		body:  "Write · ok\ntest.txt\n1 + │ " + longLine,
+		kind:         entryTool,
+		title:        "tool",
+		toolName:     "Write",
+		toolStatus:   "ok",
+		toolTarget:   "test.txt",
+		toolResult:   "1 + │ " + longLine,
+		toolExpanded: true,
 	}, 80))
 	lines := strings.Split(rendered, "\n")
 	var headerLine, diffLine string
 	for _, line := range lines {
-		if strings.Contains(line, "✓ Write · ok") {
+		if strings.Contains(line, "✓ Write test.txt · ok") {
 			headerLine = line
 		}
 		if strings.Contains(line, "1 + │") {
@@ -1200,20 +1210,24 @@ func TestToolDiffRowsAlignLineNumberWithStatusMarker(t *testing.T) {
 }
 
 func TestToolEntryClampsLargeDetailBlocks(t *testing.T) {
-	lines := []string{"Bash · running"}
+	lines := make([]string, 0, 80)
 	for i := 0; i < 80; i++ {
 		lines = append(lines, fmt.Sprintf("line-%02d", i))
 	}
 	rendered := ansi.Strip(renderEntry(transcriptEntry{
-		kind:  entryTool,
-		title: "tool",
-		body:  strings.Join(lines, "\n"),
+		kind:         entryTool,
+		title:        "tool",
+		toolName:     "Bash",
+		toolStatus:   "ok",
+		toolTarget:   "go test ./...",
+		toolResult:   strings.Join(lines, "\n"),
+		toolExpanded: true,
 	}, 80))
 
 	if strings.Contains(rendered, "line-79") {
 		t.Fatalf("rendered tool entry should hide tail detail lines:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "... 48 more lines hidden") {
+	if !strings.Contains(rendered, "... 69 more lines hidden") {
 		t.Fatalf("rendered tool entry = %q, want hidden line summary", rendered)
 	}
 }
@@ -1384,7 +1398,7 @@ func TestInputHistoryUsesArrowKeysAndPreservesDraft(t *testing.T) {
 // TestInputHistoryWaitsForMultilineBoundary 验证多行输入中上键先移动光标，抵达开头后才切历史。
 func TestInputHistoryWaitsForMultilineBoundary(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	model.inputHistory = []string{"previous"}
+	model.inputHistory = []inputDraft{{Text: "previous"}}
 	model.input.SetValue("one\ntwo")
 
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyUp})
@@ -1494,7 +1508,7 @@ func TestInputHistorySkipsControlCommands(t *testing.T) {
 	model.input.SetValue("!pwd")
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
-	if len(model.inputHistory) != 1 || model.inputHistory[0] != "!pwd" {
+	if len(model.inputHistory) != 1 || model.inputHistory[0].Text != "!pwd" {
 		t.Fatalf("inputHistory = %#v", model.inputHistory)
 	}
 }
@@ -1554,8 +1568,7 @@ func TestRelayoutReservesSpaceForTranscriptFrame(t *testing.T) {
 	if got := lipgloss.Height(rendered); got > model.height {
 		t.Fatalf("rendered height = %d, want <= %d", got, model.height)
 	}
-	leftColWidth := model.width - model.sidebarWidth
-	wantViewportWidth := maxInt(20, leftColWidth-transcriptPanelHorizontalFrame)
+	wantViewportWidth := maxInt(1, model.width-mainFrameHorizontalFrame-mainContentPadding*2)
 	if model.viewport.Width != wantViewportWidth {
 		t.Fatalf("viewport width = %d, want %d", model.viewport.Width, wantViewportWidth)
 	}
@@ -1601,8 +1614,8 @@ func TestViewFillsTerminalHeightAndPinsInputToBottom(t *testing.T) {
 		t.Fatalf("bottom input not visible near frame bottom:\n%s", ansi.Strip(rendered))
 	}
 	lastLine := lines[len(lines)-1]
-	if strings.Count(lastLine, "╯") < 2 {
-		t.Fatalf("last rendered line = %q, want input and right sidebar bottom borders aligned", lastLine)
+	if strings.Count(lastLine, "╯") != 1 {
+		t.Fatalf("last rendered line = %q, want one fixed main-frame bottom border", lastLine)
 	}
 }
 
@@ -1623,9 +1636,9 @@ func TestRelayoutIgnoresLegacyInputTitleMeter(t *testing.T) {
 	model.height = 10
 	model.relayout()
 
-	minimum := maxInt(1, model.height-model.headerHeight()-lipgloss.Height(model.renderInputBox())-transcriptPanelVerticalFrame)
-	if model.viewport.Height < minimum {
-		t.Fatalf("viewport height = %d, want at least %d", model.viewport.Height, minimum)
+	wantHeight := model.currentLayout().transcriptHeight
+	if model.viewport.Height != wantHeight {
+		t.Fatalf("viewport height = %d, want %d", model.viewport.Height, wantHeight)
 	}
 	if got := lipgloss.Height(model.View()); got != model.height {
 		t.Fatalf("rendered height = %d, want %d", got, model.height)
@@ -1690,9 +1703,36 @@ func TestBangValuePreviewsTerminalPanel(t *testing.T) {
 			t.Fatalf("input box = %q, should not contain %q", rendered, unwanted)
 		}
 	}
+
+	input := model.input
+	applyTextareaTerminalStyle(&input)
+	wantColor := colorManager.LipglossColor(colorInputTerminal)
+	if got := input.FocusedStyle.Text.GetForeground(); got != wantColor {
+		t.Fatalf("terminal text foreground = %#v, want %#v", got, wantColor)
+	}
+	if got := input.FocusedStyle.Placeholder.GetForeground(); got != wantColor {
+		t.Fatalf("terminal placeholder foreground = %#v, want %#v", got, wantColor)
+	}
 }
 
-// TestSubagentCommandUsesDefaultsAndTasksRender verifies /subagent defaults and /tasks output.
+func TestPersistentTerminalModeColorsEmptyInputPlaceholder(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.width = 80
+	model.input.SetValue("!")
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if !model.terminalMode || model.input.Value() != "" {
+		t.Fatalf("terminal mode = %v input = %q", model.terminalMode, model.input.Value())
+	}
+	rendered := model.renderInputBox()
+	want := terminalInputLabelStyle.Render("$")
+	if !strings.Contains(rendered, want) {
+		t.Fatalf("terminal input box = %q, want styled placeholder %q", rendered, want)
+	}
+}
+
+// TestSubagentCommandUsesDefaultsAndTasksOpenActivity verifies /subagent defaults and /tasks Activity entry.
 func TestSubagentCommandUsesDefaultsAndTasksRender(t *testing.T) {
 	settingsController := &fakeSettingsController{current: settings.Config{
 		Subagent: settings.SubagentConfig{
@@ -1715,6 +1755,10 @@ func TestSubagentCommandUsesDefaultsAndTasksRender(t *testing.T) {
 		},
 	}
 	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, settingsController, subagents, nil, newTerminalCursorAnchor())
+	model.ready = true
+	model.width = 80
+	model.height = 24
+	model.relayout()
 
 	handled, cmd := model.handleCommand("/subagent summarize recent changes")
 	if !handled || cmd != nil {
@@ -1735,8 +1779,11 @@ func TestSubagentCommandUsesDefaultsAndTasksRender(t *testing.T) {
 	if !handled || cmd != nil {
 		t.Fatalf("/tasks handled/cmd = %v/%v", handled, cmd)
 	}
-	if got := model.transcript[len(model.transcript)-1].body; !strings.Contains(got, "task-42 · running · fork") {
-		t.Fatalf("tasks transcript = %q", got)
+	if model.subagentPicker == nil || model.subagentPicker.tab != activityTabSubagents {
+		t.Fatalf("activity = %#v, want Subagents tab", model.subagentPicker)
+	}
+	if got := model.renderActivityBox(); !strings.Contains(got, "task-42") {
+		t.Fatalf("Activity modal = %q, want task-42", got)
 	}
 }
 
@@ -1812,7 +1859,7 @@ func TestViewAnchorsTerminalCursorOnInputCell(t *testing.T) {
 	if !position.active {
 		t.Fatalf("cursor position = %#v", position)
 	}
-	wantUpFromBottom := maxInt(0, lipgloss.Height(model.renderActiveInputPanel())-2)
+	wantUpFromBottom := 1
 	if position.upFromBottom != wantUpFromBottom {
 		t.Fatalf("upFromBottom = %d, want input content row %d", position.upFromBottom, wantUpFromBottom)
 	}
@@ -1904,7 +1951,7 @@ func TestViewAnchorsTerminalCursorWithLegacyInputTitle(t *testing.T) {
 	if !ok || !position.active {
 		t.Fatalf("anchor = %#v/%v, want active", position, ok)
 	}
-	wantUpFromBottom := maxInt(0, lipgloss.Height(model.renderActiveInputPanel())-2)
+	wantUpFromBottom := 1
 	if position.upFromBottom != wantUpFromBottom {
 		t.Fatalf("upFromBottom = %d, want input content row %d", position.upFromBottom, wantUpFromBottom)
 	}
@@ -1962,8 +2009,8 @@ func TestMouseWheelScrollsTranscriptViewport(t *testing.T) {
 		Action: tea.MouseActionPress,
 	})
 	model = next.(appModel)
-	if model.viewport.YOffset >= bottomOffset {
-		t.Fatalf("YOffset = %d, want less than %d", model.viewport.YOffset, bottomOffset)
+	if delta := bottomOffset - model.viewport.YOffset; delta != 1 {
+		t.Fatalf("wheel delta = %d (YOffset %d -> %d), want 1", delta, bottomOffset, model.viewport.YOffset)
 	}
 }
 
@@ -2004,7 +2051,7 @@ func TestArrowKeysAfterTranscriptWheelScrollViewportNotInput(t *testing.T) {
 	model.ready = true
 	model.width = 80
 	model.height = 10
-	model.inputHistory = []string{"old input"}
+	model.inputHistory = []inputDraft{{Text: "old input"}}
 	model.input.SetValue("draft")
 	model.relayout()
 	model.transcript = nil
@@ -2082,7 +2129,7 @@ func TestTypingClearsTranscriptKeyScrollFocus(t *testing.T) {
 	}
 }
 
-func TestSidebarMouseWheelDoesNotScrollTranscriptViewport(t *testing.T) {
+func TestFullWidthTranscriptMouseWheelScrollsViewport(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
 	model.width = 80
@@ -2102,15 +2149,15 @@ func TestSidebarMouseWheelDoesNotScrollTranscriptViewport(t *testing.T) {
 	beforeInput := model.input.Value()
 
 	next, _ := model.Update(tea.MouseMsg{
-		X:      model.width - model.sidebarWidth + 1,
+		X:      model.width - 3,
 		Y:      3,
 		Type:   tea.MouseWheelUp,
 		Button: tea.MouseButtonWheelUp,
 		Action: tea.MouseActionPress,
 	})
 	model = next.(appModel)
-	if model.viewport.YOffset != bottomOffset {
-		t.Fatalf("YOffset = %d, want unchanged %d when wheel is over sidebar", model.viewport.YOffset, bottomOffset)
+	if model.viewport.YOffset >= bottomOffset {
+		t.Fatalf("YOffset = %d, want less than %d when wheel is over full-width transcript", model.viewport.YOffset, bottomOffset)
 	}
 	if model.input.Value() != beforeInput {
 		t.Fatalf("input value = %q, want unchanged %q", model.input.Value(), beforeInput)
@@ -2140,7 +2187,7 @@ func TestRawMouseEscapeDetectorDoesNotRejectNormalText(t *testing.T) {
 	}
 }
 
-func TestSidebarMouseClickDoesNotStartTranscriptSelection(t *testing.T) {
+func TestFullWidthTranscriptMouseClickStartsSelection(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
 	model.width = 80
@@ -2154,14 +2201,14 @@ func TestSidebarMouseClickDoesNotStartTranscriptSelection(t *testing.T) {
 	model.refreshViewport()
 
 	next, _ := model.Update(tea.MouseMsg{
-		X:      model.width - model.sidebarWidth + 1,
+		X:      model.width - 3,
 		Y:      3,
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
 	})
 	model = next.(appModel)
-	if model.selecting || model.selectionActive {
-		t.Fatalf("selection state = selecting:%v active:%v, want sidebar click ignored", model.selecting, model.selectionActive)
+	if !model.selecting || model.selectionActive {
+		t.Fatalf("selection state = selecting:%v active:%v, want full-width transcript selection start", model.selecting, model.selectionActive)
 	}
 }
 
@@ -2192,11 +2239,11 @@ func TestTranscriptMouseDragSelectsAndCopiesAcrossScroll(t *testing.T) {
 	}
 	model.refreshViewport()
 	model.viewport.GotoTop()
-	topY := model.headerHeight() + 1
-	bottomY := model.headerHeight() + maxInt(1, model.viewport.Height)
+	topY := 1
+	bottomY := maxInt(1, model.viewport.Height)
 
 	next, _ := model.Update(tea.MouseMsg{
-		X:      1,
+		X:      2,
 		Y:      topY,
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
@@ -2207,7 +2254,7 @@ func TestTranscriptMouseDragSelectsAndCopiesAcrossScroll(t *testing.T) {
 	}
 
 	next, _ = model.Update(tea.MouseMsg{
-		X:      1,
+		X:      2,
 		Y:      bottomY,
 		Action: tea.MouseActionMotion,
 		Button: tea.MouseButtonLeft,
@@ -2218,7 +2265,7 @@ func TestTranscriptMouseDragSelectsAndCopiesAcrossScroll(t *testing.T) {
 	}
 
 	next, _ = model.Update(tea.MouseMsg{
-		X:      1,
+		X:      2,
 		Y:      bottomY,
 		Action: tea.MouseActionRelease,
 		Button: tea.MouseButtonLeft,
@@ -2258,21 +2305,21 @@ func TestTranscriptMouseDragCopiesCharacterRange(t *testing.T) {
 	model.viewport.GotoTop()
 
 	next, _ := model.Update(tea.MouseMsg{
-		X:      4,
+		X:      5,
 		Y:      3,
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
 	})
 	model = next.(appModel)
 	next, _ = model.Update(tea.MouseMsg{
-		X:      6,
+		X:      7,
 		Y:      3,
 		Action: tea.MouseActionMotion,
 		Button: tea.MouseButtonLeft,
 	})
 	model = next.(appModel)
 	next, _ = model.Update(tea.MouseMsg{
-		X:      6,
+		X:      7,
 		Y:      3,
 		Action: tea.MouseActionRelease,
 		Button: tea.MouseButtonLeft,
@@ -2397,7 +2444,7 @@ func TestSelectedTranscriptTextKeepsWideGraphemesWhole(t *testing.T) {
 // TestModelCommandOpensArrowSelectableProviderWizard 验证 /model 会打开可用方向键选择的 provider 向导。
 func TestModelCommandOpensArrowSelectableProviderWizard(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	model.inputHistory = []string{"old input"}
+	model.inputHistory = []inputDraft{{Text: "old input"}}
 	model.input.SetValue("/model")
 
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -2540,7 +2587,7 @@ func TestRenderInputBoxShowsPureTextarea(t *testing.T) {
 		}
 	}
 
-	model.pending = []string{"first"}
+	model.pending = []inputDraft{{Text: "first"}}
 	rendered = model.renderInputBox()
 	if !strings.Contains(rendered, "hello") || strings.Contains(rendered, "0%(0.0%)") {
 		t.Fatalf("multiline input box = %q", rendered)
@@ -3625,8 +3672,8 @@ func TestCompletionEscRelayoutsImmediately(t *testing.T) {
 	if model.completion != nil {
 		t.Fatalf("completion = %#v, want nil after esc", model.completion)
 	}
-	if model.viewport.Height <= withCompletionHeight {
-		t.Fatalf("viewport height = %d, want greater than %d after completion closes", model.viewport.Height, withCompletionHeight)
+	if model.viewport.Height != withCompletionHeight {
+		t.Fatalf("viewport height = %d, want unchanged %d after completion closes", model.viewport.Height, withCompletionHeight)
 	}
 }
 
@@ -3653,8 +3700,8 @@ func TestCompletionTabAppliesSelection(t *testing.T) {
 	if got := model.input.Value(); got != "/help " {
 		t.Fatalf("input value = %q, want /help after tab completion", got)
 	}
-	if model.viewport.Height <= withCompletionHeight {
-		t.Fatalf("viewport height = %d, want greater than %d after tab completion", model.viewport.Height, withCompletionHeight)
+	if model.viewport.Height != withCompletionHeight {
+		t.Fatalf("viewport height = %d, want unchanged %d after tab completion", model.viewport.Height, withCompletionHeight)
 	}
 }
 
@@ -3720,8 +3767,8 @@ func TestCompletionBoxAlignsWithInputBoxWidth(t *testing.T) {
 
 	completionWidth := lipgloss.Width(model.renderCompletionBox())
 	inputWidth := lipgloss.Width(model.renderInputBox())
-	if completionWidth != inputWidth {
-		t.Fatalf("completion width = %d, want input width %d", completionWidth, inputWidth)
+	if completionWidth <= 0 || completionWidth > inputWidth {
+		t.Fatalf("completion width = %d, want within input width %d", completionWidth, inputWidth)
 	}
 }
 
@@ -3773,8 +3820,8 @@ func TestCompletionBackspaceRelayoutsWhenTriggerDeleted(t *testing.T) {
 			if model.completion != nil {
 				t.Fatalf("completion = %#v, want nil after deleting trigger", model.completion)
 			}
-			if model.viewport.Height <= withCompletionHeight {
-				t.Fatalf("viewport height = %d, want greater than %d after trigger deletion", model.viewport.Height, withCompletionHeight)
+			if model.viewport.Height != withCompletionHeight {
+				t.Fatalf("viewport height = %d, want unchanged %d after trigger deletion", model.viewport.Height, withCompletionHeight)
 			}
 		})
 	}
@@ -4024,8 +4071,8 @@ func TestAtCompletion_Tab文件时行为同Enter(t *testing.T) {
 	if model.completion != nil {
 		t.Errorf("completion should be nil after tab on file, got %#v", model.completion)
 	}
-	if model.viewport.Height <= withCompletionHeight {
-		t.Fatalf("viewport height = %d, want greater than %d after file tab completion", model.viewport.Height, withCompletionHeight)
+	if model.viewport.Height != withCompletionHeight {
+		t.Fatalf("viewport height = %d, want unchanged %d after file tab completion", model.viewport.Height, withCompletionHeight)
 	}
 }
 
@@ -4089,8 +4136,8 @@ func TestAtCompletion_Enter加空格结束引用(t *testing.T) {
 	if model.completion != nil {
 		t.Errorf("completion should be nil after enter, got %#v", model.completion)
 	}
-	if model.viewport.Height <= withCompletionHeight {
-		t.Fatalf("viewport height = %d, want greater than %d after file enter completion", model.viewport.Height, withCompletionHeight)
+	if model.viewport.Height != withCompletionHeight {
+		t.Fatalf("viewport height = %d, want unchanged %d after file enter completion", model.viewport.Height, withCompletionHeight)
 	}
 }
 
@@ -4207,17 +4254,15 @@ func TestCtrlC_超时后不退出(t *testing.T) {
 	}
 }
 
-func TestRelayout_SidebarWidthIs30Percent(t *testing.T) {
+func TestRelayout_TranscriptUsesFullFrameWidth(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.width = 120
 	model.height = 40
 	model.ready = true
 	model.relayout()
-	if model.sidebarWidth != 36 {
-		t.Errorf("sidebarWidth = %d, want 36 (30%% of 120)", model.sidebarWidth)
-	}
-	if model.viewport.Width < 70 {
-		t.Errorf("viewport.Width = %d, want ≥70 (left column inner)", model.viewport.Width)
+	want := model.width - mainFrameHorizontalFrame - mainContentPadding*2
+	if model.viewport.Width != want {
+		t.Errorf("viewport.Width = %d, want %d (full frame inner width)", model.viewport.Width, want)
 	}
 }
 
@@ -4245,20 +4290,22 @@ func TestRenderToolEntryBody_UsesQuietDetailLines(t *testing.T) {
 	}
 }
 
-// TestRenderContextCard_ContainsTokenAndFree 验证 Context 卡片包含箭头和 free 标签。
-func TestRenderContextCard_ContainsTokenAndFree(t *testing.T) {
+// TestRenderDockStatusLine_ContainsModelTokenAndFree 验证底部状态行包含 model、箭头和 free 标签。
+func TestRenderDockStatusLine_ContainsModelTokenAndFree(t *testing.T) {
 	runner := &fakeRunner{stats: loop.ContextStats{UsedTokens: 5000, LimitTokens: 100000}}
 	model := newTestModel(runner)
 	model.width = 100
-	model.sidebarWidth = 30
-	result := model.renderContextCard(30)
+	result := model.renderDockStatusLine(98)
 	// Must contain directional arrow and free percentage
 	hasArrow := strings.Contains(result, "↑") || strings.Contains(result, "↓")
 	if !hasArrow {
-		t.Errorf("context card = %q, want ↑ or ↓ arrow", result)
+		t.Errorf("status dock = %q, want ↑ or ↓ arrow", result)
 	}
 	if !strings.Contains(result, "free") {
-		t.Errorf("context card = %q, want 'free' label", result)
+		t.Errorf("status dock = %q, want 'free' label", result)
+	}
+	if !strings.Contains(result, "gpt-5.5") {
+		t.Errorf("status dock = %q, want current model", result)
 	}
 }
 
@@ -4436,21 +4483,11 @@ func TestRenderPipelineWindowedContent_CompactsLongTimeline(t *testing.T) {
 	}
 }
 
-func TestRenderRightPanel_VisibleCardsFillRequestedHeight(t *testing.T) {
+func TestRenderActivityPipelineProgressDoesNotWrap(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	panel := model.renderRightPanel(30, 24)
-	if got := lipgloss.Height(panel); got != 24 {
-		t.Fatalf("right panel height = %d, want 24", got)
-	}
-	lines := strings.Split(ansi.Strip(panel), "\n")
-	lastLine := strings.TrimSpace(lines[len(lines)-1])
-	if !strings.Contains(lastLine, "╯") {
-		t.Fatalf("right panel last line = %q, want visible card bottom border", lastLine)
-	}
-}
-
-func TestRenderRightPanel_PipelineProgressDoesNotWrap(t *testing.T) {
-	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 24
 	model.pipelineState.detected = true
 	model.pipelineState.doneCount = 5
 	model.pipelineState.activeIdx = 5
@@ -4465,7 +4502,9 @@ func TestRenderRightPanel_PipelineProgressDoesNotWrap(t *testing.T) {
 	}
 	model.pipelineState.phases[5].status = phaseStatusActive
 
-	panel := model.renderRightPanel(30, 24)
+	model.relayout()
+	model.openActivity(activityTabPipeline)
+	panel := model.renderActivityBox()
 	lines := strings.Split(ansi.Strip(panel), "\n")
 	for _, line := range lines {
 		if strings.TrimSpace(line) == "▱▱" {
@@ -4558,7 +4597,7 @@ func TestCtrlC_清空时关闭候选框(t *testing.T) {
 }
 
 // TestRenderPipelineWindowedContent_ShowsCurrentStage 验证 Pipeline 滚动窗口正确显示当前阶段。
-func TestFullLayout_RightPanelVisible(t *testing.T) {
+func TestFullLayout_StatusDockVisibleWithoutSidebar(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.width = 100
 	model.height = 30
@@ -4566,17 +4605,15 @@ func TestFullLayout_RightPanelVisible(t *testing.T) {
 	model.relayout()
 
 	view := model.View()
-	// Right panel exists — context card content should appear
-	if !strings.Contains(view, "free") && !strings.Contains(view, "turns") {
-		t.Errorf("View() = %q, want right panel with context card", view)
+	if !strings.Contains(view, "free") {
+		t.Errorf("View() = %q, want bottom context meter", view)
 	}
-	// 30% of 100 = 30
-	if model.sidebarWidth != 30 {
-		t.Errorf("sidebarWidth = %d, want 30 for 100-wide terminal", model.sidebarWidth)
+	if strings.Contains(view, "subagents") {
+		t.Errorf("View() = %q, should not contain persistent subagents sidebar", view)
 	}
 }
 
-func TestFullLayout_PipelineCardAppearsWhenDetected(t *testing.T) {
+func TestFullLayout_PipelineAppearsOnlyInActivityModal(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.width = 100
 	model.height = 30
@@ -4588,8 +4625,13 @@ func TestFullLayout_PipelineCardAppearsWhenDetected(t *testing.T) {
 	model.relayout()
 
 	view := model.View()
-	if !strings.Contains(view, "pipeline") {
-		t.Errorf("View() = %q, want 'pipeline' badge when pipeline detected", view)
+	if strings.Contains(strings.ToLower(view), "pipeline") {
+		t.Errorf("View() = %q, should not contain persistent pipeline card", view)
+	}
+	model.openActivity(activityTabPipeline)
+	view = model.View()
+	if !strings.Contains(strings.ToLower(view), "pipeline") {
+		t.Errorf("View() = %q, want pipeline in Activity modal", view)
 	}
 }
 

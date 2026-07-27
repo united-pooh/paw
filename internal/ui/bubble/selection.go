@@ -41,13 +41,23 @@ func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.C
 		m.selectionActive = false
 		m.selectionStart = point
 		m.selectionEnd = point
-		if hadSelection {
+		hoverIndex, _ := m.toolIndexAtTranscriptRow(point.row)
+		hoverChanged := m.setToolHover(hoverIndex)
+		if hadSelection || hoverChanged {
 			m.refreshViewportPreservingOffset()
 		}
 		return m, true, nil
 	case tea.MouseActionMotion:
 		if !m.selecting {
-			return m, false, nil
+			hoverIndex := -1
+			if point, ok := m.transcriptPointForMouse(msg.X, msg.Y); ok {
+				hoverIndex, _ = m.toolIndexAtTranscriptRow(point.row)
+			}
+			changed := m.setToolHover(hoverIndex)
+			if changed {
+				m.refreshViewportPreservingOffset()
+			}
+			return m, changed || hoverIndex >= 0, nil
 		}
 		m.scrollTranscriptSelectionAtEdge(msg.Y)
 		if point, ok := m.transcriptPointForMouse(msg.X, msg.Y); ok {
@@ -75,7 +85,16 @@ func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.C
 			}
 			m.refreshViewport()
 		} else {
-			m.refreshViewportPreservingOffset()
+			if index, ok := m.toolIndexAtTranscriptRow(m.selectionStart.row); ok {
+				if m.toolInspectActive {
+					m.selectInspectedTool(index)
+				}
+				if !m.toggleToolExpansion(index) {
+					m.refreshViewportPreservingOffset()
+				}
+			} else {
+				m.refreshViewportPreservingOffset()
+			}
 		}
 		return m, true, nil
 	default:
@@ -94,13 +113,6 @@ func isMouseWheel(msg tea.MouseMsg) bool {
 	default:
 		return false
 	}
-}
-
-func (m appModel) isSidebarMouse(msg tea.MouseMsg) bool {
-	if m.sidebarWidth <= 0 {
-		return false
-	}
-	return msg.X >= maxInt(0, m.width-m.sidebarWidth)
 }
 
 func (m appModel) isTranscriptViewportMouse(msg tea.MouseMsg) bool {
@@ -139,8 +151,8 @@ func (m appModel) transcriptPointForMouse(x, y int) (selectionPoint, bool) {
 
 // transcriptContentRow 返回 y 坐标在 transcript 内容区内的行号。
 func (m appModel) transcriptContentRow(y int) (int, bool) {
-	headerHeight := m.headerHeight()
-	row := y - headerHeight - 1
+	// 主外框顶部边框占一行，transcript 没有额外纵向边框。
+	row := y - 1
 	if row < 0 || row >= m.viewport.Height {
 		return 0, false
 	}
@@ -149,7 +161,8 @@ func (m appModel) transcriptContentRow(y int) (int, bool) {
 
 // transcriptContentColumn 返回 x 坐标在 transcript 内容区内的显示列。
 func (m appModel) transcriptContentColumn(x int) (int, bool) {
-	col := x - 1
+	// 主外框左边框和 transcript 内边距各占一列。
+	col := x - 1 - mainContentPadding
 	if col < 0 || col >= m.viewport.Width {
 		return 0, false
 	}

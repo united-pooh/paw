@@ -2,9 +2,9 @@
 package bubble
 
 import (
+	"codex-agent-go/internal/model"
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
-	"codex-agent-go/internal/model"
 	"os"
 	"strings"
 	"time"
@@ -152,7 +152,6 @@ func (m appModel) renderModelWizardBox() string {
 	if m.modelWizard == nil {
 		return ""
 	}
-	width := maxInt(32, m.width-2)
 	var body string
 	switch m.modelWizard.step {
 	case modelWizardProvider:
@@ -162,7 +161,7 @@ func (m appModel) renderModelWizardBox() string {
 	default:
 		body = "Unknown model wizard step"
 	}
-	return wizardPanelStyle.Width(width).Render(body)
+	return m.renderModalPanel(body)
 }
 
 // renderProviderStep 渲染 provider 列表选择步骤。
@@ -171,7 +170,11 @@ func (m appModel) renderProviderStep() string {
 		wizardTitleStyle.Render("Model provider"),
 		"Choose a provider:",
 	}
-	for i, option := range modelProviderOptions {
+	maxItems := clampInt(m.currentLayout().transcriptHeight-7, 1, len(modelProviderOptions))
+	start := maxInt(0, m.modelWizard.selectedIndex-maxItems+1)
+	end := minInt(len(modelProviderOptions), start+maxItems)
+	for i := start; i < end; i++ {
+		option := modelProviderOptions[i]
 		text := "  " + option.label + "  " + option.description
 		if i == m.modelWizard.selectedIndex {
 			text = selectedProviderStyle.Render("> " + option.label + "  " + option.description)
@@ -179,6 +182,9 @@ func (m appModel) renderProviderStep() string {
 			text = unselectedProviderStyle.Render(text)
 		}
 		lines = append(lines, text)
+	}
+	if maxItems < len(modelProviderOptions) {
+		lines = append(lines, fmt.Sprintf("(%d/%d) Use up/down to scroll", m.modelWizard.selectedIndex+1, len(modelProviderOptions)))
 	}
 	return strings.Join(lines, "\n")
 }

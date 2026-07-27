@@ -138,15 +138,9 @@ func NormalizeRunMode(mode RunMode) RunMode {
 	}
 }
 
-func NormalizeMeterLocation(location MeterLocation) MeterLocation {
-	switch MeterLocation(strings.ToLower(strings.TrimSpace(string(location)))) {
-	case MeterLocationHeader:
-		return MeterLocationHeader
-	case MeterLocationInputAbove:
-		return MeterLocationInputAbove
-	default:
-		return MeterLocationInputAbove
-	}
+func NormalizeMeterLocation(_ MeterLocation) MeterLocation {
+	// 旧值继续可被 JSON 解析，但新布局只有输入框上方这一处 context meter。
+	return MeterLocationInputAbove
 }
 
 func (c *Controller) CurrentSettings() Config {

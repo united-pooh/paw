@@ -100,7 +100,16 @@ func NewCommandRegistry() *CommandRegistry {
 		Description:       "show background subagent tasks",
 		AllowWhileRunning: true,
 		Handler: func(m *appModel, invocation string) tea.Cmd {
-			m.handleTasksCommand()
+			m.openActivity(activityTabSubagents)
+			return nil
+		},
+	})
+	registry.Register(Command{
+		Name:              "/pipeline",
+		Description:       "show the current pipeline activity",
+		AllowWhileRunning: true,
+		Handler: func(m *appModel, invocation string) tea.Cmd {
+			m.openActivity(activityTabPipeline)
 			return nil
 		},
 	})
@@ -153,6 +162,7 @@ func NewCommandRegistry() *CommandRegistry {
 				m.runner.ResetHistory()
 			}
 			m.transcript = nil
+			m.resetToolInspect()
 			m.pending = nil
 			m.chatQueue.Clear()
 			m.activeAssistant = -1

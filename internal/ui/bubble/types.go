@@ -17,6 +17,14 @@ import (
 // entryKind 表示 transcript 中一条消息的来源类别。
 type entryKind int
 
+type transcriptRenderMode uint8
+
+const (
+	transcriptRenderFormatted transcriptRenderMode = iota
+	transcriptRenderStreamingPlain
+	transcriptRenderPlain
+)
+
 // transcript 条目类型常量。
 const (
 	// entrySystem 表示系统状态或命令提示消息。
@@ -35,16 +43,24 @@ const (
 
 // transcriptEntry 是聊天历史区的一条可渲染记录。
 type transcriptEntry struct {
-	kind      entryKind
-	title     string
-	body      string
-	color     string // 可选：标题颜色（lipgloss 颜色字符串），与 subagents 面板保持一致
-	isError   bool   // true for tool results with IsError=true
-	toolUseID string
-	toolName  string
-	citations []toolCitation
-	createdAt time.Time
-	version   int
+	kind           entryKind
+	title          string
+	body           string
+	color          string // 可选：标题颜色（lipgloss 颜色字符串），与 subagents 面板保持一致
+	isError        bool   // true for tool results with IsError=true
+	toolUseID      string
+	toolName       string
+	toolStatus     string
+	toolTarget     string
+	toolResult     string
+	toolExpanded   bool
+	toolFocused    bool
+	toolHovered    bool
+	toolResultOnly bool
+	citations      []toolCitation
+	createdAt      time.Time
+	version        int
+	renderMode     transcriptRenderMode
 }
 
 type toolCitation struct {
@@ -143,7 +159,6 @@ type settingWizardStep int
 const (
 	settingWizardContext settingWizardStep = iota
 	settingWizardRunMode
-	settingWizardMeterLocation
 	settingWizardLimit
 	settingWizardConfirm
 )
@@ -238,6 +253,7 @@ type sessionSummaryItem struct {
 type subagentPicker struct {
 	tasks         []subagent.TaskSnapshot
 	selectedIndex int
+	tab           activityTab
 }
 
 type subagentTranscriptPreview struct {
@@ -280,18 +296,27 @@ type appModel struct {
 	cursorFrameAt             time.Time
 	turnStartedAt             time.Time
 	contextMeter              contextMeterAnimation
-	pending                   []string
-	inputHistory              []string
+	pending                   []inputDraft
+	inputTokens               []inputToken
+	submittedDraft            inputDraft
+	inputHistory              []inputDraft
 	historyIndex              int
-	historyDraft              string
+	historyDraft              inputDraft
 	historyDownLock           bool
 	inputPasteFoldActive      bool
 	transcript                []transcriptEntry
 	transcriptRenderCache     []transcriptRenderCacheEntry
 	transcriptRefreshPending  bool
 	transcriptKeyScrollActive bool
+	toolInspectActive         bool
+	toolInspectIndex          int
+	toolHoverIndex            int
 	lastTranscriptRefreshAt   time.Time
 	activeAssistant           int
+	activeThinking            int
+	doneAssistant             int
+	assistantStream           streamLineBuffer
+	thinkingStream            streamLineBuffer
 	pendingToolCites          []toolCitation
 	isGenerating              bool
 	lastCtrlCAt               time.Time // 追踪双击 Ctrl+C 退出
@@ -303,9 +328,15 @@ type appModel struct {
 	completion                *completion
 	pipelineState             pipelineState
 	pipelineActiveAfter       time.Time
-	sidebarWidth              int // 右侧面板宽度（字符），由 relayout() 计算并存储
-	spinnerFrameIdx           int // 侧边栏 running 条目动画帧索引，由 cursorFrameMsg 驱动
+	spinnerFrameIdx           int // Activity 中 running 条目的动画帧索引，由 cursorFrameMsg 驱动
 }
+
+type activityTab int
+
+const (
+	activityTabSubagents activityTab = iota
+	activityTabPipeline
+)
 
 // pipelinePhaseStatus 标记单个 pipeline 阶段的状态。
 type pipelinePhaseStatus int

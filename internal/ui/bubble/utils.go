@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/rivo/uniseg"
 )
 
 // summarizeToolContent 将工具输出压缩为单行短预览，避免 transcript 被长结果撑开。
@@ -14,12 +16,16 @@ func summarizeToolContent(content string) string {
 	if trimmed == "" {
 		return ""
 	}
-	const maxPreviewRunes = 140
-	runes := []rune(trimmed)
-	if len(runes) <= maxPreviewRunes {
-		return trimmed
+	const maxPreviewGraphemes = 140
+	graphemes := uniseg.NewGraphemes(trimmed)
+	parts := make([]string, 0, maxPreviewGraphemes)
+	for graphemes.Next() {
+		if len(parts) == maxPreviewGraphemes {
+			return strings.Join(parts, "") + "..."
+		}
+		parts = append(parts, graphemes.Str())
 	}
-	return string(runes[:maxPreviewRunes]) + "..."
+	return trimmed
 }
 
 // prettyJSON 尽量将原始 JSON 压缩为稳定的一行文本，解析失败时返回原文。
@@ -457,6 +463,26 @@ func primaryToolInput(name string, fields []toolDisplayField) string {
 	}
 	if len(fields) == 1 {
 		return fields[0].key + "=" + fields[0].value
+	}
+	return ""
+}
+
+// toolSummaryTarget 提取最适合单行工具轨道展示的目标值，不暴露参数键名。
+func toolSummaryTarget(name string, input json.RawMessage) string {
+	fields := toolInputFields(input)
+	lower := strings.ToLower(strings.TrimSpace(name))
+	for _, key := range primaryToolInputKeys(lower) {
+		if value := strings.TrimSpace(fieldValue(fields, key)); value != "" {
+			return strings.Join(strings.Fields(value), " ")
+		}
+	}
+	for _, field := range fields {
+		if shouldHideToolDetailField(name, field) {
+			continue
+		}
+		if value := strings.TrimSpace(field.value); value != "" {
+			return strings.Join(strings.Fields(value), " ")
+		}
 	}
 	return ""
 }

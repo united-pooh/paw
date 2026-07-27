@@ -86,6 +86,22 @@ var (
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(colorManager.LipglossColor(colorPanelBorder)).
 				Padding(0, 1)
+	mainFrameStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorManager.LipglossColor(colorPanelBorder))
+	transcriptContentStyle = lipgloss.NewStyle().
+				Padding(0, mainContentPadding)
+	inputDockStyle = lipgloss.NewStyle().
+			Padding(0, mainContentPadding)
+	inputDockMultilineStyle = inputDockStyle.Copy().
+				Foreground(colorManager.LipglossColor(colorInputMultilineBorder))
+	inputDockTerminalStyle = inputDockStyle.Copy().
+				Foreground(colorManager.LipglossColor(colorInputTerminal))
+	dockRuleStyle = lipgloss.NewStyle().
+			Foreground(colorManager.LipglossColor(colorPanelBorder))
+	modelStatusStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorLabelAssistant)).
+				Bold(true)
 	inputLabelStyle = lipgloss.NewStyle().
 			Foreground(colorManager.LipglossColor(colorLabelUser)).
 			Bold(true)
@@ -102,6 +118,14 @@ var (
 				Bold(true)
 	terminalInputLabelStyle = lipgloss.NewStyle().
 				Foreground(colorManager.LipglossColor(colorInputTerminal)).
+				Bold(true)
+	terminalInputTextStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorInputTerminal))
+	inputCommandTokenStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorInputTokenCommand)).
+				Bold(true)
+	inputFileTokenStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorInputTokenFile)).
 				Bold(true)
 	inputWaitingStyle = lipgloss.NewStyle().
 				Foreground(colorManager.LipglossColor(colorInputWaitingBorder)).
@@ -138,24 +162,27 @@ var (
 
 	// Blockquote styles for tool calls — coloured left border
 	toolCallBorderStyle = lipgloss.NewStyle().
-				Border(lipgloss.Border{Left: "│"}).
-				BorderForeground(colorManager.LipglossColor(colorLabelTool)).
+				BorderStyle(lipgloss.Border{Left: "│"}).
+				BorderLeft(true).
+				BorderLeftForeground(colorManager.LipglossColor(colorLabelTool)).
 				PaddingLeft(1)
 
 	toolResultBorderStyle = lipgloss.NewStyle().
-				Border(lipgloss.Border{Left: "│"}).
-				BorderForeground(colorManager.LipglossColor(colorLabelResult)).
+				BorderStyle(lipgloss.Border{Left: "│"}).
+				BorderLeft(true).
+				BorderLeftForeground(colorManager.LipglossColor(colorLabelResult)).
 				PaddingLeft(1)
 
 	toolErrorBorderStyle = lipgloss.NewStyle().
-				Border(lipgloss.Border{Left: "│"}).
-				BorderForeground(colorManager.LipglossColor(colorLabelError)).
+				BorderStyle(lipgloss.Border{Left: "│"}).
+				BorderLeft(true).
+				BorderLeftForeground(colorManager.LipglossColor(colorLabelError)).
 				PaddingLeft(1)
+	toolFocusedStyle = lipgloss.NewStyle().
+				Background(colorManager.LipglossColor(colorSelectionBackground)).
+				Foreground(colorManager.LipglossColor(colorSelectionForeground)).
+				Bold(true)
 
-	rightCardStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorManager.LipglossColor(colorPanelBorder)).
-			Padding(0, 1)
 	selectedTranscriptLineStyle = lipgloss.NewStyle().
 					Background(colorManager.LipglossColor(colorSelectionBackground)).
 					Foreground(colorManager.LipglossColor(colorSelectionForeground))
@@ -166,14 +193,12 @@ const (
 	cursorFrameInterval            = time.Second / 30
 	cursorCycleDuration            = 3 * time.Second
 	cursorHiddenThreshold          = 0.03
-	inputMinVisibleLines           = 2
+	inputMinVisibleLines           = 1
 	inputMaxVisibleLines           = 10
 	contextMeterDefaultWidth       = 80
 	contextMeterMinimumBarCells    = 1
 	transcriptPanelHorizontalFrame = 4
 	transcriptPanelVerticalFrame   = 2
-	rightCardBorderFrame           = 2
-	rightCardHorizontalPadding     = 2
-	rightCardVerticalFrame         = 2
-	rightSidebarMinWidth           = 20
+	modalPanelVerticalFrame        = 2
+	completionPanelVerticalFrame   = 2
 )

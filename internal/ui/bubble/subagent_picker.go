@@ -18,26 +18,33 @@ import (
 )
 
 func newSubagentPicker(tasks []subagent.TaskSnapshot) *subagentPicker {
-	return &subagentPicker{tasks: append([]subagent.TaskSnapshot(nil), tasks...)}
+	return &subagentPicker{
+		tasks: append([]subagent.TaskSnapshot(nil), tasks...),
+		tab:   activityTabSubagents,
+	}
 }
 
 func (m appModel) openSubagentPicker() (tea.Model, tea.Cmd) {
-	if m.subagents == nil {
-		m.addEntry(transcriptEntry{kind: entryError, title: "subagent", body: "subagent controller is unavailable"})
-		return m, nil
+	m.openActivity(activityTabSubagents)
+	return m, nil
+}
+
+func (m appModel) openPipelinePicker() (tea.Model, tea.Cmd) {
+	m.openActivity(activityTabPipeline)
+	return m, nil
+}
+
+func (m *appModel) openActivity(tab activityTab) {
+	if m == nil {
+		return
 	}
-	tasks := m.subagentTasks()
-	if len(tasks) == 0 {
-		m.addEntry(transcriptEntry{kind: entrySystem, title: "subagent", body: "no subagent tasks"})
-		return m, nil
-	}
-	m.subagentPicker = newSubagentPicker(tasks)
+	m.subagentPicker = newSubagentPicker(m.subagentTasks())
+	m.subagentPicker.tab = tab
 	m.sessionPicker = nil
 	m.modelWizard = nil
 	m.settingWizard = nil
 	m.clearCompletionAndRelayout()
 	m.relayout()
-	return m, m.input.Focus()
 }
 
 func (m appModel) handleSubagentPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -50,17 +57,32 @@ func (m appModel) handleSubagentPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.subagentPicker = nil
 		m.relayout()
 		return m, m.input.Focus()
+	case "tab", "right", "l":
+		m.subagentPicker.tab = activityTabPipeline
+		return m, nil
+	case "shift+tab", "left", "h":
+		m.subagentPicker.tab = activityTabSubagents
+		return m, nil
 	case "up", "k":
+		if m.subagentPicker.tab != activityTabSubagents {
+			return m, nil
+		}
 		if m.subagentPicker.selectedIndex > 0 {
 			m.subagentPicker.selectedIndex--
 		}
 		return m, nil
 	case "down", "j":
+		if m.subagentPicker.tab != activityTabSubagents {
+			return m, nil
+		}
 		if m.subagentPicker.selectedIndex < len(m.subagentPicker.tasks)-1 {
 			m.subagentPicker.selectedIndex++
 		}
 		return m, nil
 	case "enter":
+		if m.subagentPicker.tab != activityTabSubagents {
+			return m, nil
+		}
 		if len(m.subagentPicker.tasks) == 0 {
 			return m, nil
 		}
@@ -68,6 +90,18 @@ func (m appModel) handleSubagentPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.previewSubagentTranscript(task)
 	}
 	return m, nil
+}
+
+func (m *appModel) refreshActivityTasks() {
+	if m == nil || m.subagentPicker == nil {
+		return
+	}
+	m.subagentPicker.tasks = append(m.subagentPicker.tasks[:0], m.subagentTasks()...)
+	if len(m.subagentPicker.tasks) == 0 {
+		m.subagentPicker.selectedIndex = 0
+		return
+	}
+	m.subagentPicker.selectedIndex = clampInt(m.subagentPicker.selectedIndex, 0, len(m.subagentPicker.tasks)-1)
 }
 
 func (m appModel) previewSubagentTranscript(task subagent.TaskSnapshot) (tea.Model, tea.Cmd) {
@@ -155,7 +189,7 @@ func loadSubagentTranscriptEntries(ctx context.Context, task subagent.TaskSnapsh
 			entries = append(entries, transcriptEntry{kind: entryAssistant, title: "assistant", body: content, createdAt: at})
 		}
 	}
-	return entries, nil
+	return mergeTranscriptToolEntries(entries), nil
 }
 
 func transcriptEntriesFromMessage(msg message.Message, createdAt time.Time) []transcriptEntry {
@@ -175,34 +209,93 @@ func transcriptEntriesFromMessage(msg message.Message, createdAt time.Time) []tr
 		if name == "" {
 			name = "tool"
 		}
-		body := strings.TrimSpace(string(call.Input))
-		if body == "" {
-			body = "{}"
-		}
 		entries = append(entries, transcriptEntry{
-			kind:      entryTool,
-			title:     name,
-			body:      body,
-			toolUseID: strings.TrimSpace(call.ID),
-			toolName:  name,
-			createdAt: createdAt,
+			kind:       entryTool,
+			title:      "tool",
+			body:       formatRunningToolCallBody(name, call.Input, ""),
+			toolUseID:  strings.TrimSpace(call.ID),
+			toolName:   name,
+			toolStatus: "running",
+			toolTarget: toolSummaryTarget(name, call.Input),
+			createdAt:  createdAt,
 		})
 	}
 	for _, result := range appendToolResults(msg) {
-		body := strings.TrimSpace(result.Content)
-		if body == "" {
-			body = "(empty)"
+		status := "ok"
+		if result.IsError {
+			status = "error"
 		}
 		entries = append(entries, transcriptEntry{
-			kind:      entryTool,
-			title:     "tool",
-			body:      body,
-			isError:   result.IsError,
-			toolUseID: strings.TrimSpace(result.ToolUseID),
-			createdAt: createdAt,
+			kind:           entryTool,
+			title:          "tool",
+			body:           formatToolResultBody("tool", status, ""),
+			isError:        result.IsError,
+			toolUseID:      strings.TrimSpace(result.ToolUseID),
+			toolName:       "tool",
+			toolStatus:     status,
+			toolResult:     result.Content,
+			toolExpanded:   result.IsError,
+			toolResultOnly: true,
+			createdAt:      createdAt,
 		})
 	}
 	return entries
+}
+
+// mergeTranscriptToolEntries 将历史中的调用和结果合并成一个仅供 Bubble 展示的事务条目。
+func mergeTranscriptToolEntries(entries []transcriptEntry) []transcriptEntry {
+	out := make([]transcriptEntry, 0, len(entries))
+	pendingByID := make(map[string]int)
+	for _, original := range entries {
+		entry := original
+		if !isToolTransaction(entry) {
+			out = append(out, entry)
+			continue
+		}
+		entry.toolStatus = toolEntryStatus(entry)
+		entry.toolName = toolEntryDisplayName(entry)
+		entry.toolFocused = false
+		entry.toolHovered = false
+
+		if entry.toolResultOnly {
+			matchIndex := -1
+			if entry.toolUseID != "" {
+				if candidate, ok := pendingByID[entry.toolUseID]; ok {
+					matchIndex = candidate
+				}
+			}
+			if matchIndex < 0 && entry.toolUseID == "" && entry.toolName != "" && entry.toolName != "tool" {
+				for index := len(out) - 1; index >= 0; index-- {
+					if toolEntryStatus(out[index]) == "running" && strings.EqualFold(out[index].toolName, entry.toolName) {
+						matchIndex = index
+						break
+					}
+				}
+			}
+			if matchIndex >= 0 && matchIndex < len(out) {
+				call := &out[matchIndex]
+				call.toolStatus = entry.toolStatus
+				call.toolResult = entry.toolResult
+				call.isError = entry.isError
+				call.toolExpanded = entry.isError
+				call.toolResultOnly = false
+				call.body = completeRunningToolCallBody(call.body, entry.toolStatus)
+				touchTranscriptEntry(call)
+				delete(pendingByID, entry.toolUseID)
+				continue
+			}
+			entry.toolExpanded = entry.isError
+			out = append(out, entry)
+			continue
+		}
+
+		entry.toolExpanded = entry.isError
+		out = append(out, entry)
+		if entry.toolStatus == "running" && entry.toolUseID != "" {
+			pendingByID[entry.toolUseID] = len(out) - 1
+		}
+	}
+	return out
 }
 
 func appendToolCalls(msg message.Message) []message.ToolCall {
@@ -270,6 +363,7 @@ func (m *appModel) refreshSubagentPreviewFromTasks() bool {
 	}
 	m.subagentPreview.task = task
 	m.subagentPreview.liveContent = live
+	m.resetToolInspect()
 	m.transcript = renderSubagentPreviewTranscript(m.subagentPreview, m.animationNow())
 	m.refreshViewport()
 	return true
@@ -313,30 +407,34 @@ func copyTranscriptEntries(entries []transcriptEntry) []transcriptEntry {
 	out := append([]transcriptEntry(nil), entries...)
 	for i := range out {
 		out[i].citations = append([]toolCitation(nil), out[i].citations...)
+		out[i].toolFocused = false
+		out[i].toolHovered = false
 	}
 	return out
 }
 
 func (m *appModel) applySessionPickerRestore(msg sessionRestoredMsg) {
+	m.resetToolInspect()
 	m.sessionID = msg.sessionID
 	m.sessionPicker = nil
 	m.subagentPicker = nil
 	m.subagentPreview = nil
 	m.syncInputPlaceholder()
 	if len(msg.entries) > 0 {
-		m.transcript = copyTranscriptEntries(msg.entries)
+		m.transcript = mergeTranscriptToolEntries(copyTranscriptEntries(msg.entries))
 		m.refreshViewport()
 	}
 	m.addEntry(transcriptEntry{kind: entrySystem, title: "sessions", body: fmt.Sprintf("已切换到会话: %s", msg.sessionID)})
 }
 
 func (m *appModel) applySubagentPreviewRestore(msg sessionRestoredMsg) {
+	m.resetToolInspect()
 	m.sessionPicker = nil
 	m.subagentPicker = nil
 	if msg.subagentPreview != nil {
 		preview := *msg.subagentPreview
 		preview.parentTranscript = copyTranscriptEntries(msg.subagentPreview.parentTranscript)
-		preview.entries = copyTranscriptEntries(msg.entries)
+		preview.entries = mergeTranscriptToolEntries(copyTranscriptEntries(msg.entries))
 		m.subagentPreview = &preview
 	}
 	m.transcript = renderSubagentPreviewTranscript(m.subagentPreview, m.animationNow())
@@ -352,6 +450,7 @@ func (m *appModel) restoreMainTranscriptFromSubagentPreview() {
 	m.sessionPicker = nil
 	m.subagentPicker = nil
 	m.subagentPreview = nil
+	m.resetToolInspect()
 	m.sessionID = preview.parentSessionID
 	m.transcript = copyTranscriptEntries(preview.parentTranscript)
 	m.syncInputPlaceholder()
