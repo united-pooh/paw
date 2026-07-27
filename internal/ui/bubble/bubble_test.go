@@ -1149,6 +1149,9 @@ func TestToolDiffDetailLinesUseBackgroundColors(t *testing.T) {
 	lines := []string{"1 - │ old", "1 + │ new"}
 	rendered := renderToolDetailLines(lines, 40)
 	rowWidth := diffDetailRowsWidth(lines, 40)
+	if rowWidth != 40 {
+		t.Fatalf("diff row width = %d, want detail width 40", rowWidth)
+	}
 	deleted := lipgloss.NewStyle().Foreground(lipgloss.Color("224")).Background(lipgloss.Color("52")).Bold(true).Render(padDisplayWidth("1 - │ old", rowWidth))
 	added := lipgloss.NewStyle().Foreground(lipgloss.Color("194")).Background(lipgloss.Color("22")).Bold(true).Render(padDisplayWidth("1 + │ new", rowWidth))
 	for _, want := range []string{deleted, added} {
@@ -1159,6 +1162,40 @@ func TestToolDiffDetailLinesUseBackgroundColors(t *testing.T) {
 	for _, line := range strings.Split(ansi.Strip(rendered), "\n") {
 		if got := lipgloss.Width(line); got != rowWidth {
 			t.Fatalf("diff line width = %d, want safe row width %d: %q", got, rowWidth, line)
+		}
+	}
+}
+
+func TestToolDetailUsesBackgroundColor(t *testing.T) {
+	if got := toolDetailStyle.GetBackground(); got != lipgloss.Color(colorManager.Hex(colorToolDetailBackground)) {
+		t.Fatalf("tool detail background = %#v, want %q", got, colorManager.Hex(colorToolDetailBackground))
+	}
+}
+
+func TestMarkdownListDetailLinesKeepDetailBackground(t *testing.T) {
+	lines := []string{"- first item", "- second item"}
+	rendered := renderToolDetailLines(lines, 40)
+	for _, line := range lines {
+		want := toolDetailStyle.Width(40).Render("  " + line)
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("markdown list line = %q, want detail style without diff background %q", rendered, want)
+		}
+	}
+}
+
+func TestUnifiedDiffLinesUseBackgroundColorsOnlyWithinHunk(t *testing.T) {
+	lines := []string{"@@ -1,2 +1,2 @@", " - keep this markdown item", "-old", "+new"}
+	rendered := renderToolDetailLines(lines, 40)
+	rowWidth := diffDetailRowsWidth(lines, 40)
+	contextLine := toolDetailStyle.Width(40).Render("  - keep this markdown item")
+	if !strings.Contains(rendered, contextLine) {
+		t.Fatalf("unified diff context line = %q, want detail style %q", rendered, contextLine)
+	}
+	deleted := lipgloss.NewStyle().Foreground(lipgloss.Color("224")).Background(lipgloss.Color("52")).Bold(true).Render(padDisplayWidth("-old", rowWidth))
+	added := lipgloss.NewStyle().Foreground(lipgloss.Color("194")).Background(lipgloss.Color("22")).Bold(true).Render(padDisplayWidth("+new", rowWidth))
+	for _, want := range []string{deleted, added} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("unified diff = %q, want colored line %q", rendered, want)
 		}
 	}
 }

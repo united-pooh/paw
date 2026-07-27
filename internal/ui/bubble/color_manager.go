@@ -24,6 +24,7 @@ const (
 	colorLabelSystem            colorRole = "label.system"
 	colorLabelError             colorRole = "label.error"
 	colorBody                   colorRole = "body"
+	colorToolDetailBackground   colorRole = "tool.detail.background"
 	colorMarkdownHeading        colorRole = "markdown.heading"
 	colorMarkdownRule           colorRole = "markdown.rule"
 	colorMarkdownBullet         colorRole = "markdown.bullet"
@@ -75,6 +76,7 @@ func NewColorManager() ColorManager {
 			colorLabelSystem:            "245",
 			colorLabelError:             "203",
 			colorBody:                   "252",
+			colorToolDetailBackground:   "#3e4a58",
 			colorMarkdownHeading:        "229",
 			colorMarkdownRule:           "240",
 			colorMarkdownBullet:         "86",

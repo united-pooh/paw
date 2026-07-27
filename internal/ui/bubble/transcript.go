@@ -1006,6 +1006,7 @@ func limitRenderedDetailLines(lines []string, maxLines int) []string {
 }
 
 func renderToolDetailLines(lines []string, width int) string {
+	containsUnifiedDiffHunk := hasUnifiedDiffHunk(lines)
 	diffRowWidth := diffDetailRowsWidth(lines, width)
 	rendered := make([]string, 0, len(lines))
 	for _, line := range lines {
@@ -1014,16 +1015,16 @@ func renderToolDetailLines(lines []string, width int) string {
 		renderedLine := "  " + trimmed
 		isDiffLine := false
 		switch {
-		case strings.HasPrefix(trimmed, "@@"), strings.HasPrefix(trimmed, "---"), strings.HasPrefix(trimmed, "+++"):
+		case containsUnifiedDiffHunk && isUnifiedDiffMetadataLine(trimmed):
 			style = toolCitationStyle
-		case diffDetailLineMarker(trimmed) == "+":
+		case diffDetailLineMarker(line, containsUnifiedDiffHunk) == "+":
 			style = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("194")).
 				Background(lipgloss.Color("22")).
 				Bold(true)
 			renderedLine = strings.TrimRight(line, " \t\r")
 			isDiffLine = true
-		case diffDetailLineMarker(trimmed) == "-":
+		case diffDetailLineMarker(line, containsUnifiedDiffHunk) == "-":
 			style = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("224")).
 				Background(lipgloss.Color("52")).
@@ -1043,24 +1044,39 @@ func renderToolDetailLines(lines []string, width int) string {
 }
 
 func diffDetailRowsWidth(_ []string, width int) int {
-	maxAllowed := maxInt(1, width-2)
-	return maxAllowed
+	return maxInt(1, width)
 }
 
-func diffDetailLineMarker(line string) string {
-	if strings.HasPrefix(line, "+") {
+func hasUnifiedDiffHunk(lines []string) bool {
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "@@ ") {
+			return true
+		}
+	}
+	return false
+}
+
+func isUnifiedDiffMetadataLine(line string) bool {
+	return strings.HasPrefix(line, "@@ ") || strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "+++ ")
+}
+
+func diffDetailLineMarker(line string, allowStandalone bool) string {
+	if allowStandalone && strings.HasPrefix(line, "+") {
 		return "+"
 	}
-	if strings.HasPrefix(line, "-") {
+	if allowStandalone && strings.HasPrefix(line, "-") {
 		return "-"
 	}
 	fields := strings.Fields(line)
-	if len(fields) < 2 || !isDecimalNumber(fields[0]) {
+	if len(fields) < 3 || !isDecimalNumber(fields[0]) {
 		return ""
 	}
 	switch fields[1] {
 	case "+", "-":
-		return fields[1]
+		if fields[2] == "│" {
+			return fields[1]
+		}
+		return ""
 	default:
 		return ""
 	}

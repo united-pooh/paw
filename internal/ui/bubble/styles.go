@@ -28,7 +28,8 @@ var (
 			Foreground(colorManager.LipglossColor(colorLabelTool)).
 			Bold(true)
 	toolDetailStyle = lipgloss.NewStyle().
-			Foreground(colorManager.LipglossColor(colorBody))
+			Foreground(colorManager.LipglossColor(colorBody)).
+			Background(colorManager.LipglossColor(colorToolDetailBackground))
 	toolCitationStyle = lipgloss.NewStyle().
 				Foreground(colorManager.LipglossColor(colorMarkdownQuote))
 	toolCitationKeyStyle = lipgloss.NewStyle().
