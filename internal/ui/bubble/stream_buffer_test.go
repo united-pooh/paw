@@ -168,7 +168,7 @@ func TestSanitizeTerminalTextRemovesEscapesAndExpandsTabs(t *testing.T) {
 	}
 }
 
-func TestAssistantStreamUsesPlainCompletedLinesThenFinalMarkdown(t *testing.T) {
+func TestAssistantStreamRendersMarkdownForEachStableLine(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
 	model.width = 80
@@ -184,12 +184,23 @@ func TestAssistantStreamUsesPlainCompletedLinesThenFinalMarkdown(t *testing.T) {
 	next, _ = model.Update(assistantDeltaMsg("ld**\n"))
 	model = next.(appModel)
 	entry := model.transcript[model.activeAssistant]
-	if entry.renderMode != transcriptRenderStreamingPlain {
-		t.Fatalf("stream render mode = %v", entry.renderMode)
+	if entry.renderMode != transcriptRenderFormatted {
+		t.Fatalf("stream render mode = %v, want formatted", entry.renderMode)
 	}
 	streamed := ansi.Strip(renderEntry(entry, 80))
-	if !strings.Contains(streamed, "**bold**") {
-		t.Fatalf("streamed entry = %q, want literal markdown", streamed)
+	if !strings.Contains(streamed, "bold") || strings.Contains(streamed, "**bold**") {
+		t.Fatalf("streamed entry = %q, want formatted markdown before done", streamed)
+	}
+	viewport := ansi.Strip(model.viewport.View())
+	if !strings.Contains(viewport, "bold") || strings.Contains(viewport, "**bold**") {
+		t.Fatalf("viewport = %q, want formatted markdown before done", viewport)
+	}
+
+	next, _ = model.Update(assistantDeltaMsg("\n- item\n"))
+	model = next.(appModel)
+	viewport = ansi.Strip(model.viewport.View())
+	if !strings.Contains(viewport, "bold") || !strings.Contains(viewport, "item") {
+		t.Fatalf("viewport after second stable line = %q, want both rendered lines", viewport)
 	}
 
 	next, _ = model.Update(doneMsg{})
@@ -197,10 +208,6 @@ func TestAssistantStreamUsesPlainCompletedLinesThenFinalMarkdown(t *testing.T) {
 	entry = lastEntryOfKind(t, model.transcript, entryAssistant)
 	if entry.renderMode != transcriptRenderFormatted {
 		t.Fatalf("final render mode = %v", entry.renderMode)
-	}
-	rendered := ansi.Strip(renderEntry(entry, 80))
-	if !strings.Contains(rendered, "bold") || strings.Contains(rendered, "**bold**") {
-		t.Fatalf("final entry = %q, want formatted markdown", rendered)
 	}
 }
 

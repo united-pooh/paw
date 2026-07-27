@@ -301,7 +301,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pipelineState = msg.state
 		return m, nil
 	case tea.KeyMsg:
-		if isRawMouseEscapeKey(msg) {
+		var rawMouseFragment bool
+		msg, rawMouseFragment = m.filterRawMouseEscapeKey(msg)
+		if rawMouseFragment {
 			return m, nil
 		}
 		if m.settingWizard != nil {
@@ -445,6 +447,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleSubmit()
 		}
 	case tea.MouseMsg:
+		m.rawMouseEscapePending = ""
+		m.rawMouseEscapePendingAt = time.Time{}
+		m.rawMouseEscapeBracketBurst = false
+		if isHorizontalMouseWheel(msg) {
+			return m, nil
+		}
 		if next, handled, cmd := m.handleTranscriptMouse(msg); handled {
 			if msg.Action != tea.MouseActionMotion || next.selecting {
 				next.transcriptKeyScrollActive = true

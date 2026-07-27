@@ -914,7 +914,7 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 	}
 }
 
-func TestAssistantDeltaBuffersTailAndCoalescesCompletedLineRefresh(t *testing.T) {
+func TestAssistantDeltaBuffersTailAndRefreshesCompletedLineImmediately(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
 	model.width = 80
@@ -939,21 +939,14 @@ func TestAssistantDeltaBuffersTailAndCoalescesCompletedLineRefresh(t *testing.T)
 	next, _ = model.Update(assistantDeltaMsg("\n"))
 	model = next.(appModel)
 
-	if !model.transcriptRefreshPending {
-		t.Fatalf("transcriptRefreshPending = false, want true for completed line")
+	if model.transcriptRefreshPending {
+		t.Fatalf("transcriptRefreshPending = true, want false after immediate refresh")
 	}
 	if got := model.transcript[len(model.transcript)-1].body; got != "streamed text\n" {
 		t.Fatalf("assistant body = %q, want completed line", got)
 	}
-
-	next, _ = model.Update(cursorFrameMsg(time.Now().Add(transcriptStreamingRefreshInterval)))
-	model = next.(appModel)
-
-	if model.transcriptRefreshPending {
-		t.Fatalf("transcriptRefreshPending = true, want false after cursor frame")
-	}
 	if !strings.Contains(model.viewport.View(), "streamed text") {
-		t.Fatalf("viewport = %q, want streamed text after cursor frame", model.viewport.View())
+		t.Fatalf("viewport = %q, want streamed text immediately after stable line", model.viewport.View())
 	}
 }
 
@@ -2084,6 +2077,42 @@ func TestMouseWheelOverTranscriptDoesNotScrollInputViewport(t *testing.T) {
 	}
 }
 
+func TestHorizontalMouseWheelDoesNotEnterTranscriptOrInput(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 10
+	model.input.SetValue("draft")
+	model.relayout()
+	model.transcript = nil
+	for i := 0; i < 30; i++ {
+		model.transcript = append(model.transcript, transcriptEntry{
+			kind:  entryAssistant,
+			title: "assistant",
+			body:  fmt.Sprintf("line %02d", i),
+		})
+	}
+	model.refreshViewport()
+	beforeOffset := model.viewport.YOffset
+
+	for _, button := range []tea.MouseButton{tea.MouseButtonWheelLeft, tea.MouseButtonWheelRight} {
+		next, _ := model.Update(tea.MouseMsg{
+			X:      10,
+			Y:      3,
+			Type:   tea.MouseEventType(button),
+			Button: button,
+			Action: tea.MouseActionPress,
+		})
+		model = next.(appModel)
+	}
+	if model.viewport.YOffset != beforeOffset {
+		t.Fatalf("horizontal wheel changed transcript offset from %d to %d", beforeOffset, model.viewport.YOffset)
+	}
+	if got := model.input.Value(); got != "draft" {
+		t.Fatalf("input value = %q, want draft unchanged", got)
+	}
+}
+
 func TestArrowKeysAfterTranscriptWheelScrollViewportNotInput(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
@@ -2217,10 +2246,64 @@ func TestRawMouseEscapeSequenceDoesNotEnterInput(t *testing.T) {
 	}
 }
 
+func TestFragmentedRawMouseEscapeSequenceDoesNotEnterInput(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 12
+	model.input.SetValue("draft")
+	model.relayout()
+
+	for _, chunk := range []string{"[", "<64;59;", "25M"} {
+		next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(chunk)})
+		model = next.(appModel)
+	}
+	if got := model.input.Value(); got != "draft" {
+		t.Fatalf("input value = %q, want fragmented raw mouse sequence ignored", got)
+	}
+}
+
+func TestNormalBracketTextSurvivesRawMouseFragmentFilter(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 12
+	model.input.SetValue("draft")
+	model.relayout()
+
+	for _, chunk := range []string{"[", "a"} {
+		next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(chunk)})
+		model = next.(appModel)
+	}
+	if got := model.input.Value(); got != "draft[a" {
+		t.Fatalf("input value = %q, want normal bracket text preserved", got)
+	}
+}
+
+func TestRepeatedRawMouseBracketsDoNotEnterInput(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 12
+	model.input.SetValue("draft")
+	model.relayout()
+
+	for i := 0; i < 12; i++ {
+		next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}})
+		model = next.(appModel)
+	}
+	if got := model.input.Value(); got != "draft" {
+		t.Fatalf("input value = %q, want repeated raw mouse brackets ignored", got)
+	}
+}
+
 func TestRawMouseEscapeDetectorDoesNotRejectNormalText(t *testing.T) {
 	for _, text := range []string{"<tag>", "[not-mouse]", "<64;not;mouseM", "hello"} {
 		if isRawMouseEscapeKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text)}) {
 			t.Fatalf("text %q was detected as raw mouse escape", text)
+		}
+		if isRawMouseEscapePrefix(text) {
+			t.Fatalf("text %q was detected as raw mouse prefix", text)
 		}
 	}
 }

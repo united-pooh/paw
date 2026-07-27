@@ -4,16 +4,18 @@ package bubble
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 const (
-	inputPasteFoldThreshold  = 6
-	inputPasteFoldHeadLines  = 3
-	inputPasteFoldTailLines  = 2
-	inputPasteFoldMarkerLine = "... %d lines folded ..."
+	inputPasteFoldThreshold    = 6
+	inputPasteFoldHeadLines    = 3
+	inputPasteFoldTailLines    = 2
+	inputPasteFoldMarkerLine   = "... %d lines folded ..."
+	rawMouseBracketBurstWindow = 75 * time.Millisecond
 )
 
 // inputVisibleLineCount 计算 textarea 当前需要展示的可视行数。
@@ -167,4 +169,139 @@ func isRawMouseEscapeKey(msg tea.KeyMsg) bool {
 		seen = true
 	}
 	return seen
+}
+
+// isRawMouseEscapePrefix reports whether text can still become one or more
+// SGR mouse reports. Bubble Tea may expose a short read as KeyRunes before the
+// complete ESC[<...M sequence is available, so the prefix must be held until
+// the next key message arrives.
+func isRawMouseEscapePrefix(text string) bool {
+	if text == "" {
+		return false
+	}
+
+	i := 0
+	for {
+		if i < len(text) && text[i] == '[' {
+			i++
+		}
+		if i == len(text) {
+			return true
+		}
+		if text[i] != '<' {
+			return false
+		}
+		i++
+
+		for field := 0; field < 3; field++ {
+			start := i
+			for i < len(text) && text[i] >= '0' && text[i] <= '9' {
+				i++
+			}
+			if start == i {
+				return i == len(text)
+			}
+			if field < 2 {
+				if i == len(text) {
+					return true
+				}
+				if text[i] != ';' {
+					return false
+				}
+				i++
+				if i == len(text) {
+					return true
+				}
+			}
+		}
+		if i == len(text) {
+			return true
+		}
+		if text[i] != 'm' && text[i] != 'M' {
+			return false
+		}
+		i++
+		if i == len(text) {
+			return false
+		}
+		if text[i] != '[' {
+			return false
+		}
+	}
+}
+
+// flushRawMouseEscapePending replays a held candidate that turned out to be
+// ordinary user text. It is inserted before the current key is processed.
+func (m *appModel) flushRawMouseEscapePending() {
+	if m == nil || m.rawMouseEscapePending == "" {
+		return
+	}
+	text := m.rawMouseEscapePending
+	m.rawMouseEscapePending = ""
+	m.rawMouseEscapePendingAt = time.Time{}
+	beforeText := m.input.Value()
+	beforeCursor := textareaAbsoluteCursor(m.input)
+	beforeTokens := cloneInputTokens(m.inputTokens)
+	m.input.InsertString(text)
+	afterText := m.input.Value()
+	afterCursor := textareaAbsoluteCursor(m.input)
+	if beforeText != afterText {
+		m.reconcileInputTokenEdit(beforeText, afterText, beforeCursor, afterCursor, beforeTokens)
+	}
+}
+
+// filterRawMouseEscapeKey hides complete or fragmented SGR mouse reports
+// before they reach the textarea. When a held prefix turns out to be normal
+// text, it is replayed before the current KeyMsg unchanged.
+func (m *appModel) filterRawMouseEscapeKey(msg tea.KeyMsg) (tea.KeyMsg, bool) {
+	if m == nil {
+		return msg, false
+	}
+	if msg.Type != tea.KeyRunes || msg.Paste || msg.Alt || len(msg.Runes) == 0 {
+		m.flushRawMouseEscapePending()
+		m.rawMouseEscapeBracketBurst = false
+		return msg, false
+	}
+
+	text := string(msg.Runes)
+	if m.rawMouseEscapeBracketBurst {
+		if text == "[" {
+			return msg, true
+		}
+		m.rawMouseEscapeBracketBurst = false
+	}
+	pending := m.rawMouseEscapePending
+	if pending != "" {
+		if pending == "[" && text == "[" &&
+			!m.rawMouseEscapePendingAt.IsZero() && time.Since(m.rawMouseEscapePendingAt) <= rawMouseBracketBurstWindow {
+			m.rawMouseEscapePending = ""
+			m.rawMouseEscapePendingAt = time.Time{}
+			m.rawMouseEscapeBracketBurst = true
+			return msg, true
+		}
+		candidateText := pending + text
+		candidate := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(candidateText)}
+		if isRawMouseEscapeKey(candidate) || isRawMouseEscapePrefix(candidateText) {
+			m.rawMouseEscapePending = candidateText
+			if isRawMouseEscapeKey(candidate) {
+				m.rawMouseEscapePending = ""
+				m.rawMouseEscapePendingAt = time.Time{}
+			} else {
+				m.rawMouseEscapePendingAt = time.Now()
+			}
+			return msg, true
+		}
+		m.flushRawMouseEscapePending()
+	}
+
+	candidate := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text)}
+	if isRawMouseEscapeKey(candidate) {
+		return msg, true
+	}
+	if isRawMouseEscapePrefix(text) {
+		m.rawMouseEscapePending = text
+		m.rawMouseEscapePendingAt = time.Now()
+		return msg, true
+	}
+	return msg, false
 }

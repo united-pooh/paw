@@ -54,27 +54,29 @@ func (m *appModel) ensureAssistantStreamEntry() {
 			title:      "assistant",
 			citations:  m.consumePendingToolCitations(),
 			createdAt:  m.animationNow(),
-			renderMode: transcriptRenderStreamingPlain,
+			renderMode: transcriptRenderFormatted,
 		})
 		m.activeAssistant = len(m.transcript) - 1
 	} else if len(m.pendingToolCites) > 0 {
 		m.transcript[m.activeAssistant].citations = append(m.transcript[m.activeAssistant].citations, m.consumePendingToolCitations()...)
 	}
-	if m.transcript[m.activeAssistant].renderMode != transcriptRenderStreamingPlain {
-		m.transcript[m.activeAssistant].renderMode = transcriptRenderStreamingPlain
+	if m.transcript[m.activeAssistant].renderMode != transcriptRenderFormatted {
+		m.transcript[m.activeAssistant].renderMode = transcriptRenderFormatted
 		touchTranscriptEntry(&m.transcript[m.activeAssistant])
 	}
 }
 
-// appendAssistantDelta 将经过流隔离器确认的稳定文本追加到当前 assistant 消息。
+// appendAssistantDelta 将经过流隔离器确认的稳定文本逐行追加到当前 assistant 消息。
 func (m *appModel) appendAssistantDelta(delta string) {
 	if delta == "" {
 		return
 	}
-	m.ensureAssistantStreamEntry()
-	m.transcript[m.activeAssistant].body += delta
-	touchTranscriptEntry(&m.transcript[m.activeAssistant])
-	m.refreshViewportForStreaming()
+	for _, line := range strings.SplitAfter(delta, "\n") {
+		m.ensureAssistantStreamEntry()
+		m.transcript[m.activeAssistant].body += line
+		touchTranscriptEntry(&m.transcript[m.activeAssistant])
+		m.refreshViewport()
+	}
 }
 
 func (m *appModel) ensureThinkingStreamEntry() {

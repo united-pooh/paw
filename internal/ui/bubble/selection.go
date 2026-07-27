@@ -114,6 +114,22 @@ func isMouseWheel(msg tea.MouseMsg) bool {
 	}
 }
 
+// isHorizontalMouseWheel reports the left/right wheel events produced by
+// trackpad page-swipe gestures. The transcript has no horizontal scrolling,
+// so these events must not reach the viewport or textarea path.
+func isHorizontalMouseWheel(msg tea.MouseMsg) bool {
+	switch msg.Button {
+	case tea.MouseButtonWheelLeft, tea.MouseButtonWheelRight:
+		return true
+	}
+	switch msg.Type {
+	case tea.MouseWheelLeft, tea.MouseWheelRight:
+		return true
+	default:
+		return false
+	}
+}
+
 func (m appModel) isTranscriptViewportMouse(msg tea.MouseMsg) bool {
 	if _, ok := m.transcriptContentRow(msg.Y); !ok {
 		return false
