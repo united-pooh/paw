@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // inputTokenKind describes the semantic style of a completion-created token.
@@ -111,6 +112,58 @@ func normalizeInputTokens(text string, tokens []inputToken) []inputToken {
 		compacted = append(compacted, token)
 	}
 	return compacted
+}
+
+// canonicalSkillReferenceTokens recovers only the Markdown references emitted
+// by skill completion. It intentionally does not infer tokens from bare
+// prefixes in restored or manually typed text.
+func canonicalSkillReferenceTokens(text string) []inputToken {
+	const prefix = "[$"
+	tokens := make([]inputToken, 0)
+	search := 0
+	for search < len(text) {
+		relativeStart := strings.Index(text[search:], prefix)
+		if relativeStart < 0 {
+			break
+		}
+		start := search + relativeStart
+		nameEndRelative := strings.IndexByte(text[start+len(prefix):], ']')
+		if nameEndRelative < 0 {
+			break
+		}
+		nameStart := start + len(prefix)
+		nameEnd := nameStart + nameEndRelative
+		name := text[nameStart:nameEnd]
+		if name == "" || strings.IndexAny(name, " \t\r\n") >= 0 {
+			search = nameEnd + 1
+			continue
+		}
+		if nameEnd+1 >= len(text) || text[nameEnd+1] != '(' {
+			search = nameEnd + 1
+			continue
+		}
+		pathStart := nameEnd + 2
+		pathEndRelative := strings.IndexByte(text[pathStart:], ')')
+		if pathEndRelative < 0 {
+			break
+		}
+		pathEnd := pathStart + pathEndRelative
+		path := text[pathStart:pathEnd]
+		end := pathEnd + 1
+		if path == "" || strings.IndexAny(path, "\r\n") >= 0 ||
+			(path != "SKILL.md" && !strings.HasSuffix(path, "/SKILL.md")) {
+			search = end
+			continue
+		}
+		tokens = append(tokens, inputToken{
+			Kind:  inputTokenSkill,
+			Start: len([]rune(text[:start])),
+			End:   len([]rune(text[:end])),
+			Label: name,
+		})
+		search = end
+	}
+	return normalizeInputTokens(text, tokens)
 }
 
 // replaceInputRange replaces a rune range and rebases every unaffected token.
@@ -420,7 +473,10 @@ func projectInput(raw string, tokens []inputToken, cursor, width int, folded boo
 	width = maxInt(1, width)
 	tokens = normalizeInputTokens(raw, tokens)
 	rawRunes := []rune(raw)
-	cursor = clampInt(cursor, 0, len(rawRunes))
+	hasCursor := cursor >= 0
+	if hasCursor {
+		cursor = clampInt(cursor, 0, len(rawRunes))
+	}
 	lines := []inputProjectionLine{{logicalLine: 0}}
 	row := 0
 	column := 0
@@ -466,7 +522,7 @@ func projectInput(raw string, tokens []inputToken, cursor, width int, folded boo
 
 	tokenIndex := 0
 	for i := 0; i < len(rawRunes); {
-		if cursor == i {
+		if hasCursor && cursor == i {
 			markCursor()
 		}
 		if tokenIndex < len(tokens) && tokens[tokenIndex].Start == i {
@@ -474,7 +530,7 @@ func projectInput(raw string, tokens []inputToken, cursor, width int, folded boo
 			appendText(token.Label, token.Kind, true)
 			i = token.End
 			tokenIndex++
-			if cursor > token.Start && cursor < token.End {
+			if hasCursor && cursor > token.Start && cursor < token.End {
 				cursor = token.End
 			}
 			continue
@@ -490,7 +546,7 @@ func projectInput(raw string, tokens []inputToken, cursor, width int, folded boo
 			break
 		}
 		clusterRunes := len([]rune(cluster))
-		if cursor > i && cursor < i+clusterRunes {
+		if hasCursor && cursor > i && cursor < i+clusterRunes {
 			if cursor-i > i+clusterRunes-cursor {
 				cursor = i + clusterRunes
 			} else {
@@ -501,13 +557,15 @@ func projectInput(raw string, tokens []inputToken, cursor, width int, folded boo
 		appendCluster(cluster, inputTokenCommand, false)
 		i += clusterRunes
 	}
-	if cursor == len(rawRunes) {
+	if hasCursor && cursor == len(rawRunes) {
 		markCursor()
 	}
-	if !cursorSet {
+	if hasCursor && !cursorSet {
 		markCursor()
 	}
-	lines = normalizeProjectedCursorWrap(lines, width)
+	if hasCursor {
+		lines = normalizeProjectedCursorWrap(lines, width)
+	}
 
 	if folded {
 		start, end, ok := inputPasteFoldHiddenRange(raw)
@@ -601,6 +659,37 @@ func (m appModel) inputTokenProjection() inputProjection {
 	)
 }
 
+func inputTokenStyleFor(kind inputTokenKind) lipgloss.Style {
+	if kind == inputTokenFile {
+		return inputFileTokenStyle
+	}
+	return inputCommandTokenStyle
+}
+
+func renderProjectedTextLine(line inputProjectionLine, baseStyle lipgloss.Style) string {
+	var out strings.Builder
+	for _, atom := range line.atoms {
+		if atom.text == "" {
+			continue
+		}
+		style := baseStyle
+		if atom.token {
+			style = inputTokenStyleFor(atom.kind)
+		}
+		out.WriteString(style.Render(atom.text))
+	}
+	return out.String()
+}
+
+func renderTokenizedTranscriptBody(raw string, tokens []inputToken, width int) string {
+	projection := projectInput(raw, tokens, -1, width, false)
+	lines := make([]string, 0, len(projection.lines))
+	for _, line := range projection.lines {
+		lines = append(lines, renderProjectedTextLine(line, bodyStyle))
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (m appModel) renderTokenInputContent() string {
 	projection := m.inputTokenProjection()
 	height := maxInt(1, m.input.Height())
@@ -620,11 +709,7 @@ func (m appModel) renderTokenInputContent() string {
 				style = terminalInputTextStyle
 			}
 			if atom.token {
-				if atom.kind == inputTokenFile {
-					style = inputFileTokenStyle
-				} else {
-					style = inputCommandTokenStyle
-				}
+				style = inputTokenStyleFor(atom.kind)
 			}
 			if atom.cursor && m.input.Focused() {
 				char := " "
@@ -632,11 +717,7 @@ func (m appModel) renderTokenInputContent() string {
 					next := line.atoms[atomIndex+1]
 					char = next.text
 					if next.token {
-						if next.kind == inputTokenFile {
-							style = inputFileTokenStyle
-						} else {
-							style = inputCommandTokenStyle
-						}
+						style = inputTokenStyleFor(next.kind)
 					}
 					atomIndex++
 				}

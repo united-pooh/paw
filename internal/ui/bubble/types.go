@@ -46,8 +46,9 @@ type transcriptEntry struct {
 	kind           entryKind
 	title          string
 	body           string
-	color          string // 可选：标题颜色（lipgloss 颜色字符串），与 subagents 面板保持一致
-	isError        bool   // true for tool results with IsError=true
+	inputTokens    []inputToken // visual-only metadata; body remains the raw submitted/session text
+	color          string       // 可选：标题颜色（lipgloss 颜色字符串），与 subagents 面板保持一致
+	isError        bool         // true for tool results with IsError=true
 	toolUseID      string
 	toolName       string
 	toolStatus     string

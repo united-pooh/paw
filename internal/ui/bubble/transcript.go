@@ -25,6 +25,7 @@ type transcriptRenderCacheKey struct {
 	renderMode      transcriptRenderMode
 	title           string
 	body            string
+	inputTokens     string
 	color           string
 	isError         bool
 	toolUseID       string
@@ -487,6 +488,7 @@ func transcriptRenderKey(entry transcriptEntry, width int) transcriptRenderCache
 		kind:            entry.kind,
 		renderMode:      entry.renderMode,
 		title:           entry.title,
+		inputTokens:     inputTokenSnapshot(entry.inputTokens),
 		color:           entry.color,
 		isError:         entry.isError,
 		toolUseID:       entry.toolUseID,
@@ -511,6 +513,30 @@ func transcriptRenderKey(entry transcriptEntry, width int) transcriptRenderCache
 		key.citations = transcriptCitationSnapshot(entry.citations)
 	}
 	return key
+}
+
+func inputTokenSnapshot(tokens []inputToken) string {
+	if len(tokens) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, token := range tokens {
+		b.WriteString(strconv.Itoa(int(token.Kind)))
+		b.WriteByte(':')
+		b.WriteString(strconv.Itoa(token.Start))
+		b.WriteByte(':')
+		b.WriteString(strconv.Itoa(token.End))
+		b.WriteByte(':')
+		b.WriteString(token.Label)
+		b.WriteByte(':')
+		if token.AutoSpace {
+			b.WriteByte('1')
+		} else {
+			b.WriteByte('0')
+		}
+		b.WriteByte(';')
+	}
+	return b.String()
 }
 
 func transcriptCitationSnapshot(citations []toolCitation) string {
@@ -642,6 +668,9 @@ func renderEntryBodyAt(entry transcriptEntry, width int, at time.Time) string {
 	}
 	if body == "" {
 		return ""
+	}
+	if entry.kind == entryUser && len(entry.inputTokens) > 0 {
+		return renderTokenizedTranscriptBody(body, entry.inputTokens, width)
 	}
 	if entry.kind == entryThinking {
 		return thinkingBodyStyle.Width(width).Render(body)

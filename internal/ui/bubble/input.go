@@ -241,11 +241,29 @@ func (m appModel) submitSupplement(line string) appModel {
 		return m
 	}
 	m.addEntry(transcriptEntry{
-		kind:  entryUser,
-		title: "you (supplement)",
-		body:  line,
+		kind:        entryUser,
+		title:       "you (supplement)",
+		body:        line,
+		inputTokens: m.submittedTokensForLine(line),
 	})
 	return m
+}
+
+func (m appModel) submittedTokensForLine(line string) []inputToken {
+	draft := trimInputDraft(m.submittedDraft)
+	if draft.Text != strings.TrimSpace(line) {
+		return nil
+	}
+	return cloneInputTokens(draft.Tokens)
+}
+
+func (m appModel) userTranscriptEntry(title, line string) transcriptEntry {
+	return transcriptEntry{
+		kind:        entryUser,
+		title:       title,
+		body:        strings.TrimSpace(line),
+		inputTokens: m.submittedTokensForLine(line),
+	}
 }
 
 // startChatTurn records and starts a model turn when the guard is idle.
@@ -259,11 +277,7 @@ func (m appModel) startChatTurn(line string) (appModel, tea.Cmd) {
 		return m, nil
 	}
 	m.resetStreamingBuffers()
-	m.addEntry(transcriptEntry{
-		kind:  entryUser,
-		title: "you",
-		body:  line,
-	})
+	m.addEntry(m.userTranscriptEntry("you", line))
 	m.turnStartedAt = time.Now()
 	m.syncRunningFlags()
 	return m, runTurnCmd(m.ctx, m.runner, line)
@@ -277,11 +291,7 @@ func (m appModel) queueChatInput(line string) appModel {
 	}
 	m.rememberInputHistory(line)
 	if m.chatQueue.Enqueue(line) {
-		m.addEntry(transcriptEntry{
-			kind:  entryUser,
-			title: "you (queued)",
-			body:  line,
-		})
+		m.addEntry(m.userTranscriptEntry("you (queued)", line))
 		m.addEntry(transcriptEntry{
 			kind:  entrySystem,
 			title: "queued",
@@ -412,6 +422,30 @@ func (m *appModel) rememberInputHistory(line string) {
 		return
 	}
 	m.inputHistory = append(m.inputHistory, cloneInputDraft(draft))
+}
+
+func inputHistoryFromTranscript(entries []transcriptEntry) []inputDraft {
+	history := make([]inputDraft, 0)
+	for _, entry := range entries {
+		if entry.kind != entryUser {
+			continue
+		}
+		draft := trimInputDraft(inputDraft{
+			Text:   entry.body,
+			Tokens: cloneInputTokens(entry.inputTokens),
+		})
+		if draft.Text == "" {
+			continue
+		}
+		if len(history) > 0 && history[len(history)-1].Text == draft.Text {
+			if !inputDraftEqual(history[len(history)-1], draft) {
+				history[len(history)-1] = cloneInputDraft(draft)
+			}
+			continue
+		}
+		history = append(history, cloneInputDraft(draft))
+	}
+	return history
 }
 
 // resetHistoryNavigation 清除当前历史浏览状态，回到普通编辑模式。

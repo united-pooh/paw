@@ -116,6 +116,94 @@ func TestSlashSkillCompletionCreatesSkillToken(t *testing.T) {
 	}
 }
 
+func TestTranscriptRendersSkillTokenWithoutRawReference(t *testing.T) {
+	raw := "[$design](/tmp/design/SKILL.md)"
+	tokens := canonicalSkillReferenceTokens(raw)
+	if len(tokens) != 1 {
+		t.Fatalf("canonical skill tokens = %#v, want one token", tokens)
+	}
+	rendered := renderEntry(transcriptEntry{
+		kind:        entryUser,
+		title:       "you",
+		body:        raw,
+		inputTokens: tokens,
+	}, 80)
+	plain := ansi.Strip(rendered)
+	if strings.Contains(plain, raw) || strings.Contains(plain, "/tmp/design/SKILL.md") {
+		t.Fatalf("transcript leaked raw skill reference: %q", plain)
+	}
+	if !strings.Contains(rendered, inputCommandTokenStyle.Render("design")) {
+		t.Fatalf("transcript missed skill token style: %q", rendered)
+	}
+	plainEntry := renderEntry(transcriptEntry{kind: entryUser, title: "you", body: "ordinary text"}, 80)
+	if !strings.Contains(ansi.Strip(plainEntry), "ordinary text") {
+		t.Fatalf("plain user transcript body = %q", ansi.Strip(plainEntry))
+	}
+}
+
+func TestCanonicalSkillReferenceTokensIgnoreNonSkillMarkdownLinks(t *testing.T) {
+	for _, raw := range []string{
+		"[$design](README.md)",
+		"[$design](/tmp/design/design.md)",
+		"$design",
+	} {
+		if tokens := canonicalSkillReferenceTokens(raw); len(tokens) != 0 {
+			t.Fatalf("canonicalSkillReferenceTokens(%q) = %#v, want no tokens", raw, tokens)
+		}
+	}
+}
+
+func TestSubmittedSkillTokenRendersInTranscriptAndKeepsRawRunnerInput(t *testing.T) {
+	root := t.TempDir()
+	path := writeBubbleTestSkill(t, root, "design", "# Design\n")
+	runner := &fakeRunner{}
+	model := newTestModel(runner)
+	model.ready = true
+	model.width = 80
+	model.height = 20
+	model.skillRegistry = skill.NewRegistry([]string{root})
+	model.input.SetValue("$de")
+	model.completion = &completion{
+		kind:          completionKindSkill,
+		items:         []string{"design"},
+		selectedIndex: 0,
+	}
+	model = model.applySkillCompletion("design")
+	model.completion = nil
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if cmd == nil {
+		t.Fatal("submit command = nil")
+	}
+	_ = cmd()
+
+	wantBody := "[$design](" + path + ")"
+	last := model.transcript[len(model.transcript)-1]
+	if last.kind != entryUser || len(last.inputTokens) != 1 {
+		t.Fatalf("last transcript entry = %#v, want one input token", last)
+	}
+	if last.body != wantBody {
+		t.Fatalf("last transcript body = %q, want %q", last.body, wantBody)
+	}
+	if len(runner.inputs) != 1 || runner.inputs[0] != last.body {
+		t.Fatalf("runner inputs = %#v, want raw transcript body", runner.inputs)
+	}
+	if rendered := ansi.Strip(renderEntry(last, 80)); strings.Contains(rendered, wantBody) || !strings.Contains(rendered, "design") {
+		t.Fatalf("rendered transcript = %q", rendered)
+	}
+
+	model.running = false
+	next, _ = model.handleHistoryNavigation(-1)
+	model = next.(appModel)
+	if got := model.input.Value(); got != wantBody {
+		t.Fatalf("recalled input = %q, want %q", got, wantBody)
+	}
+	if len(model.inputTokens) != 1 || model.inputTokens[0].Label != "design" {
+		t.Fatalf("recalled input tokens = %#v", model.inputTokens)
+	}
+}
+
 func TestDirectoryCompletionAndTypedSyntaxStayPlain(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.input.SetValue("@sr")

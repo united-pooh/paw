@@ -197,7 +197,13 @@ func transcriptEntriesFromMessage(msg message.Message, createdAt time.Time) []tr
 	if content := strings.TrimSpace(msg.Content); content != "" {
 		switch msg.Role {
 		case message.RoleUser:
-			entries = append(entries, transcriptEntry{kind: entryUser, title: "you", body: content, createdAt: createdAt})
+			entries = append(entries, transcriptEntry{
+				kind:        entryUser,
+				title:       "you",
+				body:        content,
+				inputTokens: canonicalSkillReferenceTokens(content),
+				createdAt:   createdAt,
+			})
 		case message.RoleSystem:
 			entries = append(entries, transcriptEntry{kind: entrySystem, title: "system", body: content, createdAt: createdAt})
 		default:
@@ -407,6 +413,7 @@ func copyTranscriptEntries(entries []transcriptEntry) []transcriptEntry {
 	out := append([]transcriptEntry(nil), entries...)
 	for i := range out {
 		out[i].citations = append([]toolCitation(nil), out[i].citations...)
+		out[i].inputTokens = cloneInputTokens(out[i].inputTokens)
 		out[i].toolFocused = false
 		out[i].toolHovered = false
 	}
@@ -421,6 +428,8 @@ func (m *appModel) applySessionPickerRestore(msg sessionRestoredMsg) {
 	m.subagentPreview = nil
 	m.syncInputPlaceholder()
 	m.transcript = mergeTranscriptToolEntries(copyTranscriptEntries(msg.entries))
+	m.inputHistory = inputHistoryFromTranscript(msg.entries)
+	m.resetHistoryNavigation()
 	m.addEntry(transcriptEntry{kind: entrySystem, title: "sessions", body: fmt.Sprintf("已切换到会话: %s", msg.sessionID)})
 }
 

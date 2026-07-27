@@ -257,17 +257,10 @@ func (runner *Runner) activateSkillContext(input string) {
 		runner.clearActiveSkillContext()
 		return
 	}
-	contextText, loaded, errs := registry.InstructionContext(input)
+	contextText, _, errs := registry.InstructionContext(input)
 	runner.mu.Lock()
 	runner.activeSkillContext = contextText
 	runner.mu.Unlock()
-	if len(loaded) > 0 {
-		names := make([]string, 0, len(loaded))
-		for _, sk := range loaded {
-			names = append(names, sk.Name)
-		}
-		runner.notifySystem("skills", "loaded "+strings.Join(names, ", "))
-	}
 	for _, err := range errs {
 		if err != nil {
 			runner.notifySystem("skills", err.Error())

@@ -428,6 +428,11 @@ Design body line.`)
 	if _, err := runner.RunTurn(context.Background(), "use $design"); err != nil {
 		t.Fatalf("RunTurn(skill) error = %v", err)
 	}
+	for _, event := range ui.system {
+		if event.Title == "skills" && strings.HasPrefix(event.Body, "loaded ") {
+			t.Fatalf("unexpected skill loaded notification: %#v", event)
+		}
+	}
 	if _, err := runner.RunTurn(context.Background(), "plain follow-up"); err != nil {
 		t.Fatalf("RunTurn(follow-up) error = %v", err)
 	}

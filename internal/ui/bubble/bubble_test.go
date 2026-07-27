@@ -3529,6 +3529,67 @@ func TestSessionPickerRestoreClearsTranscriptForEmptyHistory(t *testing.T) {
 	}
 }
 
+func TestSessionRestoreRebuildsInputHistoryAndDropsPreviousSession(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.inputHistory = []inputDraft{{Text: "old session input"}}
+
+	next, _ := model.Update(sessionRestoredMsg{
+		sessionID: "target-session",
+		entries: []transcriptEntry{
+			{kind: entryUser, title: "you", body: "restored prompt"},
+			{kind: entryAssistant, title: "assistant", body: "restored answer"},
+		},
+	})
+	model = next.(appModel)
+	if len(model.inputHistory) != 1 || model.inputHistory[0].Text != "restored prompt" {
+		t.Fatalf("inputHistory = %#v, want restored prompt only", model.inputHistory)
+	}
+
+	model.running = false
+	next, _ = model.handleHistoryNavigation(-1)
+	model = next.(appModel)
+	if got := model.input.Value(); got != "restored prompt" {
+		t.Fatalf("recalled input = %q, want restored prompt", got)
+	}
+}
+
+func TestSessionRestoreClearsInputHistoryForEmptySession(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.inputHistory = []inputDraft{{Text: "old session input"}}
+
+	next, _ := model.Update(sessionRestoredMsg{sessionID: "empty-session"})
+	model = next.(appModel)
+	if len(model.inputHistory) != 0 {
+		t.Fatalf("inputHistory = %#v, want empty after restore", model.inputHistory)
+	}
+	next, _ = model.handleHistoryNavigation(-1)
+	model = next.(appModel)
+	if model.input.Value() != "" {
+		t.Fatalf("input after empty-session history navigation = %q", model.input.Value())
+	}
+}
+
+func TestRestoredSkillReferenceRebuildsTranscriptAndInputTokens(t *testing.T) {
+	raw := "[$design](/tmp/design/SKILL.md)"
+	entries := transcriptEntriesFromMessage(message.Message{Role: message.RoleUser, Content: raw}, time.Now())
+	if len(entries) != 1 || len(entries[0].inputTokens) != 1 {
+		t.Fatalf("restored entries = %#v, want one user skill token", entries)
+	}
+
+	model := newTestModel(&fakeRunner{})
+	next, _ := model.Update(sessionRestoredMsg{sessionID: "restored", entries: entries})
+	model = next.(appModel)
+	if len(model.inputHistory) != 1 || len(model.inputHistory[0].Tokens) != 1 {
+		t.Fatalf("restored inputHistory = %#v, want one token", model.inputHistory)
+	}
+	model.running = false
+	next, _ = model.handleHistoryNavigation(-1)
+	model = next.(appModel)
+	if model.input.Value() != raw || len(model.inputTokens) != 1 || model.inputTokens[0].Label != "design" {
+		t.Fatalf("recalled restored skill = value:%q tokens:%#v", model.input.Value(), model.inputTokens)
+	}
+}
+
 func TestCtrlGSubagentPickerEnterPreviewsSelectedSubagent(t *testing.T) {
 	transcriptPath := filepath.Join(t.TempDir(), "agent-2.jsonl")
 	transcript := strings.Join([]string{
