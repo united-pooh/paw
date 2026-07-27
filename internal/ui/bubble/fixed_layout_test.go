@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"codex-agent-go/internal/settings"
 	"codex-agent-go/internal/subagent"
@@ -40,7 +41,7 @@ func TestViewFrameInvariantAcrossContentAndOverlays(t *testing.T) {
 	model.transcript = append(model.transcript, transcriptEntry{
 		kind:  entryAssistant,
 		title: "assistant",
-		body:  "中文 👨‍👩‍👧‍👦 e\u0301\n```go\nfmt.Println(\"stream\")\n```",
+		body:  "中文 👨‍👩‍👧‍👦 e\u0301\n### 混合语言\n中文 English 日本語 한국어 Русский العربية हिन्दी ภาษาไทย\n```go\nfmt.Println(\"stream\")\n```",
 	})
 	model.refreshViewport()
 	assertFixedFrame(t, model.View(), 80, 24)
@@ -63,6 +64,40 @@ func TestViewFrameInvariantAcrossContentAndOverlays(t *testing.T) {
 
 	model.openActivity(activityTabPipeline)
 	assertFixedFrame(t, model.View(), 80, 24)
+}
+
+func TestMixedLanguageTranscriptKeepsRendererWidthWhileScrolling(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 160
+	model.height = 60
+	model.transcript = []transcriptEntry{{
+		kind:  entryAssistant,
+		title: "assistant",
+		body: strings.Repeat("before\n", 70) +
+			"### 混合语言\n中文 English 日本語 한국어 Русский العربية हिन्दी ภาษาไทย\n" +
+			strings.Repeat("after\n", 70),
+		renderMode: transcriptRenderFormatted,
+	}}
+	model.relayout()
+	model.refreshViewport()
+
+	model.viewport.GotoTop()
+	for {
+		offset := model.viewport.YOffset
+		for row, line := range strings.Split(model.View(), "\n") {
+			if got := ansi.StringWidth(line); got != model.width {
+				t.Fatalf("offset=%d row=%d renderer width=%d, want %d; line=%q", offset, row, got, model.width, ansi.Strip(line))
+			}
+		}
+		if model.viewport.AtBottom() {
+			break
+		}
+		model.viewport.ScrollDown(1)
+		if model.viewport.YOffset == offset {
+			t.Fatalf("viewport stopped before reaching bottom at offset=%d", offset)
+		}
+	}
 }
 
 func TestInputGrowthOnlyChangesInternalAllocation(t *testing.T) {
@@ -165,7 +200,7 @@ func TestDockStatusLineFitsNarrowWidths(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	for _, width := range []int{8, 16, 32, 80} {
 		line := model.renderDockStatusLine(width)
-		if got := ansi.StringWidth(line); got != width {
+		if got := terminalCellWidth(line); got != width {
 			t.Fatalf("width=%d status display width=%d line=%q", width, got, ansi.Strip(line))
 		}
 	}
@@ -217,11 +252,41 @@ func TestModalListsKeepSelectionVisibleInShortTranscript(t *testing.T) {
 	model.sessionPicker = &sessionPicker{selectedIndex: 9}
 	for i := 0; i < 10; i++ {
 		model.sessionPicker.sessions = append(model.sessionPicker.sessions, sessionSummaryItem{
-			sessionID: "sess000" + string(rune('a'+i)),
+			sessionID:    "sess000" + string(rune('a'+i)),
+			firstMessage: "session-" + string(rune('a'+i)),
 		})
 	}
-	if got := ansi.Strip(model.renderSessionPickerContent()); !strings.Contains(got, "sess000j") {
+	if got := ansi.Strip(model.renderSessionPickerContent()); !strings.Contains(got, "session-j") {
 		t.Fatalf("short sessions modal hid selected session:\n%s", got)
+	}
+}
+
+func TestSessionPickerModalKeepsBottomBorderWhenSummaryIsLong(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 24
+	model.relayout()
+	model.sessionPicker = &sessionPicker{
+		loading: false,
+		sessions: []sessionSummaryItem{{
+			sessionID:    "session-1",
+			createdAt:    time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC),
+			firstMessage: strings.Repeat("long summary ", 12),
+		}},
+	}
+
+	lines := strings.Split(ansi.Strip(model.renderSessionPickerBox()), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("session picker panel has %d lines, want a border and body", len(lines))
+	}
+	topBorder := strings.TrimRight(lines[0], " ")
+	if !strings.HasPrefix(topBorder, "┌") || !strings.HasSuffix(topBorder, "┐") {
+		t.Fatalf("top border=%q, want normal corners", lines[0])
+	}
+	bottomBorder := strings.TrimRight(lines[len(lines)-1], " ")
+	if !strings.HasPrefix(bottomBorder, "└") || !strings.HasSuffix(bottomBorder, "┘") {
+		t.Fatalf("bottom border=%q, want normal corners\n%s", lines[len(lines)-1], strings.Join(lines, "\n"))
 	}
 }
 
@@ -232,7 +297,7 @@ func assertFixedFrame(t *testing.T, view string, width, height int) {
 		t.Fatalf("frame height=%d, want %d\n%s", len(lines), height, ansi.Strip(view))
 	}
 	for i, line := range lines {
-		if got := ansi.StringWidth(line); got != width {
+		if got := terminalCellWidth(line); got != width {
 			t.Fatalf("line %d width=%d, want %d: %q", i, got, width, line)
 		}
 	}

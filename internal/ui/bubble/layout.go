@@ -210,13 +210,21 @@ func (m appModel) renderCompletionPanel(body string) string {
 func renderFixedStyledPanel(style lipgloss.Style, totalWidth, totalHeight int, body string) string {
 	totalWidth = maxInt(1, totalWidth)
 	totalHeight = maxInt(1, totalHeight)
-	horizontalFrame, verticalFrame := style.GetFrameSize()
-	bodyWidth := maxInt(1, totalWidth-horizontalFrame)
-	bodyHeight := maxInt(1, totalHeight-verticalFrame)
+	horizontalBorder := style.GetHorizontalBorderSize()
+	verticalBorder := style.GetVerticalBorderSize()
+	horizontalPadding := style.GetHorizontalPadding()
+	verticalPadding := style.GetVerticalPadding()
+	// Lipgloss Width/Height include padding but are applied before borders.
+	// The body must therefore fit inside the width/height left after padding,
+	// while the style dimensions only subtract the border itself.
+	styleWidth := maxInt(1, totalWidth-horizontalBorder)
+	styleHeight := maxInt(1, totalHeight-verticalBorder)
+	bodyWidth := maxInt(1, styleWidth-horizontalPadding)
+	bodyHeight := maxInt(1, styleHeight-verticalPadding)
 	body = fitStyledRect(body, bodyWidth, bodyHeight)
 	rendered := style.
-		Width(bodyWidth).
-		Height(bodyHeight).
+		Width(styleWidth).
+		Height(styleHeight).
 		Render(body)
 	return fitStyledRect(rendered, totalWidth, totalHeight)
 }
@@ -254,7 +262,7 @@ func (m appModel) renderDockStatusLine(width int) string {
 	modelBudget := clampInt(width/4, 6, 24)
 	modelLabel = truncateDisplayWidth(modelLabel, modelBudget)
 	prefix := dockRuleStyle.Render("─ ") + modelStatusStyle.Render(modelLabel) + dockRuleStyle.Render(" ─ ")
-	remaining := width - ansi.StringWidth(prefix)
+	remaining := width - terminalCellWidth(prefix)
 
 	var context string
 	if remaining >= 24 {
@@ -264,9 +272,9 @@ func (m appModel) renderDockStatusLine(width int) string {
 		context = contextUsedStyle.Render(formatContextPercent(stats.UsedTokens, maxInt(1, stats.LimitTokens)))
 		context = ansi.Truncate(context, remaining, "")
 	}
-	gapWidth := maxInt(0, remaining-ansi.StringWidth(context))
+	gapWidth := maxInt(0, remaining-terminalCellWidth(context))
 	line := prefix + dockRuleStyle.Render(strings.Repeat("─", gapWidth)) + context
-	if visible := ansi.StringWidth(line); visible < width {
+	if visible := terminalCellWidth(line); visible < width {
 		line += strings.Repeat(" ", width-visible)
 	}
 	return fitStyledRect(line, width, 1)

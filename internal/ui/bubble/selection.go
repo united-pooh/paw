@@ -7,7 +7,6 @@ import (
 	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/rivo/uniseg"
 )
 
 // writeClipboard 写入系统剪贴板；测试中可以替换。
@@ -211,7 +210,7 @@ func buildTranscriptLineSnapshots(content string) []transcriptLineSnapshot {
 		lines = append(lines, transcriptLineSnapshot{
 			styled: line,
 			plain:  plain,
-			width:  uniseg.StringWidth(plain),
+			width:  terminalCellWidth(plain),
 		})
 	}
 	return lines
@@ -316,12 +315,13 @@ func snapCellRangeToGraphemes(text string, width, left, right int) (int, int, bo
 	if right <= left {
 		return 0, 0, false
 	}
-	graphemes := uniseg.NewGraphemes(text)
 	cell := 0
 	snappedLeft := -1
 	snappedRight := 0
-	for graphemes.Next() {
-		graphemeWidth := maxInt(1, graphemes.Width())
+	for remaining := text; remaining != ""; {
+		cluster, clusterWidth := terminalFirstGraphemeCluster(remaining)
+		remaining = remaining[len(cluster):]
+		graphemeWidth := maxInt(1, clusterWidth)
 		graphemeStart := cell
 		graphemeEnd := cell + graphemeWidth
 		if graphemeEnd > left && graphemeStart < right {
@@ -340,15 +340,16 @@ func snapCellRangeToGraphemes(text string, width, left, right int) (int, int, bo
 
 // slicePlainCells 按显示单元格范围截取纯文本，返回完整 grapheme。
 func slicePlainCells(text string, left, right int) string {
-	graphemes := uniseg.NewGraphemes(text)
 	cell := 0
 	var selected strings.Builder
-	for graphemes.Next() {
-		graphemeWidth := maxInt(1, graphemes.Width())
+	for remaining := text; remaining != ""; {
+		cluster, clusterWidth := terminalFirstGraphemeCluster(remaining)
+		remaining = remaining[len(cluster):]
+		graphemeWidth := maxInt(1, clusterWidth)
 		graphemeStart := cell
 		graphemeEnd := cell + graphemeWidth
 		if graphemeEnd > left && graphemeStart < right {
-			selected.WriteString(graphemes.Str())
+			selected.WriteString(cluster)
 		}
 		cell = graphemeEnd
 		if cell >= right {
@@ -360,9 +361,9 @@ func slicePlainCells(text string, left, right int) string {
 
 // renderSelectedLineFragment 只给一行中的选中片段添加选区样式。
 func renderSelectedLineFragment(line string, left, right int) string {
-	prefix := ansi.Cut(line, 0, left)
-	selected := ansi.Cut(line, left, right)
-	suffix := ansi.Cut(line, right, ansi.StringWidth(line))
+	prefix := cutStyledCellsExact(line, 0, left)
+	selected := cutStyledCellsExact(line, left, right)
+	suffix := cutStyledCellsExact(line, right, terminalCellWidth(line))
 	if selected == "" {
 		return line
 	}

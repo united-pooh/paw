@@ -7,7 +7,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/rivo/uniseg"
 )
 
 // inputTokenKind describes the semantic style of a completion-created token.
@@ -338,10 +337,11 @@ func (m *appModel) snapInputCursorToToken(beforeCursor, afterCursor int) {
 func snapRuneOffsetToGrapheme(text string, offset, direction int) int {
 	runes := []rune(text)
 	offset = clampInt(offset, 0, len(runes))
-	graphemes := uniseg.NewGraphemes(text)
 	runeOffset := 0
-	for graphemes.Next() {
-		clusterRunes := len([]rune(graphemes.Str()))
+	for remaining := text; remaining != ""; {
+		cluster, _ := terminalFirstGraphemeCluster(remaining)
+		remaining = remaining[len(cluster):]
+		clusterRunes := len([]rune(cluster))
 		clusterEnd := runeOffset + clusterRunes
 		if offset > runeOffset && offset < clusterEnd {
 			if direction > 0 {
@@ -440,7 +440,7 @@ func projectInput(raw string, tokens []inputToken, cursor, width int, folded boo
 		column = 0
 	}
 	appendCluster := func(cluster string, kind inputTokenKind, token bool) {
-		clusterWidth := uniseg.StringWidth(cluster)
+		clusterWidth := terminalCellWidth(cluster)
 		if clusterWidth < 1 {
 			clusterWidth = 1
 		}
@@ -457,9 +457,10 @@ func projectInput(raw string, tokens []inputToken, cursor, width int, folded boo
 		lines[row].width = column
 	}
 	appendText := func(text string, kind inputTokenKind, token bool) {
-		graphemes := uniseg.NewGraphemes(text)
-		for graphemes.Next() {
-			appendCluster(graphemes.Str(), kind, token)
+		for remaining := text; remaining != ""; {
+			cluster, _ := terminalFirstGraphemeCluster(remaining)
+			remaining = remaining[len(cluster):]
+			appendCluster(cluster, kind, token)
 		}
 	}
 
@@ -484,11 +485,10 @@ func projectInput(raw string, tokens []inputToken, cursor, width int, folded boo
 			newVisualLine(logicalLine)
 			continue
 		}
-		graphemes := uniseg.NewGraphemes(string(rawRunes[i:]))
-		if !graphemes.Next() {
+		cluster, _ := terminalFirstGraphemeCluster(string(rawRunes[i:]))
+		if cluster == "" {
 			break
 		}
-		cluster := graphemes.Str()
 		clusterRunes := len([]rune(cluster))
 		if cursor > i && cursor < i+clusterRunes {
 			if cursor-i > i+clusterRunes-cursor {
@@ -522,8 +522,9 @@ func projectInput(raw string, tokens []inputToken, cursor, width int, folded boo
 							formatInputFoldMarker(end-start),
 							width,
 						)
-						marker.atoms = []inputProjectionAtom{{text: text, width: uniseg.StringWidth(text)}}
-						marker.width = uniseg.StringWidth(text)
+						markerWidth := terminalCellWidth(text)
+						marker.atoms = []inputProjectionAtom{{text: text, width: markerWidth}}
+						marker.width = markerWidth
 						filtered = append(filtered, marker)
 						markerAdded = true
 					}

@@ -30,6 +30,7 @@ type fakeRunner struct {
 	inputs           []string
 	resetCalls       int
 	loadHistoryCalls []string
+	loadHistoryMsgs  []message.Message
 	loadHistoryErr   error
 	err              error
 	stats            loop.ContextStats
@@ -50,9 +51,9 @@ func (r *fakeRunner) ResetHistory() {
 }
 
 // LoadHistory 记录加载历史的调用，并可模拟失败。
-func (r *fakeRunner) LoadHistory(ctx context.Context, sessionID string) error {
+func (r *fakeRunner) LoadHistory(ctx context.Context, sessionID string) ([]message.Message, error) {
 	r.loadHistoryCalls = append(r.loadHistoryCalls, sessionID)
-	return r.loadHistoryErr
+	return append([]message.Message(nil), r.loadHistoryMsgs...), r.loadHistoryErr
 }
 
 func (r *fakeRunner) SubmitSupplement(input string) bool {
@@ -3120,6 +3121,24 @@ func TestMarkdownCodeBlockKeepsNestedMarkdownFencesInsideBlock(t *testing.T) {
 	}
 }
 
+func TestMarkdownWrappingUsesTerminalGraphemeWidth(t *testing.T) {
+	const mixed = "中文 English 日本語 한국어 Русский العربية हिन्दी ภาษาไทย"
+	const width = 52
+	lines := wrapDisplayWidthLine(mixed, width)
+	if len(lines) != 2 {
+		t.Fatalf("wrapped lines=%q, want one trailing line at width %d", lines, width)
+	}
+	if got := strings.Join(lines, ""); got != mixed {
+		t.Fatalf("wrapped text=%q, want original %q", got, mixed)
+	}
+	if got := terminalCellWidth(lines[0]); got != width {
+		t.Fatalf("first line width=%d, want %d: %q", got, width, lines[0])
+	}
+	if got := terminalCellWidth(lines[1]); got != 2 {
+		t.Fatalf("last line width=%d, want 2: %q", got, lines[1])
+	}
+}
+
 // TestMarkdownTableRendersAsAlignedTable 验证 Markdown 表格会渲染为终端对齐表格。
 func TestMarkdownTableRendersAsAlignedTable(t *testing.T) {
 	rendered := renderMarkdown("| Name | Value |\n| :--- | ---: |\n| alpha | 1 |\n| beta | two |", 80)
@@ -3417,7 +3436,10 @@ func TestSessionPickerEscClosesPicker(t *testing.T) {
 
 // TestSessionPickerEnterRestoresSession 验证在选择器中按 enter 触发 loadSessionHistoryCmd。
 func TestSessionPickerEnterRestoresSession(t *testing.T) {
-	runner := &fakeRunner{}
+	runner := &fakeRunner{loadHistoryMsgs: []message.Message{
+		{Role: message.RoleUser, Content: "restored prompt"},
+		{Role: message.RoleAssistant, Content: "restored answer"},
+	}}
 	model := newTestModel(runner)
 	model.sessionPicker = &sessionPicker{
 		loading: false,
@@ -3442,6 +3464,9 @@ func TestSessionPickerEnterRestoresSession(t *testing.T) {
 	if restored.sessionID != "target-session" {
 		t.Fatalf("sessionRestoredMsg.sessionID = %q, want target-session", restored.sessionID)
 	}
+	if len(restored.entries) != 2 || restored.entries[0].body != "restored prompt" || restored.entries[1].body != "restored answer" {
+		t.Fatalf("sessionRestoredMsg.entries = %#v, want converted session history", restored.entries)
+	}
 }
 
 // TestSessionRestoredMsgUpdatesSessionID 验证 sessionRestoredMsg 更新 m.sessionID。
@@ -3456,6 +3481,51 @@ func TestSessionRestoredMsgUpdatesSessionID(t *testing.T) {
 	}
 	if model.sessionPicker != nil {
 		t.Fatalf("sessionPicker = %#v, want nil after restore", model.sessionPicker)
+	}
+}
+
+func TestSessionPickerRestoreReplacesTranscriptAndViewport(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 24
+	model.relayout()
+	model.transcript = []transcriptEntry{{kind: entryUser, title: "you", body: "old conversation"}}
+	model.refreshViewport()
+
+	next, _ := model.Update(sessionRestoredMsg{
+		sessionID: "replacement",
+		entries:   []transcriptEntry{{kind: entryUser, title: "you", body: "restored conversation"}},
+	})
+	model = next.(appModel)
+
+	rendered := ansi.Strip(model.viewport.View())
+	if !strings.Contains(rendered, "restored conversation") {
+		t.Fatalf("viewport = %q, want restored history", rendered)
+	}
+	if strings.Contains(rendered, "old conversation") {
+		t.Fatalf("viewport = %q, retained previous session history", rendered)
+	}
+}
+
+func TestSessionPickerRestoreClearsTranscriptForEmptyHistory(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 24
+	model.relayout()
+	model.transcript = []transcriptEntry{{kind: entryAssistant, title: "assistant", body: "old conversation"}}
+	model.refreshViewport()
+
+	next, _ := model.Update(sessionRestoredMsg{sessionID: "empty-session"})
+	model = next.(appModel)
+
+	rendered := ansi.Strip(model.viewport.View())
+	if strings.Contains(rendered, "old conversation") {
+		t.Fatalf("viewport = %q, retained previous session history for empty session", rendered)
+	}
+	if !strings.Contains(rendered, "已切换到会话: empty-session") {
+		t.Fatalf("viewport = %q, want session switch status", rendered)
 	}
 }
 
@@ -3864,9 +3934,9 @@ func TestCompletionBackspaceRelayoutsWhenTriggerDeleted(t *testing.T) {
 	}
 }
 
-// TestFormatSessionLabel_SizeDisplay 验证 formatFileSize B/KB/MB 阈值格式化。
+// TestFormatSessionLabel_SizeDisplay 验证会话标签保留日期、大小和摘要但不展示 session ID。
 func TestFormatSessionLabel_SizeDisplay(t *testing.T) {
-	base := time.Date(2024, 3, 15, 0, 0, 0, 0, time.UTC)
+	base := time.Date(2024, 3, 15, 9, 8, 7, 0, time.UTC)
 
 	tests := []struct {
 		name     string
@@ -3894,15 +3964,19 @@ func TestFormatSessionLabel_SizeDisplay(t *testing.T) {
 			if !strings.Contains(label, tc.wantSize) {
 				t.Fatalf("formatSessionLabel() = %q, want size %q", label, tc.wantSize)
 			}
-			// ID should be truncated to 8 chars
-			if !strings.Contains(label, "abcdef12") {
-				t.Fatalf("formatSessionLabel() = %q, want ID prefix abcdef12", label)
+			if strings.Contains(label, "abcdef1234567890") || strings.Contains(label, "abcdef12") {
+				t.Fatalf("formatSessionLabel() = %q, must not expose session ID", label)
 			}
-			// Date should be YYYY-MM-DD
-			if !strings.Contains(label, "2024-03-15") {
-				t.Fatalf("formatSessionLabel() = %q, want date 2024-03-15", label)
+			if !strings.Contains(label, "2024-03-15 09:08:07") {
+				t.Fatalf("formatSessionLabel() = %q, want creation timestamp", label)
 			}
 		})
+	}
+
+	first := formatSessionLabel(sessionSummaryItem{createdAt: base, firstMessage: "same"})
+	second := formatSessionLabel(sessionSummaryItem{createdAt: base.Add(time.Second), firstMessage: "same"})
+	if first == second {
+		t.Fatalf("same-summary sessions need a non-ID discriminator: %q", first)
 	}
 }
 

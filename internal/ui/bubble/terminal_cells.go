@@ -8,10 +8,22 @@ import (
 )
 
 // terminalCellWidth returns the number of terminal cells occupied by styled
-// text. ANSI control sequences are ignored and printable text is measured as
-// grapheme clusters.
+// text. x/ansi is shared by this package, Lipgloss, and Bubble Tea, so all
+// layout and renderer layers use the same width model.
 func terminalCellWidth(text string) int {
 	return ansi.StringWidth(text)
+}
+
+func terminalFirstGraphemeCluster(text string) (string, int) {
+	if text == "" {
+		return "", 0
+	}
+	cluster, width := ansi.FirstGraphemeCluster(text, ansi.GraphemeWidth)
+	if cluster == "" {
+		cluster = text[:1]
+		width = ansi.StringWidth(cluster)
+	}
+	return cluster, width
 }
 
 // fitStyledCellLine truncates and pads one styled line to an exact terminal

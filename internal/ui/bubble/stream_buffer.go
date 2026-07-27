@@ -6,7 +6,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
-	"github.com/rivo/uniseg"
 )
 
 const streamTabWidth = 4
@@ -291,10 +290,10 @@ func (b *streamLineBuffer) appendToken(out *strings.Builder, text string, tokenW
 
 func displayTokens(text string) []displayToken {
 	tokens := make([]displayToken, 0, len(text))
-	graphemes := uniseg.NewGraphemes(text)
-	for graphemes.Next() {
-		cluster := graphemes.Str()
-		token := displayToken{text: cluster, width: graphemes.Width(), kind: displayTokenText}
+	for remaining := text; remaining != ""; {
+		cluster, width := terminalFirstGraphemeCluster(remaining)
+		remaining = remaining[len(cluster):]
+		token := displayToken{text: cluster, width: width, kind: displayTokenText}
 		switch cluster {
 		case "\n":
 			token.kind = displayTokenNewline

@@ -330,6 +330,16 @@ func TestTokenProjectionWrapsUnicodeWithoutExposingRawSyntax(t *testing.T) {
 	}
 }
 
+func TestTokenProjectionUsesIndicConjunctCellWidth(t *testing.T) {
+	projection := projectInput("हिन्दी", nil, 0, 3, false)
+	if len(projection.lines) != 1 {
+		t.Fatalf("projection lines=%d, want one line: %#v", len(projection.lines), projection.lines)
+	}
+	if got := projection.lines[0].width; got != 3 {
+		t.Fatalf("projected width=%d, want 3: %#v", got, projection.lines[0])
+	}
+}
+
 func TestTokenProjectionDrivesInputHeightFoldAndCursorAnchor(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true

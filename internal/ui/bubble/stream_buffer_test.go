@@ -50,6 +50,16 @@ func TestStreamLineBufferUsesGraphemeCellWidth(t *testing.T) {
 	}
 }
 
+func TestStreamLineBufferUsesIndicConjunctCellWidth(t *testing.T) {
+	var buffer streamLineBuffer
+	if got := buffer.Push("हिन्दीx!", 4); got != "हिन्दीx" {
+		t.Fatalf("push = %q, want Hindi plus x in four cells", got)
+	}
+	if got := buffer.Flush(4); got != "!" {
+		t.Fatalf("flush = %q, want held tail", got)
+	}
+}
+
 func TestStreamLineBufferKeepsSplitGraphemeTogether(t *testing.T) {
 	var buffer streamLineBuffer
 	if got := buffer.Push("e", 1); got != "" {

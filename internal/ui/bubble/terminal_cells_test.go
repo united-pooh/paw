@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -37,10 +38,17 @@ func TestCutStyledCellsExactHandlesGraphemeBoundaries(t *testing.T) {
 			want:  " A",
 		},
 		{
-			name:  "half width grapheme",
+			name:  "promoted halfwidth grapheme partial",
 			line:  "(ﾟABC",
 			left:  0,
 			right: 1,
+			want:  " ",
+		},
+		{
+			name:  "promoted halfwidth grapheme complete",
+			line:  "(ﾟABC",
+			left:  0,
+			right: 2,
 			want:  "(ﾟ",
 		},
 		{
@@ -96,5 +104,51 @@ func TestOpaqueOverlayClearsWideGraphemeAtItsCellBoundary(t *testing.T) {
 	}
 	if strings.Contains(got, "\x1b[31mXXXXX") {
 		t.Fatalf("overlay inherited base foreground style: %q", got)
+	}
+}
+
+func TestTerminalGraphemeClustersUseTerminalCellWidths(t *testing.T) {
+	var clusters []string
+	for remaining := "हिन्दी"; remaining != ""; {
+		cluster, _ := terminalFirstGraphemeCluster(remaining)
+		remaining = remaining[len(cluster):]
+		clusters = append(clusters, cluster)
+	}
+	if got, want := strings.Join(clusters, "|"), "हि|न्दी"; got != want {
+		t.Fatalf("clusters=%q, want %q", got, want)
+	}
+	if got := terminalCellWidth(strings.Join(clusters, "")); got != 3 {
+		t.Fatalf("terminal width=%d, want 3", got)
+	}
+}
+
+func TestTerminalCellWidthMatchesGhosttyComplexScriptAdvance(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want int
+	}{
+		{name: "arabic", text: "العربية", want: 7},
+		{name: "devanagari", text: "हिन्दी", want: 3},
+		{name: "thai", text: "ภาษาไทย", want: 7},
+		{
+			name: "mixed language line",
+			text: "中文 English 日本語 한국어 Русский العربية हिन्दी ภาษาไทย",
+			want: 54,
+		},
+		{name: "styled devanagari", text: "\x1b[31mहिन्दी\x1b[0m", want: 3},
+		{name: "combining latin", text: "e\u0301", want: 1},
+		{name: "spacing mark cluster", text: "(ﾟ", want: 2},
+		{name: "emoji zwj", text: "👩‍💻", want: 2},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := terminalCellWidth(test.text); got != test.want {
+				t.Fatalf("terminalCellWidth(%q)=%d, want %d", test.text, got, test.want)
+			}
+			if got := lipgloss.Width(test.text); got != test.want {
+				t.Fatalf("lipgloss.Width(%q)=%d, want %d", test.text, got, test.want)
+			}
+		})
 	}
 }

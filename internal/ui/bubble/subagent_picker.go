@@ -420,10 +420,7 @@ func (m *appModel) applySessionPickerRestore(msg sessionRestoredMsg) {
 	m.subagentPicker = nil
 	m.subagentPreview = nil
 	m.syncInputPlaceholder()
-	if len(msg.entries) > 0 {
-		m.transcript = mergeTranscriptToolEntries(copyTranscriptEntries(msg.entries))
-		m.refreshViewport()
-	}
+	m.transcript = mergeTranscriptToolEntries(copyTranscriptEntries(msg.entries))
 	m.addEntry(transcriptEntry{kind: entrySystem, title: "sessions", body: fmt.Sprintf("已切换到会话: %s", msg.sessionID)})
 }
 

@@ -26,7 +26,12 @@ require (
 	github.com/mattn/go-runewidth v0.0.23 // indirect
 	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
+	github.com/rockorager/go-uucode v1.2.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.3.8 // indirect
 )
+
+// Keep Bubble Tea, Lipgloss, and the application on Ghostty-compatible
+// grapheme widths. Upstream displaywidth counts Indic conjuncts differently.
+replace github.com/clipperhouse/displaywidth => ./third_party/displaywidth

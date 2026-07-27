@@ -7,7 +7,7 @@ import (
 	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/rivo/uniseg"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const maxRenderedCodeBlockLines = 32
@@ -155,13 +155,13 @@ func markdownCodeBlockWidth(code string, width int) int {
 	maxWidth := maxInt(6, width-4)
 	widest := 1
 	for _, line := range strings.Split(code, "\n") {
-		widest = maxInt(widest, lipgloss.Width(line))
+		widest = maxInt(widest, terminalCellWidth(line))
 	}
 	return minInt(maxWidth, maxInt(6, widest+4))
 }
 
 func renderCodeBlockBorderLine(left, fill, right string, width int) string {
-	fillWidth := maxInt(1, width-lipgloss.Width(left)-lipgloss.Width(right))
+	fillWidth := maxInt(1, width-terminalCellWidth(left)-terminalCellWidth(right))
 	return markdownCodeBlockBorderStyle.Render(left + strings.Repeat(fill, fillWidth) + right)
 }
 
@@ -300,7 +300,7 @@ func markdownTableColumnWidths(rows [][]string, columnCount, maxWidth int) []int
 	widths := make([]int, columnCount)
 	for _, row := range rows {
 		for i, cell := range row {
-			widths[i] = maxInt(widths[i], lipgloss.Width(renderInlineMarkdown(cell)))
+			widths[i] = maxInt(widths[i], terminalCellWidth(renderInlineMarkdown(cell)))
 		}
 	}
 	available := maxInt(columnCount, maxWidth-(columnCount-1)*3)
@@ -340,7 +340,7 @@ func renderMarkdownTableRow(row []string, widths []int, header bool) string {
 			cell = renderInlineMarkdown(row[i])
 		}
 		cell = truncateDisplayWidth(cell, width)
-		padded := cell + strings.Repeat(" ", maxInt(0, width-lipgloss.Width(cell)))
+		padded := cell + strings.Repeat(" ", maxInt(0, width-terminalCellWidth(cell)))
 		if header {
 			padded = markdownHeadingStyle.Render(padded)
 		}
@@ -361,21 +361,10 @@ func renderMarkdownTableRule(widths []int) string {
 // truncateDisplayWidth 按终端显示宽度截断文本，并在末尾添加省略号。
 func truncateDisplayWidth(text string, width int) string {
 	width = maxInt(1, width)
-	if lipgloss.Width(text) <= width {
+	if terminalCellWidth(text) <= width {
 		return text
 	}
-	graphemes := uniseg.NewGraphemes(text)
-	var clusters []string
-	for graphemes.Next() {
-		clusters = append(clusters, graphemes.Str())
-	}
-	for len(clusters) > 0 && lipgloss.Width(strings.Join(clusters, "")+"…") > width {
-		clusters = clusters[:len(clusters)-1]
-	}
-	if len(clusters) == 0 {
-		return "…"
-	}
-	return strings.Join(clusters, "") + "…"
+	return ansi.Truncate(text, width, "…")
 }
 
 func wrapDisplayWidthLines(text string, width int) string {
@@ -392,30 +381,31 @@ func wrapDisplayWidthLine(text string, width int) []string {
 	if text == "" {
 		return []string{""}
 	}
-	if lipgloss.Width(text) <= width {
+	if terminalCellWidth(text) <= width {
 		return []string{text}
 	}
 
 	var lines []string
 	var chunk strings.Builder
 	chunkWidth := 0
-	for _, r := range text {
-		runeWidth := lipgloss.Width(string(r))
-		if runeWidth <= 0 {
-			chunk.WriteRune(r)
+	for remaining := text; remaining != ""; {
+		cluster, clusterWidth := terminalFirstGraphemeCluster(remaining)
+		remaining = remaining[len(cluster):]
+		if clusterWidth <= 0 {
+			chunk.WriteString(cluster)
 			continue
 		}
-		if chunkWidth > 0 && chunkWidth+runeWidth > width {
+		if chunkWidth > 0 && chunkWidth+clusterWidth > width {
 			lines = append(lines, chunk.String())
 			chunk.Reset()
 			chunkWidth = 0
 		}
-		if runeWidth > width {
-			lines = append(lines, truncateDisplayWidth(string(r), width))
+		if clusterWidth > width {
+			lines = append(lines, truncateDisplayWidth(cluster, width))
 			continue
 		}
-		chunk.WriteRune(r)
-		chunkWidth += runeWidth
+		chunk.WriteString(cluster)
+		chunkWidth += clusterWidth
 	}
 	if chunk.Len() > 0 || len(lines) == 0 {
 		lines = append(lines, chunk.String())
@@ -439,7 +429,7 @@ func markdownHeading(line string) (int, string, bool) {
 func renderMarkdownHeading(level int, text string, width int) string {
 	text = renderInlineMarkdown(text)
 	if level == 1 {
-		rule := strings.Repeat("─", maxInt(8, minInt(width, lipgloss.Width(text)+4)))
+		rule := strings.Repeat("─", maxInt(8, minInt(width, terminalCellWidth(text)+4)))
 		return markdownHeadingStyle.Render(text) + "\n" + markdownRuleStyle.Render(rule)
 	}
 	prefix := strings.Repeat("#", minInt(level, 3))

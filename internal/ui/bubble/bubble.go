@@ -20,7 +20,7 @@ import (
 type Runner interface {
 	RunTurn(ctx context.Context, input string) (message.Message, error)
 	ResetHistory()
-	LoadHistory(ctx context.Context, sessionID string) error
+	LoadHistory(ctx context.Context, sessionID string) ([]message.Message, error)
 }
 
 // SupplementSubmitter describes runners that can accept instructions while a

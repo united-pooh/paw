@@ -51,10 +51,16 @@ func loadSessionHistoryCmd(ctx context.Context, runner Runner, sessionID string)
 		if runner == nil {
 			return sessionRestoredMsg{err: fmt.Errorf("runner 未初始化")}
 		}
-		if err := runner.LoadHistory(ctx, sessionID); err != nil {
+		messages, err := runner.LoadHistory(ctx, sessionID)
+		if err != nil {
 			return sessionRestoredMsg{err: err}
 		}
-		return sessionRestoredMsg{sessionID: sessionID}
+		createdAt := time.Now()
+		entries := make([]transcriptEntry, 0, len(messages))
+		for _, msg := range messages {
+			entries = append(entries, transcriptEntriesFromMessage(msg, createdAt)...)
+		}
+		return sessionRestoredMsg{sessionID: sessionID, entries: entries}
 	}
 }
 
@@ -148,23 +154,16 @@ func (m appModel) renderSessionPickerContent() string {
 	return strings.Join(lines, "\n")
 }
 
-// formatSessionLabel 格式化会话列表项的显示文本。
-// 格式：ID[:8]  YYYY-MM-DD  <size>  <firstMessage>
+// formatSessionLabel 格式化会话列表项的显示文本。创建时间在隐藏
+// session ID 后提供稳定的、可读的候选项区分信息。
 func formatSessionLabel(item sessionSummaryItem) string {
-	id := item.sessionID
-	if len(id) > 8 {
-		id = id[:8]
-	}
-	date := item.createdAt.Format("2006-01-02")
+	createdAt := item.createdAt.Format("2006-01-02 15:04:05")
 	size := formatFileSize(item.transcriptSize)
-	if item.firstMessage != "" {
-		msg := item.firstMessage
-		if runes := []rune(msg); len(runes) > 80 {
-			msg = string(runes[:80])
-		}
-		return fmt.Sprintf("%s  %s  %s  %s", id, date, size, msg)
+	msg := strings.Join(strings.Fields(sanitizeTerminalText(item.firstMessage)), " ")
+	if msg != "" {
+		return fmt.Sprintf("%s  %s  %s", createdAt, size, truncateDisplayWidth(msg, 80))
 	}
-	return fmt.Sprintf("%s  %s  %s  (empty)", id, date, size)
+	return fmt.Sprintf("%s  %s  (empty)", createdAt, size)
 }
 
 // formatFileSize 将字节数格式化为人类可读的文件大小。

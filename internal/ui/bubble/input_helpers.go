@@ -7,7 +7,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 const (
@@ -30,7 +29,7 @@ func wrappedInputLineCount(value string, width int) int {
 	}
 	total := 0
 	for _, line := range strings.Split(value, "\n") {
-		lineWidth := lipgloss.Width(line)
+		lineWidth := terminalCellWidth(line)
 		total += maxInt(1, (lineWidth+width-1)/width)
 	}
 	return maxInt(1, total)
