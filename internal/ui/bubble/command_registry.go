@@ -154,6 +154,15 @@ func NewCommandRegistry() *CommandRegistry {
 		},
 	})
 	registry.Register(Command{
+		Name:              "/mcp",
+		Description:       "show MCP server status",
+		AllowWhileRunning: true,
+		Handler: func(m *appModel, invocation string) tea.Cmd {
+			m.addEntry(transcriptEntry{kind: entrySystem, title: "mcp", body: m.mcpStatusText()})
+			return nil
+		},
+	})
+	registry.Register(Command{
 		Name:              "/clear",
 		Description:       "clear in-process chat history",
 		AllowWhileRunning: false,
@@ -275,6 +284,36 @@ func (r *CommandRegistry) HelpText() string {
 		lines = append(lines, fmt.Sprintf("%s - %s", label, command.Description))
 	}
 	lines = append(lines, "Type ! to toggle terminal mode or !<command> to run bash once.")
+	return strings.Join(lines, "\n")
+}
+
+func (m *appModel) mcpStatusText() string {
+	if m == nil || m.mcpController == nil {
+		return "MCP status controller is unavailable."
+	}
+	lines := []string{"config: " + m.mcpController.ConfigPath()}
+	statuses := m.mcpController.Status()
+	if len(statuses) == 0 {
+		lines = append(lines, "servers: none")
+		return strings.Join(lines, "\n")
+	}
+	for _, status := range statuses {
+		line := fmt.Sprintf("%s state=%s", status.Name, status.State)
+		if status.PID > 0 {
+			line += fmt.Sprintf(" pid=%d", status.PID)
+		}
+		line += fmt.Sprintf(" tools=%d resources=%d templates=%d prompts=%d", status.Tools, status.Resources, status.Templates, status.Prompts)
+		if status.Command != "" {
+			line += " command=" + status.Command
+		}
+		if status.WorkDir != "" {
+			line += " cwd=" + status.WorkDir
+		}
+		if status.LastError != "" {
+			line += " error=" + status.LastError
+		}
+		lines = append(lines, line)
+	}
 	return strings.Join(lines, "\n")
 }
 

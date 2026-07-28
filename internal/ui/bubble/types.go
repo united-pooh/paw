@@ -297,6 +297,7 @@ type appModel struct {
 	settingsConfig            SettingsController
 	subagents                 SubagentController
 	sessionStore              SessionStore
+	mcpController             MCPStatusController
 	commandRegistry           *CommandRegistry
 	skillRegistry             *skill.Registry
 	queryGuard                QueryGuard

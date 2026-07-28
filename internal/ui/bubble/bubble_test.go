@@ -3453,17 +3453,18 @@ func TestMarkdownCodeBlockDoesNotForceFullViewportWidth(t *testing.T) {
 	}
 }
 
-// TestMarkdownCodeBlockKeepsLanguageLabelOutsideBlock 验证代码块语言标签显示在代码块外部。
-func TestMarkdownCodeBlockKeepsLanguageLabelOutsideBlock(t *testing.T) {
-	rendered := renderMarkdown("```json\n{\"ok\": true}\n```", 80)
+// TestMarkdownCodeBlockKeepsLanguageLabelOnTopBorder 验证语言标签嵌入代码块顶边。
+func TestMarkdownCodeBlockKeepsLanguageLabelOnTopBorder(t *testing.T) {
+	rendered := ansi.Strip(renderMarkdown("```json\n{\"ok\": true}\n```", 80))
 	lines := strings.Split(rendered, "\n")
-	if len(lines) < 2 || !strings.Contains(lines[0], "json") || strings.Contains(ansi.Strip(lines[0]), "code json") {
-		t.Fatalf("rendered code block = %q", rendered)
+	if len(lines) != 3 {
+		t.Fatalf("rendered code block lines = %d, want 3:\n%s", len(lines), rendered)
 	}
-	for _, line := range lines[1:] {
-		if strings.Contains(line, "json") {
-			t.Fatalf("rendered code block = %q, should not include label inside body", rendered)
-		}
+	if !strings.Contains(lines[0], " json ") || !strings.Contains(lines[0], "┌") || !strings.Contains(lines[0], "┐") {
+		t.Fatalf("top border = %q, want centered json label", lines[0])
+	}
+	if strings.Contains(lines[1], "json") {
+		t.Fatalf("body line = %q, should not repeat language label", lines[1])
 	}
 	if !strings.Contains(rendered, "{\"ok\": true}") {
 		t.Fatalf("rendered code block = %q, want json body", rendered)
@@ -3473,11 +3474,67 @@ func TestMarkdownCodeBlockKeepsLanguageLabelOutsideBlock(t *testing.T) {
 func TestMarkdownCodeBlockShowsOnlyLanguageLabel(t *testing.T) {
 	rendered := ansi.Strip(renderMarkdown("```python\ndef hanoi():\n    pass\n```", 80))
 	lines := strings.Split(rendered, "\n")
-	if len(lines) < 2 || strings.TrimSpace(lines[0]) != "python" {
-		t.Fatalf("rendered code block = %q, want python-only label", rendered)
+	if len(lines) < 3 || !strings.Contains(lines[0], " python ") {
+		t.Fatalf("rendered code block = %q, want python label on top border", rendered)
 	}
 	if strings.Contains(rendered, "code python") {
 		t.Fatalf("rendered code block = %q, should not include code prefix", rendered)
+	}
+}
+
+func TestMarkdownCodeBlockCentersLanguageLabel(t *testing.T) {
+	rendered := ansi.Strip(renderMarkdown("```text\nhello\n```", 80))
+	lines := strings.Split(rendered, "\n")
+	if len(lines) != 3 {
+		t.Fatalf("rendered code block lines = %d, want 3:\n%s", len(lines), rendered)
+	}
+	const chip = " text "
+	start := strings.Index(lines[0], chip)
+	if start < 0 {
+		t.Fatalf("top border = %q, want %q", lines[0], chip)
+	}
+	leftWidth := terminalCellWidth(lines[0][:start])
+	rightWidth := terminalCellWidth(lines[0][start+len(chip):])
+	diff := leftWidth - rightWidth
+	if diff < -1 || diff > 1 {
+		t.Fatalf("top border is not centered: left=%d right=%d line=%q", leftWidth, rightWidth, lines[0])
+	}
+}
+
+func TestMarkdownCodeBlockOmitsDefaultLabelWithoutLanguage(t *testing.T) {
+	rendered := ansi.Strip(renderMarkdown("```\nhello\n```", 80))
+	lines := strings.Split(rendered, "\n")
+	if len(lines) != 3 {
+		t.Fatalf("rendered code block lines = %d, want 3:\n%s", len(lines), rendered)
+	}
+	if strings.Contains(lines[0], "code") || strings.Contains(rendered, "code hello") {
+		t.Fatalf("rendered code block = %q, should not invent a code label", rendered)
+	}
+}
+
+func TestMarkdownCodeBlockTruncatesLongLanguageLabelWithinWidth(t *testing.T) {
+	const width = 12
+	rendered := renderMarkdown("```this-is-a-very-long-language\nx\n```", width)
+	stripped := ansi.Strip(rendered)
+	lines := strings.Split(stripped, "\n")
+	if len(lines) != 3 {
+		t.Fatalf("rendered code block lines = %d, want 3:\n%s", len(lines), stripped)
+	}
+	assertRenderedLineWidthsAtMost(t, rendered, width)
+	if !strings.Contains(lines[0], "…") {
+		t.Fatalf("top border = %q, want truncated language marker", lines[0])
+	}
+}
+
+func TestMarkdownCodeBlockLabelStyleUsesSignalCyan(t *testing.T) {
+	if got := markdownCodeBlockLabelStyle.GetBackground(); got != colorManager.LipglossColor(colorSignal) {
+		t.Fatalf("label background = %#v, want %#v", got, colorManager.LipglossColor(colorSignal))
+	}
+	if got := markdownCodeBlockLabelStyle.GetForeground(); got != colorManager.LipglossColor(colorTerminalBackground) {
+		t.Fatalf("label foreground = %#v, want %#v", got, colorManager.LipglossColor(colorTerminalBackground))
+	}
+	if !markdownCodeBlockLabelStyle.GetBold() {
+		t.Fatal("label style must be bold")
 	}
 }
 

@@ -144,6 +144,15 @@ func NewRunnerWithInstructionRoot(model ModelStreamer, output ui.UI, registry *t
 	}
 }
 
+// ReplaceToolNamespace refreshes a dynamically discovered tool namespace while
+// keeping the Runner's existing history and model loop intact.
+func (runner *Runner) ReplaceToolNamespace(namespace string, tools []tool.Tool) error {
+	if runner == nil || runner.registry == nil {
+		return fmt.Errorf("runner tool registry is unavailable")
+	}
+	return runner.registry.ReplaceNamespace(namespace, tools)
+}
+
 // RunTurn 执行一次最小工具闭环流程，并返回最终 assistant 消息。
 func (runner *Runner) RunTurn(ctx context.Context, input string) (msg message.Message, err error) {
 	if err := runner.validate(); err != nil {

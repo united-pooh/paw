@@ -91,15 +91,16 @@ go run ./cmd/agent -s <session-id>
 - `-p` 为空: 进入交互式对话界面
 - `-s` 有值: 绑定到指定 session 并恢复历史
 - `-s` 为空: 每次启动都创建一个全新空 session
-- `-subagent-worker`: 以子进程方式运行，从 stdin 读取 `WorkerRequest`（JSON），执行后输出 `WorkerResult` 到 stdout
+- `-subagent-worker`: 以子进程方式运行，使用父进程转发 MCP 调用的双向 JSON 行协议
 
-#### `buildRunner(ctx, sessionIDFlag, output) (*loop.Runner, string, *model.Client, *settings.Controller, *subagent.Manager, error)`
+#### `buildRunner(ctx, sessionIDFlag, output) (*loop.Runner, string, *model.Client, *settings.Controller, *subagent.Manager, *session.JSONLStore, *mcp.Manager, error)`
 
 职责:
 - 加载模型配置
 - 创建模型客户端和会话存储
 - 装配 settings 控制器和 subagent 管理器
 - 注册文件、shell、webfetch、subagent 相关工具
+- 启动主进程持有的 MCP Manager，并注册 namespaced MCP 工具
 - 返回 `Runner`、sessionID 和运行时控制器
 
 这是当前的依赖装配点。
@@ -109,6 +110,24 @@ go run ./cmd/agent -s <session-id>
 - `.ccagent/settings.json`
 - `.ccagent/exports/`
 - `.ccagent/sessions/<sessionID>/`
+
+### MCP / CodeGraph
+
+GoCode 是 MCP client，主 Agent 在启动时读取 `~/.ccagent/mcp.toml`，通过本地 stdio 启动配置的 MCP server。文件不存在时会自动创建为空文件；启用的 server 初始化或能力发现失败会阻止本次启动。
+
+配置沿用 Codex 风格的 `mcp_servers` 表，例如：
+
+```toml
+[mcp_servers.codegraph]
+command = "codegraph"
+args = ["serve", "--mcp"]
+cwd = "."
+enabled = true
+```
+
+发现的工具使用 `<server>__<tool>` 名称，例如 `codegraph__codegraph_explore`。资源、资源模板和 prompts 会映射为对应的 namespaced 虚拟工具；交互模式输入 `/mcp` 可查看配置路径、进程状态、能力数量和诊断信息。
+
+主 Agent 持有唯一的 MCP server 会话。外部 subagent 不会重复启动 CodeGraph，而是通过父进程的 `mcp.call` / `mcp.result` request-ID 协议转发调用；能力列表变化时父进程会推送 `mcp.snapshot` 更新代理工具名称空间。
 
 #### `runSingleTurnMode(ctx, opts) error`
 
@@ -150,6 +169,7 @@ go run ./cmd/agent -s <session-id>
 - `/skills`
 - `/token-tracer` / `/tt`
 - `/status`
+- `/mcp`
 - `/clear`
 - `/exit` / `/quit`
 
@@ -1455,5 +1475,7 @@ go run ./cmd/agent
 ### Subagent 工作模式（由主进程自动调用，一般不需要手动执行）
 
 ```bash
-go run ./cmd/agent -subagent-worker < worker_request.json
+go run ./cmd/agent -subagent-worker
 ```
+
+该模式需要父进程先发送 `worker.start`；随后 worker 可以发送 `mcp.call`，父进程回传对应的 `mcp.result`，最后以 `worker.result` 结束本轮任务。

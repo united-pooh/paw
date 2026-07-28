@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"codex-agent-go/internal/loop"
+	coremcp "codex-agent-go/internal/mcp"
 	"codex-agent-go/internal/model"
 	"codex-agent-go/internal/session"
 	"codex-agent-go/internal/settings"
@@ -10,6 +11,7 @@ import (
 	"codex-agent-go/internal/tool"
 	toolexec "codex-agent-go/internal/tool/exec"
 	toolfile "codex-agent-go/internal/tool/file"
+	toolmcp "codex-agent-go/internal/tool/mcp"
 	toolwebfetch "codex-agent-go/internal/tool/webfetch"
 	"codex-agent-go/internal/ui"
 	"context"
@@ -53,6 +55,7 @@ type Config struct {
 	Depth        int
 	MaxDepth     int
 	ParentTaskID string
+	MCPBroker    coremcp.Broker
 }
 
 type Manager struct {
@@ -68,6 +71,7 @@ type Manager struct {
 	depth        int
 	maxDepth     int
 	parentTaskID string
+	mcpBroker    coremcp.Broker
 
 	startMu sync.Mutex
 	mu      sync.RWMutex
@@ -165,6 +169,7 @@ func NewManager(cfg Config) *Manager {
 		depth:        cfg.Depth,
 		maxDepth:     cfg.MaxDepth,
 		parentTaskID: strings.TrimSpace(cfg.ParentTaskID),
+		mcpBroker:    cfg.MCPBroker,
 		tasks:        make(map[string]TaskSnapshot),
 		running:      make(map[string]Process),
 	}
@@ -174,7 +179,35 @@ func NewManager(cfg Config) *Manager {
 	if m.launcher == nil && m.model != nil {
 		m.launcher = newInProcessLauncher(m.runWorkerInProcess)
 	}
+	if brokerAware, ok := m.launcher.(interface{ SetMCPBroker(coremcp.Broker) }); ok {
+		brokerAware.SetMCPBroker(m.mcpBroker)
+	}
+	if subscriber, ok := m.mcpBroker.(interface {
+		Subscribe() (<-chan coremcp.Snapshot, func())
+	}); ok {
+		updates, stopUpdates := subscriber.Subscribe()
+		go m.forwardMCPSnapshots(updates, stopUpdates)
+	}
 	return m
+}
+
+func (m *Manager) forwardMCPSnapshots(updates <-chan coremcp.Snapshot, stop func()) {
+	if stop != nil {
+		defer stop()
+	}
+	for snapshot := range updates {
+		m.mu.RLock()
+		processes := make([]Process, 0, len(m.running))
+		for _, process := range m.running {
+			processes = append(processes, process)
+		}
+		m.mu.RUnlock()
+		for _, process := range processes {
+			if updater, ok := process.(interface{ UpdateMCPSnapshot(coremcp.Snapshot) error }); ok {
+				_ = updater.UpdateMCPSnapshot(snapshot)
+			}
+		}
+	}
 }
 
 func (m *Manager) SetTokenTracer(tracer *tokentracer.Tracer) {
@@ -485,6 +518,9 @@ func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Pro
 		RunMode:         req.RunMode,
 		Depth:           task.Depth,
 		MaxDepth:        m.maxDepth,
+	}
+	if !req.DisableTools && m.mcpBroker != nil {
+		workerReq.MCPSnapshot = m.mcpBroker.Snapshot()
 	}
 
 	if err := m.registry.saveTask(ctx, task); err != nil {
@@ -984,7 +1020,23 @@ func (m *Manager) toolRegistry(disableTools bool) *tool.Registry {
 	if m != nil {
 		root = m.root
 	}
-	return newBaseToolRegistry(root)
+	registry := newBaseToolRegistry(root)
+	if m != nil && m.mcpBroker != nil {
+		_ = registry.ReplaceNamespace("mcp", mcpTools(m.mcpBroker, disableTools))
+	}
+	return registry
+}
+
+func mcpTools(broker coremcp.Broker, disableTools bool) []tool.Tool {
+	if disableTools || broker == nil {
+		return nil
+	}
+	tools := toolmcp.NewTools(broker)
+	result := make([]tool.Tool, 0, len(tools))
+	for _, item := range tools {
+		result = append(result, item)
+	}
+	return result
 }
 
 func newBaseToolRegistry(root string) *tool.Registry {

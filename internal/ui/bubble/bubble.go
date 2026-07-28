@@ -2,6 +2,7 @@
 package bubble
 
 import (
+	coremcp "codex-agent-go/internal/mcp"
 	"codex-agent-go/internal/message"
 	"codex-agent-go/internal/model"
 	"codex-agent-go/internal/session"
@@ -63,6 +64,12 @@ type SubagentController interface {
 	ListTasks() []subagent.TaskSnapshot
 }
 
+// MCPStatusController exposes sanitized MCP runtime state to /mcp.
+type MCPStatusController interface {
+	ConfigPath() string
+	Status() []coremcp.ServerStatus
+}
+
 // UI 是基于 Bubble Tea 的交互式终端界面实现。
 type UI struct {
 	mu                    sync.Mutex
@@ -71,6 +78,7 @@ type UI struct {
 	settingsController    SettingsController
 	subagentController    SubagentController
 	sessionStore          SessionStore
+	mcpController         MCPStatusController
 }
 
 // 确保 UI 满足通用终端 UI 接口。
@@ -109,6 +117,13 @@ func (u *UI) SetSessionStore(store SessionStore) {
 	u.sessionStore = store
 }
 
+// SetMCPStatusController injects MCP runtime state for the /mcp command.
+func (u *UI) SetMCPStatusController(controller MCPStatusController) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.mcpController = controller
+}
+
 // Run 启动 Bubble Tea 主循环，并把输出写入带光标锚点修正的终端流。
 func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 	u.mu.Lock()
@@ -116,10 +131,12 @@ func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 	settingsController := u.settingsController
 	subagentController := u.subagentController
 	sessionStore := u.sessionStore
+	mcpController := u.mcpController
 	u.mu.Unlock()
 
 	anchor := newTerminalCursorAnchor()
 	appModel := newModel(ctx, runner, sessionID, controller, settingsController, subagentController, sessionStore, anchor)
+	appModel.mcpController = mcpController
 	// WithInput 包一层 ESC 聚合 reader：在 BubbleTea 解析字节之前，把被读边界
 	// 切断的 \x1b[<...M 鼠标序列重新拼合，从源头杜绝 ESC 与 [ 分离导致的
 	// [[[[[[[ 泄漏。reader 内嵌 *os.File，MakeRaw 与 kqueue 路径不受影响。

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"codex-agent-go/internal/loop"
+	coremcp "codex-agent-go/internal/mcp"
 	"codex-agent-go/internal/message"
 	"codex-agent-go/internal/model"
 	"codex-agent-go/internal/session"
@@ -1084,5 +1085,86 @@ func TestSubagentWorkerHelperProcess(t *testing.T) {
 		Content:   "worker: " + req.Prompt,
 		ExitCode:  0,
 	})
+	os.Exit(0)
+}
+
+func TestProcessLauncherBrokeredWorkerProtocol(t *testing.T) {
+	broker := &testMCPBroker{snapshot: coremcp.Snapshot{Tools: []coremcp.ToolSpec{{Name: "codegraph__explore"}}}}
+	launcher := &ProcessLauncher{
+		Command: os.Args[0],
+		Args:    []string{"-test.run=TestSubagentFramedWorkerHelperProcess"},
+		Env:     []string{"GOCODE_SUBAGENT_FRAMED_HELPER=1"},
+		Broker:  broker,
+	}
+	proc, err := launcher.Start(context.Background(), WorkerRequest{TaskID: "task-2", SessionID: "session-2"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	updater, ok := proc.(interface{ UpdateMCPSnapshot(coremcp.Snapshot) error })
+	if !ok {
+		t.Fatal("brokered process does not support snapshot updates")
+	}
+	if err := updater.UpdateMCPSnapshot(coremcp.Snapshot{Version: 2}); err != nil {
+		t.Fatalf("UpdateMCPSnapshot() error = %v", err)
+	}
+	result, err := proc.Wait()
+	if err != nil {
+		t.Fatalf("Wait() error = %v result=%#v", err, result)
+	}
+	if result.Content != "parent:codegraph__explore" || broker.name != "codegraph__explore" {
+		t.Fatalf("result=%#v broker=%#v", result, broker)
+	}
+}
+
+type testMCPBroker struct {
+	snapshot coremcp.Snapshot
+	name     string
+}
+
+func (b *testMCPBroker) Snapshot() coremcp.Snapshot { return b.snapshot.Clone() }
+func (b *testMCPBroker) Call(_ context.Context, name string, _ json.RawMessage) (string, error) {
+	b.name = name
+	return "parent:" + name, nil
+}
+
+func TestSubagentFramedWorkerHelperProcess(t *testing.T) {
+	if os.Getenv("GOCODE_SUBAGENT_FRAMED_HELPER") != "1" {
+		return
+	}
+	decoder := json.NewDecoder(os.Stdin)
+	encoder := json.NewEncoder(os.Stdout)
+	var start WorkerMessage
+	if err := decoder.Decode(&start); err != nil {
+		os.Exit(2)
+	}
+	if start.Type != WorkerMessageStart {
+		os.Exit(3)
+	}
+	_ = encoder.Encode(WorkerMessage{Type: WorkerMessageMCPCall, RequestID: "call-1", Tool: "codegraph__explore", Input: json.RawMessage(`{"query":"main"}`)})
+	var result WorkerMessage
+	gotResult := false
+	gotSnapshot := false
+	for !gotResult || !gotSnapshot {
+		var message WorkerMessage
+		if err := decoder.Decode(&message); err != nil {
+			os.Exit(4)
+		}
+		switch message.Type {
+		case WorkerMessageMCPResult:
+			result = message
+			gotResult = true
+		case WorkerMessageSnapshot:
+			if message.Snapshot.Version != 2 {
+				os.Exit(5)
+			}
+			gotSnapshot = true
+		}
+	}
+	_ = encoder.Encode(NewWorkerResultMessage(WorkerResult{
+		TaskID:    start.TaskID,
+		SessionID: start.SessionID,
+		Content:   result.Content,
+		ExitCode:  0,
+	}))
 	os.Exit(0)
 }

@@ -105,24 +105,20 @@ func isMarkdownFenceLanguage(lang string) bool {
 	return lang == "markdown" || lang == "md"
 }
 
-// renderCodeBlock 渲染代码块，并把语言标签放在代码块外部。
+// renderCodeBlock 渲染代码块，并将语言标签嵌入代码块顶边。
 func renderCodeBlock(lang, code string, width int) string {
 	width = maxInt(1, width)
-	label := "code"
-	if lang != "" {
-		label = lang
-	}
+	label := strings.TrimSpace(lang)
 	body := strings.TrimRight(code, "\n")
 	if body == "" {
 		body = " "
 	}
-	block := renderCodeBlockPanel(body, width)
-	return markdownBulletStyle.Render(truncateDisplayWidth(label, width)) + "\n" + block
+	return renderCodeBlockPanel(body, width, label)
 }
 
-func renderCodeBlockPanel(code string, width int) string {
+func renderCodeBlockPanel(code string, width int, label string) string {
 	width = maxInt(1, width)
-	blockWidth := markdownCodeBlockWidth(code, width)
+	blockWidth := markdownCodeBlockWidth(code, label, width)
 	if blockWidth < 6 {
 		lines := limitRenderedCodeBlockLines(strings.Split(wrapDisplayWidthLines(code, width), "\n"), maxRenderedCodeBlockLines)
 		return markdownCodeBlockStyle.Render(strings.Join(lines, "\n"))
@@ -130,7 +126,7 @@ func renderCodeBlockPanel(code string, width int) string {
 	textWidth := maxInt(1, blockWidth-4)
 	lines := limitRenderedCodeBlockLines(strings.Split(wrapDisplayWidthLines(code, textWidth), "\n"), maxRenderedCodeBlockLines)
 	rendered := make([]string, 0, len(lines)+2)
-	rendered = append(rendered, renderCodeBlockBorderLine("┌", "─", "┐", blockWidth))
+	rendered = append(rendered, renderCodeBlockTopBorder(label, blockWidth))
 	for _, line := range lines {
 		body := " " + markdownCodeBlockStyle.Render(padDisplayWidth(line, textWidth)) + " "
 		rendered = append(rendered,
@@ -151,13 +147,38 @@ func limitRenderedCodeBlockLines(lines []string, maxLines int) []string {
 	return out
 }
 
-func markdownCodeBlockWidth(code string, width int) int {
+func markdownCodeBlockWidth(code, label string, width int) int {
 	maxWidth := maxInt(6, width-4)
 	widest := 1
 	for _, line := range strings.Split(code, "\n") {
 		widest = maxInt(widest, terminalCellWidth(line))
 	}
-	return minInt(maxWidth, maxInt(6, widest+4))
+	required := maxInt(6, widest+4)
+	if label != "" {
+		required = maxInt(required, terminalCellWidth(label)+6)
+	}
+	return minInt(maxWidth, required)
+}
+
+func renderCodeBlockTopBorder(label string, width int) string {
+	label = strings.TrimSpace(label)
+	if label == "" || width < 7 {
+		return renderCodeBlockBorderLine("┌", "─", "┐", width)
+	}
+
+	label = truncateDisplayWidth(label, width-6)
+	if label == "" {
+		return renderCodeBlockBorderLine("┌", "─", "┐", width)
+	}
+
+	chipText := " " + label + " "
+	chip := markdownCodeBlockLabelStyle.Render(chipText)
+	fillWidth := maxInt(0, width-2-terminalCellWidth(chipText))
+	leftWidth := fillWidth / 2
+	rightWidth := fillWidth - leftWidth
+	return markdownCodeBlockBorderStyle.Render("┌"+strings.Repeat("─", leftWidth)) +
+		chip +
+		markdownCodeBlockBorderStyle.Render(strings.Repeat("─", rightWidth)+"┐")
 }
 
 func renderCodeBlockBorderLine(left, fill, right string, width int) string {

@@ -1,0 +1,150 @@
+package mcp
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/BurntSushi/toml"
+)
+
+const (
+	configDirectoryName = ".ccagent"
+	configFileName      = "mcp.toml"
+)
+
+type rawConfig struct {
+	Servers map[string]rawServerConfig `toml:"mcp_servers"`
+}
+
+type rawServerConfig struct {
+	Command string            `toml:"command"`
+	Args    []string          `toml:"args"`
+	CWD     string            `toml:"cwd"`
+	Enabled *bool             `toml:"enabled"`
+	Env     map[string]string `toml:"env"`
+}
+
+// LoadConfig loads the global GoCode MCP configuration. homeDir is injectable
+// for tests; an empty value falls back to the current user's home directory.
+func LoadConfig(homeDir, workspaceRoot string) (Config, error) {
+	if strings.TrimSpace(homeDir) == "" {
+		var err error
+		homeDir, err = os.UserHomeDir()
+		if err != nil {
+			return Config{}, fmt.Errorf("resolve home directory: %w", err)
+		}
+	}
+	homeDir, err := filepath.Abs(homeDir)
+	if err != nil {
+		return Config{}, fmt.Errorf("resolve home directory: %w", err)
+	}
+	workspaceRoot, err = filepath.Abs(strings.TrimSpace(workspaceRoot))
+	if err != nil {
+		return Config{}, fmt.Errorf("resolve workspace root: %w", err)
+	}
+	if strings.TrimSpace(workspaceRoot) == "" {
+		return Config{}, fmt.Errorf("workspace root is empty")
+	}
+
+	path := filepath.Join(homeDir, configDirectoryName, configFileName)
+	if err := ensureConfigFile(path); err != nil {
+		return Config{}, err
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, fmt.Errorf("read MCP config %s: %w", path, err)
+	}
+	config := rawConfig{}
+	if strings.TrimSpace(string(data)) != "" {
+		if _, err := toml.Decode(string(data), &config); err != nil {
+			return Config{}, fmt.Errorf("parse MCP config %s: %w", path, err)
+		}
+	}
+
+	servers := make(map[string]ServerConfig, len(config.Servers))
+	for name, raw := range config.Servers {
+		if err := validateServerName(name); err != nil {
+			return Config{}, err
+		}
+		enabled := true
+		if raw.Enabled != nil {
+			enabled = *raw.Enabled
+		}
+		command := strings.TrimSpace(raw.Command)
+		if enabled && command == "" {
+			return Config{}, fmt.Errorf("MCP server %q has an empty command", name)
+		}
+
+		workDir := workspaceRoot
+		if strings.TrimSpace(raw.CWD) != "" {
+			workDir = raw.CWD
+			if !filepath.IsAbs(workDir) {
+				workDir = filepath.Join(workspaceRoot, workDir)
+			}
+			workDir, err = filepath.Abs(workDir)
+			if err != nil {
+				return Config{}, fmt.Errorf("resolve cwd for MCP server %q: %w", name, err)
+			}
+		}
+
+		servers[name] = ServerConfig{
+			Name:    name,
+			Command: command,
+			Args:    append([]string(nil), raw.Args...),
+			WorkDir: workDir,
+			Enabled: enabled,
+			Env:     cloneStringMap(raw.Env),
+		}
+	}
+
+	return Config{Path: path, Servers: servers}, nil
+}
+
+func ensureConfigFile(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create MCP config directory: %w", err)
+	}
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect MCP config %s: %w", path, err)
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		if os.IsExist(err) {
+			return nil
+		}
+		return fmt.Errorf("create MCP config %s: %w", path, err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close MCP config %s: %w", path, err)
+	}
+	return nil
+}
+
+func validateServerName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("MCP server name is empty")
+	}
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return fmt.Errorf("invalid MCP server name %q: use only letters, digits, underscore, or hyphen", name)
+	}
+	return nil
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}

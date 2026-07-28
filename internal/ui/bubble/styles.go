@@ -78,6 +78,10 @@ var (
 				Background(colorManager.LipglossColor(colorMarkdownCodeBackground))
 	markdownCodeBlockBorderStyle = lipgloss.NewStyle().
 					Foreground(colorManager.LipglossColor(colorMarkdownCodeBorder))
+	markdownCodeBlockLabelStyle = lipgloss.NewStyle().
+					Foreground(colorManager.LipglossColor(colorTerminalBackground)).
+					Background(colorManager.LipglossColor(colorSignal)).
+					Bold(true)
 	markdownQuoteStyle = lipgloss.NewStyle().
 				Foreground(colorManager.LipglossColor(colorMarkdownQuote)).
 				Border(lipgloss.Border{Left: "│"}).
