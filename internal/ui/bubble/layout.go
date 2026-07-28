@@ -6,7 +6,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -23,6 +22,7 @@ type tuiLayout struct {
 	frameHeight      int
 	contentWidth     int
 	contentHeight    int
+	headerHeight     int
 	transcriptHeight int
 	statusHeight     int
 	inputHeight      int
@@ -34,25 +34,31 @@ func computeTUILayout(width, height, requestedInputHeight int) tuiLayout {
 	contentWidth := maxInt(1, frameWidth-mainFrameHorizontalFrame)
 	contentHeight := maxInt(1, frameHeight-mainFrameVerticalFrame)
 
+	// header 在内容足够高时占 1 行；极小终端优先保留 transcript+input。
+	headerHeight := 0
+	if contentHeight >= 4 {
+		headerHeight = dockStatusHeight
+	}
 	statusHeight := 0
-	if contentHeight >= 2 {
+	if contentHeight-headerHeight >= 2 {
 		statusHeight = dockStatusHeight
 	}
 
 	inputHeight := clampInt(requestedInputHeight, 1, inputMaxVisibleLines)
 	// 正常尺寸下始终给 transcript 留至少一行；极小终端优先保留输入。
-	maxInputHeight := maxInt(1, contentHeight-statusHeight-1)
+	maxInputHeight := maxInt(1, contentHeight-headerHeight-statusHeight-1)
 	inputHeight = minInt(inputHeight, maxInputHeight)
-	if inputHeight+statusHeight > contentHeight {
-		inputHeight = maxInt(1, contentHeight-statusHeight)
+	if inputHeight+headerHeight+statusHeight > contentHeight {
+		inputHeight = maxInt(1, contentHeight-headerHeight-statusHeight)
 	}
-	transcriptHeight := maxInt(0, contentHeight-statusHeight-inputHeight)
+	transcriptHeight := maxInt(0, contentHeight-headerHeight-statusHeight-inputHeight)
 
 	return tuiLayout{
 		frameWidth:       frameWidth,
 		frameHeight:      frameHeight,
 		contentWidth:     contentWidth,
 		contentHeight:    contentHeight,
+		headerHeight:     headerHeight,
 		transcriptHeight: transcriptHeight,
 		statusHeight:     statusHeight,
 		inputHeight:      inputHeight,
@@ -77,7 +83,10 @@ func (m appModel) View() string {
 	}
 
 	layout := m.currentLayout()
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, 4)
+	if layout.headerHeight > 0 {
+		parts = append(parts, m.renderHeaderLine(layout.contentWidth))
+	}
 	if layout.transcriptHeight > 0 {
 		parts = append(parts, m.renderTranscriptRegion(layout))
 	}
@@ -245,39 +254,6 @@ func fitStyledRect(text string, width, height int) string {
 		lines[i] = fitStyledCellLine(line, width)
 	}
 	return strings.Join(lines, "\n")
-}
-
-// renderDockStatusLine 将 model 和 context meter 合并为输入框上方的单行分隔条。
-func (m appModel) renderDockStatusLine(width int) string {
-	width = maxInt(1, width)
-	cfg := m.currentModelConfig()
-	modelLabel := strings.TrimSpace(sanitizeTerminalText(cfg.Model))
-	if modelLabel == "" {
-		modelLabel = strings.TrimSpace(sanitizeTerminalText(cfg.Provider))
-	}
-	if modelLabel == "" {
-		modelLabel = "model"
-	}
-
-	modelBudget := clampInt(width/4, 6, 24)
-	modelLabel = truncateDisplayWidth(modelLabel, modelBudget)
-	prefix := dockRuleStyle.Render("─ ") + modelStatusStyle.Render(modelLabel) + dockRuleStyle.Render(" ─ ")
-	remaining := width - terminalCellWidth(prefix)
-
-	var context string
-	if remaining >= 24 {
-		context = m.contextMeterLine(minInt(56, remaining))
-	} else if remaining > 0 {
-		stats := m.contextStats()
-		context = contextUsedStyle.Render(formatContextPercent(stats.UsedTokens, maxInt(1, stats.LimitTokens)))
-		context = ansi.Truncate(context, remaining, "")
-	}
-	gapWidth := maxInt(0, remaining-terminalCellWidth(context))
-	line := prefix + dockRuleStyle.Render(strings.Repeat("─", gapWidth)) + context
-	if visible := terminalCellWidth(line); visible < width {
-		line += strings.Repeat(" ", width-visible)
-	}
-	return fitStyledRect(line, width, 1)
 }
 
 // renderActiveInputPanel 保留为输入区兼容入口；modal 和 completion 已移入 transcript 浮层。

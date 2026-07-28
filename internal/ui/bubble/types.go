@@ -310,8 +310,6 @@ type appModel struct {
 	transcriptRefreshPending   bool
 	transcriptKeyScrollActive  bool
 	rawMouseEscapePending      string
-	rawMouseEscapePendingAt    time.Time
-	rawMouseEscapeBracketBurst bool
 	toolInspectActive          bool
 	toolInspectIndex           int
 	toolHoverIndex             int
@@ -333,6 +331,10 @@ type appModel struct {
 	pipelineState              pipelineState
 	pipelineActiveAfter        time.Time
 	spinnerFrameIdx            int // Activity 中 running 条目的动画帧索引，由 cursorFrameMsg 驱动
+	waveAmpTarget              bool       // 均衡器波浪振幅目标态（= isGenerating），翻转时更新
+	waveAmpStartedAt           time.Time  // 振幅目标态确立时刻，用于缓动进度
+	waveAmpFrom                float64    // 过渡起点振幅，反向退场时从此值缓降
+	waveAmpCurrent             float64    // 当前振幅（cursorFrameMsg 每帧更新，渲染只读）
 }
 
 type activityTab int
