@@ -42,7 +42,7 @@ func NewCommandRegistry() *CommandRegistry {
 	registry.Register(Command{
 		Name:              "/model",
 		Description:       "open the model switcher",
-		ArgumentHint:      "[status|custom|deepseek]",
+		ArgumentHint:      "[status|custom|deepseek|<model>]",
 		AllowWhileRunning: false,
 		Handler: func(m *appModel, invocation string) tea.Cmd {
 			return m.handleModelCommand(invocation)

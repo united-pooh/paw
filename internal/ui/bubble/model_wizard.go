@@ -19,6 +19,7 @@ func (m appModel) currentModelConfig() model.Config {
 			APIPath:       model.CustomChatPath,
 			APIKey:        model.CustomDefaultAPIKey,
 			Model:         model.CustomDefaultModel,
+			Models:        []string{model.CustomDefaultModel},
 			APIKeyEnvName: model.CustomAPIKeyEnvName,
 			Timeout:       time.Minute,
 		}
@@ -43,6 +44,11 @@ func (m appModel) configForProvider(provider string) (model.Config, error) {
 		if strings.TrimSpace(cfg.Model) == "" || currentProvider == model.ProviderDeepSeek {
 			cfg.Model = model.CustomDefaultModel
 		}
+		if currentProvider == model.ProviderDeepSeek {
+			cfg.Models = []string{cfg.Model}
+		} else if len(cfg.Models) == 0 {
+			cfg.Models = []string{cfg.Model}
+		}
 		cfg.APIKeyEnvName = model.CustomAPIKeyEnvName
 		cfg.APIKey = strings.TrimSpace(os.Getenv(cfg.APIKeyEnvName))
 		if cfg.APIKey == "" {
@@ -55,6 +61,7 @@ func (m appModel) configForProvider(provider string) (model.Config, error) {
 		cfg.APIBaseURL = model.DeepSeekAPIBaseURL
 		cfg.APIPath = model.DeepSeekChatPath
 		cfg.Model = model.DeepSeekDefaultModel
+		cfg.Models = []string{cfg.Model}
 		cfg.APIKeyEnvName = model.DeepSeekAPIKeyEnvName
 		cfg.APIKey = strings.TrimSpace(os.Getenv(cfg.APIKeyEnvName))
 		if cfg.APIKey == "" {
@@ -209,6 +216,7 @@ func (m appModel) renderModelConfirmStep() string {
 		fmt.Sprintf("base url: %s", cfg.APIBaseURL),
 		fmt.Sprintf("path: %s", cfg.APIPath),
 		fmt.Sprintf("model: %s", cfg.Model),
+		fmt.Sprintf("models: %s", strings.Join(model.AvailableModels(cfg), ", ")),
 		fmt.Sprintf("key env: %s", cfg.APIKeyEnvName),
 		"Press enter to apply, b to go back, esc to cancel.",
 	)

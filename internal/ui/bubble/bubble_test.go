@@ -315,7 +315,7 @@ func TestHelpComesFromCommandRegistry(t *testing.T) {
 	body := model.transcript[len(model.transcript)-1].body
 	for _, want := range []string{
 		"/help - show available commands",
-		"/model [status|custom|deepseek] - open the model switcher",
+		"/model [status|custom|deepseek|<model>] - open the model switcher",
 		"/export [filename] - export the current conversation",
 		"/setting - open settings wizard",
 		"/subagent [--fork|--empty] [--background|--sync] <prompt> - launch a subagent",
@@ -502,6 +502,37 @@ func TestModelCommandVariantsKeepWizardAndShortcuts(t *testing.T) {
 	}
 	if len(controller.applied) != 2 || controller.applied[1].Provider != modelcfg.ProviderDeepSeek {
 		t.Fatalf("applied configs = %#v", controller.applied)
+	}
+}
+
+// TestModelCommandSwitchesConfiguredModel verifies that one endpoint can expose
+// multiple persisted model names and switch the active one without changing
+// the provider connection settings.
+func TestModelCommandSwitchesConfiguredModel(t *testing.T) {
+	controller := &fakeModelConfigController{
+		current: modelcfg.Config{
+			Provider:      modelcfg.ProviderCustom,
+			APIBaseURL:    "https://example.test/v1",
+			APIPath:       modelcfg.CustomChatPath,
+			APIKey:        "custom-secret",
+			APIKeyEnvName: modelcfg.CustomAPIKeyEnvName,
+			Model:         "gpt-5.6-sol",
+			Models:        []string{"gpt-5.6-sol", "gpt-5.6-luna"},
+			Timeout:       time.Minute,
+		},
+	}
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", controller, nil, nil, nil, newTerminalCursorAnchor())
+
+	handled, cmd := model.handleCommand("/model gpt-5.6-luna")
+	if !handled || cmd != nil {
+		t.Fatalf("/model gpt-5.6-luna handled/cmd = %v/%v", handled, cmd)
+	}
+	if len(controller.applied) != 1 {
+		t.Fatalf("applied configs = %#v", controller.applied)
+	}
+	got := controller.applied[0]
+	if got.Model != "gpt-5.6-luna" || got.APIBaseURL != "https://example.test/v1" || !equalStrings(got.Models, []string{"gpt-5.6-sol", "gpt-5.6-luna"}) {
+		t.Fatalf("applied config = %#v", got)
 	}
 }
 

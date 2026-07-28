@@ -74,6 +74,36 @@ func TestLoadConfigFromEnvUsesPersistedProvider(t *testing.T) {
 	}
 }
 
+func TestLoadConfigFromEnvUsesPersistedModelList(t *testing.T) {
+	restoreCWD := chdirForTest(t, t.TempDir())
+	defer restoreCWD()
+
+	unsetEnvNamesForTest(t, apiKeyEnvNames...)
+	if err := os.WriteFile(".env.local", []byte(CustomAPIKeyEnvName+"=custom-secret\n"), 0o600); err != nil {
+		t.Fatalf("write .env.local: %v", err)
+	}
+	writePersistedModelConfig(t, persistedModelConfig{
+		Provider:      ProviderCustom,
+		APIBaseURL:    "https://example.test/v1",
+		APIPath:       CustomChatPath,
+		APIKeyEnvName: CustomAPIKeyEnvName,
+		Model:         "gpt-5.6-luna",
+		Models:        []string{"gpt-5.6-sol", "gpt-5.6-luna"},
+	})
+
+	cfg, err := LoadConfigFromEnv()
+	if err != nil {
+		t.Fatalf("LoadConfigFromEnv() error = %v", err)
+	}
+	if cfg.APIBaseURL != "https://example.test/v1" || cfg.Model != "gpt-5.6-luna" {
+		t.Fatalf("cfg endpoint/model = %q/%q", cfg.APIBaseURL, cfg.Model)
+	}
+	want := []string{"gpt-5.6-sol", "gpt-5.6-luna"}
+	if got := AvailableModels(cfg); len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("AvailableModels(cfg) = %#v, want %#v", got, want)
+	}
+}
+
 func TestLoadConfigFromEnvDotEnvLocalOverridesProcessEnv(t *testing.T) {
 	restoreCWD := chdirForTest(t, t.TempDir())
 	defer restoreCWD()
@@ -202,6 +232,10 @@ func TestSaveModelConfigPersistsProviderSelection(t *testing.T) {
 	}
 	if got := persisted["timeout_seconds"]; got != float64(75) {
 		t.Fatalf("persisted timeout_seconds = %#v, want %d", got, 75)
+	}
+	models, ok := persisted["models"].([]any)
+	if !ok || len(models) != 1 || models[0] != CustomDefaultModel {
+		t.Fatalf("persisted models = %#v, want [%q]", persisted["models"], CustomDefaultModel)
 	}
 }
 

@@ -29,7 +29,7 @@ func (m *appModel) handleModelCommand(invocation string) tea.Cmd {
 		m.addEntry(transcriptEntry{
 			kind:  entrySystem,
 			title: "model",
-			body:  fmt.Sprintf("provider=%s base=%s path=%s model=%s key=%s", cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, cfg.APIKeyEnvName),
+			body:  fmt.Sprintf("provider=%s base=%s path=%s model=%s models=%s key=%s", cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, strings.Join(model.AvailableModels(cfg), ","), cfg.APIKeyEnvName),
 		})
 	case model.ProviderCustom, model.ProviderDeepSeek:
 		cfg, err := m.configForProvider(args)
@@ -39,7 +39,13 @@ func (m *appModel) handleModelCommand(invocation string) tea.Cmd {
 		}
 		m.applyModelConfigFromCommand(cfg)
 	default:
-		m.addEntry(transcriptEntry{kind: entryError, title: "model", body: fmt.Sprintf("unknown model command: %s", args)})
+		cfg := m.currentModelConfig()
+		if !model.SupportsModel(cfg, args) {
+			m.addEntry(transcriptEntry{kind: entryError, title: "model", body: fmt.Sprintf("unknown model command: %s", args)})
+			return nil
+		}
+		cfg.Model = args
+		m.applyModelConfigFromCommand(cfg)
 	}
 	return nil
 }
@@ -62,7 +68,7 @@ func (m *appModel) applyModelConfigFromCommand(cfg model.Config) {
 	m.addEntry(transcriptEntry{
 		kind:  entrySystem,
 		title: "model",
-		body:  fmt.Sprintf("provider=%s base=%s path=%s model=%s key=%s", cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, cfg.APIKeyEnvName),
+		body:  fmt.Sprintf("provider=%s base=%s path=%s model=%s models=%s key=%s", cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, strings.Join(model.AvailableModels(cfg), ","), cfg.APIKeyEnvName),
 	})
 }
 

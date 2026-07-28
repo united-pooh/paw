@@ -50,16 +50,18 @@ type Config struct {
 	APIKey        string
 	APIKeyEnvName string
 	Model         string
+	Models        []string
 	Timeout       time.Duration
 }
 
 type persistedModelConfig struct {
-	Provider      string `json:"provider"`
-	APIBaseURL    string `json:"api_base_url"`
-	APIPath       string `json:"api_path"`
-	APIKeyEnvName string `json:"api_key_env_name"`
-	Model         string `json:"model"`
-	Timeout       int    `json:"timeout_seconds,omitempty"`
+	Provider      string   `json:"provider"`
+	APIBaseURL    string   `json:"api_base_url"`
+	APIPath       string   `json:"api_path"`
+	APIKeyEnvName string   `json:"api_key_env_name"`
+	Model         string   `json:"model"`
+	Models        []string `json:"models,omitempty"`
+	Timeout       int      `json:"timeout_seconds,omitempty"`
 }
 
 func LoadConfigFromEnv() (Config, error) {
@@ -101,6 +103,7 @@ func SaveModelConfig(cfg Config) error {
 		APIPath:       cfg.APIPath,
 		APIKeyEnvName: cfg.APIKeyEnvName,
 		Model:         cfg.Model,
+		Models:        AvailableModels(cfg),
 		Timeout:       int(cfg.Timeout / time.Second),
 	}
 
@@ -124,6 +127,7 @@ func defaultConfigForProvider(provider string) Config {
 			APIPath:       CustomChatPath,
 			APIKeyEnvName: CustomAPIKeyEnvName,
 			Model:         CustomDefaultModel,
+			Models:        []string{CustomDefaultModel},
 			Timeout:       defaultTimeout(),
 		}
 	default:
@@ -133,6 +137,7 @@ func defaultConfigForProvider(provider string) Config {
 			APIPath:       DeepSeekChatPath,
 			APIKeyEnvName: DeepSeekAPIKeyEnvName,
 			Model:         DeepSeekDefaultModel,
+			Models:        []string{DeepSeekDefaultModel},
 			Timeout:       defaultTimeout(),
 		}
 	}
@@ -168,6 +173,13 @@ func fillConfigDefaults(cfg Config) Config {
 	if strings.TrimSpace(cfg.Model) == "" {
 		cfg.Model = defaults.Model
 	}
+	cfg.Models = normalizeModelNames(cfg.Models)
+	if len(cfg.Models) == 0 {
+		cfg.Models = append([]string(nil), defaults.Models...)
+	}
+	if !containsModel(cfg.Models, cfg.Model) {
+		cfg.Models = append(cfg.Models, cfg.Model)
+	}
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = defaults.Timeout
 	}
@@ -191,10 +203,59 @@ func mergePersistedConfig(base Config, persisted persistedModelConfig) Config {
 	if strings.TrimSpace(persisted.Model) != "" {
 		cfg.Model = normalizePersistedModel(cfg.Provider, persisted.Model)
 	}
+	if len(persisted.Models) > 0 {
+		cfg.Models = append([]string(nil), persisted.Models...)
+	}
 	if persisted.Timeout > 0 {
 		cfg.Timeout = time.Duration(persisted.Timeout) * time.Second
 	}
 	return cfg
+}
+
+// AvailableModels returns the configured model names in stable order without
+// duplicates. The active model is always included for compatibility with
+// Config values built by callers that predate the model list.
+func AvailableModels(cfg Config) []string {
+	models := append([]string(nil), cfg.Models...)
+	if strings.TrimSpace(cfg.Model) != "" {
+		models = append(models, cfg.Model)
+	}
+	return normalizeModelNames(models)
+}
+
+// SupportsModel reports whether modelName is one of the configured models.
+func SupportsModel(cfg Config, modelName string) bool {
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
+		return false
+	}
+	return containsModel(AvailableModels(cfg), modelName)
+}
+
+func normalizeModelNames(models []string) []string {
+	result := make([]string, 0, len(models))
+	seen := make(map[string]struct{}, len(models))
+	for _, name := range models {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		result = append(result, name)
+	}
+	return result
+}
+
+func containsModel(models []string, want string) bool {
+	for _, name := range models {
+		if name == want {
+			return true
+		}
+	}
+	return false
 }
 
 func loadPersistedModelConfig() (*persistedModelConfig, error) {

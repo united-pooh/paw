@@ -139,7 +139,7 @@ go run ./cmd/agent -s <session-id>
 当前 slash command 由 `internal/ui/bubble/command_registry.go` 统一注册，`/help` 会显示参数提示。
 
 - `/help`
-- `/model [status|custom|deepseek]`
+- `/model [status|custom|deepseek|<model>]`
 - `/export [filename]`
 - `/setting`
 - `/sessions`
@@ -154,7 +154,7 @@ go run ./cmd/agent -s <session-id>
 - `/exit` / `/quit`
 
 当前行为:
-- `/model` 无参数时打开 provider 向导；`status` 只输出当前配置；`custom`、`deepseek` 直接切换并持久化到 `.ccagent/model.json`；`deepseek` 需要 `DEEPSEEK_API_KEY`
+- `/model` 无参数时打开 provider 向导；`status` 输出当前配置和可用模型；`custom`、`deepseek` 直接切换并持久化到 `.ccagent/model.json`；输入已配置的模型名可切换活动模型；`deepseek` 需要 `DEEPSEEK_API_KEY`
 - `/export` 默认导出到 `.ccagent/exports/conversation-YYYY-MM-DD-HHMMSS.txt`，也支持工作区内显式路径；导出文件权限为 `0600`
 - `/setting` 通过向导保存默认 subagent context/run mode，以及 context meter 的位置和 token limit
 - `/sessions` 列出所有历史会话（ID 前缀、日期、文件大小、首条消息），选中条目后直接恢复该会话
@@ -403,6 +403,7 @@ main (-subagent-worker)
 - `APIPath`
 - `APIKey`
 - `Model`
+- `Models`
 - `Timeout`
 
 ##### `LoadConfigFromEnv() (Config, error)`
@@ -411,6 +412,7 @@ main (-subagent-worker)
 - 从环境变量构造 `Config`
 - 启动时按顺序尝试加载当前目录下的 `.env`、`.env.local`
 - 读取并合并 `.ccagent/model.json` 中的持久化 provider 配置
+- 在同一个 OpenAI-compatible endpoint 下持久化多个模型名，`Model` 表示当前活动模型
 - `.env.local` 会覆盖 `.env` 和外部 shell 继承进来的同名变量
 
 当前环境变量:
