@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	mainFrameHorizontalFrame = 2
+	mainFrameHorizontalFrame = 0
 	mainFrameVerticalFrame   = 2
 	mainContentPadding       = 1
 	dockStatusHeight         = 1
@@ -25,6 +25,7 @@ type tuiLayout struct {
 	headerHeight     int
 	transcriptHeight int
 	statusHeight     int
+	worktreeHeight   int
 	inputHeight      int
 }
 
@@ -43,15 +44,18 @@ func computeTUILayout(width, height, requestedInputHeight int) tuiLayout {
 	if contentHeight-headerHeight >= 2 {
 		statusHeight = dockStatusHeight
 	}
+	// The worktree chip lives inline in the status row. Keeping this dimension
+	// at zero prevents the input dock from growing a second metadata row.
+	worktreeHeight := 0
 
 	inputHeight := clampInt(requestedInputHeight, 1, inputMaxVisibleLines)
 	// 正常尺寸下始终给 transcript 留至少一行；极小终端优先保留输入。
-	maxInputHeight := maxInt(1, contentHeight-headerHeight-statusHeight-1)
+	maxInputHeight := maxInt(1, contentHeight-headerHeight-statusHeight-worktreeHeight-1)
 	inputHeight = minInt(inputHeight, maxInputHeight)
-	if inputHeight+headerHeight+statusHeight > contentHeight {
-		inputHeight = maxInt(1, contentHeight-headerHeight-statusHeight)
+	if inputHeight+headerHeight+statusHeight+worktreeHeight > contentHeight {
+		inputHeight = maxInt(1, contentHeight-headerHeight-statusHeight-worktreeHeight)
 	}
-	transcriptHeight := maxInt(0, contentHeight-headerHeight-statusHeight-inputHeight)
+	transcriptHeight := maxInt(0, contentHeight-headerHeight-statusHeight-worktreeHeight-inputHeight)
 
 	return tuiLayout{
 		frameWidth:       frameWidth,
@@ -61,6 +65,7 @@ func computeTUILayout(width, height, requestedInputHeight int) tuiLayout {
 		headerHeight:     headerHeight,
 		transcriptHeight: transcriptHeight,
 		statusHeight:     statusHeight,
+		worktreeHeight:   worktreeHeight,
 		inputHeight:      inputHeight,
 	}
 }
@@ -96,9 +101,19 @@ func (m appModel) View() string {
 	parts = append(parts, m.renderInputBoxForLayout(layout))
 
 	inner := fitStyledRect(strings.Join(parts, "\n"), layout.contentWidth, layout.contentHeight)
-	view := renderFixedStyledPanel(mainFrameStyle, layout.frameWidth, layout.frameHeight, inner)
+	view := renderHairlineFrame(inner, layout.frameWidth, layout.frameHeight)
 	m.updateTerminalCursorAnchor(layout)
 	return fitStyledRect(view, layout.frameWidth, layout.frameHeight)
+}
+
+func renderHairlineFrame(inner string, width, height int) string {
+	width = maxInt(1, width)
+	height = maxInt(1, height)
+	if height == 1 {
+		return strings.Repeat("─", width)
+	}
+	inner = fitStyledRect(inner, width, maxInt(1, height-2))
+	return strings.Repeat("─", width) + "\n" + inner + "\n" + strings.Repeat("─", width)
 }
 
 func (m appModel) renderTranscriptRegion(layout tuiLayout) string {
@@ -106,11 +121,15 @@ func (m appModel) renderTranscriptRegion(layout tuiLayout) string {
 		return ""
 	}
 
+	content := m.viewport.View()
+	if !m.hasRenderableTranscript() {
+		content = renderEmptyState(layout.contentWidth, layout.transcriptHeight)
+	}
 	base := renderFixedStyledPanel(
 		transcriptContentStyle,
 		layout.contentWidth,
 		layout.transcriptHeight,
-		m.viewport.View(),
+		content,
 	)
 
 	if modal := m.renderActiveModalBox(layout); modal != "" {
@@ -286,7 +305,7 @@ func (m appModel) shouldAnchorTextInputCursor() bool {
 // inputCursorTerminalPosition 直接由固定布局矩形计算，不再依赖拼接后字符串高度。
 func (m appModel) inputCursorTerminalPosition(layout tuiLayout) terminalCursorPosition {
 	row := minInt(m.visibleInputCursorRow(), maxInt(0, layout.inputHeight-1))
-	upFromBottom := 1 + maxInt(0, layout.inputHeight-row-1)
+	upFromBottom := 1 + layout.worktreeHeight + maxInt(0, layout.inputHeight-row-1)
 	column := 2 + m.visibleInputCursorColumn()
 	column = minInt(column, maxInt(0, layout.frameWidth-1))
 	return terminalCursorPosition{
@@ -349,7 +368,38 @@ func (m appModel) renderInputBoxForLayout(layout tuiLayout) string {
 	} else if m.hasMultilineInput() {
 		style = inputDockMultilineStyle
 	}
-	return renderFixedStyledPanel(style, layout.contentWidth, layout.inputHeight, m.renderInputContent())
+	bodyWidth := inputDockContentWidth(layout.contentWidth)
+	return renderFixedStyledPanel(
+		style,
+		layout.contentWidth,
+		layout.inputHeight,
+		m.renderInputContentWithHints(bodyWidth, layout.inputHeight),
+	)
+}
+
+func inputDockContentWidth(width int) int {
+	return maxInt(1, width-inputDockStyle.GetHorizontalFrameSize()-inputDockStyle.GetHorizontalPadding())
+}
+
+func (m appModel) renderInputContentWithHints(width, height int) string {
+	if width <= 0 || height <= 0 {
+		return ""
+	}
+	if strings.TrimSpace(m.input.Value()) == "" && !m.isTerminalInputActive() && !m.runningTerminal && !m.hasMultilineInput() {
+		if m.hasInteracted {
+			return fitStyledRect("", width, height)
+		}
+		left := inputPromptStyle.Render("›") + " " + inputHintStyle.Render("Ask anything…")
+		hint := inputHintStyle.Render("/help @file !shell")
+		line := left
+		if terminalCellWidth(left)+terminalCellWidth(hint)+1 <= width {
+			line += strings.Repeat(" ", width-terminalCellWidth(left)-terminalCellWidth(hint)) + hint
+		} else {
+			line = truncateDisplayWidth(left, width)
+		}
+		return fitStyledRect(line, width, height)
+	}
+	return fitStyledRect(m.renderInputContent(), width, height)
 }
 
 func (m appModel) renderInputContent() string {
@@ -440,13 +490,14 @@ func (m *appModel) relayout() {
 		return
 	}
 	base := computeTUILayout(m.width, m.height, inputMinVisibleLines)
-	inputWidth := maxInt(1, base.contentWidth-mainContentPadding*2)
+	inputWidth := inputDockContentWidth(base.contentWidth)
+	transcriptWidth := maxInt(1, base.contentWidth-transcriptContentStyle.GetHorizontalPadding())
 	m.input.SetWidth(inputWidth)
 
 	requestedInputHeight := m.tokenAwareInputVisibleLineCount()
 	layout := computeTUILayout(m.width, m.height, requestedInputHeight)
 	m.input.SetHeight(layout.inputHeight)
-	m.viewport.Width = inputWidth
+	m.viewport.Width = transcriptWidth
 	m.viewport.Height = maxInt(1, layout.transcriptHeight)
 }
 

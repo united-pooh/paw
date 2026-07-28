@@ -35,7 +35,7 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 	now := time.Now()
 	input := textarea.New()
 	input.Prompt = ""
-	input.Placeholder = ">"
+	input.Placeholder = "Ask anything…"
 	input.ShowLineNumbers = false
 	input.EndOfBufferCharacter = ' '
 	input.CharLimit = 0
@@ -68,28 +68,16 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 		viewport:            vp,
 		cursorFrameAt:       now,
 		pipelineActiveAfter: now,
+		worktreeCWD:         skillRoot,
+		worktree:            worktreeSnapshot{name: filepath.Base(filepath.Clean(skillRoot))},
+		worktreeReader:      readWorktreeStatus,
 		activeAssistant:     -1,
 		activeThinking:      -1,
 		doneAssistant:       -1,
 		toolInspectIndex:    -1,
 		toolHoverIndex:      -1,
 		historyIndex:        -1,
-		transcript: []transcriptEntry{
-			{
-				kind:  entrySystem,
-				title: "system",
-				body:  "Interactive mode is running on Bubble Tea. Use /help for commands.",
-			},
-		},
-	}
-	if provider, ok := runner.(tokenTracerURLProvider); ok {
-		if url := strings.TrimSpace(provider.TokenTracerURL()); url != "" {
-			model.transcript = append(model.transcript, transcriptEntry{
-				kind:  entrySystem,
-				title: "token-tracer",
-				body:  "Token Tracer dashboard: " + url + "\nUse /token-tracer to show this link again.",
-			})
-		}
+		transcript:          nil,
 	}
 	model.applyCursorAnimation()
 	model.refreshViewport()
@@ -111,7 +99,11 @@ func applyTextareaPlainBackground(input *textarea.Model) {
 
 // Init 返回 Bubble Tea 启动时需要执行的初始命令。
 func (m appModel) Init() tea.Cmd {
-	return tea.Batch(m.input.Focus(), cursorFrameTick())
+	cmds := []tea.Cmd{m.input.Focus(), cursorFrameTick()}
+	if m.worktreeCWD != "" {
+		cmds = append(cmds, worktreeRefreshCmd(m.ctx, m.worktreeCWD, m.worktreeReader))
+	}
+	return tea.Batch(cmds...)
 }
 
 // Update 是 Bubble Tea 的核心状态机，负责把输入事件、模型事件和工具事件规约为新状态。
@@ -135,6 +127,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateWaveAmp(time.Time(msg))
 		m.refreshActivityTasks()
 		m.refreshSubagentPreviewFromTasks()
+		m.refreshRunningToolProgress(time.Time(msg))
 		if m.transcriptRefreshPending {
 			if m.viewport.AtBottom() {
 				m.refreshViewport()
@@ -198,6 +191,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.turnStartedAt = time.Time{}
 		m.syncRunningFlags()
 		if msg.err != nil {
+			m.markRunningToolsError(msg.err)
 			m.pendingToolCites = nil
 			m.addEntry(transcriptEntry{
 				kind:  entryError,
@@ -301,6 +295,16 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pipelineStateUpdatedMsg:
 		m.pipelineState = msg.state
 		return m, nil
+	case worktreeRefreshMsg:
+		if msg.err == nil && msg.snapshot.visible() {
+			m.worktree = msg.snapshot
+		}
+		return m, worktreeRefreshTickCmd()
+	case worktreeRefreshTickMsg:
+		if m.worktreeCWD == "" {
+			return m, nil
+		}
+		return m, worktreeRefreshCmd(m.ctx, m.worktreeCWD, m.worktreeReader)
 	case tea.KeyMsg:
 		var rawMouseFragment bool
 		msg, rawMouseFragment = m.filterRawMouseEscapeKey(msg)

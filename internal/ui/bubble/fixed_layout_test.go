@@ -23,7 +23,7 @@ func TestComputeTUILayoutKeepsOuterFrameStable(t *testing.T) {
 		if got.inputHeight < 1 || got.inputHeight > inputMaxVisibleLines {
 			t.Fatalf("requested=%d inputHeight=%d, want 1..%d", requested, got.inputHeight, inputMaxVisibleLines)
 		}
-		if got.headerHeight+got.transcriptHeight+got.statusHeight+got.inputHeight != got.contentHeight {
+		if got.headerHeight+got.transcriptHeight+got.statusHeight+got.worktreeHeight+got.inputHeight != got.contentHeight {
 			t.Fatalf("requested=%d internal heights do not fill content: %+v", requested, got)
 		}
 	}
@@ -206,10 +206,10 @@ func TestDockStatusLineFitsNarrowWidths(t *testing.T) {
 		}
 	}
 
-	// 模式标记应在右侧（B 布局右段）。
+	// 状态行按信息优先级排列：ready · chat · token info。
 	line := ansi.Strip(model.renderDockStatusLine(80))
-	if idx := strings.LastIndex(line, "chat"); idx < 40 {
-		t.Fatalf("mode indicator not right-aligned: %q", line)
+	if ready, chat := strings.Index(line, "ready"), strings.Index(line, "chat"); ready < 0 || chat < 0 || ready >= chat {
+		t.Fatalf("status order = %q", line)
 	}
 }
 
@@ -303,10 +303,10 @@ func assertFixedFrame(t *testing.T, view string, width, height int) {
 			t.Fatalf("line %d width=%d, want %d: %q", i, got, width, line)
 		}
 	}
-	if !strings.HasPrefix(lines[0], "╭") || !strings.HasSuffix(lines[0], "╮") {
-		t.Fatalf("top border=%q, want fixed corners", lines[0])
+	if strings.TrimSpace(lines[0]) == "" || !strings.Contains(strings.TrimSpace(lines[0]), "─") {
+		t.Fatalf("top border=%q, want a hairline rule", lines[0])
 	}
-	if !strings.HasPrefix(lines[len(lines)-1], "╰") || !strings.HasSuffix(lines[len(lines)-1], "╯") {
-		t.Fatalf("bottom border=%q, want fixed corners", lines[len(lines)-1])
+	if strings.TrimSpace(lines[len(lines)-1]) == "" || !strings.Contains(strings.TrimSpace(lines[len(lines)-1]), "─") {
+		t.Fatalf("bottom border=%q, want a hairline rule", lines[len(lines)-1])
 	}
 }

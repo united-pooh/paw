@@ -166,18 +166,21 @@ func (m appModel) transcriptPointForMouse(x, y int) (selectionPoint, bool) {
 
 // transcriptContentRow 返回 y 坐标在 transcript 内容区内的行号。
 func (m appModel) transcriptContentRow(y int) (int, bool) {
-	// 主外框顶部边框占一行，transcript 没有额外纵向边框。
-	row := y - 1
+	row := y - m.transcriptScreenTop()
 	if row < 0 || row >= m.viewport.Height {
 		return 0, false
 	}
 	return row, true
 }
 
+func (m appModel) transcriptScreenTop() int {
+	return 1 + m.currentLayout().headerHeight
+}
+
 // transcriptContentColumn 返回 x 坐标在 transcript 内容区内的显示列。
 func (m appModel) transcriptContentColumn(x int) (int, bool) {
-	// 主外框左边框和 transcript 内边距各占一列。
-	col := x - 1 - mainContentPadding
+	// 主布局没有左侧外框，只保留 transcript 内边距。
+	col := x - mainContentPadding
 	if col < 0 || col >= m.viewport.Width {
 		return 0, false
 	}

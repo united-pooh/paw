@@ -154,7 +154,7 @@ go run ./cmd/agent -s <session-id>
 - `/exit` / `/quit`
 
 当前行为:
-- `/model` 无参数时打开 provider 向导；`status` 输出当前配置和可用模型；`custom`、`deepseek` 直接切换并持久化到 `.ccagent/model.json`；输入已配置的模型名可切换活动模型；`deepseek` 需要 `DEEPSEEK_API_KEY`
+- `/model` 无参数时打开 provider → model 向导；同一 provider 配置多个模型时可在第二步选择具体模型；`status` 输出当前配置和可用模型；`custom`、`deepseek` 直接切换并持久化到 `.ccagent/model.json`；输入已配置的模型名也可切换活动模型；`deepseek` 需要 `DEEPSEEK_API_KEY`
 - `/export` 默认导出到 `.ccagent/exports/conversation-YYYY-MM-DD-HHMMSS.txt`，也支持工作区内显式路径；导出文件权限为 `0600`
 - `/setting` 通过向导保存默认 subagent context/run mode，以及 context meter 的位置和 token limit
 - `/sessions` 列出所有历史会话（ID 前缀、日期、文件大小、首条消息），选中条目后直接恢复该会话
@@ -405,6 +405,8 @@ main (-subagent-worker)
 - `Model`
 - `Models`
 - `Timeout`
+- `RetryCount`（持久化为 `.ccagent/model.json` 的 `retry_count`；网络请求失败或遇到 408/425/429/5xx 时的重试次数，默认 3）
+- `Stream`（持久化为 `.ccagent/model.json` 的 `stream`；默认 `true`，只有显式写为 `false` 才使用非流式请求）
 
 ##### `LoadConfigFromEnv() (Config, error)`
 
@@ -428,6 +430,7 @@ main (-subagent-worker)
 - path: `/chat/completions`
 - model: `gpt-5.5`
 - 缺省 key: `sk-dummy`
+- stream: `true`
 
 当前默认值（`deepseek`）:
 - base url: `https://api.deepseek.com`

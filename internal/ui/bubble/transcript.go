@@ -3,6 +3,7 @@ package bubble
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -21,30 +22,32 @@ type transcriptRenderCacheEntry struct {
 }
 
 type transcriptRenderCacheKey struct {
-	kind            entryKind
-	renderMode      transcriptRenderMode
-	title           string
-	body            string
-	inputTokens     string
-	color           string
-	isError         bool
-	toolUseID       string
-	toolName        string
-	toolStatus      string
-	toolTarget      string
-	toolResult      string
-	toolResultLen   int
-	toolExpanded    bool
-	toolFocused     bool
-	toolHovered     bool
-	toolResultOnly  bool
-	citations       string
-	width           int
-	version         int
-	bodyLen         int
-	citationCount   int
-	createdAtUnixNS int64
-	createdAtIsZero bool
+	kind                entryKind
+	renderMode          transcriptRenderMode
+	title               string
+	body                string
+	inputTokens         string
+	color               string
+	isError             bool
+	toolUseID           string
+	toolName            string
+	toolStatus          string
+	toolTarget          string
+	toolResult          string
+	toolResultLen       int
+	toolExpanded        bool
+	toolFocused         bool
+	toolHovered         bool
+	toolResultOnly      bool
+	citations           string
+	width               int
+	version             int
+	bodyLen             int
+	citationCount       int
+	createdAtUnixNS     int64
+	createdAtIsZero     bool
+	toolStartedAtUnixNS int64
+	toolElapsedSecond   int64
 }
 
 func (m *appModel) ensureAssistantStreamEntry() {
@@ -249,14 +252,15 @@ func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMes
 		name = "tool"
 	}
 	m.addEntry(transcriptEntry{
-		kind:       entryTool,
-		title:      "tool",
-		body:       formatRunningToolCallBody(name, input, oldContent),
-		toolUseID:  strings.TrimSpace(toolUseID),
-		toolName:   name,
-		toolStatus: "running",
-		toolTarget: toolSummaryTarget(name, input),
-		createdAt:  m.animationNow(),
+		kind:          entryTool,
+		title:         "tool",
+		body:          formatRunningToolCallBody(name, input, oldContent),
+		toolUseID:     strings.TrimSpace(toolUseID),
+		toolName:      name,
+		toolStatus:    "running",
+		toolTarget:    toolSummaryTarget(name, input),
+		createdAt:     m.animationNow(),
+		toolStartedAt: m.animationNow(),
 	})
 }
 
@@ -442,6 +446,63 @@ func (m *appModel) markTranscriptRefreshed() {
 	m.lastTranscriptRefreshAt = time.Now()
 }
 
+func (m *appModel) refreshRunningToolProgress(now time.Time) {
+	if m == nil {
+		return
+	}
+	maxElapsed := int64(-1)
+	for _, entry := range m.transcript {
+		if !isToolTransaction(entry) || toolEntryStatus(entry) != "running" {
+			continue
+		}
+		elapsed := toolElapsedSeconds(entry, now)
+		if elapsed > maxElapsed {
+			maxElapsed = elapsed
+		}
+	}
+	if maxElapsed < 0 {
+		m.lastToolProgressSecond = -1
+		return
+	}
+	if maxElapsed == m.lastToolProgressSecond {
+		return
+	}
+	m.lastToolProgressSecond = maxElapsed
+	if m.viewport.AtBottom() {
+		m.refreshViewport()
+	} else {
+		m.refreshViewportPreservingOffset()
+	}
+}
+
+func (m *appModel) markRunningToolsError(err error) {
+	if m == nil {
+		return
+	}
+	message := "tool failed"
+	if err != nil && strings.TrimSpace(err.Error()) != "" {
+		message = err.Error()
+	}
+	changed := false
+	for index := range m.transcript {
+		entry := &m.transcript[index]
+		if !isToolTransaction(*entry) || toolEntryStatus(*entry) != "running" {
+			continue
+		}
+		entry.body = completeRunningToolCallBody(entry.body, "error")
+		entry.toolStatus = "error"
+		entry.isError = true
+		entry.toolResult = message
+		entry.toolExpanded = true
+		touchTranscriptEntry(entry)
+		changed = true
+	}
+	m.lastToolProgressSecond = -1
+	if changed {
+		m.refreshViewport()
+	}
+}
+
 func (m *appModel) renderTranscriptContent() string {
 	return m.renderTranscriptContentAt(maxInt(20, m.viewport.Width), m.showThinking, m.animationNow())
 }
@@ -466,7 +527,7 @@ func (m *appModel) renderTranscriptContentAt(width int, showThinking bool, at ti
 		if !assistantEntryIsRenderable(entry) {
 			continue
 		}
-		key := transcriptRenderKey(entry, width)
+		key := transcriptRenderKey(entry, width, at)
 		if m.transcriptRenderCache[idx].key == key {
 			appendTranscriptRenderedEntry(&renderedTranscript, m.transcriptRenderCache[idx].rendered, entry.kind, previousKind, hasPrevious)
 			previousKind = entry.kind
@@ -485,29 +546,33 @@ func (m *appModel) renderTranscriptContentAt(width int, showThinking bool, at ti
 	return renderedTranscript.String()
 }
 
-func transcriptRenderKey(entry transcriptEntry, width int) transcriptRenderCacheKey {
+func transcriptRenderKey(entry transcriptEntry, width int, at time.Time) transcriptRenderCacheKey {
 	key := transcriptRenderCacheKey{
-		kind:            entry.kind,
-		renderMode:      entry.renderMode,
-		title:           entry.title,
-		inputTokens:     inputTokenSnapshot(entry.inputTokens),
-		color:           entry.color,
-		isError:         entry.isError,
-		toolUseID:       entry.toolUseID,
-		toolName:        entry.toolName,
-		toolStatus:      entry.toolStatus,
-		toolTarget:      entry.toolTarget,
-		toolResultLen:   len(entry.toolResult),
-		toolExpanded:    entry.toolExpanded,
-		toolFocused:     entry.toolFocused,
-		toolHovered:     entry.toolHovered,
-		toolResultOnly:  entry.toolResultOnly,
-		width:           width,
-		version:         entry.version,
-		bodyLen:         len(entry.body),
-		citationCount:   len(entry.citations),
-		createdAtUnixNS: entry.createdAt.UnixNano(),
-		createdAtIsZero: entry.createdAt.IsZero(),
+		kind:                entry.kind,
+		renderMode:          entry.renderMode,
+		title:               entry.title,
+		inputTokens:         inputTokenSnapshot(entry.inputTokens),
+		color:               entry.color,
+		isError:             entry.isError,
+		toolUseID:           entry.toolUseID,
+		toolName:            entry.toolName,
+		toolStatus:          entry.toolStatus,
+		toolTarget:          entry.toolTarget,
+		toolResultLen:       len(entry.toolResult),
+		toolExpanded:        entry.toolExpanded,
+		toolFocused:         entry.toolFocused,
+		toolHovered:         entry.toolHovered,
+		toolResultOnly:      entry.toolResultOnly,
+		width:               width,
+		version:             entry.version,
+		bodyLen:             len(entry.body),
+		citationCount:       len(entry.citations),
+		createdAtUnixNS:     entry.createdAt.UnixNano(),
+		createdAtIsZero:     entry.createdAt.IsZero(),
+		toolStartedAtUnixNS: entry.toolStartedAt.UnixNano(),
+	}
+	if toolEntryStatus(entry) == "running" {
+		key.toolElapsedSecond = toolElapsedSeconds(entry, at)
 	}
 	if entry.version == 0 {
 		key.body = entry.body
@@ -515,6 +580,13 @@ func transcriptRenderKey(entry transcriptEntry, width int) transcriptRenderCache
 		key.citations = transcriptCitationSnapshot(entry.citations)
 	}
 	return key
+}
+
+func toolElapsedSeconds(entry transcriptEntry, at time.Time) int64 {
+	if entry.toolStartedAt.IsZero() || at.Before(entry.toolStartedAt) {
+		return 0
+	}
+	return int64(at.Sub(entry.toolStartedAt) / time.Second)
 }
 
 func inputTokenSnapshot(tokens []inputToken) string {
@@ -612,6 +684,9 @@ func transcriptEntrySeparator(previousKind, currentKind entryKind) string {
 	if currentKind == entryTool && (previousKind == entryAssistant || previousKind == entryTool) {
 		return "\n"
 	}
+	if previousKind == currentKind {
+		return "\n"
+	}
 	return "\n\n"
 }
 
@@ -621,7 +696,7 @@ func renderEntry(entry transcriptEntry, width int) string {
 }
 
 func renderEntryAt(entry transcriptEntry, width int, at time.Time) string {
-	title := sanitizeTerminalText(entry.title)
+	title := displayEntryTitle(entry)
 	color := sanitizeTerminalText(entry.color)
 	var label string
 	if color != "" {
@@ -643,8 +718,38 @@ func renderEntryAt(entry transcriptEntry, width int, at time.Time) string {
 	return indentLines(label+"\n"+body, transcriptEntryGutter)
 }
 
+func displayEntryTitle(entry transcriptEntry) string {
+	switch entry.kind {
+	case entryUser:
+		return "you >"
+	case entryAssistant:
+		return "agent >"
+	case entryThinking:
+		return "thinking >"
+	default:
+		return sanitizeTerminalText(entry.title)
+	}
+}
+
 func transcriptBodyWidth(width int) int {
 	return maxInt(1, width-lipgloss.Width(transcriptEntryGutter))
+}
+
+func (m appModel) hasRenderableTranscript() bool {
+	for _, entry := range m.transcript {
+		if entry.kind == entryThinking && !m.showThinking {
+			continue
+		}
+		if assistantEntryIsRenderable(entry) {
+			return true
+		}
+	}
+	return false
+}
+
+func renderEmptyState(width, height int) string {
+	content := emptyTitleStyle.Render("アトリ高性能ですから!")
+	return lipgloss.Place(maxInt(1, width), maxInt(1, height), lipgloss.Center, lipgloss.Center, content)
 }
 
 // renderEntryBody 按消息类型渲染正文，assistant 消息会走 Markdown 渲染。
@@ -654,7 +759,7 @@ func renderEntryBody(entry transcriptEntry, width int) string {
 
 func renderEntryBodyAt(entry transcriptEntry, width int, at time.Time) string {
 	if isToolTransaction(entry) {
-		return renderToolTransactionEntry(entry, width)
+		return renderToolTransactionEntry(entry, width, at)
 	}
 	body := entry.body
 	if entry.kind != entryUser {
@@ -742,7 +847,7 @@ func toolEntryDisplayName(entry transcriptEntry) string {
 	return name
 }
 
-func renderToolTransactionEntry(entry transcriptEntry, width int) string {
+func renderToolTransactionEntry(entry transcriptEntry, width int, at time.Time) string {
 	status := toolEntryStatus(entry)
 	borderStyle := toolResultBorderStyle
 	switch status {
@@ -759,7 +864,7 @@ func renderToolTransactionEntry(entry transcriptEntry, width int) string {
 
 	contentWidth := toolEntryContentWidth(width, borderStyle)
 	innerWidth := maxInt(1, contentWidth-borderStyle.GetHorizontalFrameSize())
-	summary := renderCompactToolSummary(entry, innerWidth)
+	summary := renderCompactToolSummary(entry, innerWidth, at)
 	if entry.toolFocused {
 		summary = toolFocusedStyle.Width(innerWidth).Render(summary)
 	}
@@ -779,7 +884,7 @@ func renderToolTransactionEntry(entry transcriptEntry, width int) string {
 	return borderStyle.Width(contentWidth).Render(summary + "\n" + detail)
 }
 
-func renderCompactToolSummary(entry transcriptEntry, width int) string {
+func renderCompactToolSummary(entry transcriptEntry, width int, at time.Time) string {
 	width = maxInt(1, width)
 	status := toolEntryStatus(entry)
 	icon := "✓"
@@ -815,6 +920,9 @@ func renderCompactToolSummary(entry transcriptEntry, width int) string {
 	}
 	iconText := icon + " "
 	statusSuffix := " · " + statusText
+	if status == "running" {
+		statusSuffix += " · " + formatToolElapsed(entry.toolStartedAt, at)
+	}
 	nameWidth := lipgloss.Width(name)
 	baseWidth := lipgloss.Width(focusPrefix) + lipgloss.Width(iconText) + nameWidth
 	statusWidth := lipgloss.Width(statusSuffix)
@@ -858,6 +966,17 @@ func renderCompactToolSummary(entry transcriptEntry, width int) string {
 		line.WriteString(statusStyle.Render(statusSuffix))
 	}
 	return truncateStyledDisplayWidth(line.String(), width)
+}
+
+func formatToolElapsed(startedAt, at time.Time) string {
+	if startedAt.IsZero() || at.Before(startedAt) {
+		return "0s"
+	}
+	seconds := int(at.Sub(startedAt) / time.Second)
+	if seconds < 60 {
+		return fmt.Sprintf("%ds", seconds)
+	}
+	return fmt.Sprintf("%dm%02ds", seconds/60, seconds%60)
 }
 
 func truncateStyledDisplayWidth(text string, width int) string {

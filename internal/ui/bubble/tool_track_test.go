@@ -3,6 +3,7 @@ package bubble
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -27,7 +28,7 @@ func TestToolTrackUsesSemanticEntrySpacing(t *testing.T) {
 	before := lineContaining(t, lines, "before")
 	firstTool := lineContaining(t, lines, "✓ Read one.go · ok")
 	secondTool := lineContaining(t, lines, "◌ Read two.go · running")
-	afterLabel := lineContainingAfter(t, lines, "assistant", secondTool+1)
+	afterLabel := lineContainingAfter(t, lines, "agent >", secondTool+1)
 
 	if firstTool != before+1 {
 		t.Fatalf("assistant -> tool rows = %d -> %d, want adjacent\n%s", before, firstTool, strings.Join(lines, "\n"))
@@ -51,6 +52,14 @@ func TestToolTrackLifecycleAndResultVisibility(t *testing.T) {
 	entryIndex := len(model.transcript) - 1
 	if entry := model.transcript[entryIndex]; entry.toolStatus != "running" || entry.toolTarget != "README.md" || entry.toolExpanded {
 		t.Fatalf("running entry = %#v", entry)
+	}
+	if model.transcript[entryIndex].toolStartedAt.IsZero() {
+		t.Fatalf("running entry = %#v, want tool start time", model.transcript[entryIndex])
+	}
+	runningAt := model.transcript[entryIndex].toolStartedAt.Add(12 * time.Second)
+	runningRendered := ansi.Strip(renderTranscriptAt(model.transcript, 80, true, runningAt))
+	if !strings.Contains(runningRendered, "running · 12s") {
+		t.Fatalf("running transcript = %q, want elapsed status", runningRendered)
 	}
 	if model.toggleToolExpansion(entryIndex) {
 		t.Fatalf("running transaction must remain single-line")
@@ -96,6 +105,15 @@ func TestToolTrackLifecycleAndResultVisibility(t *testing.T) {
 	rendered := ansi.Strip(renderTranscript(model.transcript, 80, true))
 	if !strings.Contains(rendered, "× Bash go test ./... · error") || !strings.Contains(rendered, "exit status 1") {
 		t.Fatalf("rendered error transaction:\n%s", rendered)
+	}
+
+	failed := newTestModel(&fakeRunner{})
+	next, _ = failed.Update(toolCallMsg(ui.ToolCallEvent{ID: "call-3", Name: "Read", Input: []byte(`{"file_path":"stuck.go"}`)}))
+	failed = next.(appModel)
+	next, _ = failed.Update(turnFinishedMsg{err: errors.New("tool failed")})
+	failed = next.(appModel)
+	if got := failed.transcript[0].toolStatus; got != "error" {
+		t.Fatalf("unfinished tool status = %q, want error", got)
 	}
 }
 
@@ -196,8 +214,8 @@ func TestToolTrackMouseClickTogglesButDragSelects(t *testing.T) {
 	}}
 	model.relayout()
 	model.refreshViewport()
-	location := transcriptEntryLocations(model.transcript, model.viewport.Width, true)[0]
-	y := 1 + location.startRow - model.viewport.YOffset
+	location := transcriptEntryLocations(model.transcript, model.viewport.Width, true, model.animationNow())[0]
+	y := 1 + model.currentLayout().headerHeight + location.startRow - model.viewport.YOffset
 	x := 5
 
 	next, _ := model.Update(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
@@ -254,8 +272,8 @@ func TestToolTrackMouseHoverHighlightsAndClears(t *testing.T) {
 	}}
 	model.relayout()
 	model.refreshViewport()
-	location := transcriptEntryLocations(model.transcript, model.viewport.Width, true)[0]
-	y := 1 + location.startRow - model.viewport.YOffset
+	location := transcriptEntryLocations(model.transcript, model.viewport.Width, true, model.animationNow())[0]
+	y := 1 + model.currentLayout().headerHeight + location.startRow - model.viewport.YOffset
 
 	next, _ := model.Update(tea.MouseMsg{X: 5, Y: y, Action: tea.MouseActionMotion})
 	model = next.(appModel)

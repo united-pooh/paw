@@ -50,6 +50,12 @@ const (
 	colorContextCache           colorRole = "context.cache"
 	colorContextUsed            colorRole = "context.used"
 	colorContextFree            colorRole = "context.free"
+	colorSignal                 colorRole = "signal"
+	colorWorktreeBackground     colorRole = "worktree.background"
+	colorWorktreeBorder         colorRole = "worktree.border"
+	colorWorktreeClean          colorRole = "worktree.clean"
+	colorWorktreeDirty          colorRole = "worktree.dirty"
+	colorWorktreeConflict       colorRole = "worktree.conflict"
 	colorCursorNormalBright     colorRole = "cursor.normal.bright"
 	colorCursorTerminalBright   colorRole = "cursor.terminal.bright"
 )
@@ -67,16 +73,16 @@ func NewColorManager() ColorManager {
 	return ColorManager{
 		palette: map[colorRole]string{
 			colorTerminalBackground:     "#292C33",
-			colorHeaderBackground:       "236",
-			colorHeaderForeground:       "231",
-			colorLabelUser:              "86",
-			colorLabelAssistant:         "111",
-			colorLabelTool:              "214",
-			colorLabelResult:            "65",
-			colorLabelSystem:            "245",
-			colorLabelError:             "203",
-			colorBody:                   "252",
-			colorToolDetailBackground:   "#3e4a58",
+			colorHeaderBackground:       "#242830",
+			colorHeaderForeground:       "#F0E6D5",
+			colorLabelUser:              "#D98568",
+			colorLabelAssistant:         "#F0E6D5",
+			colorLabelTool:              "#A9C8B5",
+			colorLabelResult:            "#A9C8B5",
+			colorLabelSystem:            "#8E98A8",
+			colorLabelError:             "#EF7D7D",
+			colorBody:                   "#C9C2B7",
+			colorToolDetailBackground:   "#182830",
 			colorMarkdownHeading:        "229",
 			colorMarkdownRule:           "240",
 			colorMarkdownBullet:         "86",
@@ -85,8 +91,8 @@ func NewColorManager() ColorManager {
 			colorMarkdownCodeBorder:     "62",
 			colorMarkdownQuote:          "245",
 			colorMarkdownQuoteBorder:    "244",
-			colorPanelBorder:            "238",
-			colorInputFocusedBorder:     "86",
+			colorPanelBorder:            "#3B434C",
+			colorInputFocusedBorder:     "#76D5E8",
 			colorInputWaitingBorder:     "244",
 			colorInputMultilineBorder:   "214",
 			colorInputTerminal:          "#ff5ac8",
@@ -100,8 +106,14 @@ func NewColorManager() ColorManager {
 			colorSelectionBackground:    "237",
 			colorSelectionForeground:    "255",
 			colorContextCache:           "214",
-			colorContextUsed:            "111",
-			colorContextFree:            "246",
+			colorContextUsed:            "#76D5E8",
+			colorContextFree:            "#687581",
+			colorSignal:                 "#76D5E8",
+			colorWorktreeBackground:     "#182830",
+			colorWorktreeBorder:         "#355461",
+			colorWorktreeClean:          "#A9C8B5",
+			colorWorktreeDirty:          "#E5B66E",
+			colorWorktreeConflict:       "#EF7D7D",
 			colorCursorNormalBright:     "#9fffd3",
 			colorCursorTerminalBright:   "#ff8ddd",
 		},

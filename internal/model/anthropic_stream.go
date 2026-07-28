@@ -83,18 +83,19 @@ func (c *Client) streamAnthropicMessage(ctx context.Context, cfg Config, message
 		return nil, fmt.Errorf("序列化 Anthropic 请求体失败: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		anthropicMessagesURL(cfg),
-		bytes.NewReader(bodyBytes),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("创建 Anthropic HTTP 请求失败: %w", err)
-	}
-	setAnthropicRequestHeaders(req, cfg)
-
-	resp, err := c.streamHTTPClient().Do(req)
+	resp, err := c.doRequestWithRetry(ctx, cfg, true, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(
+			ctx,
+			http.MethodPost,
+			anthropicMessagesURL(cfg),
+			bytes.NewReader(bodyBytes),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("创建 Anthropic HTTP 请求失败: %w", err)
+		}
+		setAnthropicRequestHeaders(req, cfg)
+		return req, nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("调用 Anthropic 流式接口失败: %w", err)
 	}

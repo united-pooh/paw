@@ -67,6 +67,9 @@ func (c *Client) StreamMessage(ctx context.Context, messages []message.Message, 
 	}
 
 	cfg := c.CurrentModelConfig()
+	if !cfg.Stream {
+		return c.nonStreamingOpenAIMessage(ctx, cfg, messages, tools)
+	}
 	if shouldAttemptAnthropicStream(cfg) {
 		events, err := c.streamAnthropicMessage(ctx, cfg, messages, tools)
 		if err == nil {
@@ -75,6 +78,104 @@ func (c *Client) StreamMessage(ctx context.Context, messages []message.Message, 
 	}
 
 	return c.streamOpenAIMessage(ctx, cfg, messages, tools)
+}
+
+type nonStreamingChatResponse struct {
+	Choices []struct {
+		Message struct {
+			Content   string `json:"content"`
+			ToolCalls []struct {
+				ID       string `json:"id"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls,omitempty"`
+		} `json:"message"`
+	} `json:"choices"`
+	Usage *Usage `json:"usage,omitempty"`
+	Error *struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+	} `json:"error,omitempty"`
+}
+
+func (c *Client) nonStreamingOpenAIMessage(ctx context.Context, cfg Config, messages []message.Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
+	reqBody := ChatCompletionsRequest{
+		Model:    cfg.Model,
+		Messages: messages,
+		Stream:   false,
+	}
+	for _, t := range tools {
+		reqBody.Tools = append(reqBody.Tools, openAITool{
+			Type: "function",
+			Function: openAIToolFunction{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  t.InputSchema,
+			},
+		})
+	}
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("序列化请求体失败: %w", err)
+	}
+	resp, err := c.doRequestWithRetry(ctx, cfg, false, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.APIBaseURL+cfg.APIPath, bytes.NewReader(bodyBytes))
+		if err != nil {
+			return nil, fmt.Errorf("创建 HTTP 请求失败: %w", err)
+		}
+		c.setRequestHeaders(req)
+		return req, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("调用模型接口失败: %w", err)
+	}
+	defer resp.Body.Close()
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取响应体失败: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("模型接口返回异常状态 %d: %s", resp.StatusCode, strings.TrimSpace(string(respBytes)))
+	}
+	var parsed nonStreamingChatResponse
+	if err := json.Unmarshal(respBytes, &parsed); err != nil {
+		return nil, fmt.Errorf("解析响应 JSON 失败: %w", err)
+	}
+	if parsed.Error != nil {
+		return nil, fmt.Errorf("模型接口返回错误: %s", parsed.Error.Message)
+	}
+	if len(parsed.Choices) == 0 {
+		return nil, fmt.Errorf("模型接口未返回任何 choices")
+	}
+
+	choice := parsed.Choices[0].Message
+	events := make(chan StreamEvent, 4)
+	if parsed.Usage != nil {
+		events <- StreamEvent{Usage: parsed.Usage}
+	}
+	if content := strings.TrimSpace(choice.Content); content != "" {
+		events <- StreamEvent{Delta: content}
+	}
+	if len(choice.ToolCalls) > 0 {
+		calls := make([]message.ToolCall, 0, len(choice.ToolCalls))
+		for _, call := range choice.ToolCalls {
+			input := json.RawMessage(`{}`)
+			if strings.TrimSpace(call.Function.Arguments) != "" && json.Valid([]byte(call.Function.Arguments)) {
+				input = json.RawMessage(call.Function.Arguments)
+			}
+			calls = append(calls, message.ToolCall{ID: call.ID, Name: call.Function.Name, Input: input})
+		}
+		events <- StreamEvent{ToolCalls: calls}
+	}
+	if len(events) == 0 {
+		close(events)
+		return nil, fmt.Errorf("模型接口返回了空内容")
+	}
+	events <- StreamEvent{Done: true}
+	close(events)
+	return events, nil
 }
 
 func (c *Client) streamOpenAIMessage(ctx context.Context, cfg Config, messages []message.Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
@@ -102,22 +203,22 @@ func (c *Client) streamOpenAIMessage(ctx context.Context, cfg Config, messages [
 		return nil, fmt.Errorf("序列化请求体失败: %w", err)
 	}
 
-	// 将上层 context 透传到底层 HTTP 请求，支持超时/取消。
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		cfg.APIBaseURL+cfg.APIPath,
-		bytes.NewReader(bodyBytes),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("创建 HTTP 请求失败: %w", err)
-	}
-
-	// 当前本地网关沿用标准 JSON 请求体和 Bearer 鉴权头。
-	c.setRequestHeaders(req)
-
-	// 发起请求；如果失败直接返回同步错误。
-	resp, err := c.streamHTTPClient().Do(req)
+	// 将上层 context 透传到底层 HTTP 请求，支持超时/取消；请求建立失败时
+	// 按配置重试，响应一旦建立则交给 SSE 消费器继续读取。
+	resp, err := c.doRequestWithRetry(ctx, cfg, true, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(
+			ctx,
+			http.MethodPost,
+			cfg.APIBaseURL+cfg.APIPath,
+			bytes.NewReader(bodyBytes),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("创建 HTTP 请求失败: %w", err)
+		}
+		// 当前本地网关沿用标准 JSON 请求体和 Bearer 鉴权头。
+		c.setRequestHeaders(req)
+		return req, nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("调用模型接口失败: %w", err)
 	}

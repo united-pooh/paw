@@ -591,3 +591,85 @@ func TestStreamMessageDoesNotTimeoutWhileReadingBody(t *testing.T) {
 		t.Fatalf("gotDelta = %q, want slow", gotDelta)
 	}
 }
+
+func TestStreamMessageRetriesTransientHTTPFailures(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			http.Error(w, "provider unavailable", http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"recovered\"}}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Provider:   ProviderCustom,
+		APIBaseURL: server.URL,
+		APIPath:    "/chat/completions",
+		Model:      CustomDefaultModel,
+		RetryCount: 1,
+		Timeout:    time.Second,
+	})
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "hello"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+	var got strings.Builder
+	for event := range events {
+		if event.Err != nil {
+			t.Fatalf("stream event error = %v", event.Err)
+		}
+		got.WriteString(event.Delta)
+	}
+	if got.String() != "recovered" || requests != 2 {
+		t.Fatalf("response=%q requests=%d, want recovered/2", got.String(), requests)
+	}
+}
+
+func TestStreamMessageUsesNonStreamingResponseWhenExplicitlyDisabled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request ChatCompletionsRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if request.Stream {
+			t.Fatal("request.Stream = true, want false")
+		}
+		if request.StreamOptions != nil {
+			t.Fatal("non-stream request unexpectedly included stream_options")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"non-stream"}}]}`)
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Provider:   ProviderCustom,
+		APIBaseURL: server.URL,
+		APIPath:    "/chat/completions",
+		Model:      CustomDefaultModel,
+		Stream:     false,
+		streamSet:  true,
+		Timeout:    time.Second,
+	})
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "hello"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+	var got string
+	var done bool
+	for event := range events {
+		got += event.Delta
+		done = done || event.Done
+		if event.Err != nil {
+			t.Fatalf("stream event error = %v", event.Err)
+		}
+	}
+	if got != "non-stream" || !done {
+		t.Fatalf("events = content %q done=%v, want non-stream/true", got, done)
+	}
+}

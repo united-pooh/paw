@@ -34,6 +34,9 @@ func TestLoadConfigFromEnvDefaultsToCustom(t *testing.T) {
 	if cfg.APIKey != CustomDefaultAPIKey {
 		t.Fatalf("cfg.APIKey = %q, want %q", cfg.APIKey, CustomDefaultAPIKey)
 	}
+	if cfg.RetryCount != defaultRetryCountValue {
+		t.Fatalf("cfg.RetryCount = %d, want %d", cfg.RetryCount, defaultRetryCountValue)
+	}
 }
 
 func TestLoadConfigFromEnvUsesPersistedProvider(t *testing.T) {
@@ -101,6 +104,32 @@ func TestLoadConfigFromEnvUsesPersistedModelList(t *testing.T) {
 	want := []string{"gpt-5.6-sol", "gpt-5.6-luna"}
 	if got := AvailableModels(cfg); len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("AvailableModels(cfg) = %#v, want %#v", got, want)
+	}
+}
+
+func TestLoadConfigFromEnvHonorsExplicitNonStreamingConfig(t *testing.T) {
+	restoreCWD := chdirForTest(t, t.TempDir())
+	defer restoreCWD()
+
+	unsetEnvNamesForTest(t, apiKeyEnvNames...)
+	writePersistedModelConfig(t, persistedModelConfig{
+		Provider:      ProviderCustom,
+		APIBaseURL:    "https://example.test/v1",
+		APIPath:       CustomChatPath,
+		APIKeyEnvName: CustomAPIKeyEnvName,
+		Model:         CustomDefaultModel,
+		Stream:        boolPointer(false),
+	})
+
+	cfg, err := LoadConfigFromEnv()
+	if err != nil {
+		t.Fatalf("LoadConfigFromEnv() error = %v", err)
+	}
+	if cfg.Stream {
+		t.Fatal("cfg.Stream = true, want explicit false")
+	}
+	if !cfg.streamSet {
+		t.Fatal("explicit stream=false was not retained as configured")
 	}
 }
 
@@ -209,6 +238,7 @@ func TestSaveModelConfigPersistsProviderSelection(t *testing.T) {
 		APIKeyEnvName: CustomAPIKeyEnvName,
 		Model:         CustomDefaultModel,
 		Timeout:       75 * time.Second,
+		RetryCount:    5,
 	}
 	if err := SaveModelConfig(cfg); err != nil {
 		t.Fatalf("SaveModelConfig() error = %v", err)
@@ -232,6 +262,9 @@ func TestSaveModelConfigPersistsProviderSelection(t *testing.T) {
 	}
 	if got := persisted["timeout_seconds"]; got != float64(75) {
 		t.Fatalf("persisted timeout_seconds = %#v, want %d", got, 75)
+	}
+	if got := persisted["retry_count"]; got != float64(5) {
+		t.Fatalf("persisted retry_count = %#v, want %d", got, 5)
 	}
 	models, ok := persisted["models"].([]any)
 	if !ok || len(models) != 1 || models[0] != CustomDefaultModel {

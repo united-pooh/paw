@@ -18,7 +18,7 @@ type ToolDefinition struct {
 type ChatCompletionsRequest struct {
 	Model         string            `json:"model"`
 	Messages      []message.Message `json:"messages"`
-	Stream        bool              `json:"stream,omitempty"`
+	Stream        bool              `json:"stream"`
 	StreamOptions *StreamOptions    `json:"stream_options,omitempty"`
 	Tools         []openAITool      `json:"tools,omitempty"`
 }

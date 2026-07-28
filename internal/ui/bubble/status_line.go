@@ -1,13 +1,16 @@
 // 底部 status 行渲染层（方案 B · 细线分隔）。
 //
-// 布局：[spinner+状态] · [均衡器 百分比 · cache/free] · [模式]
+// 布局：[状态] · [模式] · [token ripple] · [token count]  [工作树]
 // 生成态前导 braille 旋转 spinner；均衡器 idle=进度填充、generating=波浪起伏。
 // 遵循 UI/数据隔离：各段从 appModel accessor 读数据，按 cell 预算截断，整体
 // 严格等于 width 个 cell，数据内容绝不破坏布局。
 package bubble
 
 import (
+	"strings"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 // statusSegmentSeparator 是 B 布局各段之间的点号分隔符（轻盈）。
@@ -63,34 +66,85 @@ func spinnerFrame(idx int) string {
 	return spinnerFrames[(idx/3)%len(spinnerFrames)]
 }
 
+const (
+	tokenRippleTravel = 3 * time.Second
+	tokenRippleExit   = 600 * time.Millisecond
+	tokenRippleCycle  = tokenRippleTravel + tokenRippleExit
+	tokenRippleTail   = 14
+)
+
 // renderDockStatusLine 渲染输入框上方的单行状态条。
 func (m appModel) renderDockStatusLine(width int) string {
 	width = maxInt(1, width)
 
 	left := m.renderStatusLeftSegment()
+	stats := m.contextStats()
+	limit := maxInt(1, stats.LimitTokens)
+	used := clampInt(stats.UsedTokens, 0, limit)
+	count := contextUsedStyle.Render(formatCompactTokenCount(used) + " / " + formatCompactTokenCount(limit))
 	mode := m.renderModeIndicator()
-
-	// 模式右对齐，预算固定小。
-	modeBudget := clampInt(width/6, 4, 10)
-	mode = truncateDisplayWidth(mode, modeBudget)
-	modeW := terminalCellWidth(mode)
-
-	// 状态词收紧到实际宽度（⠋ generating ≈12 格），不再预留 width/4 浪费均衡器空间。
-	left = truncateDisplayWidth(left, 14)
-	leftW := terminalCellWidth(left)
-
 	sepW := terminalCellWidth(statusSegmentSeparator)
-	// 中段吃剩余宽度：均衡器拉伸填满，无死空白。amp 由 cursorFrameMsg 预算。
-	midBudget := width - leftW - modeW - 2*sepW
-	mid := m.renderStatusMidSegment(midBudget, m.waveAmpCurrent)
+	left = truncateDisplayWidth(left, minInt(18, width))
 
-	// 左 · 中 · 右：均衡器吃满 midBudget，不再有 mid-mode 间空格 gap。
-	line := left + statusSegmentSeparator + mid + statusSegmentSeparator + mode
+	worktree := ""
+	if width >= worktreeInlineMinimumWidth {
+		worktree = m.renderWorktreeChip(minInt(28, maxInt(1, width/3)))
+	}
+
+	// Keep the requested information order. When space gets tight, hide the
+	// worktree first, then mode, then token count, while retaining a frontier.
+	includeMode := true
+	includeCount := true
+	worktreeGap := 2
+	statusWidth := func(includeMode, includeCount bool, worktree string) int {
+		fixed := terminalCellWidth(left)
+		// The frontier is always present, so it is already one of the parts.
+		parts := 2
+		if includeMode {
+			fixed += terminalCellWidth(mode)
+			parts++
+		}
+		if includeCount {
+			fixed += terminalCellWidth(count)
+			parts++
+		}
+		fixed += (parts - 1) * sepW
+		if worktree != "" {
+			fixed += worktreeGap + terminalCellWidth(worktree)
+		}
+		return fixed
+	}
+	fixed := statusWidth(includeMode, includeCount, worktree)
+	if fixed >= width {
+		worktree = ""
+		fixed = statusWidth(includeMode, includeCount, worktree)
+	}
+	if fixed >= width {
+		includeMode = false
+		fixed = statusWidth(includeMode, includeCount, worktree)
+	}
+	if fixed >= width {
+		includeCount = false
+		fixed = statusWidth(includeMode, includeCount, worktree)
+	}
+	barBudget := maxInt(1, width-fixed)
+	bar := m.renderTokenFrontier(barBudget, used, limit)
+	statusParts := []string{left}
+	if includeMode {
+		statusParts = append(statusParts, mode)
+	}
+	statusParts = append(statusParts, bar)
+	if includeCount {
+		statusParts = append(statusParts, count)
+	}
+	line := strings.Join(statusParts, statusSegmentSeparator)
+	if worktree != "" {
+		line += strings.Repeat(" ", worktreeGap) + worktree
+	}
 	return padOrTruncateToWidth(line, width)
 }
 
-// renderStatusLeftSegment 返回左段：工作中态显示 spinner + 状态词，空闲显示 "● idle"。
-// 三态词：流式生成="generating"、工具调用中="working"、空闲="idle"。前两者都带 spinner。
+// renderStatusLeftSegment 返回左段：工作中态显示 spinner + 状态词，空闲显示 ready。
 func (m appModel) renderStatusLeftSegment() string {
 	if m.isGenerating {
 		return generatingStatusStyle.Render(spinnerFrame(m.spinnerFrameIdx) + " generating")
@@ -98,49 +152,74 @@ func (m appModel) renderStatusLeftSegment() string {
 	if m.isModelWorkRunning() {
 		return generatingStatusStyle.Render(spinnerFrame(m.spinnerFrameIdx) + " working")
 	}
-	return idleStatusStyle.Render("● idle")
+	return idleStatusStyle.Render("ready")
 }
 
-// renderStatusMidSegment 返回中段：均衡器（拉伸填满）+ 百分比 + 辅助（cache%/free%）。
-// 预算紧张时按优先级丢弃辅助→百分比→均衡器缩到 min 4 格。返回宽度 <= budget。
-// amp 由 cursorFrameMsg 经 updateWaveAmp 缓动后存入 waveAmpCurrent，此处传入。
-func (m appModel) renderStatusMidSegment(budget int, amp float64) string {
-	if budget <= 0 {
-		return ""
+func (m appModel) renderTokenFrontier(width, used, limit int) string {
+	width = maxInt(1, width)
+	limit = maxInt(1, limit)
+	used = clampInt(used, 0, limit)
+	usedCells := int(float64(width) * float64(used) / float64(limit))
+	usedCells = clampInt(usedCells, 0, width)
+	cells := make([]string, width)
+	for i := range cells {
+		if i < usedCells {
+			cells[i] = contextUsedStyle.Render("━")
+		} else {
+			cells[i] = contextFreeStyle.Render("─")
+		}
 	}
-	stats := m.contextStats()
-	limit := maxInt(1, stats.LimitTokens)
-	usedPct := percent(stats.UsedTokens, limit)
-	pctLabel := formatContextPercent(stats.UsedTokens, limit)
-
-	// 辅助：工作中态（流式或工具调用）显示 cache%，空闲显示 free%。
-	var aux string
-	if m.isAgentWorking() {
-		aux = "cache " + formatContextPercent(stats.CacheTokens, limit)
-	} else {
-		aux = "free " + formatContextPercent(maxInt(0, limit-stats.UsedTokens), limit)
+	if !m.isAgentWorking() || usedCells >= width {
+		return strings.Join(cells, "")
 	}
 
-	pctPart := equalizerActiveStyle.Render(" " + pctLabel)
-	auxPart := equalizerDimStyle.Render(" · " + aux)
-
-	// 均衡器拉伸：格数 = budget − 文本宽度，clamp [4, 40]。
-	textW := terminalCellWidth(pctPart) + terminalCellWidth(auxPart)
-	eqBudget := budget - textW
-	cells := clampInt(eqBudget, 4, equalizerMaxCells)
-
-	eq := equalizerActiveStyle.Render(renderEqualizer(usedPct, amp, m.spinnerFrameIdx, cells))
-	full := eq + pctPart + auxPart
-	if terminalCellWidth(full) <= budget {
-		return full
+	now := m.animationNow()
+	phase := tokenRipplePhase(now)
+	head := tokenRippleHead(usedCells, width, phase)
+	fade := tokenRippleFade(phase)
+	background := colorManager.Hex(colorTerminalBackground)
+	for i := maxInt(usedCells, head-tokenRippleTail+1); i <= head && i < width; i++ {
+		distance := head - i
+		alpha := float64(tokenRippleTail-distance) / float64(tokenRippleTail)
+		alpha = clamp01(alpha) * fade
+		glyph := "░"
+		switch {
+		case distance == 0:
+			glyph = "█"
+		case distance == 1:
+			glyph = "▓"
+		case distance == 2:
+			glyph = "▒"
+		}
+		color := interpolateHexColor(background, colorManager.Hex(colorSignal), alpha)
+		cells[i] = lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(glyph)
 	}
-	// 装不下辅助：均衡器 + 百分比。
-	core := eq + pctPart
-	if terminalCellWidth(core) <= budget {
-		return core
+	return strings.Join(cells, "")
+}
+
+func tokenRipplePhase(now time.Time) time.Duration {
+	phase := now.Sub(time.Unix(0, 0)) % tokenRippleCycle
+	if phase < 0 {
+		phase += tokenRippleCycle
 	}
-	// 极窄：只显示百分比。
-	return truncateDisplayWidth(pctPart, budget)
+	return phase
+}
+
+func tokenRippleHead(usedCells, width int, phase time.Duration) int {
+	lastVisible := maxInt(usedCells, width-1)
+	if phase <= tokenRippleTravel {
+		progress := clamp01(float64(phase) / float64(tokenRippleTravel))
+		return usedCells + int(float64(lastVisible-usedCells)*progress+0.5)
+	}
+	exitProgress := clamp01(float64(phase-tokenRippleTravel) / float64(tokenRippleExit))
+	return lastVisible + int(float64(tokenRippleTail)*exitProgress+0.5)
+}
+
+func tokenRippleFade(phase time.Duration) float64 {
+	if phase <= tokenRippleTravel {
+		return 1
+	}
+	return 1 - clamp01(float64(phase-tokenRippleTravel)/float64(tokenRippleExit))
 }
 
 // renderModeIndicator 返回右侧模式标记。优先级：terminal > !bang > multiline > chat。

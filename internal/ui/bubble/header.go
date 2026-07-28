@@ -9,7 +9,7 @@
 package bubble
 
 import (
-	"strconv"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -17,92 +17,53 @@ import (
 // headerSnapshot 是 header 渲染所需的全部数据。字段已 sanitize，渲染层不再
 // 触碰数据源。
 type headerSnapshot struct {
-	modelLabel    string        // 已 sanitize 的模型名
-	turnElapsed   time.Duration // 0 表示 idle
-	generating    bool
-	sessionTokens int           // 会话累计 token
-	now           time.Time     // 渲染时刻（wall clock 来源）
+	modelLabel  string
+	statusLabel string
+	now         time.Time
 }
 
 // headerFieldSeparator 是字段间的分隔符，占 3 个 cell。
 const headerFieldSeparator = " · "
 
 // renderHeader 把快照渲染成严格 width cell 宽的一行。纯函数。
-// 两端对齐：左组 [model · timer] 贴左，右组 [session · clock] 贴右，中间弹性空格。
+// 左侧显示模型和运行状态，当前时间固定贴右。
 func renderHeader(s headerSnapshot, width int) string {
 	if width <= 0 {
 		return ""
 	}
 
 	// 模型名是唯一的用户可控长字符串，给独立预算并截断。
-	modelBudget := clampInt(width/4, 6, 24)
+	modelBudget := clampInt(width/3, 6, 28)
 	model := truncateDisplayWidth(s.modelLabel, modelBudget)
-	timer := formatTurnTimer(s.turnElapsed, s.generating)
-	left := model + headerFieldSeparator + timer
-
-	session := "Σ " + formatCompactTokenCount(s.sessionTokens)
+	status := strings.TrimSpace(s.statusLabel)
+	if status == "" {
+		status = "ready"
+	}
+	left := model + headerFieldSeparator + status
 	clock := s.now.Format("15:04")
 
-	// 右组字段按优先级从低到高丢弃（clock 先丢、session 后丢），直到装得下。
-	rightFields := []string{clock, session} // 尾递减：先尝试丢 clock
-	var right string
-	for drop := 0; drop <= len(rightFields); drop++ {
-		keep := rightFields[drop:] // drop 个被丢弃
-		parts := make([]string, 0, len(keep))
-		for _, f := range keep {
-			parts = append(parts, f)
-		}
-		// 反转回 session, clock 顺序拼接。
-		if len(parts) == 0 {
-			right = ""
-		} else {
-			rev := make([]string, len(parts))
-			for i, p := range parts {
-				rev[len(parts)-1-i] = p
-			}
-			right = strings.Join(rev, headerFieldSeparator)
-		}
-		leftW := terminalCellWidth(left)
-		rightW := terminalCellWidth(right)
-		if leftW+rightW == 0 {
-			return ""
-		}
-		if rightW == 0 {
-			// 只有左组：左对齐 + 右补空格。
-			return padOrTruncateToWidth(left, width)
-		}
-		gap := width - leftW - rightW
-		if gap >= len(headerFieldSeparator) {
-			// 两端对齐：左 + gap空格 + 右。
-			return left + strings.Repeat(" ", gap) + right
-		}
-		// 装不下当前右组，继续丢弃。
+	leftW := terminalCellWidth(left)
+	rightW := terminalCellWidth(clock)
+	if leftW+rightW+terminalCellWidth(headerFieldSeparator) <= width {
+		return left + strings.Repeat(" ", width-leftW-rightW) + clock
 	}
-	return padOrTruncateToWidth(left, width)
+	if width >= rightW {
+		return padOrTruncateToWidth(truncateDisplayWidth(left, maxInt(1, width-rightW))+clock, width)
+	}
+	return padOrTruncateToWidth(truncateDisplayWidth(left, width), width)
 }
 
-// formatTurnTimer 把轮次耗时格式化为 header 用字符串。生成中显示 mm:ss，
-// 空闲显示 "idle"。
-func formatTurnTimer(elapsed time.Duration, generating bool) string {
-	if !generating || elapsed <= 0 {
-		return "⏱ idle"
+// formatTurnTimer 把轮次耗时格式化为 header 用字符串。
+// 运行中的短任务显示秒数，超过一分钟显示 mm:ss。
+func formatTurnTimer(startedAt, now time.Time) string {
+	if startedAt.IsZero() || now.Before(startedAt) {
+		return "0s"
 	}
-	secs := int(elapsed.Seconds())
-	return "⏱ " + formatTwoDigitPadded(secs/60) + ":" + formatTwoDigitPadded(secs%60)
-}
-
-// formatTwoDigitPadded 返回两位补零的数字字符串（0-99）。
-func formatTwoDigitPadded(n int) string {
-	if n < 0 {
-		n = 0
+	seconds := int(now.Sub(startedAt) / time.Second)
+	if seconds < 60 {
+		return fmt.Sprintf("%ds", seconds)
 	}
-	if n > 99 {
-		n = 99
-	}
-	if n < 10 {
-		return "0" + strconv.FormatInt(int64(n), 10)
-	}
-	return strconv.FormatInt(int64(n), 10)
+	return fmt.Sprintf("%dm%02ds", seconds/60, seconds%60)
 }
 
 // padOrTruncateToWidth 把 text 对齐到精确 width cell：不足右补空格，超宽截断。
@@ -129,22 +90,15 @@ func (m appModel) collectHeaderData(now time.Time) headerSnapshot {
 	if label == "" {
 		label = "model"
 	}
-
-	var elapsed time.Duration
-	generating := m.isGenerating
-	if generating && !m.turnStartedAt.IsZero() {
-		elapsed = now.Sub(m.turnStartedAt)
-		if elapsed < 0 {
-			elapsed = 0
-		}
+	status := "ready"
+	if m.isAgentWorking() {
+		status = spinnerFrame(m.spinnerFrameIdx) + " " + formatTurnTimer(m.turnStartedAt, now) + " working"
 	}
 
 	return headerSnapshot{
-		modelLabel:    label,
-		turnElapsed:   elapsed,
-		generating:    generating,
-		sessionTokens: m.contextStats().SessionUsedTokens,
-		now:           now,
+		modelLabel:  label,
+		statusLabel: status,
+		now:         now,
 	}
 }
 

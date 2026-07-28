@@ -2,14 +2,17 @@ package model
 
 import (
 	"bytes"
+	"codex-agent-go/internal/message"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"codex-agent-go/internal/message"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Client 封装模型调用的 HTTP 客户端。
@@ -22,10 +25,119 @@ type Client struct {
 
 // NewClient 创建模型客户端。
 func NewClient(cfg Config) *Client {
+	cfg = fillConfigDefaults(cfg)
 	return &Client{
 		httpClient: &http.Client{Timeout: cfg.Timeout},
 		cfg:        cfg,
 	}
+}
+
+const (
+	requestRetryBaseDelay = 200 * time.Millisecond
+	requestRetryMaxDelay  = 2 * time.Second
+)
+
+// doRequestWithRetry executes only the request-establishment phase with retry.
+// Once a streaming response has been accepted, the caller owns the body and
+// retries are deliberately not attempted: replaying a partially consumed
+// stream could duplicate assistant text or tool calls.
+func (c *Client) doRequestWithRetry(ctx context.Context, cfg Config, stream bool, buildRequest func() (*http.Request, error)) (*http.Response, error) {
+	attempts := cfg.RetryCount + 1
+	if attempts < 1 {
+		attempts = 1
+	}
+
+	client := c.httpClient
+	if stream {
+		client = c.streamHTTPClient()
+	}
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		req, err := buildRequest()
+		if err != nil {
+			return nil, err
+		}
+		resp, err := client.Do(req)
+		if err == nil {
+			if !isRetryableHTTPStatus(resp.StatusCode) || attempt == attempts-1 {
+				return resp, nil
+			}
+			_ = drainAndClose(resp.Body)
+			lastErr = fmt.Errorf("model endpoint returned retryable status %d", resp.StatusCode)
+		} else {
+			if resp != nil && resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+			if !isRetryableRequestError(ctx, err) || attempt == attempts-1 {
+				return nil, err
+			}
+			lastErr = err
+		}
+
+		if err := waitForRequestRetry(ctx, attempt); err != nil {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
+func isRetryableHTTPStatus(status int) bool {
+	switch {
+	case status == http.StatusRequestTimeout,
+		status == http.StatusTooEarly,
+		status == http.StatusTooManyRequests:
+		return true
+	case status >= 500 && status <= 599:
+		return true
+	default:
+		return false
+	}
+}
+
+func isRetryableRequestError(ctx context.Context, err error) bool {
+	if err == nil || ctx == nil {
+		return err != nil
+	}
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var networkErr net.Error
+	return errors.As(err, &networkErr)
+}
+
+func waitForRequestRetry(ctx context.Context, attempt int) error {
+	shift := attempt
+	if shift > 3 {
+		shift = 3
+	}
+	delay := requestRetryBaseDelay * time.Duration(1<<shift)
+	if delay > requestRetryMaxDelay {
+		delay = requestRetryMaxDelay
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	if ctx == nil {
+		<-timer.C
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func drainAndClose(body io.ReadCloser) error {
+	if body == nil {
+		return nil
+	}
+	_, err := io.Copy(io.Discard, body)
+	closeErr := body.Close()
+	if err != nil {
+		return err
+	}
+	return closeErr
 }
 
 func (c *Client) streamHTTPClient() *http.Client {
@@ -90,19 +202,19 @@ func (c *Client) RunMessage(ctx context.Context, messages []message.Message) (st
 		return "", fmt.Errorf("序列化请求体失败: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		cfg.APIBaseURL+cfg.APIPath,
-		bytes.NewReader(bodyBytes),
-	)
-	if err != nil {
-		return "", fmt.Errorf("创建 HTTP 请求失败: %w", err)
-	}
-
-	c.setRequestHeaders(req)
-
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.doRequestWithRetry(ctx, cfg, false, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(
+			ctx,
+			http.MethodPost,
+			cfg.APIBaseURL+cfg.APIPath,
+			bytes.NewReader(bodyBytes),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("创建 HTTP 请求失败: %w", err)
+		}
+		c.setRequestHeaders(req)
+		return req, nil
+	})
 	if err != nil {
 		return "", fmt.Errorf("调用模型接口失败: %w", err)
 	}

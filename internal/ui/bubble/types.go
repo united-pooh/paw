@@ -60,6 +60,7 @@ type transcriptEntry struct {
 	toolResultOnly bool
 	citations      []toolCitation
 	createdAt      time.Time
+	toolStartedAt  time.Time
 	version        int
 	renderMode     transcriptRenderMode
 }
@@ -123,6 +124,8 @@ type modelWizardStep int
 const (
 	// modelWizardProvider 表示正在选择 provider。
 	modelWizardProvider modelWizardStep = iota
+	// modelWizardModel 表示正在选择 provider 下的具体模型。
+	modelWizardModel
 	// modelWizardConfirm 表示正在确认将要应用的模型配置。
 	modelWizardConfirm
 )
@@ -152,6 +155,8 @@ var modelProviderOptions = []modelProviderOption{
 type modelWizard struct {
 	step          modelWizardStep
 	selectedIndex int
+	selectedModel int
+	modelOptions  []string
 	err           string
 }
 
@@ -196,7 +201,10 @@ func newModelWizard(current model.Config) *modelWizard {
 			break
 		}
 	}
-	return &modelWizard{step: modelWizardProvider, selectedIndex: selected}
+	return &modelWizard{
+		step:          modelWizardProvider,
+		selectedIndex: selected,
+	}
 }
 
 // selectedProvider 返回当前选中的 provider，并在索引越界时进行纠正。
@@ -211,6 +219,20 @@ func (w *modelWizard) selectedProvider() modelProviderOption {
 		w.selectedIndex = len(modelProviderOptions) - 1
 	}
 	return modelProviderOptions[w.selectedIndex]
+}
+
+func (w *modelWizard) selectedModelName() string {
+	if w == nil || w.selectedModel < 0 || w.selectedModel >= len(w.modelOptions) {
+		return ""
+	}
+	return w.modelOptions[w.selectedModel]
+}
+
+func (w *modelWizard) selectedModelNameOr(fallback string) string {
+	if selected := w.selectedModelName(); selected != "" {
+		return selected
+	}
+	return fallback
 }
 
 // sessionsLoadedMsg 携带异步加载完成的会话列表。
@@ -268,73 +290,78 @@ type subagentTranscriptPreview struct {
 
 // appModel 是 Bubble Tea TUI 的唯一状态中心。
 type appModel struct {
-	ctx                        context.Context
-	runner                     Runner
-	sessionID                  string
-	modelConfig                ModelConfigController
-	settingsConfig             SettingsController
-	subagents                  SubagentController
-	sessionStore               SessionStore
-	commandRegistry            *CommandRegistry
-	skillRegistry              *skill.Registry
-	queryGuard                 QueryGuard
-	chatQueue                  CommandQueue
-	cursorAnchor               *terminalCursorAnchor
-	input                      textarea.Model
-	viewport                   viewport.Model
-	width                      int
-	height                     int
-	ready                      bool
-	running                    bool
-	runningTerminal            bool
-	terminalMode               bool
-	terminalPreview            bool
-	showThinking               bool
-	selecting                  bool
-	selectionActive            bool
-	selectionStart             selectionPoint
-	selectionEnd               selectionPoint
-	cursorFrameAt              time.Time
-	turnStartedAt              time.Time
-	contextMeter               contextMeterAnimation
-	pending                    []inputDraft
-	inputTokens                []inputToken
-	submittedDraft             inputDraft
-	inputHistory               []inputDraft
-	historyIndex               int
-	historyDraft               inputDraft
-	historyDownLock            bool
-	inputPasteFoldActive       bool
-	transcript                 []transcriptEntry
-	transcriptRenderCache      []transcriptRenderCacheEntry
-	transcriptRefreshPending   bool
-	transcriptKeyScrollActive  bool
-	rawMouseEscapePending      string
-	toolInspectActive          bool
-	toolInspectIndex           int
-	toolHoverIndex             int
-	lastTranscriptRefreshAt    time.Time
-	activeAssistant            int
-	activeThinking             int
-	doneAssistant              int
-	assistantStream            streamLineBuffer
-	thinkingStream             streamLineBuffer
-	pendingToolCites           []toolCitation
-	isGenerating               bool
-	lastCtrlCAt                time.Time // 追踪双击 Ctrl+C 退出
-	modelWizard                *modelWizard
-	settingWizard              *settingWizard
-	sessionPicker              *sessionPicker
-	subagentPicker             *subagentPicker
-	subagentPreview            *subagentTranscriptPreview
-	completion                 *completion
-	pipelineState              pipelineState
-	pipelineActiveAfter        time.Time
-	spinnerFrameIdx            int // Activity 中 running 条目的动画帧索引，由 cursorFrameMsg 驱动
-	waveAmpTarget              bool       // 均衡器波浪振幅目标态（= isGenerating），翻转时更新
-	waveAmpStartedAt           time.Time  // 振幅目标态确立时刻，用于缓动进度
-	waveAmpFrom                float64    // 过渡起点振幅，反向退场时从此值缓降
-	waveAmpCurrent             float64    // 当前振幅（cursorFrameMsg 每帧更新，渲染只读）
+	ctx                       context.Context
+	runner                    Runner
+	sessionID                 string
+	modelConfig               ModelConfigController
+	settingsConfig            SettingsController
+	subagents                 SubagentController
+	sessionStore              SessionStore
+	commandRegistry           *CommandRegistry
+	skillRegistry             *skill.Registry
+	queryGuard                QueryGuard
+	chatQueue                 CommandQueue
+	cursorAnchor              *terminalCursorAnchor
+	input                     textarea.Model
+	viewport                  viewport.Model
+	width                     int
+	height                    int
+	ready                     bool
+	running                   bool
+	runningTerminal           bool
+	terminalMode              bool
+	terminalPreview           bool
+	hasInteracted             bool
+	showThinking              bool
+	selecting                 bool
+	selectionActive           bool
+	selectionStart            selectionPoint
+	selectionEnd              selectionPoint
+	cursorFrameAt             time.Time
+	turnStartedAt             time.Time
+	contextMeter              contextMeterAnimation
+	pending                   []inputDraft
+	inputTokens               []inputToken
+	submittedDraft            inputDraft
+	inputHistory              []inputDraft
+	historyIndex              int
+	historyDraft              inputDraft
+	historyDownLock           bool
+	inputPasteFoldActive      bool
+	transcript                []transcriptEntry
+	transcriptRenderCache     []transcriptRenderCacheEntry
+	transcriptRefreshPending  bool
+	transcriptKeyScrollActive bool
+	rawMouseEscapePending     string
+	toolInspectActive         bool
+	toolInspectIndex          int
+	toolHoverIndex            int
+	lastTranscriptRefreshAt   time.Time
+	lastToolProgressSecond    int64
+	activeAssistant           int
+	activeThinking            int
+	doneAssistant             int
+	assistantStream           streamLineBuffer
+	thinkingStream            streamLineBuffer
+	pendingToolCites          []toolCitation
+	isGenerating              bool
+	lastCtrlCAt               time.Time // 追踪双击 Ctrl+C 退出
+	modelWizard               *modelWizard
+	settingWizard             *settingWizard
+	sessionPicker             *sessionPicker
+	subagentPicker            *subagentPicker
+	subagentPreview           *subagentTranscriptPreview
+	completion                *completion
+	pipelineState             pipelineState
+	pipelineActiveAfter       time.Time
+	spinnerFrameIdx           int       // Activity 中 running 条目的动画帧索引，由 cursorFrameMsg 驱动
+	waveAmpTarget             bool      // 均衡器波浪振幅目标态（= isGenerating），翻转时更新
+	waveAmpStartedAt          time.Time // 振幅目标态确立时刻，用于缓动进度
+	waveAmpFrom               float64   // 过渡起点振幅，反向退场时从此值缓降
+	waveAmpCurrent            float64   // 当前振幅（cursorFrameMsg 每帧更新，渲染只读）
+	worktreeCWD               string
+	worktree                  worktreeSnapshot
+	worktreeReader            worktreeStatusReader
 }
 
 type activityTab int

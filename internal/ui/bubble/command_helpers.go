@@ -29,7 +29,7 @@ func (m *appModel) handleModelCommand(invocation string) tea.Cmd {
 		m.addEntry(transcriptEntry{
 			kind:  entrySystem,
 			title: "model",
-			body:  fmt.Sprintf("provider=%s base=%s path=%s model=%s models=%s key=%s", cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, strings.Join(model.AvailableModels(cfg), ","), cfg.APIKeyEnvName),
+			body:  fmt.Sprintf("provider=%s base=%s path=%s model=%s models=%s retries=%d key=%s", cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, strings.Join(model.AvailableModels(cfg), ","), cfg.RetryCount, cfg.APIKeyEnvName),
 		})
 	case model.ProviderCustom, model.ProviderDeepSeek:
 		cfg, err := m.configForProvider(args)
@@ -68,7 +68,7 @@ func (m *appModel) applyModelConfigFromCommand(cfg model.Config) {
 	m.addEntry(transcriptEntry{
 		kind:  entrySystem,
 		title: "model",
-		body:  fmt.Sprintf("provider=%s base=%s path=%s model=%s models=%s key=%s", cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, strings.Join(model.AvailableModels(cfg), ","), cfg.APIKeyEnvName),
+		body:  fmt.Sprintf("provider=%s base=%s path=%s model=%s models=%s retries=%d key=%s", cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, strings.Join(model.AvailableModels(cfg), ","), cfg.RetryCount, cfg.APIKeyEnvName),
 	})
 }
 

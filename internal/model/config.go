@@ -26,8 +26,9 @@ const (
 	DeepSeekDefaultModel  = "deepseek-chat"
 	DeepSeekAPIKeyEnvName = "DEEPSEEK_API_KEY"
 
-	defaultTimeoutSeconds = 60
-	modelConfigPath       = ".ccagent/model.json"
+	defaultTimeoutSeconds  = 60
+	defaultRetryCountValue = 3
+	modelConfigPath        = ".ccagent/model.json"
 )
 
 var apiKeyEnvNames = []string{
@@ -52,6 +53,9 @@ type Config struct {
 	Model         string
 	Models        []string
 	Timeout       time.Duration
+	RetryCount    int
+	Stream        bool
+	streamSet     bool
 }
 
 type persistedModelConfig struct {
@@ -62,6 +66,8 @@ type persistedModelConfig struct {
 	Model         string   `json:"model"`
 	Models        []string `json:"models,omitempty"`
 	Timeout       int      `json:"timeout_seconds,omitempty"`
+	RetryCount    int      `json:"retry_count,omitempty"`
+	Stream        *bool    `json:"stream,omitempty"`
 }
 
 func LoadConfigFromEnv() (Config, error) {
@@ -105,6 +111,8 @@ func SaveModelConfig(cfg Config) error {
 		Model:         cfg.Model,
 		Models:        AvailableModels(cfg),
 		Timeout:       int(cfg.Timeout / time.Second),
+		RetryCount:    cfg.RetryCount,
+		Stream:        boolPointer(cfg.Stream),
 	}
 
 	data, err := json.MarshalIndent(payload, "", "  ")
@@ -129,6 +137,8 @@ func defaultConfigForProvider(provider string) Config {
 			Model:         CustomDefaultModel,
 			Models:        []string{CustomDefaultModel},
 			Timeout:       defaultTimeout(),
+			RetryCount:    defaultRetryCount(),
+			Stream:        true,
 		}
 	default:
 		return Config{
@@ -139,12 +149,18 @@ func defaultConfigForProvider(provider string) Config {
 			Model:         DeepSeekDefaultModel,
 			Models:        []string{DeepSeekDefaultModel},
 			Timeout:       defaultTimeout(),
+			RetryCount:    defaultRetryCount(),
+			Stream:        true,
 		}
 	}
 }
 
 func defaultTimeout() time.Duration {
 	return time.Duration(defaultTimeoutSeconds) * time.Second
+}
+
+func defaultRetryCount() int {
+	return defaultRetryCountValue
 }
 
 func normalizeProvider(provider string) string {
@@ -183,7 +199,17 @@ func fillConfigDefaults(cfg Config) Config {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = defaults.Timeout
 	}
+	if cfg.RetryCount <= 0 {
+		cfg.RetryCount = defaults.RetryCount
+	}
+	if !cfg.Stream && !cfg.streamSet {
+		cfg.Stream = defaults.Stream
+	}
 	return cfg
+}
+
+func boolPointer(value bool) *bool {
+	return &value
 }
 
 func mergePersistedConfig(base Config, persisted persistedModelConfig) Config {
@@ -208,6 +234,13 @@ func mergePersistedConfig(base Config, persisted persistedModelConfig) Config {
 	}
 	if persisted.Timeout > 0 {
 		cfg.Timeout = time.Duration(persisted.Timeout) * time.Second
+	}
+	if persisted.RetryCount > 0 {
+		cfg.RetryCount = persisted.RetryCount
+	}
+	if persisted.Stream != nil {
+		cfg.Stream = *persisted.Stream
+		cfg.streamSet = true
 	}
 	return cfg
 }

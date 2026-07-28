@@ -112,6 +112,9 @@ func (m appModel) consumeSubmittedInput() (appModel, string, bool) {
 	if draft.Text == "" {
 		return m, "", false
 	}
+	// The landing hint is a first-use affordance. Once the user submits
+	// anything, keep the dock quiet while it waits for the next input.
+	m.hasInteracted = true
 	m.input.Reset()
 	m.inputTokens = nil
 	m.inputPasteFoldActive = false

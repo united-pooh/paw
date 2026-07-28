@@ -73,6 +73,42 @@ func (m appModel) configForProvider(provider string) (model.Config, error) {
 	}
 }
 
+// prepareModelWizardStep resolves the selected provider and creates the model
+// list for the second step of /model. The list comes from the persisted
+// provider configuration, so custom endpoints can expose any model names.
+func (m *appModel) prepareModelWizardStep() {
+	if m == nil || m.modelWizard == nil {
+		return
+	}
+	option := m.modelWizard.selectedProvider()
+	cfg, err := m.configForProvider(option.id)
+	if err != nil {
+		m.modelWizard.modelOptions = nil
+		m.modelWizard.err = err.Error()
+		m.modelWizard.step = modelWizardConfirm
+		return
+	}
+	m.modelWizard.modelOptions = model.AvailableModels(cfg)
+	if len(m.modelWizard.modelOptions) == 0 {
+		m.modelWizard.modelOptions = []string{cfg.Model}
+	}
+	m.modelWizard.selectedModel = 0
+	for index, name := range m.modelWizard.modelOptions {
+		if name == cfg.Model {
+			m.modelWizard.selectedModel = index
+			break
+		}
+	}
+	m.modelWizard.err = ""
+	// A provider with one available model does not need an extra stop. Custom
+	// providers with multiple persisted models use the explicit second step.
+	if len(m.modelWizard.modelOptions) > 1 {
+		m.modelWizard.step = modelWizardModel
+	} else {
+		m.modelWizard.step = modelWizardConfirm
+	}
+}
+
 // handleModelWizardKey 处理 /model 向导中的方向键、确认键和取消键。
 func (m appModel) handleModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.modelWizard == nil {
@@ -99,6 +135,36 @@ func (m appModel) handleModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "enter":
+			m.prepareModelWizardStep()
+			return m, nil
+		}
+	case modelWizardModel:
+		count := len(m.modelWizard.modelOptions)
+		switch msg.String() {
+		case "ctrl+c", "esc":
+			m.modelWizard = nil
+			return m, nil
+		case "b", "backspace":
+			m.modelWizard.step = modelWizardProvider
+			m.modelWizard.err = ""
+			return m, nil
+		case "up", "k":
+			if count > 0 {
+				m.modelWizard.selectedModel--
+				if m.modelWizard.selectedModel < 0 {
+					m.modelWizard.selectedModel = count - 1
+				}
+			}
+			return m, nil
+		case "down", "j":
+			if count > 0 {
+				m.modelWizard.selectedModel++
+				if m.modelWizard.selectedModel >= count {
+					m.modelWizard.selectedModel = 0
+				}
+			}
+			return m, nil
+		case "enter":
 			m.modelWizard.step = modelWizardConfirm
 			return m, nil
 		}
@@ -108,7 +174,11 @@ func (m appModel) handleModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.modelWizard = nil
 			return m, nil
 		case "b", "backspace":
-			m.modelWizard.step = modelWizardProvider
+			if len(m.modelWizard.modelOptions) > 0 {
+				m.modelWizard.step = modelWizardModel
+			} else {
+				m.modelWizard.step = modelWizardProvider
+			}
 			return m, nil
 		case "enter":
 			return m.applyModelWizardSelection(), nil
@@ -134,6 +204,9 @@ func (m appModel) applyModelWizardSelection() appModel {
 		m.modelWizard.err = err.Error()
 		return m
 	}
+	if selected := m.modelWizard.selectedModelName(); selected != "" {
+		cfg.Model = selected
+	}
 	if saver, ok := m.modelConfig.(ModelConfigSaver); ok {
 		if err := saver.SaveModelConfig(cfg); err != nil {
 			m.modelWizard.err = err.Error()
@@ -149,7 +222,7 @@ func (m appModel) applyModelWizardSelection() appModel {
 	m.addEntry(transcriptEntry{
 		kind:  entrySystem,
 		title: "model",
-		body:  fmt.Sprintf("provider=%s base=%s path=%s model=%s key=%s", cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, cfg.APIKeyEnvName),
+		body:  fmt.Sprintf("provider=%s base=%s path=%s model=%s retries=%d key=%s", cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, cfg.RetryCount, cfg.APIKeyEnvName),
 	})
 	return m
 }
@@ -163,12 +236,38 @@ func (m appModel) renderModelWizardBox() string {
 	switch m.modelWizard.step {
 	case modelWizardProvider:
 		body = m.renderProviderStep()
+	case modelWizardModel:
+		body = m.renderModelStep()
 	case modelWizardConfirm:
 		body = m.renderModelConfirmStep()
 	default:
 		body = "Unknown model wizard step"
 	}
 	return m.renderModalPanel(body)
+}
+
+// renderModelStep renders the models available under the selected provider.
+func (m appModel) renderModelStep() string {
+	lines := []string{
+		wizardTitleStyle.Render("Choose model"),
+		fmt.Sprintf("Provider: %s", m.modelWizard.selectedProvider().label),
+	}
+	maxItems := clampInt(m.currentLayout().transcriptHeight-7, 1, len(m.modelWizard.modelOptions))
+	start := maxInt(0, m.modelWizard.selectedModel-maxItems+1)
+	end := minInt(len(m.modelWizard.modelOptions), start+maxItems)
+	for i := start; i < end; i++ {
+		name := m.modelWizard.modelOptions[i]
+		if i == m.modelWizard.selectedModel {
+			lines = append(lines, selectedProviderStyle.Render("> "+name))
+		} else {
+			lines = append(lines, unselectedProviderStyle.Render("  "+name))
+		}
+	}
+	if len(m.modelWizard.modelOptions) == 0 {
+		lines = append(lines, labelErrorStyle.Render("No configured models"))
+	}
+	lines = append(lines, "Press enter to continue, b to choose another provider.")
+	return strings.Join(lines, "\n")
 }
 
 // renderProviderStep 渲染 provider 列表选择步骤。
@@ -200,7 +299,7 @@ func (m appModel) renderProviderStep() string {
 func (m appModel) renderModelConfirmStep() string {
 	option := m.modelWizard.selectedProvider()
 	cfg, err := m.configForProvider(option.id)
-	lines := []string{wizardTitleStyle.Render("Confirm model provider")}
+	lines := []string{wizardTitleStyle.Render("Confirm model")}
 	if err != nil {
 		lines = append(lines,
 			fmt.Sprintf("provider: %s", option.label),
@@ -215,7 +314,7 @@ func (m appModel) renderModelConfirmStep() string {
 		fmt.Sprintf("provider: %s", cfg.Provider),
 		fmt.Sprintf("base url: %s", cfg.APIBaseURL),
 		fmt.Sprintf("path: %s", cfg.APIPath),
-		fmt.Sprintf("model: %s", cfg.Model),
+		fmt.Sprintf("model: %s", m.modelWizard.selectedModelNameOr(cfg.Model)),
 		fmt.Sprintf("models: %s", strings.Join(model.AvailableModels(cfg), ", ")),
 		fmt.Sprintf("key env: %s", cfg.APIKeyEnvName),
 		"Press enter to apply, b to go back, esc to cancel.",

@@ -88,8 +88,15 @@ var (
 				BorderForeground(colorManager.LipglossColor(colorPanelBorder)).
 				Padding(0, 1)
 	mainFrameStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorManager.LipglossColor(colorPanelBorder))
+			Border(lipgloss.Border{
+			Top:         "─",
+			TopLeft:     "─",
+			TopRight:    "─",
+			Bottom:      "─",
+			BottomLeft:  "─",
+			BottomRight: "─",
+		}).
+		BorderForeground(colorManager.LipglossColor(colorPanelBorder))
 	transcriptContentStyle = lipgloss.NewStyle().
 				Padding(0, mainContentPadding)
 	inputDockStyle = lipgloss.NewStyle().
@@ -98,6 +105,23 @@ var (
 				Foreground(colorManager.LipglossColor(colorInputMultilineBorder))
 	inputDockTerminalStyle = inputDockStyle.Copy().
 				Foreground(colorManager.LipglossColor(colorInputTerminal))
+	worktreeNameStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorMarkdownQuote)).
+				Background(colorManager.LipglossColor(colorWorktreeBackground))
+	worktreeSeparatorStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorMarkdownQuote)).
+				Background(colorManager.LipglossColor(colorWorktreeBackground))
+	worktreeChipStyle = lipgloss.NewStyle().
+				Background(colorManager.LipglossColor(colorWorktreeBackground)).
+				Padding(0, 1)
+	inputHintStyle = lipgloss.NewStyle().
+			Foreground(colorManager.LipglossColor(colorContextFree))
+	inputPromptStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorSignal)).
+				Bold(true)
+	emptyTitleStyle = lipgloss.NewStyle().
+			Foreground(colorManager.LipglossColor(colorHeaderForeground)).
+			Bold(true)
 	dockRuleStyle = lipgloss.NewStyle().
 			Foreground(colorManager.LipglossColor(colorPanelBorder))
 	modelStatusStyle = lipgloss.NewStyle().
@@ -127,16 +151,16 @@ var (
 				Foreground(colorManager.LipglossColor(colorContextUsed)).
 				Bold(true)
 	idleStatusStyle = lipgloss.NewStyle().
-				Foreground(colorManager.LipglossColor(colorMarkdownRule))
+			Foreground(colorManager.LipglossColor(colorMarkdownRule))
 	modeTerminalStyle = lipgloss.NewStyle().
 				Foreground(colorManager.LipglossColor(colorInputTerminal)).
 				Bold(true)
 	modeShellStyle = lipgloss.NewStyle().
-				Foreground(colorManager.LipglossColor(colorInputTerminal))
+			Foreground(colorManager.LipglossColor(colorInputTerminal))
 	modeMultilineStyle = lipgloss.NewStyle().
 				Foreground(colorManager.LipglossColor(colorInputMultilineBorder))
 	modeChatStyle = lipgloss.NewStyle().
-				Foreground(colorManager.LipglossColor(colorMarkdownRule))
+			Foreground(colorManager.LipglossColor(colorMarkdownRule))
 	inputCommandTokenStyle = lipgloss.NewStyle().
 				Foreground(colorManager.LipglossColor(colorInputTokenCommand)).
 				Bold(true)

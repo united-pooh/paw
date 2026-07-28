@@ -536,6 +536,45 @@ func TestModelCommandSwitchesConfiguredModel(t *testing.T) {
 	}
 }
 
+func TestModelWizardSelectsConfiguredModelUnderProvider(t *testing.T) {
+	controller := &fakeModelConfigController{
+		current: modelcfg.Config{
+			Provider:      modelcfg.ProviderCustom,
+			APIBaseURL:    "https://example.test/v1",
+			APIPath:       modelcfg.CustomChatPath,
+			APIKey:        "custom-secret",
+			APIKeyEnvName: modelcfg.CustomAPIKeyEnvName,
+			Model:         "gpt-5.6-sol",
+			Models:        []string{"gpt-5.6-sol", "gpt-5.6-luna"},
+			Timeout:       time.Minute,
+		},
+	}
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", controller, nil, nil, nil, newTerminalCursorAnchor())
+	model.modelWizard = newModelWizard(controller.current)
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if model.modelWizard.step != modelWizardModel || !equalStrings(model.modelWizard.modelOptions, []string{"gpt-5.6-sol", "gpt-5.6-luna"}) {
+		t.Fatalf("wizard model step = %#v", model.modelWizard)
+	}
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = next.(appModel)
+	if got := model.modelWizard.selectedModelName(); got != "gpt-5.6-luna" {
+		t.Fatalf("selected model = %q, want gpt-5.6-luna", got)
+	}
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+
+	if model.modelWizard != nil {
+		t.Fatalf("model wizard remains open: %#v", model.modelWizard)
+	}
+	if len(controller.applied) != 1 || controller.applied[0].Model != "gpt-5.6-luna" {
+		t.Fatalf("applied configs = %#v", controller.applied)
+	}
+}
+
 // TestExportCommandWritesExplicitAndDefaultTranscriptFiles verifies /export paths and content.
 func TestExportCommandWritesExplicitAndDefaultTranscriptFiles(t *testing.T) {
 	root := t.TempDir()
@@ -1578,7 +1617,7 @@ func TestInputHistorySkipsControlCommands(t *testing.T) {
 // TestViewUsesMinimalPlaceholderAndOmitsHelpLine 验证输入框只展示最简 > 占位符并移除帮助行。
 func TestViewUsesMinimalPlaceholderAndOmitsHelpLine(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	if model.input.Placeholder != ">" {
+	if model.input.Placeholder != "Ask anything…" {
 		t.Fatalf("placeholder = %q", model.input.Placeholder)
 	}
 	if model.input.Prompt != "" {
@@ -1597,7 +1636,7 @@ func TestViewUsesMinimalPlaceholderAndOmitsHelpLine(t *testing.T) {
 	}
 }
 
-// TestViewFramesTranscriptHistoryPanel 验证聊天历史区域有边框并包含系统启动消息。
+// TestViewFramesTranscriptHistoryPanel 验证聊天历史区域使用细线结构并展示空状态。
 func TestViewFramesTranscriptHistoryPanel(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
@@ -1606,15 +1645,41 @@ func TestViewFramesTranscriptHistoryPanel(t *testing.T) {
 	model.relayout()
 
 	rendered := model.View()
-	for _, want := range []string{"╭", "╰", "Interactive mode is running"} {
+	for _, want := range []string{"─", "アトリ高性能ですから!", "› Ask anything…"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("view = %q, want %q", rendered, want)
 		}
+	}
+	if strings.Contains(rendered, "SIGNAL / READY") {
+		t.Fatalf("view = %q, contains retired empty-state/input text", rendered)
 	}
 	for _, unwanted := range []string{"Input", "Waiting", "Terminal"} {
 		if strings.Contains(rendered, unwanted) {
 			t.Fatalf("view = %q, should not contain %q", rendered, unwanted)
 		}
+	}
+}
+
+func TestInputHintIsDimAndDisappearsAfterFirstSubmission(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 24
+	model.relayout()
+
+	initial := model.View()
+	if !strings.Contains(initial, "Ask anything…") {
+		t.Fatalf("initial view = %q, want landing hint", initial)
+	}
+
+	model.input.SetValue("hello")
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if !model.hasInteracted {
+		t.Fatal("submission did not mark the input as interacted")
+	}
+	if strings.Contains(model.View(), "Ask anything…") {
+		t.Fatalf("post-submit view = %q, hint should be hidden", model.View())
 	}
 }
 
@@ -1676,8 +1741,8 @@ func TestViewFillsTerminalHeightAndPinsInputToBottom(t *testing.T) {
 		t.Fatalf("bottom input not visible near frame bottom:\n%s", ansi.Strip(rendered))
 	}
 	lastLine := lines[len(lines)-1]
-	if strings.Count(lastLine, "╯") != 1 {
-		t.Fatalf("last rendered line = %q, want one fixed main-frame bottom border", lastLine)
+	if strings.TrimSpace(lastLine) == "" || !strings.Contains(lastLine, "─") {
+		t.Fatalf("last rendered line = %q, want one fixed main-frame bottom rule", lastLine)
 	}
 }
 
@@ -2435,8 +2500,8 @@ func TestTranscriptMouseDragSelectsAndCopiesAcrossScroll(t *testing.T) {
 	}
 	model.refreshViewport()
 	model.viewport.GotoTop()
-	topY := 1
-	bottomY := maxInt(1, model.viewport.Height)
+	topY := 1 + model.currentLayout().headerHeight
+	bottomY := 1 + model.currentLayout().headerHeight + maxInt(0, model.viewport.Height-1)
 
 	next, _ := model.Update(tea.MouseMsg{
 		X:      2,
@@ -2470,7 +2535,7 @@ func TestTranscriptMouseDragSelectsAndCopiesAcrossScroll(t *testing.T) {
 	if model.selecting {
 		t.Fatalf("selecting = true, want false after release")
 	}
-	if !strings.Contains(copied, "line 00") || !strings.Contains(copied, "assistant") {
+	if !strings.Contains(copied, "line 00") || !strings.Contains(copied, "agent >") {
 		t.Fatalf("copied selection = %q start=%+v end=%+v active=%v yOffset=%d viewportHeight=%d lines=%d", copied, model.selectionStart, model.selectionEnd, model.selectionActive, model.viewport.YOffset, model.viewport.Height, len(model.transcriptLineSnapshots()))
 	}
 }
@@ -2522,8 +2587,8 @@ func TestTranscriptMouseDragCopiesCharacterRange(t *testing.T) {
 	})
 	model = next.(appModel)
 
-	if copied != "ell" {
-		t.Fatalf("copied selection = %q, want ell", copied)
+	if copied != "llo" {
+		t.Fatalf("copied selection = %q, want llo with the frameless transcript origin", copied)
 	}
 }
 
@@ -2990,8 +3055,8 @@ func TestContextMeterUsesDefaultLimitAndStableSegments(t *testing.T) {
 	}
 	for role, want := range map[string]string{
 		fmt.Sprint(contextCacheStyle.GetForeground()): "214",
-		fmt.Sprint(contextUsedStyle.GetForeground()):  "111",
-		fmt.Sprint(contextFreeStyle.GetForeground()):  "246",
+		fmt.Sprint(contextUsedStyle.GetForeground()):  colorManager.Hex(colorContextUsed),
+		fmt.Sprint(contextFreeStyle.GetForeground()):  colorManager.Hex(colorContextFree),
 	} {
 		if role != want {
 			t.Fatalf("context style foreground = %q, want %q", role, want)
@@ -3230,7 +3295,7 @@ func TestAssistantEntryRendersMarkdown(t *testing.T) {
 		body:  "## Title\n\n- one with `code`\n- **bold item**\n\n> quoted **bold quote**\n\n```go\nfmt.Println(\"hi\")\n```",
 	}, 80)
 
-	for _, want := range []string{"assistant", "## Title", "•", "one", "code", "bold item", "│", "quoted", "bold quote", "go", "fmt.Println"} {
+	for _, want := range []string{"agent >", "## Title", "•", "one", "code", "bold item", "│", "quoted", "bold quote", "go", "fmt.Println"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered markdown = %q, want %q", rendered, want)
 		}
@@ -4620,21 +4685,18 @@ func TestRenderToolEntryBody_UsesQuietDetailLines(t *testing.T) {
 	}
 }
 
-// TestRenderDockStatusLine_ContainsModelTokenAndFree 验证底部状态行包含均衡器和 free 标签，
-// 模型名则位于顶部 header（设计变更：model 从 dock 移至 header，进度条改为均衡器）。
+// TestRenderDockStatusLine_ContainsModelTokenAndFree 验证底部状态行包含 token 数和进度条。
 func TestRenderDockStatusLine_ContainsModelTokenAndFree(t *testing.T) {
 	runner := &fakeRunner{stats: loop.ContextStats{UsedTokens: 5000, LimitTokens: 100000}}
 	model := newTestModel(runner)
 	model.width = 100
 	model.cursorFrameAt = time.Now()
 	dock := model.renderDockStatusLine(98)
-	// idle 态应包含 free 百分比标签。
-	if !strings.Contains(dock, "free") {
-		t.Errorf("status dock = %q, want 'free' label", dock)
+	if !strings.Contains(dock, "5k / 100k") {
+		t.Errorf("status dock = %q, want token count", dock)
 	}
-	// 均衡器 block 字符应出现（进度填充）。
-	if !strings.ContainsAny(dock, "▁▂▃▄▅▆▇█") {
-		t.Errorf("status dock = %q, want equalizer block chars", dock)
+	if !strings.ContainsAny(dock, "━─") {
+		t.Errorf("status dock = %q, want frontier progress glyphs", dock)
 	}
 	// 模型名现在在 header，不在 dock。
 	if strings.Contains(dock, "gpt-5.5") {
@@ -4942,8 +5004,8 @@ func TestFullLayout_StatusDockVisibleWithoutSidebar(t *testing.T) {
 	model.relayout()
 
 	view := model.View()
-	if !strings.Contains(view, "free") {
-		t.Errorf("View() = %q, want bottom context meter", view)
+	if !strings.Contains(view, "0 / 1.05M") {
+		t.Errorf("View() = %q, want bottom token status", view)
 	}
 	if strings.Contains(view, "subagents") {
 		t.Errorf("View() = %q, should not contain persistent subagents sidebar", view)

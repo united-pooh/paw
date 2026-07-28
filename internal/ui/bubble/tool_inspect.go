@@ -15,7 +15,7 @@ type transcriptEntryLocation struct {
 	height          int
 }
 
-func transcriptEntryLocations(entries []transcriptEntry, width int, showThinking bool) []transcriptEntryLocation {
+func transcriptEntryLocations(entries []transcriptEntry, width int, showThinking bool, at time.Time) []transcriptEntryLocation {
 	locations := make([]transcriptEntryLocation, 0, len(entries))
 	totalRows := 0
 	hasPrevious := false
@@ -27,7 +27,7 @@ func transcriptEntryLocations(entries []transcriptEntry, width int, showThinking
 		if !assistantEntryIsRenderable(entry) {
 			continue
 		}
-		rendered := strings.TrimRight(renderEntryAt(entry, width, time.Time{}), "\n")
+		rendered := strings.TrimRight(renderEntryAt(entry, width, at), "\n")
 		if rendered == "" {
 			continue
 		}
@@ -49,7 +49,7 @@ func transcriptEntryLocations(entries []transcriptEntry, width int, showThinking
 }
 
 func (m appModel) toolIndexAtTranscriptRow(row int) (int, bool) {
-	for _, location := range transcriptEntryLocations(m.transcript, maxInt(20, m.viewport.Width), m.showThinking) {
+	for _, location := range transcriptEntryLocations(m.transcript, maxInt(20, m.viewport.Width), m.showThinking, m.animationNow()) {
 		if row < location.startRow || row >= location.startRow+location.height {
 			continue
 		}
@@ -228,7 +228,7 @@ func (m *appModel) ensureInspectedToolVisible() {
 	if m == nil || !m.toolInspectActive || m.viewport.Height <= 0 {
 		return
 	}
-	for _, location := range transcriptEntryLocations(m.transcript, maxInt(20, m.viewport.Width), m.showThinking) {
+	for _, location := range transcriptEntryLocations(m.transcript, maxInt(20, m.viewport.Width), m.showThinking, m.animationNow()) {
 		if location.transcriptIndex != m.toolInspectIndex {
 			continue
 		}
