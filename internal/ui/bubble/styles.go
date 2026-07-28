@@ -122,6 +122,21 @@ var (
 				Bold(true)
 	terminalInputTextStyle = lipgloss.NewStyle().
 				Foreground(colorManager.LipglossColor(colorInputTerminal))
+	// 底部 status 三段样式：生成态、模式标记。复用既有颜色角色，不新增调色板。
+	generatingStatusStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorContextUsed)).
+				Bold(true)
+	idleStatusStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorMarkdownRule))
+	modeTerminalStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorInputTerminal)).
+				Bold(true)
+	modeShellStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorInputTerminal))
+	modeMultilineStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorInputMultilineBorder))
+	modeChatStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorMarkdownRule))
 	inputCommandTokenStyle = lipgloss.NewStyle().
 				Foreground(colorManager.LipglossColor(colorInputTokenCommand)).
 				Bold(true)

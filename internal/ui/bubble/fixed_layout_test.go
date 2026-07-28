@@ -23,7 +23,7 @@ func TestComputeTUILayoutKeepsOuterFrameStable(t *testing.T) {
 		if got.inputHeight < 1 || got.inputHeight > inputMaxVisibleLines {
 			t.Fatalf("requested=%d inputHeight=%d, want 1..%d", requested, got.inputHeight, inputMaxVisibleLines)
 		}
-		if got.transcriptHeight+got.statusHeight+got.inputHeight != got.contentHeight {
+		if got.headerHeight+got.transcriptHeight+got.statusHeight+got.inputHeight != got.contentHeight {
 			t.Fatalf("requested=%d internal heights do not fill content: %+v", requested, got)
 		}
 	}
@@ -198,6 +198,7 @@ func TestActivityCommandsAndTabs(t *testing.T) {
 
 func TestDockStatusLineFitsNarrowWidths(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
+	model.cursorFrameAt = time.Now()
 	for _, width := range []int{8, 16, 32, 80} {
 		line := model.renderDockStatusLine(width)
 		if got := terminalCellWidth(line); got != width {
@@ -205,9 +206,10 @@ func TestDockStatusLineFitsNarrowWidths(t *testing.T) {
 		}
 	}
 
+	// 模式标记应在右侧（B 布局右段）。
 	line := ansi.Strip(model.renderDockStatusLine(80))
-	if index := strings.LastIndex(line, "free("); index < 40 {
-		t.Fatalf("context meter is not right-aligned: %q", line)
+	if idx := strings.LastIndex(line, "chat"); idx < 40 {
+		t.Fatalf("mode indicator not right-aligned: %q", line)
 	}
 }
 

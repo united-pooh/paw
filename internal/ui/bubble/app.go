@@ -132,6 +132,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinnerFrameIdx++
 		m.applyCursorAnimation()
 		m.updateContextMeterAnimation()
+		m.updateWaveAmp(time.Time(msg))
 		m.refreshActivityTasks()
 		m.refreshSubagentPreviewFromTasks()
 		if m.transcriptRefreshPending {
@@ -448,8 +449,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tea.MouseMsg:
 		m.rawMouseEscapePending = ""
-		m.rawMouseEscapePendingAt = time.Time{}
-		m.rawMouseEscapeBracketBurst = false
 		if isHorizontalMouseWheel(msg) {
 			return m, nil
 		}

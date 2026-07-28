@@ -4,18 +4,16 @@ package bubble
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 const (
-	inputPasteFoldThreshold    = 6
-	inputPasteFoldHeadLines    = 3
-	inputPasteFoldTailLines    = 2
-	inputPasteFoldMarkerLine   = "... %d lines folded ..."
-	rawMouseBracketBurstWindow = 75 * time.Millisecond
+	inputPasteFoldThreshold  = 6
+	inputPasteFoldHeadLines  = 3
+	inputPasteFoldTailLines  = 2
+	inputPasteFoldMarkerLine = "... %d lines folded ..."
 )
 
 // inputVisibleLineCount 计算 textarea 当前需要展示的可视行数。
@@ -140,7 +138,7 @@ func isRawMouseEscapeKey(msg tea.KeyMsg) bool {
 	i := 0
 	seen := false
 	for i < len(text) {
-		if text[i] == '[' {
+		for i < len(text) && text[i] == '[' {
 			i++
 		}
 		if i >= len(text) || text[i] != '<' {
@@ -182,7 +180,7 @@ func isRawMouseEscapePrefix(text string) bool {
 
 	i := 0
 	for {
-		if i < len(text) && text[i] == '[' {
+		for i < len(text) && text[i] == '[' {
 			i++
 		}
 		if i == len(text) {
@@ -221,12 +219,8 @@ func isRawMouseEscapePrefix(text string) bool {
 			return false
 		}
 		i++
-		if i == len(text) {
-			return false
-		}
-		if text[i] != '[' {
-			return false
-		}
+		// A trailing run of '[' is a valid prefix for the next report;
+		// it is consumed at the top of the next iteration.
 	}
 }
 
@@ -238,7 +232,6 @@ func (m *appModel) flushRawMouseEscapePending() {
 	}
 	text := m.rawMouseEscapePending
 	m.rawMouseEscapePending = ""
-	m.rawMouseEscapePendingAt = time.Time{}
 	beforeText := m.input.Value()
 	beforeCursor := textareaAbsoluteCursor(m.input)
 	beforeTokens := cloneInputTokens(m.inputTokens)
@@ -250,48 +243,69 @@ func (m *appModel) flushRawMouseEscapePending() {
 	}
 }
 
+// clearRawMouseEscapePending drops a held prefix without replaying it as text.
+// Mouse fragments are always followed by more mouse input, so a held prefix
+// that gets interrupted by an unrelated event is almost certainly a leaked
+// fragment rather than real typing.
+func (m *appModel) clearRawMouseEscapePending() {
+	if m == nil {
+		return
+	}
+	m.rawMouseEscapePending = ""
+}
+
 // filterRawMouseEscapeKey hides complete or fragmented SGR mouse reports
-// before they reach the textarea. When a held prefix turns out to be normal
-// text, it is replayed before the current KeyMsg unchanged.
+// before they reach the textarea.
+//
+// Defense-in-depth: escCoalescingReader (bubble.go 的 WithInput) 已在字节进入
+// BubbleTea 之前把被读边界切断的 \x1b[<...M 拼合成完整序列，正常情况下泄漏
+// 片段不再到达此处。本过滤器作为第二道防线，兜底处理 reader 在极端情况下
+// （如 SSH/tmux 转发延迟、peek 漏网）仍可能漏过的 [ 或 [​<...M 片段。
+//
+// A leaked '[' (the second byte of an ESC[<...M SGR mouse report, with the
+// ESC stripped by a short read) is held as a prefix. Repeated '[' fragments
+// accumulate into a held prefix run, so a trackpad-scroll burst of '[' bytes
+// never reaches the textarea even when the fragments arrive with irregular
+// gaps. The run is resolved when the next byte arrives: '<' or another '['
+// extends the held prefix, a complete '<...M' report is discarded, and
+// ordinary typing replays the held prefix as text.
 func (m *appModel) filterRawMouseEscapeKey(msg tea.KeyMsg) (tea.KeyMsg, bool) {
 	if m == nil {
 		return msg, false
 	}
-	if msg.Type != tea.KeyRunes || msg.Paste || msg.Alt || len(msg.Runes) == 0 {
-		m.flushRawMouseEscapePending()
-		m.rawMouseEscapeBracketBurst = false
+	if msg.Type != tea.KeyRunes || msg.Paste || len(msg.Runes) == 0 {
+		m.clearRawMouseEscapePending()
+		return msg, false
+	}
+	// Alt+key 正常是合法按键（ESC 前缀修饰），跳过过滤。但鼠标短读会把
+	// "\x1b["（ESC+bracket，载荷未到）解析成 Alt+`[` KeyRunes——这正是 [[[[ 泄漏
+	// 的来源。Alt 且 runes 以 '[' 开头时，仍走鼠标片段过滤。
+	if msg.Alt && msg.Runes[0] != '[' {
+		m.clearRawMouseEscapePending()
 		return msg, false
 	}
 
 	text := string(msg.Runes)
-	if m.rawMouseEscapeBracketBurst {
-		if text == "[" {
-			return msg, true
-		}
-		m.rawMouseEscapeBracketBurst = false
-	}
-	pending := m.rawMouseEscapePending
-	if pending != "" {
-		if pending == "[" && text == "[" &&
-			!m.rawMouseEscapePendingAt.IsZero() && time.Since(m.rawMouseEscapePendingAt) <= rawMouseBracketBurstWindow {
-			m.rawMouseEscapePending = ""
-			m.rawMouseEscapePendingAt = time.Time{}
-			m.rawMouseEscapeBracketBurst = true
-			return msg, true
-		}
+	if pending := m.rawMouseEscapePending; pending != "" {
 		candidateText := pending + text
 		candidate := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(candidateText)}
-		if isRawMouseEscapeKey(candidate) || isRawMouseEscapePrefix(candidateText) {
-			m.rawMouseEscapePending = candidateText
-			if isRawMouseEscapeKey(candidate) {
-				m.rawMouseEscapePending = ""
-				m.rawMouseEscapePendingAt = time.Time{}
-			} else {
-				m.rawMouseEscapePendingAt = time.Now()
-			}
+		if isRawMouseEscapeKey(candidate) {
+			m.clearRawMouseEscapePending()
 			return msg, true
 		}
-		m.flushRawMouseEscapePending()
+		if isRawMouseEscapePrefix(candidateText) {
+			m.rawMouseEscapePending = candidateText
+			return msg, true
+		}
+		// candidate rejected. If the new text could itself open a fresh
+		// mouse report, drop the held prefix without flushing and
+		// re-evaluate the text standalone; otherwise the text is ordinary
+		// typing and the held prefix is replayed.
+		if isRawMouseEscapePrefix(text) || isRawMouseEscapeKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text)}) {
+			m.clearRawMouseEscapePending()
+		} else {
+			m.flushRawMouseEscapePending()
+		}
 	}
 
 	candidate := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text)}
@@ -300,7 +314,6 @@ func (m *appModel) filterRawMouseEscapeKey(msg tea.KeyMsg) (tea.KeyMsg, bool) {
 	}
 	if isRawMouseEscapePrefix(text) {
 		m.rawMouseEscapePending = text
-		m.rawMouseEscapePendingAt = time.Now()
 		return msg, true
 	}
 	return msg, false

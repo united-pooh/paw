@@ -90,6 +90,11 @@ type ContextStats struct {
 	UsedTokens  int
 	CacheTokens int
 	LimitTokens int
+	// SessionUsedTokens is the cumulative token usage across the whole session
+	// (sum of every turn's delta), distinct from UsedTokens which reflects the
+	// current context window. Exposed for display; the UI must not reach into
+	// runner internals.
+	SessionUsedTokens int
 }
 
 type outputMode int
@@ -481,10 +486,16 @@ func (runner *Runner) ContextStats(limitTokens int, _ string) ContextStats {
 	if provider != nil {
 		subagentTokens = provider.TotalSubagentTokens(sessionID)
 	}
+
+	runner.mu.RLock()
+	sessionTotals := usageTotalsFromUsage(runner.sessionUsage, runner.sessionUsageKnown)
+	runner.mu.RUnlock()
+
 	return ContextStats{
-		UsedTokens:  current.used + subagentTokens,
-		CacheTokens: current.cache,
-		LimitTokens: limitTokens,
+		UsedTokens:        current.used + subagentTokens,
+		CacheTokens:       current.cache,
+		LimitTokens:       limitTokens,
+		SessionUsedTokens: sessionTotals.used + subagentTokens,
 	}
 }
 

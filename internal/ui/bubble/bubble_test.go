@@ -2328,6 +2328,50 @@ func TestRepeatedRawMouseBracketsDoNotEnterInput(t *testing.T) {
 	}
 }
 
+// Real trackpad scroll delivers leaked '[' fragments with irregular gaps that
+// exceed any fixed burst window. The held prefix must accumulate across the
+// gaps and be cleared by the next mouse event, never replayed as text.
+func TestGappedRawMouseBracketBurstDoesNotEnterInput(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 12
+	model.input.SetValue("draft")
+	model.relayout()
+
+	for i := 0; i < 6; i++ {
+		next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}})
+		model = next.(appModel)
+	}
+	// A trailing MouseMsg (always present during real scroll) clears the
+	// held prefix without flushing.
+	next, _ := model.Update(tea.MouseMsg{Action: tea.MouseActionMotion, X: 10, Y: 10})
+	model = next.(appModel)
+
+	if got := model.input.Value(); got != "draft" {
+		t.Fatalf("input value = %q, want gapped raw mouse brackets ignored", got)
+	}
+}
+
+// A held '[' followed by ordinary typing replays the bracket so real input
+// like "[a" survives the filter.
+func TestHeldBracketReplayedBeforeOrdinaryText(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 12
+	model.input.SetValue("draft")
+	model.relayout()
+
+	for _, chunk := range []string{"[", "a"} {
+		next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(chunk)})
+		model = next.(appModel)
+	}
+	if got := model.input.Value(); got != "draft[a" {
+		t.Fatalf("input value = %q, want held bracket replayed before ordinary text", got)
+	}
+}
+
 func TestRawMouseEscapeDetectorDoesNotRejectNormalText(t *testing.T) {
 	for _, text := range []string{"<tag>", "[not-mouse]", "<64;not;mouseM", "hello"} {
 		if isRawMouseEscapeKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text)}) {
@@ -4576,22 +4620,29 @@ func TestRenderToolEntryBody_UsesQuietDetailLines(t *testing.T) {
 	}
 }
 
-// TestRenderDockStatusLine_ContainsModelTokenAndFree 验证底部状态行包含 model、箭头和 free 标签。
+// TestRenderDockStatusLine_ContainsModelTokenAndFree 验证底部状态行包含均衡器和 free 标签，
+// 模型名则位于顶部 header（设计变更：model 从 dock 移至 header，进度条改为均衡器）。
 func TestRenderDockStatusLine_ContainsModelTokenAndFree(t *testing.T) {
 	runner := &fakeRunner{stats: loop.ContextStats{UsedTokens: 5000, LimitTokens: 100000}}
 	model := newTestModel(runner)
 	model.width = 100
-	result := model.renderDockStatusLine(98)
-	// Must contain directional arrow and free percentage
-	hasArrow := strings.Contains(result, "↑") || strings.Contains(result, "↓")
-	if !hasArrow {
-		t.Errorf("status dock = %q, want ↑ or ↓ arrow", result)
+	model.cursorFrameAt = time.Now()
+	dock := model.renderDockStatusLine(98)
+	// idle 态应包含 free 百分比标签。
+	if !strings.Contains(dock, "free") {
+		t.Errorf("status dock = %q, want 'free' label", dock)
 	}
-	if !strings.Contains(result, "free") {
-		t.Errorf("status dock = %q, want 'free' label", result)
+	// 均衡器 block 字符应出现（进度填充）。
+	if !strings.ContainsAny(dock, "▁▂▃▄▅▆▇█") {
+		t.Errorf("status dock = %q, want equalizer block chars", dock)
 	}
-	if !strings.Contains(result, "gpt-5.5") {
-		t.Errorf("status dock = %q, want current model", result)
+	// 模型名现在在 header，不在 dock。
+	if strings.Contains(dock, "gpt-5.5") {
+		t.Errorf("status dock = %q, model should be in header not dock", dock)
+	}
+	header := model.renderHeaderLine(98)
+	if !strings.Contains(header, "gpt-5.5") {
+		t.Errorf("header = %q, want current model", header)
 	}
 }
 
@@ -4950,5 +5001,47 @@ func TestRenderPipelineWindowedContent_ShowsCurrentStage(t *testing.T) {
 	}
 	if !strings.Contains(result, "8/18") {
 		t.Errorf("windowed = %q, want 8/18 count", result)
+	}
+}
+
+// TestAltBracketMouseSplitFiltered 验证鼠标短读产生的 Alt+`[` KeyRunes 被过滤，
+// 不泄漏进输入框。短读 "\x1b["（ESC+bracket，载荷未到）会被 BubbleTea 解析为
+// Alt+`[` KeyRunes，是 [[[[ 泄漏的来源。
+func TestAltBracketMouseSplitFiltered(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 12
+	model.input.SetValue("draft")
+	model.relayout()
+
+	// Alt+`[` 单独到达（模拟短读 \x1b[）。
+	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}, Alt: true})
+	if got := model.input.Value(); got != "draft" {
+		t.Fatalf("Alt+[ leaked into input: %q, want draft (held as pending)", got)
+	}
+	// 续接载荷 <64;59;25M 到达，拼成完整鼠标序列被丢弃。
+	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("<64;59;25M")})
+	if got := model.input.Value(); got != "draft" {
+		t.Fatalf("mouse completion leaked: %q, want draft", got)
+	}
+}
+
+// TestAltBracketBurstFiltered 验证连续 Alt+`[` 突发（触控板滑动）不泄漏。
+func TestAltBracketBurstFiltered(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 12
+	model.input.SetValue("draft")
+	model.relayout()
+
+	for i := 0; i < 8; i++ {
+		model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}, Alt: true})
+	}
+	// trailing MouseMsg（真实滑动中总有）清挂起。
+	model.Update(tea.MouseMsg{Action: tea.MouseActionMotion, X: 10, Y: 10})
+	if got := model.input.Value(); got != "draft" {
+		t.Fatalf("Alt+[ burst leaked: %q, want draft", got)
 	}
 }
