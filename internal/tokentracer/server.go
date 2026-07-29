@@ -284,7 +284,7 @@ th:first-child, td:first-child { text-align: left; white-space: normal; }
   <div class="brand">
     <span class="mark">TT</span>
     <span class="title">Token Tracer</span>
-    <span class="pipe" id="pipeline-name">GoCode</span>
+    <span class="pipe" id="pipeline-name">Paw</span>
   </div>
   <div class="status"><span class="status-dot"></span><span id="status-text">LIVE</span></div>
 </header>
@@ -403,7 +403,7 @@ function render() {
   if (!state) return;
   const p = state.pipeline || {total:{}};
   const total = p.total || {};
-  document.getElementById('pipeline-name').textContent = (p.name || 'GoCode') + (state.session_id ? ' · ' + state.session_id : '');
+  document.getElementById('pipeline-name').textContent = (p.name || 'Paw') + (state.session_id ? ' · ' + state.session_id : '');
   document.getElementById('status-text').textContent = p.status || 'live';
   document.getElementById('total-context').textContent = fmt(total.total_context);
   document.getElementById('input-tokens').textContent = fmt(total.input);

@@ -10,14 +10,14 @@ import (
 	"testing"
 	"time"
 
-	"codex-agent-go/internal/loop"
-	coremcp "codex-agent-go/internal/mcp"
-	"codex-agent-go/internal/message"
-	"codex-agent-go/internal/model"
-	"codex-agent-go/internal/session"
-	"codex-agent-go/internal/settings"
-	"codex-agent-go/internal/tokentracer"
-	"codex-agent-go/internal/ui"
+	"paw/internal/loop"
+	coremcp "paw/internal/mcp"
+	"paw/internal/message"
+	"paw/internal/model"
+	"paw/internal/session"
+	"paw/internal/settings"
+	"paw/internal/tokentracer"
+	"paw/internal/ui"
 )
 
 type fakeRound struct {
@@ -250,7 +250,7 @@ func (s *fakeContextSink) wait(t *testing.T) string {
 func newTestManager(t *testing.T, modelStreamer loop.ModelStreamer, cfg settings.Config, notifier Notifier) (*Manager, *session.JSONLStore, string) {
 	t.Helper()
 	root := t.TempDir()
-	store, err := session.NewJSONLStore(filepath.Join(root, ".ccagent"))
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
 	if err != nil {
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
@@ -586,7 +586,7 @@ func TestLaunchAssignsUniqueRunningPersonas(t *testing.T) {
 	})
 
 	root := t.TempDir()
-	store, err := session.NewJSONLStore(filepath.Join(root, ".ccagent"))
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
 	if err != nil {
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
@@ -771,7 +771,7 @@ func TestLaunchTracksStatusListAndNotification(t *testing.T) {
 
 func TestWorkerResultUsagePersistsToTaskSnapshotAndTracerEvent(t *testing.T) {
 	root := t.TempDir()
-	store, err := session.NewJSONLStore(filepath.Join(root, ".ccagent"))
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
 	if err != nil {
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
@@ -1011,7 +1011,7 @@ func TestLaunchPersistsTaskRegistry(t *testing.T) {
 
 func TestStopStopsRunningWorkerAndPersistsStoppedStatus(t *testing.T) {
 	root := t.TempDir()
-	store, err := session.NewJSONLStore(filepath.Join(root, ".ccagent"))
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
 	if err != nil {
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
@@ -1051,7 +1051,7 @@ func TestProcessLauncherParsesWorkerJSON(t *testing.T) {
 	launcher := &ProcessLauncher{
 		Command: os.Args[0],
 		Args:    []string{"-test.run=TestSubagentWorkerHelperProcess"},
-		Env:     []string{"GOCODE_SUBAGENT_HELPER=1"},
+		Env:     []string{"PAW_SUBAGENT_HELPER=1"},
 	}
 	proc, err := launcher.Start(context.Background(), WorkerRequest{
 		TaskID:    "task-1",
@@ -1071,7 +1071,7 @@ func TestProcessLauncherParsesWorkerJSON(t *testing.T) {
 }
 
 func TestSubagentWorkerHelperProcess(t *testing.T) {
-	if os.Getenv("GOCODE_SUBAGENT_HELPER") != "1" {
+	if os.Getenv("PAW_SUBAGENT_HELPER") != "1" {
 		return
 	}
 	var req WorkerRequest
@@ -1093,7 +1093,7 @@ func TestProcessLauncherBrokeredWorkerProtocol(t *testing.T) {
 	launcher := &ProcessLauncher{
 		Command: os.Args[0],
 		Args:    []string{"-test.run=TestSubagentFramedWorkerHelperProcess"},
-		Env:     []string{"GOCODE_SUBAGENT_FRAMED_HELPER=1"},
+		Env:     []string{"PAW_SUBAGENT_FRAMED_HELPER=1"},
 		Broker:  broker,
 	}
 	proc, err := launcher.Start(context.Background(), WorkerRequest{TaskID: "task-2", SessionID: "session-2"})
@@ -1128,7 +1128,7 @@ func (b *testMCPBroker) Call(_ context.Context, name string, _ json.RawMessage) 
 }
 
 func TestSubagentFramedWorkerHelperProcess(t *testing.T) {
-	if os.Getenv("GOCODE_SUBAGENT_FRAMED_HELPER") != "1" {
+	if os.Getenv("PAW_SUBAGENT_FRAMED_HELPER") != "1" {
 		return
 	}
 	decoder := json.NewDecoder(os.Stdin)

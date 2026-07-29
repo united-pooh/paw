@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"codex-agent-go/internal/model"
+	"paw/internal/model"
 )
 
 func TestUsageFromModelUsageNormalizesCachedPromptTokens(t *testing.T) {
@@ -98,7 +98,7 @@ func TestTimelineProjectionShowsParallelAgentsAndFailure(t *testing.T) {
 	ts := func(offset time.Duration) string { return base.Add(offset).Format(time.RFC3339Nano) }
 	pipeline := Pipeline{
 		ID:        "run-test",
-		Name:      "GoCode",
+		Name:      "Paw",
 		StartTime: ts(0),
 		Status:    "live",
 		Stages: []*Stage{{
@@ -156,7 +156,7 @@ func TestTimelineProjectionShowsParallelAgentsAndFailure(t *testing.T) {
 func TestTimelineProjectionUsesNowForLiveRows(t *testing.T) {
 	base := time.Date(2026, 6, 26, 14, 37, 9, 0, time.UTC)
 	now := base.Add(30 * time.Second)
-	timeline := buildTimeline(Pipeline{ID: "run-live", Name: "GoCode", Status: "live"}, []Event{
+	timeline := buildTimeline(Pipeline{ID: "run-live", Name: "Paw", Status: "live"}, []Event{
 		{Seq: 1, Type: "streamma.subagent_start", Timestamp: base.Format(time.RFC3339Nano), Data: map[string]any{"stage_id": "turn-1", "agent_id": "planner", "session_id": "planner-session", "invocation_index": 1}},
 	}, now)
 	planner := findTimelineRow(t, timeline, "planner")

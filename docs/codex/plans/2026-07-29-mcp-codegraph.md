@@ -1,4 +1,4 @@
-# GoCode MCP Client for CodeGraph Implementation Plan
+# Paw MCP Client for CodeGraph Implementation Plan
 
 > **For Codex workers:** Implement task-by-task. Use update_plan to track progress, keep one step in progress at a time, edit files with apply_patch, and run the exact verification commands listed below. Steps use checkbox syntax for tracking.
 
@@ -34,7 +34,7 @@ Steps:
 
 - [ ] Write tests for missing-config creation, Codex-style mcp_servers parsing, cwd resolution, env overlay, defaults, disabled entries, and invalid enabled servers.
 - [ ] Run go test ./internal/mcp -run TestLoadConfig -count=1 and verify it fails because internal/mcp is absent.
-- [ ] Add github.com/BurntSushi/toml and implement LoadConfig(homeDir, workspaceRoot) with mode 0700 for ~/.ccagent and mode 0600 for the absent mcp.toml.
+- [ ] Add github.com/BurntSushi/toml and implement LoadConfig(homeDir, workspaceRoot) with mode 0700 for ~/.paw and mode 0600 for the absent mcp.toml.
 - [ ] Validate server names and enabled commands; resolve cwd against the workspace root; preserve disabled entries for status.
 - [ ] Define CapabilityKind, ToolSpec, Snapshot, and Broker in internal/mcp/types.go. ToolSpec must retain both the model-facing qualified name and the original MCP server/name pair.
 - [ ] Run go test ./internal/mcp -count=1 and verify configuration and type tests pass.

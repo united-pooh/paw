@@ -1,11 +1,11 @@
 package bubble
 
 import (
-	"codex-agent-go/internal/loop"
-	"codex-agent-go/internal/settings"
 	"fmt"
 	"github.com/charmbracelet/lipgloss"
 	"math"
+	"paw/internal/loop"
+	"paw/internal/settings"
 	"strconv"
 	"strings"
 	"time"

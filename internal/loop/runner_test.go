@@ -1,19 +1,19 @@
 package loop
 
 import (
-	"codex-agent-go/internal/message"
-	"codex-agent-go/internal/model"
-	"codex-agent-go/internal/session"
-	"codex-agent-go/internal/skill"
-	"codex-agent-go/internal/streamma"
-	"codex-agent-go/internal/tokentracer"
-	"codex-agent-go/internal/tool"
-	"codex-agent-go/internal/ui"
 	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"paw/internal/message"
+	"paw/internal/model"
+	"paw/internal/session"
+	"paw/internal/skill"
+	"paw/internal/streamma"
+	"paw/internal/tokentracer"
+	"paw/internal/tool"
+	"paw/internal/ui"
 	"strings"
 	"sync"
 	"testing"
@@ -1168,7 +1168,7 @@ func TestRunTurnExecutesToolAndReturnsFinalAnswer(t *testing.T) {
 		},
 	}
 	registry := tool.NewRegistry()
-	registry.Register(&fakeTool{name: "Read", output: "module gocode"})
+	registry.Register(&fakeTool{name: "Read", output: "module paw"})
 	runner := NewRunner(model, ui, registry, nil, "")
 
 	msg, err := runner.RunTurn(context.Background(), "read go.mod")
@@ -1202,7 +1202,7 @@ func TestRunTurnExecutesToolAndReturnsFinalAnswer(t *testing.T) {
 
 	foundToolResult := false
 	for _, msg := range model.calls[1] {
-		if strings.Contains(msg.Content, "TOOL_RESULT:") && strings.Contains(msg.Content, "module gocode") {
+		if strings.Contains(msg.Content, "TOOL_RESULT:") && strings.Contains(msg.Content, "module paw") {
 			foundToolResult = true
 		}
 	}
@@ -1231,8 +1231,8 @@ func TestRunTurnExecutesMultipleToolUsesAndCarriesAllResults(t *testing.T) {
 		},
 	}
 	registry := tool.NewRegistry()
-	registry.Register(&fakeTool{name: "Read", output: "module gocode", safe: true})
-	registry.Register(&fakeTool{name: "Grep", output: "go.mod:1:module gocode", safe: true})
+	registry.Register(&fakeTool{name: "Read", output: "module paw", safe: true})
+	registry.Register(&fakeTool{name: "Grep", output: "go.mod:1:module paw", safe: true})
 	runner := NewRunner(model, ui, registry, nil, "")
 
 	msg, err := runner.RunTurn(context.Background(), "read and grep")
@@ -1251,7 +1251,7 @@ func TestRunTurnExecutesMultipleToolUsesAndCarriesAllResults(t *testing.T) {
 	if len(model.calls) != 2 {
 		t.Fatalf("model calls = %d, want 2", len(model.calls))
 	}
-	for _, want := range []string{"TOOL_RESULTS:", "call_read", "module gocode", "call_grep", "go.mod:1:module gocode"} {
+	for _, want := range []string{"TOOL_RESULTS:", "call_read", "module paw", "call_grep", "go.mod:1:module paw"} {
 		if !messagesContainContent(model.calls[1], want) {
 			t.Fatalf("second model call messages = %#v, want %q", model.calls[1], want)
 		}
@@ -1388,7 +1388,7 @@ func TestRunTurnInjectsSupplementBeforeNextModelStep(t *testing.T) {
 	}
 	blocker := &blockingTool{
 		name:    "Read",
-		output:  "module gocode",
+		output:  "module paw",
 		started: make(chan struct{}),
 		release: make(chan struct{}),
 	}
@@ -1550,7 +1550,7 @@ func TestRunTurnExecutesToolUseWrappedInMarkdownFence(t *testing.T) {
 		},
 	}
 	registry := tool.NewRegistry()
-	registry.Register(&fakeTool{name: "Read", output: "module gocode"})
+	registry.Register(&fakeTool{name: "Read", output: "module paw"})
 	runner := NewRunner(model, ui, registry, nil, "")
 
 	msg, err := runner.RunTurn(context.Background(), "read go.mod")

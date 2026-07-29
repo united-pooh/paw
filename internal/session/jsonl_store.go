@@ -8,9 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"codex-agent-go/internal/message"
 	"os"
 	"path/filepath"
+	"paw/internal/message"
 	"sort"
 	"strings"
 	"time"
@@ -41,14 +41,14 @@ func NewJSONLStore(baseDir string) (*JSONLStore, error) {
 }
 
 // NewJSONLStoreInCwd 以当前工作目录作为 baseDir 创建存储，
-// 会话数据存放在 .ccagent/ 子目录下。
+// 会话数据存放在 .paw/ 子目录下。
 // 调用方不需要感知路径细节。
 func NewJSONLStoreInCwd() (*JSONLStore, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("获取当前目录失败: %w", err)
 	}
-	baseDir := filepath.Join(cwd, ".ccagent")
+	baseDir := filepath.Join(cwd, ".paw")
 	return NewJSONLStore(baseDir)
 }
 

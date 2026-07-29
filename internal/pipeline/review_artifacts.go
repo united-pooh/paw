@@ -554,7 +554,7 @@ func discoverModules(root, readme string) ([]ModuleInfo, error) {
 
 func shouldSkipDir(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case ".git", ".ccagent", workspaceDirName, "vendor", "node_modules", "tmp", "temp", "users":
+	case ".git", ".paw", workspaceDirName, "vendor", "node_modules", "tmp", "temp", "users":
 		return true
 	default:
 		return strings.HasPrefix(name, ".") && name != "."

@@ -2,18 +2,18 @@
 package bubble
 
 import (
-	coremcp "codex-agent-go/internal/mcp"
-	"codex-agent-go/internal/message"
-	"codex-agent-go/internal/model"
-	"codex-agent-go/internal/session"
-	"codex-agent-go/internal/settings"
-	"codex-agent-go/internal/subagent"
-	"codex-agent-go/internal/ui"
 	"context"
 	"errors"
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
 	"os"
+	coremcp "paw/internal/mcp"
+	"paw/internal/message"
+	"paw/internal/model"
+	"paw/internal/session"
+	"paw/internal/settings"
+	"paw/internal/subagent"
+	"paw/internal/ui"
 	"sync"
 )
 

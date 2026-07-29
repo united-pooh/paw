@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"codex-agent-go/internal/ui"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"paw/internal/ui"
 )
 
 func TestStreamLineBufferCommitsOnlyCompleteLines(t *testing.T) {

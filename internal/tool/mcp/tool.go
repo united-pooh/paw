@@ -1,13 +1,13 @@
 package mcp
 
 import (
-	coremcp "codex-agent-go/internal/mcp"
 	"context"
 	"encoding/json"
 	"errors"
+	coremcp "paw/internal/mcp"
 )
 
-// Tool adapts one model-facing MCP capability to GoCode's normal tool
+// Tool adapts one model-facing MCP capability to Paw's normal tool
 // interface. The broker may be the main-process Manager or a subagent proxy.
 type Tool struct {
 	spec   coremcp.ToolSpec

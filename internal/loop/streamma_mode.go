@@ -1,17 +1,17 @@
 package loop
 
 import (
-	"codex-agent-go/internal/message"
-	"codex-agent-go/internal/model"
-	"codex-agent-go/internal/pipeline"
-	"codex-agent-go/internal/streamma"
-	"codex-agent-go/internal/tokentracer"
-	"codex-agent-go/internal/ui"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"paw/internal/message"
+	"paw/internal/model"
+	"paw/internal/pipeline"
+	"paw/internal/streamma"
+	"paw/internal/tokentracer"
+	"paw/internal/ui"
 	"sort"
 	"strconv"
 	"strings"
@@ -767,7 +767,7 @@ func streamMAReviewWorkspaceSnapshot(root string) string {
 
 func shouldSkipStreamMAReviewDir(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case ".git", ".ccagent", "node_modules", "vendor", "dist", "build", "tmp", "temp":
+	case ".git", ".paw", "node_modules", "vendor", "dist", "build", "tmp", "temp":
 		return true
 	default:
 		return false

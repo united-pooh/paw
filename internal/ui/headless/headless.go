@@ -2,8 +2,8 @@ package headless
 
 import (
 	"fmt"
-	"codex-agent-go/internal/ui"
 	"io"
+	"paw/internal/ui"
 	"strings"
 	"sync"
 )

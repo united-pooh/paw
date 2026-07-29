@@ -1,12 +1,12 @@
 package model
 
 import (
-	"codex-agent-go/internal/message"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"paw/internal/message"
 	"strings"
 	"testing"
 	"time"

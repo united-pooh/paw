@@ -3,14 +3,14 @@ package bubble
 
 import (
 	"bufio"
-	"codex-agent-go/internal/message"
-	"codex-agent-go/internal/session"
-	"codex-agent-go/internal/subagent"
-	"codex-agent-go/internal/tokentracer"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"paw/internal/message"
+	"paw/internal/session"
+	"paw/internal/subagent"
+	"paw/internal/tokentracer"
 	"strings"
 	"time"
 
@@ -422,6 +422,7 @@ func copyTranscriptEntries(entries []transcriptEntry) []transcriptEntry {
 
 func (m *appModel) applySessionPickerRestore(msg sessionRestoredMsg) {
 	m.resetToolInspect()
+	m.clearNewMessageNotice()
 	m.sessionID = msg.sessionID
 	m.sessionPicker = nil
 	m.subagentPicker = nil
@@ -431,10 +432,12 @@ func (m *appModel) applySessionPickerRestore(msg sessionRestoredMsg) {
 	m.inputHistory = inputHistoryFromTranscript(msg.entries)
 	m.resetHistoryNavigation()
 	m.addEntry(transcriptEntry{kind: entrySystem, title: "sessions", body: fmt.Sprintf("已切换到会话: %s", msg.sessionID)})
+	m.clearNewMessageNotice()
 }
 
 func (m *appModel) applySubagentPreviewRestore(msg sessionRestoredMsg) {
 	m.resetToolInspect()
+	m.clearNewMessageNotice()
 	m.sessionPicker = nil
 	m.subagentPicker = nil
 	if msg.subagentPreview != nil {
@@ -457,6 +460,7 @@ func (m *appModel) restoreMainTranscriptFromSubagentPreview() {
 	m.subagentPicker = nil
 	m.subagentPreview = nil
 	m.resetToolInspect()
+	m.clearNewMessageNotice()
 	m.sessionID = preview.parentSessionID
 	m.transcript = copyTranscriptEntries(preview.parentTranscript)
 	m.syncInputPlaceholder()

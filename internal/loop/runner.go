@@ -1,18 +1,18 @@
 package loop
 
 import (
-	"codex-agent-go/internal/message"
-	"codex-agent-go/internal/model"
-	"codex-agent-go/internal/skill"
-	"codex-agent-go/internal/tokentracer"
-	"codex-agent-go/internal/tool"
-	"codex-agent-go/internal/ui"
 	"context"
 	"encoding/json"
 	"fmt"
 	"html"
 	"os"
 	"path/filepath"
+	"paw/internal/message"
+	"paw/internal/model"
+	"paw/internal/skill"
+	"paw/internal/tokentracer"
+	"paw/internal/tool"
+	"paw/internal/ui"
 	"strconv"
 	"strings"
 	"sync"
@@ -184,7 +184,7 @@ func (runner *Runner) RunTurn(ctx context.Context, input string) (msg message.Me
 
 	if invocation, ok := parseStreamMAInvocation(input); ok {
 		if !runner.currentStreamMAEnabled() {
-			return message.Message{}, fmt.Errorf("streamma is disabled; start with -streamma=true or set GOCODE_STREAMMA=1 to enable /streamma")
+			return message.Message{}, fmt.Errorf("streamma is disabled; start with -streamma=true or set PAW_STREAMMA=1 to enable /streamma")
 		}
 		return runner.runStreamMATurn(ctx, input, invocation)
 	}

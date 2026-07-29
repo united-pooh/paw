@@ -3,9 +3,6 @@ package subagent
 import (
 	"bufio"
 	"bytes"
-	coremcp "codex-agent-go/internal/mcp"
-	"codex-agent-go/internal/settings"
-	"codex-agent-go/internal/tokentracer"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +10,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	coremcp "paw/internal/mcp"
+	"paw/internal/settings"
+	"paw/internal/tokentracer"
 	"strings"
 	"sync"
 )

@@ -28,7 +28,7 @@ const (
 
 	defaultTimeoutSeconds  = 60
 	defaultRetryCountValue = 3
-	modelConfigPath        = ".ccagent/model.json"
+	modelConfigPath        = ".paw/model.json"
 )
 
 var apiKeyEnvNames = []string{

@@ -151,6 +151,15 @@ func (m appModel) renderTranscriptRegion(layout tuiLayout) string {
 			overlayAlignBottom,
 		)
 	}
+	if notice := m.renderNewMessageNotice(layout.contentWidth); notice != "" {
+		base = placeOpaqueOverlay(
+			base,
+			notice,
+			layout.contentWidth,
+			layout.transcriptHeight,
+			overlayAlignBottom,
+		)
+	}
 	return fitStyledRect(base, layout.contentWidth, layout.transcriptHeight)
 }
 

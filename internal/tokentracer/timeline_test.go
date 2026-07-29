@@ -15,7 +15,7 @@ func TestTimelineSubagentLifecycleUsesTaskMetadataAndAggregateTokens(t *testing.
 		{Seq: 2, Type: "subagent_task_end", Timestamp: ts(10 * time.Second), Data: map[string]any{"task_id": "task-1", "name": "Research citations", "description": "Collect source links", "session_id": "researcher-session", "status": "completed", "finished_at": finishedAt, "used_tokens": 4479}},
 	}
 
-	timeline := buildTimeline(Pipeline{ID: "run-aggregate", Name: "GoCode", StartTime: ts(0), Status: "completed"}, events, base.Add(time.Minute))
+	timeline := buildTimeline(Pipeline{ID: "run-aggregate", Name: "Paw", StartTime: ts(0), Status: "completed"}, events, base.Add(time.Minute))
 	researcher := findTimelineRowBySession(t, timeline, "researcher-session")
 
 	if researcher.AgentID != "subagent" {
@@ -57,7 +57,7 @@ func TestTimelineSubagentLifecyclePrefersStructuredUsageOverUsedTokens(t *testin
 		}},
 	}
 
-	timeline := buildTimeline(Pipeline{ID: "run-structured", Name: "GoCode", StartTime: ts(0), Status: "completed"}, events, base.Add(time.Minute))
+	timeline := buildTimeline(Pipeline{ID: "run-structured", Name: "Paw", StartTime: ts(0), Status: "completed"}, events, base.Add(time.Minute))
 	builder := findTimelineRowBySession(t, timeline, "structured-session")
 
 	if builder.Usage.Input != 12 || builder.Usage.CacheRead != 5 || builder.Usage.CacheCreation != 2 || builder.Usage.Output != 3 {
@@ -80,7 +80,7 @@ func TestTimelineSubagentLifecycleDoesNotOverrideAPICallUsage(t *testing.T) {
 		{Seq: 3, Type: "subagent_task_end", Timestamp: ts(10 * time.Second), Data: map[string]any{"task_id": "task-2", "description": "Implement the patch", "session_id": "builder-session", "status": "completed", "finished_at": ts(10 * time.Second), "usage": Usage{Input: 1000, CacheRead: 500, Output: 250}, "used_tokens": 9999}},
 	}
 
-	timeline := buildTimeline(Pipeline{ID: "run-api", Name: "GoCode", StartTime: ts(0), Status: "completed"}, events, base.Add(time.Minute))
+	timeline := buildTimeline(Pipeline{ID: "run-api", Name: "Paw", StartTime: ts(0), Status: "completed"}, events, base.Add(time.Minute))
 	builder := findTimelineRowBySession(t, timeline, "builder-session")
 
 	if builder.Name != "Implement the patch" || builder.DisplayName != "Implement the patch" {
@@ -106,7 +106,7 @@ func TestTimelineTotalIncludesLifecycleFallbackUsageWithPipelineTotal(t *testing
 	}
 	pipeline := Pipeline{
 		ID:        "run-total",
-		Name:      "GoCode",
+		Name:      "Paw",
 		StartTime: ts(0),
 		Status:    "completed",
 		Total:     Usage{Input: 100, Output: 10}.Normalized(),

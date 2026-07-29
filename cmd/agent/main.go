@@ -1,21 +1,6 @@
 package main
 
 import (
-	"codex-agent-go/internal/loop"
-	coremcp "codex-agent-go/internal/mcp"
-	"codex-agent-go/internal/model"
-	"codex-agent-go/internal/session"
-	"codex-agent-go/internal/settings"
-	"codex-agent-go/internal/subagent"
-	"codex-agent-go/internal/tokentracer"
-	"codex-agent-go/internal/tool"
-	toolexec "codex-agent-go/internal/tool/exec"
-	toolfile "codex-agent-go/internal/tool/file"
-	toolmcp "codex-agent-go/internal/tool/mcp"
-	toolwebfetch "codex-agent-go/internal/tool/webfetch"
-	uiiface "codex-agent-go/internal/ui"
-	bubbleui "codex-agent-go/internal/ui/bubble"
-	"codex-agent-go/internal/ui/headless"
 	"context"
 	"encoding/json"
 	"flag"
@@ -23,6 +8,21 @@ import (
 	"io"
 	"log"
 	"os"
+	"paw/internal/loop"
+	coremcp "paw/internal/mcp"
+	"paw/internal/model"
+	"paw/internal/session"
+	"paw/internal/settings"
+	"paw/internal/subagent"
+	"paw/internal/tokentracer"
+	"paw/internal/tool"
+	toolexec "paw/internal/tool/exec"
+	toolfile "paw/internal/tool/file"
+	toolmcp "paw/internal/tool/mcp"
+	toolwebfetch "paw/internal/tool/webfetch"
+	uiiface "paw/internal/ui"
+	bubbleui "paw/internal/ui/bubble"
+	"paw/internal/ui/headless"
 	"strconv"
 	"strings"
 	"sync"
@@ -62,22 +62,22 @@ func parseOptions() options {
 }
 
 func defaultStreamMAEnabled() bool {
-	value := strings.ToLower(strings.TrimSpace(os.Getenv("GOCODE_STREAMMA")))
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("PAW_STREAMMA")))
 	return value != "0" && value != "false" && value != "off" && value != "no"
 }
 
 func defaultTokenTracerEnabled() bool {
-	value := strings.ToLower(strings.TrimSpace(os.Getenv("GOCODE_TOKEN_TRACER")))
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("PAW_TOKEN_TRACER")))
 	return value != "0" && value != "false" && value != "off" && value != "no"
 }
 
 func defaultTokenTracerOpen() bool {
-	value := strings.ToLower(strings.TrimSpace(os.Getenv("GOCODE_TOKEN_TRACER_OPEN")))
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("PAW_TOKEN_TRACER_OPEN")))
 	return value == "1" || value == "true" || value == "on" || value == "yes"
 }
 
 func defaultTokenTracerPort() int {
-	value := strings.TrimSpace(os.Getenv("GOCODE_TOKEN_TRACER_PORT"))
+	value := strings.TrimSpace(os.Getenv("PAW_TOKEN_TRACER_PORT"))
 	if value == "" {
 		return 8999
 	}
@@ -162,7 +162,7 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 }
 
 func startTokenTracer(ctx context.Context, sessionID string, opts options) (*tokentracer.Tracer, *tokentracer.Server, error) {
-	tracer := tokentracer.New("GoCode")
+	tracer := tokentracer.New("Paw")
 	tracer.SetSessionID(sessionID)
 	if cwd, err := os.Getwd(); err == nil {
 		tracer.SetWorkspace(cwd)

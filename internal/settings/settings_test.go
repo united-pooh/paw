@@ -50,7 +50,7 @@ func TestNormalizeLegacyInputTitleMeterLocation(t *testing.T) {
 }
 
 func TestSaveLoadAndControllerRoundTrip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), ".ccagent", "settings.json")
+	path := filepath.Join(t.TempDir(), ".paw", "settings.json")
 	want := Config{
 		Subagent: SubagentConfig{
 			DefaultContextMode: ContextModeFork,

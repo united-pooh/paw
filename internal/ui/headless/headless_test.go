@@ -2,7 +2,7 @@ package headless
 
 import (
 	"bytes"
-	uiiface "codex-agent-go/internal/ui"
+	uiiface "paw/internal/ui"
 	"testing"
 )
 
@@ -50,12 +50,12 @@ func TestToolEventsWriteReadableLines(t *testing.T) {
 	}
 	if err := output.OnToolResult(uiiface.ToolResultEvent{
 		Name:    "Read",
-		Content: "module gocode",
+		Content: "module paw",
 	}); err != nil {
 		t.Fatalf("OnToolResult() error = %v", err)
 	}
 
-	want := "[tool] Read {\"file_path\":\"go.mod\"}\n[tool-result] Read ok: module gocode\n"
+	want := "[tool] Read {\"file_path\":\"go.mod\"}\n[tool-result] Read ok: module paw\n"
 	if got := out.String(); got != want {
 		t.Fatalf("out.String() = %q, want %q", got, want)
 	}

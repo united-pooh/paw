@@ -17,7 +17,7 @@ const (
 	closeTimeout   = 2 * time.Second
 
 	protocolVersion = "2025-06-18"
-	clientName      = "gocode"
+	clientName      = "paw"
 	clientVersion   = "0.1.0"
 )
 

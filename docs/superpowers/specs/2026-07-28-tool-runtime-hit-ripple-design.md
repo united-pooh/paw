@@ -1,4 +1,4 @@
-# GoCode TUI 工具运行态、点击命中与 Token Ripple 修复设计
+# Paw TUI 工具运行态、点击命中与 Token Ripple 修复设计
 
 ## 背景
 

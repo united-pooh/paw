@@ -294,7 +294,7 @@ func writePersistedModelConfig(t *testing.T, persisted persistedModelConfig) {
 	t.Helper()
 
 	if err := os.MkdirAll(filepath.Dir(modelConfigPath), 0o755); err != nil {
-		t.Fatalf("mkdir .ccagent: %v", err)
+		t.Fatalf("mkdir .paw: %v", err)
 	}
 	data, err := json.Marshal(persisted)
 	if err != nil {

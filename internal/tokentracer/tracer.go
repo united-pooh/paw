@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"codex-agent-go/internal/model"
+	"paw/internal/model"
 )
 
 const maxEventHistory = 2000
@@ -169,7 +169,7 @@ type Tracer struct {
 func New(name string) *Tracer {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		name = "GoCode"
+		name = "Paw"
 	}
 	now := time.Now().UTC()
 	runID := fmt.Sprintf("run-%s", now.Format("20060102-150405"))

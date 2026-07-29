@@ -1,9 +1,9 @@
 package streamma
 
 import (
-	"codex-agent-go/internal/model"
 	"context"
 	"errors"
+	"paw/internal/model"
 	"strings"
 	"testing"
 )

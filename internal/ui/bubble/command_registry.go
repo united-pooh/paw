@@ -176,7 +176,9 @@ func NewCommandRegistry() *CommandRegistry {
 			m.chatQueue.Clear()
 			m.activeAssistant = -1
 			m.syncInputMode()
+			m.clearNewMessageNotice()
 			m.addEntry(transcriptEntry{kind: entrySystem, title: "system", body: "history cleared"})
+			m.clearNewMessageNotice()
 			return nil
 		},
 	})

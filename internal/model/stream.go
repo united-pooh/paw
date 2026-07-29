@@ -3,12 +3,12 @@ package model
 import (
 	"bufio"
 	"bytes"
-	"codex-agent-go/internal/message"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"paw/internal/message"
 	"sort"
 	"strings"
 )

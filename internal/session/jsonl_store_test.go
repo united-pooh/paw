@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"codex-agent-go/internal/message"
+	"paw/internal/message"
 )
 
 // newTestStore 在临时目录中创建 JSONLStore，baseDir 就是 tempDir 本身。

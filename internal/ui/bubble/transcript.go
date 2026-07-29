@@ -78,6 +78,7 @@ func (m *appModel) appendAssistantDelta(delta string) {
 		m.ensureAssistantStreamEntry()
 		m.transcript[m.activeAssistant].body += line
 		touchTranscriptEntry(&m.transcript[m.activeAssistant])
+		m.recordAssistantActivity(m.activeAssistant)
 		m.refreshViewport()
 	}
 }
@@ -160,6 +161,10 @@ func (m *appModel) setAssistantRenderMode(index int, mode transcriptRenderMode) 
 
 func (m *appModel) finalizeThinkingStream() {
 	hadContent := m.thinkingStream.HasContent()
+	thinkingIndex := m.activeThinking
+	if hadContent {
+		m.recordTranscriptEntryActivity(thinkingIndex, true)
+	}
 	committed := m.thinkingStream.Flush(m.streamingBodyWidth())
 	if hadContent {
 		m.ensureThinkingStreamEntry()
@@ -199,6 +204,10 @@ func (m *appModel) addEntry(entry transcriptEntry) {
 	}
 	touchTranscriptEntry(&entry)
 	m.transcript = append(m.transcript, entry)
+	index := len(m.transcript) - 1
+	if entry.kind != entryUser && (entry.kind != entryTool || entry.toolStatus != "running") {
+		m.recordTranscriptEntryActivity(index, true)
+	}
 	m.refreshViewport()
 }
 
@@ -292,6 +301,7 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 		entry.toolExpanded = isError
 		entry.toolResultOnly = false
 		touchTranscriptEntry(entry)
+		m.recordTranscriptEntryActivity(idx, true)
 		m.refreshViewport()
 		return
 	}
@@ -401,15 +411,23 @@ func assistantEntryIsRenderable(entry transcriptEntry) bool {
 	return false
 }
 
-// refreshViewport 将 transcript 重新渲染到 viewport，并滚动到底部。
+// refreshViewport 将 transcript 重新渲染到 viewport。
+// 如果刷新前用户位于底部，则继续跟随新内容；否则保留手动滚动位置。
 func (m *appModel) refreshViewport() {
+	m.refreshViewportWithBottomState(!m.selectionActive && m.viewport.AtBottom())
+}
+
+func (m *appModel) refreshViewportWithBottomState(wasAtBottom bool) {
+	offset := m.viewport.YOffset
 	content := m.renderTranscriptContent()
 	if m.selectionActive {
 		content = m.renderTranscriptSelection(content)
 	}
 	m.viewport.SetContent(content)
-	if !m.selectionActive {
+	if wasAtBottom {
 		m.viewport.GotoBottom()
+	} else {
+		m.viewport.SetYOffset(offset)
 	}
 	m.markTranscriptRefreshed()
 }

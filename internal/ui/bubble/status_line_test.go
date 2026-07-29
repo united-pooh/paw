@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"codex-agent-go/internal/loop"
 	"github.com/charmbracelet/x/ansi"
+	"paw/internal/loop"
 )
 
 func TestStatusLineExactWidthAcrossWidths(t *testing.T) {

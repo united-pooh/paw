@@ -2,15 +2,15 @@
 package bubble
 
 import (
-	"codex-agent-go/internal/loop"
-	"codex-agent-go/internal/model"
-	"codex-agent-go/internal/settings"
-	"codex-agent-go/internal/skill"
-	"codex-agent-go/internal/subagent"
-	"codex-agent-go/internal/ui"
 	"context"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
+	"paw/internal/loop"
+	"paw/internal/model"
+	"paw/internal/settings"
+	"paw/internal/skill"
+	"paw/internal/subagent"
+	"paw/internal/ui"
 	"time"
 )
 
@@ -43,26 +43,27 @@ const (
 
 // transcriptEntry 是聊天历史区的一条可渲染记录。
 type transcriptEntry struct {
-	kind           entryKind
-	title          string
-	body           string
-	inputTokens    []inputToken // visual-only metadata; body remains the raw submitted/session text
-	color          string       // 可选：标题颜色（lipgloss 颜色字符串），与 subagents 面板保持一致
-	isError        bool         // true for tool results with IsError=true
-	toolUseID      string
-	toolName       string
-	toolStatus     string
-	toolTarget     string
-	toolResult     string
-	toolExpanded   bool
-	toolFocused    bool
-	toolHovered    bool
-	toolResultOnly bool
-	citations      []toolCitation
-	createdAt      time.Time
-	toolStartedAt  time.Time
-	version        int
-	renderMode     transcriptRenderMode
+	kind                  entryKind
+	title                 string
+	body                  string
+	newMessageNoticeCycle uint64       // UI-only marker; 不参与 transcript 文本渲染。
+	inputTokens           []inputToken // visual-only metadata; body remains the raw submitted/session text
+	color                 string       // 可选：标题颜色（lipgloss 颜色字符串），与 subagents 面板保持一致
+	isError               bool         // true for tool results with IsError=true
+	toolUseID             string
+	toolName              string
+	toolStatus            string
+	toolTarget            string
+	toolResult            string
+	toolExpanded          bool
+	toolFocused           bool
+	toolHovered           bool
+	toolResultOnly        bool
+	citations             []toolCitation
+	createdAt             time.Time
+	toolStartedAt         time.Time
+	version               int
+	renderMode            transcriptRenderMode
 }
 
 type toolCitation struct {
@@ -333,6 +334,10 @@ type appModel struct {
 	transcriptRenderCache     []transcriptRenderCacheEntry
 	transcriptRefreshPending  bool
 	transcriptKeyScrollActive bool
+	newMessageNoticeCycle     uint64
+	newMessageNoticeCount     int
+	newMessageNoticeHovered   bool
+	newMessageNoticePressed   bool
 	rawMouseEscapePending     string
 	toolInspectActive         bool
 	toolInspectIndex          int

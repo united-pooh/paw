@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"codex-agent-go/internal/subagent"
 	"github.com/charmbracelet/lipgloss"
+	"paw/internal/subagent"
 )
 
 const (

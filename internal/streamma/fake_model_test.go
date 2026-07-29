@@ -3,8 +3,8 @@ package streamma
 import (
 	"context"
 	"fmt"
-	"codex-agent-go/internal/message"
-	"codex-agent-go/internal/model"
+	"paw/internal/message"
+	"paw/internal/model"
 	"sync"
 )
 

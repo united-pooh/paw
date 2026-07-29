@@ -1,31 +1,31 @@
-# GoCode MCP Client for CodeGraph
+# Paw MCP Client for CodeGraph
 
 Date: 2026-07-29
 Status: Revised design pending written-spec review
 
 ## 1. Objective
 
-Add MCP client support to GoCode so it can launch and use local stdio MCP servers, with CodeGraph as the first target. The feature must reuse the existing tool.Tool, tool.Registry, Runner tool loop, model tool definitions, and UI tool events.
+Add MCP client support to Paw so it can launch and use local stdio MCP servers, with CodeGraph as the first target. The feature must reuse the existing tool.Tool, tool.Registry, Runner tool loop, model tool definitions, and UI tool events.
 
-The implementation is a generic multi-server client rather than a CodeGraph-only special case. It follows the Codex-style server configuration shape, but uses an independent GoCode configuration file:
+The implementation is a generic multi-server client rather than a CodeGraph-only special case. It follows the Codex-style server configuration shape, but uses an independent Paw configuration file:
 
 ~~~text
-~/.ccagent/mcp.toml
+~/.paw/mcp.toml
 ~~~
 
 The main Agent process owns the real MCP server sessions. Subagents receive the current MCP capability snapshot and route MCP calls through a parent-process broker. This keeps one CodeGraph process per main Agent, avoids duplicate indexes, and provides a stable path for later subagent process/session reuse.
 
 ## 2. Confirmed decisions
 
-- GoCode is an MCP client, not an MCP server.
+- Paw is an MCP client, not an MCP server.
 - The first transport is local stdio only.
 - The configuration supports multiple MCP servers.
-- Configuration is global and independent from Codex: ~/.ccagent/mcp.toml.
+- Configuration is global and independent from Codex: ~/.paw/mcp.toml.
 - A missing configuration file is created as an empty file and does not block normal startup.
 - Configured servers start during process initialization and complete MCP initialization before the Runner is usable.
-- A configured server that cannot initialize causes that GoCode process to fail startup.
+- A configured server that cannot initialize causes that Paw process to fail startup.
 - Server and tool names are namespaced with <server>__<name>.
-- MCP tools, resources, resource templates, and prompts are all exposed to the model through virtual GoCode tools.
+- MCP tools, resources, resource templates, and prompts are all exposed to the model through virtual Paw tools.
 - /mcp reports server state and discovered capability counts.
 - There is no automatic MCP server restart in the first implementation.
 - The main Agent owns the MCP Manager; subagents use proxy tools backed by the parent broker.
@@ -49,7 +49,7 @@ The main Agent process owns the real MCP server sessions. Subagents receive the 
 
 ### Not in scope
 
-- GoCode acting as an MCP server.
+- Paw acting as an MCP server.
 - HTTP, Streamable HTTP, or legacy HTTP/SSE transports.
 - Independent MCP server sessions inside subagent processes; subagents use the parent broker instead.
 - Automatic server restart or reconnect.
@@ -75,13 +75,13 @@ CODEGRAPH_MCP_TOOLS = "explore,context"
 
 ### Configuration rules
 
-- The path is resolved from os.UserHomeDir() as <home>/.ccagent/mcp.toml.
+- The path is resolved from os.UserHomeDir() as <home>/.paw/mcp.toml.
 - A missing parent directory is created with mode 0700.
 - A missing file is created empty with mode 0600.
 - Failure to create or read the configuration is reported as a startup error.
 - command is required for an enabled server.
 - args defaults to an empty list.
-- cwd defaults to the current GoCode workspace root.
+- cwd defaults to the current Paw workspace root.
 - A relative cwd is resolved against the workspace root, not the home directory.
 - enabled defaults to true.
 - The child inherits the parent environment, then the configured env table overrides matching variables.
@@ -101,7 +101,7 @@ The initial implementation uses internal timeout defaults instead of adding extr
 
 This package owns the MCP protocol and process lifecycle:
 
-- ConfigLoader: loads, validates, and creates ~/.ccagent/mcp.toml.
+- ConfigLoader: loads, validates, and creates ~/.paw/mcp.toml.
 - Manager: starts enabled servers, exposes aggregate status, and closes sessions.
 - Session: owns one child process, stdin/stdout/stderr, request IDs, pending responses, and negotiated capabilities.
 - JSON-RPC dispatcher: correlates responses with requests and delivers notifications.
@@ -144,12 +144,12 @@ At main Agent startup, for each enabled server:
 2. Start the child process.
 3. Connect stdin and stdout to the JSON-RPC session.
 4. Capture stderr in a bounded 32 KiB diagnostic buffer.
-5. Send initialize with the GoCode client identity and supported protocol revision.
+5. Send initialize with the Paw client identity and supported protocol revision.
 6. Validate the server response and negotiated capabilities.
 7. Send notifications/initialized.
 8. Discover all paginated tools, resources, resource templates, and prompts.
 9. Build the server's namespaced tool set.
-10. Atomically add the tool set to the GoCode registry.
+10. Atomically add the tool set to the Paw registry.
 
 All enabled servers start in parallel. If any server fails before capability discovery completes, the Manager closes all servers it started and returns an error containing the server name, command, failure phase, and bounded stderr tail.
 
@@ -180,7 +180,7 @@ The child constructs proxy tools from the snapshot included in worker.start. Pro
 
 The in-process subagent launcher uses the same broker interface without serializing through pipes. The external process launcher uses the framed protocol above. The worker protocol continues to carry the final WorkerResult fields required by existing task tracking.
 
-## 7. MCP-to-GoCode tool mapping
+## 7. MCP-to-Paw tool mapping
 
 ### MCP tools
 
@@ -232,7 +232,7 @@ Prompt messages are rendered into the returned textual representation; they are 
 
 - One text content block is returned as its text.
 - Multiple content blocks, embedded resources, binary blobs, or structured content are returned as a JSON object containing the original content metadata and data.
-- MCP isError=true is converted into a GoCode tool error, preserving the rendered content.
+- MCP isError=true is converted into a Paw tool error, preserving the rendered content.
 - Transport, timeout, protocol, and process errors are returned as Go errors, allowing the existing Runner to set ToolResult.IsError.
 
 ## 8. Registry refresh support
@@ -265,7 +265,7 @@ In headless and single-turn modes, startup errors continue to be returned throug
 
 ## 10. Error and security behavior
 
-- Invalid TOML, missing enabled-server command, unsupported initialization response, malformed JSON-RPC, invalid tool schema, and startup timeout fail the current GoCode process before the Runner starts.
+- Invalid TOML, missing enabled-server command, unsupported initialization response, malformed JSON-RPC, invalid tool schema, and startup timeout fail the current Paw process before the Runner starts.
 - A tool-call timeout or MCP execution error affects only that tool call and is returned to the model as an error result.
 - A brokered subagent call is rejected if its name is absent from the current snapshot, and parent/child disconnects fail all pending broker calls.
 - Unexpected stdout that is not a valid JSON-RPC message is a protocol failure; it is never forwarded to the model.
@@ -279,7 +279,7 @@ In headless and single-turn modes, startup errors continue to be returned throug
 
 ### Configuration tests
 
-- missing ~/.ccagent/mcp.toml creates an empty file;
+- missing ~/.paw/mcp.toml creates an empty file;
 - valid Codex-style tables load correctly;
 - enabled, default cwd, relative cwd, args, and environment overlay behave as specified;
 - invalid TOML and invalid server names fail clearly;

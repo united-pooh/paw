@@ -124,7 +124,7 @@ func (r taskRegistry) listTasks(ctx context.Context) ([]TaskSnapshot, error) {
 }
 
 func (r taskRegistry) tasksDir() string {
-	return filepath.Join(r.root, ".ccagent", tasksDirName)
+	return filepath.Join(r.root, ".paw", tasksDirName)
 }
 
 func (r taskRegistry) taskDir(taskID string) string {

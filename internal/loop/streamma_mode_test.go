@@ -1,7 +1,7 @@
 package loop
 
 import (
-	"codex-agent-go/internal/streamma"
+	"paw/internal/streamma"
 	"testing"
 )
 

@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"codex-agent-go/internal/skill"
+	"paw/internal/skill"
 )
 
 func TestCommandCompletionCreatesAtomicTokenProjection(t *testing.T) {

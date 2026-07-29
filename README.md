@@ -1,4 +1,4 @@
-# go-code
+# paw
 
 一个最小可运行的本地 coding agent。
 
@@ -58,7 +58,7 @@ go run ./cmd/agent -s <session-id>
 - 不加参数直接启动时，每次都会创建一个全新的空会话。
 - 需要恢复历史会话时，使用 `-s <session-id>` 指定会话 ID；也可在交互界面输入 `/sessions` 浏览并恢复历史会话。
 
-当前运行目录会作为工作区 root，同时也是 `.ccagent/` 状态目录的基准路径。
+当前运行目录会作为工作区 root，同时也是 `.paw/` 状态目录的基准路径。
 
 ## 入口
 
@@ -106,14 +106,14 @@ go run ./cmd/agent -s <session-id>
 这是当前的依赖装配点。
 
 当前会注册的持久化目录:
-- `.ccagent/model.json`
-- `.ccagent/settings.json`
-- `.ccagent/exports/`
-- `.ccagent/sessions/<sessionID>/`
+- `.paw/model.json`
+- `.paw/settings.json`
+- `.paw/exports/`
+- `.paw/sessions/<sessionID>/`
 
 ### MCP / CodeGraph
 
-GoCode 是 MCP client，主 Agent 在启动时读取 `~/.ccagent/mcp.toml`，通过本地 stdio 启动配置的 MCP server。文件不存在时会自动创建为空文件；启用的 server 初始化或能力发现失败会阻止本次启动。
+Paw 是 MCP client，主 Agent 在启动时读取 `~/.paw/mcp.toml`，通过本地 stdio 启动配置的 MCP server。文件不存在时会自动创建为空文件；启用的 server 初始化或能力发现失败会阻止本次启动。
 
 配置沿用 Codex 风格的 `mcp_servers` 表，例如：
 
@@ -174,23 +174,23 @@ enabled = true
 - `/exit` / `/quit`
 
 当前行为:
-- `/model` 无参数时打开 provider → model 向导；同一 provider 配置多个模型时可在第二步选择具体模型；`status` 输出当前配置和可用模型；`custom`、`deepseek` 直接切换并持久化到 `.ccagent/model.json`；输入已配置的模型名也可切换活动模型；`deepseek` 需要 `DEEPSEEK_API_KEY`
-- `/export` 默认导出到 `.ccagent/exports/conversation-YYYY-MM-DD-HHMMSS.txt`，也支持工作区内显式路径；导出文件权限为 `0600`
+- `/model` 无参数时打开 provider → model 向导；同一 provider 配置多个模型时可在第二步选择具体模型；`status` 输出当前配置和可用模型；`custom`、`deepseek` 直接切换并持久化到 `.paw/model.json`；输入已配置的模型名也可切换活动模型；`deepseek` 需要 `DEEPSEEK_API_KEY`
+- `/export` 默认导出到 `.paw/exports/conversation-YYYY-MM-DD-HHMMSS.txt`，也支持工作区内显式路径；导出文件权限为 `0600`
 - `/setting` 通过向导保存默认 subagent context/run mode，以及 context meter 的位置和 token limit
 - `/sessions` 列出所有历史会话（ID 前缀、日期、文件大小、首条消息），选中条目后直接恢复该会话
 - `/subagent` 支持 `empty` 与 `fork` 两种上下文模式，以及 `sync` 与 `background` 两种运行模式；后台任务完成后会发 UI 系统通知，并把截断后的结果作为补充上下文注入后续模型轮次（完整结果仍在任务 output/transcript 路径中）
 - `/streamma <prompt>` 显式把当前任务交给 StreamMA runtime；runtime 会按任务选择一个小型 DAG，并把每个 StreamMA worker 映射为真实 subagent。一次 run 内同一个 logical agent 复用同一个 subagent session 作为真实 `ctx_a`；首次调用写入 agent base context + problem，后续调用只追加新 inbound step。只有同步到精确 `END_STEP` step 后才继续在 DAG 中传播；缺失 `END_STEP` 会失败而不是在 agent `Done` 时兜底传播，最终由 finalizer 的最后一步作为 assistant 回复写回会话历史。可选参数包括 `--profile`、`--topology`、`--agents`/`--a`、`--steps`/`--s`、`--protocol`；默认 `adaptive` profile 会保留任务模板图，显式 `--topology` 或 `paper` profile 可按指定拓扑生成 chain/tree/graph 形状
 - `/streamma-trace <prompt>` 使用同一套真实 StreamMA/subagent 路径，并额外输出 live runtime trace（如 `subagent.started`、`agent.step.committed`、`control.upstream_eof`、per-invocation usage/cache），用于观察 step fanout 是否发生在上游 agent `Done` 前，以及同一 agent 是否复用同一 session
-- `multi-agent-pipeline` skill 是 Codex/GoCode 的阶段化工作流指导，不会自动要求 StreamMA runtime。`/streamma` 和 `/streamma-trace` 是显式 runtime 调试入口；如果只想测试 skill、slash completion、普通 subagent 或 Token Tracer，可用 `GOCODE_STREAMMA=0` 或 `-streamma=false` 关闭这两个入口
+- `multi-agent-pipeline` skill 是 Codex/Paw 的阶段化工作流指导，不会自动要求 StreamMA runtime。`/streamma` 和 `/streamma-trace` 是显式 runtime 调试入口；如果只想测试 skill、slash completion、普通 subagent 或 Token Tracer，可用 `PAW_STREAMMA=0` 或 `-streamma=false` 关闭这两个入口
 - `/tasks` 展示当前后台 subagent 任务及 transcript 路径
 - `/skills` 展示当前可发现的本地 skills 及其 `SKILL.md` 路径
 - `/token-tracer` 展示当前启动的 Token Tracer dashboard URL；交互模式默认启动本地 HTTP 服务，`/` 为实时页面，`/api/state` 为完整快照，`/events` 为 SSE 实时事件流
 
 Token Tracer:
-- StreamMA 可用 `GOCODE_STREAMMA=0` 或 `-streamma=false` 手动关闭；关闭后输入 `/streamma` 或 `/streamma-trace` 会直接提示已禁用，不会启动 worker，也不会触发 `END_STEP` parser
-- 交互模式启动时默认拉起本地 dashboard；可用 `GOCODE_TOKEN_TRACER=0` 或 `-token-tracer=false` 关闭
-- `-token-tracer-port <port>` 指定端口，默认 `8999`；`GOCODE_TOKEN_TRACER_PORT` 也可设置默认端口
-- `-token-tracer-open` 或 `GOCODE_TOKEN_TRACER_OPEN=1` 会自动在浏览器打开 dashboard
+- StreamMA 可用 `PAW_STREAMMA=0` 或 `-streamma=false` 手动关闭；关闭后输入 `/streamma` 或 `/streamma-trace` 会直接提示已禁用，不会启动 worker，也不会触发 `END_STEP` parser
+- 交互模式启动时默认拉起本地 dashboard；可用 `PAW_TOKEN_TRACER=0` 或 `-token-tracer=false` 关闭
+- `-token-tracer-port <port>` 指定端口，默认 `8999`；`PAW_TOKEN_TRACER_PORT` 也可设置默认端口
+- `-token-tracer-open` 或 `PAW_TOKEN_TRACER_OPEN=1` 会自动在浏览器打开 dashboard
 - Dashboard 聚合普通对话、工具调用、StreamMA runtime events、StreamMA subagent usage/cache、后台 subagent 任务生命周期，并按 `pipeline -> stage -> agent` 语义展示 token lane；output token 单独统计，不参与 context lane 宽度
 
 #### 当前输入区状态
@@ -204,7 +204,7 @@ context meter 默认展示在消息历史区下方、输入框上方；输入框
 - 使用 ↑↓ 键在候选项之间导航，Tab 或 Enter 确认补全，Esc 关闭弹窗
 
 Skills:
-- 当前仓库内置项目级 `multi-agent-pipeline` skill，路径为 `.codex/skills/multi-agent-pipeline/SKILL.md`，适配说明见 `.codex/skills/multi-agent-pipeline/references/gocode-adapter.md`
+- 当前仓库内置项目级 `multi-agent-pipeline` skill，路径为 `.codex/skills/multi-agent-pipeline/SKILL.md`，适配说明见 `.codex/skills/multi-agent-pipeline/references/paw-adapter.md`
 - 支持的本地 skill 目录为当前工作区 `.codex/skills/<name>/SKILL.md`、`.claude/skills/<name>/SKILL.md`，以及 `$CODEX_HOME/skills/<name>/SKILL.md`、`~/.codex/skills/<name>/SKILL.md`、`~/.claude/skills/<name>/SKILL.md`
 - 输入中出现 `$skill` 或 `[$skill](/abs/path/SKILL.md)` 时，Runner 会在本轮 system prompt 中注入对应 `SKILL.md` 的完整内容；该注入只对当前 turn 生效，不写入会话历史
 - `/subagent` 的 prompt 中显式提到 skill 时，subagent worker 会按同样规则加载；`/streamma` 和 `/streamma-trace` 会把本轮选中的 skill context 传入每个 StreamMA worker 的 system prompt
@@ -237,7 +237,7 @@ context meter 左侧显示紧凑 token 与比例，例如 `260k↑ 2.05k↓ 25%(
 当前分为 5 层。
 
 补充:
-- `session`、`settings`、`subagent`、`streamma` 是新增的运行时支撑模块，负责 `.ccagent/` 持久化、用户默认配置、子代理调度和 StreamMA runtime；主对话链路仍按下面的 5 层理解即可。
+- `session`、`settings`、`subagent`、`streamma` 是新增的运行时支撑模块，负责 `.paw/` 持久化、用户默认配置、子代理调度和 StreamMA runtime；主对话链路仍按下面的 5 层理解即可。
 - `internal/skill` 负责发现本地 `skill-name/SKILL.md`、解析输入中的 skill 引用，并把选中的 skill 文件格式化为当前 turn 的 system context。
 - `internal/streamma` 是独立的内存版 multi-agent runtime，目前覆盖 fake model + runtime 验收，并通过 `/streamma <prompt>` 接入 `loop.Runner` 的显式分支；交互入口会使用真实 subagent worker 作为 StreamMA agent，生产版 NATS、Postgres、MinIO 适配器仍未接入。
 
@@ -425,15 +425,15 @@ main (-subagent-worker)
 - `Model`
 - `Models`
 - `Timeout`
-- `RetryCount`（持久化为 `.ccagent/model.json` 的 `retry_count`；网络请求失败或遇到 408/425/429/5xx 时的重试次数，默认 3）
-- `Stream`（持久化为 `.ccagent/model.json` 的 `stream`；默认 `true`，只有显式写为 `false` 才使用非流式请求）
+- `RetryCount`（持久化为 `.paw/model.json` 的 `retry_count`；网络请求失败或遇到 408/425/429/5xx 时的重试次数，默认 3）
+- `Stream`（持久化为 `.paw/model.json` 的 `stream`；默认 `true`，只有显式写为 `false` 才使用非流式请求）
 
 ##### `LoadConfigFromEnv() (Config, error)`
 
 职责:
 - 从环境变量构造 `Config`
 - 启动时按顺序尝试加载当前目录下的 `.env`、`.env.local`
-- 读取并合并 `.ccagent/model.json` 中的持久化 provider 配置
+- 读取并合并 `.paw/model.json` 中的持久化 provider 配置
 - 在同一个 OpenAI-compatible endpoint 下持久化多个模型名，`Model` 表示当前活动模型
 - `.env.local` 会覆盖 `.env` 和外部 shell 继承进来的同名变量
 
@@ -1324,7 +1324,7 @@ Manager 同文件中实现了三个供 LLM 调用的工具：
 ##### `NewControllerInCwd() (*Controller, error)`
 
 职责:
-- 从 `.ccagent/settings.json` 加载配置并创建 Controller
+- 从 `.paw/settings.json` 加载配置并创建 Controller
 
 ##### `CurrentSettings() Config`
 

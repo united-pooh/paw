@@ -32,8 +32,8 @@ load cheaply, then read only the files needed for the current stage.
 
 - First read this file to decide whether the pipeline applies.
 - For Codex execution rules, read `references/codex-execution-model.md`.
-- For GoCode/codex-agent-go host behavior, read
-  `references/gocode-adapter.md`.
+- For Paw/paw host behavior, read
+  `references/paw-adapter.md`.
 - For OpenCode expert-mode setup, read `references/opencode-expert-mode.md`.
 - For the phase-by-phase pipeline, read `references/pipeline-stages.md`.
 - For workspace layout and pet events, read `references/workspace-and-events.md`.
@@ -167,13 +167,13 @@ Codex can use the runtime and stage catalog in `src/` plus the prompt templates
 in `references/orchestrator-prompts.md`. Keep detailed Codex tool behavior in
 `references/codex-execution-model.md`.
 
-### GoCode
+### Paw
 
 This repository installs a project-local copy at
-`.codex/skills/multi-agent-pipeline/`. GoCode discovers it through the local
+`.codex/skills/multi-agent-pipeline/`. Paw discovers it through the local
 skill registry, lists it with `/skills`, and can insert it from the input box by
 typing `$multi-agent-pipeline` and accepting the completion. Read
-`references/gocode-adapter.md` before running the pipeline inside this Go host.
+`references/paw-adapter.md` before running the pipeline inside this Go host.
 
 ### OpenCode
 

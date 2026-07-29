@@ -1,9 +1,9 @@
 package bubble
 
 import (
-	"codex-agent-go/internal/settings"
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
+	"paw/internal/settings"
 	"strings"
 )
 

@@ -2,12 +2,12 @@ package model
 
 import (
 	"bytes"
-	"codex-agent-go/internal/message"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"paw/internal/message"
 	"strings"
 )
 

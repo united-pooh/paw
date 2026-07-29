@@ -1,24 +1,24 @@
 package subagent
 
 import (
-	"codex-agent-go/internal/loop"
-	coremcp "codex-agent-go/internal/mcp"
-	"codex-agent-go/internal/model"
-	"codex-agent-go/internal/session"
-	"codex-agent-go/internal/settings"
-	"codex-agent-go/internal/skill"
-	"codex-agent-go/internal/tokentracer"
-	"codex-agent-go/internal/tool"
-	toolexec "codex-agent-go/internal/tool/exec"
-	toolfile "codex-agent-go/internal/tool/file"
-	toolmcp "codex-agent-go/internal/tool/mcp"
-	toolwebfetch "codex-agent-go/internal/tool/webfetch"
-	"codex-agent-go/internal/ui"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"paw/internal/loop"
+	coremcp "paw/internal/mcp"
+	"paw/internal/model"
+	"paw/internal/session"
+	"paw/internal/settings"
+	"paw/internal/skill"
+	"paw/internal/tokentracer"
+	"paw/internal/tool"
+	toolexec "paw/internal/tool/exec"
+	toolfile "paw/internal/tool/file"
+	toolmcp "paw/internal/tool/mcp"
+	toolwebfetch "paw/internal/tool/webfetch"
+	"paw/internal/ui"
 	"sort"
 	"strings"
 	"sync"
@@ -1355,5 +1355,5 @@ func marshalResult(v any) string {
 }
 
 func TranscriptPath(root, sessionID string) string {
-	return filepath.Join(root, ".ccagent", "sessions", sessionID, "transcript.jsonl")
+	return filepath.Join(root, ".paw", "sessions", sessionID, "transcript.jsonl")
 }

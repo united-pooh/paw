@@ -16,13 +16,13 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"codex-agent-go/internal/loop"
-	"codex-agent-go/internal/message"
-	modelcfg "codex-agent-go/internal/model"
-	"codex-agent-go/internal/settings"
-	"codex-agent-go/internal/skill"
-	"codex-agent-go/internal/subagent"
-	"codex-agent-go/internal/ui"
+	"paw/internal/loop"
+	"paw/internal/message"
+	modelcfg "paw/internal/model"
+	"paw/internal/settings"
+	"paw/internal/skill"
+	"paw/internal/subagent"
+	"paw/internal/ui"
 )
 
 // fakeRunner 记录测试中的提交输入，并模拟对话 runner。
@@ -613,7 +613,7 @@ func TestExportCommandWritesExplicitAndDefaultTranscriptFiles(t *testing.T) {
 	if !handled || cmd != nil {
 		t.Fatalf("/export handled/cmd = %v/%v", handled, cmd)
 	}
-	exports, err := filepath.Glob(filepath.Join(root, ".ccagent", "exports", "conversation-*.txt"))
+	exports, err := filepath.Glob(filepath.Join(root, ".paw", "exports", "conversation-*.txt"))
 	if err != nil {
 		t.Fatalf("Glob() error = %v", err)
 	}
@@ -947,7 +947,7 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 		}
 	}
 
-	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{Name: "Read", Content: "module gocode"}))
+	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{Name: "Read", Content: "module paw"}))
 	model = next.(appModel)
 	okRendered := renderTranscript(model.transcript, 80, model.showThinking)
 	for _, want := range []string{"hello", "✓ Read go.mod · ok"} {
@@ -977,7 +977,7 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 			t.Fatalf("rendered transcript = %q, want %q", rendered, want)
 		}
 	}
-	for _, hidden := range []string{"\n  tool\n", "\n  result\n", "[Read]", "file_path=", "file_path  ", "◌ Read go.mod · running", "module gocode", "tool cites"} {
+	for _, hidden := range []string{"\n  tool\n", "\n  result\n", "[Read]", "file_path=", "file_path  ", "◌ Read go.mod · running", "module paw", "tool cites"} {
 		if strings.Contains(rendered, hidden) {
 			t.Fatalf("rendered transcript = %q, should not contain old tool block marker/content %q", rendered, hidden)
 		}
@@ -1017,6 +1017,80 @@ func TestAssistantDeltaBuffersTailAndRefreshesCompletedLineImmediately(t *testin
 	}
 	if !strings.Contains(model.viewport.View(), "streamed text") {
 		t.Fatalf("viewport = %q, want streamed text immediately after stable line", model.viewport.View())
+	}
+}
+
+func newTranscriptScrollTestModel() appModel {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 10
+	model.relayout()
+	for i := 0; i < 30; i++ {
+		model.transcript = append(model.transcript, transcriptEntry{
+			kind:  entryAssistant,
+			title: "assistant",
+			body:  fmt.Sprintf("history line %02d", i),
+		})
+	}
+	model.refreshViewport()
+	return model
+}
+
+func TestAssistantStreamingPreservesManualTranscriptScroll(t *testing.T) {
+	model := newTranscriptScrollTestModel()
+	model.viewport.SetYOffset(3)
+	wantOffset := model.viewport.YOffset
+
+	next, _ := model.Update(assistantDeltaMsg("streamed line\n"))
+	model = next.(appModel)
+	if model.viewport.YOffset != wantOffset {
+		t.Fatalf("YOffset = %d after streaming update, want preserved offset %d", model.viewport.YOffset, wantOffset)
+	}
+
+	model.viewport.GotoBottom()
+	next, _ = model.Update(assistantDeltaMsg("followed line\n"))
+	model = next.(appModel)
+	if !model.viewport.AtBottom() {
+		t.Fatalf("viewport left bottom after streaming while already at bottom, offset=%d", model.viewport.YOffset)
+	}
+}
+
+func TestThinkingStreamingPreservesManualTranscriptScroll(t *testing.T) {
+	model := newTranscriptScrollTestModel()
+	model.viewport.SetYOffset(3)
+	wantOffset := model.viewport.YOffset
+	model.lastTranscriptRefreshAt = time.Time{}
+
+	next, _ := model.Update(thinkingDeltaMsg("thinking line\n"))
+	model = next.(appModel)
+	if model.viewport.YOffset != wantOffset {
+		t.Fatalf("YOffset = %d after thinking update, want preserved offset %d", model.viewport.YOffset, wantOffset)
+	}
+}
+
+func TestCompletedTurnPreservesManualTranscriptScroll(t *testing.T) {
+	model := newTranscriptScrollTestModel()
+	next, _ := model.Update(assistantDeltaMsg("answer line\n"))
+	model = next.(appModel)
+	model.viewport.SetYOffset(3)
+	wantOffset := model.viewport.YOffset
+
+	next, _ = model.Update(doneMsg{})
+	model = next.(appModel)
+	if model.viewport.YOffset != wantOffset {
+		t.Fatalf("YOffset = %d after completed turn, want preserved offset %d", model.viewport.YOffset, wantOffset)
+	}
+}
+
+func TestResizeKeepsBottomFollowAfterViewportShrinks(t *testing.T) {
+	model := newTranscriptScrollTestModel()
+	model.viewport.GotoBottom()
+
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 8})
+	model = next.(appModel)
+	if !model.viewport.AtBottom() {
+		t.Fatalf("viewport left bottom after resize from bottom, offset=%d", model.viewport.YOffset)
 	}
 }
 

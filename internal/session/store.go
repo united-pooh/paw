@@ -2,7 +2,7 @@ package session
 
 import (
 	"context"
-	"codex-agent-go/internal/message"
+	"paw/internal/message"
 	"time"
 )
 

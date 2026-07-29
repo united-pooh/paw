@@ -1,10 +1,10 @@
 package streamma
 
 import (
-	"codex-agent-go/internal/model"
 	"context"
 	"errors"
 	"fmt"
+	"paw/internal/model"
 	"strings"
 )
 

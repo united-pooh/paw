@@ -1,14 +1,14 @@
 package bubble
 
 import (
-	"codex-agent-go/internal/model"
-	"codex-agent-go/internal/settings"
-	"codex-agent-go/internal/subagent"
 	"context"
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
 	"os"
 	"path/filepath"
+	"paw/internal/model"
+	"paw/internal/settings"
+	"paw/internal/subagent"
 	"strings"
 	"time"
 )
@@ -102,7 +102,7 @@ func (m appModel) exportPath(arg string) (string, error) {
 	arg = strings.TrimSpace(arg)
 	if arg == "" {
 		name := "conversation-" + time.Now().Format("2006-01-02-150405") + ".txt"
-		return filepath.Join(root, ".ccagent", "exports", name), nil
+		return filepath.Join(root, ".paw", "exports", name), nil
 	}
 	if !strings.HasSuffix(arg, ".txt") {
 		arg = strings.TrimSuffix(arg, filepath.Ext(arg)) + ".txt"

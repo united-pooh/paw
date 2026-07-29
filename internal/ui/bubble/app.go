@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"codex-agent-go/internal/skill"
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"paw/internal/skill"
 )
 
 // pipelinePollCmd 异步检测 .pipeline-workspace/ 并返回 pipelineStateUpdatedMsg。
@@ -54,30 +54,31 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 	vp.MouseWheelDelta = 1
 	skillRoot, _ := os.Getwd()
 	model := appModel{
-		ctx:                 ctx,
-		runner:              runner,
-		sessionID:           sessionID,
-		modelConfig:         controller,
-		settingsConfig:      settingsController,
-		subagents:           subagentController,
-		sessionStore:        sessionStore,
-		commandRegistry:     NewCommandRegistry(),
-		skillRegistry:       skill.NewRegistry(skill.DefaultRoots(skillRoot)),
-		cursorAnchor:        anchor,
-		input:               input,
-		viewport:            vp,
-		cursorFrameAt:       now,
-		pipelineActiveAfter: now,
-		worktreeCWD:         skillRoot,
-		worktree:            worktreeSnapshot{name: filepath.Base(filepath.Clean(skillRoot))},
-		worktreeReader:      readWorktreeStatus,
-		activeAssistant:     -1,
-		activeThinking:      -1,
-		doneAssistant:       -1,
-		toolInspectIndex:    -1,
-		toolHoverIndex:      -1,
-		historyIndex:        -1,
-		transcript:          nil,
+		ctx:                   ctx,
+		runner:                runner,
+		sessionID:             sessionID,
+		modelConfig:           controller,
+		settingsConfig:        settingsController,
+		subagents:             subagentController,
+		sessionStore:          sessionStore,
+		commandRegistry:       NewCommandRegistry(),
+		skillRegistry:         skill.NewRegistry(skill.DefaultRoots(skillRoot)),
+		cursorAnchor:          anchor,
+		input:                 input,
+		viewport:              vp,
+		cursorFrameAt:         now,
+		pipelineActiveAfter:   now,
+		worktreeCWD:           skillRoot,
+		worktree:              worktreeSnapshot{name: filepath.Base(filepath.Clean(skillRoot))},
+		worktreeReader:        readWorktreeStatus,
+		activeAssistant:       -1,
+		activeThinking:        -1,
+		doneAssistant:         -1,
+		newMessageNoticeCycle: 1,
+		toolInspectIndex:      -1,
+		toolHoverIndex:        -1,
+		historyIndex:          -1,
+		transcript:            nil,
 	}
 	model.applyCursorAnimation()
 	model.refreshViewport()
@@ -112,12 +113,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		wasAtBottom := !m.selectionActive && m.viewport.AtBottom()
 		m.ready = true
 		m.width = msg.Width
 		m.height = msg.Height
 		m.relayout()
 		m.resizeStreamingBuffers()
-		m.refreshViewport()
+		m.refreshViewportWithBottomState(wasAtBottom)
 		return m, nil
 	case cursorFrameMsg:
 		m.cursorFrameAt = time.Time(msg)
@@ -392,9 +394,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "up":
 				m.viewport.ScrollUp(1)
+				m.syncNewMessageNoticeAfterScroll()
 				return m, nil
 			case "down":
 				m.viewport.ScrollDown(1)
+				m.syncNewMessageNoticeAfterScroll()
 				if m.viewport.AtBottom() {
 					m.transcriptKeyScrollActive = false
 				}
@@ -456,7 +460,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if isHorizontalMouseWheel(msg) {
 			return m, nil
 		}
+		if next, handled, cmd := m.handleNewMessageNoticeMouse(msg); handled {
+			return next, cmd
+		}
 		if next, handled, cmd := m.handleTranscriptMouse(msg); handled {
+			next.syncNewMessageNoticeAfterScroll()
 			if msg.Action != tea.MouseActionMotion || next.selecting {
 				next.transcriptKeyScrollActive = true
 			}
@@ -466,6 +474,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.isTranscriptViewportMouse(msg) {
 				var viewportCmd tea.Cmd
 				m.viewport, viewportCmd = m.viewport.Update(msg)
+				m.syncNewMessageNoticeAfterScroll()
 				m.transcriptKeyScrollActive = true
 				return m, viewportCmd
 			}
@@ -475,6 +484,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var viewportCmd tea.Cmd
 	m.viewport, viewportCmd = m.viewport.Update(msg)
+	m.syncNewMessageNoticeAfterScroll()
 	cmds = append(cmds, viewportCmd)
 
 	if !m.isTerminalWorkRunning() {

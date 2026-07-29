@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"codex-agent-go/internal/model"
+	"paw/internal/model"
 )
 
 type Registry struct {

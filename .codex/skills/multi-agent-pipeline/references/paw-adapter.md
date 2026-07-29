@@ -1,13 +1,13 @@
-# GoCode Host Adapter
+# Paw Host Adapter
 
-This file adapts the multi-agent pipeline skill for the `codex-agent-go` host.
+This file adapts the multi-agent pipeline skill for the `paw` host.
 It is intentionally small: the generic pipeline rules remain in `SKILL.md` and
 the detailed stage contracts remain under `agents/`, `references/`, and
 `templates/`.
 
 ## Discovery
 
-`codex-agent-go` discovers project-local skills from:
+`paw` discovers project-local skills from:
 
 - `.codex/skills/<name>/SKILL.md`
 - `.claude/skills/<name>/SKILL.md`
@@ -34,7 +34,7 @@ it again.
 
 ## Subagents And Stages
 
-GoCode has two relevant execution paths:
+Paw has two relevant execution paths:
 
 - `/subagent` and the subagent tool create bounded worker sessions.
 - `/streamma` and `/streamma-trace` map a small stage DAG onto real subagent

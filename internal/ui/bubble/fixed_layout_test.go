@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"codex-agent-go/internal/settings"
-	"codex-agent-go/internal/subagent"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"paw/internal/settings"
+	"paw/internal/subagent"
 )
 
 func TestComputeTUILayoutKeepsOuterFrameStable(t *testing.T) {

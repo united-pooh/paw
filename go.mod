@@ -1,4 +1,4 @@
-module codex-agent-go
+module paw
 
 go 1.25.0
 

@@ -5,7 +5,7 @@
 .playwright-mcp/
 .claude/
 /agent
-.ccagent/
+.paw/
 .codewhale/
 .env
 .env.local

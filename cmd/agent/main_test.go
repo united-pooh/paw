@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"codex-agent-go/internal/model"
-	"codex-agent-go/internal/session"
-	"codex-agent-go/internal/tokentracer"
+	"paw/internal/model"
+	"paw/internal/session"
+	"paw/internal/tokentracer"
 )
 
 func TestClearTerminalWindowWritesClearAndScrollbackSequence(t *testing.T) {
@@ -25,42 +25,42 @@ func TestClearTerminalWindowWritesClearAndScrollbackSequence(t *testing.T) {
 }
 
 func TestTokenTracerDefaultsFromEnv(t *testing.T) {
-	t.Setenv("GOCODE_TOKEN_TRACER", "0")
+	t.Setenv("PAW_TOKEN_TRACER", "0")
 	if defaultTokenTracerEnabled() {
 		t.Fatalf("defaultTokenTracerEnabled() = true, want false when disabled by env")
 	}
-	t.Setenv("GOCODE_TOKEN_TRACER", "")
+	t.Setenv("PAW_TOKEN_TRACER", "")
 	if !defaultTokenTracerEnabled() {
 		t.Fatalf("defaultTokenTracerEnabled() = false, want true by default")
 	}
-	t.Setenv("GOCODE_TOKEN_TRACER_OPEN", "true")
+	t.Setenv("PAW_TOKEN_TRACER_OPEN", "true")
 	if !defaultTokenTracerOpen() {
 		t.Fatalf("defaultTokenTracerOpen() = false, want true")
 	}
-	t.Setenv("GOCODE_TOKEN_TRACER_PORT", "")
+	t.Setenv("PAW_TOKEN_TRACER_PORT", "")
 	if got := defaultTokenTracerPort(); got != 8999 {
 		t.Fatalf("defaultTokenTracerPort() = %d, want 8999 by default", got)
 	}
-	t.Setenv("GOCODE_TOKEN_TRACER_PORT", "bad")
+	t.Setenv("PAW_TOKEN_TRACER_PORT", "bad")
 	if got := defaultTokenTracerPort(); got != 8999 {
 		t.Fatalf("defaultTokenTracerPort() = %d, want 8999 for invalid env", got)
 	}
-	t.Setenv("GOCODE_TOKEN_TRACER_PORT", "43210")
+	t.Setenv("PAW_TOKEN_TRACER_PORT", "43210")
 	if got := defaultTokenTracerPort(); got != 43210 {
 		t.Fatalf("defaultTokenTracerPort() = %d, want 43210", got)
 	}
 }
 
 func TestStreamMADefaultFromEnv(t *testing.T) {
-	t.Setenv("GOCODE_STREAMMA", "0")
+	t.Setenv("PAW_STREAMMA", "0")
 	if defaultStreamMAEnabled() {
 		t.Fatalf("defaultStreamMAEnabled() = true, want false when disabled by env")
 	}
-	t.Setenv("GOCODE_STREAMMA", "off")
+	t.Setenv("PAW_STREAMMA", "off")
 	if defaultStreamMAEnabled() {
 		t.Fatalf("defaultStreamMAEnabled() = true, want false for off")
 	}
-	t.Setenv("GOCODE_STREAMMA", "")
+	t.Setenv("PAW_STREAMMA", "")
 	if !defaultStreamMAEnabled() {
 		t.Fatalf("defaultStreamMAEnabled() = false, want true by default")
 	}

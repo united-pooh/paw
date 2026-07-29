@@ -76,8 +76,8 @@ func TestManagerKeepsDisabledServerWithoutLaunchingIt(t *testing.T) {
 }
 
 func TestCodeGraphSmokeWhenEnabled(t *testing.T) {
-	if os.Getenv("GOCODE_RUN_CODEGRAPH_SMOKE") != "1" {
-		t.Skip("set GOCODE_RUN_CODEGRAPH_SMOKE=1 to run the local CodeGraph smoke test")
+	if os.Getenv("PAW_RUN_CODEGRAPH_SMOKE") != "1" {
+		t.Skip("set PAW_RUN_CODEGRAPH_SMOKE=1 to run the local CodeGraph smoke test")
 	}
 	root, err := os.Getwd()
 	if err != nil {

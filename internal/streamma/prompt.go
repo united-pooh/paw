@@ -2,7 +2,7 @@ package streamma
 
 import (
 	"fmt"
-	"codex-agent-go/internal/message"
+	"paw/internal/message"
 	"strings"
 )
 

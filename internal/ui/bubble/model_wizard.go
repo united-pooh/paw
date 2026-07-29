@@ -2,10 +2,10 @@
 package bubble
 
 import (
-	"codex-agent-go/internal/model"
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
 	"os"
+	"paw/internal/model"
 	"strings"
 	"time"
 )

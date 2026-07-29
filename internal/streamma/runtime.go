@@ -1,9 +1,9 @@
 package streamma
 
 import (
-	"codex-agent-go/internal/model"
 	"context"
 	"fmt"
+	"paw/internal/model"
 	"strconv"
 	"strings"
 	"time"

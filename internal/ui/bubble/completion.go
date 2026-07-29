@@ -2,10 +2,10 @@
 package bubble
 
 import (
-	"codex-agent-go/internal/skill"
 	"fmt"
 	"os"
 	"path/filepath"
+	"paw/internal/skill"
 	"strings"
 	"unicode"
 	"unicode/utf8"

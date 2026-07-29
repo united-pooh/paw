@@ -12,7 +12,7 @@
 
 ## Current repository constraints
 
-- Repository: `/Users/united_pooh/python project/go-code`.
+- Repository: `<repository-root>`.
 - Branch: `dev`, with the design specification commit `880bbc2` already ahead of `origin/dev`.
 - Existing visual redesign changes are intentionally uncommitted. Do not stage, reset, or rewrite them while implementing this plan.
 - Relevant existing files already own the required boundaries:
@@ -27,11 +27,11 @@
 
 **Files:**
 
-- Modify: `/Users/united_pooh/python project/go-code/internal/ui/bubble/types.go`
-- Modify: `/Users/united_pooh/python project/go-code/internal/ui/bubble/transcript.go`
-- Modify: `/Users/united_pooh/python project/go-code/internal/ui/bubble/app.go`
-- Test: `/Users/united_pooh/python project/go-code/internal/ui/bubble/tool_track_test.go`
-- Test: `/Users/united_pooh/python project/go-code/internal/ui/bubble/bubble_test.go`
+- Modify: `<repository-root>/internal/ui/bubble/types.go`
+- Modify: `<repository-root>/internal/ui/bubble/transcript.go`
+- Modify: `<repository-root>/internal/ui/bubble/app.go`
+- Test: `<repository-root>/internal/ui/bubble/tool_track_test.go`
+- Test: `<repository-root>/internal/ui/bubble/bubble_test.go`
 
 - [ ] **Step 1: Write failing lifecycle assertions for running text and elapsed refresh.**
 
@@ -136,10 +136,10 @@ Expected: PASS, including immediate running visibility, elapsed text, result rep
 
 **Files:**
 
-- Modify: `/Users/united_pooh/python project/go-code/internal/ui/bubble/selection.go`
-- Modify: `/Users/united_pooh/python project/go-code/internal/ui/bubble/tool_inspect.go`
-- Test: `/Users/united_pooh/python project/go-code/internal/ui/bubble/bubble_test.go`
-- Test: `/Users/united_pooh/python project/go-code/internal/ui/bubble/tool_track_test.go`
+- Modify: `<repository-root>/internal/ui/bubble/selection.go`
+- Modify: `<repository-root>/internal/ui/bubble/tool_inspect.go`
+- Test: `<repository-root>/internal/ui/bubble/bubble_test.go`
+- Test: `<repository-root>/internal/ui/bubble/tool_track_test.go`
 
 - [ ] **Step 1: Write failing coordinate and expansion tests.**
 
@@ -233,8 +233,8 @@ Expected: PASS for header offset, scroll offset, preview-row click, expanded-det
 
 **Files:**
 
-- Modify: `/Users/united_pooh/python project/go-code/internal/ui/bubble/status_line.go`
-- Test: `/Users/united_pooh/python project/go-code/internal/ui/bubble/status_line_test.go`
+- Modify: `<repository-root>/internal/ui/bubble/status_line.go`
+- Test: `<repository-root>/internal/ui/bubble/status_line_test.go`
 
 - [ ] **Step 1: Write failing phase-boundary tests.**
 
@@ -314,8 +314,8 @@ Expected: PASS; the rendered line remains exactly the requested width while the 
 
 **Files:**
 
-- Verify: all modified files under `/Users/united_pooh/python project/go-code/internal/ui/bubble`
-- Verify: `/Users/united_pooh/python project/go-code/docs/superpowers/specs/2026-07-28-tool-runtime-hit-ripple-design.md`
+- Verify: all modified files under `<repository-root>/internal/ui/bubble`
+- Verify: `<repository-root>/docs/superpowers/specs/2026-07-28-tool-runtime-hit-ripple-design.md`
 
 - [ ] **Step 1: Run the focused Bubble tests after all three fixes.**
 
@@ -344,7 +344,7 @@ Expected: both Go test commands pass and `git diff --check` produces no output.
 Run:
 
 ```bash
-GOCODE_TOKEN_TRACER=0 GOCODE_STREAMMA=0 go run ./cmd/agent/main.go
+PAW_TOKEN_TRACER=0 PAW_STREAMMA=0 go run ./cmd/agent/main.go
 ```
 
 Verify manually at normal width and after resizing:
@@ -359,7 +359,7 @@ Verify manually at normal width and after resizing:
 Exit the PTY with two quick `Ctrl+C` keystrokes, then run:
 
 ```bash
-NO_COLOR=1 GOCODE_TOKEN_TRACER=0 GOCODE_STREAMMA=0 go run ./cmd/agent/main.go
+NO_COLOR=1 PAW_TOKEN_TRACER=0 PAW_STREAMMA=0 go run ./cmd/agent/main.go
 ```
 
 Confirm the same state transitions do not panic or corrupt the layout under `NO_COLOR=1`.

@@ -3,7 +3,7 @@ package model
 import (
 	"encoding/json"
 
-	"codex-agent-go/internal/message"
+	"paw/internal/message"
 )
 
 // ToolDefinition 描述一个可被模型调用的工具，格式兼容 Anthropic 和 OpenAI。

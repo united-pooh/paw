@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"codex-agent-go/internal/model"
-	"codex-agent-go/internal/streamma"
-	"codex-agent-go/internal/tokentracer"
+	"paw/internal/model"
+	"paw/internal/streamma"
+	"paw/internal/tokentracer"
 )
 
 type traceContext struct {

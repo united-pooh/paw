@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	configDirectoryName = ".ccagent"
+	configDirectoryName = ".paw"
 	configFileName      = "mcp.toml"
 )
 
@@ -26,7 +26,7 @@ type rawServerConfig struct {
 	Env     map[string]string `toml:"env"`
 }
 
-// LoadConfig loads the global GoCode MCP configuration. homeDir is injectable
+// LoadConfig loads the global Paw MCP configuration. homeDir is injectable
 // for tests; an empty value falls back to the current user's home directory.
 func LoadConfig(homeDir, workspaceRoot string) (Config, error) {
 	if strings.TrimSpace(homeDir) == "" {

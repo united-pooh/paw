@@ -20,7 +20,7 @@ func TestLoadConfigCreatesEmptyFile(t *testing.T) {
 		t.Fatalf("servers=%d, want 0", len(cfg.Servers))
 	}
 
-	path := filepath.Join(home, ".ccagent", "mcp.toml")
+	path := filepath.Join(home, ".paw", "mcp.toml")
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("config file was not created: %v", err)
@@ -134,7 +134,7 @@ command = "server"
 
 func writeMCPConfig(t *testing.T, home, content string) {
 	t.Helper()
-	path := filepath.Join(home, ".ccagent", "mcp.toml")
+	path := filepath.Join(home, ".paw", "mcp.toml")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}

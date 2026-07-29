@@ -70,10 +70,10 @@ func TestConflictStatusRecognition(t *testing.T) {
 
 func TestWorktreeLabelUsesOnlyBranchColorForGitState(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	model.worktree = worktreeSnapshot{name: "go-code", ref: "dev", state: worktreeDirty, isGit: true}
+	model.worktree = worktreeSnapshot{name: "paw", ref: "dev", state: worktreeDirty, isGit: true}
 	rendered := model.renderWorktreeLine(80)
 	plain := ansi.Strip(rendered)
-	if !strings.Contains(plain, "go-code · dev") {
+	if !strings.Contains(plain, "paw · dev") {
 		t.Fatalf("worktree label = %q, want name and branch", plain)
 	}
 	for _, forbidden := range []string{"●", "⌂", "⎇"} {
@@ -88,16 +88,16 @@ func TestWorktreeLabelUsesOnlyBranchColorForGitState(t *testing.T) {
 		t.Fatalf("worktree separator background = %q, want %q", got, colorManager.Hex(colorWorktreeBackground))
 	}
 
-	model.worktree = worktreeSnapshot{name: "go-code", ref: "abc1234", state: worktreeClean, isGit: true, detached: true}
+	model.worktree = worktreeSnapshot{name: "paw", ref: "abc1234", state: worktreeClean, isGit: true, detached: true}
 	plain = ansi.Strip(model.renderWorktreeLine(80))
-	if !strings.Contains(plain, "go-code · abc1234") {
+	if !strings.Contains(plain, "paw · abc1234") {
 		t.Fatalf("detached label = %q", plain)
 	}
 }
 
 func TestWorktreeLabelHidesAtNarrowWidth(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	model.worktree = worktreeSnapshot{name: "go-code", ref: "dev", state: worktreeClean, isGit: true}
+	model.worktree = worktreeSnapshot{name: "paw", ref: "dev", state: worktreeClean, isGit: true}
 	if got := ansi.Strip(model.renderWorktreeLine(worktreeMinimumWidth - 1)); strings.TrimSpace(got) != "" {
 		t.Fatalf("narrow worktree label = %q, want hidden", got)
 	}
@@ -105,7 +105,7 @@ func TestWorktreeLabelHidesAtNarrowWidth(t *testing.T) {
 
 func TestWorktreeRefreshKeepsLastSnapshotOnError(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	model.worktree = worktreeSnapshot{name: "go-code", ref: "dev", state: worktreeClean, isGit: true}
+	model.worktree = worktreeSnapshot{name: "paw", ref: "dev", state: worktreeClean, isGit: true}
 	next, cmd := model.Update(worktreeRefreshMsg{err: errors.New("git unavailable")})
 	model = next.(appModel)
 	if model.worktree.ref != "dev" || model.worktree.state != worktreeClean {
@@ -164,12 +164,12 @@ func TestNewModelStartsWithEmptyTranscript(t *testing.T) {
 
 func TestStatusLinePlacesWorktreeAfterTokenInfo(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	model.worktree = worktreeSnapshot{name: "go-code", ref: "dev", state: worktreeDirty, isGit: true}
+	model.worktree = worktreeSnapshot{name: "paw", ref: "dev", state: worktreeDirty, isGit: true}
 	dock := ansi.Strip(model.renderDockStatusLine(100))
 	ready := strings.Index(dock, "ready")
 	chat := strings.Index(dock, "chat")
 	count := strings.Index(dock, " / ")
-	worktree := strings.Index(dock, "go-code · dev")
+	worktree := strings.Index(dock, "paw · dev")
 	if ready < 0 || chat < 0 || count < 0 || worktree < 0 || !(ready < chat && chat < count && count < worktree) {
 		t.Fatalf("status line order = %q", dock)
 	}

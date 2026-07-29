@@ -161,7 +161,7 @@ main { padding: 16px 22px 26px; }
   <div class="brand">
     <span class="mark">TT</span>
     <span class="title">Token Tracer</span>
-    <span class="pipe" id="pipeline-name">GoCode</span>
+    <span class="pipe" id="pipeline-name">Paw</span>
   </div>
   <div class="status"><span class="status-dot"></span><span id="status-text">live</span></div>
 </header>
@@ -272,7 +272,7 @@ function renderSummary() {
   const agentRows = rows.filter(r => r.kind === 'agent');
   const allDone = agentRows.length > 0 && agentRows.every(r => r.status === 'completed');
   const visualStatus = (tl.error || rows.some(r => r.status === 'failed')) ? 'failed' : (allDone ? 'completed' : (p.status || 'live'));
-  document.getElementById('pipeline-name').textContent = (p.name || 'GoCode') + (state && state.session_id ? ' · ' + state.session_id : '');
+  document.getElementById('pipeline-name').textContent = (p.name || 'Paw') + (state && state.session_id ? ' · ' + state.session_id : '');
   document.querySelector('.status').className = 'status ' + visualStatus;
   document.getElementById('status-text').textContent = visualStatus;
   document.getElementById('duration').textContent = dur(tl.duration_ms);

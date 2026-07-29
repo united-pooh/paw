@@ -1,9 +1,9 @@
 package mcp
 
 import (
-	coremcp "codex-agent-go/internal/mcp"
 	"context"
 	"encoding/json"
+	coremcp "paw/internal/mcp"
 	"testing"
 )
 

@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"codex-agent-go/internal/message"
-	"codex-agent-go/internal/ui"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
+	"paw/internal/message"
+	"paw/internal/ui"
 )
 
 func TestToolTrackUsesSemanticEntrySpacing(t *testing.T) {

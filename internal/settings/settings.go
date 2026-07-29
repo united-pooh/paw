@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	DefaultSettingsPath       = ".ccagent/settings.json"
+	DefaultSettingsPath       = ".paw/settings.json"
 	DefaultContextLimitTokens = 1024 * 1024
 
 	ContextModeEmpty ContextMode = "empty"
