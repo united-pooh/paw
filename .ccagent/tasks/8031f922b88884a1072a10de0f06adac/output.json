@@ -1,6 +1,0 @@
-{
-  "task_id": "8031f922b88884a1072a10de0f06adac",
-  "session_id": "8031f922b88884a1072a10de0f06adac",
-  "content": "任务已成功完成！命令执行结果如下：\n\n```\nhello world Agent1\nhello world Agent1\nhello world Agent1\nhello world Agent1\nhello world Agent1\nhello world Agent1\nhello world Agent1\nhello world Agent1\nhello world Agent1\nhello world Agent1\n```\n\n共输出了10次 \"hello world Agent1\"，每次间隔约1秒，总耗时约10秒。命令执行正常，无错误。",
-  "exit_code": 0
-}

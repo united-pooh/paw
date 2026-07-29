@@ -1,6 +1,0 @@
-{"seq":0,"message":{"role":"user","content":"请只回复：**DIRECT_OK** 和 `markdown`"},"created_at":"2026-07-10T06:49:41.223708Z"}
-{"seq":1,"message":{"role":"assistant","tool_use":{"id":"call_1","name":"Bash","input":{"command":"echo '**DIRECT_OK** and `markdown`'","cwd":"."}}},"created_at":"2026-07-10T06:49:41.223708Z"}
-{"seq":2,"message":{"role":"user","tool_result":{"tool_use_id":"call_1","content":"**DIRECT_OK** and `markdown`\n","is_error":false}},"created_at":"2026-07-10T06:49:41.223708Z"}
-{"seq":3,"message":{"role":"assistant","content":"**DIRECT_OK** 和 `markdown`"},"created_at":"2026-07-10T06:49:41.223708Z"}
-{"seq":4,"message":{"role":"user","content":"请回复两段 Markdown：第一段 **MARKDOWN_OK**，第二段 `code_ok`。"},"created_at":"2026-07-10T06:52:12.375282Z"}
-{"seq":5,"message":{"role":"assistant","content":"**MARKDOWN_OK**\n\n`code_ok`"},"created_at":"2026-07-10T06:52:12.375282Z"}

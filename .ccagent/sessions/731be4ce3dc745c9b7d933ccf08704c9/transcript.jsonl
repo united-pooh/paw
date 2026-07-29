@@ -1,4 +1,0 @@
-{"seq":0,"message":{"role":"user","content":"写一个20行的测试文件 /tmp/line_align_test.txt，每行内容是'第N行'"},"created_at":"2026-06-17T09:21:32.759945Z"}
-{"seq":1,"message":{"role":"assistant","tool_use":{"id":"call_00_dD0NESfHAYHpnTPSxs4x9885","name":"Write","input":{"file_path":"/tmp/line_align_test.txt","content":"第1行\n第2行\n第3行\n第4行\n第5行\n第6行\n第7行\n第8行\n第9行\n第10行\n第11行\n第12行\n第13行\n第14行\n第15行\n第16行\n第17行\n第18行\n第19行\n第20行"}}},"created_at":"2026-06-17T09:21:32.759945Z"}
-{"seq":2,"message":{"role":"user","tool_result":{"tool_use_id":"call_00_dD0NESfHAYHpnTPSxs4x9885","content":"wrote 170 bytes to tmp/line_align_test.txt","is_error":false}},"created_at":"2026-06-17T09:21:32.759945Z"}
-{"seq":3,"message":{"role":"assistant","content":"文件 `/tmp/line_align_test.txt` 已成功创建，共 20 行，每行内容为 `第N行`（N 从 1 到 20）。"},"created_at":"2026-06-17T09:21:32.759945Z"}

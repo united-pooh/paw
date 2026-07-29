@@ -1,8 +1,0 @@
-{
-  "task_id": "f8753681150e81ce69f4b7fdb6dbf830",
-  "session_id": "f8753681150e81ce69f4b7fdb6dbf830",
-  "content": "Let me start by exploring the project structure to understand what language(s) are used.Let me also check the README and some source files to get more context.",
-  "error": "读取 Anthropic 流式响应失败: context canceled",
-  "exit_code": 1,
-  "used_tokens": 14007
-}

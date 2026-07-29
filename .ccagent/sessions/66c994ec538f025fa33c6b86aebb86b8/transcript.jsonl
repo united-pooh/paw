@@ -1,2 +1,0 @@
-{"seq":0,"message":{"role":"user","content":"/streamma-trace 用一句话说明这个项目主要使用什么语言"},"created_at":"2026-06-18T10:06:46.244664Z"}
-{"seq":1,"message":{"role":"assistant","content":"多次验证一致且无矛盾证据。最终确认：该项目主要使用 Go 语言。"},"created_at":"2026-06-18T10:06:46.244664Z"}

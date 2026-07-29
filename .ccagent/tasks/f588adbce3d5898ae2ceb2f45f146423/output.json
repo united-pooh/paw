@@ -1,6 +1,0 @@
-{
-  "task_id": "f588adbce3d5898ae2ceb2f45f146423",
-  "session_id": "f588adbce3d5898ae2ceb2f45f146423",
-  "content": "已完成！每隔一秒输出一个报数，持续5次，结果如下：\n\n```\n报数: 1\n报数: 2\n报数: 3\n报数: 4\n报数: 5\n```",
-  "exit_code": 0
-}

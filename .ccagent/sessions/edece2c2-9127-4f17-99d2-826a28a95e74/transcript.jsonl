@@ -1,2 +1,0 @@
-{"seq":0,"message":{"role":"user","content":"请只回复这段 Markdown：**MARKDOWN_OK** 和 `code_ok`"},"created_at":"2026-07-10T06:52:45.246365Z"}
-{"seq":1,"message":{"role":"assistant","content":"**MARKDOWN_OK** 和 `code_ok`"},"created_at":"2026-07-10T06:52:45.246365Z"}

@@ -1,7 +1,0 @@
-{
-  "task_id": "7f74afaccf2348145e7b238dd74cc8e5",
-  "session_id": "7f74afaccf2348145e7b238dd74cc8e5",
-  "error": "模型接口返回异常状态 413: \u003chtml\u003e\r\n\u003chead\u003e\u003ctitle\u003e413 Request Entity Too Large\u003c/title\u003e\u003c/head\u003e\r\n\u003cbody\u003e\r\n\u003ccenter\u003e\u003ch1\u003e413 Request Entity Too Large\u003c/h1\u003e\u003c/center\u003e\r\n\u003chr\u003e\u003ccenter\u003eopenresty\u003c/center\u003e\r\n\u003c/body\u003e\r\n\u003c/html\u003e",
-  "exit_code": 1,
-  "used_tokens": 1885
-}

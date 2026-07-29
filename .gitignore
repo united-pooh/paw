@@ -26,7 +26,22 @@ node_modules/
 *.tmp
 *.swp
 *.swo
-*.DS_Store
+.DS_Store
 
 # Pipeline artifacts
 .pipeline-last-run-summary.json
+
+# Build artifacts
+/main
+/output/
+/project/
+
+# IDE & tool config
+.ccagent/
+.codex/
+.paw/
+
+# Docs / misc artifacts
+index.html
+qa-report.json
+diff-demo.md

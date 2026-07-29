@@ -1,6 +1,0 @@
-{
-  "task_id": "e8e87fe3d13ad020a5af5298e53696ff",
-  "session_id": "e8e87fe3d13ad020a5af5298e53696ff",
-  "content": "任务已完成！脚本成功执行，每2秒输出一次 \"hello world\"，共持续30秒，总共输出了15次 \"hello world\"。",
-  "exit_code": 0
-}

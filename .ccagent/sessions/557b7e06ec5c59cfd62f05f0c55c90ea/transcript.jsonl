@@ -1,2 +1,0 @@
-{"seq":0,"message":{"role":"user","content":"请只输出一个词：pong"},"created_at":"2026-06-18T10:02:25.791396Z"}
-{"seq":1,"message":{"role":"assistant","content":"pong"},"created_at":"2026-06-18T10:02:25.791396Z"}

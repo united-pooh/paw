@@ -1,7 +1,0 @@
-{
-  "task_id": "cb88df28745e444229d41c1cd6af8284",
-  "session_id": "cb88df28745e444229d41c1cd6af8284",
-  "content": "The project contains `go.mod` and `go.sum` files, along with Go source directories (`cmd/`, `internal/`). This is a Go (Golang) project.\n\n这个项目主要使用 Go 语言。\n\nEND_STEP",
-  "exit_code": 0,
-  "used_tokens": 2090
-}

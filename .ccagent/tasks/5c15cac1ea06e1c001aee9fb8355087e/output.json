@@ -1,7 +1,0 @@
-{
-  "task_id": "5c15cac1ea06e1c001aee9fb8355087e",
-  "session_id": "5c15cac1ea06e1c001aee9fb8355087e",
-  "error": "读取 Anthropic 流式响应失败: context canceled",
-  "exit_code": 1,
-  "used_tokens": 2211
-}

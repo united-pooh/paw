@@ -1,8 +1,0 @@
-{
-  "task_id": "2f4653cc0566d5cdd29e87e672d2c330",
-  "session_id": "2f4653cc0566d5cdd29e87e672d2c330",
-  "content": "多次验证一致且无矛盾证据。最终确认：该项目主要使用 Go 语言。\nEND_STEP",
-  "error": "保存会话历史失败: context canceled",
-  "exit_code": 1,
-  "used_tokens": 2510
-}
