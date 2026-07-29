@@ -234,12 +234,16 @@ func renderMarkdownTable(lines []string, width int) string {
 	}
 	columnCount = minInt(columnCount, markdownTableMaxColumnsForWidth(width))
 	normalizeMarkdownTableRows(rows, columnCount)
+	alignments := markdownTableAlignments(parseMarkdownTableRow(lines[1]), columnCount)
 	widths := markdownTableColumnWidths(rows, columnCount, width)
-	renderedRows := make([]string, 0, len(rows)+1)
+	renderedRows := make([]string, 0, len(rows)+2)
+	renderedRows = append(renderedRows, renderMarkdownTableBorder("┌", "┬", "┐", widths))
 	for i, row := range rows {
-		renderedRows = append(renderedRows, renderMarkdownTableRow(row, widths, i == 0))
-		if i == 0 {
-			renderedRows = append(renderedRows, markdownRuleStyle.Render(renderMarkdownTableRule(widths)))
+		renderedRows = append(renderedRows, renderMarkdownTableRow(row, widths, i == 0, alignments))
+		if i == len(rows)-1 {
+			renderedRows = append(renderedRows, renderMarkdownTableBorder("└", "┴", "┘", widths))
+		} else {
+			renderedRows = append(renderedRows, renderMarkdownTableBorder("├", "┼", "┤", widths))
 		}
 	}
 	return strings.Join(renderedRows, "\n")
@@ -292,7 +296,9 @@ func isMarkdownTableSeparatorRune(r rune) bool {
 
 func markdownTableMaxColumnsForWidth(width int) int {
 	width = maxInt(1, width)
-	return maxInt(1, (width+3)/4)
+	// 每列至少需要一个内容格、左右两个内边距，列间还需要一条竖线；
+	// 外框再占一格，所以 n 列的最小宽度是 3n+1。
+	return maxInt(1, (width-1)/3)
 }
 
 // markdownTableColumnCount 返回表格中需要渲染的最大列数。
@@ -324,7 +330,7 @@ func markdownTableColumnWidths(rows [][]string, columnCount, maxWidth int) []int
 			widths[i] = maxInt(widths[i], terminalCellWidth(renderInlineMarkdown(cell)))
 		}
 	}
-	available := maxInt(columnCount, maxWidth-(columnCount-1)*3)
+	available := maxInt(columnCount, maxWidth-columnCount*3-1)
 	for markdownTableTotalWidth(widths) > available {
 		widest := 0
 		for i := range widths {
@@ -352,31 +358,89 @@ func markdownTableTotalWidth(widths []int) int {
 	return total
 }
 
+// markdownTableAlignment 表示 Markdown 表格单元格的水平对齐方式。
+type markdownTableAlignment uint8
+
+const (
+	markdownTableAlignLeft markdownTableAlignment = iota
+	markdownTableAlignCenter
+	markdownTableAlignRight
+)
+
+// markdownTableAlignments 从分隔行中的冒号读取各列的对齐方式。
+func markdownTableAlignments(separator []string, columnCount int) []markdownTableAlignment {
+	alignments := make([]markdownTableAlignment, columnCount)
+	for i := range alignments {
+		if i >= len(separator) {
+			continue
+		}
+		cell := strings.TrimSpace(separator[i])
+		left := strings.HasPrefix(cell, ":")
+		right := strings.HasSuffix(cell, ":")
+		switch {
+		case left && right:
+			alignments[i] = markdownTableAlignCenter
+		case right:
+			alignments[i] = markdownTableAlignRight
+		default:
+			alignments[i] = markdownTableAlignLeft
+		}
+	}
+	return alignments
+}
+
 // renderMarkdownTableRow 渲染一行表格，并对表头应用强调样式。
-func renderMarkdownTableRow(row []string, widths []int, header bool) string {
-	cells := make([]string, 0, len(widths))
+func renderMarkdownTableRow(row []string, widths []int, header bool, alignments []markdownTableAlignment) string {
+	var rendered strings.Builder
+	rendered.WriteString(markdownRuleStyle.Render("│"))
 	for i, width := range widths {
 		cell := ""
 		if i < len(row) {
 			cell = renderInlineMarkdown(row[i])
 		}
 		cell = truncateDisplayWidth(cell, width)
-		padded := cell + strings.Repeat(" ", maxInt(0, width-terminalCellWidth(cell)))
+		alignment := markdownTableAlignLeft
+		if i < len(alignments) {
+			alignment = alignments[i]
+		}
+		padded := padMarkdownTableCell(cell, width, alignment)
 		if header {
 			padded = markdownHeadingStyle.Render(padded)
 		}
-		cells = append(cells, padded)
+		rendered.WriteString(" ")
+		rendered.WriteString(padded)
+		rendered.WriteString(" ")
+		rendered.WriteString(markdownRuleStyle.Render("│"))
 	}
-	return strings.Join(cells, "  ")
+	return rendered.String()
 }
 
-// renderMarkdownTableRule 渲染表头和正文之间的横向分隔线。
-func renderMarkdownTableRule(widths []int) string {
-	parts := make([]string, 0, len(widths))
-	for _, width := range widths {
-		parts = append(parts, strings.Repeat("─", width))
+// padMarkdownTableCell 将单元格按 Markdown 声明的对齐方式补齐到列宽。
+func padMarkdownTableCell(cell string, width int, alignment markdownTableAlignment) string {
+	remaining := maxInt(0, width-terminalCellWidth(cell))
+	switch alignment {
+	case markdownTableAlignCenter:
+		left := remaining / 2
+		return strings.Repeat(" ", left) + cell + strings.Repeat(" ", remaining-left)
+	case markdownTableAlignRight:
+		return strings.Repeat(" ", remaining) + cell
+	default:
+		return cell + strings.Repeat(" ", remaining)
 	}
-	return strings.Join(parts, "  ")
+}
+
+// renderMarkdownTableBorder 渲染表格外框或行间的完整横线。
+func renderMarkdownTableBorder(left, junction, right string, widths []int) string {
+	var rendered strings.Builder
+	rendered.WriteString(markdownRuleStyle.Render(left))
+	for i, width := range widths {
+		rendered.WriteString(markdownRuleStyle.Render(strings.Repeat("─", width+2)))
+		if i < len(widths)-1 {
+			rendered.WriteString(markdownRuleStyle.Render(junction))
+		}
+	}
+	rendered.WriteString(markdownRuleStyle.Render(right))
+	return rendered.String()
 }
 
 // truncateDisplayWidth 按终端显示宽度截断文本，并在末尾添加省略号。

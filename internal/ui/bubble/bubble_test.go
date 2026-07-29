@@ -3438,17 +3438,32 @@ func TestMarkdownWrappingUsesTerminalGraphemeWidth(t *testing.T) {
 
 // TestMarkdownTableRendersAsAlignedTable 验证 Markdown 表格会渲染为终端对齐表格。
 func TestMarkdownTableRendersAsAlignedTable(t *testing.T) {
-	rendered := renderMarkdown("| Name | Value |\n| :--- | ---: |\n| alpha | 1 |\n| beta | two |", 80)
+	rendered := ansi.Strip(renderMarkdown("| Name | Value |\n| :---: | ---: |\n| alpha | 1 |\n| beta | two |", 80))
+	lines := strings.Split(rendered, "\n")
+	if len(lines) != 7 {
+		t.Fatalf("rendered table lines = %d, want 7:\n%s", len(lines), rendered)
+	}
 
-	for _, want := range []string{"Name", "Value", "alpha", "beta", "─────"} {
+	for _, want := range []string{"Name", "Value", "alpha", "beta", "┌", "┬", "┼", "└", "┴", "─────"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered table = %q, want %q", rendered, want)
 		}
 	}
-	for _, unwanted := range []string{":---", "---:", "│", "┼"} {
+	for _, unwanted := range []string{":---", "---:"} {
 		if strings.Contains(rendered, unwanted) {
 			t.Fatalf("rendered table = %q, should not contain %q", rendered, unwanted)
 		}
+	}
+	for i, line := range lines {
+		if got := terminalCellWidth(line); got != terminalCellWidth(lines[0]) {
+			t.Fatalf("table line %d width = %d, want %d: %q", i+1, got, terminalCellWidth(lines[0]), line)
+		}
+	}
+	if !strings.Contains(lines[1], " Name ") || !strings.Contains(lines[1], " Value ") {
+		t.Fatalf("header row = %q, want centered cells", lines[1])
+	}
+	if !strings.Contains(lines[3], " alpha ") || !strings.Contains(lines[3], " 1 ") {
+		t.Fatalf("first body row = %q, want centered cells", lines[3])
 	}
 }
 
@@ -3479,7 +3494,7 @@ func TestMarkdownTableSeparatorVariantsDoNotLeak(t *testing.T) {
 					t.Fatalf("rendered table = %q, want %q", rendered, want)
 				}
 			}
-			for _, leaked := range append(tc.leaked, "│", "┼") {
+			for _, leaked := range tc.leaked {
 				if strings.Contains(ansi.Strip(rendered), leaked) {
 					t.Fatalf("rendered table = %q, should not leak separator %q", rendered, leaked)
 				}
