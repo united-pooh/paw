@@ -73,6 +73,10 @@ var (
 				Foreground(colorManager.LipglossColor(colorMarkdownCodeForeground)).
 				Background(colorManager.LipglossColor(colorMarkdownCodeBackground)).
 				Padding(0, 1)
+	markdownLinkStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorMarkdownLink)).
+				Bold(true).
+				Underline(true)
 	markdownCodeBlockStyle = lipgloss.NewStyle().
 				Foreground(colorManager.LipglossColor(colorMarkdownCodeForeground)).
 				Background(colorManager.LipglossColor(colorMarkdownCodeBackground))

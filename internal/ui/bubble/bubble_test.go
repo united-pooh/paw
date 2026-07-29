@@ -3479,6 +3479,198 @@ func TestRenderInlineMarkdownKeepsUnclosedBoldLiteral(t *testing.T) {
 	}
 }
 
+func TestRenderInlineMarkdownMakesBareURLClickableAndStyled(t *testing.T) {
+	const target = "https://example.com/docs?q=terminal"
+	rendered := renderInlineMarkdown("Open " + target + " now.")
+	wantLink := ansi.SetHyperlink(target) +
+		markdownLinkStyle.Render(target) +
+		ansi.ResetHyperlink()
+
+	if !strings.Contains(rendered, wantLink) {
+		t.Fatalf("inline markdown = %q, want styled OSC 8 link %q", rendered, wantLink)
+	}
+	if got := ansi.Strip(rendered); got != "Open "+target+" now." {
+		t.Fatalf("stripped inline markdown = %q, want visible URL unchanged", got)
+	}
+	if got := ansi.StringWidth(rendered); got != len("Open ")+len(target)+len(" now.") {
+		t.Fatalf("link display width = %d, want escape sequences to have zero width", got)
+	}
+	if !markdownLinkStyle.GetUnderline() || !markdownLinkStyle.GetBold() {
+		t.Fatalf("link style must be underlined and bold")
+	}
+	if markdownLinkStyle.GetForeground() == bodyStyle.GetForeground() {
+		t.Fatalf("link foreground must differ from body foreground")
+	}
+}
+
+func TestRenderInlineMarkdownSupportsMarkdownLinksAndSkipsCode(t *testing.T) {
+	const (
+		target  = "https://example.com/guide"
+		codeURL = "https://example.com/code"
+	)
+	rendered := renderInlineMarkdown("[terminal guide](" + target + ") and `" + codeURL + "`")
+	wantLink := ansi.SetHyperlink(target) +
+		markdownLinkStyle.Render("terminal guide") +
+		ansi.ResetHyperlink()
+
+	if !strings.Contains(rendered, wantLink) {
+		t.Fatalf("inline markdown = %q, want markdown OSC 8 link %q", rendered, wantLink)
+	}
+	if strings.Contains(rendered, ansi.SetHyperlink(codeURL)) {
+		t.Fatalf("inline markdown = %q, code span URL should not be clickable", rendered)
+	}
+}
+
+func TestRenderInlineMarkdownExcludesTrailingPunctuationFromURL(t *testing.T) {
+	const target = "https://example.com/docs"
+	rendered := renderInlineMarkdown("See " + target + ").")
+
+	if !strings.Contains(rendered, ansi.SetHyperlink(target)) {
+		t.Fatalf("inline markdown = %q, want target %q", rendered, target)
+	}
+	if strings.Contains(rendered, ansi.SetHyperlink(target+").")) {
+		t.Fatalf("inline markdown = %q, trailing punctuation entered hyperlink", rendered)
+	}
+	if got := ansi.Strip(rendered); got != "See "+target+")." {
+		t.Fatalf("stripped inline markdown = %q, want punctuation preserved", got)
+	}
+}
+
+func TestRenderInlineMarkdownStopsURLAtChinesePunctuation(t *testing.T) {
+	const target = "https://example.com/docs"
+	rendered := renderInlineMarkdown("打开" + target + "，然后继续")
+
+	if !strings.Contains(rendered, ansi.SetHyperlink(target)) {
+		t.Fatalf("inline markdown = %q, want target %q", rendered, target)
+	}
+	if strings.Contains(rendered, ansi.SetHyperlink(target+"，然后继续")) {
+		t.Fatalf("inline markdown = %q, Chinese punctuation entered hyperlink", rendered)
+	}
+	if got := ansi.Strip(rendered); got != "打开"+target+"，然后继续" {
+		t.Fatalf("stripped inline markdown = %q, want punctuation preserved", got)
+	}
+}
+
+func TestRenderInlineMarkdownKeepsBalancedURLParentheses(t *testing.T) {
+	const target = "https://example.com/wiki/Function_(mathematics)"
+	rendered := renderInlineMarkdown(target)
+	if !strings.Contains(rendered, ansi.SetHyperlink(target)) {
+		t.Fatalf("inline markdown = %q, want balanced-parenthesis target %q", rendered, target)
+	}
+}
+
+func TestStreamingAssistantURLIsClickableBeforeMarkdownFinalization(t *testing.T) {
+	const target = "https://example.com/live"
+	rendered := renderEntryBody(transcriptEntry{
+		kind:       entryAssistant,
+		body:       "Live: " + target,
+		renderMode: transcriptRenderStreamingPlain,
+	}, 80)
+
+	if !strings.Contains(rendered, ansi.SetHyperlink(target)) {
+		t.Fatalf("streaming assistant body = %q, want clickable URL", rendered)
+	}
+}
+
+func TestSystemOutputURLIsClickable(t *testing.T) {
+	const target = "https://example.com/status"
+	rendered := renderEntryBody(transcriptEntry{
+		kind: entrySystem,
+		body: "Status: " + target,
+	}, 80)
+
+	if !strings.Contains(rendered, ansi.SetHyperlink(target)) {
+		t.Fatalf("system body = %q, want clickable URL", rendered)
+	}
+}
+
+func TestTerminalHyperlinkAtPointTracksWrappedLink(t *testing.T) {
+	const target = "https://example.com/wrapped"
+	content := ansi.SetHyperlink(target) +
+		markdownLinkStyle.Render("first\nsecond") +
+		ansi.ResetHyperlink()
+
+	for _, point := range []selectionPoint{
+		{row: 0, col: 2},
+		{row: 1, col: 3},
+	} {
+		if got := terminalHyperlinkAtPoint(content, point); got != target {
+			t.Fatalf("hyperlink at %+v = %q, want %q", point, got, target)
+		}
+	}
+	if got := terminalHyperlinkAtPoint("plain text", selectionPoint{row: 0, col: 2}); got != "" {
+		t.Fatalf("plain-text hyperlink = %q, want empty", got)
+	}
+}
+
+func TestTranscriptMouseClickOpensURL(t *testing.T) {
+	oldOpenTerminalURL := openTerminalURL
+	var opened string
+	openTerminalURL = func(target string) error {
+		opened = target
+		return nil
+	}
+	defer func() {
+		openTerminalURL = oldOpenTerminalURL
+	}()
+
+	const target = "https://example.com/click"
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 12
+	model.relayout()
+	model.transcript = []transcriptEntry{{
+		kind:  entryAssistant,
+		title: "assistant",
+		body:  "Open " + target,
+	}}
+	model.refreshViewport()
+	model.viewport.GotoTop()
+
+	lines := model.transcriptLineSnapshots()
+	row := -1
+	col := -1
+	for index, line := range lines {
+		if offset := strings.Index(line.plain, target); offset >= 0 {
+			row = index
+			col = terminalCellWidth(line.plain[:offset])
+			break
+		}
+	}
+	if row < 0 || col < 0 {
+		t.Fatalf("rendered transcript does not contain %q", target)
+	}
+
+	x := mainContentPadding + col
+	y := model.transcriptScreenTop() + row
+	next, _ := model.Update(tea.MouseMsg{
+		X:      x,
+		Y:      y,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+	model = next.(appModel)
+	next, cmd := model.Update(tea.MouseMsg{
+		X:      x,
+		Y:      y,
+		Action: tea.MouseActionRelease,
+		Button: tea.MouseButtonLeft,
+	})
+	model = next.(appModel)
+
+	if cmd == nil {
+		t.Fatal("URL click returned no open command")
+	}
+	cmd()
+	if opened != target {
+		t.Fatalf("opened URL = %q, want %q", opened, target)
+	}
+	if model.selectionActive {
+		t.Fatal("URL click should not create a transcript selection")
+	}
+}
+
 // TestMarkdownCodeBlockKeepsNestedMarkdownFencesInsideBlock 验证 markdown 代码块中的嵌套 fence 不会被错误拆出。
 func TestMarkdownCodeBlockKeepsNestedMarkdownFencesInsideBlock(t *testing.T) {
 	rendered := renderMarkdown("```markdown\n# 水獭的问候\n\n```go\nfunc hello() {\nfmt.Println(\"Hello!\")\n}\n```\n```", 80)

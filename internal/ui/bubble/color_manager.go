@@ -31,6 +31,7 @@ const (
 	colorMarkdownCodeForeground colorRole = "markdown.code.foreground"
 	colorMarkdownCodeBackground colorRole = "markdown.code.background"
 	colorMarkdownCodeBorder     colorRole = "markdown.code.border"
+	colorMarkdownLink           colorRole = "markdown.link"
 	colorMarkdownQuote          colorRole = "markdown.quote"
 	colorMarkdownQuoteBorder    colorRole = "markdown.quote.border"
 	colorPanelBorder            colorRole = "panel.border"
@@ -89,6 +90,7 @@ func NewColorManager() ColorManager {
 			colorMarkdownCodeForeground: "230",
 			colorMarkdownCodeBackground: "236",
 			colorMarkdownCodeBorder:     "62",
+			colorMarkdownLink:           "#76D5E8",
 			colorMarkdownQuote:          "245",
 			colorMarkdownQuoteBorder:    "244",
 			colorPanelBorder:            "#3B434C",

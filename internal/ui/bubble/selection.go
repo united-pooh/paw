@@ -84,6 +84,10 @@ func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.C
 			}
 			m.refreshViewport()
 		} else {
+			if target := m.transcriptHyperlinkAtPoint(m.selectionStart); target != "" {
+				m.refreshViewportPreservingOffset()
+				return m, true, openTerminalURLCmd(target)
+			}
 			if index, ok := m.toolIndexAtTranscriptRow(m.selectionStart.row); ok {
 				if m.toolInspectActive {
 					m.selectInspectedTool(index)
@@ -215,6 +219,88 @@ func (m appModel) transcriptContentLines() []string {
 func (m appModel) transcriptLineSnapshots() []transcriptLineSnapshot {
 	content := renderTranscript(m.transcript, maxInt(20, m.viewport.Width), m.showThinking)
 	return buildTranscriptLineSnapshots(content)
+}
+
+func (m appModel) transcriptHyperlinkAtPoint(point selectionPoint) string {
+	content := renderTranscript(m.transcript, maxInt(20, m.viewport.Width), m.showThinking)
+	return terminalHyperlinkAtPoint(content, point)
+}
+
+// terminalHyperlinkAtPoint 返回渲染文本指定单元格上的 OSC 8 URL。
+// activeTarget 跨换行保留，以支持被终端宽度折行的长链接。
+func terminalHyperlinkAtPoint(content string, point selectionPoint) string {
+	if content == "" || point.row < 0 || point.col < 0 {
+		return ""
+	}
+
+	row := 0
+	cell := 0
+	activeTarget := ""
+	for content != "" && row <= point.row {
+		if target, consumed, ok := consumeTerminalHyperlinkSequence(content); ok {
+			activeTarget = target
+			content = content[consumed:]
+			continue
+		}
+		if content[0] == '\x1b' {
+			_, _, consumed, _ := ansi.DecodeSequence(content, ansi.NormalState, nil)
+			if consumed > 0 {
+				content = content[consumed:]
+				continue
+			}
+		}
+
+		cluster, width := terminalFirstGraphemeCluster(content)
+		if cluster == "" {
+			break
+		}
+		content = content[len(cluster):]
+		if cluster == "\n" {
+			row++
+			cell = 0
+			continue
+		}
+
+		graphemeWidth := maxInt(1, width)
+		if row == point.row && point.col >= cell && point.col < cell+graphemeWidth {
+			if isClickableTerminalURL(activeTarget) {
+				return activeTarget
+			}
+			return ""
+		}
+		cell += graphemeWidth
+	}
+	return ""
+}
+
+func consumeTerminalHyperlinkSequence(text string) (target string, consumed int, ok bool) {
+	const prefix = "\x1b]8;"
+	if !strings.HasPrefix(text, prefix) {
+		return "", 0, false
+	}
+
+	payloadStart := len(prefix)
+	belOffset := strings.IndexByte(text[payloadStart:], '\a')
+	stOffset := strings.Index(text[payloadStart:], "\x1b\\")
+	payloadEnd := -1
+	terminatorWidth := 0
+	switch {
+	case belOffset >= 0 && (stOffset < 0 || belOffset < stOffset):
+		payloadEnd = payloadStart + belOffset
+		terminatorWidth = 1
+	case stOffset >= 0:
+		payloadEnd = payloadStart + stOffset
+		terminatorWidth = 2
+	default:
+		return "", 0, false
+	}
+
+	payload := text[payloadStart:payloadEnd]
+	separator := strings.IndexByte(payload, ';')
+	if separator < 0 {
+		return "", 0, false
+	}
+	return payload[separator+1:], payloadEnd + terminatorWidth, true
 }
 
 // buildTranscriptLineSnapshots 将渲染文本拆成可按显示单元格寻址的行快照。

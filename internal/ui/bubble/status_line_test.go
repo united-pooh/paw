@@ -1,6 +1,7 @@
 package bubble
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -56,6 +57,60 @@ func TestTokenFrontierRippleStartsAtUsedProgressAndMoves(t *testing.T) {
 	}
 	if !strings.Contains(first, "░") || !strings.Contains(first, "█") {
 		t.Fatalf("ripple lacks gradient head/tail: %q", first)
+	}
+}
+
+func TestTokenRippleNarrowSpanWaitsForTailBeforeNextHead(t *testing.T) {
+	tests := []struct {
+		head int
+		want []int
+	}{
+		{head: 4, want: []int{4, 3, 2, 1, 0}},
+		{head: 5, want: []int{5, 4, 3, 2, 1}},
+		{head: 13, want: []int{13, 12, 11, 10, 9}},
+		{head: 14, want: []int{0, 13, 12, 11, 10}},
+	}
+	for _, test := range tests {
+		got := tokenRippleNarrowDistancesAtHead(5, test.head)
+		if !slices.Equal(got, test.want) {
+			t.Fatalf("head=%d distances=%v, want %v", test.head, got, test.want)
+		}
+	}
+}
+
+func TestTokenRippleNarrowSpanPreservesUncompressedCyclicOrder(t *testing.T) {
+	for freeCells := 1; freeCells < tokenRippleTail; freeCells++ {
+		for head := 0; head < tokenRippleTail*2; head++ {
+			distances := tokenRippleNarrowDistancesAtHead(freeCells, head)
+			if len(distances) != freeCells {
+				t.Fatalf("free=%d head=%d len=%d", freeCells, head, len(distances))
+			}
+			for i, distance := range distances {
+				if distance < 0 || distance >= tokenRippleTail {
+					t.Fatalf("free=%d head=%d distance[%d]=%d", freeCells, head, i, distance)
+				}
+				if i > 0 {
+					want := positiveModulo(distances[i-1]-1, tokenRippleTail)
+					if distance != want {
+						t.Fatalf("free=%d head=%d distances=%v: distance[%d]=%d, want %d", freeCells, head, distances, i, distance, want)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestTokenRippleNarrowSpanDoesNotPinHead(t *testing.T) {
+	var observed []int
+	for head := 0; head < tokenRippleTail; head++ {
+		observed = append(observed, tokenRippleNarrowDistancesAtHead(1, head)[0])
+	}
+	want := make([]int, tokenRippleTail)
+	for i := range want {
+		want[i] = i
+	}
+	if !slices.Equal(observed, want) {
+		t.Fatalf("single-cell ripple distances=%v, want %v", observed, want)
 	}
 }
 

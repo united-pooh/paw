@@ -198,24 +198,21 @@ func (m appModel) renderTokenFrontier(width, used, limit int) string {
 		return strings.Join(cells, "")
 	}
 	phase := tokenRipplePhase(now)
-	head := tokenRippleHead(usedCells, width, phase)
 	fade := tokenRippleFade(phase)
 	background := colorManager.Hex(colorTerminalBackground)
-	for i := maxInt(usedCells, head-tokenRippleTail+1); i <= head && i < width; i++ {
-		distance := head - i
-		alpha := float64(tokenRippleTail-distance) / float64(tokenRippleTail)
-		alpha = clamp01(alpha) * fade
-		glyph := "░"
-		switch {
-		case distance == 0:
-			glyph = "█"
-		case distance == 1:
-			glyph = "▓"
-		case distance == 2:
-			glyph = "▒"
+	freeCells := width - usedCells
+	if freeCells < tokenRippleTail {
+		// A narrow free span is a window into one uncompressed cyclic ripple.
+		// The next head waits for the previous tail to pass instead of crowding it.
+		for offset, distance := range tokenRippleNarrowDistances(freeCells, phase) {
+			cells[usedCells+offset] = renderTokenRippleCell(distance, fade, background)
 		}
-		color := interpolateHexColor(background, colorManager.Hex(colorSignal), alpha)
-		cells[i] = lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(glyph)
+		return strings.Join(cells, "")
+	}
+
+	head := tokenRippleHead(usedCells, width, phase)
+	for i := maxInt(usedCells, head-tokenRippleTail+1); i <= head && i < width; i++ {
+		cells[i] = renderTokenRippleCell(head-i, fade, background)
 	}
 	return strings.Join(cells, "")
 }
@@ -243,6 +240,51 @@ func tokenRippleFade(phase time.Duration) float64 {
 		return 1
 	}
 	return 1 - clamp01(float64(phase-tokenRippleTravel)/float64(tokenRippleExit))
+}
+
+// tokenRippleNarrowDistances returns a contiguous window into the full ripple
+// sequence. Distances wrap only after the complete tail has passed, so a new
+// head never overwrites or compresses the previous tail in a narrow free span.
+func tokenRippleNarrowDistances(freeCells int, phase time.Duration) []int {
+	return tokenRippleNarrowDistancesAtHead(freeCells, tokenRippleHead(0, freeCells, phase))
+}
+
+func tokenRippleNarrowDistancesAtHead(freeCells, virtualHead int) []int {
+	if freeCells <= 0 {
+		return nil
+	}
+	distances := make([]int, freeCells)
+	for offset := range distances {
+		distances[offset] = positiveModulo(virtualHead-offset, tokenRippleTail)
+	}
+	return distances
+}
+
+func renderTokenRippleCell(distance int, fade float64, background string) string {
+	alpha := float64(tokenRippleTail-distance) / float64(tokenRippleTail)
+	alpha = clamp01(alpha) * fade
+	glyph := "░"
+	switch distance {
+	case 0:
+		glyph = "█"
+	case 1:
+		glyph = "▓"
+	case 2:
+		glyph = "▒"
+	}
+	color := interpolateHexColor(background, colorManager.Hex(colorSignal), alpha)
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(glyph)
+}
+
+func positiveModulo(value, modulus int) int {
+	if modulus <= 0 {
+		return 0
+	}
+	result := value % modulus
+	if result < 0 {
+		result += modulus
+	}
+	return result
 }
 
 // renderModeIndicator 返回右侧模式标记。优先级：terminal > !bang > multiline > chat。

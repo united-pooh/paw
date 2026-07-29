@@ -791,7 +791,7 @@ func renderEntryBodyAt(entry transcriptEntry, width int, at time.Time) string {
 	if entry.kind == entryAssistant {
 		body = sanitizeAssistantVisibleBody(body)
 		if entry.renderMode != transcriptRenderFormatted {
-			return bodyStyle.Width(width).Render(body)
+			return bodyStyle.Width(width).Render(renderTerminalLinks(body))
 		}
 		return renderAssistantBodyWithCitations(body, width, entry.citations)
 	}
@@ -800,6 +800,9 @@ func renderEntryBodyAt(entry transcriptEntry, width int, at time.Time) string {
 	}
 	if entry.kind == entryUser && len(entry.inputTokens) > 0 {
 		return renderTokenizedTranscriptBody(body, entry.inputTokens, width)
+	}
+	if entry.kind != entryUser {
+		body = renderTerminalLinks(body)
 	}
 	if entry.kind == entryThinking {
 		return thinkingBodyStyle.Width(width).Render(body)
@@ -895,7 +898,7 @@ func renderToolTransactionEntry(entry transcriptEntry, width int, at time.Time) 
 		return borderStyle.Width(contentWidth).Render(summary)
 	}
 
-	result := sanitizeTerminalText(entry.toolResult)
+	result := renderTerminalLinks(sanitizeTerminalText(entry.toolResult))
 	result = strings.TrimRight(result, "\n")
 	if result == "" {
 		result = "(empty result)"

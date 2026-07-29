@@ -2,9 +2,11 @@
 package bubble
 
 import (
+	"net/url"
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -569,33 +571,188 @@ func renderInlineMarkdown(line string) string {
 		boldStart := strings.Index(line, "**")
 		switch {
 		case codeStart == -1 && boldStart == -1:
-			rendered.WriteString(line)
+			rendered.WriteString(renderTerminalLinks(line))
 			return rendered.String()
 		case codeStart != -1 && (boldStart == -1 || codeStart < boldStart):
-			rendered.WriteString(line[:codeStart])
+			rendered.WriteString(renderTerminalLinks(line[:codeStart]))
 			line = line[codeStart+1:]
 			end := strings.Index(line, "`")
 			if end == -1 {
 				rendered.WriteString("`")
-				rendered.WriteString(line)
+				rendered.WriteString(renderTerminalLinks(line))
 				return rendered.String()
 			}
 			rendered.WriteString(markdownCodeStyle.Render(line[:end]))
 			line = line[end+1:]
 		default:
-			rendered.WriteString(line[:boldStart])
+			rendered.WriteString(renderTerminalLinks(line[:boldStart]))
 			line = line[boldStart+2:]
 			end := strings.Index(line, "**")
 			if end <= 0 {
 				rendered.WriteString("**")
-				rendered.WriteString(line)
+				rendered.WriteString(renderTerminalLinks(line))
 				return rendered.String()
 			}
-			rendered.WriteString(markdownBoldStyle.Render(line[:end]))
+			rendered.WriteString(renderTerminalLinksWithStyle(line[:end], markdownBoldStyle))
 			line = line[end+2:]
 		}
 	}
 	return rendered.String()
+}
+
+// renderTerminalLinks 将裸 http(s) URL 和 Markdown 链接转换为 OSC 8 终端超链接。
+// URL 的可见文本使用独立颜色、粗体和下划线；代码片段不会调用此函数。
+func renderTerminalLinks(text string) string {
+	return renderTerminalLinksWithStyle(text, lipgloss.NewStyle())
+}
+
+func renderTerminalLinksWithStyle(text string, textStyle lipgloss.Style) string {
+	if text == "" {
+		return ""
+	}
+
+	var rendered strings.Builder
+	plainStart := 0
+	flushPlain := func(end int) {
+		if end <= plainStart {
+			return
+		}
+		rendered.WriteString(textStyle.Render(text[plainStart:end]))
+	}
+
+	for index := 0; index < len(text); {
+		if text[index] == '[' {
+			if label, target, consumed, ok := parseMarkdownTerminalLink(text[index:]); ok {
+				flushPlain(index)
+				rendered.WriteString(renderTerminalHyperlink(label, target))
+				index += consumed
+				plainStart = index
+				continue
+			}
+		}
+
+		if hasHTTPURLPrefix(text[index:]) {
+			target := terminalURLCandidate(text[index:])
+			if isClickableTerminalURL(target) {
+				flushPlain(index)
+				rendered.WriteString(renderTerminalHyperlink(target, target))
+				index += len(target)
+				plainStart = index
+				continue
+			}
+		}
+
+		_, size := utf8.DecodeRuneInString(text[index:])
+		index += size
+	}
+	flushPlain(len(text))
+	return rendered.String()
+}
+
+func renderTerminalHyperlink(label, target string) string {
+	return ansi.SetHyperlink(target) +
+		markdownLinkStyle.Render(label) +
+		ansi.ResetHyperlink()
+}
+
+func parseMarkdownTerminalLink(text string) (label, target string, consumed int, ok bool) {
+	if !strings.HasPrefix(text, "[") {
+		return "", "", 0, false
+	}
+	labelEndOffset := strings.Index(text[1:], "](")
+	if labelEndOffset < 0 {
+		return "", "", 0, false
+	}
+	labelEnd := labelEndOffset + 1
+	label = text[1:labelEnd]
+	if label == "" {
+		return "", "", 0, false
+	}
+
+	targetStart := labelEnd + 2
+	depth := 0
+	for offset, r := range text[targetStart:] {
+		switch r {
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+				continue
+			}
+			target = strings.TrimSpace(text[targetStart : targetStart+offset])
+			if strings.HasPrefix(target, "<") && strings.HasSuffix(target, ">") {
+				target = strings.TrimSpace(target[1 : len(target)-1])
+			}
+			if !isClickableTerminalURL(target) {
+				return "", "", 0, false
+			}
+			return label, target, targetStart + offset + 1, true
+		}
+	}
+	return "", "", 0, false
+}
+
+func hasHTTPURLPrefix(text string) bool {
+	return strings.HasPrefix(text, "https://") || strings.HasPrefix(text, "http://")
+}
+
+func terminalURLCandidate(text string) string {
+	end := len(text)
+	for offset, r := range text {
+		if offset > 0 && terminalURLDelimiter(r) {
+			end = offset
+			break
+		}
+	}
+	return trimTerminalURLPunctuation(text[:end])
+}
+
+func terminalURLDelimiter(r rune) bool {
+	return unicode.IsSpace(r) ||
+		unicode.IsControl(r) ||
+		strings.ContainsRune("<>\"'`，。；：！？、", r)
+}
+
+func trimTerminalURLPunctuation(candidate string) string {
+	const trailingPunctuation = ".,;:!?。，；：！？、"
+	type bracketPair struct {
+		open  string
+		close string
+	}
+	pairs := []bracketPair{
+		{open: "(", close: ")"},
+		{open: "[", close: "]"},
+		{open: "{", close: "}"},
+	}
+
+	for {
+		trimmed := strings.TrimRightFunc(candidate, func(r rune) bool {
+			return strings.ContainsRune(trailingPunctuation, r)
+		})
+		for _, pair := range pairs {
+			if strings.HasSuffix(trimmed, pair.close) &&
+				strings.Count(trimmed, pair.close) > strings.Count(trimmed, pair.open) {
+				trimmed = strings.TrimSuffix(trimmed, pair.close)
+				break
+			}
+		}
+		if trimmed == candidate {
+			return candidate
+		}
+		candidate = trimmed
+	}
+}
+
+func isClickableTerminalURL(target string) bool {
+	if target == "" || strings.IndexFunc(target, unicode.IsControl) >= 0 {
+		return false
+	}
+	parsed, err := url.Parse(target)
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	return parsed.Scheme == "https" || parsed.Scheme == "http"
 }
 
 // compactBlankLines 合并连续空行，避免终端历史区出现过大的空洞。
