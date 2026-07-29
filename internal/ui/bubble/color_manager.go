@@ -59,6 +59,10 @@ const (
 	colorWorktreeConflict       colorRole = "worktree.conflict"
 	colorCursorNormalBright     colorRole = "cursor.normal.bright"
 	colorCursorTerminalBright   colorRole = "cursor.terminal.bright"
+	colorDiffAddedForeground    colorRole = "diff.added.foreground"
+	colorDiffAddedBackground    colorRole = "diff.added.background"
+	colorDiffDeletedForeground  colorRole = "diff.deleted.foreground"
+	colorDiffDeletedBackground  colorRole = "diff.deleted.background"
 )
 
 type ColorManager struct{ palette theme.Palette }
@@ -168,6 +172,14 @@ func (c ColorManager) Hex(role colorRole) string {
 		value = p.CursorNormalBright
 	case colorCursorTerminalBright:
 		value = p.CursorTerminalBright
+	case colorDiffAddedForeground:
+		value = p.DiffAddedForeground
+	case colorDiffAddedBackground:
+		value = p.DiffAddedBackground
+	case colorDiffDeletedForeground:
+		value = p.DiffDeletedForeground
+	case colorDiffDeletedBackground:
+		value = p.DiffDeletedBackground
 	}
 	if value == "" {
 		value = p.Body

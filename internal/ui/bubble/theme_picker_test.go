@@ -3,6 +3,7 @@ package bubble
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -112,5 +113,13 @@ func TestThemePickerHomeAndEnd(t *testing.T) {
 	model = next.(appModel)
 	if model.theme.ID != theme.Default {
 		t.Fatalf("home theme = %q", model.theme.ID)
+	}
+}
+
+func TestStatusTextIncludesCurrentTheme(t *testing.T) {
+	model := newThemedTestModel(t, theme.CatppuccinMocha)
+	got := model.statusText("session-1")
+	if !strings.Contains(got, "theme: catppuccin-mocha") {
+		t.Fatalf("status = %q", got)
 	}
 }

@@ -172,8 +172,8 @@ func (m appModel) renderSubagentsCardContent(width int) string {
 }
 
 func (m appModel) renderSubagentsCardContentHeight(width, height int) string {
-	hdrStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Bold(true)
-	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
+	hdrStyle := lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorHeaderForeground)).Bold(true)
+	mutedStyle := lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorContextFree))
 	hdr := renderSidebarRow(width, "subagents", "", hdrStyle, mutedStyle)
 	maxLines := height
 
@@ -192,10 +192,10 @@ func (m appModel) renderSubagentsCardContentHeight(width, height int) string {
 		return hdr + "\n" + empty
 	}
 
-	dotRunStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("84"))
-	dotDoneStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	dotFailStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	dotStopStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	dotRunStyle := lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorWorktreeClean))
+	dotDoneStyle := lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorMarkdownQuote))
+	dotFailStyle := lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorLabelError))
+	dotStopStyle := lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorContextCache))
 	spinnerFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 	availableTaskRows := len(tasks)
@@ -236,23 +236,23 @@ func (m appModel) renderSubagentsCardContentHeight(width, height int) string {
 		t := tasks[idx]
 		var dot, status string
 		dotStyle := dotDoneStyle
-		lineStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("248"))
+		lineStyle := lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorBody))
 		switch t.Status {
 		case subagent.TaskRunning:
 			dot = spinnerFrames[m.spinnerFrameIdx%len(spinnerFrames)]
 			status = formatElapsedTime(time.Since(t.StartedAt))
 			dotStyle = dotRunStyle
-			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("84"))
+			lineStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorWorktreeClean))
 		case subagent.TaskFailed:
 			dot = "✗"
 			status = "failed"
 			dotStyle = dotFailStyle
-			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+			lineStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorLabelError))
 		case subagent.TaskStopped:
 			dot = "■"
 			status = "stopped"
 			dotStyle = dotStopStyle
-			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+			lineStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorContextCache))
 		default:
 			dot = "✓"
 			status = "done"
@@ -329,12 +329,12 @@ func (m appModel) renderPipelineWindowedContent(width, height int) string {
 	}
 
 	lines := []string{
-		renderSidebarRow(width, "pipeline", titleRight, lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Bold(true), lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Bold(true)),
-		renderSidebarRow(width, fmt.Sprintf("%d/%d complete", ps.doneCount, total), fmt.Sprintf("%d%%", percent), lipgloss.NewStyle().Foreground(lipgloss.Color("246")), lipgloss.NewStyle().Foreground(lipgloss.Color("246"))),
+		renderSidebarRow(width, "pipeline", titleRight, lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorHeaderForeground)).Bold(true), lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorContextUsed)).Bold(true)),
+		renderSidebarRow(width, fmt.Sprintf("%d/%d complete", ps.doneCount, total), fmt.Sprintf("%d%%", percent), lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorContextFree)), lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorContextFree))),
 		renderPipelineProgressBar(ps, width),
-		renderSidebarRow(width, fmt.Sprintf("ok %d", ps.doneCount), fmt.Sprintf("now %d", activeCount), lipgloss.NewStyle().Foreground(lipgloss.Color("28")), lipgloss.NewStyle().Foreground(lipgloss.Color("75"))),
-		renderSidebarRow(width, fmt.Sprintf("todo %d", pendingCount), fmt.Sprintf("retry %d", retryCount), lipgloss.NewStyle().Foreground(lipgloss.Color("246")), lipgloss.NewStyle().Foreground(lipgloss.Color("214"))),
-		renderSidebarRow(width, "timeline", "near", lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Bold(true), lipgloss.NewStyle().Foreground(lipgloss.Color("246"))),
+		renderSidebarRow(width, fmt.Sprintf("ok %d", ps.doneCount), fmt.Sprintf("now %d", activeCount), lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorWorktreeClean)), lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorContextUsed))),
+		renderSidebarRow(width, fmt.Sprintf("todo %d", pendingCount), fmt.Sprintf("retry %d", retryCount), lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorContextFree)), lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorContextCache))),
+		renderSidebarRow(width, "timeline", "near", lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorHeaderForeground)).Bold(true), lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorContextFree))),
 	}
 
 	stageRows := minInt(pipelineMaxStageRows, maxInt(0, height-len(lines)))
@@ -355,18 +355,18 @@ func renderPipelineProgressBar(ps pipelineState, width int) string {
 		idx := minInt(total-1, cell*total/width)
 		status := ps.phases[idx].status
 		if status == phaseStatusActive && (cell == 0 || minInt(total-1, (cell-1)*total/width) != idx) {
-			parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Bold(true).Render("▶"))
+			parts = append(parts, lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorContextUsed)).Bold(true).Render("▶"))
 			continue
 		}
 		switch status {
 		case phaseStatusDone:
-			parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color("28")).Render("▰"))
+			parts = append(parts, lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorWorktreeClean)).Render("▰"))
 		case phaseStatusActive:
-			parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Render("▰"))
+			parts = append(parts, lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorContextUsed)).Render("▰"))
 		case phaseStatusRetry:
-			parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("▱"))
+			parts = append(parts, lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorContextCache)).Render("▱"))
 		default:
-			parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("▱"))
+			parts = append(parts, lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorMarkdownQuote)).Render("▱"))
 		}
 	}
 	return strings.Join(parts, "")
@@ -406,20 +406,20 @@ func renderPipelineStageLine(ph pipelinePhaseEntry, idx, currentIdx, width int) 
 	left := symbol + " " + name
 	if idx == currentIdx {
 		contentWidth := maxInt(1, width-1)
-		content := renderSidebarRow(contentWidth, left, status, lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Bold(true), lipgloss.NewStyle().Foreground(lipgloss.Color("252")))
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("68")).Render("▐") +
-			lipgloss.NewStyle().Width(contentWidth).Background(lipgloss.Color("234")).Render(content)
+		content := renderSidebarRow(contentWidth, left, status, lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorHeaderForeground)).Bold(true), lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorHeaderForeground)))
+		return lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorSignal)).Render("▐") +
+			lipgloss.NewStyle().Width(contentWidth).Background(colorManager.LipglossColor(colorToolDetailBackground)).Render(content)
 	}
 	var fg lipgloss.Color
 	switch ph.status {
 	case phaseStatusDone:
-		fg = lipgloss.Color("248")
+		fg = colorManager.LipglossColor(colorBody)
 	case phaseStatusRetry:
-		fg = lipgloss.Color("214")
+		fg = colorManager.LipglossColor(colorContextCache)
 	case phaseStatusActive:
-		fg = lipgloss.Color("252")
+		fg = colorManager.LipglossColor(colorHeaderForeground)
 	default:
-		fg = lipgloss.Color("245")
+		fg = colorManager.LipglossColor(colorMarkdownQuote)
 	}
 	style := lipgloss.NewStyle().Foreground(fg)
 	return renderSidebarRow(width, left, status, style, style)

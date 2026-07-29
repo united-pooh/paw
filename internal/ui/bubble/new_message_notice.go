@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // transcriptNoticeBounds 描述浮空提示在终端中的可点击区域。
@@ -14,18 +13,6 @@ type transcriptNoticeBounds struct {
 	width  int
 	height int
 }
-
-var newMessageNoticeStyle = lipgloss.NewStyle().
-	Foreground(colorManager.LipglossColor(colorSignal)).
-	Background(colorManager.LipglossColor(colorWorktreeBackground)).
-	Bold(true).
-	Padding(0, 1)
-
-var newMessageNoticeHoverStyle = lipgloss.NewStyle().
-	Foreground(colorManager.LipglossColor(colorTerminalBackground)).
-	Background(colorManager.LipglossColor(colorSignal)).
-	Bold(true).
-	Padding(0, 1)
 
 func newMessageNoticeText(count int, hovered bool, width int) string {
 	if count <= 0 || width <= 0 {
