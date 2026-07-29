@@ -11,41 +11,17 @@ import (
 )
 
 const (
-	ProviderCustom   = "custom"
-	ProviderDeepSeek = "deepseek"
-
-	CustomAPIBaseURL    = "http://localhost:8317/v1"
-	CustomChatPath      = "/chat/completions"
-	CustomDefaultAPIKey = "sk-dummy"
-	legacyCustomModel   = "gpt-5.4-xhigh"
-	CustomDefaultModel  = "gpt-5.5"
-	CustomAPIKeyEnvName = "NEWAPI_API_KEY"
-
-	DeepSeekAPIBaseURL    = "https://api.deepseek.com"
-	DeepSeekChatPath      = "/chat/completions"
-	DeepSeekDefaultModel  = "deepseek-chat"
-	DeepSeekAPIKeyEnvName = "DEEPSEEK_API_KEY"
-
 	defaultTimeoutSeconds  = 60
 	defaultRetryCountValue = 3
-	modelConfigPath        = ".paw/model.json"
+	modelConfigDirName     = ".paw"
+	modelConfigFileName    = "config.json"
 )
-
-var apiKeyEnvNames = []string{
-	CustomAPIKeyEnvName,
-	DeepSeekAPIKeyEnvName,
-}
-
-var placeholderAPIKeys = map[string]struct{}{
-	"":               {},
-	"dummy":          {},
-	"your_key_here":  {},
-	"your-key-here":  {},
-	"<your_api_key>": {},
-}
 
 type Config struct {
 	Provider      string
+	Transport     string
+	ProfileID     string
+	ProfileName   string
 	APIBaseURL    string
 	APIPath       string
 	APIKey        string
@@ -56,18 +32,75 @@ type Config struct {
 	RetryCount    int
 	Stream        bool
 	streamSet     bool
+	Profiles      []Profile
+}
+
+// Profile is one fully configured provider entry from ~/.paw/config.json.
+// The UI uses one profile as the first-level provider choice and its Models
+// as the second-level model choices.
+type Profile struct {
+	ID            string
+	Name          string
+	Provider      string
+	Transport     string
+	APIBaseURL    string
+	APIPath       string
+	APIKey        string
+	APIKeyEnvName string
+	Model         string
+	Models        []string
+	Timeout       time.Duration
+	RetryCount    int
+	Stream        bool
+	StreamSet     bool
+	CredentialID  string
+}
+
+func (p Profile) Config() Config {
+	models := normalizeModelNames(p.Models)
+	modelName := strings.TrimSpace(p.Model)
+	if modelName == "" && len(models) > 0 {
+		modelName = models[0]
+	}
+	return Config{
+		Provider:      p.Provider,
+		Transport:     p.Transport,
+		ProfileID:     p.ID,
+		ProfileName:   p.Name,
+		APIBaseURL:    p.APIBaseURL,
+		APIPath:       p.APIPath,
+		APIKey:        p.APIKey,
+		APIKeyEnvName: p.APIKeyEnvName,
+		Model:         modelName,
+		Models:        models,
+		Timeout:       p.Timeout,
+		RetryCount:    p.RetryCount,
+		Stream:        p.Stream,
+		streamSet:     p.StreamSet,
+	}
 }
 
 type persistedModelConfig struct {
-	Provider      string   `json:"provider"`
-	APIBaseURL    string   `json:"api_base_url"`
-	APIPath       string   `json:"api_path"`
-	APIKeyEnvName string   `json:"api_key_env_name"`
-	Model         string   `json:"model"`
+	ID            string   `json:"id,omitempty"`
+	Name          string   `json:"name,omitempty"`
+	Provider      string   `json:"provider,omitempty"`
+	Transport     string   `json:"transport,omitempty"`
+	APIBaseURL    string   `json:"baseUrl,omitempty"`
+	APIPath       string   `json:"apiPath,omitempty"`
+	APIKeyEnvName string   `json:"apiKeyEnvName,omitempty"`
+	APIKey        string   `json:"apiKey,omitempty"`
+	Model         string   `json:"model,omitempty"`
 	Models        []string `json:"models,omitempty"`
-	Timeout       int      `json:"timeout_seconds,omitempty"`
-	RetryCount    int      `json:"retry_count,omitempty"`
+	Timeout       int      `json:"timeoutSeconds,omitempty"`
+	RetryCount    int      `json:"retryCount,omitempty"`
 	Stream        *bool    `json:"stream,omitempty"`
+	CredentialID  string   `json:"credentialId,omitempty"`
+}
+
+type persistedPawConfig struct {
+	SchemaVersion        int                    `json:"schemaVersion,omitempty"`
+	ModelProfiles        []persistedModelConfig `json:"modelProfiles,omitempty"`
+	ActiveModelProfileID string                 `json:"activeModelProfileId,omitempty"`
 }
 
 func LoadConfigFromEnv() (Config, error) {
@@ -75,84 +108,133 @@ func LoadConfigFromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-
-	cfg := defaultConfigForProvider(ProviderCustom)
-	persisted, err := loadPersistedModelConfig()
+	configPath, err := modelConfigPath()
 	if err != nil {
 		return Config{}, err
 	}
-	if persisted != nil {
-		cfg = mergePersistedConfig(cfg, *persisted)
+
+	document, persisted, err := loadPawConfigDocument(configPath)
+	if err != nil {
+		return Config{}, err
+	}
+	profiles := configuredProfiles(persisted.ModelProfiles, fileEnvValues)
+	if len(profiles) == 0 {
+		if document == nil {
+			if err := savePawConfigDocument(configPath, map[string]any{
+				"schemaVersion":        1,
+				"modelProfiles":        []any{},
+				"activeModelProfileId": "",
+			}); err != nil {
+				return Config{}, fmt.Errorf("create Paw config: %w", err)
+			}
+		}
+		return Config{}, fmt.Errorf("no model profiles configured in %s", configPath)
 	}
 
-	cfg.Provider = normalizeProvider(cfg.Provider)
-	cfg = fillConfigDefaults(cfg)
-	cfg.APIKey = sanitizeAPIKey(cfg.Provider, loadAPIKeyByEnvName(cfg.APIKeyEnvName, fileEnvValues))
-	if cfg.Provider == ProviderCustom && cfg.APIKey == "" {
-		cfg.APIKey = CustomDefaultAPIKey
+	selected := 0
+	activeID := strings.TrimSpace(persisted.ActiveModelProfileID)
+	if activeID != "" {
+		for index, profile := range profiles {
+			if profile.ID == activeID {
+				selected = index
+				break
+			}
+		}
 	}
-	if providerRequiresAPIKey(cfg.Provider) && cfg.APIKey == "" {
-		return Config{}, fmt.Errorf("missing %s", cfg.APIKeyEnvName)
+	cfg := profiles[selected].Config()
+	cfg.Profiles = cloneProfiles(profiles)
+	cfg = fillConfigDefaults(cfg)
+	if cfg.APIKey == "" {
+		cfg.APIKey = loadAPIKeyByEnvName(cfg.APIKeyEnvName, fileEnvValues)
 	}
 	return cfg, nil
 }
 
 func SaveModelConfig(cfg Config) error {
+	configPath, err := modelConfigPath()
+	if err != nil {
+		return err
+	}
+	return saveModelConfigAtPath(cfg, configPath)
+}
+
+func saveModelConfigAtPath(cfg Config, configPath string) error {
 	cfg = fillConfigDefaults(cfg)
-	if err := os.MkdirAll(filepath.Dir(modelConfigPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		return fmt.Errorf("create config directory: %w", err)
 	}
 
-	payload := persistedModelConfig{
-		Provider:      cfg.Provider,
-		APIBaseURL:    cfg.APIBaseURL,
-		APIPath:       cfg.APIPath,
-		APIKeyEnvName: cfg.APIKeyEnvName,
-		Model:         cfg.Model,
-		Models:        AvailableModels(cfg),
-		Timeout:       int(cfg.Timeout / time.Second),
-		RetryCount:    cfg.RetryCount,
-		Stream:        boolPointer(cfg.Stream),
-	}
-
-	data, err := json.MarshalIndent(payload, "", "  ")
+	document, persisted, err := loadPawConfigDocument(configPath)
 	if err != nil {
-		return fmt.Errorf("marshal model config: %w", err)
+		return err
 	}
-	data = append(data, '\n')
-	if err := os.WriteFile(modelConfigPath, data, 0o600); err != nil {
-		return fmt.Errorf("write model config: %w", err)
+	if document == nil {
+		document = make(map[string]any)
 	}
-	return nil
-}
+	if _, ok := document["schemaVersion"]; !ok {
+		document["schemaVersion"] = 1
+	}
 
-func defaultConfigForProvider(provider string) Config {
-	switch normalizeProvider(provider) {
-	case ProviderCustom:
-		return Config{
-			Provider:      ProviderCustom,
-			APIBaseURL:    CustomAPIBaseURL,
-			APIPath:       CustomChatPath,
-			APIKeyEnvName: CustomAPIKeyEnvName,
-			Model:         CustomDefaultModel,
-			Models:        []string{CustomDefaultModel},
-			Timeout:       defaultTimeout(),
-			RetryCount:    defaultRetryCount(),
-			Stream:        true,
-		}
-	default:
-		return Config{
-			Provider:      ProviderDeepSeek,
-			APIBaseURL:    DeepSeekAPIBaseURL,
-			APIPath:       DeepSeekChatPath,
-			APIKeyEnvName: DeepSeekAPIKeyEnvName,
-			Model:         DeepSeekDefaultModel,
-			Models:        []string{DeepSeekDefaultModel},
-			Timeout:       defaultTimeout(),
-			RetryCount:    defaultRetryCount(),
-			Stream:        true,
+	profileID := strings.TrimSpace(cfg.ProfileID)
+	if profileID == "" {
+		profileID = strings.TrimSpace(persisted.ActiveModelProfileID)
+	}
+	if profileID == "" && len(persisted.ModelProfiles) > 0 {
+		profileID = strings.TrimSpace(persisted.ModelProfiles[0].ID)
+	}
+	if profileID == "" {
+		profileID = "default"
+	}
+
+	profiles := profileDocuments(document)
+	profileIndex := -1
+	for index, profile := range profiles {
+		if strings.TrimSpace(stringValue(profile["id"])) == profileID {
+			profileIndex = index
+			break
 		}
 	}
+	if profileIndex < 0 {
+		profiles = append(profiles, make(map[string]any))
+		profileIndex = len(profiles) - 1
+	}
+	profile := profiles[profileIndex]
+	profile["id"] = profileID
+	if strings.TrimSpace(cfg.ProfileName) != "" {
+		profile["name"] = cfg.ProfileName
+	}
+	if strings.TrimSpace(cfg.Provider) != "" {
+		profile["provider"] = cfg.Provider
+	}
+	if strings.TrimSpace(cfg.Transport) != "" {
+		profile["transport"] = cfg.Transport
+	}
+	if strings.TrimSpace(cfg.APIBaseURL) != "" {
+		profile["baseUrl"] = cfg.APIBaseURL
+	}
+	if strings.TrimSpace(cfg.APIPath) != "" {
+		profile["apiPath"] = cfg.APIPath
+	}
+	if strings.TrimSpace(cfg.APIKeyEnvName) != "" {
+		profile["apiKeyEnvName"] = cfg.APIKeyEnvName
+	}
+	if strings.TrimSpace(cfg.Model) != "" {
+		profile["model"] = cfg.Model
+	}
+	if models := AvailableModels(cfg); len(models) > 0 {
+		profile["models"] = models
+	}
+	if cfg.Timeout > 0 {
+		profile["timeoutSeconds"] = int(cfg.Timeout / time.Second)
+	}
+	if cfg.RetryCount > 0 {
+		profile["retryCount"] = cfg.RetryCount
+	}
+	profile["stream"] = cfg.Stream
+	document["modelProfiles"] = profiles
+	document["activeModelProfileId"] = profileID
+
+	return savePawConfigDocument(configPath, document)
 }
 
 func defaultTimeout() time.Duration {
@@ -163,86 +245,108 @@ func defaultRetryCount() int {
 	return defaultRetryCountValue
 }
 
-func normalizeProvider(provider string) string {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case ProviderCustom:
-		return ProviderCustom
-	case ProviderDeepSeek:
-		return ProviderDeepSeek
-	default:
-		return ProviderCustom
-	}
-}
-
 func fillConfigDefaults(cfg Config) Config {
-	defaults := defaultConfigForProvider(cfg.Provider)
-	cfg.Provider = defaults.Provider
-	if strings.TrimSpace(cfg.APIBaseURL) == "" {
-		cfg.APIBaseURL = defaults.APIBaseURL
-	}
-	if strings.TrimSpace(cfg.APIPath) == "" {
-		cfg.APIPath = defaults.APIPath
-	}
-	if strings.TrimSpace(cfg.APIKeyEnvName) == "" {
-		cfg.APIKeyEnvName = defaults.APIKeyEnvName
-	}
-	if strings.TrimSpace(cfg.Model) == "" {
-		cfg.Model = defaults.Model
-	}
+	cfg.Provider = strings.TrimSpace(cfg.Provider)
+	cfg.Transport = strings.TrimSpace(cfg.Transport)
+	cfg.ProfileID = strings.TrimSpace(cfg.ProfileID)
+	cfg.ProfileName = strings.TrimSpace(cfg.ProfileName)
+	cfg.APIBaseURL = strings.TrimSpace(cfg.APIBaseURL)
+	cfg.APIPath = strings.TrimSpace(cfg.APIPath)
+	cfg.APIKeyEnvName = strings.TrimSpace(cfg.APIKeyEnvName)
+	cfg.Model = strings.TrimSpace(cfg.Model)
 	cfg.Models = normalizeModelNames(cfg.Models)
-	if len(cfg.Models) == 0 {
-		cfg.Models = append([]string(nil), defaults.Models...)
+	if cfg.Model == "" && len(cfg.Models) > 0 {
+		cfg.Model = cfg.Models[0]
 	}
-	if !containsModel(cfg.Models, cfg.Model) {
+	if cfg.Model != "" && !containsModel(cfg.Models, cfg.Model) {
 		cfg.Models = append(cfg.Models, cfg.Model)
 	}
 	if cfg.Timeout <= 0 {
-		cfg.Timeout = defaults.Timeout
+		cfg.Timeout = defaultTimeout()
 	}
 	if cfg.RetryCount <= 0 {
-		cfg.RetryCount = defaults.RetryCount
+		cfg.RetryCount = defaultRetryCount()
 	}
 	if !cfg.Stream && !cfg.streamSet {
-		cfg.Stream = defaults.Stream
+		cfg.Stream = true
 	}
 	return cfg
 }
 
-func boolPointer(value bool) *bool {
-	return &value
+func configuredProfiles(persisted []persistedModelConfig, envValues map[string]string) []Profile {
+	profiles := make([]Profile, 0, len(persisted))
+	for _, raw := range persisted {
+		profile := Profile{
+			ID:            strings.TrimSpace(raw.ID),
+			Name:          strings.TrimSpace(raw.Name),
+			Provider:      strings.TrimSpace(raw.Provider),
+			Transport:     strings.TrimSpace(raw.Transport),
+			APIBaseURL:    strings.TrimSpace(raw.APIBaseURL),
+			APIPath:       strings.TrimSpace(raw.APIPath),
+			APIKey:        strings.TrimSpace(raw.APIKey),
+			APIKeyEnvName: strings.TrimSpace(raw.APIKeyEnvName),
+			Model:         strings.TrimSpace(raw.Model),
+			Models:        normalizeModelNames(raw.Models),
+			CredentialID:  strings.TrimSpace(raw.CredentialID),
+			StreamSet:     raw.Stream != nil,
+		}
+		if raw.Timeout > 0 {
+			profile.Timeout = time.Duration(raw.Timeout) * time.Second
+		}
+		if raw.RetryCount > 0 {
+			profile.RetryCount = raw.RetryCount
+		}
+		if raw.Stream != nil {
+			profile.Stream = *raw.Stream
+		}
+		if profile.APIKeyEnvName != "" {
+			if key := loadAPIKeyByEnvName(profile.APIKeyEnvName, envValues); key != "" {
+				profile.APIKey = key
+			}
+		}
+		if profile.ID == "" {
+			profile.ID = profile.Name
+		}
+		if profile.ID == "" {
+			profile.ID = profile.Provider
+		}
+		profiles = append(profiles, profile)
+	}
+	return profiles
 }
 
-func mergePersistedConfig(base Config, persisted persistedModelConfig) Config {
-	cfg := base
-	if strings.TrimSpace(persisted.Provider) != "" {
-		cfg.Provider = persisted.Provider
+func cloneProfiles(profiles []Profile) []Profile {
+	cloned := make([]Profile, len(profiles))
+	for index, profile := range profiles {
+		cloned[index] = profile
+		cloned[index].Models = append([]string(nil), profile.Models...)
 	}
-	if strings.TrimSpace(persisted.APIBaseURL) != "" {
-		cfg.APIBaseURL = persisted.APIBaseURL
+	return cloned
+}
+
+// ConfiguredProfiles returns all configured first-level choices. The fallback
+// keeps callers that construct Config directly usable without inventing any
+// provider or endpoint values.
+func ConfiguredProfiles(cfg Config) []Profile {
+	if len(cfg.Profiles) > 0 {
+		return cloneProfiles(cfg.Profiles)
 	}
-	if strings.TrimSpace(persisted.APIPath) != "" {
-		cfg.APIPath = persisted.APIPath
-	}
-	if strings.TrimSpace(persisted.APIKeyEnvName) != "" {
-		cfg.APIKeyEnvName = persisted.APIKeyEnvName
-	}
-	if strings.TrimSpace(persisted.Model) != "" {
-		cfg.Model = normalizePersistedModel(cfg.Provider, persisted.Model)
-	}
-	if len(persisted.Models) > 0 {
-		cfg.Models = append([]string(nil), persisted.Models...)
-	}
-	if persisted.Timeout > 0 {
-		cfg.Timeout = time.Duration(persisted.Timeout) * time.Second
-	}
-	if persisted.RetryCount > 0 {
-		cfg.RetryCount = persisted.RetryCount
-	}
-	if persisted.Stream != nil {
-		cfg.Stream = *persisted.Stream
-		cfg.streamSet = true
-	}
-	return cfg
+	return []Profile{{
+		ID:            cfg.ProfileID,
+		Name:          cfg.ProfileName,
+		Provider:      cfg.Provider,
+		Transport:     cfg.Transport,
+		APIBaseURL:    cfg.APIBaseURL,
+		APIPath:       cfg.APIPath,
+		APIKey:        cfg.APIKey,
+		APIKeyEnvName: cfg.APIKeyEnvName,
+		Model:         cfg.Model,
+		Models:        append([]string(nil), cfg.Models...),
+		Timeout:       cfg.Timeout,
+		RetryCount:    cfg.RetryCount,
+		Stream:        cfg.Stream,
+		StreamSet:     cfg.streamSet,
+	}}
 }
 
 // AvailableModels returns the configured model names in stable order without
@@ -291,20 +395,74 @@ func containsModel(models []string, want string) bool {
 	return false
 }
 
-func loadPersistedModelConfig() (*persistedModelConfig, error) {
-	data, err := os.ReadFile(modelConfigPath)
+func modelConfigPath() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve user home: %w", err)
+	}
+	if strings.TrimSpace(homeDir) == "" {
+		return "", fmt.Errorf("resolve user home: empty path")
+	}
+	return filepath.Join(homeDir, modelConfigDirName, modelConfigFileName), nil
+}
+
+func loadPawConfigDocument(configPath string) (map[string]any, persistedPawConfig, error) {
+	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, persistedPawConfig{}, nil
 		}
-		return nil, fmt.Errorf("read model config: %w", err)
+		return nil, persistedPawConfig{}, fmt.Errorf("read Paw config: %w", err)
 	}
 
-	var persisted persistedModelConfig
-	if err := json.Unmarshal(data, &persisted); err != nil {
-		return nil, fmt.Errorf("parse model config: %w", err)
+	if strings.TrimSpace(string(data)) == "" {
+		return make(map[string]any), persistedPawConfig{}, nil
 	}
-	return &persisted, nil
+
+	var document map[string]any
+	if err := json.Unmarshal(data, &document); err != nil {
+		return nil, persistedPawConfig{}, fmt.Errorf("parse Paw config: %w", err)
+	}
+	var persisted persistedPawConfig
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		return nil, persistedPawConfig{}, fmt.Errorf("parse Paw model profiles: %w", err)
+	}
+	return document, persisted, nil
+}
+
+func savePawConfigDocument(configPath string, document map[string]any) error {
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		return fmt.Errorf("create Paw config directory: %w", err)
+	}
+	data, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal Paw config: %w", err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(configPath, data, 0o600); err != nil {
+		return fmt.Errorf("write Paw config: %w", err)
+	}
+	return nil
+}
+
+func profileDocuments(document map[string]any) []map[string]any {
+	values, ok := document["modelProfiles"].([]any)
+	if !ok {
+		return nil
+	}
+	profiles := make([]map[string]any, 0, len(values))
+	for _, value := range values {
+		profile, ok := value.(map[string]any)
+		if ok {
+			profiles = append(profiles, profile)
+		}
+	}
+	return profiles
+}
+
+func stringValue(value any) string {
+	stringValue, _ := value.(string)
+	return stringValue
 }
 
 func loadAPIKeyByEnvName(primary string, values map[string]string) string {
@@ -319,29 +477,6 @@ func loadAPIKeyByEnvName(primary string, values map[string]string) string {
 		return value
 	}
 	return ""
-}
-
-func normalizePersistedModel(provider, modelName string) string {
-	modelName = strings.TrimSpace(modelName)
-	if normalizeProvider(provider) == ProviderCustom && modelName == legacyCustomModel {
-		return CustomDefaultModel
-	}
-	return modelName
-}
-
-func providerRequiresAPIKey(provider string) bool {
-	return normalizeProvider(provider) != ProviderCustom
-}
-
-func sanitizeAPIKey(provider, key string) string {
-	key = strings.TrimSpace(key)
-	if providerRequiresAPIKey(provider) {
-		return key
-	}
-	if _, ok := placeholderAPIKeys[strings.ToLower(key)]; ok {
-		return ""
-	}
-	return key
 }
 
 func loadOptionalEnvFiles(paths ...string) (map[string]string, error) {

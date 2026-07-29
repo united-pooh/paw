@@ -11,29 +11,29 @@ import (
 )
 
 func TestSetRequestHeadersOmitsAuthorizationWhenAPIKeyEmpty(t *testing.T) {
-	t.Setenv(CustomAPIKeyEnvName, "")
+	t.Setenv("TEST_API_KEY", "")
 
 	client := NewClient(Config{
-		Provider:      ProviderCustom,
-		APIBaseURL:    CustomAPIBaseURL,
-		APIPath:       CustomChatPath,
-		APIKeyEnvName: CustomAPIKeyEnvName,
-		Model:         CustomDefaultModel,
+		Provider:      "test-gateway",
+		APIBaseURL:    "http://gateway.test/v1",
+		APIPath:       "/chat/completions",
+		APIKeyEnvName: "TEST_API_KEY",
+		Model:         "test-model",
 		Timeout:       time.Minute,
 	})
 	if err := client.ApplyModelConfig(Config{
-		Provider:      ProviderCustom,
-		APIBaseURL:    CustomAPIBaseURL,
-		APIPath:       CustomChatPath,
+		Provider:      "test-gateway",
+		APIBaseURL:    "http://gateway.test/v1",
+		APIPath:       "/chat/completions",
 		APIKey:        "",
-		APIKeyEnvName: CustomAPIKeyEnvName,
-		Model:         CustomDefaultModel,
+		APIKeyEnvName: "TEST_API_KEY",
+		Model:         "test-model",
 		Timeout:       time.Minute,
 	}); err != nil {
 		t.Fatalf("ApplyModelConfig() error = %v", err)
 	}
 
-	req := httptest.NewRequest("POST", CustomAPIBaseURL+CustomChatPath, nil)
+	req := httptest.NewRequest("POST", "http://gateway.test/v1/chat/completions", nil)
 	client.setRequestHeaders(req)
 
 	if got := req.Header.Get("Authorization"); got != "" {
@@ -58,10 +58,10 @@ func TestRunMessageRetriesTransientHTTPFailures(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(Config{
-		Provider:   ProviderCustom,
+		Provider:   "test-gateway",
 		APIBaseURL: server.URL,
 		APIPath:    "/chat/completions",
-		Model:      CustomDefaultModel,
+		Model:      "test-model",
 		RetryCount: 2,
 		Timeout:    time.Second,
 	})
@@ -83,10 +83,10 @@ func TestRunMessageStopsAfterConfiguredRetries(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(Config{
-		Provider:   ProviderCustom,
+		Provider:   "test-gateway",
 		APIBaseURL: server.URL,
 		APIPath:    "/chat/completions",
-		Model:      CustomDefaultModel,
+		Model:      "test-model",
 		RetryCount: 1,
 		Timeout:    time.Second,
 	})

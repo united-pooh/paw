@@ -17,8 +17,8 @@ func TestStreamMessageUsesAnthropicStreamForDeepSeekEarlyUsageAndThinking(t *tes
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() { _ = r.Body.Close() }()
 
-		if r.URL.Path != "/anthropic/v1/messages" {
-			t.Fatalf("path = %q, want /anthropic/v1/messages", r.URL.Path)
+		if r.URL.Path != "/v1/messages" {
+			t.Fatalf("path = %q, want /v1/messages", r.URL.Path)
 		}
 		if got := r.Header.Get("X-Api-Key"); got != "sk-test" {
 			t.Fatalf("X-Api-Key = %q, want sk-test", got)
@@ -54,12 +54,13 @@ func TestStreamMessageUsesAnthropicStreamForDeepSeekEarlyUsageAndThinking(t *tes
 	defer server.Close()
 
 	client := NewClient(Config{
-		Provider:      ProviderDeepSeek,
+		Provider:      "anthropic-gateway",
+		Transport:     "anthropic-compatible",
 		APIBaseURL:    server.URL,
-		APIPath:       "/chat/completions",
+		APIPath:       "/v1/messages",
 		APIKey:        "sk-test",
-		APIKeyEnvName: DeepSeekAPIKeyEnvName,
-		Model:         DeepSeekDefaultModel,
+		APIKeyEnvName: "TEST_ANTHROPIC_API_KEY",
+		Model:         "anthropic-model",
 		Timeout:       time.Minute,
 	})
 
@@ -109,8 +110,8 @@ func TestStreamMessageUsesAnthropicStreamForDeepSeekEarlyUsageAndThinking(t *tes
 func TestStreamMessageEmitsAnthropicToolCalls(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() { _ = r.Body.Close() }()
-		if r.URL.Path != "/anthropic/v1/messages" {
-			t.Fatalf("path = %q, want /anthropic/v1/messages", r.URL.Path)
+		if r.URL.Path != "/v1/messages" {
+			t.Fatalf("path = %q, want /v1/messages", r.URL.Path)
 		}
 
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -126,12 +127,13 @@ func TestStreamMessageEmitsAnthropicToolCalls(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(Config{
-		Provider:      ProviderDeepSeek,
+		Provider:      "anthropic-gateway",
+		Transport:     "anthropic-compatible",
 		APIBaseURL:    server.URL,
-		APIPath:       "/chat/completions",
+		APIPath:       "/v1/messages",
 		APIKey:        "sk-test",
-		APIKeyEnvName: DeepSeekAPIKeyEnvName,
-		Model:         DeepSeekDefaultModel,
+		APIKeyEnvName: "TEST_ANTHROPIC_API_KEY",
+		Model:         "anthropic-model",
 		Timeout:       time.Minute,
 	})
 
@@ -163,8 +165,8 @@ func TestStreamMessageEmitsAnthropicToolCalls(t *testing.T) {
 func TestStreamMessageEmitsAnthropicToolCallInputFromStartBlock(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() { _ = r.Body.Close() }()
-		if r.URL.Path != "/anthropic/v1/messages" {
-			t.Fatalf("path = %q, want /anthropic/v1/messages", r.URL.Path)
+		if r.URL.Path != "/v1/messages" {
+			t.Fatalf("path = %q, want /v1/messages", r.URL.Path)
 		}
 
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -178,12 +180,13 @@ func TestStreamMessageEmitsAnthropicToolCallInputFromStartBlock(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(Config{
-		Provider:      ProviderDeepSeek,
+		Provider:      "anthropic-gateway",
+		Transport:     "anthropic-compatible",
 		APIBaseURL:    server.URL,
-		APIPath:       "/chat/completions",
+		APIPath:       "/v1/messages",
 		APIKey:        "sk-test",
-		APIKeyEnvName: DeepSeekAPIKeyEnvName,
-		Model:         DeepSeekDefaultModel,
+		APIKeyEnvName: "TEST_ANTHROPIC_API_KEY",
+		Model:         "anthropic-model",
 		Timeout:       time.Minute,
 	})
 
@@ -210,8 +213,8 @@ func TestStreamMessageEmitsAnthropicToolCallInputFromStartBlock(t *testing.T) {
 func TestStreamMessageEmitsAnthropicToolCallInputFromStringStartBlock(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() { _ = r.Body.Close() }()
-		if r.URL.Path != "/anthropic/v1/messages" {
-			t.Fatalf("path = %q, want /anthropic/v1/messages", r.URL.Path)
+		if r.URL.Path != "/v1/messages" {
+			t.Fatalf("path = %q, want /v1/messages", r.URL.Path)
 		}
 
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -225,12 +228,13 @@ func TestStreamMessageEmitsAnthropicToolCallInputFromStringStartBlock(t *testing
 	defer server.Close()
 
 	client := NewClient(Config{
-		Provider:      ProviderDeepSeek,
+		Provider:      "anthropic-gateway",
+		Transport:     "anthropic-compatible",
 		APIBaseURL:    server.URL,
-		APIPath:       "/chat/completions",
+		APIPath:       "/v1/messages",
 		APIKey:        "sk-test",
-		APIKeyEnvName: DeepSeekAPIKeyEnvName,
-		Model:         DeepSeekDefaultModel,
+		APIKeyEnvName: "TEST_ANTHROPIC_API_KEY",
+		Model:         "anthropic-model",
 		Timeout:       time.Minute,
 	})
 
@@ -254,8 +258,8 @@ func TestStreamMessageEmitsAnthropicToolCallInputFromStringStartBlock(t *testing
 func TestStreamMessageAnthropicToolCallDeltaOverridesStartBlockInput(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() { _ = r.Body.Close() }()
-		if r.URL.Path != "/anthropic/v1/messages" {
-			t.Fatalf("path = %q, want /anthropic/v1/messages", r.URL.Path)
+		if r.URL.Path != "/v1/messages" {
+			t.Fatalf("path = %q, want /v1/messages", r.URL.Path)
 		}
 
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -273,12 +277,13 @@ func TestStreamMessageAnthropicToolCallDeltaOverridesStartBlockInput(t *testing.
 	defer server.Close()
 
 	client := NewClient(Config{
-		Provider:      ProviderDeepSeek,
+		Provider:      "anthropic-gateway",
+		Transport:     "anthropic-compatible",
 		APIBaseURL:    server.URL,
-		APIPath:       "/chat/completions",
+		APIPath:       "/v1/messages",
 		APIKey:        "sk-test",
-		APIKeyEnvName: DeepSeekAPIKeyEnvName,
-		Model:         DeepSeekDefaultModel,
+		APIKeyEnvName: "TEST_ANTHROPIC_API_KEY",
+		Model:         "anthropic-model",
 		Timeout:       time.Minute,
 	})
 
@@ -304,13 +309,13 @@ func TestStreamMessageFallsBackToOpenAIAndParsesDeepSeekUsage(t *testing.T) {
 	openAIChecked := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() { _ = r.Body.Close() }()
-		if r.URL.Path == "/anthropic/v1/messages" {
+		if r.Header.Get("Anthropic-Version") != "" {
 			anthropicChecked = true
 			http.Error(w, "anthropic unavailable", http.StatusNotFound)
 			return
 		}
-		if r.URL.Path != "/chat/completions" {
-			t.Fatalf("path = %q, want /chat/completions", r.URL.Path)
+		if r.URL.Path != "/v1/messages" {
+			t.Fatalf("path = %q, want /v1/messages", r.URL.Path)
 		}
 
 		var req ChatCompletionsRequest
@@ -330,12 +335,13 @@ func TestStreamMessageFallsBackToOpenAIAndParsesDeepSeekUsage(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(Config{
-		Provider:      ProviderDeepSeek,
+		Provider:      "anthropic-gateway",
+		Transport:     "anthropic-compatible",
 		APIBaseURL:    server.URL,
-		APIPath:       "/chat/completions",
+		APIPath:       "/v1/messages",
 		APIKey:        "sk-test",
-		APIKeyEnvName: DeepSeekAPIKeyEnvName,
-		Model:         DeepSeekDefaultModel,
+		APIKeyEnvName: "TEST_ANTHROPIC_API_KEY",
+		Model:         "anthropic-model",
 		Timeout:       time.Minute,
 	})
 
@@ -392,12 +398,12 @@ func TestStreamMessageEmitsOpenAIToolCalls(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(Config{
-		Provider:      ProviderCustom,
+		Provider:      "openai-gateway",
 		APIBaseURL:    server.URL,
 		APIPath:       "/chat/completions",
 		APIKey:        "sk-test",
-		APIKeyEnvName: CustomAPIKeyEnvName,
-		Model:         CustomDefaultModel,
+		APIKeyEnvName: "TEST_OPENAI_API_KEY",
+		Model:         "openai-model",
 		Timeout:       time.Minute,
 	})
 
@@ -471,12 +477,12 @@ func TestStreamMessageSendsOpenAIToolsWithParametersSchema(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(Config{
-		Provider:      ProviderCustom,
+		Provider:      "openai-gateway",
 		APIBaseURL:    server.URL,
 		APIPath:       "/chat/completions",
 		APIKey:        "sk-test",
-		APIKeyEnvName: CustomAPIKeyEnvName,
-		Model:         CustomDefaultModel,
+		APIKeyEnvName: "TEST_OPENAI_API_KEY",
+		Model:         "openai-model",
 		Timeout:       time.Minute,
 	})
 
@@ -527,12 +533,12 @@ func TestStreamMessageReadsSSELineLongerThanLegacyScannerLimit(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(Config{
-		Provider:      ProviderCustom,
+		Provider:      "openai-gateway",
 		APIBaseURL:    server.URL,
 		APIPath:       "/chat/completions",
 		APIKey:        "sk-test",
-		APIKeyEnvName: CustomAPIKeyEnvName,
-		Model:         CustomDefaultModel,
+		APIKeyEnvName: "TEST_OPENAI_API_KEY",
+		Model:         "openai-model",
 		Timeout:       time.Minute,
 	})
 
@@ -566,12 +572,12 @@ func TestStreamMessageDoesNotTimeoutWhileReadingBody(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(Config{
-		Provider:      ProviderCustom,
+		Provider:      "openai-gateway",
 		APIBaseURL:    server.URL,
 		APIPath:       "/chat/completions",
 		APIKey:        "sk-test",
-		APIKeyEnvName: CustomAPIKeyEnvName,
-		Model:         CustomDefaultModel,
+		APIKeyEnvName: "TEST_OPENAI_API_KEY",
+		Model:         "openai-model",
 		Timeout:       10 * time.Millisecond,
 	})
 
@@ -607,10 +613,10 @@ func TestStreamMessageRetriesTransientHTTPFailures(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(Config{
-		Provider:   ProviderCustom,
+		Provider:   "openai-gateway",
 		APIBaseURL: server.URL,
 		APIPath:    "/chat/completions",
-		Model:      CustomDefaultModel,
+		Model:      "openai-model",
 		RetryCount: 1,
 		Timeout:    time.Second,
 	})
@@ -648,10 +654,10 @@ func TestStreamMessageUsesNonStreamingResponseWhenExplicitlyDisabled(t *testing.
 	defer server.Close()
 
 	client := NewClient(Config{
-		Provider:   ProviderCustom,
+		Provider:   "openai-gateway",
 		APIBaseURL: server.URL,
 		APIPath:    "/chat/completions",
-		Model:      CustomDefaultModel,
+		Model:      "openai-model",
 		Stream:     false,
 		streamSet:  true,
 		Timeout:    time.Second,

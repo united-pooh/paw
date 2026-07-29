@@ -171,21 +171,14 @@ func buildAnthropicMessagesRequest(cfg Config, messages []message.Message, tools
 
 func anthropicMessagesURL(cfg Config) string {
 	base := strings.TrimRight(strings.TrimSpace(cfg.APIBaseURL), "/")
-	lowerBase := strings.ToLower(base)
-	switch {
-	case strings.HasSuffix(lowerBase, "/anthropic/v1"):
-		return base + "/messages"
-	case strings.HasSuffix(lowerBase, "/anthropic"):
-		return base + "/v1/messages"
-	case normalizeProvider(cfg.Provider) == ProviderDeepSeek:
-		return strings.TrimRight(strings.TrimSuffix(base, "/v1"), "/") + "/anthropic/v1/messages"
-	default:
-		apiPath := strings.TrimSpace(cfg.APIPath)
-		if apiPath == "" {
-			apiPath = "/v1/messages"
-		}
-		return base + apiPath
+	apiPath := strings.TrimSpace(cfg.APIPath)
+	if base == "" {
+		return apiPath
 	}
+	if apiPath == "" {
+		return base
+	}
+	return base + "/" + strings.TrimLeft(apiPath, "/")
 }
 
 func setAnthropicRequestHeaders(req *http.Request, cfg Config) {

@@ -4,92 +4,36 @@ package bubble
 import (
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
-	"os"
 	"paw/internal/model"
 	"strings"
-	"time"
 )
 
-// currentModelConfig 返回当前模型配置；没有控制器时使用 custom 默认配置兜底。
+// currentModelConfig 返回当前模型配置；没有控制器时返回空配置。
 func (m appModel) currentModelConfig() model.Config {
 	if m.modelConfig == nil {
-		return model.Config{
-			Provider:      model.ProviderCustom,
-			APIBaseURL:    model.CustomAPIBaseURL,
-			APIPath:       model.CustomChatPath,
-			APIKey:        model.CustomDefaultAPIKey,
-			Model:         model.CustomDefaultModel,
-			Models:        []string{model.CustomDefaultModel},
-			APIKeyEnvName: model.CustomAPIKeyEnvName,
-			Timeout:       time.Minute,
-		}
+		return model.Config{}
 	}
 	return m.modelConfig.CurrentModelConfig()
 }
 
-// configForProvider 根据目标 provider 生成可应用的模型配置。
-func (m appModel) configForProvider(provider string) (model.Config, error) {
-	current := m.currentModelConfig()
-	switch provider {
-	case model.ProviderCustom:
-		cfg := current
-		currentProvider := cfg.Provider
-		cfg.Provider = model.ProviderCustom
-		if strings.TrimSpace(cfg.APIBaseURL) == "" || currentProvider == model.ProviderDeepSeek {
-			cfg.APIBaseURL = model.CustomAPIBaseURL
-		}
-		if strings.TrimSpace(cfg.APIPath) == "" || currentProvider == model.ProviderDeepSeek {
-			cfg.APIPath = model.CustomChatPath
-		}
-		if strings.TrimSpace(cfg.Model) == "" || currentProvider == model.ProviderDeepSeek {
-			cfg.Model = model.CustomDefaultModel
-		}
-		if currentProvider == model.ProviderDeepSeek {
-			cfg.Models = []string{cfg.Model}
-		} else if len(cfg.Models) == 0 {
-			cfg.Models = []string{cfg.Model}
-		}
-		cfg.APIKeyEnvName = model.CustomAPIKeyEnvName
-		cfg.APIKey = strings.TrimSpace(os.Getenv(cfg.APIKeyEnvName))
-		if cfg.APIKey == "" {
-			cfg.APIKey = model.CustomDefaultAPIKey
-		}
-		return cfg, nil
-	case model.ProviderDeepSeek:
-		cfg := current
-		cfg.Provider = model.ProviderDeepSeek
-		cfg.APIBaseURL = model.DeepSeekAPIBaseURL
-		cfg.APIPath = model.DeepSeekChatPath
-		cfg.Model = model.DeepSeekDefaultModel
-		cfg.Models = []string{cfg.Model}
-		cfg.APIKeyEnvName = model.DeepSeekAPIKeyEnvName
-		cfg.APIKey = strings.TrimSpace(os.Getenv(cfg.APIKeyEnvName))
-		if cfg.APIKey == "" {
-			return model.Config{}, fmt.Errorf("missing %s", cfg.APIKeyEnvName)
-		}
-		return cfg, nil
-	default:
-		return model.Config{}, fmt.Errorf("unknown provider: %s", provider)
-	}
+// configForProfile 根据 config.json 中的 profile 生成可应用的模型配置。
+func (m appModel) configForProfile(profile model.Profile) model.Config {
+	cfg := profile.Config()
+	cfg.Profiles = m.currentModelConfig().Profiles
+	return cfg
 }
 
 // prepareModelWizardStep resolves the selected provider and creates the model
 // list for the second step of /model. The list comes from the persisted
-// provider configuration, so custom endpoints can expose any model names.
+// profile configuration, so each configured endpoint can expose any model names.
 func (m *appModel) prepareModelWizardStep() {
 	if m == nil || m.modelWizard == nil {
 		return
 	}
 	option := m.modelWizard.selectedProvider()
-	cfg, err := m.configForProvider(option.id)
-	if err != nil {
-		m.modelWizard.modelOptions = nil
-		m.modelWizard.err = err.Error()
-		m.modelWizard.step = modelWizardConfirm
-		return
-	}
+	cfg := m.configForProfile(option.profile)
 	m.modelWizard.modelOptions = model.AvailableModels(cfg)
-	if len(m.modelWizard.modelOptions) == 0 {
+	if len(m.modelWizard.modelOptions) == 0 && strings.TrimSpace(cfg.Model) != "" {
 		m.modelWizard.modelOptions = []string{cfg.Model}
 	}
 	m.modelWizard.selectedModel = 0
@@ -100,8 +44,8 @@ func (m *appModel) prepareModelWizardStep() {
 		}
 	}
 	m.modelWizard.err = ""
-	// A provider with one available model does not need an extra stop. Custom
-	// providers with multiple persisted models use the explicit second step.
+	// A profile with one available model does not need an extra stop. Profiles
+	// with multiple persisted models use the explicit second step.
 	if len(m.modelWizard.modelOptions) > 1 {
 		m.modelWizard.step = modelWizardModel
 	} else {
@@ -125,12 +69,12 @@ func (m appModel) handleModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "up", "k":
 			m.modelWizard.selectedIndex--
 			if m.modelWizard.selectedIndex < 0 {
-				m.modelWizard.selectedIndex = len(modelProviderOptions) - 1
+				m.modelWizard.selectedIndex = len(m.modelWizard.providerOptions) - 1
 			}
 			return m, nil
 		case "down", "j":
 			m.modelWizard.selectedIndex++
-			if m.modelWizard.selectedIndex >= len(modelProviderOptions) {
+			if m.modelWizard.selectedIndex >= len(m.modelWizard.providerOptions) {
 				m.modelWizard.selectedIndex = 0
 			}
 			return m, nil
@@ -199,11 +143,7 @@ func (m appModel) applyModelWizardSelection() appModel {
 	}
 
 	option := m.modelWizard.selectedProvider()
-	cfg, err := m.configForProvider(option.id)
-	if err != nil {
-		m.modelWizard.err = err.Error()
-		return m
-	}
+	cfg := m.configForProfile(option.profile)
 	if selected := m.modelWizard.selectedModelName(); selected != "" {
 		cfg.Model = selected
 	}
@@ -276,11 +216,11 @@ func (m appModel) renderProviderStep() string {
 		wizardTitleStyle.Render("Model provider"),
 		"Choose a provider:",
 	}
-	maxItems := clampInt(m.currentLayout().transcriptHeight-7, 1, len(modelProviderOptions))
+	maxItems := clampInt(m.currentLayout().transcriptHeight-7, 1, len(m.modelWizard.providerOptions))
 	start := maxInt(0, m.modelWizard.selectedIndex-maxItems+1)
-	end := minInt(len(modelProviderOptions), start+maxItems)
+	end := minInt(len(m.modelWizard.providerOptions), start+maxItems)
 	for i := start; i < end; i++ {
-		option := modelProviderOptions[i]
+		option := m.modelWizard.providerOptions[i]
 		text := "  " + option.label + "  " + option.description
 		if i == m.modelWizard.selectedIndex {
 			text = selectedProviderStyle.Render("> " + option.label + "  " + option.description)
@@ -289,8 +229,8 @@ func (m appModel) renderProviderStep() string {
 		}
 		lines = append(lines, text)
 	}
-	if maxItems < len(modelProviderOptions) {
-		lines = append(lines, fmt.Sprintf("(%d/%d) Use up/down to scroll", m.modelWizard.selectedIndex+1, len(modelProviderOptions)))
+	if maxItems < len(m.modelWizard.providerOptions) {
+		lines = append(lines, fmt.Sprintf("(%d/%d) Use up/down to scroll", m.modelWizard.selectedIndex+1, len(m.modelWizard.providerOptions)))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -298,17 +238,8 @@ func (m appModel) renderProviderStep() string {
 // renderModelConfirmStep 渲染 provider 配置确认步骤和错误提示。
 func (m appModel) renderModelConfirmStep() string {
 	option := m.modelWizard.selectedProvider()
-	cfg, err := m.configForProvider(option.id)
+	cfg := m.configForProfile(option.profile)
 	lines := []string{wizardTitleStyle.Render("Confirm model")}
-	if err != nil {
-		lines = append(lines,
-			fmt.Sprintf("provider: %s", option.label),
-			labelErrorStyle.Render(err.Error()),
-			"Set the missing environment variable, then press enter again.",
-			"Press b to choose another provider.",
-		)
-		return strings.Join(lines, "\n")
-	}
 
 	lines = append(lines,
 		fmt.Sprintf("provider: %s", cfg.Provider),

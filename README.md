@@ -106,7 +106,7 @@ go run ./cmd/agent -s <session-id>
 这是当前的依赖装配点。
 
 当前会注册的持久化目录:
-- `.paw/model.json`
+- `~/.paw/config.json`（全局配置，模型通过 `modelProfiles` 和 `activeModelProfileId` 保存；缺失时自动创建）
 - `.paw/settings.json`
 - `.paw/exports/`
 - `.paw/sessions/<sessionID>/`
@@ -158,7 +158,7 @@ enabled = true
 当前 slash command 由 `internal/ui/bubble/command_registry.go` 统一注册，`/help` 会显示参数提示。
 
 - `/help`
-- `/model [status|custom|deepseek|<model>]`
+- `/model [status|<profile>|<model>]`
 - `/export [filename]`
 - `/setting`
 - `/sessions`
@@ -174,7 +174,7 @@ enabled = true
 - `/exit` / `/quit`
 
 当前行为:
-- `/model` 无参数时打开 provider → model 向导；同一 provider 配置多个模型时可在第二步选择具体模型；`status` 输出当前配置和可用模型；`custom`、`deepseek` 直接切换并持久化到 `.paw/model.json`；输入已配置的模型名也可切换活动模型；`deepseek` 需要 `DEEPSEEK_API_KEY`
+- `/model` 无参数时打开 profile → model 二级向导；profile 和模型列表全部来自全局 `~/.paw/config.json`；没有活动 profile/model 时默认使用配置中第一个 profile 的第一个模型；`status` 输出当前配置和可用模型；输入已配置的 profile ID、provider、名称或模型名即可切换并持久化活动选择
 - `/export` 默认导出到 `.paw/exports/conversation-YYYY-MM-DD-HHMMSS.txt`，也支持工作区内显式路径；导出文件权限为 `0600`
 - `/setting` 通过向导保存默认 subagent context/run mode，以及 context meter 的位置和 token limit
 - `/sessions` 列出所有历史会话（ID 前缀、日期、文件大小、首条消息），选中条目后直接恢复该会话
@@ -425,45 +425,50 @@ main (-subagent-worker)
 模型连接参数。
 
 字段:
+- `ProfileID` / `ProfileName`
+- `Provider` / `Transport`
 - `APIBaseURL`
 - `APIPath`
 - `APIKey`
+- `APIKeyEnvName`
 - `Model`
 - `Models`
 - `Timeout`
-- `RetryCount`（持久化为 `.paw/model.json` 的 `retry_count`；网络请求失败或遇到 408/425/429/5xx 时的重试次数，默认 3）
-- `Stream`（持久化为 `.paw/model.json` 的 `stream`；默认 `true`，只有显式写为 `false` 才使用非流式请求）
+- `RetryCount`（持久化为 `~/.paw/config.json` 当前 model profile 的 `retryCount`；网络请求失败或遇到 408/425/429/5xx 时的重试次数，默认 3）
+- `Stream`（持久化为 `~/.paw/config.json` 当前 model profile 的 `stream`；默认 `true`，只有显式写为 `false` 才使用非流式请求）
 
 ##### `LoadConfigFromEnv() (Config, error)`
 
 职责:
 - 从环境变量构造 `Config`
 - 启动时按顺序尝试加载当前目录下的 `.env`、`.env.local`
-- 读取并合并 `.paw/model.json` 中的持久化 provider 配置
-- 在同一个 OpenAI-compatible endpoint 下持久化多个模型名，`Model` 表示当前活动模型
+- 读取 `~/.paw/config.json` 中 `modelProfiles` 的 profile；优先使用 `activeModelProfileId`，没有时使用第一个 profile
+- 每个 profile 的 `models` 是 `/model` 向导的二级模型列表；profile 没有单独的 `model` 时使用 `models[0]`
+- 文件不存在时自动创建空的 `config.json`，不会注入 provider、API URL、API path 或模型名；保存时保留其他全局配置字段
 - `.env.local` 会覆盖 `.env` 和外部 shell 继承进来的同名变量
 
-当前环境变量:
-- `NEWAPI_API_KEY`
-- `DEEPSEEK_API_KEY`
+配置示例（字段名可按 profile 实际情况调整）：
 
-当前 provider:
-- `custom`
-- `deepseek`
+```json
+{
+  "schemaVersion": 1,
+  "modelProfiles": [
+    {
+      "id": "local-gateway",
+      "name": "Local Gateway",
+      "provider": "local-gateway",
+      "transport": "openai-compatible",
+      "baseUrl": "http://127.0.0.1:8317/v1",
+      "apiPath": "/chat/completions",
+      "apiKeyEnvName": "LOCAL_GATEWAY_API_KEY",
+      "models": ["model-a", "model-b"]
+    }
+  ],
+  "activeModelProfileId": "local-gateway"
+}
+```
 
-当前默认值（`custom`）:
-- base url: `http://localhost:8317/v1`
-- path: `/chat/completions`
-- model: `gpt-5.5`
-- 缺省 key: `sk-dummy`
-- stream: `true`
-
-当前默认值（`deepseek`）:
-- base url: `https://api.deepseek.com`
-- path: `/chat/completions`
-- model: `deepseek-chat`
-- 缺少 `DEEPSEEK_API_KEY` 时启动会报错
-- 流式调用会优先尝试 DeepSeek Anthropic Messages 端点以尽早获得 `message_start.usage.input_tokens`；如果 Anthropic 建流失败，则回退到 `/chat/completions` OpenAI-compatible 流。
+代码只负责按 `transport` 和 profile 中的 endpoint 发请求；不会内置 provider、API URL、API path、API key 或模型名。
 
 #### 请求/响应类型
 
@@ -1454,16 +1459,14 @@ Manager 同文件中实现了三个供 LLM 调用的工具：
 ### 环境变量
 
 ```bash
-export NEWAPI_API_KEY=your_key
-# 或者
-export DEEPSEEK_API_KEY=your_key
+export LOCAL_GATEWAY_API_KEY=your_key
 ```
 
 也支持在项目根目录放一个不会进 git 的 `.env.local`：
 
 ```bash
 cp .env.local.example .env.local
-# 默认示例使用 NEWAPI_API_KEY；如果你的网关兼容旧变量名，也可以改用 DEEPSEEK_API_KEY
+# `apiKeyEnvName` 应与 profile 中声明的环境变量名一致
 ```
 
 ### 单轮模式

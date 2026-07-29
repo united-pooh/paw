@@ -8,102 +8,103 @@ import (
 	"time"
 )
 
-func TestLoadConfigFromEnvDefaultsToCustom(t *testing.T) {
+func TestLoadConfigFromEnvUsesFirstConfiguredProfileAndModel(t *testing.T) {
 	restoreCWD := chdirForTest(t, t.TempDir())
 	defer restoreCWD()
 
-	unsetEnvNamesForTest(t, apiKeyEnvNames...)
-
-	cfg, err := LoadConfigFromEnv()
-	if err != nil {
-		t.Fatalf("LoadConfigFromEnv() error = %v", err)
-	}
-
-	if cfg.Provider != ProviderCustom {
-		t.Fatalf("cfg.Provider = %q, want %q", cfg.Provider, ProviderCustom)
-	}
-	if cfg.APIBaseURL != CustomAPIBaseURL {
-		t.Fatalf("cfg.APIBaseURL = %q, want %q", cfg.APIBaseURL, CustomAPIBaseURL)
-	}
-	if cfg.APIPath != CustomChatPath {
-		t.Fatalf("cfg.APIPath = %q, want %q", cfg.APIPath, CustomChatPath)
-	}
-	if cfg.Model != CustomDefaultModel {
-		t.Fatalf("cfg.Model = %q, want %q", cfg.Model, CustomDefaultModel)
-	}
-	if cfg.APIKey != CustomDefaultAPIKey {
-		t.Fatalf("cfg.APIKey = %q, want %q", cfg.APIKey, CustomDefaultAPIKey)
-	}
-	if cfg.RetryCount != defaultRetryCountValue {
-		t.Fatalf("cfg.RetryCount = %d, want %d", cfg.RetryCount, defaultRetryCountValue)
-	}
-}
-
-func TestLoadConfigFromEnvUsesPersistedProvider(t *testing.T) {
-	restoreCWD := chdirForTest(t, t.TempDir())
-	defer restoreCWD()
-
-	unsetEnvNamesForTest(t, apiKeyEnvNames...)
-	if err := os.WriteFile(".env.local", []byte(CustomAPIKeyEnvName+"=custom-secret\n"), 0o600); err != nil {
-		t.Fatalf("write .env.local: %v", err)
-	}
-
-	persisted := persistedModelConfig{
-		Provider:      ProviderCustom,
-		APIBaseURL:    CustomAPIBaseURL,
-		APIPath:       CustomChatPath,
-		APIKeyEnvName: CustomAPIKeyEnvName,
-		Model:         legacyCustomModel,
-		Timeout:       42,
-	}
-	writePersistedModelConfig(t, persisted)
-
-	cfg, err := LoadConfigFromEnv()
-	if err != nil {
-		t.Fatalf("LoadConfigFromEnv() error = %v", err)
-	}
-
-	if cfg.Provider != ProviderCustom {
-		t.Fatalf("cfg.Provider = %q, want %q", cfg.Provider, ProviderCustom)
-	}
-	if cfg.APIKey != "custom-secret" {
-		t.Fatalf("cfg.APIKey = %q, want %q", cfg.APIKey, "custom-secret")
-	}
-	if cfg.Model != CustomDefaultModel {
-		t.Fatalf("cfg.Model = %q, want %q", cfg.Model, CustomDefaultModel)
-	}
-	if cfg.Timeout != 42*time.Second {
-		t.Fatalf("cfg.Timeout = %v, want %v", cfg.Timeout, 42*time.Second)
-	}
-}
-
-func TestLoadConfigFromEnvUsesPersistedModelList(t *testing.T) {
-	restoreCWD := chdirForTest(t, t.TempDir())
-	defer restoreCWD()
-
-	unsetEnvNamesForTest(t, apiKeyEnvNames...)
-	if err := os.WriteFile(".env.local", []byte(CustomAPIKeyEnvName+"=custom-secret\n"), 0o600); err != nil {
-		t.Fatalf("write .env.local: %v", err)
-	}
-	writePersistedModelConfig(t, persistedModelConfig{
-		Provider:      ProviderCustom,
-		APIBaseURL:    "https://example.test/v1",
-		APIPath:       CustomChatPath,
-		APIKeyEnvName: CustomAPIKeyEnvName,
-		Model:         "gpt-5.6-luna",
-		Models:        []string{"gpt-5.6-sol", "gpt-5.6-luna"},
+	writePawConfig(t, map[string]any{
+		"schemaVersion": 1,
+		"modelProfiles": []any{
+			map[string]any{
+				"id":             "gateway",
+				"name":           "Gateway",
+				"provider":       "gateway",
+				"transport":      "openai-compatible",
+				"baseUrl":        "http://gateway.test/v1",
+				"apiPath":        "/chat/completions",
+				"apiKey":         "profile-secret",
+				"models":         []string{"first-model", "second-model"},
+				"timeoutSeconds": 42,
+			},
+			map[string]any{
+				"id":       "other",
+				"provider": "other",
+				"model":    "other-model",
+			},
+		},
 	})
 
 	cfg, err := LoadConfigFromEnv()
 	if err != nil {
 		t.Fatalf("LoadConfigFromEnv() error = %v", err)
 	}
-	if cfg.APIBaseURL != "https://example.test/v1" || cfg.Model != "gpt-5.6-luna" {
-		t.Fatalf("cfg endpoint/model = %q/%q", cfg.APIBaseURL, cfg.Model)
+	if cfg.ProfileID != "gateway" || cfg.Provider != "gateway" {
+		t.Fatalf("profile/provider = %q/%q, want gateway/gateway", cfg.ProfileID, cfg.Provider)
 	}
-	want := []string{"gpt-5.6-sol", "gpt-5.6-luna"}
+	if cfg.Model != "first-model" {
+		t.Fatalf("cfg.Model = %q, want first-model", cfg.Model)
+	}
+	if cfg.APIBaseURL != "http://gateway.test/v1" || cfg.APIPath != "/chat/completions" {
+		t.Fatalf("endpoint = %q%s, want configured endpoint", cfg.APIBaseURL, cfg.APIPath)
+	}
+	if cfg.APIKey != "profile-secret" {
+		t.Fatalf("cfg.APIKey = %q, want profile-secret", cfg.APIKey)
+	}
+	if cfg.Timeout != 42*time.Second {
+		t.Fatalf("cfg.Timeout = %v, want 42s", cfg.Timeout)
+	}
+	want := []string{"first-model", "second-model"}
 	if got := AvailableModels(cfg); len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("AvailableModels(cfg) = %#v, want %#v", got, want)
+	}
+}
+
+func TestLoadConfigFromEnvUsesActiveProfileWhenSet(t *testing.T) {
+	restoreCWD := chdirForTest(t, t.TempDir())
+	defer restoreCWD()
+
+	writePawConfig(t, map[string]any{
+		"modelProfiles": []any{
+			map[string]any{"id": "first", "model": "first-model"},
+			map[string]any{
+				"id":       "second",
+				"provider": "second-provider",
+				"model":    "selected-model",
+				"models":   []string{"selected-model", "other-model"},
+			},
+		},
+		"activeModelProfileId": "second",
+	})
+
+	cfg, err := LoadConfigFromEnv()
+	if err != nil {
+		t.Fatalf("LoadConfigFromEnv() error = %v", err)
+	}
+	if cfg.ProfileID != "second" || cfg.Model != "selected-model" {
+		t.Fatalf("active profile/model = %q/%q, want second/selected-model", cfg.ProfileID, cfg.Model)
+	}
+}
+
+func TestLoadConfigFromEnvUsesEnvironmentKeyConfiguredByProfile(t *testing.T) {
+	restoreCWD := chdirForTest(t, t.TempDir())
+	defer restoreCWD()
+
+	t.Setenv("GATEWAY_API_KEY", "environment-secret")
+	writePawConfig(t, map[string]any{
+		"modelProfiles": []any{map[string]any{
+			"id":            "gateway",
+			"apiKey":        "profile-secret",
+			"apiKeyEnvName": "GATEWAY_API_KEY",
+			"model":         "model",
+		}},
+	})
+
+	cfg, err := LoadConfigFromEnv()
+	if err != nil {
+		t.Fatalf("LoadConfigFromEnv() error = %v", err)
+	}
+	if cfg.APIKey != "environment-secret" {
+		t.Fatalf("cfg.APIKey = %q, want environment-secret", cfg.APIKey)
 	}
 }
 
@@ -111,14 +112,12 @@ func TestLoadConfigFromEnvHonorsExplicitNonStreamingConfig(t *testing.T) {
 	restoreCWD := chdirForTest(t, t.TempDir())
 	defer restoreCWD()
 
-	unsetEnvNamesForTest(t, apiKeyEnvNames...)
-	writePersistedModelConfig(t, persistedModelConfig{
-		Provider:      ProviderCustom,
-		APIBaseURL:    "https://example.test/v1",
-		APIPath:       CustomChatPath,
-		APIKeyEnvName: CustomAPIKeyEnvName,
-		Model:         CustomDefaultModel,
-		Stream:        boolPointer(false),
+	writePawConfig(t, map[string]any{
+		"modelProfiles": []any{map[string]any{
+			"id":     "gateway",
+			"model":  "model",
+			"stream": false,
+		}},
 	})
 
 	cfg, err := LoadConfigFromEnv()
@@ -133,181 +132,146 @@ func TestLoadConfigFromEnvHonorsExplicitNonStreamingConfig(t *testing.T) {
 	}
 }
 
-func TestLoadConfigFromEnvDotEnvLocalOverridesProcessEnv(t *testing.T) {
+func TestLoadConfigFromEnvMissingConfigCreatesEmptyDocument(t *testing.T) {
 	restoreCWD := chdirForTest(t, t.TempDir())
 	defer restoreCWD()
 
-	unsetEnvNamesForTest(t, apiKeyEnvNames...)
-	if err := os.Setenv(DeepSeekAPIKeyEnvName, "process-secret"); err != nil {
-		t.Fatalf("set env: %v", err)
+	if _, err := LoadConfigFromEnv(); err == nil {
+		t.Fatal("LoadConfigFromEnv() error = nil, want missing profile error")
 	}
-	t.Cleanup(func() {
-		_ = os.Unsetenv(DeepSeekAPIKeyEnvName)
-	})
-
-	if err := os.WriteFile(".env.local", []byte(DeepSeekAPIKeyEnvName+"=file-secret\n"), 0o600); err != nil {
-		t.Fatalf("write .env.local: %v", err)
-	}
-	writePersistedModelConfig(t, persistedModelConfig{
-		Provider:      ProviderDeepSeek,
-		APIBaseURL:    DeepSeekAPIBaseURL,
-		APIPath:       DeepSeekChatPath,
-		APIKeyEnvName: DeepSeekAPIKeyEnvName,
-		Model:         DeepSeekDefaultModel,
-	})
-
-	cfg, err := LoadConfigFromEnv()
+	configPath, err := modelConfigPath()
 	if err != nil {
-		t.Fatalf("LoadConfigFromEnv() error = %v", err)
+		t.Fatalf("modelConfigPath() error = %v", err)
 	}
-
-	if cfg.APIKey != "file-secret" {
-		t.Fatalf("cfg.APIKey = %q, want %q", cfg.APIKey, "file-secret")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read auto-created config: %v", err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatalf("unmarshal auto-created config: %v", err)
+	}
+	if _, ok := document["modelProfiles"]; !ok {
+		t.Fatalf("auto-created config has no modelProfiles: %#v", document)
 	}
 }
 
-func TestLoadConfigFromEnvCustomProviderDoesNotReuseDeepSeekKey(t *testing.T) {
+func TestSaveModelConfigPersistsSelectedProfileWithoutAPIKey(t *testing.T) {
 	restoreCWD := chdirForTest(t, t.TempDir())
 	defer restoreCWD()
 
-	unsetEnvNamesForTest(t, apiKeyEnvNames...)
-	if err := os.WriteFile(".env.local", []byte(DeepSeekAPIKeyEnvName+"=deepseek-secret\n"), 0o600); err != nil {
-		t.Fatalf("write .env.local: %v", err)
-	}
-
-	persisted := persistedModelConfig{
-		Provider:      ProviderCustom,
-		APIBaseURL:    CustomAPIBaseURL,
-		APIPath:       CustomChatPath,
-		APIKeyEnvName: CustomAPIKeyEnvName,
-		Model:         CustomDefaultModel,
-	}
-	writePersistedModelConfig(t, persisted)
-
-	cfg, err := LoadConfigFromEnv()
-	if err != nil {
-		t.Fatalf("LoadConfigFromEnv() error = %v", err)
-	}
-
-	if cfg.Provider != ProviderCustom {
-		t.Fatalf("cfg.Provider = %q, want %q", cfg.Provider, ProviderCustom)
-	}
-	if cfg.APIKey != CustomDefaultAPIKey {
-		t.Fatalf("cfg.APIKey = %q, want %q", cfg.APIKey, CustomDefaultAPIKey)
-	}
-}
-
-func TestLoadConfigFromEnvCustomProviderAllowsPlaceholderKey(t *testing.T) {
-	restoreCWD := chdirForTest(t, t.TempDir())
-	defer restoreCWD()
-
-	unsetEnvNamesForTest(t, apiKeyEnvNames...)
-	if err := os.WriteFile(".env.local", []byte(CustomAPIKeyEnvName+"=sk-dummy\n"), 0o600); err != nil {
-		t.Fatalf("write .env.local: %v", err)
-	}
-
-	writePersistedModelConfig(t, persistedModelConfig{
-		Provider:      ProviderCustom,
-		APIBaseURL:    CustomAPIBaseURL,
-		APIPath:       CustomChatPath,
-		APIKeyEnvName: CustomAPIKeyEnvName,
-		Model:         CustomDefaultModel,
+	writePawConfig(t, map[string]any{
+		"modelProfiles": []any{map[string]any{
+			"id":    "gateway",
+			"name":  "Gateway",
+			"model": "old-model",
+		}},
+		"activeModelProfileId": "gateway",
 	})
 
-	cfg, err := LoadConfigFromEnv()
-	if err != nil {
-		t.Fatalf("LoadConfigFromEnv() error = %v", err)
-	}
-	if cfg.Provider != ProviderCustom {
-		t.Fatalf("cfg.Provider = %q, want %q", cfg.Provider, ProviderCustom)
-	}
-	if cfg.APIKey != CustomDefaultAPIKey {
-		t.Fatalf("cfg.APIKey = %q, want %q", cfg.APIKey, CustomDefaultAPIKey)
-	}
-}
-
-func TestSaveModelConfigPersistsProviderSelection(t *testing.T) {
-	restoreCWD := chdirForTest(t, t.TempDir())
-	defer restoreCWD()
-
-	cfg := Config{
-		Provider:      ProviderCustom,
-		APIBaseURL:    CustomAPIBaseURL,
-		APIPath:       CustomChatPath,
-		APIKey:        "should-not-be-persisted",
-		APIKeyEnvName: CustomAPIKeyEnvName,
-		Model:         CustomDefaultModel,
+	if err := SaveModelConfig(Config{
+		ProfileID:     "gateway",
+		ProfileName:   "Gateway",
+		Provider:      "gateway",
+		Transport:     "openai-compatible",
+		APIBaseURL:    "http://gateway.test/v1",
+		APIPath:       "/chat/completions",
+		APIKey:        "do-not-persist",
+		APIKeyEnvName: "GATEWAY_API_KEY",
+		Model:         "new-model",
+		Models:        []string{"new-model", "other-model"},
 		Timeout:       75 * time.Second,
 		RetryCount:    5,
-	}
-	if err := SaveModelConfig(cfg); err != nil {
+	}); err != nil {
 		t.Fatalf("SaveModelConfig() error = %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(".", modelConfigPath))
-	if err != nil {
-		t.Fatalf("read persisted config: %v", err)
+	document := readPawConfig(t)
+	profiles, ok := document["modelProfiles"].([]any)
+	if !ok || len(profiles) != 1 {
+		t.Fatalf("modelProfiles = %#v, want one profile", document["modelProfiles"])
 	}
-
-	var persisted map[string]any
-	if err := json.Unmarshal(data, &persisted); err != nil {
-		t.Fatalf("unmarshal persisted config: %v", err)
+	profile := profiles[0].(map[string]any)
+	if profile["model"] != "new-model" || profile["provider"] != "gateway" {
+		t.Fatalf("saved profile = %#v, want selected values", profile)
 	}
-
-	if _, ok := persisted["api_key"]; ok {
-		t.Fatalf("persisted config unexpectedly contains api_key")
+	if _, ok := profile["apiKey"]; ok {
+		t.Fatalf("saved profile unexpectedly contains apiKey")
 	}
-	if got := persisted["provider"]; got != ProviderCustom {
-		t.Fatalf("persisted provider = %#v, want %q", got, ProviderCustom)
-	}
-	if got := persisted["timeout_seconds"]; got != float64(75) {
-		t.Fatalf("persisted timeout_seconds = %#v, want %d", got, 75)
-	}
-	if got := persisted["retry_count"]; got != float64(5) {
-		t.Fatalf("persisted retry_count = %#v, want %d", got, 5)
-	}
-	models, ok := persisted["models"].([]any)
-	if !ok || len(models) != 1 || models[0] != CustomDefaultModel {
-		t.Fatalf("persisted models = %#v, want [%q]", persisted["models"], CustomDefaultModel)
+	if profile["timeoutSeconds"] != float64(75) || profile["retryCount"] != float64(5) {
+		t.Fatalf("saved retry/timeout = %#v/%#v", profile["retryCount"], profile["timeoutSeconds"])
 	}
 }
 
-func TestLoadConfigFromEnvErrorsWhenConfiguredKeyMissing(t *testing.T) {
+func TestSaveModelConfigPreservesOtherGlobalConfigFields(t *testing.T) {
 	restoreCWD := chdirForTest(t, t.TempDir())
 	defer restoreCWD()
 
-	unsetEnvNamesForTest(t, apiKeyEnvNames...)
-	writePersistedModelConfig(t, persistedModelConfig{
-		Provider:      ProviderDeepSeek,
-		APIBaseURL:    DeepSeekAPIBaseURL,
-		APIPath:       DeepSeekChatPath,
-		APIKeyEnvName: DeepSeekAPIKeyEnvName,
-		Model:         DeepSeekDefaultModel,
+	writePawConfig(t, map[string]any{
+		"appearance": "system",
+		"ui":         map[string]any{"contextLimitTokens": float64(1048576)},
+		"modelProfiles": []any{map[string]any{
+			"id":           "gateway",
+			"credentialId": "default",
+			"model":        "old-model",
+		}},
+		"activeModelProfileId": "gateway",
 	})
 
-	if _, err := LoadConfigFromEnv(); err == nil {
-		t.Fatalf("LoadConfigFromEnv() error = nil, want missing key error")
+	if err := SaveModelConfig(Config{ProfileID: "gateway", Model: "new-model"}); err != nil {
+		t.Fatalf("SaveModelConfig() error = %v", err)
+	}
+	document := readPawConfig(t)
+	if document["appearance"] != "system" {
+		t.Fatalf("appearance = %#v, want preserved value", document["appearance"])
+	}
+	ui := document["ui"].(map[string]any)
+	if ui["contextLimitTokens"] != float64(1048576) {
+		t.Fatalf("ui = %#v, want preserved value", ui)
+	}
+	profile := document["modelProfiles"].([]any)[0].(map[string]any)
+	if profile["credentialId"] != "default" || profile["model"] != "new-model" {
+		t.Fatalf("profile = %#v, want credential preserved and model changed", profile)
 	}
 }
 
-func writePersistedModelConfig(t *testing.T, persisted persistedModelConfig) {
+func writePawConfig(t *testing.T, document map[string]any) {
 	t.Helper()
-
-	if err := os.MkdirAll(filepath.Dir(modelConfigPath), 0o755); err != nil {
-		t.Fatalf("mkdir .paw: %v", err)
-	}
-	data, err := json.Marshal(persisted)
+	configPath, err := modelConfigPath()
 	if err != nil {
-		t.Fatalf("marshal persisted config: %v", err)
+		t.Fatalf("modelConfigPath() error = %v", err)
 	}
-	if err := os.WriteFile(modelConfigPath, append(data, '\n'), 0o600); err != nil {
-		t.Fatalf("write persisted config: %v", err)
+	data, err := json.Marshal(document)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
 	}
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatalf("mkdir config directory: %v", err)
+	}
+	if err := os.WriteFile(configPath, append(data, '\n'), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+}
+
+func readPawConfig(t *testing.T) map[string]any {
+	t.Helper()
+	configPath, err := modelConfigPath()
+	if err != nil {
+		t.Fatalf("modelConfigPath() error = %v", err)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	return document
 }
 
 func chdirForTest(t *testing.T, dir string) func() {
 	t.Helper()
-
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
@@ -315,29 +279,10 @@ func chdirForTest(t *testing.T, dir string) func() {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("chdir to temp dir: %v", err)
 	}
-
+	t.Setenv("HOME", filepath.Join(dir, "home"))
 	return func() {
 		if err := os.Chdir(wd); err != nil {
 			t.Fatalf("restore cwd: %v", err)
 		}
-	}
-}
-
-func unsetEnvNamesForTest(t *testing.T, keys ...string) {
-	t.Helper()
-
-	for _, key := range keys {
-		value, exists := os.LookupEnv(key)
-		if err := os.Unsetenv(key); err != nil {
-			t.Fatalf("unset env %s: %v", key, err)
-		}
-
-		t.Cleanup(func() {
-			if exists {
-				_ = os.Setenv(key, value)
-				return
-			}
-			_ = os.Unsetenv(key)
-		})
 	}
 }

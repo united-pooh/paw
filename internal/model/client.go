@@ -170,7 +170,7 @@ func (c *Client) ApplyModelConfig(cfg Config) error {
 	if strings.TrimSpace(cfg.APIKey) == "" {
 		cfg.APIKey = loadAPIKeyByEnvName(cfg.APIKeyEnvName, nil)
 	}
-	cfg.APIKey = sanitizeAPIKey(cfg.Provider, cfg.APIKey)
+	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()

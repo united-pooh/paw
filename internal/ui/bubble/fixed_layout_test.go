@@ -239,8 +239,8 @@ func TestModalListsKeepSelectionVisibleInShortTranscript(t *testing.T) {
 	model.relayout()
 
 	model.modelWizard = newModelWizard(model.currentModelConfig())
-	model.modelWizard.selectedIndex = len(modelProviderOptions) - 1
-	if got := ansi.Strip(model.renderProviderStep()); !strings.Contains(got, modelProviderOptions[len(modelProviderOptions)-1].label) {
+	model.modelWizard.selectedIndex = len(model.modelWizard.providerOptions) - 1
+	if got := ansi.Strip(model.renderProviderStep()); !strings.Contains(got, model.modelWizard.providerOptions[len(model.modelWizard.providerOptions)-1].label) {
 		t.Fatalf("short model modal hid selected provider:\n%s", got)
 	}
 

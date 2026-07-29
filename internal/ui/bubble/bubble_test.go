@@ -187,17 +187,45 @@ func (c *fakeModelConfigController) SaveModelConfig(cfg modelcfg.Config) error {
 	return nil
 }
 
-// newTestModel 创建带默认 custom 配置的测试用 appModel。
+// newTestModel 创建带默认配置 profile 的测试用 appModel。
 func newTestModel(runner Runner) appModel {
 	return newModel(context.Background(), runner, "session-1", &fakeModelConfigController{
 		current: modelcfg.Config{
-			Provider:      modelcfg.ProviderCustom,
-			APIBaseURL:    modelcfg.CustomAPIBaseURL,
-			APIPath:       modelcfg.CustomChatPath,
+			ProfileID:     "gateway",
+			ProfileName:   "Gateway",
+			Provider:      "gateway",
+			Transport:     "openai-compatible",
+			APIBaseURL:    "http://127.0.0.1:8317/v1",
+			APIPath:       "/chat/completions",
 			APIKey:        "custom-secret",
-			APIKeyEnvName: modelcfg.CustomAPIKeyEnvName,
-			Model:         modelcfg.CustomDefaultModel,
-			Timeout:       time.Minute,
+			APIKeyEnvName: "TEST_API_KEY",
+			Model:         "model-a",
+			Models:        []string{"model-a"},
+			Profiles: []modelcfg.Profile{
+				{
+					ID:            "gateway",
+					Name:          "Gateway",
+					Provider:      "gateway",
+					Transport:     "openai-compatible",
+					APIBaseURL:    "http://127.0.0.1:8317/v1",
+					APIPath:       "/chat/completions",
+					APIKey:        "custom-secret",
+					APIKeyEnvName: "TEST_API_KEY",
+					Model:         "model-a",
+					Models:        []string{"model-a"},
+				},
+				{
+					ID:         "backup",
+					Name:       "Backup",
+					Provider:   "backup",
+					Transport:  "openai-compatible",
+					APIBaseURL: "https://backup.example/v1",
+					APIPath:    "/chat/completions",
+					Model:      "model-b",
+					Models:     []string{"model-b"},
+				},
+			},
+			Timeout: time.Minute,
 		},
 	}, nil, nil, nil, newTerminalCursorAnchor())
 }
@@ -315,7 +343,7 @@ func TestHelpComesFromCommandRegistry(t *testing.T) {
 	body := model.transcript[len(model.transcript)-1].body
 	for _, want := range []string{
 		"/help - show available commands",
-		"/model [status|custom|deepseek|<model>] - open the model switcher",
+		"/model [status|<profile>|<model>] - open the model switcher",
 		"/export [filename] - export the current conversation",
 		"/setting - open settings wizard",
 		"/subagent [--fork|--empty] [--background|--sync] <prompt> - launch a subagent",
@@ -466,16 +494,23 @@ func TestStreamMATraceCommandWithoutPromptShowsUsage(t *testing.T) {
 
 // TestModelCommandVariantsKeepWizardAndShortcuts verifies wizard and direct subcommands coexist.
 func TestModelCommandVariantsKeepWizardAndShortcuts(t *testing.T) {
-	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
 	controller := &fakeModelConfigController{
 		current: modelcfg.Config{
-			Provider:      modelcfg.ProviderCustom,
-			APIBaseURL:    modelcfg.CustomAPIBaseURL,
-			APIPath:       modelcfg.CustomChatPath,
+			ProfileID:     "gateway",
+			ProfileName:   "Gateway",
+			Provider:      "gateway",
+			Transport:     "openai-compatible",
+			APIBaseURL:    "http://127.0.0.1:8317/v1",
+			APIPath:       "/chat/completions",
 			APIKey:        "custom-secret",
-			APIKeyEnvName: modelcfg.CustomAPIKeyEnvName,
-			Model:         modelcfg.CustomDefaultModel,
-			Timeout:       time.Minute,
+			APIKeyEnvName: "TEST_API_KEY",
+			Model:         "model-a",
+			Models:        []string{"model-a"},
+			Profiles: []modelcfg.Profile{
+				{ID: "gateway", Name: "Gateway", Provider: "gateway", Transport: "openai-compatible", APIBaseURL: "http://127.0.0.1:8317/v1", APIPath: "/chat/completions", APIKey: "custom-secret", Model: "model-a", Models: []string{"model-a"}},
+				{ID: "backup", Name: "Backup", Provider: "backup", Transport: "openai-compatible", APIBaseURL: "https://backup.example/v1", APIPath: "/chat/completions", APIKey: "backup-secret", Model: "model-b", Models: []string{"model-b"}},
+			},
+			Timeout: time.Minute,
 		},
 	}
 	model := newModel(context.Background(), &fakeRunner{}, "session-1", controller, nil, nil, nil, newTerminalCursorAnchor())
@@ -484,23 +519,23 @@ func TestModelCommandVariantsKeepWizardAndShortcuts(t *testing.T) {
 	if !handled || cmd != nil {
 		t.Fatalf("/model status handled/cmd = %v/%v", handled, cmd)
 	}
-	if got := model.transcript[len(model.transcript)-1].body; !strings.Contains(got, "provider=custom") {
+	if got := model.transcript[len(model.transcript)-1].body; !strings.Contains(got, "provider=gateway") {
 		t.Fatalf("status body = %q", got)
 	}
 
-	handled, cmd = model.handleCommand("/model custom")
+	handled, cmd = model.handleCommand("/model gateway")
 	if !handled || cmd != nil {
-		t.Fatalf("/model custom handled/cmd = %v/%v", handled, cmd)
+		t.Fatalf("/model gateway handled/cmd = %v/%v", handled, cmd)
 	}
-	if len(controller.applied) != 1 || controller.applied[0].Provider != modelcfg.ProviderCustom {
-		t.Fatalf("custom applied configs = %#v", controller.applied)
+	if len(controller.applied) != 1 || controller.applied[0].Provider != "gateway" {
+		t.Fatalf("gateway applied configs = %#v", controller.applied)
 	}
 
-	handled, cmd = model.handleCommand("/model deepseek")
+	handled, cmd = model.handleCommand("/model backup")
 	if !handled || cmd != nil {
-		t.Fatalf("/model deepseek handled/cmd = %v/%v", handled, cmd)
+		t.Fatalf("/model backup handled/cmd = %v/%v", handled, cmd)
 	}
-	if len(controller.applied) != 2 || controller.applied[1].Provider != modelcfg.ProviderDeepSeek {
+	if len(controller.applied) != 2 || controller.applied[1].Provider != "backup" {
 		t.Fatalf("applied configs = %#v", controller.applied)
 	}
 }
@@ -511,11 +546,11 @@ func TestModelCommandVariantsKeepWizardAndShortcuts(t *testing.T) {
 func TestModelCommandSwitchesConfiguredModel(t *testing.T) {
 	controller := &fakeModelConfigController{
 		current: modelcfg.Config{
-			Provider:      modelcfg.ProviderCustom,
+			Provider:      "gateway",
 			APIBaseURL:    "https://example.test/v1",
-			APIPath:       modelcfg.CustomChatPath,
+			APIPath:       "/chat/completions",
 			APIKey:        "custom-secret",
-			APIKeyEnvName: modelcfg.CustomAPIKeyEnvName,
+			APIKeyEnvName: "TEST_API_KEY",
 			Model:         "gpt-5.6-sol",
 			Models:        []string{"gpt-5.6-sol", "gpt-5.6-luna"},
 			Timeout:       time.Minute,
@@ -539,11 +574,11 @@ func TestModelCommandSwitchesConfiguredModel(t *testing.T) {
 func TestModelWizardSelectsConfiguredModelUnderProvider(t *testing.T) {
 	controller := &fakeModelConfigController{
 		current: modelcfg.Config{
-			Provider:      modelcfg.ProviderCustom,
+			Provider:      "gateway",
 			APIBaseURL:    "https://example.test/v1",
-			APIPath:       modelcfg.CustomChatPath,
+			APIPath:       "/chat/completions",
 			APIKey:        "custom-secret",
-			APIKeyEnvName: modelcfg.CustomAPIKeyEnvName,
+			APIKeyEnvName: "TEST_API_KEY",
 			Model:         "gpt-5.6-sol",
 			Models:        []string{"gpt-5.6-sol", "gpt-5.6-luna"},
 			Timeout:       time.Minute,
@@ -2172,7 +2207,7 @@ func TestViewClearsTerminalCursorAnchorWhenWizardOpen(t *testing.T) {
 		t.Fatalf("initial anchor = %#v/%v", position, ok)
 	}
 
-	model.modelWizard = newModelWizard(modelcfg.Config{Provider: modelcfg.ProviderCustom})
+	model.modelWizard = newModelWizard(modelcfg.Config{Provider: "gateway"})
 	_ = model.View()
 
 	position, ok := anchor.consume()
@@ -2790,23 +2825,24 @@ func TestModelCommandOpensArrowSelectableProviderWizard(t *testing.T) {
 
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
 	model = next.(appModel)
-	if model.modelWizard.selectedProvider().id != modelcfg.ProviderDeepSeek {
+	if model.modelWizard.selectedProvider().id != "backup" {
 		t.Fatalf("selected provider = %q", model.modelWizard.selectedProvider().id)
 	}
 }
 
-// TestModelWizardAppliesDeepSeekConfig 验证选择 deepseek 会保存并应用 DeepSeek 配置。
-func TestModelWizardAppliesDeepSeekConfig(t *testing.T) {
-	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+// TestModelWizardAppliesConfiguredProfile 验证向导会保存并应用配置文件中的 profile。
+func TestModelWizardAppliesConfiguredProfile(t *testing.T) {
 	controller := &fakeModelConfigController{
 		current: modelcfg.Config{
-			Provider:      modelcfg.ProviderCustom,
-			APIBaseURL:    modelcfg.CustomAPIBaseURL,
-			APIPath:       modelcfg.CustomChatPath,
-			APIKey:        "custom-secret",
-			APIKeyEnvName: modelcfg.CustomAPIKeyEnvName,
-			Model:         modelcfg.CustomDefaultModel,
-			Timeout:       time.Minute,
+			ProfileID: "gateway",
+			Provider:  "gateway",
+			Model:     "gateway-model",
+			Models:    []string{"gateway-model"},
+			Profiles: []modelcfg.Profile{
+				{ID: "gateway", Name: "Gateway", Provider: "gateway", Transport: "openai-compatible", APIBaseURL: "https://gateway.example/v1", APIPath: "/chat/completions", APIKey: "gateway-secret", Model: "gateway-model", Models: []string{"gateway-model"}},
+				{ID: "anthropic", Name: "Anthropic Gateway", Provider: "anthropic-gateway", Transport: "anthropic-compatible", APIBaseURL: "https://anthropic.example", APIPath: "/v1/messages", APIKey: "anthropic-secret", APIKeyEnvName: "ANTHROPIC_API_KEY", Model: "anthropic-model", Models: []string{"anthropic-model"}},
+			},
+			Timeout: time.Minute,
 		},
 	}
 	model := newModel(context.Background(), &fakeRunner{}, "session-1", controller, nil, nil, nil, newTerminalCursorAnchor())
@@ -2825,24 +2861,26 @@ func TestModelWizardAppliesDeepSeekConfig(t *testing.T) {
 		t.Fatalf("applied/saved = %#v / %#v", controller.applied, controller.saved)
 	}
 	cfg := controller.applied[0]
-	if cfg.Provider != modelcfg.ProviderDeepSeek || cfg.APIBaseURL != modelcfg.DeepSeekAPIBaseURL || cfg.APIPath != modelcfg.DeepSeekChatPath || cfg.Model != modelcfg.DeepSeekDefaultModel {
+	if cfg.Provider != "anthropic-gateway" || cfg.APIBaseURL != "https://anthropic.example" || cfg.APIPath != "/v1/messages" || cfg.Model != "anthropic-model" {
 		t.Fatalf("applied cfg = %#v", cfg)
 	}
-	if cfg.APIKey != "deepseek-secret" || cfg.APIKeyEnvName != modelcfg.DeepSeekAPIKeyEnvName {
+	if cfg.APIKey != "anthropic-secret" || cfg.APIKeyEnvName != "ANTHROPIC_API_KEY" {
 		t.Fatalf("applied key/env = %q/%q", cfg.APIKey, cfg.APIKeyEnvName)
 	}
 }
 
-// TestModelWizardAllowsCustomConfigWithoutAPIKey 验证 custom provider 在没有真实 API key 时使用默认 dummy key。
-func TestModelWizardAllowsCustomConfigWithoutAPIKey(t *testing.T) {
+// TestModelWizardUsesConfiguredAPIKey 验证向导使用配置文件中的 API key。
+func TestModelWizardUsesConfiguredAPIKey(t *testing.T) {
 	controller := &fakeModelConfigController{
 		current: modelcfg.Config{
-			Provider:      modelcfg.ProviderDeepSeek,
-			APIBaseURL:    modelcfg.DeepSeekAPIBaseURL,
-			APIPath:       modelcfg.DeepSeekChatPath,
-			APIKey:        "deepseek-secret",
-			APIKeyEnvName: modelcfg.DeepSeekAPIKeyEnvName,
-			Model:         modelcfg.DeepSeekDefaultModel,
+			ProfileID:     "gateway",
+			Provider:      "gateway",
+			APIBaseURL:    "https://gateway.example/v1",
+			APIPath:       "/chat/completions",
+			APIKey:        "gateway-secret",
+			APIKeyEnvName: "GATEWAY_API_KEY",
+			Model:         "gateway-model",
+			Models:        []string{"gateway-model"},
 			Timeout:       time.Minute,
 		},
 	}
@@ -2861,29 +2899,29 @@ func TestModelWizardAllowsCustomConfigWithoutAPIKey(t *testing.T) {
 	if len(controller.applied) != 1 {
 		t.Fatalf("applied = %#v", controller.applied)
 	}
-	if got := controller.applied[0]; got.Provider != modelcfg.ProviderCustom || got.APIKey != modelcfg.CustomDefaultAPIKey {
+	if got := controller.applied[0]; got.Provider != "gateway" || got.APIKey != "gateway-secret" {
 		t.Fatalf("applied cfg = %#v", got)
 	}
 }
 
 // TestModelWizardDoesNotApplyConfigWhenSaveFails 验证配置持久化失败时不会继续应用配置。
 func TestModelWizardDoesNotApplyConfigWhenSaveFails(t *testing.T) {
-	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
 	controller := &fakeModelConfigController{
 		current: modelcfg.Config{
-			Provider:      modelcfg.ProviderCustom,
-			APIBaseURL:    modelcfg.CustomAPIBaseURL,
-			APIPath:       modelcfg.CustomChatPath,
+			Provider:      "gateway",
+			APIBaseURL:    "https://gateway.example/v1",
+			APIPath:       "/chat/completions",
 			APIKey:        "custom-secret",
-			APIKeyEnvName: modelcfg.CustomAPIKeyEnvName,
-			Model:         modelcfg.CustomDefaultModel,
+			APIKeyEnvName: "GATEWAY_API_KEY",
+			Model:         "gateway-model",
+			Models:        []string{"gateway-model"},
 			Timeout:       time.Minute,
 		},
 		saveErr: errors.New("disk full"),
 	}
 	model := newModel(context.Background(), &fakeRunner{}, "session-1", controller, nil, nil, nil, newTerminalCursorAnchor())
 	model.modelWizard = newModelWizard(controller.current)
-	model.modelWizard.selectedIndex = 1
+	model.modelWizard.selectedIndex = 0
 
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
@@ -4884,11 +4922,11 @@ func TestRenderDockStatusLine_ContainsModelTokenAndFree(t *testing.T) {
 		t.Errorf("status dock = %q, want frontier progress glyphs", dock)
 	}
 	// 模型名现在在 header，不在 dock。
-	if strings.Contains(dock, "gpt-5.5") {
+	if strings.Contains(dock, "model-a") {
 		t.Errorf("status dock = %q, model should be in header not dock", dock)
 	}
 	header := model.renderHeaderLine(98)
-	if !strings.Contains(header, "gpt-5.5") {
+	if !strings.Contains(header, "model-a") {
 		t.Errorf("header = %q, want current model", header)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"paw/internal/skill"
 	"paw/internal/subagent"
 	"paw/internal/ui"
+	"strings"
 	"time"
 )
 
@@ -142,29 +143,17 @@ type modelProviderOption struct {
 	id          string
 	label       string
 	description string
-}
-
-// modelProviderOptions 是当前 TUI 支持切换的 provider 列表。
-var modelProviderOptions = []modelProviderOption{
-	{
-		id:          model.ProviderCustom,
-		label:       "custom",
-		description: "Local or custom OpenAI-compatible endpoint",
-	},
-	{
-		id:          model.ProviderDeepSeek,
-		label:       "deepseek",
-		description: "DeepSeek official OpenAI-compatible endpoint",
-	},
+	profile     model.Profile
 }
 
 // modelWizard 保存 /model 交互向导的临时 UI 状态。
 type modelWizard struct {
-	step          modelWizardStep
-	selectedIndex int
-	selectedModel int
-	modelOptions  []string
-	err           string
+	step            modelWizardStep
+	providerOptions []modelProviderOption
+	selectedIndex   int
+	selectedModel   int
+	modelOptions    []string
+	err             string
 }
 
 type settingWizardStep int
@@ -201,31 +190,58 @@ type contextMeterAnimation struct {
 
 // newModelWizard 根据当前配置创建 provider 选择向导，并默认选中当前 provider。
 func newModelWizard(current model.Config) *modelWizard {
+	options := modelProviderOptionsForConfig(current)
 	selected := 0
-	for i, option := range modelProviderOptions {
-		if option.id == current.Provider {
+	for i, option := range options {
+		if option.id == current.ProfileID || option.id == current.Provider {
 			selected = i
 			break
 		}
 	}
 	return &modelWizard{
-		step:          modelWizardProvider,
-		selectedIndex: selected,
+		step:            modelWizardProvider,
+		providerOptions: options,
+		selectedIndex:   selected,
 	}
+}
+
+func modelProviderOptionsForConfig(current model.Config) []modelProviderOption {
+	profiles := model.ConfiguredProfiles(current)
+	options := make([]modelProviderOption, 0, len(profiles))
+	for _, profile := range profiles {
+		label := strings.TrimSpace(profile.Name)
+		if label == "" {
+			label = strings.TrimSpace(profile.Provider)
+		}
+		if label == "" {
+			label = strings.TrimSpace(profile.ID)
+		}
+		description := strings.TrimSpace(profile.Transport)
+		if description == "" {
+			description = strings.TrimSpace(profile.APIBaseURL)
+		}
+		options = append(options, modelProviderOption{
+			id:          profile.ID,
+			label:       label,
+			description: description,
+			profile:     profile,
+		})
+	}
+	return options
 }
 
 // selectedProvider 返回当前选中的 provider，并在索引越界时进行纠正。
 func (w *modelWizard) selectedProvider() modelProviderOption {
-	if w == nil || len(modelProviderOptions) == 0 {
+	if w == nil || len(w.providerOptions) == 0 {
 		return modelProviderOption{}
 	}
 	if w.selectedIndex < 0 {
 		w.selectedIndex = 0
 	}
-	if w.selectedIndex >= len(modelProviderOptions) {
-		w.selectedIndex = len(modelProviderOptions) - 1
+	if w.selectedIndex >= len(w.providerOptions) {
+		w.selectedIndex = len(w.providerOptions) - 1
 	}
-	return modelProviderOptions[w.selectedIndex]
+	return w.providerOptions[w.selectedIndex]
 }
 
 func (w *modelWizard) selectedModelName() string {

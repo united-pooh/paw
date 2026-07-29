@@ -250,11 +250,8 @@ func (c *Client) streamOpenAIMessage(ctx context.Context, cfg Config, messages [
 }
 
 func shouldAttemptAnthropicStream(cfg Config) bool {
-	baseURL := strings.ToLower(strings.TrimSpace(cfg.APIBaseURL))
-	apiPath := strings.ToLower(strings.TrimSpace(cfg.APIPath))
-	return normalizeProvider(cfg.Provider) == ProviderDeepSeek ||
-		strings.Contains(baseURL, "/anthropic") ||
-		strings.HasSuffix(apiPath, "/messages")
+	transport := strings.ToLower(strings.TrimSpace(cfg.Transport))
+	return strings.Contains(transport, "anthropic")
 }
 
 const (

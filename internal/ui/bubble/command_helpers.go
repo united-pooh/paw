@@ -31,21 +31,25 @@ func (m *appModel) handleModelCommand(invocation string) tea.Cmd {
 			title: "model",
 			body:  fmt.Sprintf("provider=%s base=%s path=%s model=%s models=%s retries=%d key=%s", cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, strings.Join(model.AvailableModels(cfg), ","), cfg.RetryCount, cfg.APIKeyEnvName),
 		})
-	case model.ProviderCustom, model.ProviderDeepSeek:
-		cfg, err := m.configForProvider(args)
-		if err != nil {
-			m.addEntry(transcriptEntry{kind: entryError, title: "model", body: err.Error()})
-			return nil
-		}
-		m.applyModelConfigFromCommand(cfg)
 	default:
 		cfg := m.currentModelConfig()
-		if !model.SupportsModel(cfg, args) {
-			m.addEntry(transcriptEntry{kind: entryError, title: "model", body: fmt.Sprintf("unknown model command: %s", args)})
-			return nil
+		profiles := model.ConfiguredProfiles(cfg)
+		for _, profile := range profiles {
+			if args == profile.ID || args == profile.Name || args == profile.Provider {
+				selected := profile.Config()
+				selected.Profiles = profiles
+				m.applyModelConfigFromCommand(selected)
+				return nil
+			}
+			if model.SupportsModel(profile.Config(), args) {
+				selected := profile.Config()
+				selected.Profiles = profiles
+				selected.Model = args
+				m.applyModelConfigFromCommand(selected)
+				return nil
+			}
 		}
-		cfg.Model = args
-		m.applyModelConfigFromCommand(cfg)
+		m.addEntry(transcriptEntry{kind: entryError, title: "model", body: fmt.Sprintf("unknown model command: %s", args)})
 	}
 	return nil
 }
