@@ -22,32 +22,33 @@ type transcriptRenderCacheEntry struct {
 }
 
 type transcriptRenderCacheKey struct {
-	kind                entryKind
-	renderMode          transcriptRenderMode
-	title               string
-	body                string
-	inputTokens         string
-	color               string
-	isError             bool
-	toolUseID           string
-	toolName            string
-	toolStatus          string
-	toolTarget          string
-	toolResult          string
-	toolResultLen       int
-	toolExpanded        bool
-	toolFocused         bool
-	toolHovered         bool
-	toolResultOnly      bool
-	citations           string
-	width               int
-	version             int
-	bodyLen             int
-	citationCount       int
-	createdAtUnixNS     int64
-	createdAtIsZero     bool
-	toolStartedAtUnixNS int64
-	toolElapsedSecond   int64
+	kind                 entryKind
+	renderMode           transcriptRenderMode
+	title                string
+	body                 string
+	inputTokens          string
+	color                string
+	isError              bool
+	toolUseID            string
+	toolName             string
+	toolStatus           string
+	toolTarget           string
+	toolResult           string
+	toolResultLen        int
+	toolExpanded         bool
+	toolFocused          bool
+	toolHovered          bool
+	toolResultOnly       bool
+	citations            string
+	width                int
+	version              int
+	bodyLen              int
+	citationCount        int
+	createdAtUnixNS      int64
+	createdAtIsZero      bool
+	toolStartedAtUnixNS  int64
+	toolFinishedAtUnixNS int64
+	toolElapsedSecond    int64
 }
 
 func (m *appModel) ensureAssistantStreamEntry() {
@@ -300,6 +301,7 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 		entry.toolResult = content
 		entry.toolExpanded = isError
 		entry.toolResultOnly = false
+		entry.toolFinishedAt = m.animationNow()
 		touchTranscriptEntry(entry)
 		m.recordTranscriptEntryActivity(idx, true)
 		m.refreshViewport()
@@ -368,8 +370,8 @@ func toolEntryMatchesResult(entry transcriptEntry, result toolEntryResult) bool 
 	if !isToolTransaction(entry) || toolEntryStatus(entry) != "running" {
 		return false
 	}
-	if entry.toolUseID != "" || result.toolUseID != "" {
-		return entry.toolUseID != "" && entry.toolUseID == result.toolUseID
+	if entry.toolUseID != "" && result.toolUseID != "" {
+		return entry.toolUseID == result.toolUseID
 	}
 	return strings.EqualFold(entry.toolName, result.name)
 }
@@ -378,8 +380,8 @@ func toolCitationMatchesResult(running, result toolCitation) bool {
 	if running.status != "running" {
 		return false
 	}
-	if running.toolUseID != "" || result.toolUseID != "" {
-		return running.toolUseID != "" && running.toolUseID == result.toolUseID
+	if running.toolUseID != "" && result.toolUseID != "" {
+		return running.toolUseID == result.toolUseID
 	}
 	return strings.EqualFold(running.name, result.name)
 }
@@ -512,6 +514,7 @@ func (m *appModel) markRunningToolsError(err error) {
 		entry.isError = true
 		entry.toolResult = message
 		entry.toolExpanded = true
+		entry.toolFinishedAt = m.animationNow()
 		touchTranscriptEntry(entry)
 		changed = true
 	}
@@ -566,28 +569,29 @@ func (m *appModel) renderTranscriptContentAt(width int, showThinking bool, at ti
 
 func transcriptRenderKey(entry transcriptEntry, width int, at time.Time) transcriptRenderCacheKey {
 	key := transcriptRenderCacheKey{
-		kind:                entry.kind,
-		renderMode:          entry.renderMode,
-		title:               entry.title,
-		inputTokens:         inputTokenSnapshot(entry.inputTokens),
-		color:               entry.color,
-		isError:             entry.isError,
-		toolUseID:           entry.toolUseID,
-		toolName:            entry.toolName,
-		toolStatus:          entry.toolStatus,
-		toolTarget:          entry.toolTarget,
-		toolResultLen:       len(entry.toolResult),
-		toolExpanded:        entry.toolExpanded,
-		toolFocused:         entry.toolFocused,
-		toolHovered:         entry.toolHovered,
-		toolResultOnly:      entry.toolResultOnly,
-		width:               width,
-		version:             entry.version,
-		bodyLen:             len(entry.body),
-		citationCount:       len(entry.citations),
-		createdAtUnixNS:     entry.createdAt.UnixNano(),
-		createdAtIsZero:     entry.createdAt.IsZero(),
-		toolStartedAtUnixNS: entry.toolStartedAt.UnixNano(),
+		kind:                 entry.kind,
+		renderMode:           entry.renderMode,
+		title:                entry.title,
+		inputTokens:          inputTokenSnapshot(entry.inputTokens),
+		color:                entry.color,
+		isError:              entry.isError,
+		toolUseID:            entry.toolUseID,
+		toolName:             entry.toolName,
+		toolStatus:           entry.toolStatus,
+		toolTarget:           entry.toolTarget,
+		toolResultLen:        len(entry.toolResult),
+		toolExpanded:         entry.toolExpanded,
+		toolFocused:          entry.toolFocused,
+		toolHovered:          entry.toolHovered,
+		toolResultOnly:       entry.toolResultOnly,
+		width:                width,
+		version:              entry.version,
+		bodyLen:              len(entry.body),
+		citationCount:        len(entry.citations),
+		createdAtUnixNS:      entry.createdAt.UnixNano(),
+		createdAtIsZero:      entry.createdAt.IsZero(),
+		toolStartedAtUnixNS:  entry.toolStartedAt.UnixNano(),
+		toolFinishedAtUnixNS: entry.toolFinishedAt.UnixNano(),
 	}
 	if toolEntryStatus(entry) == "running" {
 		key.toolElapsedSecond = toolElapsedSeconds(entry, at)
@@ -939,7 +943,9 @@ func renderCompactToolSummary(entry transcriptEntry, width int, at time.Time) st
 	iconText := icon + " "
 	statusSuffix := " · " + statusText
 	if status == "running" {
-		statusSuffix += " · " + formatToolElapsed(entry.toolStartedAt, at)
+		statusSuffix += " · " + formatRunningToolElapsed(entry.toolStartedAt, at)
+	} else if !entry.toolFinishedAt.IsZero() {
+		statusSuffix += " · " + formatToolDuration(entry.toolStartedAt, entry.toolFinishedAt)
 	}
 	nameWidth := lipgloss.Width(name)
 	baseWidth := lipgloss.Width(focusPrefix) + lipgloss.Width(iconText) + nameWidth
@@ -986,15 +992,76 @@ func renderCompactToolSummary(entry transcriptEntry, width int, at time.Time) st
 	return truncateStyledDisplayWidth(line.String(), width)
 }
 
-func formatToolElapsed(startedAt, at time.Time) string {
+func formatRunningToolElapsed(startedAt, at time.Time) string {
 	if startedAt.IsZero() || at.Before(startedAt) {
 		return "0s"
 	}
 	seconds := int(at.Sub(startedAt) / time.Second)
+	return formatWholeSeconds(seconds)
+}
+
+func formatToolDuration(startedAt, finishedAt time.Time) string {
+	if startedAt.IsZero() || finishedAt.Before(startedAt) {
+		return "0ms"
+	}
+	duration := finishedAt.Sub(startedAt)
+	if duration < time.Second {
+		return fmt.Sprintf("%dms", duration/time.Millisecond)
+	}
+	if duration < 10*time.Second {
+		return trimDurationTrailingZeros(fmt.Sprintf("%.2fs", duration.Seconds()))
+	}
+	if duration < time.Minute {
+		return trimDurationTrailingZeros(fmt.Sprintf("%.1fs", duration.Seconds()))
+	}
+	return formatWholeSeconds(int(duration / time.Second))
+}
+
+func formatWholeSeconds(seconds int) string {
 	if seconds < 60 {
 		return fmt.Sprintf("%ds", seconds)
 	}
-	return fmt.Sprintf("%dm%02ds", seconds/60, seconds%60)
+	minutes := seconds / 60
+	seconds %= 60
+	if minutes < 60 {
+		return fmt.Sprintf("%dm%ds", minutes, seconds)
+	}
+
+	hours := minutes / 60
+	minutes %= 60
+	if hours < 24 {
+		return formatDurationParts(
+			fmt.Sprintf("%dh", hours),
+			fmt.Sprintf("%dm", minutes),
+			fmt.Sprintf("%ds", seconds),
+		)
+	}
+
+	days := hours / 24
+	hours %= 24
+	return formatDurationParts(
+		fmt.Sprintf("%dd", days),
+		fmt.Sprintf("%dh", hours),
+		fmt.Sprintf("%dm", minutes),
+		fmt.Sprintf("%ds", seconds),
+	)
+}
+
+func formatDurationParts(parts ...string) string {
+	visible := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.HasPrefix(part, "0") {
+			continue
+		}
+		visible = append(visible, part)
+	}
+	return strings.Join(visible, " ")
+}
+
+func trimDurationTrailingZeros(value string) string {
+	value = strings.TrimRight(value, "0")
+	value = strings.TrimRight(value, ".")
+	return value
 }
 
 func truncateStyledDisplayWidth(text string, width int) string {

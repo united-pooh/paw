@@ -62,6 +62,7 @@ type transcriptEntry struct {
 	citations             []toolCitation
 	createdAt             time.Time
 	toolStartedAt         time.Time
+	toolFinishedAt        time.Time
 	version               int
 	renderMode            transcriptRenderMode
 }

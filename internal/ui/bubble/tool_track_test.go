@@ -43,6 +43,8 @@ func TestToolTrackUsesSemanticEntrySpacing(t *testing.T) {
 
 func TestToolTrackLifecycleAndResultVisibility(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
+	startedAt := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	model.cursorFrameAt = startedAt
 	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{
 		ID:    "call-1",
 		Name:  "Read",
@@ -65,6 +67,7 @@ func TestToolTrackLifecycleAndResultVisibility(t *testing.T) {
 		t.Fatalf("running transaction must remain single-line")
 	}
 
+	model.cursorFrameAt = startedAt.Add(13*time.Second + 100*time.Millisecond)
 	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{
 		ToolUseID: "call-1",
 		Name:      "Read",
@@ -74,6 +77,15 @@ func TestToolTrackLifecycleAndResultVisibility(t *testing.T) {
 	entry := model.transcript[entryIndex]
 	if entry.toolStatus != "ok" || entry.toolResult != "full README result" || entry.toolExpanded {
 		t.Fatalf("success entry = %#v", entry)
+	}
+	if len(model.transcript) != 1 {
+		t.Fatalf("completed transcript entries = %d, want the running row updated in place", len(model.transcript))
+	}
+	if !entry.toolFinishedAt.Equal(startedAt.Add(13*time.Second + 100*time.Millisecond)) {
+		t.Fatalf("finished at = %v, want %v", entry.toolFinishedAt, startedAt.Add(13*time.Second+100*time.Millisecond))
+	}
+	if rendered := ansi.Strip(renderTranscript(model.transcript, 80, true)); !strings.Contains(rendered, "✓ Read README.md · ok · 13.1s") {
+		t.Fatalf("completed duration = %q, want formatted actual duration", rendered)
 	}
 	if rendered := ansi.Strip(renderTranscript(model.transcript, 80, true)); strings.Contains(rendered, "full README result") {
 		t.Fatalf("collapsed success leaked result:\n%s", rendered)
@@ -114,6 +126,55 @@ func TestToolTrackLifecycleAndResultVisibility(t *testing.T) {
 	failed = next.(appModel)
 	if got := failed.transcript[0].toolStatus; got != "error" {
 		t.Fatalf("unfinished tool status = %q, want error", got)
+	}
+}
+
+func TestToolResultWithoutIDUpdatesRunningEntryByName(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{
+		ID:    "call-with-id",
+		Name:  "Read",
+		Input: []byte(`{"file_path":"README.md"}`),
+	}))
+	model = next.(appModel)
+	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{
+		Name:    "Read",
+		Content: "completed",
+	}))
+	model = next.(appModel)
+
+	if len(model.transcript) != 1 {
+		t.Fatalf("transcript entries = %d, want one row after ID-less result", len(model.transcript))
+	}
+	if entry := model.transcript[0]; entry.toolStatus != "ok" || entry.toolResult != "completed" {
+		t.Fatalf("updated entry = %#v, want completed running entry", entry)
+	}
+	rendered := ansi.Strip(renderTranscript(model.transcript, 80, true))
+	if strings.Contains(rendered, "running") || !strings.Contains(rendered, "✓ Read README.md · ok") {
+		t.Fatalf("rendered transcript = %q, want only completed row", rendered)
+	}
+}
+
+func TestToolDurationFormatting(t *testing.T) {
+	startedAt := time.Unix(0, 0)
+	tests := []struct {
+		name string
+		at   time.Time
+		want string
+	}{
+		{name: "milliseconds", at: startedAt.Add(338 * time.Millisecond), want: "338ms"},
+		{name: "short seconds", at: startedAt.Add(1*time.Second + 120*time.Millisecond), want: "1.12s"},
+		{name: "seconds", at: startedAt.Add(13*time.Second + 100*time.Millisecond), want: "13.1s"},
+		{name: "minutes", at: startedAt.Add(13*time.Minute + 52*time.Second), want: "13m52s"},
+		{name: "hours", at: startedAt.Add(1*time.Hour + 26*time.Minute + 13*time.Second), want: "1h 26m 13s"},
+		{name: "days", at: startedAt.Add(24*time.Hour + 52*time.Minute + 9*time.Second), want: "1d 52m 9s"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := formatToolDuration(startedAt, test.at); got != test.want {
+				t.Fatalf("duration = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 
