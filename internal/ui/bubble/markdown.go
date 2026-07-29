@@ -510,15 +510,14 @@ func markdownHeading(line string) (int, string, bool) {
 	return level, strings.TrimSpace(line[level+1:]), true
 }
 
-// renderMarkdownHeading 根据标题等级渲染标题，一级标题会额外带下划线。
+// renderMarkdownHeading 根据标题等级渲染标题，标题标记只用于解析，不显示在终端中；一级标题会额外带下划线。
 func renderMarkdownHeading(level int, text string, width int) string {
 	text = renderInlineMarkdown(text)
 	if level == 1 {
 		rule := strings.Repeat("─", maxInt(8, minInt(width, terminalCellWidth(text)+4)))
 		return markdownHeadingStyle.Render(text) + "\n" + markdownRuleStyle.Render(rule)
 	}
-	prefix := strings.Repeat("#", minInt(level, 3))
-	return markdownHeadingStyle.Render(prefix + " " + text)
+	return markdownHeadingStyle.Render(text)
 }
 
 // markdownListItem 解析无序和有序列表项，并统一转换为终端 bullet。

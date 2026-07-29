@@ -3369,16 +3369,35 @@ func TestAssistantEntryRendersMarkdown(t *testing.T) {
 		body:  "## Title\n\n- one with `code`\n- **bold item**\n\n> quoted **bold quote**\n\n```go\nfmt.Println(\"hi\")\n```",
 	}, 80)
 
-	for _, want := range []string{"agent >", "## Title", "•", "one", "code", "bold item", "│", "quoted", "bold quote", "go", "fmt.Println"} {
+	for _, want := range []string{"agent >", "Title", "•", "one", "code", "bold item", "│", "quoted", "bold quote", "go", "fmt.Println"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered markdown = %q, want %q", rendered, want)
 		}
+	}
+	if strings.Contains(ansi.Strip(rendered), "## Title") {
+		t.Fatalf("rendered markdown = %q, should not leave heading marker visible", rendered)
 	}
 	if strings.Contains(ansi.Strip(rendered), "code go") {
 		t.Fatalf("rendered markdown = %q, should not prefix language labels with code", rendered)
 	}
 	if strings.Contains(ansi.Strip(rendered), "**bold") {
 		t.Fatalf("rendered markdown = %q, should not leave bold markers visible", rendered)
+	}
+}
+
+func TestMarkdownHeadingsHideSyntaxMarkers(t *testing.T) {
+	const markdown = "# Level one\n## Level two\n### Level three\n#### Level four\n##### Level five\n###### Level six"
+	rendered := ansi.Strip(renderMarkdown(markdown, 80))
+
+	for _, line := range strings.Split(rendered, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			t.Fatalf("rendered heading = %q, should not expose Markdown marker", line)
+		}
+	}
+	for _, want := range []string{"Level one", "Level two", "Level three", "Level four", "Level five", "Level six"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered headings = %q, want %q", rendered, want)
+		}
 	}
 }
 
