@@ -7,12 +7,12 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"paw/internal/theme"
 )
 
 // colorRole 表示一个可复用的颜色语义角色。
 type colorRole string
 
-// 颜色语义角色常量。
 const (
 	colorTerminalBackground     colorRole = "terminal.background"
 	colorHeaderBackground       colorRole = "header.background"
@@ -61,81 +61,124 @@ const (
 	colorCursorTerminalBright   colorRole = "cursor.terminal.bright"
 )
 
-// ColorManager 集中管理 Bubble Tea TUI 的颜色调色板。
-type ColorManager struct {
-	palette map[colorRole]string
+type ColorManager struct{ palette theme.Palette }
+
+func NewColorManager(palette theme.Palette) ColorManager { return ColorManager{palette: palette} }
+
+func defaultColorManager() ColorManager {
+	item, _ := theme.ByID(theme.Default)
+	return NewColorManager(item.Colors)
 }
 
-// colorManager 是当前 TUI 使用的默认颜色管理器。
-var colorManager = NewColorManager()
+// Transitional style source. Rendering activates the appModel palette before
+// using legacy package-level styles; all persistent theme state remains on appModel.
+var colorManager = defaultColorManager()
 
-// NewColorManager 创建默认颜色管理器。
-func NewColorManager() ColorManager {
-	return ColorManager{
-		palette: map[colorRole]string{
-			colorTerminalBackground:     "#292C33",
-			colorHeaderBackground:       "#242830",
-			colorHeaderForeground:       "#F0E6D5",
-			colorLabelUser:              "#D98568",
-			colorLabelAssistant:         "#F0E6D5",
-			colorLabelTool:              "#A9C8B5",
-			colorLabelResult:            "#A9C8B5",
-			colorLabelSystem:            "#8E98A8",
-			colorLabelError:             "#EF7D7D",
-			colorBody:                   "#C9C2B7",
-			colorToolDetailBackground:   "#182830",
-			colorMarkdownHeading:        "229",
-			colorMarkdownRule:           "240",
-			colorMarkdownBullet:         "86",
-			colorMarkdownCodeForeground: "230",
-			colorMarkdownCodeBackground: "236",
-			colorMarkdownCodeBorder:     "62",
-			colorMarkdownLink:           "#76D5E8",
-			colorMarkdownQuote:          "245",
-			colorMarkdownQuoteBorder:    "244",
-			colorPanelBorder:            "#3B434C",
-			colorInputFocusedBorder:     "#76D5E8",
-			colorInputWaitingBorder:     "244",
-			colorInputMultilineBorder:   "214",
-			colorInputTerminal:          "#ff5ac8",
-			colorInputTokenCommand:      "#a77fbd",
-			colorInputTokenFile:         "#6fa878",
-			colorSelectedProviderBg:     "62",
-			colorSelectedProviderFg:     "231",
-			colorUnselectedProvider:     "245",
-			colorWizardTitle:            "229",
-			colorWizardBorder:           "62",
-			colorSelectionBackground:    "237",
-			colorSelectionForeground:    "255",
-			colorContextCache:           "214",
-			colorContextUsed:            "#76D5E8",
-			colorContextFree:            "#687581",
-			colorSignal:                 "#76D5E8",
-			colorWorktreeBackground:     "#182830",
-			colorWorktreeBorder:         "#355461",
-			colorWorktreeClean:          "#A9C8B5",
-			colorWorktreeDirty:          "#E5B66E",
-			colorWorktreeConflict:       "#EF7D7D",
-			colorCursorNormalBright:     "#9fffd3",
-			colorCursorTerminalBright:   "#ff8ddd",
-		},
-	}
-}
-
-// Hex 返回指定颜色角色对应的 lipgloss 颜色字符串。
 func (c ColorManager) Hex(role colorRole) string {
-	if c.palette == nil {
-		c = NewColorManager()
+	p := c.palette
+	var value string
+	switch role {
+	case colorTerminalBackground:
+		value = p.TerminalBackground
+	case colorHeaderBackground:
+		value = p.HeaderBackground
+	case colorHeaderForeground:
+		value = p.HeaderForeground
+	case colorLabelUser:
+		value = p.LabelUser
+	case colorLabelAssistant:
+		value = p.LabelAssistant
+	case colorLabelTool:
+		value = p.LabelTool
+	case colorLabelResult:
+		value = p.LabelResult
+	case colorLabelSystem:
+		value = p.LabelSystem
+	case colorLabelError:
+		value = p.LabelError
+	case colorBody:
+		value = p.Body
+	case colorToolDetailBackground:
+		value = p.ToolDetailBackground
+	case colorMarkdownHeading:
+		value = p.MarkdownHeading
+	case colorMarkdownRule:
+		value = p.MarkdownRule
+	case colorMarkdownBullet:
+		value = p.MarkdownBullet
+	case colorMarkdownCodeForeground:
+		value = p.MarkdownCodeForeground
+	case colorMarkdownCodeBackground:
+		value = p.MarkdownCodeBackground
+	case colorMarkdownCodeBorder:
+		value = p.MarkdownCodeBorder
+	case colorMarkdownLink:
+		value = p.MarkdownLink
+	case colorMarkdownQuote:
+		value = p.MarkdownQuote
+	case colorMarkdownQuoteBorder:
+		value = p.MarkdownQuoteBorder
+	case colorPanelBorder:
+		value = p.PanelBorder
+	case colorInputFocusedBorder:
+		value = p.InputFocusedBorder
+	case colorInputWaitingBorder:
+		value = p.InputWaitingBorder
+	case colorInputMultilineBorder:
+		value = p.InputMultilineBorder
+	case colorInputTerminal:
+		value = p.InputTerminal
+	case colorInputTokenCommand:
+		value = p.InputTokenCommand
+	case colorInputTokenFile:
+		value = p.InputTokenFile
+	case colorSelectedProviderBg:
+		value = p.SelectedProviderBG
+	case colorSelectedProviderFg:
+		value = p.SelectedProviderFG
+	case colorUnselectedProvider:
+		value = p.UnselectedProvider
+	case colorWizardTitle:
+		value = p.WizardTitle
+	case colorWizardBorder:
+		value = p.WizardBorder
+	case colorSelectionBackground:
+		value = p.SelectionBackground
+	case colorSelectionForeground:
+		value = p.SelectionForeground
+	case colorContextCache:
+		value = p.ContextCache
+	case colorContextUsed:
+		value = p.ContextUsed
+	case colorContextFree:
+		value = p.ContextFree
+	case colorSignal:
+		value = p.Signal
+	case colorWorktreeBackground:
+		value = p.WorktreeBackground
+	case colorWorktreeBorder:
+		value = p.WorktreeBorder
+	case colorWorktreeClean:
+		value = p.WorktreeClean
+	case colorWorktreeDirty:
+		value = p.WorktreeDirty
+	case colorWorktreeConflict:
+		value = p.WorktreeConflict
+	case colorCursorNormalBright:
+		value = p.CursorNormalBright
+	case colorCursorTerminalBright:
+		value = p.CursorTerminalBright
 	}
-	return strings.ToLower(c.palette[role])
+	if value == "" {
+		value = p.Body
+	}
+	return strings.ToLower(value)
 }
 
-// LipglossColor 返回指定颜色角色对应的 lipgloss.Color。
 func (c ColorManager) LipglossColor(role colorRole) lipgloss.Color {
 	return lipgloss.Color(c.Hex(role))
 }
 
-// CursorColor 根据亮度和终端模式生成光标颜色。
 func (c ColorManager) CursorColor(intensity float64, terminal bool) string {
 	bright := colorCursorNormalBright
 	if terminal {
@@ -144,45 +187,28 @@ func (c ColorManager) CursorColor(intensity float64, terminal bool) string {
 	return interpolateHexColor(c.Hex(colorTerminalBackground), c.Hex(bright), clamp01(intensity))
 }
 
-// cursorColor 使用当前默认颜色管理器生成光标颜色。
 func cursorColor(intensity float64, terminal bool) string {
 	return colorManager.CursorColor(intensity, terminal)
 }
 
-// interpolateHexColor 在两个十六进制颜色之间按比例插值。
 func interpolateHexColor(from, to string, amount float64) string {
 	fr, fg, fb := parseHexColor(from)
 	tr, tg, tb := parseHexColor(to)
-	return fmt.Sprintf(
-		"#%02x%02x%02x",
-		lerpInt(fr, tr, amount),
-		lerpInt(fg, tg, amount),
-		lerpInt(fb, tb, amount),
-	)
+	return fmt.Sprintf("#%02x%02x%02x", lerpInt(fr, tr, amount), lerpInt(fg, tg, amount), lerpInt(fb, tb, amount))
 }
 
-// parseHexColor 将 #rrggbb 字符串解析为 RGB 分量。
 func parseHexColor(color string) (int, int, int) {
 	color = strings.TrimPrefix(color, "#")
 	if len(color) != 6 {
 		return 0, 0, 0
 	}
-	r, err := strconv.ParseInt(color[0:2], 16, 0)
-	if err != nil {
-		return 0, 0, 0
-	}
-	g, err := strconv.ParseInt(color[2:4], 16, 0)
-	if err != nil {
-		return 0, 0, 0
-	}
-	b, err := strconv.ParseInt(color[4:6], 16, 0)
-	if err != nil {
+	r, e1 := strconv.ParseInt(color[0:2], 16, 0)
+	g, e2 := strconv.ParseInt(color[2:4], 16, 0)
+	b, e3 := strconv.ParseInt(color[4:6], 16, 0)
+	if e1 != nil || e2 != nil || e3 != nil {
 		return 0, 0, 0
 	}
 	return int(r), int(g), int(b)
 }
 
-// lerpInt 对整数颜色分量做线性插值。
-func lerpInt(from, to int, amount float64) int {
-	return from + int(float64(to-from)*amount+0.5)
-}
+func lerpInt(from, to int, amount float64) int { return from + int(float64(to-from)*amount+0.5) }

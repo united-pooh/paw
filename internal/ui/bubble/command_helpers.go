@@ -275,7 +275,7 @@ func (m appModel) statusText(sessionID string) string {
 	}
 	stats := m.contextStats()
 	return fmt.Sprintf(
-		"session: %s\nmodel: %s/%s\nsettings: context=%s run=%s meter=%s limit=%d\nqueue: %d\nsubagent tasks: %d\ncontext: used=%d cache=%d limit=%d",
+		"session: %s\nmodel: %s/%s\nsettings: context=%s run=%s meter=%s limit=%d\ntheme: %s\nqueue: %d\nsubagent tasks: %d\ncontext: used=%d cache=%d limit=%d",
 		sessionID,
 		modelCfg.Provider,
 		modelCfg.Model,
@@ -283,6 +283,7 @@ func (m appModel) statusText(sessionID string) string {
 		cfg.Subagent.DefaultRunMode,
 		cfg.UI.ContextMeterLocation,
 		cfg.UI.ContextLimitTokens,
+		m.theme.ID,
 		m.chatQueue.Len(),
 		taskCount,
 		stats.UsedTokens,

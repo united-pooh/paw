@@ -80,6 +80,7 @@ func (m appModel) currentLayout() tuiLayout {
 
 // View 渲染一个尺寸严格等于当前终端的单一固定外框。
 func (m appModel) View() string {
+	m.activateThemeStyles()
 	if !m.ready {
 		if m.cursorAnchor != nil {
 			m.cursorAnchor.clear()
@@ -102,8 +103,18 @@ func (m appModel) View() string {
 
 	inner := fitStyledRect(strings.Join(parts, "\n"), layout.contentWidth, layout.contentHeight)
 	view := renderHairlineFrame(inner, layout.frameWidth, layout.frameHeight)
+	view = paintStyledBackground(view, layout.frameWidth, layout.frameHeight, m.styles.Frame)
 	m.updateTerminalCursorAnchor(layout)
-	return fitStyledRect(view, layout.frameWidth, layout.frameHeight)
+	return view
+}
+
+func paintStyledBackground(text string, width, height int, style lipgloss.Style) string {
+	text = fitStyledRect(text, width, height)
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		lines[i] = style.Width(width).Render(fitStyledCellLine(line, width))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func renderHairlineFrame(inner string, width, height int) string {
@@ -168,6 +179,8 @@ func (m appModel) renderActiveModalBox(layout tuiLayout) string {
 		return ""
 	}
 	switch {
+	case m.themePicker != nil:
+		return m.renderThemePickerBox()
 	case m.modelWizard != nil:
 		return m.renderModelWizardBox()
 	case m.settingWizard != nil:
@@ -305,6 +318,7 @@ func (m appModel) shouldAnchorTextInputCursor() bool {
 	return m.ready &&
 		!m.isTerminalWorkRunning() &&
 		!m.toolInspectActive &&
+		m.themePicker == nil &&
 		m.modelWizard == nil &&
 		m.settingWizard == nil &&
 		m.sessionPicker == nil &&

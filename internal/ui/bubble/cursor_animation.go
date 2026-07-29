@@ -12,7 +12,7 @@ func (m *appModel) applyCursorAnimation() {
 		m.cursorFrameAt = time.Now()
 	}
 	intensity := cursorIntensityAt(cursorCycleOffset(m.cursorFrameAt))
-	m.input.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(cursorColor(intensity, m.isTerminalInputActive())))
+	m.input.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(m.styles.Colors.CursorColor(intensity, m.isTerminalInputActive())))
 	m.input.Cursor.Blink = intensity <= cursorHiddenThreshold
 }
 

@@ -1919,10 +1919,10 @@ func TestRenderInputBoxDoesNotDuplicatePrompt(t *testing.T) {
 	}
 }
 
-// TestTextareaInputDoesNotSetTextBackground 验证输入文字和当前行不设置背景色。
-func TestTextareaInputDoesNotSetTextBackground(t *testing.T) {
+// TestTextareaInputUsesThemeBackground verifies input cells are painted by the active theme.
+func TestTextareaInputUsesThemeBackground(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	noColor := lipgloss.NoColor{}
+	want := model.styles.Colors.LipglossColor(colorTerminalBackground)
 
 	for name, style := range map[string]lipgloss.Style{
 		"focused base":        model.input.FocusedStyle.Base,
@@ -1932,8 +1932,8 @@ func TestTextareaInputDoesNotSetTextBackground(t *testing.T) {
 		"blurred cursor line": model.input.BlurredStyle.CursorLine,
 		"blurred text":        model.input.BlurredStyle.Text,
 	} {
-		if got := style.GetBackground(); got != noColor {
-			t.Fatalf("%s background = %#v, want no color", name, got)
+		if got := style.GetBackground(); got != want {
+			t.Fatalf("%s background = %#v, want %#v", name, got, want)
 		}
 	}
 }
@@ -3184,7 +3184,7 @@ func TestContextMeterUsesDefaultLimitAndStableSegments(t *testing.T) {
 		t.Fatalf("renderContextBar() = %q, want 10 filled and 30 free cells", bar)
 	}
 	for role, want := range map[string]string{
-		fmt.Sprint(contextCacheStyle.GetForeground()): "214",
+		fmt.Sprint(contextCacheStyle.GetForeground()): colorManager.Hex(colorContextCache),
 		fmt.Sprint(contextUsedStyle.GetForeground()):  colorManager.Hex(colorContextUsed),
 		fmt.Sprint(contextFreeStyle.GetForeground()):  colorManager.Hex(colorContextFree),
 	} {

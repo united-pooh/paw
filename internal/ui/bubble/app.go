@@ -14,8 +14,9 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"paw/internal/settings"
 	"paw/internal/skill"
+	"paw/internal/theme"
 )
 
 // pipelinePollCmd 异步检测 .pipeline-workspace/ 并返回 pipelineStateUpdatedMsg。
@@ -47,13 +48,24 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 		key.WithHelp("ctrl+j", "newline"),
 	)
 	input.Cursor.SetMode(cursor.CursorStatic)
-	applyTextareaPlainBackground(&input)
 	input.Focus()
+
+	cfg := settings.DefaultConfig()
+	if settingsController != nil {
+		cfg = settings.Normalize(settingsController.CurrentSettings())
+	}
+	selectedTheme, ok := theme.ByID(cfg.UI.Theme)
+	if !ok {
+		selectedTheme, _ = theme.ByID(theme.Default)
+	}
+	styles := NewStyleSet(selectedTheme.Colors)
 
 	vp := viewport.New(80, 20)
 	vp.MouseWheelDelta = 1
 	skillRoot, _ := os.Getwd()
 	model := appModel{
+		theme:                 selectedTheme,
+		styles:                styles,
 		ctx:                   ctx,
 		runner:                runner,
 		sessionID:             sessionID,
@@ -80,22 +92,11 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 		historyIndex:          -1,
 		transcript:            nil,
 	}
+	model.activateThemeStyles()
+	model.applyTextareaTheme()
 	model.applyCursorAnimation()
 	model.refreshViewport()
 	return model
-}
-
-// applyTextareaPlainBackground 移除 textarea 默认的当前行背景色，让输入文字保持透明背景。
-func applyTextareaPlainBackground(input *textarea.Model) {
-	plain := lipgloss.NewStyle()
-	input.FocusedStyle.Base = plain
-	input.FocusedStyle.CursorLine = plain
-	input.FocusedStyle.Text = plain
-	input.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorMarkdownRule))
-	input.BlurredStyle.Base = plain
-	input.BlurredStyle.CursorLine = plain
-	input.BlurredStyle.Text = plain
-	input.BlurredStyle.Placeholder = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorMarkdownRule))
 }
 
 // Init 返回 Bubble Tea 启动时需要执行的初始命令。
@@ -351,6 +352,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		msg, rawMouseFragment = m.filterRawMouseEscapeKey(msg)
 		if rawMouseFragment {
 			return m, nil
+		}
+		if m.themePicker != nil {
+			return m.handleThemePickerKey(msg)
 		}
 		if m.settingWizard != nil {
 			return m.handleSettingWizardKey(msg)

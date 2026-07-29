@@ -10,6 +10,7 @@ import (
 	"paw/internal/settings"
 	"paw/internal/skill"
 	"paw/internal/subagent"
+	"paw/internal/theme"
 	"paw/internal/ui"
 	"strings"
 	"time"
@@ -314,6 +315,9 @@ type subagentTranscriptPreview struct {
 // appModel 是 Bubble Tea TUI 的唯一状态中心。
 type appModel struct {
 	ctx                       context.Context
+	theme                     theme.Theme
+	styles                    StyleSet
+	themePicker               *themePickerState
 	runner                    Runner
 	sessionID                 string
 	modelConfig               ModelConfigController

@@ -59,6 +59,15 @@ func NewCommandRegistry() *CommandRegistry {
 		},
 	})
 	registry.Register(Command{
+		Name:              "/theme",
+		Description:       "preview and select a color theme",
+		AllowWhileRunning: false,
+		Handler: func(m *appModel, invocation string) tea.Cmd {
+			m.openThemePicker()
+			return nil
+		},
+	})
+	registry.Register(Command{
 		Name:              "/setting",
 		Description:       "open settings wizard",
 		AllowWhileRunning: false,
