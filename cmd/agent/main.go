@@ -468,7 +468,7 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 	}
 
 	client := model.NewClient(cfg)
-	settingsController, err := settings.NewControllerInCwd()
+	settingsController, err := settings.NewDefaultController(nil)
 	if err != nil {
 		return nil, "", nil, nil, nil, nil, nil, err
 	}
