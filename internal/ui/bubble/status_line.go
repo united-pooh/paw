@@ -30,6 +30,26 @@ func (m appModel) isAgentWorking() bool {
 	return m.isGenerating || m.isModelWorkRunning()
 }
 
+// startTokenRippleExit 保留当前 Ripple 周期的剩余部分，让回答结束时波纹
+// 继续向右移动并淡出，而不是随 working 状态切换瞬间消失。
+func (m *appModel) startTokenRippleExit(now time.Time) {
+	if m == nil || now.IsZero() {
+		return
+	}
+	remaining := tokenRippleCycle - tokenRipplePhase(now)
+	if remaining <= 0 {
+		remaining = tokenRippleCycle
+	}
+	m.tokenRippleHideAt = now.Add(remaining)
+}
+
+func (m appModel) tokenRippleActive(now time.Time) bool {
+	if m.isAgentWorking() {
+		return true
+	}
+	return !m.tokenRippleHideAt.IsZero() && now.Before(m.tokenRippleHideAt)
+}
+
 // updateWaveAmp 在 cursorFrameMsg 每帧推进振幅过渡（指针接收者，写持久模型）。
 // 目标态由 isAgentWorking 派生（流式 + 工具调用期间均满振幅），翻转时记录起点
 // amp 与时刻，用 easeOutCubic 在 400ms 内缓动。结果写入 waveAmpCurrent 供渲染只读。
@@ -169,11 +189,14 @@ func (m appModel) renderTokenFrontier(width, used, limit int) string {
 			cells[i] = contextFreeStyle.Render("─")
 		}
 	}
-	if !m.isAgentWorking() || usedCells >= width {
+	if usedCells >= width {
 		return strings.Join(cells, "")
 	}
 
 	now := m.animationNow()
+	if !m.tokenRippleActive(now) {
+		return strings.Join(cells, "")
+	}
 	phase := tokenRipplePhase(now)
 	head := tokenRippleHead(usedCells, width, phase)
 	fade := tokenRippleFade(phase)

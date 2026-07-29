@@ -371,6 +371,7 @@ type appModel struct {
 	waveAmpStartedAt          time.Time // 振幅目标态确立时刻，用于缓动进度
 	waveAmpFrom               float64   // 过渡起点振幅，反向退场时从此值缓降
 	waveAmpCurrent            float64   // 当前振幅（cursorFrameMsg 每帧更新，渲染只读）
+	tokenRippleHideAt         time.Time // 回答完成后 Ripple 退场的截止时刻
 	worktreeCWD               string
 	worktree                  worktreeSnapshot
 	worktreeReader            worktreeStatusReader

@@ -3523,6 +3523,26 @@ func TestMarkdownTableSeparatorVariantsDoNotLeak(t *testing.T) {
 	}
 }
 
+func TestMarkdownTableWrapsLongCellsWithoutTruncating(t *testing.T) {
+	const input = "| 模型 | 说明 |\n| --- | --- |\n| Kimi k1.5 | 《Kimi k1.5: Scaling Reinforcement Learning with LLMs》论文详细介绍了其 RL 训练技术，并与 DeepSeek-R1 对比 |\n| Kimi K2 | 大规模 RL + 智能体数据合成 |"
+	const width = 48
+
+	rendered := ansi.Strip(renderMarkdown(input, width))
+	if strings.Contains(rendered, "…") {
+		t.Fatalf("wrapped table still contains truncation: %q", rendered)
+	}
+	content := strings.NewReplacer("┌", "", "─", "", "┬", "", "┐", "", "├", "", "┼", "", "┤", "", "└", "", "┴", "", "┘", "", "│", "", " ", "", "\n", "").Replace(rendered)
+	for _, want := range []string{"《Kimi k1.5", "Scaling", "Reinforcement", "DeepSeek-R1", "智能体数据合成"} {
+		if !strings.Contains(rendered, want) && !strings.Contains(content, strings.ReplaceAll(want, " ", "")) {
+			t.Fatalf("wrapped table = %q, want full cell content containing %q", rendered, want)
+		}
+	}
+	assertRenderedLineWidthsAtMost(t, rendered, width)
+	if lines := strings.Split(rendered, "\n"); len(lines) <= 7 {
+		t.Fatalf("wrapped table lines = %d, want long cells to occupy multiple lines:\n%s", len(lines), rendered)
+	}
+}
+
 func TestMarkdownCodeBlockWrapsLongLinesWithinWidth(t *testing.T) {
 	const width = 26
 	rendered := renderMarkdown("```go\nfmt.Println(\"这是很长很长的中文内容\") // abcdefghijklmnopqrstuvwxyz\n```\n", width)

@@ -85,6 +85,35 @@ func TestTokenFrontierRippleContinuesPastRightEdge(t *testing.T) {
 	}
 }
 
+func TestTokenFrontierRippleSurvivesTurnCompletion(t *testing.T) {
+	model := newTestModel(&fakeRunner{stats: loop.ContextStats{UsedTokens: 40000, LimitTokens: 100000}})
+	if !model.queryGuard.StartModel() {
+		t.Fatal("StartModel failed")
+	}
+	model.syncRunningFlags()
+	model.isGenerating = true
+	completedAt := time.Unix(0, int64(tokenRippleTravel))
+	model.cursorFrameAt = completedAt
+
+	next, _ := model.Update(turnFinishedMsg{})
+	model = next.(appModel)
+	if model.isAgentWorking() {
+		t.Fatal("model should be idle after turn completion")
+	}
+
+	model.cursorFrameAt = completedAt.Add(tokenRippleExit / 2)
+	exiting := ansi.Strip(model.renderTokenFrontier(80, 40000, 100000))
+	if !strings.ContainsAny(exiting, "░▒▓") {
+		t.Fatalf("completed-turn ripple disappeared during exit: %q", exiting)
+	}
+
+	model.cursorFrameAt = completedAt.Add(tokenRippleExit + time.Millisecond)
+	settled := ansi.Strip(model.renderTokenFrontier(80, 40000, 100000))
+	if strings.ContainsAny(settled, "░▒▓█") {
+		t.Fatalf("completed-turn ripple remained after exit: %q", settled)
+	}
+}
+
 func TestStatusLineWorkingDuringToolCall(t *testing.T) {
 	model := newTestModel(&fakeRunner{stats: loop.ContextStats{UsedTokens: 45000, LimitTokens: 100000}})
 	if !model.queryGuard.StartModel() {

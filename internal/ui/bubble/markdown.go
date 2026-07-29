@@ -239,7 +239,7 @@ func renderMarkdownTable(lines []string, width int) string {
 	renderedRows := make([]string, 0, len(rows)+2)
 	renderedRows = append(renderedRows, renderMarkdownTableBorder("┌", "┬", "┐", widths))
 	for i, row := range rows {
-		renderedRows = append(renderedRows, renderMarkdownTableRow(row, widths, i == 0, alignments))
+		renderedRows = append(renderedRows, renderMarkdownTableRowLines(row, widths, i == 0, alignments)...)
 		if i == len(rows)-1 {
 			renderedRows = append(renderedRows, renderMarkdownTableBorder("└", "┴", "┘", widths))
 		} else {
@@ -389,30 +389,52 @@ func markdownTableAlignments(separator []string, columnCount int) []markdownTabl
 	return alignments
 }
 
-// renderMarkdownTableRow 渲染一行表格，并对表头应用强调样式。
-func renderMarkdownTableRow(row []string, widths []int, header bool, alignments []markdownTableAlignment) string {
-	var rendered strings.Builder
-	rendered.WriteString(markdownRuleStyle.Render("│"))
+// renderMarkdownTableRowLines 渲染一行表格，并对表头应用强调样式。
+// 每个单元格都按自己的列宽换行，避免用省略号丢失模型返回的内容。
+func renderMarkdownTableRowLines(row []string, widths []int, header bool, alignments []markdownTableAlignment) []string {
+	wrapped := make([][]string, len(widths))
+	lineCount := 1
 	for i, width := range widths {
 		cell := ""
 		if i < len(row) {
 			cell = renderInlineMarkdown(row[i])
 		}
-		cell = truncateDisplayWidth(cell, width)
-		alignment := markdownTableAlignLeft
-		if i < len(alignments) {
-			alignment = alignments[i]
+		wrapped[i] = strings.Split(wrapDisplayWidthLines(cell, width), "\n")
+		if len(wrapped[i]) > lineCount {
+			lineCount = len(wrapped[i])
 		}
-		padded := padMarkdownTableCell(cell, width, alignment)
-		if header {
-			padded = markdownHeadingStyle.Render(padded)
-		}
-		rendered.WriteString(" ")
-		rendered.WriteString(padded)
-		rendered.WriteString(" ")
-		rendered.WriteString(markdownRuleStyle.Render("│"))
 	}
-	return rendered.String()
+
+	lines := make([]string, 0, lineCount)
+	for lineIndex := 0; lineIndex < lineCount; lineIndex++ {
+		var rendered strings.Builder
+		rendered.WriteString(markdownRuleStyle.Render("│"))
+		for i, width := range widths {
+			cell := ""
+			if lineIndex < len(wrapped[i]) {
+				cell = wrapped[i][lineIndex]
+			}
+			alignment := markdownTableAlignLeft
+			if i < len(alignments) {
+				alignment = alignments[i]
+			}
+			padded := padMarkdownTableCell(cell, width, alignment)
+			if header {
+				padded = markdownHeadingStyle.Render(padded)
+			}
+			rendered.WriteString(" ")
+			rendered.WriteString(padded)
+			rendered.WriteString(" ")
+			rendered.WriteString(markdownRuleStyle.Render("│"))
+		}
+		lines = append(lines, rendered.String())
+	}
+	return lines
+}
+
+// renderMarkdownTableRow 保留单行调用方的兼容包装；新表格渲染使用多行版本。
+func renderMarkdownTableRow(row []string, widths []int, header bool, alignments []markdownTableAlignment) string {
+	return strings.Join(renderMarkdownTableRowLines(row, widths, header, alignments), "\n")
 }
 
 // padMarkdownTableCell 将单元格按 Markdown 声明的对齐方式补齐到列宽。

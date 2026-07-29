@@ -180,6 +180,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, nil
 	case turnFinishedMsg:
+		wasWorking := m.isAgentWorking()
 		m.finalizeThinkingStream()
 		if msg.err != nil {
 			m.finalizeAssistantStream(transcriptRenderPlain)
@@ -192,6 +193,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.queryGuard.FinishModel()
 		m.turnStartedAt = time.Time{}
 		m.syncRunningFlags()
+		if wasWorking && !m.isAgentWorking() {
+			m.startTokenRippleExit(m.animationNow())
+		}
 		if msg.err != nil {
 			m.markRunningToolsError(msg.err)
 			m.pendingToolCites = nil
@@ -225,9 +229,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 		cmds = append(cmds, m.input.Focus())
 	case subagentFinishedMsg:
+		wasWorking := m.isAgentWorking()
 		m.queryGuard.FinishModel()
 		m.turnStartedAt = time.Time{}
 		m.syncRunningFlags()
+		if wasWorking && !m.isAgentWorking() {
+			m.startTokenRippleExit(m.animationNow())
+		}
 		agentTitle := resultDisplayName(msg.result)
 		agentColor := strings.TrimSpace(msg.result.AgentColor)
 		if msg.err != nil {
