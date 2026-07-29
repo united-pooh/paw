@@ -37,26 +37,15 @@ func NewRegistry(roots []string) *Registry {
 	return &Registry{roots: cleanRoots(roots)}
 }
 
-// DefaultRoots returns the project and user skill directories used by Codex and
-// Claude-style local installs. The directories do not need to exist.
-func DefaultRoots(workRoot string) []string {
-	var roots []string
-	if strings.TrimSpace(workRoot) != "" {
-		roots = append(roots,
-			filepath.Join(workRoot, ".codex", "skills"),
-			filepath.Join(workRoot, ".claude", "skills"),
-		)
+// DefaultRoots returns Paw's only global skill directory. The work root is
+// retained in the signature for callers that already pass it, but it is not
+// used: skills must come exclusively from ~/.paw/skills.
+func DefaultRoots(_ string) []string {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return nil
 	}
-	if codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME")); codexHome != "" {
-		roots = append(roots, filepath.Join(codexHome, "skills"))
-	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		roots = append(roots,
-			filepath.Join(home, ".codex", "skills"),
-			filepath.Join(home, ".claude", "skills"),
-		)
-	}
-	return cleanRoots(roots)
+	return cleanRoots([]string{filepath.Join(home, ".paw", "skills")})
 }
 
 // Roots returns a copy of the configured skill roots.

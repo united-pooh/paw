@@ -205,8 +205,7 @@ context meter 默认展示在消息历史区下方、输入框上方；输入框
 - 使用 ↑↓ 键在候选项之间导航，Tab 或 Enter 确认补全，Esc 关闭弹窗
 
 Skills:
-- 当前仓库内置项目级 `multi-agent-pipeline` skill，路径为 `.codex/skills/multi-agent-pipeline/SKILL.md`，适配说明见 `.codex/skills/multi-agent-pipeline/references/paw-adapter.md`
-- 支持的本地 skill 目录为当前工作区 `.codex/skills/<name>/SKILL.md`、`.claude/skills/<name>/SKILL.md`，以及 `$CODEX_HOME/skills/<name>/SKILL.md`、`~/.codex/skills/<name>/SKILL.md`、`~/.claude/skills/<name>/SKILL.md`
+- skills 统一从 `~/.paw/skills/<name>/SKILL.md` 加载，不读取项目目录、`$CODEX_HOME` 或其他 skills 目录
 - 输入中出现 `$skill` 或 `[$skill](/abs/path/SKILL.md)` 时，Runner 会在本轮 system prompt 中注入对应 `SKILL.md` 的完整内容；该注入只对当前 turn 生效，不写入会话历史
 - `/subagent` 的 prompt 中显式提到 skill 时，subagent worker 会按同样规则加载；`/streamma` 和 `/streamma-trace` 会把本轮选中的 skill context 传入每个 StreamMA worker 的 system prompt
 
