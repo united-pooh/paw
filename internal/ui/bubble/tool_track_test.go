@@ -178,7 +178,7 @@ func TestToolDurationFormatting(t *testing.T) {
 	}
 }
 
-func TestToolTrackExpandedResultIsSanitizedAndClamped(t *testing.T) {
+func TestToolTrackExpandedResultIsSanitizedAndComplete(t *testing.T) {
 	rawLines := make([]string, 20)
 	for index := range rawLines {
 		rawLines[index] = fmt.Sprintf("line-%02d", index)
@@ -203,11 +203,11 @@ func TestToolTrackExpandedResultIsSanitizedAndClamped(t *testing.T) {
 	if !strings.Contains(rendered, "owned") || !strings.Contains(rendered, "invalid-�") {
 		t.Fatalf("sanitized result lost visible content: %q", rendered)
 	}
-	if strings.Contains(rendered, "line-19") || !strings.Contains(rendered, "... 9 more lines hidden") {
-		t.Fatalf("expanded result was not clamped to 12 display rows:\n%s", rendered)
+	if !strings.Contains(rendered, "line-19") || strings.Contains(rendered, "lines hidden") {
+		t.Fatalf("expanded result did not show complete content:\n%s", rendered)
 	}
-	if got := len(strings.Split(rendered, "\n")); got != 1+maxRenderedToolDetailLines {
-		t.Fatalf("rendered rows = %d, want summary + %d detail rows\n%s", got, maxRenderedToolDetailLines, rendered)
+	if got := len(strings.Split(rendered, "\n")); got != 1+len(rawLines) {
+		t.Fatalf("rendered rows = %d, want summary + %d detail rows\n%s", got, len(rawLines), rendered)
 	}
 	if entry.toolResult != rawResult {
 		t.Fatalf("render clamp mutated stored result")

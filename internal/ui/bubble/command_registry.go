@@ -261,31 +261,53 @@ func (r *CommandRegistry) Dispatch(m *appModel, line string) (bool, tea.Cmd) {
 	return true, command.Handler(m, line)
 }
 
-// HelpText renders command metadata in a deterministic order.
+// HelpText renders command metadata as a compact, deterministic command table.
 func (r *CommandRegistry) HelpText() string {
-	if r == nil {
+	if r == nil || len(r.order) == 0 {
 		return "No commands registered."
 	}
+
 	names := append([]string(nil), r.order...)
 	sort.Strings(names)
-	lines := []string{"Commands:"}
+
+	type helpRow struct {
+		label       string
+		description string
+	}
+	rows := make([]helpRow, 0, len(names))
+	labelWidth := 0
 	for _, name := range names {
 		command, ok := r.commands[name]
 		if !ok {
 			continue
 		}
 		label := command.Name
-		if strings.TrimSpace(command.ArgumentHint) != "" {
-			label += " " + strings.TrimSpace(command.ArgumentHint)
+		if hint := strings.TrimSpace(command.ArgumentHint); hint != "" {
+			label += " " + hint
 		}
 		if len(command.Aliases) > 0 {
 			aliases := append([]string(nil), command.Aliases...)
 			sort.Strings(aliases)
-			label += " (" + strings.Join(aliases, ", ") + ")"
+			label += " (aliases: " + strings.Join(aliases, ", ") + ")"
 		}
-		lines = append(lines, fmt.Sprintf("%s - %s", label, command.Description))
+		rows = append(rows, helpRow{label: label, description: strings.TrimSpace(command.Description)})
+		labelWidth = max(labelWidth, len([]rune(label)))
 	}
-	lines = append(lines, "Type ! to toggle terminal mode or !<command> to run bash once.")
+	if len(rows) == 0 {
+		return "No commands registered."
+	}
+
+	lines := []string{"Commands"}
+	for _, row := range rows {
+		padding := strings.Repeat(" ", labelWidth-len([]rune(row.label)))
+		lines = append(lines, "  "+row.label+padding+"  "+row.description)
+	}
+	lines = append(lines,
+		"",
+		"Shortcuts",
+		"  !             toggle terminal mode",
+		"  !<command>     run a shell command once",
+	)
 	return strings.Join(lines, "\n")
 }
 

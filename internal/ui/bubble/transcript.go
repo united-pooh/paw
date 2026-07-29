@@ -900,7 +900,7 @@ func renderToolTransactionEntry(entry transcriptEntry, width int, at time.Time) 
 	if result == "" {
 		result = "(empty result)"
 	}
-	detailLines := limitRenderedDetailLines(strings.Split(result, "\n"), maxRenderedToolDetailLines)
+	detailLines := strings.Split(result, "\n")
 	detailWidth := maxInt(1, innerWidth-2)
 	detail := renderToolDetailLines(detailLines, detailWidth)
 	return borderStyle.Width(contentWidth).Render(summary + "\n" + detail)

@@ -274,14 +274,15 @@ func (m *appModel) syncSkillCompletion() {
 // syncCommandCompletion 检测 / 命令补全并更新 m.completion。
 func (m *appModel) syncCommandCompletion() {
 	val := m.input.Value()
-	if !strings.HasPrefix(val, "/") {
+	slashIdx, query := detectWordTrigger(val, '/')
+	if slashIdx < 0 {
 		if m.completion != nil && m.completion.kind == completionKindCommand {
 			m.clearCompletionAndRelayout()
 		}
 		return
 	}
-	query := strings.TrimPrefix(val, "/")
-	items := commandCompletionItems(query, m.commandRegistry, m.skillRegistry)
+	inline := strings.TrimSpace(val[:slashIdx]) != ""
+	items := commandCompletionItemsForContext(query, m.commandRegistry, m.skillRegistry, inline)
 	if len(items) == 0 {
 		m.clearCompletionAndRelayout()
 		return
@@ -372,12 +373,22 @@ func newCommandCompletion(prefix string, registry *CommandRegistry) *completion 
 
 // commandCompletionItems 从注册表中筛选匹配前缀的命令名。
 func commandCompletionItems(prefix string, registry *CommandRegistry, skillRegistries ...*skill.Registry) []string {
-	if registry == nil && len(skillRegistries) == 0 {
+	return commandCompletionItemsForContext(prefix, registry, firstSkillRegistry(skillRegistries), false)
+}
+
+// commandCompletionItemsForContext 根据斜杠词所在位置构造候选。行首保留全部
+// 命令；已有普通文本时仅保留可嵌入 prompt 的 subagent/streamma 命令。
+// Skill 在两种场景下都完整保留。
+func commandCompletionItemsForContext(prefix string, registry *CommandRegistry, skillRegistry *skill.Registry, inline bool) []string {
+	if registry == nil && skillRegistry == nil {
 		return nil
 	}
 	var items []string
 	if registry != nil {
 		for _, name := range registry.order {
+			if inline && !isInlinePromptCommand(name) {
+				continue
+			}
 			if prefix == "" || strings.HasPrefix(name, "/"+prefix) {
 				items = append(items, name)
 			}
@@ -387,16 +398,25 @@ func commandCompletionItems(prefix string, registry *CommandRegistry, skillRegis
 	for _, item := range items {
 		seen[item] = true
 	}
-	for _, skillRegistry := range skillRegistries {
-		for _, name := range skillCompletionItems(prefix, skillRegistry) {
-			item := "/" + name
-			if !seen[item] {
-				items = append(items, item)
-				seen[item] = true
-			}
+	for _, name := range skillCompletionItems(prefix, skillRegistry) {
+		item := "/" + name
+		if !seen[item] {
+			items = append(items, item)
+			seen[item] = true
 		}
 	}
 	return items
+}
+
+func firstSkillRegistry(registries []*skill.Registry) *skill.Registry {
+	if len(registries) == 0 {
+		return nil
+	}
+	return registries[0]
+}
+
+func isInlinePromptCommand(name string) bool {
+	return name == "/subagent" || name == "/streamma"
 }
 
 // skillCompletionItems 从 skill 注册表中筛选匹配前缀的技能名。
@@ -467,22 +487,32 @@ func buildAtRef(query, searchDir, selected string) string {
 
 // applyCommandCompletion 将命令填入输入框。
 func (m appModel) applyCommandCompletion(selected string) appModel {
+	val := m.input.Value()
+	slashIdx, _ := detectWordTrigger(val, '/')
+	if slashIdx < 0 && val != "" {
+		return m
+	}
+	start := 0
+	if slashIdx >= 0 {
+		start = len([]rune(val[:slashIdx]))
+	}
+	end := len([]rune(val))
 	raw := selected
 	label := strings.TrimPrefix(strings.TrimSpace(selected), "/")
 	if m.commandRegistry != nil {
 		if _, ok := m.commandRegistry.Lookup(selected); ok {
-			m.replaceInputRangeWithToken(0, len([]rune(m.input.Value())), raw, label, inputTokenCommand, true)
+			m.replaceInputRangeWithToken(start, end, raw, label, inputTokenCommand, true)
 			m.relayout()
 			return m
 		}
 	}
 	if ref, ok := m.slashSkillReference(selected); ok {
 		raw = ref
-		m.replaceInputRangeWithToken(0, len([]rune(m.input.Value())), raw, label, inputTokenSkill, true)
+		m.replaceInputRangeWithToken(start, end, raw, label, inputTokenSkill, true)
 		m.relayout()
 		return m
 	}
-	m.replaceInputRangeWithToken(0, len([]rune(m.input.Value())), raw, label, inputTokenCommand, true)
+	m.replaceInputRangeWithToken(start, end, raw, label, inputTokenCommand, true)
 	m.relayout()
 	return m
 }

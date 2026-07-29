@@ -116,6 +116,54 @@ func TestSlashSkillCompletionCreatesSkillToken(t *testing.T) {
 	}
 }
 
+func TestSlashCommandCompletionReplacesOnlyTrailingWord(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.input.SetValue("中文前缀 /he")
+	model.input.CursorEnd()
+	model.completion = &completion{kind: completionKindCommand}
+	model = model.applyCommandCompletion("/help")
+
+	want := "中文前缀 /help "
+	if got := model.input.Value(); got != want {
+		t.Fatalf("raw input = %q, want %q", got, want)
+	}
+	if len(model.inputTokens) != 1 {
+		t.Fatalf("inputTokens = %#v, want one command token", model.inputTokens)
+	}
+	token := model.inputTokens[0]
+	wantStart := len([]rune("中文前缀 "))
+	if token.Kind != inputTokenCommand || token.Start != wantStart ||
+		token.End != wantStart+len([]rune("/help")) || token.Label != "help" || !token.AutoSpace {
+		t.Fatalf("token = %#v, want command token starting at rune %d", token, wantStart)
+	}
+}
+
+func TestSlashSkillCompletionReplacesOnlyTrailingWord(t *testing.T) {
+	root := t.TempDir()
+	path := writeBubbleTestSkill(t, root, "design", "# Design\n")
+	model := newTestModel(&fakeRunner{})
+	model.skillRegistry = skill.NewRegistry([]string{root})
+	model.input.SetValue("请使用技能 /de")
+	model.input.CursorEnd()
+	model.completion = &completion{kind: completionKindCommand}
+	model = model.applyCommandCompletion("/design")
+
+	ref := "[$design](" + path + ")"
+	want := "请使用技能 " + ref + " "
+	if got := model.input.Value(); got != want {
+		t.Fatalf("raw input = %q, want %q", got, want)
+	}
+	if len(model.inputTokens) != 1 {
+		t.Fatalf("inputTokens = %#v, want one skill token", model.inputTokens)
+	}
+	token := model.inputTokens[0]
+	wantStart := len([]rune("请使用技能 "))
+	if token.Kind != inputTokenSkill || token.Start != wantStart ||
+		token.End != wantStart+len([]rune(ref)) || token.Label != "design" || !token.AutoSpace {
+		t.Fatalf("token = %#v, want skill token starting at rune %d", token, wantStart)
+	}
+}
+
 func TestTranscriptRendersSkillTokenWithoutRawReference(t *testing.T) {
 	raw := "[$design](/tmp/design/SKILL.md)"
 	tokens := canonicalSkillReferenceTokens(raw)

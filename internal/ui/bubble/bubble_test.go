@@ -342,21 +342,39 @@ func TestHelpComesFromCommandRegistry(t *testing.T) {
 	}
 	body := model.transcript[len(model.transcript)-1].body
 	for _, want := range []string{
-		"/help - show available commands",
-		"/model [status|<profile>|<model>] - open the model switcher",
-		"/export [filename] - export the current conversation",
-		"/setting - open settings wizard",
-		"/subagent [--fork|--empty] [--background|--sync] <prompt> - launch a subagent",
-		"/streamma <prompt> - run a prompt through StreamMA subagents",
-		"/streamma-trace <prompt> - run StreamMA with live event trace",
-		"/tasks - show background subagent tasks",
-		"/skills - show discovered skills",
-		"/token-tracer (/tt) - show the live Token Tracer dashboard URL",
-		"/exit (/quit, exit, quit) - quit the TUI",
+		"Commands\n",
+		"/help",
+		"show available commands",
+		"/model [status|<profile>|<model>]",
+		"open the model switcher",
+		"/export [filename]",
+		"export the current conversation",
+		"/setting",
+		"open settings wizard",
+		"/subagent [--fork|--empty] [--background|--sync] <prompt>",
+		"launch a subagent",
+		"/streamma <prompt>",
+		"run a prompt through StreamMA subagents",
+		"/streamma-trace <prompt>",
+		"run StreamMA with live event trace",
+		"/tasks",
+		"show background subagent tasks",
+		"/skills",
+		"show discovered skills",
+		"/token-tracer (aliases: /tt)",
+		"show the live Token Tracer dashboard URL",
+		"/exit (aliases: /quit, exit, quit)",
+		"quit the TUI",
+		"Shortcuts\n",
+		"!             toggle terminal mode",
+		"!<command>     run a shell command once",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("help body = %q, want %q", body, want)
 		}
+	}
+	if strings.Contains(body, " - ") {
+		t.Fatalf("help body still uses noisy dash separators: %q", body)
 	}
 }
 
@@ -1419,7 +1437,7 @@ func TestToolDiffRowsAlignLineNumberWithStatusMarker(t *testing.T) {
 	}
 }
 
-func TestToolEntryClampsLargeDetailBlocks(t *testing.T) {
+func TestToolEntryShowsCompleteLargeDetailBlocks(t *testing.T) {
 	lines := make([]string, 0, 80)
 	for i := 0; i < 80; i++ {
 		lines = append(lines, fmt.Sprintf("line-%02d", i))
@@ -1434,11 +1452,11 @@ func TestToolEntryClampsLargeDetailBlocks(t *testing.T) {
 		toolExpanded: true,
 	}, 80))
 
-	if strings.Contains(rendered, "line-79") {
-		t.Fatalf("rendered tool entry should hide tail detail lines:\n%s", rendered)
+	if !strings.Contains(rendered, "line-79") {
+		t.Fatalf("rendered tool entry should show tail detail lines:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "... 69 more lines hidden") {
-		t.Fatalf("rendered tool entry = %q, want hidden line summary", rendered)
+	if strings.Contains(rendered, "lines hidden") {
+		t.Fatalf("rendered tool entry unexpectedly hid detail lines:\n%s", rendered)
 	}
 }
 
@@ -4231,6 +4249,101 @@ func TestDollarPrefixTriggersSkillCompletion(t *testing.T) {
 	}
 	if got := model.completion.visibleItems(); len(got) != 1 || got[0] != "design" {
 		t.Fatalf("visible skill items = %#v, want design", got)
+	}
+}
+
+func TestSlashWordBoundaryTriggersAndFiltersCommandCompletion(t *testing.T) {
+	root := t.TempDir()
+	writeBubbleTestSkill(t, root, "design", "# Design\n")
+
+	tests := []struct {
+		name       string
+		value      string
+		wantOpen   bool
+		wantItems  []string
+		rejectItem string
+	}{
+		{name: "line start", value: "/", wantOpen: true, wantItems: []string{"/help", "/design"}},
+		{name: "space boundary", value: "已有内容 /", wantOpen: true, wantItems: []string{"/subagent", "/streamma", "/design"}, rejectItem: "/help"},
+		{name: "multiple whitespace boundary", value: "已有内容 \t /", wantOpen: true, wantItems: []string{"/subagent", "/streamma", "/design"}, rejectItem: "/help"},
+		{name: "query filters current slash word", value: "已有内容 /de", wantOpen: true, wantItems: []string{"/design"}, rejectItem: "/help"},
+		{name: "ordinary word slash", value: "abc/", wantOpen: false},
+		{name: "url slash", value: "https://example.com/", wantOpen: false},
+		{name: "path slash", value: "path/to/", wantOpen: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			model := newTestModel(&fakeRunner{})
+			model.skillRegistry = skill.NewRegistry([]string{root})
+			model.input.SetValue(test.value)
+			model.syncCommandCompletion()
+
+			if !test.wantOpen {
+				if model.completion != nil {
+					t.Fatalf("completion = %#v, want nil for %q", model.completion, test.value)
+				}
+				return
+			}
+			if model.completion == nil || model.completion.kind != completionKindCommand {
+				t.Fatalf("completion = %#v, want command completion for %q", model.completion, test.value)
+			}
+			items := model.completion.visibleItems()
+			for _, want := range test.wantItems {
+				if !containsString(items, want) {
+					t.Fatalf("items = %#v, want %q", items, want)
+				}
+			}
+			if test.rejectItem != "" && containsString(items, test.rejectItem) {
+				t.Fatalf("items = %#v, do not want %q", items, test.rejectItem)
+			}
+		})
+	}
+}
+
+func TestInlineSlashCompletionKeepsPromptCommandsAndAllSkills(t *testing.T) {
+	root := t.TempDir()
+	writeBubbleTestSkill(t, root, "design", "# Design\n")
+	writeBubbleTestSkill(t, root, "review", "# Review\n")
+
+	model := newTestModel(&fakeRunner{})
+	model.skillRegistry = skill.NewRegistry([]string{root})
+	model.input.SetValue("请分析这个问题 /")
+	model.syncCommandCompletion()
+
+	if model.completion == nil {
+		t.Fatal("completion = nil, want inline slash completion")
+	}
+	items := model.completion.visibleItems()
+	for _, want := range []string{"/subagent", "/streamma", "/design", "/review"} {
+		if !containsString(items, want) {
+			t.Fatalf("items = %#v, want %q", items, want)
+		}
+	}
+	for _, unwanted := range []string{"/help", "/model", "/export", "/setting", "/streamma-trace", "/tasks", "/skills", "/status", "/clear", "/sessions", "/exit"} {
+		if containsString(items, unwanted) {
+			t.Fatalf("items = %#v, do not want inline command %q", items, unwanted)
+		}
+	}
+}
+
+func TestInlineSlashCompletionFiltersSkillsWithoutRestoringOtherCommands(t *testing.T) {
+	root := t.TempDir()
+	writeBubbleTestSkill(t, root, "design", "# Design\n")
+
+	model := newTestModel(&fakeRunner{})
+	model.skillRegistry = skill.NewRegistry([]string{root})
+	model.input.SetValue("已有内容 /de")
+	model.syncCommandCompletion()
+
+	if model.completion == nil {
+		t.Fatal("completion = nil, want matching skill")
+	}
+	items := model.completion.visibleItems()
+	if !containsString(items, "/design") {
+		t.Fatalf("items = %#v, want /design", items)
+	}
+	if containsString(items, "/help") || containsString(items, "/model") {
+		t.Fatalf("items = %#v, inline completion restored unrelated commands", items)
 	}
 }
 
