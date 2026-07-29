@@ -35,6 +35,13 @@ type HistoryStore interface {
 	Append(ctx context.Context, sessionID string, msgs ...message.Message) error
 }
 
+// AttachmentStore persists clipboard images and loads them for restored
+// messages. session.JSONLStore is the production implementation.
+type AttachmentStore interface {
+	SaveAttachment(ctx context.Context, mimeType string, data []byte) (string, error)
+	ReadAttachment(ctx context.Context, reference string) (string, []byte, error)
+}
+
 type historyExistenceStore interface {
 	Exists(ctx context.Context, sessionID string) (bool, error)
 }
@@ -155,10 +162,29 @@ func (runner *Runner) ReplaceToolNamespace(namespace string, tools []tool.Tool) 
 
 // RunTurn 执行一次最小工具闭环流程，并返回最终 assistant 消息。
 func (runner *Runner) RunTurn(ctx context.Context, input string) (msg message.Message, err error) {
+	return runner.runTurn(ctx, message.Message{Role: message.RoleUser, Content: input})
+}
+
+// RunRichTurn runs a user turn containing ordered text/image parts. Clipboard
+// image bytes are persisted before the turn can be committed to history.
+func (runner *Runner) RunRichTurn(ctx context.Context, input message.Message) (msg message.Message, err error) {
+	if input.Role == "" {
+		input.Role = message.RoleUser
+	}
+	if input.Role != message.RoleUser {
+		return message.Message{}, fmt.Errorf("rich turn 必须使用 user role")
+	}
+	return runner.runTurn(ctx, input)
+}
+
+func (runner *Runner) runTurn(ctx context.Context, userInput message.Message) (msg message.Message, err error) {
 	if err := runner.validate(); err != nil {
 		return message.Message{}, err
 	}
-	runner.activateSkillContext(input)
+	if err := runner.persistInputAttachments(ctx, &userInput); err != nil {
+		return message.Message{}, err
+	}
+	runner.activateSkillContext(userInput.Content)
 	defer runner.clearActiveSkillContext()
 
 	if runner.historyIsNil() && runner.store != nil {
@@ -182,21 +208,21 @@ func (runner *Runner) RunTurn(ctx context.Context, input string) (msg message.Me
 		}
 	}
 
-	if invocation, ok := parseStreamMAInvocation(input); ok {
+	if invocation, ok := parseStreamMAInvocation(userInput.Content); ok {
 		if !runner.currentStreamMAEnabled() {
 			return message.Message{}, fmt.Errorf("streamma is disabled; start with -streamma=true or set PAW_STREAMMA=1 to enable /streamma")
 		}
-		return runner.runStreamMATurn(ctx, input, invocation)
+		return runner.runStreamMATurn(ctx, userInput.Content, invocation)
 	}
 
-	trace := runner.beginTraceTurn(input, "conversation")
+	trace := runner.beginTraceTurn(userInput.Content, "conversation")
 	defer func() {
 		runner.finishTraceTurn(trace, err)
 	}()
 
 	// 每一轮都基于“已提交的历史副本”工作。
 	// 这样即使当前轮中途失败，也不会污染下一轮上下文。
-	history, injectedSupplements := runner.buildTurnHistory(input)
+	history, injectedSupplements := runner.buildTurnHistory(userInput)
 	committed := false
 	defer func() {
 		if !committed && len(injectedSupplements) > 0 {
@@ -314,7 +340,11 @@ func (runner *Runner) runModelTurn(ctx context.Context, history []message.Messag
 	if runner.registry != nil {
 		tools = runner.registry.Definitions()
 	}
-	events, err := runner.model.StreamMessage(ctx, runner.buildModelMessages(history), tools)
+	modelMessages, err := runner.buildModelMessages(ctx, history)
+	if err != nil {
+		return message.Message{}, err
+	}
+	events, err := runner.model.StreamMessage(ctx, modelMessages, tools)
 	if err != nil {
 		return message.Message{}, err
 	}
@@ -356,13 +386,13 @@ func (runner *Runner) PendingSupplementCount() int {
 
 // buildTurnHistory 复制已完成历史，并在尾部追加当前用户输入。
 // 这样单轮执行可以安全地在本地 history 上反复追加 tool_use / tool_result。
-func (runner *Runner) buildTurnHistory(input string) ([]message.Message, []string) {
+func (runner *Runner) buildTurnHistory(input message.Message) ([]message.Message, []string) {
 	runner.mu.RLock()
 	history := append([]message.Message(nil), runner.history...)
 	runner.mu.RUnlock()
 	supplements := runner.drainSupplements()
 	history = append(history, buildSupplementMessages(supplements)...)
-	history = append(history, buildUserMessages(input)...)
+	history = append(history, input)
 	return history, supplements
 }
 
@@ -581,10 +611,13 @@ func toolResultsFromMessage(msg message.Message) []message.ToolResult {
 	return []message.ToolResult{*msg.ToolResult}
 }
 
-func (runner *Runner) buildModelMessages(history []message.Message) []message.Message {
+func (runner *Runner) buildModelMessages(ctx context.Context, history []message.Message) ([]message.Message, error) {
 	messages := make([]message.Message, 0, len(history)+1)
 	messages = append(messages, buildSystemMessage(runner.buildSystemPrompt()))
 	for _, msg := range history {
+		if err := runner.materializeAttachments(ctx, &msg); err != nil {
+			return nil, err
+		}
 		rendered := renderMessageForModel(msg)
 		// 跳过空 content 的 assistant 消息，避免发送 {"role":"assistant"} 触发 API 400 错误。
 		// 空 assistant 消息可能来自模型返回空流式内容的边界情况。
@@ -593,7 +626,65 @@ func (runner *Runner) buildModelMessages(history []message.Message) []message.Me
 		}
 		messages = append(messages, rendered)
 	}
-	return messages
+	return messages, nil
+}
+
+func (runner *Runner) persistInputAttachments(ctx context.Context, input *message.Message) error {
+	if input == nil || len(input.Parts) == 0 {
+		return nil
+	}
+	store, ok := runner.store.(AttachmentStore)
+	for i := range input.Parts {
+		part := &input.Parts[i]
+		if part.Type != message.ContentPartImage || part.Image == nil {
+			continue
+		}
+		if len(part.Image.Data) == 0 {
+			if strings.TrimSpace(part.Image.Attachment) == "" {
+				return fmt.Errorf("图片附件缺少数据或引用")
+			}
+			continue
+		}
+		if !ok {
+			return fmt.Errorf("图片输入需要可用的附件存储")
+		}
+		reference, err := store.SaveAttachment(ctx, part.Image.MIMEType, part.Image.Data)
+		if err != nil {
+			return fmt.Errorf("保存图片附件失败: %w", err)
+		}
+		part.Image.Attachment = reference
+	}
+	return nil
+}
+
+func (runner *Runner) materializeAttachments(ctx context.Context, msg *message.Message) error {
+	if msg == nil || len(msg.Parts) == 0 {
+		return nil
+	}
+	store, ok := runner.store.(AttachmentStore)
+	for i := range msg.Parts {
+		part := &msg.Parts[i]
+		if part.Type != message.ContentPartImage || part.Image == nil {
+			continue
+		}
+		if len(part.Image.Data) > 0 {
+			continue
+		}
+		reference := strings.TrimSpace(part.Image.Attachment)
+		if reference == "" {
+			return fmt.Errorf("图片消息缺少附件引用")
+		}
+		if !ok {
+			return fmt.Errorf("无法读取图片附件 %q：当前会话存储不支持附件", reference)
+		}
+		mimeType, data, err := store.ReadAttachment(ctx, reference)
+		if err != nil {
+			return fmt.Errorf("读取图片附件 %q 失败: %w", reference, err)
+		}
+		part.Image.MIMEType = mimeType
+		part.Image.Data = data
+	}
+	return nil
 }
 
 // 构建系统提示词
@@ -660,6 +751,7 @@ func renderMessageForModel(msg message.Message) message.Message {
 		return message.Message{
 			Role:    msg.Role,
 			Content: msg.Content,
+			Parts:   append([]message.ContentPart(nil), msg.Parts...),
 		}
 	}
 }

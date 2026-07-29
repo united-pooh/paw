@@ -50,6 +50,9 @@ func (m appModel) handleSubmit() (tea.Model, tea.Cmd) {
 	}
 
 	if m.isModelWorkRunning() {
+		if len(imageTokensInDraft(m.submittedDraft)) > 0 {
+			return m.queueChatInput(line), nil
+		}
 		return m.submitSupplement(line), nil
 	}
 	if m.isTerminalWorkRunning() {
@@ -275,6 +278,10 @@ func (m appModel) startChatTurn(line string) (appModel, tea.Cmd) {
 	if line == "" {
 		return m, nil
 	}
+	draft := trimInputDraft(m.submittedDraft)
+	if draft.Text != line {
+		draft = inputDraft{Text: line}
+	}
 	if !m.queryGuard.StartModel() {
 		m.addEntry(transcriptEntry{kind: entrySystem, title: "busy", body: "assistant is already running"})
 		return m, nil
@@ -283,7 +290,7 @@ func (m appModel) startChatTurn(line string) (appModel, tea.Cmd) {
 	m.addEntry(m.userTranscriptEntry("you", line))
 	m.turnStartedAt = time.Now()
 	m.syncRunningFlags()
-	return m, runTurnCmd(m.ctx, m.runner, line)
+	return m, runTurnCmd(m.ctx, m.runner, draft)
 }
 
 // queueChatInput records a chat input for FIFO execution after the active turn.
@@ -292,8 +299,12 @@ func (m appModel) queueChatInput(line string) appModel {
 	if line == "" {
 		return m
 	}
+	draft := trimInputDraft(m.submittedDraft)
+	if draft.Text != line {
+		draft = inputDraft{Text: line}
+	}
 	m.rememberInputHistory(line)
-	if m.chatQueue.Enqueue(line) {
+	if m.chatQueue.EnqueueDraft(draft) {
 		m.addEntry(m.userTranscriptEntry("you (queued)", line))
 		m.addEntry(transcriptEntry{
 			kind:  entrySystem,

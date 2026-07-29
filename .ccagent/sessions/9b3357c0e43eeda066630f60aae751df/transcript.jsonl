@@ -1,0 +1,2 @@
+{"seq":0,"message":{"role":"user","content":"你好！你是一个测试子智能体。只需回复\"测试子智能体正在运行！\"，不要回复其他内容。"},"created_at":"2026-07-10T00:37:33.785519Z"}
+{"seq":1,"message":{"role":"assistant","content":"测试子智能体正在运行！"},"created_at":"2026-07-10T00:37:33.785519Z"}

@@ -191,10 +191,14 @@ func (c *Client) RunMessage(ctx context.Context, messages []message.Message) (st
 	}
 
 	cfg := c.CurrentModelConfig()
+	apiMessages, err := buildOpenAIMessages(messages)
+	if err != nil {
+		return "", fmt.Errorf("构造 OpenAI 请求消息失败: %w", err)
+	}
 
 	reqBody := ChatCompletionsRequest{
 		Model:    cfg.Model,
-		Messages: messages,
+		Messages: apiMessages,
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)

@@ -1,0 +1,20 @@
+{
+  "id": "ff3d3123a5384f40dd34b480060ce107",
+  "name": "户山香澄",
+  "color": "#FF5522",
+  "session_id": "ff3d3123a5384f40dd34b480060ce107",
+  "parent_session_id": "b0a858d9045e1f16eb1274dc99ddbaa7",
+  "description": "只回复 READY",
+  "prompt": "现在回复 READY",
+  "context_mode": "empty",
+  "run_mode": "background",
+  "status": "completed",
+  "transcript_path": "/Users/united_pooh/PyProjects/go-code/.ccagent/sessions/ff3d3123a5384f40dd34b480060ce107/transcript.jsonl",
+  "output_path": "/Users/united_pooh/PyProjects/go-code/.ccagent/tasks/ff3d3123a5384f40dd34b480060ce107/output.json",
+  "pid": 49337,
+  "exit_code": 0,
+  "depth": 1,
+  "started_at": "2026-07-10T06:52:38.499725Z",
+  "finished_at": "2026-07-10T06:52:43.137263Z",
+  "content": "READY"
+}

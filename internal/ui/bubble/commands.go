@@ -12,14 +12,34 @@ import (
 )
 
 // runTurnCmd 把一次模型对话运行封装成 Bubble Tea 命令。
-func runTurnCmd(ctx context.Context, runner Runner, input string) tea.Cmd {
+func runTurnCmd(ctx context.Context, runner Runner, draft inputDraft) tea.Cmd {
 	return func() tea.Msg {
 		if runner == nil {
 			return turnFinishedMsg{err: fmt.Errorf("runner is nil")}
 		}
-		_, err := runner.RunTurn(ctx, input)
-		return turnFinishedMsg{err: err}
+		var err error
+		if richRunner, ok := runner.(RichInputRunner); ok {
+			_, err = richRunner.RunRichTurn(ctx, messageFromInputDraft(draft))
+		} else {
+			_, err = runner.RunTurn(ctx, draft.Text)
+		}
+		var restoreDraft *inputDraft
+		if len(imageTokensInDraft(draft)) > 0 {
+			copyDraft := cloneInputDraft(draft)
+			restoreDraft = &copyDraft
+		}
+		return turnFinishedMsg{err: err, restoreDraft: restoreDraft}
 	}
+}
+
+func imageTokensInDraft(draft inputDraft) []inputToken {
+	var images []inputToken
+	for _, token := range normalizeInputTokens(draft.Text, draft.Tokens) {
+		if token.Kind == inputTokenImage && token.Image != nil {
+			images = append(images, token)
+		}
+	}
+	return images
 }
 
 // runShellCmd 在 bash 中执行终端命令，并把 stdout、stderr 和错误汇总为消息。
@@ -79,18 +99,18 @@ func (m *appModel) startNextQueuedTurn() tea.Cmd {
 	if m == nil || !m.queryGuard.CanStartQueued() || m.ctx.Err() != nil {
 		return nil
 	}
-	line, ok := m.chatQueue.Dequeue()
+	draft, ok := m.chatQueue.DequeueDraft()
 	if !ok {
 		return nil
 	}
 	if !m.queryGuard.StartModel() {
-		_ = m.chatQueue.Enqueue(line)
+		_ = m.chatQueue.EnqueueDraft(draft)
 		return nil
 	}
 	m.resetStreamingBuffers()
 	m.turnStartedAt = time.Now()
 	m.syncRunningFlags()
-	return runTurnCmd(m.ctx, m.runner, line)
+	return runTurnCmd(m.ctx, m.runner, draft)
 }
 
 // cursorFrameTick 安排下一次光标动画帧更新。

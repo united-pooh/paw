@@ -1,0 +1,6 @@
+system:
+Interactive mode is running on Bubble Tea. Use /help for commands.
+
+sessions:
+已切换到会话: f8a7a524315e6b64c853fda663b941ab
+

@@ -24,6 +24,13 @@ type Runner interface {
 	LoadHistory(ctx context.Context, sessionID string) ([]message.Message, error)
 }
 
+// RichInputRunner is an optional runner capability used for clipboard images.
+// Runners that do not implement it continue to receive the compatibility text
+// via Runner.RunTurn.
+type RichInputRunner interface {
+	RunRichTurn(ctx context.Context, input message.Message) (message.Message, error)
+}
+
 // SupplementSubmitter describes runners that can accept instructions while a
 // model turn is already running.
 type SupplementSubmitter interface {

@@ -1,0 +1,4 @@
+{"seq":0,"message":{"role":"user","content":"用 Write 工具把 /tmp/diff_verify.txt 内容改成 line1\\nline2_modified\\nline3\\nline4 （不要用 Edit，用 Write）"},"created_at":"2026-06-17T09:36:25.371722Z"}
+{"seq":1,"message":{"role":"assistant","tool_use":{"id":"call_00_Qz5133JwO3FrSTZ2mdHl8487","name":"Write","input":{"file_path":"/tmp/diff_verify.txt","content":"line1\nline2_modified\nline3\nline4"}}},"created_at":"2026-06-17T09:36:25.371722Z"}
+{"seq":2,"message":{"role":"user","tool_result":{"tool_use_id":"call_00_Qz5133JwO3FrSTZ2mdHl8487","content":"wrote 32 bytes to tmp/diff_verify.txt","is_error":false}},"created_at":"2026-06-17T09:36:25.371722Z"}
+{"seq":3,"message":{"role":"assistant","content":"已完成。已将 `/tmp/diff_verify.txt` 内容写为：\n\n```\nline1\nline2_modified\nline3\nline4\n```"},"created_at":"2026-06-17T09:36:25.371722Z"}

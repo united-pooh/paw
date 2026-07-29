@@ -171,6 +171,9 @@ var (
 	inputFileTokenStyle = lipgloss.NewStyle().
 				Foreground(colorManager.LipglossColor(colorInputTokenFile)).
 				Bold(true)
+	inputImageTokenStyle = lipgloss.NewStyle().
+				Foreground(colorManager.LipglossColor(colorInputTokenCommand)).
+				Underline(true)
 	inputWaitingStyle = lipgloss.NewStyle().
 				Foreground(colorManager.LipglossColor(colorInputWaitingBorder)).
 				Italic(true)

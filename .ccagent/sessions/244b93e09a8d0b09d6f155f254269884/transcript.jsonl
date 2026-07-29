@@ -1,0 +1,4 @@
+{"seq":0,"message":{"role":"user","content":"每2秒输出 'hello world'，共持续30秒时间。请开始执行并持续运行。"},"created_at":"2026-07-10T06:58:19.867569Z"}
+{"seq":1,"message":{"role":"assistant","tool_use":{"id":"call_e76b245383a543a986d459bb","name":"Bash","input":{"command":"for i in $(seq 1 15); do echo 'hello world'; if [ $i -lt 15 ]; then sleep 2; fi; done","timeout_seconds":35}}},"created_at":"2026-07-10T06:58:19.867569Z"}
+{"seq":2,"message":{"role":"user","tool_result":{"tool_use_id":"call_e76b245383a543a986d459bb","content":"hello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\n","is_error":false}},"created_at":"2026-07-10T06:58:19.867569Z"}
+{"seq":3,"message":{"role":"assistant","content":"任务已完成！程序运行时每2秒输出一次 \"hello world\"，共输出了15次（2秒 × 15次 = 30秒）。"},"created_at":"2026-07-10T06:58:19.867569Z"}

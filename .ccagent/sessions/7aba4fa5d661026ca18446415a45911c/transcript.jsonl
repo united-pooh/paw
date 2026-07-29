@@ -1,0 +1,2 @@
+{"seq":0,"message":{"role":"user","content":"读取当前项目"},"created_at":"2026-06-16T06:05:40.279952Z"}
+{"seq":1,"message":{"role":"assistant","content":"好的，我来读取当前项目的内容。\n\n\u003cglob\u003e\n{\n  \"pattern\": \"*\",\n  \"path\": \".\"\n}\n\u003c/glob\u003e"},"created_at":"2026-06-16T06:05:40.279952Z"}

@@ -1,0 +1,20 @@
+{
+  "id": "732b97f7e6f0c46f28802a6e5b0a0e9c",
+  "name": "凑友希那",
+  "color": "#881188",
+  "session_id": "732b97f7e6f0c46f28802a6e5b0a0e9c",
+  "parent_session_id": "888980ea457b4152c4f8c281f2fbaea3",
+  "description": "Hello World 10秒子智能体",
+  "prompt": "请在你的运行过程中，每一秒输出一次 \"hello world\"（共持续 10 秒）。你可以用循环或 sleep 来实现。持续大约 10 秒后，输出 \"hello world 输出完毕，10秒已到。\" 然后结束。",
+  "context_mode": "empty",
+  "run_mode": "background",
+  "status": "stopped",
+  "transcript_path": "/Users/united_pooh/PyProjects/go-code/.ccagent/sessions/732b97f7e6f0c46f28802a6e5b0a0e9c/transcript.jsonl",
+  "output_path": "/Users/united_pooh/PyProjects/go-code/.ccagent/tasks/732b97f7e6f0c46f28802a6e5b0a0e9c/output.json",
+  "pid": 93614,
+  "exit_code": -1,
+  "depth": 1,
+  "started_at": "2026-07-10T01:42:41.676561Z",
+  "finished_at": "2026-07-10T01:42:59.375916Z",
+  "error": "stopped"
+}

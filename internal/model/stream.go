@@ -101,9 +101,13 @@ type nonStreamingChatResponse struct {
 }
 
 func (c *Client) nonStreamingOpenAIMessage(ctx context.Context, cfg Config, messages []message.Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
+	apiMessages, err := buildOpenAIMessages(messages)
+	if err != nil {
+		return nil, fmt.Errorf("构造 OpenAI 请求消息失败: %w", err)
+	}
 	reqBody := ChatCompletionsRequest{
 		Model:    cfg.Model,
-		Messages: messages,
+		Messages: apiMessages,
 		Stream:   false,
 	}
 	for _, t := range tools {
@@ -179,10 +183,14 @@ func (c *Client) nonStreamingOpenAIMessage(ctx context.Context, cfg Config, mess
 }
 
 func (c *Client) streamOpenAIMessage(ctx context.Context, cfg Config, messages []message.Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
+	apiMessages, err := buildOpenAIMessages(messages)
+	if err != nil {
+		return nil, fmt.Errorf("构造 OpenAI 请求消息失败: %w", err)
+	}
 	// 启用 stream=true，让服务端按 SSE 增量返回。
 	reqBody := ChatCompletionsRequest{
 		Model:         cfg.Model,
-		Messages:      messages,
+		Messages:      apiMessages,
 		Stream:        true,
 		StreamOptions: &StreamOptions{IncludeUsage: true},
 	}

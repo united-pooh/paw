@@ -1,0 +1,7 @@
+{
+  "task_id": "f30d35ab54c7188d54f8639fef8f62d6",
+  "session_id": "f30d35ab54c7188d54f8639fef8f62d6",
+  "error": "保存会话历史失败: context canceled",
+  "exit_code": 1,
+  "used_tokens": 37290
+}

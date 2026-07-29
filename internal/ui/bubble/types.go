@@ -101,7 +101,12 @@ type systemEventMsg ui.SystemEvent
 type doneMsg struct{}
 
 // turnFinishedMsg 表示一轮模型调用已经结束，并携带可能的错误。
-type turnFinishedMsg struct{ err error }
+// restoreDraft is populated for failed rich-image turns so the user can fix
+// the model/endpoint or retry without losing the clipboard image.
+type turnFinishedMsg struct {
+	err          error
+	restoreDraft *inputDraft
+}
 
 // shellFinishedMsg 表示一次终端命令执行完成后的结果。
 type shellFinishedMsg struct {

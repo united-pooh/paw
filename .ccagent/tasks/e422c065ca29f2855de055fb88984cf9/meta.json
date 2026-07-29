@@ -1,0 +1,20 @@
+{
+  "id": "e422c065ca29f2855de055fb88984cf9",
+  "name": "高松灯",
+  "color": "#CC0033",
+  "session_id": "e422c065ca29f2855de055fb88984cf9",
+  "parent_session_id": "b0a858d9045e1f16eb1274dc99ddbaa7",
+  "description": "只回复 READY",
+  "prompt": "现在回复 READY",
+  "context_mode": "empty",
+  "run_mode": "background",
+  "status": "completed",
+  "transcript_path": "/Users/united_pooh/PyProjects/go-code/.ccagent/sessions/e422c065ca29f2855de055fb88984cf9/transcript.jsonl",
+  "output_path": "/Users/united_pooh/PyProjects/go-code/.ccagent/tasks/e422c065ca29f2855de055fb88984cf9/output.json",
+  "pid": 49119,
+  "exit_code": 0,
+  "depth": 1,
+  "started_at": "2026-07-10T06:52:06.982293Z",
+  "finished_at": "2026-07-10T06:52:10.095888Z",
+  "content": "READY"
+}

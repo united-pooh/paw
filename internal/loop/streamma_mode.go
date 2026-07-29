@@ -209,7 +209,7 @@ func (runner *Runner) runStreamMATurn(ctx context.Context, input string, invocat
 		return message.Message{}, fmt.Errorf("streamma requires subagent backend")
 	}
 
-	history, injectedSupplements := runner.buildTurnHistory(input)
+	history, injectedSupplements := runner.buildTurnHistory(message.Message{Role: message.RoleUser, Content: input})
 	committed := false
 	defer func() {
 		if !committed && len(injectedSupplements) > 0 {

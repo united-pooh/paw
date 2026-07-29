@@ -200,6 +200,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				title: "error",
 				body:  msg.err.Error(),
 			})
+			if msg.restoreDraft != nil && m.input.Value() == "" {
+				m.setInputDraft(*msg.restoreDraft)
+				m.inputPasteFoldActive = false
+				m.syncInputMode()
+				m.relayout()
+			}
 		}
 		cmds = append(cmds, m.input.Focus())
 		if queuedCmd := m.startNextQueuedTurn(); queuedCmd != nil {
@@ -294,6 +300,31 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.relayout()
 		}
 		return m, nil
+	case clipboardPasteMsg:
+		if msg.err != nil {
+			// A normal text clipboard is handled by clipboardPasteCmd; only
+			// surface an error when neither image nor text could be read.
+			if msg.err != errClipboardNoImage {
+				m.addEntry(transcriptEntry{kind: entryError, title: "clipboard", body: msg.err.Error()})
+			}
+			return m, nil
+		}
+		beforeValue := m.input.Value()
+		if msg.image != nil {
+			m.insertClipboardImage(msg.cursor, *msg.image)
+		} else {
+			m.insertClipboardText(msg.text)
+		}
+		if beforeValue != m.input.Value() {
+			m.resetHistoryNavigation()
+			m.syncInputPasteFoldState(tea.KeyMsg{Type: tea.KeyRunes, Paste: true}, beforeValue, true)
+			m.syncInputMode()
+			m.relayout()
+			m.syncCommandCompletion()
+			m.syncSkillCompletion()
+		}
+		m.applyCursorAnimation()
+		return m, nil
 	case pipelineStateUpdatedMsg:
 		m.pipelineState = msg.state
 		return m, nil
@@ -330,6 +361,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.String() == "ctrl+t" {
 			return m.openToolInspect()
+		}
+		if msg.String() == "ctrl+v" && !m.isTerminalWorkRunning() {
+			return m, clipboardPasteCmd(m.ctx, textareaAbsoluteCursor(m.input))
 		}
 		if msg.String() == "ctrl+g" {
 			return m.openSubagentPicker()

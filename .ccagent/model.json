@@ -1,0 +1,8 @@
+{
+  "provider": "deepseek",
+  "api_base_url": "https://api.deepseek.com",
+  "api_path": "/chat/completions",
+  "api_key_env_name": "DEEPSEEK_API_KEY",
+  "model": "deepseek-chat",
+  "timeout_seconds": 120
+}

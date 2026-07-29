@@ -201,7 +201,7 @@ func transcriptEntriesFromMessage(msg message.Message, createdAt time.Time) []tr
 				kind:        entryUser,
 				title:       "you",
 				body:        content,
-				inputTokens: canonicalSkillReferenceTokens(content),
+				inputTokens: inputTokensFromMessage(msg),
 				createdAt:   createdAt,
 			})
 		case message.RoleSystem:

@@ -1,7 +1,9 @@
 package bubble
 
 import (
+	"bytes"
 	"fmt"
+	"paw/internal/message"
 	"sort"
 	"strings"
 
@@ -17,6 +19,7 @@ const (
 	inputTokenCommand inputTokenKind = iota
 	inputTokenSkill
 	inputTokenFile
+	inputTokenImage
 )
 
 // inputToken keeps a half-open rune range into the underlying textarea value.
@@ -28,6 +31,7 @@ type inputToken struct {
 	End       int
 	Label     string
 	AutoSpace bool
+	Image     *message.ImagePart
 }
 
 // inputDraft is the in-memory input representation. Text is always the exact
@@ -58,7 +62,16 @@ type inputProjection struct {
 }
 
 func cloneInputTokens(tokens []inputToken) []inputToken {
-	return append([]inputToken(nil), tokens...)
+	out := make([]inputToken, len(tokens))
+	copy(out, tokens)
+	for i := range out {
+		if tokens[i].Image != nil {
+			image := *tokens[i].Image
+			image.Data = append([]byte(nil), tokens[i].Image.Data...)
+			out[i].Image = &image
+		}
+	}
+	return out
 }
 
 func cloneInputDraft(draft inputDraft) inputDraft {
@@ -660,6 +673,9 @@ func (m appModel) inputTokenProjection() inputProjection {
 }
 
 func inputTokenStyleFor(kind inputTokenKind) lipgloss.Style {
+	if kind == inputTokenImage {
+		return inputImageTokenStyle
+	}
 	if kind == inputTokenFile {
 		return inputFileTokenStyle
 	}
@@ -745,7 +761,16 @@ func inputDraftEqual(a, b inputDraft) bool {
 		return false
 	}
 	for i := range a.Tokens {
-		if a.Tokens[i] != b.Tokens[i] {
+		left, right := a.Tokens[i], b.Tokens[i]
+		if left.Kind != right.Kind || left.Start != right.Start || left.End != right.End ||
+			left.Label != right.Label || left.AutoSpace != right.AutoSpace {
+			return false
+		}
+		if (left.Image == nil) != (right.Image == nil) {
+			return false
+		}
+		if left.Image != nil && (left.Image.MIMEType != right.Image.MIMEType ||
+			left.Image.Attachment != right.Image.Attachment || !bytes.Equal(left.Image.Data, right.Image.Data)) {
 			return false
 		}
 	}

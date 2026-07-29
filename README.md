@@ -214,8 +214,14 @@ context meter 的 token 数只来自模型服务端返回的真实 `usage` 字�
 context meter 左侧显示紧凑 token 与比例，例如 `260k↑ 2.05k↓ 25%(10%)`：`↑` 是 session 累计上传/input token，`↓` 是 session 累计回答/output token，两个百分比分别是当前 context 用量和当前 cache hit 用量占总 limit 的比例。右侧只显示当前 context 剩余比例，例如 `free(75%)`。超过三位的 token 会压缩成 `k`，超过 `999k` 会压缩成 `M`，数字最多保留三位有效数字。
 
 快捷键:
+- `ctrl+v`: 从剪贴板粘贴图片时插入 `[Image N]` 图片芯片；连续粘贴会按顺序生成多个芯片，芯片可以像一个整体一样删除。剪贴板没有图片时保持原有文本粘贴行为。
 - `ctrl+o`: 展开/折叠模型 thinking 过程；折叠时 thinking 仍保存在 transcript 中，但不渲染到 viewport。
 - `ctrl+g`: 打开右侧 Subagents 选择器；使用 ↑↓ 选择，Enter 预览该 subagent transcript，Esc 返回主 session transcript；输入框内容和提交目标保持主 session 不变。
+
+图片输入:
+- 当前支持 PNG、JPEG、GIF、WebP 和 BMP；macOS 使用系统 `NSPasteboard`（JXA/AppKit，兼容截图常见的 PNG/TIFF 类型），Linux 优先尝试 `wl-paste`，并保留 `xclip` 适配入口。
+- 图片会保存到当前项目的 `.paw/attachments/`，使用内容哈希去重并以 `0600` 权限保存；会话 JSONL 只记录相对附件引用，不写入 base64 图片。
+- 提交图片需要当前 provider 的多模态模型：OpenAI-compatible endpoint 使用 `image_url` data URL，Anthropic-compatible endpoint 使用 base64 `image` block。纯文本请求仍保持原有字符串格式；不支持图片的 endpoint 会报错并保留输入草稿。
 
 当前默认 settings:
 

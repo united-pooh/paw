@@ -46,7 +46,7 @@ type anthropicTool struct {
 
 type anthropicMessage struct {
 	Role    string `json:"role"`
-	Content string `json:"content"`
+	Content any    `json:"content"`
 }
 
 type anthropicStreamResponse struct {
@@ -78,7 +78,11 @@ type anthropicStreamResponse struct {
 }
 
 func (c *Client) streamAnthropicMessage(ctx context.Context, cfg Config, messages []message.Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
-	bodyBytes, err := json.Marshal(buildAnthropicMessagesRequest(cfg, messages, tools))
+	requestBody, err := buildAnthropicMessagesRequest(cfg, messages, tools)
+	if err != nil {
+		return nil, fmt.Errorf("构造 Anthropic 请求消息失败: %w", err)
+	}
+	bodyBytes, err := json.Marshal(requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("序列化 Anthropic 请求体失败: %w", err)
 	}
@@ -113,18 +117,21 @@ func (c *Client) streamAnthropicMessage(ctx context.Context, cfg Config, message
 	return events, nil
 }
 
-func buildAnthropicMessagesRequest(cfg Config, messages []message.Message, tools []ToolDefinition) anthropicMessagesRequest {
+func buildAnthropicMessagesRequest(cfg Config, messages []message.Message, tools []ToolDefinition) (anthropicMessagesRequest, error) {
 	systemParts := make([]string, 0, 1)
 	apiMessages := make([]anthropicMessage, 0, len(messages))
 	for _, msg := range messages {
-		content := strings.TrimRight(msg.Content, "\n")
+		content, err := anthropicContent(msg)
+		if err != nil {
+			return anthropicMessagesRequest{}, err
+		}
 		switch msg.Role {
 		case message.RoleSystem:
-			if strings.TrimSpace(content) != "" {
-				systemParts = append(systemParts, content)
+			if contentText, ok := content.(string); ok && strings.TrimSpace(contentText) != "" {
+				systemParts = append(systemParts, contentText)
 			}
 		case message.RoleAssistant:
-			if strings.TrimSpace(content) != "" {
+			if contentText, ok := content.(string); ok && strings.TrimSpace(contentText) != "" {
 				apiMessages = append(apiMessages, anthropicMessage{Role: "assistant", Content: content})
 			}
 		default:
@@ -159,7 +166,7 @@ func buildAnthropicMessagesRequest(cfg Config, messages []message.Message, tools
 			InputSchema: t.InputSchema,
 		})
 	}
-	return req
+	return req, nil
 }
 
 func anthropicMessagesURL(cfg Config) string {

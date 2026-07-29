@@ -16,11 +16,11 @@ type ToolDefinition struct {
 // ChatCompletionsRequest 是通用的 Chat Completions 请求结构。
 // 命名和字段不绑定具体供应商，便于后续替换 provider。
 type ChatCompletionsRequest struct {
-	Model         string            `json:"model"`
-	Messages      []message.Message `json:"messages"`
-	Stream        bool              `json:"stream"`
-	StreamOptions *StreamOptions    `json:"stream_options,omitempty"`
-	Tools         []openAITool      `json:"tools,omitempty"`
+	Model         string          `json:"model"`
+	Messages      []openAIMessage `json:"messages"`
+	Stream        bool            `json:"stream"`
+	StreamOptions *StreamOptions  `json:"stream_options,omitempty"`
+	Tools         []openAITool    `json:"tools,omitempty"`
 }
 
 // openAITool 是 OpenAI 兼容接口的工具定义格式。

@@ -1,0 +1,4 @@
+{"seq":0,"message":{"role":"user","content":"你的任务是发送 \"hello\"。请使用 Bash 命令执行 echo \"hello\" 并输出结果。"},"created_at":"2026-07-09T01:47:18.034431Z"}
+{"seq":1,"message":{"role":"assistant","tool_use":{"id":"call_98bf058ca7ec454ba8dca888","name":"Bash","input":{"command":"echo \"hello\""}}},"created_at":"2026-07-09T01:47:18.034431Z"}
+{"seq":2,"message":{"role":"user","tool_result":{"tool_use_id":"call_98bf058ca7ec454ba8dca888","content":"hello\n","is_error":false}},"created_at":"2026-07-09T01:47:18.034431Z"}
+{"seq":3,"message":{"role":"assistant","content":"输出结果为: hello"},"created_at":"2026-07-09T01:47:18.034431Z"}
