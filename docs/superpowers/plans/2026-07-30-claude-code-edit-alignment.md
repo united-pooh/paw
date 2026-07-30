@@ -348,8 +348,6 @@ import (
 // unless replace_all is true, and the file is overwritten atomically.
 type EditTool struct {
 	Root string
-	// ReadState is wired in Task 2 for stale-write protection.
-	ReadState *ReadStateStore
 }
 
 type editInput struct {
@@ -398,12 +396,6 @@ func (t *EditTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 	if err != nil {
 		return "", err
 	}
-	if t.ReadState != nil {
-		if err := t.ReadState.Verify(target, current); err != nil {
-			return "", err
-		}
-	}
-
 	count := strings.Count(string(current), in.OldString)
 	if count == 0 {
 		return "", fmt.Errorf("old_string not found in %s", relativePath(t.Root, target))
@@ -422,9 +414,6 @@ func (t *EditTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 	if err := atomicWriteFile(target, []byte(updated)); err != nil {
 		return "", err
 	}
-	if t.ReadState != nil {
-		t.ReadState.RecordAfterWrite(target, []byte(updated))
-	}
 
 	replacements := count
 	plural := "s"
@@ -442,21 +431,7 @@ Expected: PASS (all seven Edit tests + the atomic test).
 
 - [ ] **Step 9: Register `EditTool` in the main agent registry**
 
-Modify `cmd/agent/main.go` in `registerTools` (line 574). After the line `registry.Register(&toolfile.WriteTool{Root: root})` (line 580), add the `EditTool` registration. The edited block becomes:
-
-```go
-	readState := toolfile.NewReadStateStore()
-	registry.Register(&toolfile.LSTool{Root: root, ReadRoots: readRoots})
-	registry.Register(&toolfile.ReadTool{Root: root, ReadRoots: readRoots, ReadState: readState})
-	registry.Register(&toolfile.WriteTool{Root: root, ReadState: readState})
-	registry.Register(&toolfile.EditTool{Root: root, ReadState: readState})
-	registry.Register(&toolfile.GrepTool{Root: root, ReadRoots: readRoots})
-	registry.Register(&toolfile.GlobTool{Root: root, ReadRoots: readRoots})
-	registry.Register(&toolexec.BashTool{Root: root})
-	registry.Register(&toolwebfetch.Tool{})
-```
-
-Note: `ReadState` fields on `ReadTool`/`WriteTool`/`EditTool` compile even though `ReadStateStore` is defined in Task 2 — but to keep Task 1 self-contained and compiling, define `ReadStateStore` as a minimal stub now OR defer the `ReadState` field injection to Task 2. **Choose the stub path now** so Task 1 compiles: in `read_state.go` (created in Task 2) — instead, for Task 1 only, omit the `ReadState` fields from the registered structs and register `&toolfile.EditTool{Root: root}`, `&toolfile.WriteTool{Root: root}`, `&toolfile.ReadTool{Root: root, ReadRoots: readRoots}` (current shape). Then Task 2 adds the `ReadState` fields and re-wires registration. So for Task 1 the edit is:
+Modify `cmd/agent/main.go` in `registerTools` (line 574). After the line `registry.Register(&toolfile.WriteTool{Root: root})` (line 580), add the `EditTool` registration. Task 1 does NOT wire `ReadState` (Task 2 does), so register the current struct shapes with no `ReadState`:
 
 ```go
 	registry.Register(&toolfile.LSTool{Root: root, ReadRoots: readRoots})
@@ -542,7 +517,7 @@ git commit -m "feat: add native Edit tool with exact string replacement and atom
 - Create: `internal/tool/file/write_test.go`
 - Modify: `internal/tool/file/read.go` (add `ReadState` field + `Record` after read)
 - Modify: `internal/tool/file/write.go` (add `ReadState` field + `Verify` before write + `RecordAfterWrite` after, switch to `atomicWriteFile`)
-- Modify: `internal/tool/file/edit.go` (already has `ReadState` field from Task 1; ensure `Verify`/`RecordAfterWrite` calls exist — they do)
+- Modify: `internal/tool/file/edit.go` (add `ReadState` field + `Verify`/`RecordAfterWrite` hooks — Task 1 left these out)
 - Modify: `cmd/agent/main.go:registerTools` (inject one shared `*ReadStateStore`)
 - Modify: `internal/subagent/manager.go:newBaseToolRegistry` (inject one shared `*ReadStateStore`)
 
@@ -791,7 +766,7 @@ func TestWriteToolRejectsStaleWriteAfterExternalModification(t *testing.T) {
 - [ ] **Step 6: Run tests to verify they fail**
 
 Run: `go test ./internal/tool/file -run TestWriteTool -count=1`
-Expected: FAIL — `WriteTool` has no `ReadState` field and does not verify (Task 1 added the field but registration used `{Root: root}` without `ReadState`; the struct field exists from Task 1's edit.go? No — Task 1's `EditTool` has the field, but `WriteTool` does not yet). Compile error or no stale protection.
+Expected: FAIL — compile error, because `WriteTool` (and `ReadTool`) do not yet have a `ReadState` field. Steps 7-9 add the field to `ReadTool`, `WriteTool`, and `EditTool`; the tests then turn green.
 
 - [ ] **Step 7: Wire `ReadState` into `ReadTool`**
 
@@ -870,9 +845,21 @@ func (t *WriteTool) Run(ctx context.Context, input json.RawMessage) (string, err
 
 Note the imports change: `os` is still needed (`os.ReadFile`, `os.IsNotExist`); `path/filepath` is no longer directly used in write.go (it was used for `filepath.Dir` + `os.MkdirAll`, now handled inside `atomicWriteFile`). Remove the now-unused `"path/filepath"` import if `go vet`/compiler flags it; keep `"os"`.
 
-- [ ] **Step 9: Confirm `EditTool` already calls `Verify`/`RecordAfterWrite`**
+- [ ] **Step 9: Add `ReadState` field and stale-write hooks to `EditTool`**
 
-Re-open `internal/tool/file/edit.go`. The Task 1 implementation already contains:
+Task 1's `EditTool` has only `Root string` (no `ReadState`). Now that `ReadStateStore` exists, add the field and the two stale-write hooks.
+
+In `internal/tool/file/edit.go`, change the struct to:
+
+```go
+type EditTool struct {
+	Root      string
+	ReadState *ReadStateStore
+}
+```
+
+In `Run`, immediately after the successful `os.ReadFile` (before `count := strings.Count`), add the verify hook:
+
 ```go
 	if t.ReadState != nil {
 		if err := t.ReadState.Verify(target, current); err != nil {
@@ -880,13 +867,14 @@ Re-open `internal/tool/file/edit.go`. The Task 1 implementation already contains
 		}
 	}
 ```
-before the `strings.Count` line, and:
+
+After the successful `atomicWriteFile` (before `replacements := count`), add the record hook:
+
 ```go
 	if t.ReadState != nil {
 		t.ReadState.RecordAfterWrite(target, []byte(updated))
 	}
 ```
-after `atomicWriteFile`. No change needed. If the Task 1 code was written exactly as specified, this is a verification step only.
 
 - [ ] **Step 10: Add a stale-write test for `EditTool`**
 
