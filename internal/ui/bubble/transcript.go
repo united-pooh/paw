@@ -1257,15 +1257,15 @@ func renderToolDetailLines(lines []string, width int) string {
 			style = toolCitationStyle
 		case diffDetailLineMarker(line, containsUnifiedDiffHunk) == "+":
 			style = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("194")).
-				Background(lipgloss.Color("22")).
+				Foreground(colorManager.LipglossColor(colorDiffAddedForeground)).
+				Background(colorManager.LipglossColor(colorDiffAddedBackground)).
 				Bold(true)
 			renderedLine = strings.TrimRight(line, " \t\r")
 			isDiffLine = true
 		case diffDetailLineMarker(line, containsUnifiedDiffHunk) == "-":
 			style = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("224")).
-				Background(lipgloss.Color("52")).
+				Foreground(colorManager.LipglossColor(colorDiffDeletedForeground)).
+				Background(colorManager.LipglossColor(colorDiffDeletedBackground)).
 				Bold(true)
 			renderedLine = strings.TrimRight(line, " \t\r")
 			isDiffLine = true

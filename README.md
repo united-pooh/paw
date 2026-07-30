@@ -107,7 +107,7 @@ go run ./cmd/agent -s <session-id>
 
 当前会注册的持久化目录:
 - `~/.paw/config.json`（全局配置，模型通过 `modelProfiles` 和 `activeModelProfileId` 保存；缺失时自动创建）
-- `.paw/settings.json`
+- `~/.paw/settings.json`（全局 settings；项目内 `.paw/settings.json` 不再读取或迁移）
 - `.paw/exports/`
 - `.paw/sessions/<sessionID>/`
 
@@ -161,6 +161,7 @@ enabled = true
 - `/model [status|<profile>|<model>]`
 - `/export [filename]`
 - `/setting`
+- `/theme`
 - `/sessions`
 - `/subagent [--fork|--empty] [--background|--sync] <prompt>`
 - `/streamma [--profile adaptive|paper] [--topology adaptive|chain|tree|graph] [--agents N] [--steps N] [--protocol stream|single] <prompt>`
@@ -177,6 +178,7 @@ enabled = true
 - `/model` 无参数时打开 profile → model 二级向导；profile 和模型列表全部来自全局 `~/.paw/config.json`；没有活动 profile/model 时默认使用配置中第一个 profile 的第一个模型；`status` 输出当前配置和可用模型；输入已配置的 profile ID、provider、名称或模型名即可切换并持久化活动选择
 - `/export` 默认导出到 `.paw/exports/conversation-YYYY-MM-DD-HHMMSS.txt`，也支持工作区内显式路径；导出文件权限为 `0600`
 - `/setting` 通过向导保存默认 subagent context/run mode，以及 context meter 的位置和 token limit
+- `/theme` 打开内置主题选择器；↑/↓、j/k、Home/End 会实时预览，Enter 保存到 `~/.paw/settings.json`，Esc 恢复打开前的主题且不写盘
 - `/sessions` 列出所有历史会话（ID 前缀、日期、文件大小、首条消息），选中条目后直接恢复该会话
 - `/subagent` 支持 `empty` 与 `fork` 两种上下文模式，以及 `sync` 与 `background` 两种运行模式；后台任务完成后会发 UI 系统通知，并把截断后的结果作为补充上下文注入后续模型轮次（完整结果仍在任务 output/transcript 路径中）
 - `/streamma <prompt>` 显式把当前任务交给 StreamMA runtime；runtime 会按任务选择一个小型 DAG，并把每个 StreamMA worker 映射为真实 subagent。一次 run 内同一个 logical agent 复用同一个 subagent session 作为真实 `ctx_a`；首次调用写入 agent base context + problem，后续调用只追加新 inbound step。只有同步到精确 `END_STEP` step 后才继续在 DAG 中传播；缺失 `END_STEP` 会失败而不是在 agent `Done` 时兜底传播，最终由 finalizer 的最后一步作为 assistant 回复写回会话历史。可选参数包括 `--profile`、`--topology`、`--agents`/`--a`、`--steps`/`--s`、`--protocol`；默认 `adaptive` profile 会保留任务模板图，显式 `--topology` 或 `paper` profile 可按指定拓扑生成 chain/tree/graph 形状
@@ -232,11 +234,14 @@ context meter 左侧显示紧凑 token 与比例，例如 `260k↑ 2.05k↓ 25%(
     "default_run_mode": "sync"
   },
   "ui": {
+    "theme": "default",
     "context_limit_tokens": 1048576,
     "context_meter_location": "input-above"
   }
 }
 ```
+
+内置 True Color 主题 ID：`default`、`tokyo-night`、`tokyo-night-storm`、`tokyo-night-light`、`catppuccin-mocha`、`dracula`、`gruvbox-dark`。首版不支持自定义主题文件、256 色降级或 `NO_COLOR`。
 
 ## 分层
 
@@ -1323,6 +1328,7 @@ Manager 同文件中实现了三个供 LLM 调用的工具：
 ##### `UIConfig`
 
 字段:
+- `Theme` — 内置主题 ID，非法值回退到 `default`
 - `ContextLimitTokens` — 上下文 token 上限（默认 1,048,576）
 - `ContextMeterLocation` — context meter 位置（`"input-title"` / `"header"` / `"input-above"`）
 
@@ -1332,10 +1338,10 @@ Manager 同文件中实现了三个供 LLM 调用的工具：
 - 加载、保存、提供运行时配置
 - 线程安全读写
 
-##### `NewControllerInCwd() (*Controller, error)`
+##### `NewDefaultController(homeDir HomeDirFunc) (*Controller, error)`
 
 职责:
-- 从 `.paw/settings.json` 加载配置并创建 Controller
+- 从 `~/.paw/settings.json` 加载全局配置并创建 Controller；`homeDir` 可注入以隔离测试
 
 ##### `CurrentSettings() Config`
 

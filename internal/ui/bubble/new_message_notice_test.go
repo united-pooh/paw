@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"paw/internal/ui"
 )
@@ -26,8 +25,8 @@ func TestNewMessageNoticeRenderUsesBackgroundOnly(t *testing.T) {
 	if rendered == "" || !strings.Contains(ansi.Strip(rendered), "↓ 3 条新消息") {
 		t.Fatalf("rendered notice = %q", rendered)
 	}
-	if _, ok := newMessageNoticeStyle.GetBackground().(lipgloss.NoColor); ok {
-		t.Fatalf("notice style has no background")
+	if got := model.styles.Notice.GetBackground(); got != model.styles.Colors.LipglossColor(colorWorktreeBackground) {
+		t.Fatalf("notice background = %#v", got)
 	}
 	if strings.Contains(ansi.Strip(rendered), "┌") || strings.Contains(ansi.Strip(rendered), "─") {
 		t.Fatalf("rendered notice contains a border: %q", ansi.Strip(rendered))

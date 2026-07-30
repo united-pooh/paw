@@ -7,11 +7,13 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"paw/internal/theme"
 )
 
 const (
-	DefaultSettingsPath       = ".paw/settings.json"
-	DefaultContextLimitTokens = 1024 * 1024
+	defaultSettingsRelativePath = ".paw/settings.json"
+	DefaultContextLimitTokens   = 1024 * 1024
 
 	ContextModeEmpty ContextMode = "empty"
 	ContextModeFork  ContextMode = "fork"
@@ -27,6 +29,7 @@ const (
 type ContextMode string
 type RunMode string
 type MeterLocation string
+type HomeDirFunc func() (string, error)
 
 type Config struct {
 	Subagent SubagentConfig `json:"subagent"`
@@ -39,6 +42,7 @@ type SubagentConfig struct {
 }
 
 type UIConfig struct {
+	Theme                theme.ThemeID `json:"theme"`
 	ContextLimitTokens   int           `json:"context_limit_tokens"`
 	ContextMeterLocation MeterLocation `json:"context_meter_location"`
 }
@@ -51,30 +55,42 @@ type Controller struct {
 
 func DefaultConfig() Config {
 	return Config{
-		Subagent: SubagentConfig{
-			DefaultContextMode: ContextModeEmpty,
-			DefaultRunMode:     RunModeBackground,
-		},
-		UI: UIConfig{
-			ContextLimitTokens:   DefaultContextLimitTokens,
-			ContextMeterLocation: MeterLocationInputAbove,
-		},
+		Subagent: SubagentConfig{DefaultContextMode: ContextModeEmpty, DefaultRunMode: RunModeBackground},
+		UI:       UIConfig{Theme: theme.Default, ContextLimitTokens: DefaultContextLimitTokens, ContextMeterLocation: MeterLocationInputAbove},
 	}
+}
+
+func DefaultPath(homeDir HomeDirFunc) (string, error) {
+	if homeDir == nil {
+		homeDir = os.UserHomeDir
+	}
+	home, err := homeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve settings home directory: %w", err)
+	}
+	if strings.TrimSpace(home) == "" {
+		return "", fmt.Errorf("resolve settings home directory: empty path")
+	}
+	return filepath.Join(home, defaultSettingsRelativePath), nil
+}
+
+func NewDefaultController(homeDir HomeDirFunc) (*Controller, error) {
+	path, err := DefaultPath(homeDir)
+	if err != nil {
+		return nil, err
+	}
+	return NewController(path)
 }
 
 func NewController(path string) (*Controller, error) {
 	if strings.TrimSpace(path) == "" {
-		path = DefaultSettingsPath
+		return nil, fmt.Errorf("settings path is empty")
 	}
 	cfg, err := Load(path)
 	if err != nil {
 		return nil, err
 	}
 	return &Controller{path: path, cfg: cfg}, nil
-}
-
-func NewControllerInCwd() (*Controller, error) {
-	return NewController(DefaultSettingsPath)
 }
 
 func Load(path string) (Config, error) {
@@ -84,26 +100,26 @@ func Load(path string) (Config, error) {
 		if os.IsNotExist(err) {
 			return cfg, nil
 		}
-		return Config{}, fmt.Errorf("read settings: %w", err)
+		return Config{}, fmt.Errorf("read settings %s: %w", path, err)
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return Config{}, fmt.Errorf("parse settings: %w", err)
+		return Config{}, fmt.Errorf("parse settings %s: %w", path, err)
 	}
 	return Normalize(cfg), nil
 }
 
 func Save(path string, cfg Config) error {
 	cfg = Normalize(cfg)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create settings directory: %w", err)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create settings directory %s: %w", filepath.Dir(path), err)
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal settings: %w", err)
+		return fmt.Errorf("marshal settings %s: %w", path, err)
 	}
 	data = append(data, '\n')
 	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("write settings: %w", err)
+		return fmt.Errorf("write settings %s: %w", path, err)
 	}
 	return nil
 }
@@ -111,6 +127,7 @@ func Save(path string, cfg Config) error {
 func Normalize(cfg Config) Config {
 	cfg.Subagent.DefaultContextMode = NormalizeContextMode(cfg.Subagent.DefaultContextMode)
 	cfg.Subagent.DefaultRunMode = NormalizeRunMode(cfg.Subagent.DefaultRunMode)
+	cfg.UI.Theme = theme.NormalizeID(string(cfg.UI.Theme))
 	cfg.UI.ContextMeterLocation = NormalizeMeterLocation(cfg.UI.ContextMeterLocation)
 	if cfg.UI.ContextLimitTokens <= 0 {
 		cfg.UI.ContextLimitTokens = DefaultContextLimitTokens
@@ -138,10 +155,7 @@ func NormalizeRunMode(mode RunMode) RunMode {
 	}
 }
 
-func NormalizeMeterLocation(_ MeterLocation) MeterLocation {
-	// 旧值继续可被 JSON 解析，但新布局只有输入框上方这一处 context meter。
-	return MeterLocationInputAbove
-}
+func NormalizeMeterLocation(_ MeterLocation) MeterLocation { return MeterLocationInputAbove }
 
 func (c *Controller) CurrentSettings() Config {
 	if c == nil {

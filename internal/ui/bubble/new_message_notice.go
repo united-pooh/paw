@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // transcriptNoticeBounds 描述浮空提示在终端中的可点击区域。
@@ -14,18 +13,6 @@ type transcriptNoticeBounds struct {
 	width  int
 	height int
 }
-
-var newMessageNoticeStyle = lipgloss.NewStyle().
-	Foreground(colorManager.LipglossColor(colorSignal)).
-	Background(colorManager.LipglossColor(colorWorktreeBackground)).
-	Bold(true).
-	Padding(0, 1)
-
-var newMessageNoticeHoverStyle = lipgloss.NewStyle().
-	Foreground(colorManager.LipglossColor(colorTerminalBackground)).
-	Background(colorManager.LipglossColor(colorSignal)).
-	Bold(true).
-	Padding(0, 1)
 
 func newMessageNoticeText(count int, hovered bool, width int) string {
 	if count <= 0 || width <= 0 {
@@ -54,14 +41,15 @@ func (m appModel) renderNewMessageNotice(width int) string {
 	if m.newMessageNoticeCount <= 0 || width <= 0 || !m.newMessageNoticeCanRender() {
 		return ""
 	}
-	textWidth := maxInt(1, width-newMessageNoticeStyle.GetHorizontalPadding())
+	style := m.styles.Notice
+	hoverStyle := m.styles.NoticeHover
+	textWidth := maxInt(1, width-style.GetHorizontalPadding())
 	text := newMessageNoticeText(m.newMessageNoticeCount, m.newMessageNoticeHovered, textWidth)
 	if text == "" {
 		return ""
 	}
-	style := newMessageNoticeStyle
 	if m.newMessageNoticeHovered {
-		style = newMessageNoticeHoverStyle
+		style = hoverStyle
 	}
 	return style.Render(text)
 }
@@ -74,11 +62,13 @@ func (m appModel) transcriptNoticeBounds() transcriptNoticeBounds {
 	if layout.transcriptHeight <= 0 || layout.contentWidth <= 0 {
 		return transcriptNoticeBounds{}
 	}
-	textWidth := maxInt(1, layout.contentWidth-newMessageNoticeStyle.GetHorizontalPadding())
-	defaultWidth := terminalCellWidth(newMessageNoticeStyle.Render(
+	style := m.styles.Notice
+	hoverStyle := m.styles.NoticeHover
+	textWidth := maxInt(1, layout.contentWidth-style.GetHorizontalPadding())
+	defaultWidth := terminalCellWidth(style.Render(
 		newMessageNoticeText(m.newMessageNoticeCount, false, textWidth),
 	))
-	hoverWidth := terminalCellWidth(newMessageNoticeHoverStyle.Render(
+	hoverWidth := terminalCellWidth(hoverStyle.Render(
 		newMessageNoticeText(m.newMessageNoticeCount, true, textWidth),
 	))
 	width := maxInt(defaultWidth, hoverWidth)
