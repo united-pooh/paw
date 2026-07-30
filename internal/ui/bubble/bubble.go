@@ -14,6 +14,7 @@ import (
 	"paw/internal/session"
 	"paw/internal/settings"
 	"paw/internal/subagent"
+	selecttool "paw/internal/tool/select"
 	"paw/internal/ui"
 	"sync"
 )
@@ -100,6 +101,7 @@ type UI struct {
 	subagentController    SubagentController
 	sessionStore          SessionStore
 	mcpController         MCPStatusController
+	selectionBroker       *selecttool.Broker
 }
 
 // 确保 UI 满足通用终端 UI 接口。
@@ -108,6 +110,12 @@ var _ ui.UI = (*UI)(nil)
 // New 创建一个尚未启动的 Bubble Tea UI 实例。
 func New() *UI {
 	return &UI{}
+}
+
+func (u *UI) SetSelectionBroker(broker *selecttool.Broker) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.selectionBroker = broker
 }
 
 // SetModelConfigController 注入模型配置控制器，供 /model 向导读取和保存配置。
@@ -172,10 +180,12 @@ func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 	subagentController := u.subagentController
 	sessionStore := u.sessionStore
 	mcpController := u.mcpController
+	selectionBroker := u.selectionBroker
 	u.mu.Unlock()
 
 	anchor := newTerminalCursorAnchor()
 	appModel := newModel(ctx, runner, sessionID, controller, settingsController, subagentController, sessionStore, anchor)
+	appModel.selectionBroker = selectionBroker
 	appModel.mcpController = mcpController
 	// WithInput 包一层 ESC 聚合 reader：在 BubbleTea 解析字节之前，把被读边界
 	// 切断的 \x1b[<...M 鼠标序列重新拼合，从源头杜绝 ESC 与 [ 分离导致的

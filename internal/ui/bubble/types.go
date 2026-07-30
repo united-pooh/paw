@@ -12,6 +12,7 @@ import (
 	"paw/internal/skill"
 	"paw/internal/subagent"
 	"paw/internal/theme"
+	selecttool "paw/internal/tool/select"
 	"paw/internal/ui"
 	"strings"
 	"time"
@@ -328,6 +329,8 @@ type appModel struct {
 	styles                    StyleSet
 	themePicker               *themePickerState
 	runner                    Runner
+	selectionBroker           *selecttool.Broker
+	selectionDock             *selectionDock
 	sessionID                 string
 	modelConfig               ModelConfigController
 	settingsConfig            SettingsController
