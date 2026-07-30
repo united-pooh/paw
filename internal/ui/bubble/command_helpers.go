@@ -172,7 +172,9 @@ func (m *appModel) handleSubagentCommand(invocation string) tea.Cmd {
 	}
 	m.syncRunningFlags()
 	m.addEntry(transcriptEntry{kind: entrySystem, title: "subagent", body: "started sync subagent"})
-	return runSubagentCmd(m.beginModelWorkContext(), m.subagents, req)
+	workCmd := runSubagentCmd(m.beginModelWorkContext(), m.subagents, req)
+	frameCmd := m.scheduleUIAnimationFrame()
+	return tea.Batch(workCmd, frameCmd)
 }
 
 func (m appModel) parseSubagentCommand(invocation string) (subagent.Request, error) {

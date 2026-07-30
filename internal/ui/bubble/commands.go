@@ -180,7 +180,9 @@ func (m *appModel) startNextQueuedTurn() tea.Cmd {
 	m.turnStartedAt = time.Now()
 	m.turnID = newTurnID(m.turnStartedAt)
 	m.syncRunningFlags()
-	return runTurnCmd(m.beginModelWorkContext(), m.runner, draft, m.turnID, m.turnStartedAt)
+	workCmd := runTurnCmd(m.beginModelWorkContext(), m.runner, draft, m.turnID, m.turnStartedAt)
+	frameCmd := m.scheduleUIAnimationFrame()
+	return tea.Batch(workCmd, frameCmd)
 }
 
 func newTurnID(startedAt time.Time) string {

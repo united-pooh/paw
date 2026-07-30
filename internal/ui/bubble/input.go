@@ -292,7 +292,9 @@ func (m appModel) startChatTurn(line string) (appModel, tea.Cmd) {
 	m.turnStartedAt = time.Now()
 	m.turnID = newTurnID(m.turnStartedAt)
 	m.syncRunningFlags()
-	return m, runTurnCmd(m.beginModelWorkContext(), m.runner, draft, m.turnID, m.turnStartedAt)
+	workCmd := runTurnCmd(m.beginModelWorkContext(), m.runner, draft, m.turnID, m.turnStartedAt)
+	frameCmd := m.scheduleUIAnimationFrame()
+	return m, tea.Batch(workCmd, frameCmd)
 }
 
 // queueChatInput records a chat input for FIFO execution after the active turn.

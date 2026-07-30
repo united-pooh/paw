@@ -40,3 +40,77 @@ func TestCursorFrameStopsWhenIdle(t *testing.T) {
 		t.Fatal("consumed idle frame should clear the scheduled marker")
 	}
 }
+
+func TestStartChatTurnWakesAnimationBeforeFirstDelta(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.uiAnimationFrameScheduled = false
+
+	next, cmd := model.startChatTurn("hello")
+
+	if cmd == nil {
+		t.Fatal("model turn should return work and animation commands")
+	}
+	if !next.queryGuard.IsModelRunning() {
+		t.Fatal("model guard should be running")
+	}
+	if !next.uiAnimationFrameScheduled {
+		t.Fatal("model turn should wake animation before the first delta")
+	}
+}
+
+func TestQueuedTurnWakesAnimationBeforeFirstDelta(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.uiAnimationFrameScheduled = false
+	if !model.chatQueue.Enqueue("queued") {
+		t.Fatal("failed to enqueue test turn")
+	}
+
+	cmd := model.startNextQueuedTurn()
+
+	if cmd == nil {
+		t.Fatal("queued turn should return work and animation commands")
+	}
+	if !model.queryGuard.IsModelRunning() {
+		t.Fatal("queued turn should start model guard")
+	}
+	if !model.uiAnimationFrameScheduled {
+		t.Fatal("queued turn should wake animation")
+	}
+}
+
+func TestWorkingCursorFrameSchedulesSuccessorWithoutModelDelta(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.uiAnimationFrameScheduled = true
+	if !model.queryGuard.StartModel() {
+		t.Fatal("failed to start model guard")
+	}
+	model.syncRunningFlags()
+
+	next, cmd := model.Update(cursorFrameMsg(time.Unix(200, 0)))
+	model = next.(appModel)
+
+	if cmd == nil {
+		t.Fatal("working frame should schedule a successor without a model delta")
+	}
+	if !model.uiAnimationFrameScheduled {
+		t.Fatal("successor frame should be marked scheduled")
+	}
+}
+
+func TestSyncSubagentWakesAnimation(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.subagents = &fakeSubagentController{}
+	model.uiAnimationFrameScheduled = false
+
+	cmd := model.handleSubagentCommand("/subagent --sync inspect")
+
+	if cmd == nil {
+		t.Fatal("sync subagent should return work and animation commands")
+	}
+	if !model.queryGuard.IsModelRunning() {
+		t.Fatal("sync subagent should start model guard")
+	}
+	if !model.uiAnimationFrameScheduled {
+		t.Fatal("sync subagent should wake animation")
+	}
+}
