@@ -22,6 +22,7 @@ import (
 	"paw/internal/settings"
 	"paw/internal/skill"
 	"paw/internal/subagent"
+	"paw/internal/theme"
 	"paw/internal/ui"
 )
 
@@ -3960,12 +3961,14 @@ func TestAnchoredOutputRestoresBeforeNextWrite(t *testing.T) {
 
 	anchor := newTerminalCursorAnchor()
 	output := newAnchoredOutput(file, anchor)
+	defer output.Close()
+	anchor.setVisual(terminalCursorVisual{color: "#7aa2f7", visible: true})
 
-	anchor.set(terminalCursorPosition{active: true, upFromBottom: 1, column: 7})
+	anchor.set(terminalCursorPosition{active: true, upFromBottom: 1, column: 7, background: "#1a1b26"})
 	if _, err := output.Write([]byte("frame1\r")); err != nil {
 		t.Fatalf("first write: %v", err)
 	}
-	anchor.set(terminalCursorPosition{active: true, upFromBottom: 2, column: 3})
+	anchor.set(terminalCursorPosition{active: true, upFromBottom: 2, column: 3, background: "#1a1b26"})
 	if _, err := output.Write([]byte("frame2\r")); err != nil {
 		t.Fatalf("second write: %v", err)
 	}
@@ -3977,7 +3980,10 @@ func TestAnchoredOutputRestoresBeforeNextWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "frame1\r\r\x1b[1A\x1b[7C\x1b[1B\rframe2\r\r\x1b[2A\x1b[3C"
+	activate1 := terminalCursorHide + "\r\x1b[1A\x1b[7C" + terminalBackgroundSequence("#1a1b26") + terminalCursorColorSequence("#7aa2f7") + terminalCursorShow
+	restore1 := terminalCursorHide + "\x1b[1B\r" + terminalSGRReset
+	activate2 := terminalCursorHide + "\r\x1b[2A\x1b[3C" + terminalBackgroundSequence("#1a1b26") + terminalCursorColorSequence("#7aa2f7") + terminalCursorShow
+	want := "frame1\r" + activate1 + restore1 + "frame2\r" + activate2
 	if got := string(data); got != want {
 		t.Fatalf("anchored output = %q, want %q", got, want)
 	}
@@ -5633,5 +5639,138 @@ func TestAltBracketBurstFiltered(t *testing.T) {
 	model.Update(tea.MouseMsg{Action: tea.MouseActionMotion, X: 10, Y: 10})
 	if got := model.input.Value(); got != "draft" {
 		t.Fatalf("Alt+[ burst leaked: %q, want draft", got)
+	}
+}
+
+func TestInputUsesSingleRealCursorWithoutReverseVideo(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.width = 80
+	model.input.SetValue("hello")
+	model.input.CursorStart()
+	rendered := model.renderInputContent()
+	if strings.Contains(rendered, "\x1b[7m") {
+		t.Fatalf("input content contains reverse-video software cursor: %q", rendered)
+	}
+	if got := ansi.Strip(rendered); !strings.Contains(got, "hello") {
+		t.Fatalf("input content = %q, want text preserved", got)
+	}
+}
+
+func TestTokenInputUsesSingleRealCursorWithoutReverseVideo(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.input.SetValue("/help rest")
+	model.inputTokens = []inputToken{{Kind: inputTokenCommand, Start: 0, End: 5, Label: "/help"}}
+	model.input.CursorStart()
+	rendered := model.renderTokenInputContent()
+	if strings.Contains(rendered, "\x1b[7m") {
+		t.Fatalf("token input contains reverse-video software cursor: %q", rendered)
+	}
+	if got := ansi.Strip(rendered); !strings.Contains(got, "/help") {
+		t.Fatalf("token input = %q, want token text preserved", got)
+	}
+}
+
+func TestViewPublishesCursorThemeBackgroundAndVisual(t *testing.T) {
+	anchor := newTerminalCursorAnchor()
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, nil, nil, nil, anchor)
+	model.ready = true
+	model.width = 80
+	model.height = 24
+	model.relayout()
+	model.cursorFrameAt = time.Unix(0, int64(cursorCycleDuration/4))
+	model.applyCursorAnimation()
+	_ = model.View()
+
+	position, ok := anchor.consume()
+	if !ok || !position.active {
+		t.Fatalf("position = %#v/%v, want active", position, ok)
+	}
+	if position.background != model.theme.Colors.TerminalBackground {
+		t.Fatalf("background = %q, want %q", position.background, model.theme.Colors.TerminalBackground)
+	}
+	visual, ok := anchor.currentVisual()
+	if !ok || !visual.visible {
+		t.Fatalf("visual = %#v/%v, want visible", visual, ok)
+	}
+	if want := model.theme.Colors.CursorNormalBright; visual.color != strings.ToLower(want) {
+		t.Fatalf("cursor color = %q, want %q", visual.color, want)
+	}
+}
+
+func TestSlashCompletionKeepsCursorAnchor(t *testing.T) {
+	anchor := newTerminalCursorAnchor()
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, nil, nil, nil, anchor)
+	model.ready = true
+	model.width = 80
+	model.height = 24
+	model.input.SetValue("/")
+	model.input.CursorEnd()
+	model.relayout()
+	_ = model.View()
+	before, ok := anchor.consume()
+	if !ok || !before.active {
+		t.Fatalf("before anchor = %#v/%v", before, ok)
+	}
+
+	model.syncCommandCompletion()
+	if model.completion == nil {
+		t.Fatal("command completion did not open")
+	}
+	_ = model.View()
+	after, ok := anchor.consume()
+	if !ok || !after.active {
+		t.Fatalf("after anchor = %#v/%v", after, ok)
+	}
+	if before.column != after.column || before.upFromBottom != after.upFromBottom {
+		t.Fatalf("completion moved input anchor: before=%#v after=%#v", before, after)
+	}
+}
+
+func TestCursorThemeSwitchPublishesNewPalette(t *testing.T) {
+	anchor := newTerminalCursorAnchor()
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, nil, nil, nil, anchor)
+	model.ready = true
+	model.width = 80
+	model.height = 24
+	model.relayout()
+	model.cursorFrameAt = time.Unix(0, int64(cursorCycleDuration/4))
+	if err := model.applyTheme(theme.TokyoNight); err != nil {
+		t.Fatal(err)
+	}
+	_ = model.View()
+	position, ok := anchor.consume()
+	if !ok || position.background != model.theme.Colors.TerminalBackground {
+		t.Fatalf("position = %#v/%v, want new theme background", position, ok)
+	}
+	visual, ok := anchor.currentVisual()
+	if !ok || visual.color != strings.ToLower(model.theme.Colors.CursorNormalBright) {
+		t.Fatalf("visual = %#v/%v, want new theme cursor", visual, ok)
+	}
+}
+
+func TestIdleCursorFrameDoesNotScheduleAnotherFullRedraw(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.cursorFrameAt = time.Unix(10, 0)
+
+	_, cmd := model.Update(cursorFrameMsg(time.Unix(11, 0)))
+	if cmd == nil {
+		t.Fatal("idle cursor frame should still perform the one-shot pipeline poll")
+	}
+	msg := cmd()
+	if _, ok := msg.(pipelineStateUpdatedMsg); !ok {
+		t.Fatalf("idle cursor frame command returned %T, want only one-shot pipeline poll", msg)
+	}
+}
+
+func TestWorktreeRefreshDoesNotStartIdleRedrawLoop(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	next, cmd := model.Update(worktreeRefreshMsg{snapshot: worktreeSnapshot{name: "workspace"}})
+	model = next.(appModel)
+	if cmd != nil {
+		t.Fatalf("worktree refresh scheduled periodic redraw command: %v", cmd)
+	}
+	if model.worktree.name != "workspace" {
+		t.Fatalf("worktree name = %q, want refreshed snapshot", model.worktree.name)
 	}
 }

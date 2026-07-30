@@ -1,19 +1,28 @@
 // 本文件定义输入光标的两相淡入淡出动画和颜色插值。
 package bubble
 
-import (
-	"github.com/charmbracelet/lipgloss"
-	"time"
-)
+import "time"
 
-// applyCursorAnimation 根据当前时间帧更新 textarea 光标颜色和隐藏状态。
+// applyCursorAnimation 根据当前时间帧发布真实终端光标颜色和隐藏状态。
 func (m *appModel) applyCursorAnimation() {
 	if m.cursorFrameAt.IsZero() {
 		m.cursorFrameAt = time.Now()
 	}
 	intensity := cursorIntensityAt(cursorCycleOffset(m.cursorFrameAt))
-	m.input.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(m.styles.Colors.CursorColor(intensity, m.isTerminalInputActive())))
-	m.input.Cursor.Blink = intensity <= cursorHiddenThreshold
+	if m.cursorAnchor != nil {
+		brightRole := colorCursorNormalBright
+		if m.isTerminalInputActive() {
+			brightRole = colorCursorTerminalBright
+		}
+		m.cursorAnchor.setAnimation(terminalCursorAnimation{
+			background: m.styles.Colors.Hex(colorTerminalBackground),
+			bright:     m.styles.Colors.Hex(brightRole),
+		})
+		m.cursorAnchor.setVisual(terminalCursorVisual{
+			color:   m.styles.Colors.CursorColor(intensity, m.isTerminalInputActive()),
+			visible: intensity > cursorHiddenThreshold,
+		})
+	}
 }
 
 // cursorCycleOffset 计算当前时间落在 3 秒光标周期中的偏移。
@@ -61,4 +70,26 @@ func easeInOutSine(t float64) float64 {
 func easeOutCubic(t float64) float64 {
 	t = 1 - clamp01(t)
 	return 1 - t*t*t
+}
+
+// needsUIAnimationFrames reports whether non-cursor TUI elements still require
+// Bubble Tea redraws. Cursor color itself is animated directly by anchoredOutput.
+func (m appModel) needsUIAnimationFrames(now time.Time) bool {
+	if m.isWorkRunning() || m.isGenerating || m.transcriptRefreshPending {
+		return true
+	}
+	if m.tokenRippleActive(now) {
+		return true
+	}
+	if !m.waveAmpStartedAt.IsZero() && now.Sub(m.waveAmpStartedAt) < equalizerAmpDuration {
+		return true
+	}
+	if m.subagentPicker != nil {
+		for _, task := range m.subagentPicker.tasks {
+			if string(task.Status) == "running" {
+				return true
+			}
+		}
+	}
+	return false
 }
