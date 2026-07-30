@@ -2156,3 +2156,96 @@ func TestRunTurnExecutesToolCallFormatWithXMLParams(t *testing.T) {
 		t.Fatalf("file_path = %q, want README.md", input.FilePath)
 	}
 }
+
+type serialBarrierTool struct {
+	name    string
+	started chan<- string
+	release <-chan struct{}
+}
+
+func (t *serialBarrierTool) Name() string        { return t.name }
+func (t *serialBarrierTool) Description() string { return t.name }
+func (t *serialBarrierTool) InputSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object"}`)
+}
+func (t *serialBarrierTool) Run(ctx context.Context, _ json.RawMessage) (string, error) {
+	t.started <- t.name
+	if t.release != nil {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-t.release:
+		}
+	}
+	return t.name + " done", nil
+}
+
+type safeBarrierTool struct{ *serialBarrierTool }
+
+func (*safeBarrierTool) IsConcurrencySafe(json.RawMessage) bool { return true }
+
+func TestToolCallsPreserveBarrierAroundSerialTool(t *testing.T) {
+	registry := tool.NewRegistry()
+	started := make(chan string, 3)
+	beforeRelease := make(chan struct{})
+	selectRelease := make(chan struct{})
+	registry.Register(&safeBarrierTool{&serialBarrierTool{name: "safe-before", started: started, release: beforeRelease}})
+	registry.Register(&serialBarrierTool{name: "Select", started: started, release: selectRelease})
+	registry.Register(&safeBarrierTool{&serialBarrierTool{name: "safe-after", started: started}})
+	runner := NewRunner(&fakeModel{}, &fakeUI{}, registry, nil, "")
+	calls := []message.ToolCall{{ID: "1", Name: "safe-before", Input: json.RawMessage(`{}`)}, {ID: "2", Name: "Select", Input: json.RawMessage(`{}`)}, {ID: "3", Name: "safe-after", Input: json.RawMessage(`{}`)}}
+	done := make(chan error, 1)
+	go func() { _, err := runner.runToolCalls(context.Background(), calls); done <- err }()
+	if got := <-started; got != "safe-before" {
+		t.Fatalf("first = %s", got)
+	}
+	select {
+	case got := <-started:
+		t.Fatalf("started before barrier: %s", got)
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(beforeRelease)
+	if got := <-started; got != "Select" {
+		t.Fatalf("second = %s", got)
+	}
+	select {
+	case got := <-started:
+		t.Fatalf("started after barrier early: %s", got)
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(selectRelease)
+	if got := <-started; got != "safe-after" {
+		t.Fatalf("third = %s", got)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestToolCallsSerializeMultipleBarriers(t *testing.T) {
+	registry := tool.NewRegistry()
+	started := make(chan string, 3)
+	one := make(chan struct{})
+	two := make(chan struct{})
+	registry.Register(&serialBarrierTool{name: "Select-1", started: started, release: one})
+	registry.Register(&serialBarrierTool{name: "Select-2", started: started, release: two})
+	registry.Register(&safeBarrierTool{&serialBarrierTool{name: "safe-after", started: started}})
+	runner := NewRunner(&fakeModel{}, &fakeUI{}, registry, nil, "")
+	calls := []message.ToolCall{{ID: "1", Name: "Select-1", Input: json.RawMessage(`{}`)}, {ID: "2", Name: "Select-2", Input: json.RawMessage(`{}`)}, {ID: "3", Name: "safe-after", Input: json.RawMessage(`{}`)}}
+	done := make(chan error, 1)
+	go func() { _, err := runner.runToolCalls(context.Background(), calls); done <- err }()
+	if got := <-started; got != "Select-1" {
+		t.Fatal(got)
+	}
+	close(one)
+	if got := <-started; got != "Select-2" {
+		t.Fatal(got)
+	}
+	close(two)
+	if got := <-started; got != "safe-after" {
+		t.Fatal(got)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
