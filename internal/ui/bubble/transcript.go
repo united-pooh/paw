@@ -265,6 +265,10 @@ func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMes
 	if name == "" {
 		name = "tool"
 	}
+	target := toolSummaryTarget(name, input)
+	if selectTarget, ok := selectToolCallTarget(name, input); ok {
+		target = selectTarget
+	}
 	m.addEntry(transcriptEntry{
 		kind:          entryTool,
 		title:         "tool",
@@ -272,7 +276,7 @@ func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMes
 		toolUseID:     strings.TrimSpace(toolUseID),
 		toolName:      name,
 		toolStatus:    "running",
-		toolTarget:    toolSummaryTarget(name, input),
+		toolTarget:    target,
 		createdAt:     m.animationNow(),
 		toolStartedAt: m.animationNow(),
 	})
@@ -299,10 +303,13 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 			continue
 		}
 		entry.title = "tool"
-		entry.body = completeRunningToolCallBody(entry.body, status)
+		entry.body = completeToolCallBody(name, entry.body, status, content)
 		entry.isError = isError
 		entry.toolStatus = status
 		entry.toolResult = content
+		if summary, ok := selectToolResultTarget(name, status, content); ok {
+			entry.toolTarget = summary
+		}
 		entry.toolExpanded = isError
 		entry.toolResultOnly = false
 		entry.toolFinishedAt = m.animationNow()

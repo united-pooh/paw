@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/rivo/uniseg"
+	selecttool "paw/internal/tool/select"
 )
 
 // summarizeToolContent 将工具输出压缩为单行短预览，避免 transcript 被长结果撑开。
@@ -56,6 +57,9 @@ func formatToolCallBody(name string, input json.RawMessage, oldContent string) s
 		name = "tool"
 	}
 	fields := toolInputFields(input)
+	if strings.EqualFold(name, "Select") {
+		return formatSelectToolCallBody(name, fields)
+	}
 	if strings.EqualFold(name, "Subagent") {
 		return formatSubagentToolCallBody(name, fields)
 	}
@@ -70,6 +74,58 @@ func formatToolCallBody(name string, input json.RawMessage, oldContent string) s
 		}
 		lines = append(lines, field.value)
 	}
+	return strings.Join(lines, "\n")
+}
+
+func formatSelectToolCallBody(name string, fields []toolDisplayField) string {
+	lines := []string{name}
+	if mode := fieldValue(fields, "mode"); mode != "" {
+		lines = append(lines, "mode  "+mode)
+	}
+	if prompt := fieldValue(fields, "prompt"); prompt != "" {
+		lines = append(lines, "prompt  "+summarizeToolContent(prompt))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func selectToolCallTarget(name string, input json.RawMessage) (string, bool) {
+	if !strings.EqualFold(strings.TrimSpace(name), "Select") {
+		return "", false
+	}
+	return strings.Join(strings.Fields(fieldValue(toolInputFields(input), "prompt")), " "), true
+}
+
+func selectToolResultTarget(name, status, content string) (string, bool) {
+	if !strings.EqualFold(strings.TrimSpace(name), "Select") || status != "ok" {
+		return "", false
+	}
+	var result selecttool.Result
+	if json.Unmarshal([]byte(content), &result) != nil {
+		return "", false
+	}
+	if result.Cancelled {
+		return "cancelled", true
+	}
+	noun := "options"
+	if len(result.SelectedIDs) == 1 {
+		noun = "option"
+	}
+	return fmt.Sprintf("selected %d %s", len(result.SelectedIDs), noun), true
+}
+
+func completeToolCallBody(name, body, status, content string) string {
+	if !strings.EqualFold(strings.TrimSpace(name), "Select") || status != "ok" {
+		return completeRunningToolCallBody(body, status)
+	}
+	summary, ok := selectToolResultTarget(name, status, content)
+	if !ok {
+		return completeRunningToolCallBody(body, status)
+	}
+	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
+	if len(lines) == 0 {
+		return "Select · " + summary
+	}
+	lines[0] = "Select · " + summary
 	return strings.Join(lines, "\n")
 }
 
@@ -387,6 +443,8 @@ func primaryToolInputKeys(name string) []string {
 		return []string{"command"}
 	case "webfetch":
 		return []string{"url"}
+	case "select":
+		return []string{"prompt"}
 	case "subagentstop":
 		return []string{"id"}
 	default:
