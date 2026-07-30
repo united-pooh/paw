@@ -147,11 +147,13 @@ func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 	// WithInput 包一层 ESC 聚合 reader：在 BubbleTea 解析字节之前，把被读边界
 	// 切断的 \x1b[<...M 鼠标序列重新拼合，从源头杜绝 ESC 与 [ 分离导致的
 	// [[[[[[[ 泄漏。reader 内嵌 *os.File，MakeRaw 与 kqueue 路径不受影响。
+	output := newAnchoredOutput(os.Stdout, anchor)
+	defer output.Close()
 	program := tea.NewProgram(
 		appModel,
 		tea.WithContext(ctx),
 		tea.WithInput(newESCCoalescingReader(os.Stdin)),
-		tea.WithOutput(newAnchoredOutput(os.Stdout, anchor)),
+		tea.WithOutput(output),
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)

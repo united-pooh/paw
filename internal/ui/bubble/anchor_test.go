@@ -1,8 +1,11 @@
 package bubble
 
 import (
+	"io"
+	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTerminalBackgroundSequenceUsesTrueColor(t *testing.T) {
@@ -69,5 +72,51 @@ func TestTerminalCursorRestoreIsCompleteAndIdempotent(t *testing.T) {
 	}
 	if got != restoreTerminalCursorState() {
 		t.Fatal("restoreTerminalCursorState() is not deterministic")
+	}
+}
+
+func TestTerminalCursorAnimationUsesThemeEndpoints(t *testing.T) {
+	anchor := newTerminalCursorAnchor()
+	anchor.setAnimation(terminalCursorAnimation{background: "#1a1b26", bright: "#7aa2f7"})
+	animation, ok := anchor.currentAnimation()
+	if !ok {
+		t.Fatal("cursor animation was not published")
+	}
+	if animation.background != "#1a1b26" || animation.bright != "#7aa2f7" {
+		t.Fatalf("animation = %#v", animation)
+	}
+	colors := map[string]bool{}
+	for _, offset := range []time.Duration{0, cursorCycleDuration / 6, cursorCycleDuration / 4, cursorCycleDuration / 3, cursorCycleDuration / 2} {
+		intensity := cursorIntensityAt(offset)
+		colors[interpolateHexColor(animation.background, animation.bright, intensity)] = true
+	}
+	if len(colors) < 2 {
+		t.Fatalf("animation colors = %#v, want gradient", colors)
+	}
+}
+
+func TestAnchoredOutputCloseRestoresTerminalStateOnce(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "cursor-close-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	output := newAnchoredOutput(file, newTerminalCursorAnchor())
+	if err := output.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := output.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), restoreTerminalCursorState(); got != want {
+		t.Fatalf("close output = %q, want one restore %q", got, want)
 	}
 }

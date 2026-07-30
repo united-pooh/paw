@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -30,14 +31,23 @@ type terminalCursorVisual struct {
 	visible bool
 }
 
+// terminalCursorAnimation 保存真实光标渐变的主题端点。输出层独立计时，
+// 因此空闲输入时无需触发 Bubble Tea 整帧重绘。
+type terminalCursorAnimation struct {
+	background string
+	bright     string
+}
+
 // terminalCursorAnchor 在线程安全的容器中分别保存位置和视觉状态。
 type terminalCursorAnchor struct {
-	mu         sync.Mutex
-	pending    terminalCursorPosition
-	hasPending bool
-	visual     terminalCursorVisual
-	hasVisual  bool
-	visualWake chan struct{}
+	mu           sync.Mutex
+	pending      terminalCursorPosition
+	hasPending   bool
+	visual       terminalCursorVisual
+	hasVisual    bool
+	animation    terminalCursorAnimation
+	hasAnimation bool
+	visualWake   chan struct{}
 }
 
 // newTerminalCursorAnchor 创建一个空的终端光标锚点容器。
@@ -73,6 +83,30 @@ func (a *terminalCursorAnchor) setVisual(visual terminalCursorVisual) {
 	case a.visualWake <- struct{}{}:
 	default:
 	}
+}
+
+func (a *terminalCursorAnchor) setAnimation(animation terminalCursorAnimation) {
+	if a == nil {
+		return
+	}
+	background, backgroundOK := normalizeTerminalHexColor(animation.background)
+	bright, brightOK := normalizeTerminalHexColor(animation.bright)
+	if !backgroundOK || !brightOK {
+		return
+	}
+	a.mu.Lock()
+	a.animation = terminalCursorAnimation{background: background, bright: bright}
+	a.hasAnimation = true
+	a.mu.Unlock()
+}
+
+func (a *terminalCursorAnchor) currentAnimation() (terminalCursorAnimation, bool) {
+	if a == nil {
+		return terminalCursorAnimation{}, false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.animation, a.hasAnimation
 }
 
 // clear 请求下一次输出后恢复终端默认光标状态。
@@ -138,6 +172,8 @@ func (w *anchoredOutput) forwardVisualUpdates() {
 	if w == nil || w.anchor == nil {
 		return
 	}
+	ticker := time.NewTicker(cursorFrameInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-w.anchor.visualWake:
@@ -145,6 +181,16 @@ func (w *anchoredOutput) forwardVisualUpdates() {
 			if ok {
 				_ = w.applyVisualOnly(visual)
 			}
+		case now := <-ticker.C:
+			animation, ok := w.anchor.currentAnimation()
+			if !ok {
+				continue
+			}
+			intensity := cursorIntensityAt(cursorCycleOffset(now))
+			_ = w.applyVisualOnly(terminalCursorVisual{
+				color:   interpolateHexColor(animation.background, animation.bright, intensity),
+				visible: intensity > cursorHiddenThreshold,
+			})
 		case <-w.stop:
 			return
 		}
