@@ -228,3 +228,17 @@ func TestRenderToolDetailLinesHandlesNumberedDiff(t *testing.T) {
 		t.Fatalf("rendered diff lost text: %q", rendered)
 	}
 }
+
+func TestFormatFileMutationToolCallBodyNoSummaryOnIdenticalWrite(t *testing.T) {
+	content := "package p\n\nfunc a() int { return 1 }\n"
+	input := writeInputJSON(t, "a.go", content)
+	// oldContent identical to content: zero added, zero removed → no summary token.
+	body := formatFileMutationToolCallBody("Write", toolInputFields(input), content)
+	first := firstToolEntryLine(body)
+	if strings.Contains(first, "+0") || strings.Contains(first, "-0") {
+		t.Fatalf("first line = %q, want no +0/-0 summary on identical content", first)
+	}
+	if first != "Write" {
+		t.Fatalf("first line = %q, want bare Write", first)
+	}
+}

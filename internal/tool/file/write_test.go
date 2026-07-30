@@ -2,7 +2,6 @@ package file
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,5 +68,4 @@ func TestWriteToolRejectsStaleWriteAfterExternalModification(t *testing.T) {
 	if string(got) != "user-changed\n" {
 		t.Fatalf("file = %q, want user content preserved", string(got))
 	}
-	_ = errors.New
 }

@@ -125,6 +125,9 @@ func fileMutationChangeCounts(fields []toolDisplayField, oldContent string) (dif
 		return diffTotals{removed: len(splitLines(old))}, true
 	}
 	added, removed := diffCounts(structuredDiff(splitLines(old), splitLines(newContent)))
+	if added == 0 && removed == 0 {
+		return diffTotals{}, false
+	}
 	return diffTotals{added: added, removed: removed}, true
 }
 

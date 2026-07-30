@@ -1,7 +1,6 @@
 package file
 
 import (
-	"errors"
 	"strings"
 	"testing"
 )
@@ -67,5 +66,4 @@ func TestReadStateStoreVerifyConcurrentSafe(t *testing.T) {
 	if err := s.Verify("/p", []byte("x")); err != nil {
 		t.Fatalf("final Verify = %v", err)
 	}
-	_ = errors.New
 }
