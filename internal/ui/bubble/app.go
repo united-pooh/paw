@@ -20,6 +20,7 @@ import (
 	"paw/internal/settings"
 	"paw/internal/skill"
 	"paw/internal/theme"
+	selecttool "paw/internal/tool/select"
 )
 
 // pipelinePollCmd 异步检测 .pipeline-workspace/ 并返回 pipelineStateUpdatedMsg。
@@ -117,6 +118,9 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 // Init 返回 Bubble Tea 启动时需要执行的初始命令。
 func (m appModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.input.Focus(), cursorFrameTick()}
+	if m.selectionBroker != nil {
+		cmds = append(cmds, waitSelectionBrokerEventCmd(m.ctx, m.selectionBroker))
+	}
 	if m.worktreeCWD != "" {
 		cmds = append(cmds, worktreeRefreshCmd(m.ctx, m.worktreeCWD, m.worktreeReader))
 	}
@@ -128,6 +132,28 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case selectionBrokerEventMsg:
+		if errors.Is(msg.err, selecttool.ErrBrokerClosed) || errors.Is(msg.err, context.Canceled) || msg.event.Kind == selecttool.EventClosed {
+			m.selectionDock = nil
+			m.relayout()
+			return m, m.input.Focus()
+		}
+		if msg.err != nil {
+			return m, waitSelectionBrokerEventCmd(m.ctx, m.selectionBroker)
+		}
+		switch msg.event.Kind {
+		case selecttool.EventRequest:
+			if m.selectionDock == nil || m.selectionDock.request.ID == msg.event.Request.ID {
+				m.selectionDock = newSelectionDock(msg.event.Request)
+				m.relayout()
+			}
+		case selecttool.EventInvalidated:
+			if m.selectionDock != nil && m.selectionDock.request.ID == msg.event.RequestID {
+				m.selectionDock = nil
+				m.relayout()
+			}
+		}
+		return m, waitSelectionBrokerEventCmd(m.ctx, m.selectionBroker)
 	case tea.WindowSizeMsg:
 		wasAtBottom := m.viewport.AtBottom()
 		m.ready = true
@@ -440,6 +466,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		msg, rawMouseFragment = m.filterRawMouseEscapeKey(msg)
 		if rawMouseFragment {
 			return m, nil
+		}
+		if m.selectionDock != nil {
+			return m.handleSelectionDockKey(msg)
 		}
 		if m.themePicker != nil {
 			return m.handleThemePickerKey(msg)

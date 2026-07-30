@@ -5,7 +5,41 @@ import (
 
 	"paw/internal/tool"
 	toolfile "paw/internal/tool/file"
+	selecttool "paw/internal/tool/select"
 )
+
+func TestRegisterInteractiveToolsAddsSelect(t *testing.T) {
+	registry := tool.NewRegistry()
+	broker := selecttool.NewBroker()
+	defer broker.Close()
+	if err := registerInteractiveTools(registry, broker); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := registry.Get("Select"); !ok {
+		t.Fatal("interactive registry missing Select")
+	}
+}
+
+func TestRegisterToolsDoesNotAddSelect(t *testing.T) {
+	registry := tool.NewRegistry()
+	if err := registerTools(registry, t.TempDir(), nil, nil, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := registry.Get("Select"); ok {
+		t.Fatal("base registry unexpectedly contains Select")
+	}
+}
+
+func TestRegisterInteractiveToolsRejectsNil(t *testing.T) {
+	broker := selecttool.NewBroker()
+	defer broker.Close()
+	if err := registerInteractiveTools(nil, broker); err == nil || err.Error() != "tool registry is nil" {
+		t.Fatalf("nil registry error = %v", err)
+	}
+	if err := registerInteractiveTools(tool.NewRegistry(), nil); err == nil || err.Error() != "selection broker is nil" {
+		t.Fatalf("nil broker error = %v", err)
+	}
+}
 
 func TestRegisterToolsIncludesEdit(t *testing.T) {
 	registry := tool.NewRegistry()

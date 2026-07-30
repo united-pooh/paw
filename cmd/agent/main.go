@@ -19,6 +19,7 @@ import (
 	toolexec "paw/internal/tool/exec"
 	toolfile "paw/internal/tool/file"
 	toolmcp "paw/internal/tool/mcp"
+	selecttool "paw/internal/tool/select"
 	toolwebfetch "paw/internal/tool/webfetch"
 	uiiface "paw/internal/ui"
 	bubbleui "paw/internal/ui/bubble"
@@ -131,7 +132,12 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	clearTerminalWindow(os.Stdout)
 
 	output := bubbleui.New()
-	runner, sessionID, client, settingsController, subagentManager, store, mcpManager, err := buildRunner(ctx, opts.sessionID, output)
+	selectionBroker := selecttool.NewBroker()
+	defer selectionBroker.Close()
+	output.SetSelectionBroker(selectionBroker)
+	runner, sessionID, client, settingsController, subagentManager, store, mcpManager, err := buildRunner(ctx, opts.sessionID, output, func(registry *tool.Registry) error {
+		return registerInteractiveTools(registry, selectionBroker)
+	})
 	if err != nil {
 		return err
 	}
@@ -442,11 +448,13 @@ type subagentRuntimeContext struct {
 	mcpBroker    coremcp.Broker
 }
 
-func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI) (*loop.Runner, string, *model.Client, *settings.Controller, *subagent.Manager, *session.JSONLStore, *coremcp.Manager, error) {
-	return buildRunnerWithSubagentContext(ctx, sessionIDFlag, output, subagentRuntimeContext{})
+type runnerToolConfigurator func(*tool.Registry) error
+
+func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI, configurators ...runnerToolConfigurator) (*loop.Runner, string, *model.Client, *settings.Controller, *subagent.Manager, *session.JSONLStore, *coremcp.Manager, error) {
+	return buildRunnerWithSubagentContext(ctx, sessionIDFlag, output, subagentRuntimeContext{}, configurators...)
 }
 
-func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, output uiiface.UI, subCtx subagentRuntimeContext) (*loop.Runner, string, *model.Client, *settings.Controller, *subagent.Manager, *session.JSONLStore, *coremcp.Manager, error) {
+func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, output uiiface.UI, subCtx subagentRuntimeContext, configurators ...runnerToolConfigurator) (*loop.Runner, string, *model.Client, *settings.Controller, *subagent.Manager, *session.JSONLStore, *coremcp.Manager, error) {
 	cfg, err := model.LoadConfigFromEnv()
 	if err != nil {
 		return nil, "", nil, nil, nil, nil, nil, err
@@ -521,6 +529,17 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 		}
 		return nil, "", nil, nil, nil, nil, nil, err
 	}
+	for _, configure := range configurators {
+		if configure == nil {
+			continue
+		}
+		if err := configure(registry); err != nil {
+			if mcpManager != nil {
+				_ = mcpManager.Close(context.Background())
+			}
+			return nil, "", nil, nil, nil, nil, nil, err
+		}
+	}
 	if mcpManager != nil {
 		updates, stopUpdates := mcpManager.Subscribe()
 		go func() {
@@ -569,6 +588,17 @@ func (a streamMASubagentAdapter) StreamSubagent(ctx context.Context, req loop.St
 		TranscriptPath: stream.TranscriptPath,
 		OutputPath:     stream.OutputPath,
 	}, nil
+}
+
+func registerInteractiveTools(registry *tool.Registry, broker *selecttool.Broker) error {
+	if registry == nil {
+		return fmt.Errorf("tool registry is nil")
+	}
+	if broker == nil {
+		return fmt.Errorf("selection broker is nil")
+	}
+	registry.Register(selecttool.New(broker))
+	return nil
 }
 
 func registerTools(registry *tool.Registry, root string, readRoots []string, subagentManager *subagent.Manager, sessionID string, broker coremcp.Broker) error {

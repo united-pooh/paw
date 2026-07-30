@@ -74,6 +74,10 @@ func computeTUILayout(width, height, requestedInputHeight int) tuiLayout {
 
 func (m appModel) currentLayout() tuiLayout {
 	inputHeight := m.input.Height()
+	if m.selectionDock != nil {
+		base := computeTUILayout(m.width, m.height, inputMinVisibleLines)
+		inputHeight = m.selectionDock.preferredHeight(inputDockContentWidth(base.contentWidth))
+	}
 	if inputHeight <= 0 {
 		inputHeight = inputMinVisibleLines
 	}
@@ -332,6 +336,7 @@ func (m appModel) updateTerminalCursorAnchor(layout tuiLayout) {
 
 func (m appModel) shouldAnchorTextInputCursor() bool {
 	return m.ready &&
+		m.selectionDock == nil &&
 		!m.isTerminalWorkRunning() &&
 		!m.toolInspectActive &&
 		m.themePicker == nil &&
@@ -402,6 +407,14 @@ func (m appModel) renderInputBox() string {
 }
 
 func (m appModel) renderInputBoxForLayout(layout tuiLayout) string {
+	if m.selectionDock != nil {
+		return renderFixedStyledPanel(
+			inputDockStyle,
+			layout.contentWidth,
+			layout.inputHeight,
+			m.renderSelectionDock(inputDockContentWidth(layout.contentWidth), layout.inputHeight),
+		)
+	}
 	style := inputDockStyle
 	if m.isTerminalInputActive() || m.runningTerminal {
 		style = inputDockTerminalStyle
@@ -537,8 +550,15 @@ func (m *appModel) relayout() {
 	m.input.SetWidth(inputWidth)
 
 	requestedInputHeight := m.tokenAwareInputVisibleLineCount()
+	if m.selectionDock != nil {
+		requestedInputHeight = m.selectionDock.preferredHeight(inputWidth)
+	}
 	layout := computeTUILayout(m.width, m.height, requestedInputHeight)
-	m.input.SetHeight(layout.inputHeight)
+	if m.selectionDock == nil {
+		m.input.SetHeight(layout.inputHeight)
+	} else {
+		m.input.SetHeight(clampInt(m.tokenAwareInputVisibleLineCount(), 1, inputMaxVisibleLines))
+	}
 	m.viewport.Width = transcriptWidth
 	m.viewport.Height = maxInt(1, layout.transcriptHeight)
 }
