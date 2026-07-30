@@ -175,3 +175,56 @@ func TestFormatRunningToolCallBodyInsertsStatusBeforeCounts(t *testing.T) {
 		t.Fatalf("completed first line = %q, want Edit · ok · +1 -1", firstCompleted)
 	}
 }
+
+func TestEditRunningBodyRendersRegionDiff(t *testing.T) {
+	old := "func run() int {\n\treturn 1\n}\n"
+	input := editInputJSON(t, "internal/foo.go", "\treturn 1", "\treturn 2")
+	body := formatRunningToolCallBody("Edit", input, old)
+
+	first := firstToolEntryLine(body)
+	if !strings.Contains(first, "Edit · running · +1 -1") {
+		t.Fatalf("summary line = %q", first)
+	}
+	if !strings.Contains(body, "internal/foo.go") {
+		t.Fatalf("missing target: %q", body)
+	}
+	if !strings.Contains(body, "- │ \treturn 1") || !strings.Contains(body, "+ │ \treturn 2") {
+		t.Fatalf("missing region diff lines: %q", body)
+	}
+}
+
+func TestWriteRunningBodyRendersFullFileDiff(t *testing.T) {
+	old := "package p\n\nfunc a() int { return 1 }\n"
+	newContent := "package p\n\nfunc a() int { return 2 }\n"
+	input := writeInputJSON(t, "internal/foo.go", newContent)
+	body := formatRunningToolCallBody("Write", input, old)
+
+	first := firstToolEntryLine(body)
+	if !strings.Contains(first, "Write · running · +1 -1") {
+		t.Fatalf("summary line = %q", first)
+	}
+	// Full-file diff: unchanged context lines + the changed line.
+	if !strings.Contains(body, "- │ func a() int { return 1 }") {
+		t.Fatalf("missing removed line: %q", body)
+	}
+	if !strings.Contains(body, "+ │ func a() int { return 2 }") {
+		t.Fatalf("missing added line: %q", body)
+	}
+}
+
+func TestRenderToolDetailLinesHandlesNumberedDiff(t *testing.T) {
+	old := "a\nreturn 1\nb\n"
+	input := editInputJSON(t, "a.go", "return 1", "return 2")
+	body := formatRunningToolCallBody("Edit", input, old)
+	// Drop the first two lines (summary + target) to isolate diff lines.
+	parts := strings.SplitN(body, "\n", 3)
+	diffLines := []string{}
+	if len(parts) == 3 {
+		diffLines = strings.Split(parts[2], "\n")
+	}
+	rendered := renderToolDetailLines(diffLines, 80)
+	// Text content must survive styling (lipgloss escape sequences wrap it).
+	if !strings.Contains(rendered, "return 1") || !strings.Contains(rendered, "return 2") {
+		t.Fatalf("rendered diff lost text: %q", rendered)
+	}
+}
