@@ -189,7 +189,7 @@ func (w *anchoredOutput) forwardVisualUpdates() {
 			intensity := cursorIntensityAt(cursorCycleOffset(now))
 			_ = w.applyVisualOnly(terminalCursorVisual{
 				color:   interpolateHexColor(animation.background, animation.bright, intensity),
-				visible: intensity > cursorHiddenThreshold,
+				visible: true,
 			})
 		case <-w.stop:
 			return
@@ -238,7 +238,7 @@ func (w *anchoredOutput) Write(p []byte) (int, error) {
 	}
 
 	if w.moved {
-		if _, err := w.out.Write([]byte(terminalCursorHide + restoreTerminalCursorInvariant(w.last) + terminalSGRReset)); err != nil {
+		if _, err := w.out.Write([]byte(restoreTerminalCursorInvariant(w.last) + terminalSGRReset)); err != nil {
 			return 0, err
 		}
 		w.moved = false
@@ -327,22 +327,17 @@ func terminalCursorVisibilitySequence(visible bool) string {
 }
 
 func terminalCursorVisualSequence(previous, next terminalCursorVisual) string {
-	var out strings.Builder
-	if previous.color != next.color {
-		out.WriteString(terminalCursorColorSequence(next.color))
+	if previous.color == next.color {
+		return ""
 	}
-	if previous.visible != next.visible {
-		out.WriteString(terminalCursorVisibilitySequence(next.visible))
-	}
-	return out.String()
+	return terminalCursorColorSequence(next.color)
 }
 
 func activateTerminalCursor(position terminalCursorPosition, visual terminalCursorVisual) string {
-	return terminalCursorHide +
-		moveTerminalCursorToAnchor(position) +
+	return moveTerminalCursorToAnchor(position) +
 		terminalBackgroundSequence(position.background) +
 		terminalCursorColorSequence(visual.color) +
-		terminalCursorVisibilitySequence(visual.visible)
+		terminalCursorShow
 }
 
 func restoreTerminalCursorState() string {

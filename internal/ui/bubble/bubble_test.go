@@ -2159,8 +2159,9 @@ func TestViewAnchorsTerminalCursorOnInputCell(t *testing.T) {
 	if position.upFromBottom != wantUpFromBottom {
 		t.Fatalf("upFromBottom = %d, want input content row %d", position.upFromBottom, wantUpFromBottom)
 	}
-	if position.column <= 2 {
-		t.Fatalf("column = %d, want input cell position", position.column)
+	wantColumn := inputDockStyle.GetPaddingLeft() + terminalCellWidth("hello")
+	if position.column != wantColumn {
+		t.Fatalf("column = %d, want input cell position %d", position.column, wantColumn)
 	}
 }
 
@@ -2179,8 +2180,9 @@ func TestViewAnchorsTerminalCursorWithEmptyPlaceholder(t *testing.T) {
 	if !ok || !position.active {
 		t.Fatalf("anchor = %#v/%v, want active", position, ok)
 	}
-	if position.column != 2 {
-		t.Fatalf("column = %d, want input cell start", position.column)
+	wantColumn := inputDockStyle.GetPaddingLeft()
+	if position.column != wantColumn {
+		t.Fatalf("column = %d, want input cell start %d", position.column, wantColumn)
 	}
 }
 
@@ -4021,9 +4023,9 @@ func TestAnchoredOutputRestoresBeforeNextWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	activate1 := terminalCursorHide + "\r\x1b[1A\x1b[7C" + terminalBackgroundSequence("#1a1b26") + terminalCursorColorSequence("#7aa2f7") + terminalCursorShow
-	restore1 := terminalCursorHide + "\x1b[1B\r" + terminalSGRReset
-	activate2 := terminalCursorHide + "\r\x1b[2A\x1b[3C" + terminalBackgroundSequence("#1a1b26") + terminalCursorColorSequence("#7aa2f7") + terminalCursorShow
+	activate1 := "\r\x1b[1A\x1b[7C" + terminalBackgroundSequence("#1a1b26") + terminalCursorColorSequence("#7aa2f7") + terminalCursorShow
+	restore1 := "\x1b[1B\r" + terminalSGRReset
+	activate2 := "\r\x1b[2A\x1b[3C" + terminalBackgroundSequence("#1a1b26") + terminalCursorColorSequence("#7aa2f7") + terminalCursorShow
 	want := "frame1\r" + activate1 + restore1 + "frame2\r" + activate2
 	if got := string(data); got != want {
 		t.Fatalf("anchored output = %q, want %q", got, want)
@@ -5851,7 +5853,6 @@ func TestViewPublishesCursorThemeBackgroundAndVisual(t *testing.T) {
 	model.width = 80
 	model.height = 24
 	model.relayout()
-	model.cursorFrameAt = time.Unix(0, int64(cursorCycleDuration/4))
 	model.applyCursorAnimation()
 	_ = model.View()
 
@@ -5863,11 +5864,13 @@ func TestViewPublishesCursorThemeBackgroundAndVisual(t *testing.T) {
 		t.Fatalf("background = %q, want %q", position.background, model.theme.Colors.TerminalBackground)
 	}
 	visual, ok := anchor.currentVisual()
-	if !ok || !visual.visible {
-		t.Fatalf("visual = %#v/%v, want visible", visual, ok)
+	if !ok {
+		t.Fatalf("visual = %#v/%v, want published state", visual, ok)
 	}
-	if want := model.theme.Colors.CursorNormalBright; visual.color != strings.ToLower(want) {
-		t.Fatalf("cursor color = %q, want %q", visual.color, want)
+	background := strings.ToLower(model.theme.Colors.TerminalBackground)
+	bright := strings.ToLower(model.theme.Colors.CursorNormalBright)
+	if visual.color == "" || (visual.color != background && visual.color != bright && !strings.HasPrefix(visual.color, "#")) {
+		t.Fatalf("cursor color = %q, want theme gradient color", visual.color)
 	}
 }
 
@@ -5917,8 +5920,12 @@ func TestCursorThemeSwitchPublishesNewPalette(t *testing.T) {
 		t.Fatalf("position = %#v/%v, want new theme background", position, ok)
 	}
 	visual, ok := anchor.currentVisual()
-	if !ok || visual.color != strings.ToLower(model.theme.Colors.CursorNormalBright) {
-		t.Fatalf("visual = %#v/%v, want new theme cursor", visual, ok)
+	if !ok || !visual.visible || !strings.HasPrefix(visual.color, "#") {
+		t.Fatalf("visual = %#v/%v, want new theme gradient state", visual, ok)
+	}
+	animation, ok := anchor.currentAnimation()
+	if !ok || animation.background != strings.ToLower(model.theme.Colors.TerminalBackground) || animation.bright != strings.ToLower(model.theme.Colors.CursorNormalBright) {
+		t.Fatalf("animation = %#v/%v, want new theme endpoints", animation, ok)
 	}
 }
 

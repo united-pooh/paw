@@ -8,7 +8,12 @@ func (m *appModel) applyCursorAnimation() {
 	if m.cursorFrameAt.IsZero() {
 		m.cursorFrameAt = time.Now()
 	}
-	intensity := cursorIntensityAt(cursorCycleOffset(m.cursorFrameAt))
+	// cursorFrameAt can intentionally stop advancing while the TUI is idle.
+	// Keyboard events must not republish that stale frame, otherwise every key
+	// jumps the real cursor gradient back to the same point before the output
+	// ticker advances it again.
+	cursorNow := time.Now()
+	intensity := cursorIntensityAt(cursorCycleOffset(cursorNow))
 	if m.cursorAnchor != nil {
 		brightRole := colorCursorNormalBright
 		if m.isTerminalInputActive() {
@@ -20,7 +25,7 @@ func (m *appModel) applyCursorAnimation() {
 		})
 		m.cursorAnchor.setVisual(terminalCursorVisual{
 			color:   m.styles.Colors.CursorColor(intensity, m.isTerminalInputActive()),
-			visible: intensity > cursorHiddenThreshold,
+			visible: true,
 		})
 	}
 }

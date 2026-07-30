@@ -33,8 +33,11 @@ func TestTerminalVisualOnlySequenceNeverMovesCursor(t *testing.T) {
 			t.Fatalf("visual-only sequence %q contains cursor movement %q", sequence, forbidden)
 		}
 	}
-	if !strings.Contains(sequence, "\x1b]12;#abcdef\x1b\\") || !strings.Contains(sequence, terminalCursorShow) {
-		t.Fatalf("visual-only sequence = %q, want color and visibility", sequence)
+	if !strings.Contains(sequence, "\x1b]12;#abcdef\x1b\\") {
+		t.Fatalf("visual-only sequence = %q, want color update", sequence)
+	}
+	if strings.Contains(sequence, terminalCursorShow) || strings.Contains(sequence, terminalCursorHide) {
+		t.Fatalf("visual-only sequence = %q, must not blink terminal cursor", sequence)
 	}
 }
 
@@ -53,8 +56,7 @@ func TestTerminalCursorActivationOrder(t *testing.T) {
 	position := terminalCursorPosition{active: true, upFromBottom: 2, column: 7, background: "#1a1b26"}
 	visual := terminalCursorVisual{color: "#7aa2f7", visible: true}
 	got := activateTerminalCursor(position, visual)
-	want := terminalCursorHide +
-		"\r\x1b[2A\x1b[7C" +
+	want := "\r\x1b[2A\x1b[7C" +
 		"\x1b[48;2;26;27;38m" +
 		"\x1b]12;#7aa2f7\x1b\\" +
 		terminalCursorShow

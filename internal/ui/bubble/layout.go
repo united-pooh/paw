@@ -345,7 +345,7 @@ func (m appModel) shouldAnchorTextInputCursor() bool {
 func (m appModel) inputCursorTerminalPosition(layout tuiLayout) terminalCursorPosition {
 	row := minInt(m.visibleInputCursorRow(), maxInt(0, layout.inputHeight-1))
 	upFromBottom := 1 + layout.worktreeHeight + maxInt(0, layout.inputHeight-row-1)
-	column := 2 + m.visibleInputCursorColumn()
+	column := inputDockStyle.GetPaddingLeft() + m.visibleInputCursorColumn()
 	column = minInt(column, maxInt(0, layout.frameWidth-1))
 	return terminalCursorPosition{
 		active:       true,
