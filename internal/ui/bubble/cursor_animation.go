@@ -1,7 +1,11 @@
 // 本文件定义输入光标的两相淡入淡出动画和颜色插值。
 package bubble
 
-import "time"
+import (
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
 
 // applyCursorAnimation 根据当前时间帧发布真实终端光标颜色和隐藏状态。
 func (m *appModel) applyCursorAnimation() {
@@ -75,6 +79,15 @@ func easeInOutSine(t float64) float64 {
 func easeOutCubic(t float64) float64 {
 	t = 1 - clamp01(t)
 	return 1 - t*t*t
+}
+
+// scheduleUIAnimationFrame ensures at most one Bubble Tea animation tick is in flight.
+func (m *appModel) scheduleUIAnimationFrame() tea.Cmd {
+	if m == nil || m.uiAnimationFrameScheduled {
+		return nil
+	}
+	m.uiAnimationFrameScheduled = true
+	return cursorFrameTick()
 }
 
 // needsUIAnimationFrames reports whether non-cursor TUI elements still require

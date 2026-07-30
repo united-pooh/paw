@@ -351,6 +351,7 @@ type appModel struct {
 	selectionStart            selectionPoint
 	selectionEnd              selectionPoint
 	cursorFrameAt             time.Time
+	uiAnimationFrameScheduled bool
 	turnStartedAt             time.Time
 	turnID                    string
 	contextMeter              contextMeterAnimation

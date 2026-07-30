@@ -65,34 +65,35 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 	vp.MouseWheelDelta = 1
 	skillRoot, _ := os.Getwd()
 	model := appModel{
-		theme:                 selectedTheme,
-		styles:                styles,
-		ctx:                   ctx,
-		runner:                runner,
-		sessionID:             sessionID,
-		modelConfig:           controller,
-		settingsConfig:        settingsController,
-		subagents:             subagentController,
-		sessionStore:          sessionStore,
-		commandRegistry:       NewCommandRegistry(),
-		skillRegistry:         skill.NewRegistry(skill.DefaultRoots(skillRoot)),
-		cursorAnchor:          anchor,
-		input:                 input,
-		viewport:              vp,
-		cursorFrameAt:         now,
-		pipelineActiveAfter:   now,
-		worktreeCWD:           skillRoot,
-		worktree:              worktreeSnapshot{name: filepath.Base(filepath.Clean(skillRoot))},
-		worktreeReader:        readWorktreeStatus,
-		activeAssistant:       -1,
-		activeThinking:        -1,
-		activeTurnUserEntry:   -1,
-		doneAssistant:         -1,
-		newMessageNoticeCycle: 1,
-		toolInspectIndex:      -1,
-		toolHoverIndex:        -1,
-		historyIndex:          -1,
-		transcript:            nil,
+		theme:                     selectedTheme,
+		styles:                    styles,
+		ctx:                       ctx,
+		runner:                    runner,
+		sessionID:                 sessionID,
+		modelConfig:               controller,
+		settingsConfig:            settingsController,
+		subagents:                 subagentController,
+		sessionStore:              sessionStore,
+		commandRegistry:           NewCommandRegistry(),
+		skillRegistry:             skill.NewRegistry(skill.DefaultRoots(skillRoot)),
+		cursorAnchor:              anchor,
+		input:                     input,
+		viewport:                  vp,
+		cursorFrameAt:             now,
+		uiAnimationFrameScheduled: true,
+		pipelineActiveAfter:       now,
+		worktreeCWD:               skillRoot,
+		worktree:                  worktreeSnapshot{name: filepath.Base(filepath.Clean(skillRoot))},
+		worktreeReader:            readWorktreeStatus,
+		activeAssistant:           -1,
+		activeThinking:            -1,
+		activeTurnUserEntry:       -1,
+		doneAssistant:             -1,
+		newMessageNoticeCycle:     1,
+		toolInspectIndex:          -1,
+		toolHoverIndex:            -1,
+		historyIndex:              -1,
+		transcript:                nil,
 	}
 	model.activateThemeStyles()
 	model.applyTextareaTheme()
@@ -125,6 +126,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewportWithBottomState(wasAtBottom)
 		return m, nil
 	case cursorFrameMsg:
+		m.uiAnimationFrameScheduled = false
 		m.cursorFrameAt = time.Time(msg)
 		m.spinnerFrameIdx++
 		m.applyCursorAnimation()
@@ -142,7 +144,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var frameCmd tea.Cmd
 		if m.needsUIAnimationFrames(time.Time(msg)) {
-			frameCmd = cursorFrameTick()
+			frameCmd = m.scheduleUIAnimationFrame()
 		}
 		pollCmd := pipelinePollCmd(m.pipelineActiveAfter)
 		if frameCmd == nil {
