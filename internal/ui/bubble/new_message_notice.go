@@ -65,13 +65,14 @@ func (m appModel) transcriptNoticeBounds() transcriptNoticeBounds {
 	style := m.styles.Notice
 	hoverStyle := m.styles.NoticeHover
 	textWidth := maxInt(1, layout.contentWidth-style.GetHorizontalPadding())
-	defaultWidth := terminalCellWidth(style.Render(
+	width := terminalCellWidth(style.Render(
 		newMessageNoticeText(m.newMessageNoticeCount, false, textWidth),
 	))
-	hoverWidth := terminalCellWidth(hoverStyle.Render(
-		newMessageNoticeText(m.newMessageNoticeCount, true, textWidth),
-	))
-	width := maxInt(defaultWidth, hoverWidth)
+	if m.newMessageNoticeHovered {
+		width = terminalCellWidth(hoverStyle.Render(
+			newMessageNoticeText(m.newMessageNoticeCount, true, textWidth),
+		))
+	}
 	if width <= 0 {
 		return transcriptNoticeBounds{}
 	}
@@ -99,7 +100,7 @@ func (m appModel) handleNewMessageNoticeMouse(msg tea.MouseMsg) (appModel, bool,
 	case tea.MouseActionMotion:
 		changed := m.newMessageNoticeHovered != inside
 		m.newMessageNoticeHovered = inside
-		return m, inside || changed, nil
+		return m, changed, nil
 	case tea.MouseActionPress:
 		if msg.Button != tea.MouseButtonLeft || !inside {
 			return m, false, nil

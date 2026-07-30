@@ -50,6 +50,29 @@ func TestNewMessageNoticeBoundsAreCentered(t *testing.T) {
 	}
 }
 
+func TestNewMessageNoticeBoundsExpandOnlyAfterHover(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 10
+	model.relayout()
+	model.newMessageNoticeCount = 2
+
+	defaultBounds := model.transcriptNoticeBounds()
+	model.newMessageNoticeHovered = true
+	hoverBounds := model.transcriptNoticeBounds()
+
+	if hoverBounds.width <= defaultBounds.width {
+		t.Fatalf("hover width = %d, want greater than default width %d", hoverBounds.width, defaultBounds.width)
+	}
+	if got, want := defaultBounds.width, terminalCellWidth(model.styles.Notice.Render(newMessageNoticeText(2, false, maxInt(1, model.currentLayout().contentWidth-model.styles.Notice.GetHorizontalPadding())))); got != want {
+		t.Fatalf("default bounds width = %d, want rendered default width %d", got, want)
+	}
+	if got, want := hoverBounds.width, terminalCellWidth(model.styles.NoticeHover.Render(newMessageNoticeText(2, true, maxInt(1, model.currentLayout().contentWidth-model.styles.Notice.GetHorizontalPadding())))); got != want {
+		t.Fatalf("hover bounds width = %d, want rendered hover width %d", got, want)
+	}
+}
+
 func TestNewMessageNoticeHiddenWhenCountIsZero(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	if got := model.renderNewMessageNotice(80); got != "" {
@@ -159,13 +182,71 @@ func TestNoticeHoverChangesCopyWithoutStartingSelection(t *testing.T) {
 	model := newTranscriptScrollTestModel()
 	model.newMessageNoticeCount = 1
 	bounds := model.transcriptNoticeBounds()
-	next, _ := model.Update(tea.MouseMsg{X: bounds.x, Y: bounds.y, Action: tea.MouseActionMotion})
+	next, _ := model.Update(tea.MouseMsg{X: bounds.x, Y: bounds.y, Button: tea.MouseButtonNone, Action: tea.MouseActionMotion})
 	model = next.(appModel)
 	if !model.newMessageNoticeHovered || model.selecting {
 		t.Fatalf("hover state=%v selecting=%v", model.newMessageNoticeHovered, model.selecting)
 	}
 	if got := ansi.Strip(model.renderNewMessageNotice(model.width)); !strings.Contains(got, "回到底部") {
 		t.Fatalf("hover copy = %q", got)
+	}
+}
+
+func TestNoticeHoverClearsWhenPointerLeaves(t *testing.T) {
+	model := newTranscriptScrollTestModel()
+	model.newMessageNoticeCount = 1
+	bounds := model.transcriptNoticeBounds()
+
+	next, _ := model.Update(tea.MouseMsg{X: bounds.x, Y: bounds.y, Button: tea.MouseButtonNone, Action: tea.MouseActionMotion})
+	model = next.(appModel)
+	next, _ = model.Update(tea.MouseMsg{X: model.width - 1, Y: model.height - 1, Button: tea.MouseButtonNone, Action: tea.MouseActionMotion})
+	model = next.(appModel)
+
+	if model.newMessageNoticeHovered {
+		t.Fatal("hover state remained active after pointer left notice")
+	}
+}
+
+func TestIdleMouseMotionFilterOnlyPassesNoticeTransitions(t *testing.T) {
+	model := newTranscriptScrollTestModel()
+	model.newMessageNoticeCount = 1
+	bounds := model.transcriptNoticeBounds()
+	inside := tea.MouseMsg{X: bounds.x, Y: bounds.y, Button: tea.MouseButtonNone, Action: tea.MouseActionMotion}
+	outside := tea.MouseMsg{X: model.width - 1, Y: model.height - 1, Button: tea.MouseButtonNone, Action: tea.MouseActionMotion}
+
+	if got := filterIdleMouseMotion(model, outside); got != nil {
+		t.Fatalf("unchanged outside motion = %#v, want filtered", got)
+	}
+	if got := filterIdleMouseMotion(model, inside); got == nil {
+		t.Fatal("notice enter motion was filtered")
+	}
+	model.newMessageNoticeHovered = true
+	if got := filterIdleMouseMotion(model, inside); got != nil {
+		t.Fatalf("unchanged inside motion = %#v, want filtered", got)
+	}
+	if got := filterIdleMouseMotion(model, outside); got == nil {
+		t.Fatal("notice leave motion was filtered")
+	}
+}
+
+func TestIdleMouseMotionFilterPreservesMouseInteractions(t *testing.T) {
+	model := newTranscriptScrollTestModel()
+	messages := []tea.MouseMsg{
+		{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress},
+		{Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion},
+		{Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease},
+		{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress},
+	}
+	for _, msg := range messages {
+		if got := filterIdleMouseMotion(model, msg); got == nil {
+			t.Fatalf("interaction %s was filtered", msg.String())
+		}
+	}
+
+	model.selecting = true
+	passiveDrag := tea.MouseMsg{Button: tea.MouseButtonNone, Action: tea.MouseActionMotion}
+	if got := filterIdleMouseMotion(model, passiveDrag); got == nil {
+		t.Fatal("selection motion was filtered")
 	}
 }
 

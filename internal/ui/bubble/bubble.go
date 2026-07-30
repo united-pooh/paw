@@ -145,6 +145,25 @@ func (u *UI) SetMCPStatusController(controller MCPStatusController) {
 	u.mcpController = controller
 }
 
+// filterIdleMouseMotion drops passive mouse movement that cannot change UI
+// state. All-motion mode is required for real hover events, but Bubble Tea
+// otherwise runs Update and View for every reported cell crossed by the mouse.
+func filterIdleMouseMotion(model tea.Model, msg tea.Msg) tea.Msg {
+	mouse, ok := msg.(tea.MouseMsg)
+	if !ok || mouse.Action != tea.MouseActionMotion || mouse.Button != tea.MouseButtonNone {
+		return msg
+	}
+	m, ok := model.(appModel)
+	if !ok || m.selecting {
+		return msg
+	}
+	inside := m.transcriptNoticeBounds().contains(mouse.X, mouse.Y)
+	if inside != m.newMessageNoticeHovered {
+		return msg
+	}
+	return nil
+}
+
 // Run 启动 Bubble Tea 主循环，并把输出写入带光标锚点修正的终端流。
 func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 	u.mu.Lock()
@@ -169,7 +188,8 @@ func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 		tea.WithInput(newESCCoalescingReader(os.Stdin)),
 		tea.WithOutput(output),
 		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
+		tea.WithMouseAllMotion(),
+		tea.WithFilter(filterIdleMouseMotion),
 	)
 
 	u.mu.Lock()
