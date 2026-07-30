@@ -2,6 +2,7 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -13,23 +14,32 @@ import (
 	"paw/internal/message"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
 const defaultSessionsDir = "sessions"
 
 type Record struct {
-	Seq       int64           `json:"seq"`
-	Message   message.Message `json:"message"`
-	CreatedAt time.Time       `json:"created_at"`
+	Seq        int64               `json:"seq"`
+	Kind       JournalKind         `json:"kind,omitempty"`
+	TurnID     string              `json:"turn_id,omitempty"`
+	CallIndex  *int                `json:"call_index,omitempty"`
+	Message    message.Message     `json:"message"`
+	ToolResult *message.ToolResult `json:"tool_result,omitempty"`
+	Error      string              `json:"error,omitempty"`
+	CreatedAt  time.Time           `json:"created_at"`
 }
 
 type JSONLStore struct {
 	baseDir string
 	nowFn   func() time.Time
+	mu      sync.Mutex
 }
 
 var _ Store = (*JSONLStore)(nil)
+var _ TurnMetadataStore = (*JSONLStore)(nil)
+var _ TurnJournal = (*JSONLStore)(nil)
 
 // NewJSONLStore 在指定目录下创建存储。
 // baseDir 是存放所有会话数据的根目录，通常传项目 cwd。
@@ -173,62 +183,178 @@ func (s *JSONLStore) Exists(ctx context.Context, sessionID string) (bool, error)
 }
 
 func (s *JSONLStore) Append(ctx context.Context, sessionID string, msgs ...message.Message) error {
-	if err := ctx.Err(); err != nil {
-		return err
+	_, _, err := s.AppendWithSequences(ctx, sessionID, msgs...)
+	return err
+}
+
+// AppendWithSequences appends messages and returns the first and last
+// transcript sequence assigned to this append operation.
+func (s *JSONLStore) AppendWithSequences(ctx context.Context, sessionID string, msgs ...message.Message) (firstSeq, lastSeq int64, err error) {
+	records := make([]Record, 0, len(msgs))
+	for _, msg := range msgs {
+		records = append(records, Record{Kind: JournalMessage, Message: msg})
 	}
-	if len(msgs) == 0 {
-		return nil
+	return s.appendRecords(ctx, sessionID, records)
+}
+
+func (s *JSONLStore) appendRecords(ctx context.Context, sessionID string, records []Record) (firstSeq, lastSeq int64, err error) {
+	firstSeq, lastSeq = -1, -1
+	if err := ctx.Err(); err != nil {
+		return firstSeq, lastSeq, err
+	}
+	if len(records) == 0 {
+		return firstSeq, lastSeq, nil
 	}
 	if strings.TrimSpace(sessionID) == "" {
-		return fmt.Errorf("sessionID 不能为空")
+		return firstSeq, lastSeq, fmt.Errorf("sessionID 不能为空")
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	exists, err := s.Exists(ctx, sessionID)
 	if err != nil {
-		return err
+		return firstSeq, lastSeq, err
 	}
 	if !exists {
 		if _, err := s.CreateRoot(ctx, CreateRootRequest{SessionID: sessionID}); err != nil {
-			return err
+			return firstSeq, lastSeq, err
 		}
 	} else if _, err := s.GetMeta(ctx, sessionID); err != nil {
-		return err
+		return firstSeq, lastSeq, err
 	}
 
-	records, err := s.readOwnRecords(ctx, sessionID)
+	existing, err := s.readOwnRecords(ctx, sessionID)
 	if err != nil {
-		return err
+		return firstSeq, lastSeq, err
 	}
-
 	nextSeq := int64(0)
-	if len(records) > 0 {
-		nextSeq = records[len(records)-1].Seq + 1
+	if len(existing) > 0 {
+		nextSeq = existing[len(existing)-1].Seq + 1
 	}
+	firstSeq = nextSeq
+	lastSeq = nextSeq + int64(len(records)) - 1
 
 	if err := os.MkdirAll(s.sessionDir(sessionID), 0o755); err != nil {
-		return err
+		return -1, -1, err
 	}
 	f, err := os.OpenFile(s.transcriptPath(sessionID), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		return err
+		return -1, -1, err
 	}
 	defer func() { _ = f.Close() }()
 
 	enc := json.NewEncoder(f)
 	now := s.nowFn().UTC()
-	for i := range msgs {
+	for i := range records {
 		if err := ctx.Err(); err != nil {
-			return err
+			return -1, -1, err
 		}
-		rec := Record{Seq: nextSeq, Message: msgs[i], CreatedAt: now}
-		if err := enc.Encode(rec); err != nil {
-			return err
+		records[i].Seq = nextSeq
+		records[i].CreatedAt = now
+		if err := enc.Encode(records[i]); err != nil {
+			return -1, -1, err
 		}
 		nextSeq++
 	}
-	return nil
+	if err := f.Sync(); err != nil {
+		return -1, -1, fmt.Errorf("同步 transcript 失败: %w", err)
+	}
+	return firstSeq, lastSeq, nil
+}
+
+func (s *JSONLStore) BeginTurn(ctx context.Context, sessionID, turnID string, messages ...message.Message) error {
+	if err := validateTurnArgs(sessionID, turnID); err != nil {
+		return err
+	}
+	records := []Record{journalTurn(JournalTurnStarted, turnID)}
+	for _, msg := range messages {
+		records = append(records, Record{Kind: JournalMessage, TurnID: turnID, Message: msg})
+	}
+	_, _, err := s.appendRecords(ctx, sessionID, records)
+	return err
+}
+
+func (s *JSONLStore) AppendAssistant(ctx context.Context, sessionID, turnID string, msg message.Message) error {
+	_, err := s.AppendAssistantWithSequence(ctx, sessionID, turnID, msg)
+	return err
+}
+
+// AppendAssistantWithSequence appends an incremental assistant journal record
+// and returns its transcript sequence for turn metadata association.
+func (s *JSONLStore) AppendAssistantWithSequence(ctx context.Context, sessionID, turnID string, msg message.Message) (int64, error) {
+	if err := validateTurnArgs(sessionID, turnID); err != nil {
+		return -1, err
+	}
+	_, lastSeq, err := s.appendRecords(ctx, sessionID, []Record{{
+		Kind:    JournalAssistant,
+		TurnID:  strings.TrimSpace(turnID),
+		Message: msg,
+	}})
+	return lastSeq, err
+}
+
+func (s *JSONLStore) AppendToolResult(ctx context.Context, sessionID, turnID string, callIndex int, result message.ToolResult) error {
+	if err := validateTurnArgs(sessionID, turnID); err != nil {
+		return err
+	}
+	if callIndex < 0 {
+		return fmt.Errorf("callIndex 不能小于 0: %d", callIndex)
+	}
+	resultCopy := result
+	index := callIndex
+	_, _, err := s.appendRecords(ctx, sessionID, []Record{{
+		Kind:       JournalToolResult,
+		TurnID:     strings.TrimSpace(turnID),
+		CallIndex:  &index,
+		Message:    message.Message{Role: message.RoleUser, ToolResult: &resultCopy},
+		ToolResult: &resultCopy,
+	}})
+	return err
+}
+
+func (s *JSONLStore) CompleteTurn(ctx context.Context, sessionID, turnID string) error {
+	if err := validateTurnArgs(sessionID, turnID); err != nil {
+		return err
+	}
+	_, _, err := s.appendRecords(ctx, sessionID, []Record{journalTurn(JournalTurnCompleted, turnID)})
+	return err
+}
+
+func (s *JSONLStore) FailTurn(ctx context.Context, sessionID, turnID string, turnErr error) error {
+	if err := validateTurnArgs(sessionID, turnID); err != nil {
+		return err
+	}
+	record := journalTurn(JournalTurnFailed, turnID)
+	record.Error = journalError(turnErr)
+	_, _, err := s.appendRecords(ctx, sessionID, []Record{record})
+	return err
 }
 
 func (s *JSONLStore) LoadResolvedHistory(ctx context.Context, sessionID string) ([]message.Message, error) {
+	records, err := s.LoadResolvedRecords(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	history := make([]message.Message, 0, len(records))
+	for _, record := range records {
+		history = append(history, record.Message)
+	}
+	return history, nil
+}
+
+// LoadResolvedRecords returns message records visible in a session. Journal
+// control records are projected back into assistant/tool-result messages so
+// existing callers and fork sequence semantics remain message-based.
+func (s *JSONLStore) LoadResolvedRecords(ctx context.Context, sessionID string) ([]Record, error) {
+	raw, err := s.loadResolvedJournalRecords(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return projectJournalRecords(raw), nil
+}
+
+func (s *JSONLStore) loadResolvedJournalRecords(ctx context.Context, sessionID string) ([]Record, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -241,30 +367,124 @@ func (s *JSONLStore) LoadResolvedHistory(ctx context.Context, sessionID string) 
 	if err != nil {
 		return nil, err
 	}
-	ownHistory := make([]message.Message, 0, len(ownRecords))
-	for i := range ownRecords {
-		ownHistory = append(ownHistory, ownRecords[i].Message)
-	}
-
 	if meta.ParentSessionID == "" {
-		return ownHistory, nil
+		return ownRecords, nil
 	}
 
-	parentHistory, err := s.LoadResolvedHistory(ctx, meta.ParentSessionID)
+	parentRecords, err := s.LoadResolvedJournalRecords(ctx, meta.ParentSessionID)
 	if err != nil {
 		return nil, err
 	}
+	parentRecords = projectJournalRecords(parentRecords)
 	if meta.ForkFromSeq < 0 {
 		return nil, fmt.Errorf("非法 fork_from_seq: %d", meta.ForkFromSeq)
 	}
-	if meta.ForkFromSeq > int64(len(parentHistory)) {
-		return nil, fmt.Errorf("fork_from_seq 超过父会话长度: %d > %d", meta.ForkFromSeq, len(parentHistory))
+	if meta.ForkFromSeq > int64(len(parentRecords)) {
+		return nil, fmt.Errorf("fork_from_seq 超过父会话长度: %d > %d", meta.ForkFromSeq, len(parentRecords))
 	}
 
-	resolved := make([]message.Message, 0, int(meta.ForkFromSeq)+len(ownHistory))
-	resolved = append(resolved, parentHistory[:meta.ForkFromSeq]...)
-	resolved = append(resolved, ownHistory...)
+	resolved := make([]Record, 0, int(meta.ForkFromSeq)+len(ownRecords))
+	resolved = append(resolved, parentRecords[:meta.ForkFromSeq]...)
+	resolved = append(resolved, ownRecords...)
 	return resolved, nil
+}
+
+// LoadResolvedJournalRecords returns the raw append-only records for internal
+// recovery analysis. It intentionally is not part of the public Store API.
+func (s *JSONLStore) LoadResolvedJournalRecords(ctx context.Context, sessionID string) ([]Record, error) {
+	return s.loadResolvedJournalRecords(ctx, sessionID)
+}
+
+func projectJournalRecords(records []Record) []Record {
+	projected := make([]Record, 0, len(records))
+	for _, record := range records {
+		switch record.Kind {
+		case "", JournalMessage, JournalAssistant:
+			if record.Kind == JournalAssistant {
+				record.Kind = JournalMessage
+			}
+			projected = append(projected, record)
+		case JournalToolResult:
+			if record.ToolResult == nil {
+				continue
+			}
+			result := *record.ToolResult
+			record.Kind = JournalMessage
+			record.Message = message.Message{Role: message.RoleUser, ToolResult: &result}
+			projected = append(projected, record)
+		}
+	}
+	return projected
+}
+
+// LoadSnapshot loads both the display transcript and a model-safe history.
+// The latter excludes an orphaned multi-tool call group from the latest
+// unfinished turn while retaining all complete tool call/result pairs.
+func (s *JSONLStore) LoadSnapshot(ctx context.Context, sessionID string) (SessionSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return SessionSnapshot{}, err
+	}
+	if _, err := s.GetMeta(ctx, sessionID); err != nil {
+		return SessionSnapshot{}, err
+	}
+
+	messages, err := s.LoadResolvedHistory(ctx, sessionID)
+	if err != nil {
+		return SessionSnapshot{}, err
+	}
+	ownRecords, err := s.readOwnRecords(ctx, sessionID)
+	if err != nil {
+		return SessionSnapshot{}, err
+	}
+
+	turnID, status, failure := latestTurnState(ownRecords)
+	snapshot := SessionSnapshot{
+		Messages:      append([]message.Message(nil), messages...),
+		ActiveHistory: append([]message.Message(nil), messages...),
+	}
+	if turnID == "" || status == JournalTurnCompleted {
+		return snapshot, nil
+	}
+
+	recovery := &RecoveryState{
+		TurnID:      turnID,
+		Error:       failure,
+		Interrupted: status != JournalTurnFailed,
+	}
+	if strings.TrimSpace(recovery.Error) == "" {
+		recovery.Error = "previous turn ended before completion"
+	}
+	entries := entriesForTurn(ownRecords, turnID)
+	safeOwn := safeTurnHistory(entries, recovery)
+	if len(entries) <= len(messages) {
+		prefixLen := len(messages) - len(entries)
+		active := append([]message.Message(nil), messages[:prefixLen]...)
+		active = append(active, safeOwn...)
+		snapshot.ActiveHistory = active
+	}
+	snapshot.Recovery = copyRecovery(recovery)
+	return snapshot, nil
+}
+
+func latestTurnState(records []Record) (turnID string, status JournalKind, failure string) {
+	for _, record := range records {
+		switch record.Kind {
+		case JournalTurnStarted:
+			turnID = record.TurnID
+			status = JournalTurnStarted
+			failure = ""
+		case JournalTurnCompleted:
+			if record.TurnID == turnID {
+				status = JournalTurnCompleted
+			}
+		case JournalTurnFailed:
+			if record.TurnID == turnID {
+				status = JournalTurnFailed
+				failure = record.Error
+			}
+		}
+	}
+	return turnID, status, failure
 }
 
 func (s *JSONLStore) writeMeta(ctx context.Context, meta Meta) error {
@@ -290,35 +510,36 @@ func (s *JSONLStore) readOwnRecords(ctx context.Context, sessionID string) ([]Re
 	}
 
 	path := s.transcriptPath(sessionID)
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	defer func() { _ = f.Close() }()
-
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-
 	records := make([]Record, 0, 64)
-	for scanner.Scan() {
+	lines := bytes.Split(data, []byte{'\n'})
+	for lineIndex, rawLine := range lines {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		line := strings.TrimSpace(scanner.Text())
+		line := strings.TrimSpace(string(rawLine))
 		if line == "" {
 			continue
 		}
 		var rec Record
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			if lineIndex == len(lines)-1 && !bytes.HasSuffix(data, []byte{'\n'}) {
+				// The final line may have been torn during a process crash. All
+				// preceding newline-terminated records are still durable.
+				break
+			}
 			return nil, fmt.Errorf("解析 transcript 失败(%s): %w", path, err)
 		}
+		if rec.Kind == "" {
+			rec.Kind = JournalMessage
+		}
 		records = append(records, rec)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
 	}
 	return records, nil
 }
@@ -335,9 +556,96 @@ func (s *JSONLStore) transcriptPath(sessionID string) string {
 	return filepath.Join(s.sessionDir(sessionID), "transcript.jsonl")
 }
 
+func (s *JSONLStore) turnMetadataPath(sessionID string) string {
+	return filepath.Join(s.sessionDir(sessionID), "turns.jsonl")
+}
+
 // TranscriptPath 返回指定 session 的 transcript 文件路径。
 func (s *JSONLStore) TranscriptPath(sessionID string) string {
 	return s.transcriptPath(sessionID)
+}
+
+// TurnMetadataPath returns the sidecar path used for persisted turn timing.
+func (s *JSONLStore) TurnMetadataPath(sessionID string) string {
+	return s.turnMetadataPath(sessionID)
+}
+
+// AppendTurnMetadata appends display-only timing data without changing the
+// message transcript that is sent back to the model.
+func (s *JSONLStore) AppendTurnMetadata(ctx context.Context, sessionID string, metadata TurnMetadata) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		return fmt.Errorf("sessionID 不能为空")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	exists, err := s.Exists(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		if _, err := s.CreateRoot(ctx, CreateRootRequest{SessionID: sessionID}); err != nil {
+			return err
+		}
+	} else if _, err := s.GetMeta(ctx, sessionID); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(s.sessionDir(sessionID), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(s.turnMetadataPath(sessionID), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	if err := json.NewEncoder(f).Encode(metadata); err != nil {
+		return err
+	}
+	return f.Sync()
+}
+
+// LoadTurnMetadata loads valid sidecar records in append order. Missing or
+// malformed lines are ignored so a damaged display sidecar cannot hide a
+// usable message transcript.
+func (s *JSONLStore) LoadTurnMetadata(ctx context.Context, sessionID string) ([]TurnMetadata, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		return nil, fmt.Errorf("sessionID 不能为空")
+	}
+	f, err := os.Open(s.turnMetadataPath(sessionID))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	metadata := make([]TurnMetadata, 0, 16)
+	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var item TurnMetadata
+		if err := json.Unmarshal([]byte(line), &item); err != nil {
+			continue
+		}
+		metadata = append(metadata, item)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return metadata, nil
 }
 
 // GenerateSessionID 生成一个随机的 session ID（16 字节 hex 字符串）。

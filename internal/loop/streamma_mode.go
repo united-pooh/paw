@@ -315,7 +315,7 @@ func (runner *Runner) runStreamMATurn(ctx context.Context, input string, invocat
 	}
 	assistant := buildAssistantMessage(finalText)
 	history = append(history, assistant)
-	if err := runner.commitHistory(ctx, history); err != nil {
+	if _, err := runner.commitHistory(ctx, history); err != nil {
 		return message.Message{}, err
 	}
 	committed = true

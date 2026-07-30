@@ -39,6 +39,17 @@ type fakeRunner struct {
 	supplements      []string
 }
 
+type ctrlCRunner struct {
+	fakeRunner
+	runCtx context.Context
+}
+
+func (r *ctrlCRunner) RunTurn(ctx context.Context, input string) (message.Message, error) {
+	r.runCtx = ctx
+	<-ctx.Done()
+	return message.Message{}, ctx.Err()
+}
+
 // RunTurn 记录输入并返回固定 assistant 消息。
 func (r *fakeRunner) RunTurn(ctx context.Context, input string) (message.Message, error) {
 	r.inputs = append(r.inputs, input)
@@ -1109,6 +1120,21 @@ func TestAssistantStreamingPreservesManualTranscriptScroll(t *testing.T) {
 	}
 }
 
+func TestAssistantStreamingFollowsBottomWithActiveSelection(t *testing.T) {
+	model := newTranscriptScrollTestModel()
+	model.viewport.GotoBottom()
+	model.selectionActive = true
+	model.selectionStart = selectionPoint{row: 0, col: 0}
+	model.selectionEnd = selectionPoint{row: 0, col: 1}
+
+	next, _ := model.Update(assistantDeltaMsg("followed with selection\n"))
+	model = next.(appModel)
+
+	if !model.viewport.AtBottom() {
+		t.Fatalf("viewport left bottom with active selection, offset=%d", model.viewport.YOffset)
+	}
+}
+
 func TestThinkingStreamingPreservesManualTranscriptScroll(t *testing.T) {
 	model := newTranscriptScrollTestModel()
 	model.viewport.SetYOffset(3)
@@ -1144,6 +1170,21 @@ func TestResizeKeepsBottomFollowAfterViewportShrinks(t *testing.T) {
 	model = next.(appModel)
 	if !model.viewport.AtBottom() {
 		t.Fatalf("viewport left bottom after resize from bottom, offset=%d", model.viewport.YOffset)
+	}
+}
+
+func TestResizeKeepsBottomFollowWithActiveSelection(t *testing.T) {
+	model := newTranscriptScrollTestModel()
+	model.viewport.GotoBottom()
+	model.selectionActive = true
+	model.selectionStart = selectionPoint{row: 0, col: 0}
+	model.selectionEnd = selectionPoint{row: 0, col: 1}
+
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 8})
+	model = next.(appModel)
+
+	if !model.viewport.AtBottom() {
+		t.Fatalf("viewport left bottom after resize with active selection, offset=%d", model.viewport.YOffset)
 	}
 }
 
@@ -5174,6 +5215,139 @@ func TestCtrlC_超时后不退出(t *testing.T) {
 		if _, ok := msg.(tea.QuitMsg); ok {
 			t.Errorf("ctrl+c after timeout should not quit")
 		}
+	}
+}
+
+func TestCtrlCWhileModelWorkingCancelsWithoutClearingInput(t *testing.T) {
+	runner := &ctrlCRunner{}
+	model := newTestModel(runner)
+	model.input.SetValue("first")
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if cmd == nil {
+		t.Fatal("submit returned nil command")
+	}
+
+	// 模拟模型已经进入 generating，同时用户在输入框准备了下一段内容。
+	next, _ = model.Update(assistantDeltaMsg("partial"))
+	model = next.(appModel)
+	model.input.SetValue("follow-up")
+
+	next, cancelCmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	model = next.(appModel)
+	if cancelCmd != nil {
+		t.Fatalf("working Ctrl+C returned command: %T", cancelCmd)
+	}
+	if got := model.input.Value(); got != "follow-up" {
+		t.Fatalf("working Ctrl+C cleared input = %q, want follow-up preserved", got)
+	}
+	if !model.lastCtrlCAt.IsZero() {
+		t.Fatal("working Ctrl+C should not start the ready-state double-press timer")
+	}
+
+	finishedMsg := cmd()
+	finished, ok := finishedMsg.(turnFinishedMsg)
+	if !ok {
+		t.Fatalf("cancelled command returned %T, want turnFinishedMsg", finishedMsg)
+	}
+	if runner.runCtx == nil {
+		t.Fatal("runner did not receive a context")
+	}
+	if runner.runCtx.Err() != context.Canceled {
+		t.Fatalf("runner context error = %v, want context.Canceled", runner.runCtx.Err())
+	}
+	next, _ = model.Update(finished)
+	model = next.(appModel)
+	if model.isWorkRunning() || model.isGenerating || model.activeModelCancel != nil {
+		t.Fatalf("model still working after cancellation: running=%v generating=%v cancel=%v", model.isWorkRunning(), model.isGenerating, model.activeModelCancel != nil)
+	}
+	for _, entry := range model.transcript {
+		if entry.kind == entryError && strings.Contains(entry.body, "context canceled") {
+			t.Fatalf("expected cancellation error to stay hidden, got %#v", entry)
+		}
+	}
+}
+
+func TestCtrlCWithoutModelOutputRestoresInputAndRemovesTranscript(t *testing.T) {
+	runner := &ctrlCRunner{}
+	model := newTestModel(runner)
+	model.input.SetValue("retry this prompt")
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if cmd == nil {
+		t.Fatal("submit returned nil command")
+	}
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	model = next.(appModel)
+
+	finished := cmd()
+	next, _ = model.Update(finished)
+	model = next.(appModel)
+	if got := model.input.Value(); got != "retry this prompt" {
+		t.Fatalf("input = %q, want interrupted prompt restored", got)
+	}
+	for _, entry := range model.transcript {
+		if entry.kind == entryUser && entry.body == "retry this prompt" {
+			t.Fatalf("interrupted user input remained in transcript: %#v", entry)
+		}
+		if strings.Contains(entry.body, "context canceled") {
+			t.Fatalf("context cancellation was rendered: %#v", entry)
+		}
+	}
+}
+
+func TestCtrlCDoublePressWhileWorkingDoesNotQuit(t *testing.T) {
+	runner := &ctrlCRunner{}
+	model := newTestModel(runner)
+	model.input.SetValue("first")
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if cmd == nil {
+		t.Fatal("submit returned nil command")
+	}
+	model.lastCtrlCAt = time.Now()
+
+	next, secondCmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	model = next.(appModel)
+	if secondCmd != nil {
+		msg := secondCmd()
+		if _, ok := msg.(tea.QuitMsg); ok {
+			t.Fatal("double Ctrl+C while working should not quit")
+		}
+	}
+	if !model.lastCtrlCAt.IsZero() {
+		t.Fatal("working Ctrl+C should reset the ready-state double-press timer")
+	}
+
+	finishedMsg := cmd()
+	finished, ok := finishedMsg.(turnFinishedMsg)
+	if !ok {
+		t.Fatalf("cancelled command returned %T, want turnFinishedMsg", finishedMsg)
+	}
+	_, _ = model.Update(finished)
+}
+
+func TestCtrlCDoublePressWhileTerminalWorkDoesNotQuit(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	if !model.queryGuard.StartTerminal() {
+		t.Fatal("StartTerminal() failed")
+	}
+	model.syncRunningFlags()
+	model.lastCtrlCAt = time.Now()
+	model.input.SetValue("follow-up")
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	model = next.(appModel)
+	if cmd != nil {
+		msg := cmd()
+		if _, ok := msg.(tea.QuitMsg); ok {
+			t.Fatal("double Ctrl+C while terminal work should not quit")
+		}
+	}
+	if got := model.input.Value(); got != "follow-up" {
+		t.Fatalf("terminal-work Ctrl+C changed input = %q", got)
 	}
 }
 

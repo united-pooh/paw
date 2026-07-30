@@ -7,15 +7,38 @@ import (
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
 	"os/exec"
+	"paw/internal/loop"
+	"paw/internal/session"
 	"strings"
 	"time"
 )
 
 // runTurnCmd 把一次模型对话运行封装成 Bubble Tea 命令。
-func runTurnCmd(ctx context.Context, runner Runner, draft inputDraft) tea.Cmd {
+func runTurnCmd(ctx context.Context, runner Runner, draft inputDraft, turnID string, startedAt time.Time) tea.Cmd {
 	return func() tea.Msg {
+		copyDraft := cloneInputDraft(draft)
 		if runner == nil {
-			return turnFinishedMsg{err: fmt.Errorf("runner is nil")}
+			return turnFinishedMsg{err: fmt.Errorf("runner is nil"), interruptedDraft: &copyDraft}
+		}
+		if timedRunner, ok := runner.(TimedRunner); ok {
+			var execution loop.TurnExecution
+			var err error
+			if _, rich := runner.(RichInputRunner); rich {
+				execution, err = timedRunner.RunRichTurnWithTiming(ctx, messageFromInputDraft(draft), turnID, startedAt)
+			} else {
+				execution, err = timedRunner.RunTurnWithTiming(ctx, draft.Text, turnID, startedAt)
+			}
+			var metadata *session.TurnMetadata
+			if err == nil && !execution.Metadata.StartedAt.IsZero() {
+				copyMetadata := execution.Metadata
+				metadata = &copyMetadata
+			}
+			var restoreDraft *inputDraft
+			if len(imageTokensInDraft(draft)) > 0 {
+				copyDraft := cloneInputDraft(draft)
+				restoreDraft = &copyDraft
+			}
+			return turnFinishedMsg{err: err, metadata: metadata, metadataErr: execution.MetadataPersistErr, restoreDraft: restoreDraft, interruptedDraft: &copyDraft}
 		}
 		var err error
 		if richRunner, ok := runner.(RichInputRunner); ok {
@@ -28,7 +51,52 @@ func runTurnCmd(ctx context.Context, runner Runner, draft inputDraft) tea.Cmd {
 			copyDraft := cloneInputDraft(draft)
 			restoreDraft = &copyDraft
 		}
-		return turnFinishedMsg{err: err, restoreDraft: restoreDraft}
+		return turnFinishedMsg{err: err, restoreDraft: restoreDraft, interruptedDraft: &copyDraft}
+	}
+}
+
+// beginModelWorkContext creates a cancellable context for one foreground model
+// turn. The parent context still owns the lifetime of the whole TUI, while the
+// child lets Ctrl+C stop only the current model operation.
+func (m *appModel) beginModelWorkContext() context.Context {
+	if m == nil {
+		return context.Background()
+	}
+	if m.activeModelCancel != nil {
+		m.activeModelCancel()
+	}
+	parent := m.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
+	m.activeModelCancel = cancel
+	m.modelCancelRequested = false
+	return ctx
+}
+
+// cancelModelWork interrupts the current model operation without releasing
+// the query guard. The guard remains busy until its completion message arrives,
+// so a second Ctrl+C cannot exit while the TUI is still leaving working state.
+func (m *appModel) cancelModelWork() {
+	if m == nil {
+		return
+	}
+	m.modelCancelRequested = true
+	if m.activeModelCancel != nil {
+		m.activeModelCancel()
+	}
+}
+
+// finishModelWork releases the per-turn cancellation function after the
+// corresponding completion message has returned to the Bubble Tea state loop.
+func (m *appModel) finishModelWork() {
+	if m == nil {
+		return
+	}
+	if m.activeModelCancel != nil {
+		m.activeModelCancel()
+		m.activeModelCancel = nil
 	}
 }
 
@@ -108,9 +176,15 @@ func (m *appModel) startNextQueuedTurn() tea.Cmd {
 		return nil
 	}
 	m.resetStreamingBuffers()
+	m.activeTurnUserEntry = m.latestTurnUserEntry(draft.Text)
 	m.turnStartedAt = time.Now()
+	m.turnID = newTurnID(m.turnStartedAt)
 	m.syncRunningFlags()
-	return runTurnCmd(m.ctx, m.runner, draft)
+	return runTurnCmd(m.beginModelWorkContext(), m.runner, draft, m.turnID, m.turnStartedAt)
+}
+
+func newTurnID(startedAt time.Time) string {
+	return fmt.Sprintf("turn-%d", startedAt.UnixNano())
 }
 
 // cursorFrameTick 安排下一次光标动画帧更新。

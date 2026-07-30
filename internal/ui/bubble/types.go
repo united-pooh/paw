@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	"paw/internal/loop"
 	"paw/internal/model"
+	"paw/internal/session"
 	"paw/internal/settings"
 	"paw/internal/skill"
 	"paw/internal/subagent"
@@ -65,6 +66,7 @@ type transcriptEntry struct {
 	createdAt             time.Time
 	toolStartedAt         time.Time
 	toolFinishedAt        time.Time
+	turnMetadata          *session.TurnMetadata
 	version               int
 	renderMode            transcriptRenderMode
 }
@@ -106,8 +108,11 @@ type doneMsg struct{}
 // restoreDraft is populated for failed rich-image turns so the user can fix
 // the model/endpoint or retry without losing the clipboard image.
 type turnFinishedMsg struct {
-	err          error
-	restoreDraft *inputDraft
+	err              error
+	metadata         *session.TurnMetadata
+	metadataErr      error
+	restoreDraft     *inputDraft
+	interruptedDraft *inputDraft
 }
 
 // shellFinishedMsg 表示一次终端命令执行完成后的结果。
@@ -347,6 +352,7 @@ type appModel struct {
 	selectionEnd              selectionPoint
 	cursorFrameAt             time.Time
 	turnStartedAt             time.Time
+	turnID                    string
 	contextMeter              contextMeterAnimation
 	pending                   []inputDraft
 	inputTokens               []inputToken
@@ -372,11 +378,15 @@ type appModel struct {
 	lastToolProgressSecond    int64
 	activeAssistant           int
 	activeThinking            int
+	activeTurnUserEntry       int
 	doneAssistant             int
 	assistantStream           streamLineBuffer
 	thinkingStream            streamLineBuffer
 	pendingToolCites          []toolCitation
 	isGenerating              bool
+	turnHasModelOutput        bool
+	modelCancelRequested      bool
+	activeModelCancel         context.CancelFunc
 	lastCtrlCAt               time.Time // 追踪双击 Ctrl+C 退出
 	modelWizard               *modelWizard
 	settingWizard             *settingWizard

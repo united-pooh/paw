@@ -4,6 +4,7 @@ package bubble
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,6 +86,7 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 		worktreeReader:        readWorktreeStatus,
 		activeAssistant:       -1,
 		activeThinking:        -1,
+		activeTurnUserEntry:   -1,
 		doneAssistant:         -1,
 		newMessageNoticeCycle: 1,
 		toolInspectIndex:      -1,
@@ -114,7 +116,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		wasAtBottom := !m.selectionActive && m.viewport.AtBottom()
+		wasAtBottom := m.viewport.AtBottom()
 		m.ready = true
 		m.width = msg.Width
 		m.height = msg.Height
@@ -140,14 +142,21 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cursorFrameTick(), pipelinePollCmd(m.pipelineActiveAfter))
 	case assistantDeltaMsg:
+		if string(msg) != "" {
+			m.turnHasModelOutput = true
+		}
 		m.isGenerating = true
 		m.consumeAssistantStreamDelta(string(msg))
 		return m, nil
 	case thinkingDeltaMsg:
+		if string(msg) != "" {
+			m.turnHasModelOutput = true
+		}
 		m.isGenerating = true
 		m.consumeThinkingStreamDelta(string(msg))
 		return m, nil
 	case toolCallMsg:
+		m.turnHasModelOutput = true
 		m.finalizeThinkingStream()
 		m.finalizeAssistantStream(transcriptRenderFormatted)
 		m.isGenerating = false
@@ -182,22 +191,44 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case turnFinishedMsg:
 		wasWorking := m.isAgentWorking()
+		hadModelOutput := m.turnHasModelOutput
+		expectedCancel := m.modelCancelRequested && errors.Is(msg.err, context.Canceled)
 		m.finalizeThinkingStream()
+		assistantIndex := m.doneAssistant
 		if msg.err != nil {
 			m.finalizeAssistantStream(transcriptRenderPlain)
 			m.setAssistantRenderMode(m.doneAssistant, transcriptRenderPlain)
 		} else {
-			m.finalizeAssistantStream(transcriptRenderFormatted)
+			if finalized := m.finalizeAssistantStream(transcriptRenderFormatted); finalized >= 0 {
+				assistantIndex = finalized
+			}
+			if msg.metadata != nil && assistantIndex >= 0 && assistantIndex < len(m.transcript) && m.transcript[assistantIndex].kind == entryAssistant {
+				metadata := *msg.metadata
+				m.transcript[assistantIndex].turnMetadata = &metadata
+				touchTranscriptEntry(&m.transcript[assistantIndex])
+				m.refreshViewport()
+			}
 		}
 		m.doneAssistant = -1
 		m.isGenerating = false
+		m.finishModelWork()
+		m.modelCancelRequested = false
 		m.queryGuard.FinishModel()
 		m.turnStartedAt = time.Time{}
+		m.turnID = ""
 		m.syncRunningFlags()
 		if wasWorking && !m.isAgentWorking() {
 			m.startTokenRippleExit(m.animationNow())
 		}
-		if msg.err != nil {
+		if expectedCancel && !hadModelOutput {
+			m.removeInterruptedTurnUserEntry()
+			if msg.interruptedDraft != nil && m.input.Value() == "" {
+				m.setInputDraft(*msg.interruptedDraft)
+				m.inputPasteFoldActive = false
+				m.syncInputMode()
+				m.relayout()
+			}
+		} else if msg.err != nil && !expectedCancel {
 			m.markRunningToolsError(msg.err)
 			m.pendingToolCites = nil
 			m.addEntry(transcriptEntry{
@@ -211,7 +242,15 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.syncInputMode()
 				m.relayout()
 			}
+		} else if msg.metadataErr != nil {
+			m.addEntry(transcriptEntry{
+				kind:  entryError,
+				title: "turn metadata",
+				body:  msg.metadataErr.Error(),
+			})
 		}
+		m.activeTurnUserEntry = -1
+		m.turnHasModelOutput = false
 		cmds = append(cmds, m.input.Focus())
 		if queuedCmd := m.startNextQueuedTurn(); queuedCmd != nil {
 			cmds = append(cmds, queuedCmd)
@@ -231,6 +270,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.input.Focus())
 	case subagentFinishedMsg:
 		wasWorking := m.isAgentWorking()
+		expectedCancel := m.modelCancelRequested && errors.Is(msg.err, context.Canceled)
+		m.finishModelWork()
+		m.modelCancelRequested = false
 		m.queryGuard.FinishModel()
 		m.turnStartedAt = time.Time{}
 		m.syncRunningFlags()
@@ -239,7 +281,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		agentTitle := resultDisplayName(msg.result)
 		agentColor := strings.TrimSpace(msg.result.AgentColor)
-		if msg.err != nil {
+		if msg.err != nil && !expectedCancel {
 			m.addEntry(transcriptEntry{
 				kind:  entryError,
 				title: agentTitle,
@@ -468,6 +510,18 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.input.Focus()
 			}
 		case "ctrl+c":
+			if m.isAgentWorking() {
+				// 工作态优先取消当前模型操作，不清空用户输入，也不开始双击退出计时。
+				m.lastCtrlCAt = time.Time{}
+				m.cancelModelWork()
+				return m, nil
+			}
+			if m.isWorkRunning() {
+				// 其他前台工作结束前也不允许双击退出；避免一次工作态按键
+				// 与一次 ready 态按键拼成退出手势。
+				m.lastCtrlCAt = time.Time{}
+				return m, nil
+			}
 			now := time.Now()
 			if !m.lastCtrlCAt.IsZero() && now.Sub(m.lastCtrlCAt) < time.Second {
 				// 1 秒内连按两次：退出

@@ -2,8 +2,11 @@ package model
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -71,6 +74,12 @@ func TestLoadConfigFromEnvUsesActiveProfileWhenSet(t *testing.T) {
 				"provider": "second-provider",
 				"model":    "selected-model",
 				"models":   []string{"selected-model", "other-model"},
+				"extraBody": map[string]any{
+					"metadata": map[string]any{"profile": "second"},
+				},
+				"modelExtraBody": map[string]any{
+					"selected-model": map[string]any{"service_tier": "fast"},
+				},
 			},
 		},
 		"activeModelProfileId": "second",
@@ -82,6 +91,16 @@ func TestLoadConfigFromEnvUsesActiveProfileWhenSet(t *testing.T) {
 	}
 	if cfg.ProfileID != "second" || cfg.Model != "selected-model" {
 		t.Fatalf("active profile/model = %q/%q, want second/selected-model", cfg.ProfileID, cfg.Model)
+	}
+	if cfg.ExtraBody["metadata"].(map[string]any)["profile"] != "second" {
+		t.Fatalf("active profile extraBody = %#v", cfg.ExtraBody)
+	}
+	if cfg.ModelExtraBody["selected-model"]["service_tier"] != "fast" {
+		t.Fatalf("active model extraBody = %#v", cfg.ModelExtraBody)
+	}
+	cfg.ExtraBody["metadata"].(map[string]any)["profile"] = "changed"
+	if cfg.Profiles[1].ExtraBody["metadata"].(map[string]any)["profile"] != "second" {
+		t.Fatal("LoadConfigFromEnv shared active extraBody with Profiles")
 	}
 }
 
@@ -232,6 +251,213 @@ func TestSaveModelConfigPreservesOtherGlobalConfigFields(t *testing.T) {
 	profile := document["modelProfiles"].([]any)[0].(map[string]any)
 	if profile["credentialId"] != "default" || profile["model"] != "new-model" {
 		t.Fatalf("profile = %#v, want credential preserved and model changed", profile)
+	}
+}
+
+func TestLoadPawConfigDocumentRejectsNonObjectExtraBodies(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "extra null", body: `"extraBody": null`, want: `extraBody must be a JSON object`},
+		{name: "extra string", body: `"extraBody": "fast"`, want: `extraBody must be a JSON object`},
+		{name: "extra array", body: `"extraBody": []`, want: `extraBody must be a JSON object`},
+		{name: "model map null", body: `"modelExtraBody": null`, want: `modelExtraBody must be a JSON object`},
+		{name: "model map string", body: `"modelExtraBody": "fast"`, want: `modelExtraBody must be a JSON object`},
+		{name: "model map array", body: `"modelExtraBody": []`, want: `modelExtraBody must be a JSON object`},
+		{name: "model value null", body: `"modelExtraBody": {"model-a": null}`, want: `modelExtraBody["model-a"] must be a JSON object`},
+		{name: "model value string", body: `"modelExtraBody": {"model-a": "fast"}`, want: `modelExtraBody["model-a"] must be a JSON object`},
+		{name: "model value array", body: `"modelExtraBody": {"model-a": []}`, want: `modelExtraBody["model-a"] must be a JSON object`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			data := fmt.Sprintf(`{
+				"schemaVersion": 1,
+				"activeModelProfileId": "gateway",
+				"modelProfiles": [{
+					"id": "gateway",
+					"transport": "openai-compatible",
+					"model": "model-a",
+					"models": ["model-a"],
+					%s
+				}]
+			}`, tt.body)
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, _, err := loadPawConfigDocument(path)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want substring %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestConfiguredProfilesLoadAndDeepCopyExtraBodies(t *testing.T) {
+	raw := []persistedModelConfig{{
+		ID:        "gateway",
+		Transport: "openai-compatible",
+		Model:     "model-a",
+		Models:    []string{"model-a", "model-b"},
+		ExtraBody: RequestBody{
+			"metadata": map[string]any{"team": "platform"},
+		},
+		ModelExtraBody: map[string]RequestBody{
+			"model-a": {"service_tier": "fast"},
+		},
+	}}
+	profiles, err := configuredProfiles(raw, nil)
+	if err != nil {
+		t.Fatalf("configuredProfiles() error = %v", err)
+	}
+
+	cfg := profiles[0].Config()
+	cfg.ExtraBody["metadata"].(map[string]any)["team"] = "changed"
+	cfg.ModelExtraBody["model-a"]["service_tier"] = "slow"
+	if profiles[0].ExtraBody["metadata"].(map[string]any)["team"] != "platform" {
+		t.Fatalf("Profile.Config shared ExtraBody: %#v", profiles[0].ExtraBody)
+	}
+	if profiles[0].ModelExtraBody["model-a"]["service_tier"] != "fast" {
+		t.Fatalf("Profile.Config shared ModelExtraBody: %#v", profiles[0].ModelExtraBody)
+	}
+
+	selected := ConfiguredProfiles(Config{Profiles: profiles})
+	selected[0].ExtraBody["metadata"].(map[string]any)["team"] = "selected-change"
+	if profiles[0].ExtraBody["metadata"].(map[string]any)["team"] != "platform" {
+		t.Fatalf("ConfiguredProfiles shared ExtraBody: %#v", profiles[0].ExtraBody)
+	}
+}
+
+func TestConfiguredProfilesRejectInvalidModelExtraBody(t *testing.T) {
+	_, err := configuredProfiles([]persistedModelConfig{{
+		ID:        "gateway",
+		Transport: "openai-compatible",
+		Model:     "model-a",
+		Models:    []string{"model-a"},
+		ModelExtraBody: map[string]RequestBody{
+			"model-typo": {"service_tier": "fast"},
+		},
+	}}, nil)
+	if err == nil || !strings.Contains(err.Error(), `model profile "gateway": modelExtraBody references unknown model "model-typo"`) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestSaveModelConfigRoundTripsExtraBodiesAndPreservesUnknownFields(t *testing.T) {
+	restoreCWD := chdirForTest(t, t.TempDir())
+	defer restoreCWD()
+
+	writePawConfig(t, map[string]any{
+		"customGlobal": map[string]any{"keep": true},
+		"modelProfiles": []any{map[string]any{
+			"id":            "gateway",
+			"customProfile": map[string]any{"keep": "profile"},
+			"model":         "old-model",
+		}},
+		"activeModelProfileId": "gateway",
+	})
+
+	wantExtra := RequestBody{"metadata": map[string]any{"team": "platform"}}
+	wantModelExtra := map[string]RequestBody{"new-model": {"service_tier": "fast"}}
+	if err := SaveModelConfig(Config{
+		ProfileID:      "gateway",
+		ProfileName:    "Gateway",
+		Provider:       "openai",
+		Transport:      "openai-compatible",
+		Model:          "new-model",
+		Models:         []string{"new-model", "other-model"},
+		ExtraBody:      wantExtra,
+		ModelExtraBody: wantModelExtra,
+	}); err != nil {
+		t.Fatalf("SaveModelConfig() error = %v", err)
+	}
+
+	configPath, err := modelConfigPath()
+	if err != nil {
+		t.Fatalf("modelConfigPath() error = %v", err)
+	}
+	document, persisted, err := loadPawConfigDocument(configPath)
+	if err != nil {
+		t.Fatalf("loadPawConfigDocument() error = %v", err)
+	}
+	if !reflect.DeepEqual(persisted.ModelProfiles[0].ExtraBody, wantExtra) {
+		t.Fatalf("ExtraBody = %#v, want %#v", persisted.ModelProfiles[0].ExtraBody, wantExtra)
+	}
+	if !reflect.DeepEqual(persisted.ModelProfiles[0].ModelExtraBody, wantModelExtra) {
+		t.Fatalf("ModelExtraBody = %#v, want %#v", persisted.ModelProfiles[0].ModelExtraBody, wantModelExtra)
+	}
+	if document["customGlobal"].(map[string]any)["keep"] != true {
+		t.Fatalf("customGlobal was not preserved: %#v", document["customGlobal"])
+	}
+	profile := document["modelProfiles"].([]any)[0].(map[string]any)
+	if profile["customProfile"].(map[string]any)["keep"] != "profile" {
+		t.Fatalf("customProfile was not preserved: %#v", profile["customProfile"])
+	}
+}
+
+func TestSaveModelConfigKeepsConfiguredEmptyObjectsAsObjects(t *testing.T) {
+	restoreCWD := chdirForTest(t, t.TempDir())
+	defer restoreCWD()
+
+	if err := SaveModelConfig(Config{
+		ProfileID: "gateway",
+		Model:     "model-a",
+		Models:    []string{"model-a"},
+		ExtraBody: RequestBody{},
+		ModelExtraBody: map[string]RequestBody{
+			"model-a": {},
+		},
+	}); err != nil {
+		t.Fatalf("SaveModelConfig() error = %v", err)
+	}
+
+	profile := readPawConfig(t)["modelProfiles"].([]any)[0].(map[string]any)
+	if _, ok := profile["extraBody"].(map[string]any); !ok {
+		t.Fatalf("extraBody = %#v, want empty JSON object", profile["extraBody"])
+	}
+	modelExtraBody, ok := profile["modelExtraBody"].(map[string]any)
+	if !ok {
+		t.Fatalf("modelExtraBody = %#v, want JSON object", profile["modelExtraBody"])
+	}
+	if _, ok := modelExtraBody["model-a"].(map[string]any); !ok {
+		t.Fatalf("modelExtraBody[model-a] = %#v, want empty JSON object", modelExtraBody["model-a"])
+	}
+}
+
+func TestPersistedModelConfigMarshalOmitsNilAndKeepsEmptyObjects(t *testing.T) {
+	data, err := json.Marshal(persistedModelConfig{
+		ID:        "gateway",
+		ExtraBody: RequestBody{},
+		ModelExtraBody: map[string]RequestBody{
+			"model-a": {},
+		},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if _, ok := document["extraBody"].(map[string]any); !ok {
+		t.Fatalf("extraBody = %#v, want empty JSON object", document["extraBody"])
+	}
+	modelExtraBody, ok := document["modelExtraBody"].(map[string]any)
+	if !ok {
+		t.Fatalf("modelExtraBody = %#v, want JSON object", document["modelExtraBody"])
+	}
+	if _, ok := modelExtraBody["model-a"].(map[string]any); !ok {
+		t.Fatalf("modelExtraBody[model-a] = %#v, want empty JSON object", modelExtraBody["model-a"])
+	}
+
+	data, err = json.Marshal(persistedModelConfig{ID: "gateway"})
+	if err != nil {
+		t.Fatalf("json.Marshal() nil bodies error = %v", err)
+	}
+	if strings.Contains(string(data), `"extraBody"`) || strings.Contains(string(data), `"modelExtraBody"`) {
+		t.Fatalf("nil bodies were serialized: %s", data)
 	}
 }
 

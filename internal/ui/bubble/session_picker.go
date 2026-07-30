@@ -5,9 +5,16 @@ import (
 	"context"
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
+	"paw/internal/loop"
+	"paw/internal/message"
+	"paw/internal/session"
 	"strings"
 	"time"
 )
+
+type sessionStateLoader interface {
+	LoadSession(ctx context.Context, sessionID string) (loop.SessionLoadResult, error)
+}
 
 // sessionPicker 保存 /sessions 交互选择器的临时 UI 状态。
 type sessionPicker struct {
@@ -46,22 +53,65 @@ func loadSessionsCmd(ctx context.Context, store SessionStore) tea.Cmd {
 }
 
 // loadSessionHistoryCmd 异步加载指定会话的历史。
-func loadSessionHistoryCmd(ctx context.Context, runner Runner, sessionID string) tea.Cmd {
+func loadSessionHistoryCmd(ctx context.Context, runner Runner, store SessionStore, sessionID string) tea.Cmd {
 	return func() tea.Msg {
 		if runner == nil {
 			return sessionRestoredMsg{err: fmt.Errorf("runner 未初始化")}
 		}
-		messages, err := runner.LoadHistory(ctx, sessionID)
-		if err != nil {
-			return sessionRestoredMsg{err: err}
+		var messages []message.Message
+		var recovery *session.RecoveryState
+		if loader, ok := runner.(sessionStateLoader); ok {
+			result, err := loader.LoadSession(ctx, sessionID)
+			if err != nil {
+				return sessionRestoredMsg{err: err}
+			}
+			messages = result.Messages
+			recovery = result.Recovery
+		} else {
+			var err error
+			messages, err = runner.LoadHistory(ctx, sessionID)
+			if err != nil {
+				return sessionRestoredMsg{err: err}
+			}
 		}
-		createdAt := time.Now()
+		metadata := loadRestoreTurnMetadata(ctx, store, sessionID)
 		entries := make([]transcriptEntry, 0, len(messages))
-		for _, msg := range messages {
-			entries = append(entries, transcriptEntriesFromMessage(msg, createdAt)...)
+		if recordLoader, ok := store.(ResolvedRecordLoader); ok {
+			if records, recordsErr := recordLoader.LoadResolvedRecords(ctx, sessionID); recordsErr == nil {
+				entries = transcriptEntriesFromRecords(records, metadata)
+			}
+		}
+		if len(entries) == 0 && len(messages) > 0 {
+			createdAt := time.Now()
+			for _, msg := range messages {
+				entries = append(entries, transcriptEntriesFromMessage(msg, createdAt)...)
+			}
+			attachRestoreMetadataByAssistantOrder(entries, metadata)
+		}
+		if recovery != nil {
+			entries = append(entries, transcriptEntry{
+				kind:      entryError,
+				title:     "recovery",
+				body:      recoveryDisplayText(recovery),
+				createdAt: time.Now(),
+			})
 		}
 		return sessionRestoredMsg{sessionID: sessionID, entries: entries}
 	}
+}
+
+func recoveryDisplayText(recovery *session.RecoveryState) string {
+	if recovery == nil {
+		return ""
+	}
+	text := strings.TrimSpace(recovery.Error)
+	if text == "" {
+		text = "previous turn ended before completion"
+	}
+	if recovery.Interrupted {
+		return "previous turn interrupted: " + text
+	}
+	return "previous turn failed: " + text
 }
 
 // handleSessionPickerKey 处理会话选择器中的方向键、确认键和取消键。
@@ -89,10 +139,77 @@ func (m appModel) handleSessionPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		selected := m.sessionPicker.sessions[m.sessionPicker.selectedIndex]
-		return m, loadSessionHistoryCmd(m.ctx, m.runner, selected.sessionID)
+		return m, loadSessionHistoryCmd(m.ctx, m.runner, m.sessionStore, selected.sessionID)
 	}
 
 	return m, nil
+}
+
+func loadRestoreTurnMetadata(ctx context.Context, store SessionStore, sessionID string) []session.TurnMetadata {
+	metadataStore, ok := store.(session.TurnMetadataStore)
+	if !ok {
+		return nil
+	}
+	metadata, err := metadataStore.LoadTurnMetadata(ctx, sessionID)
+	if err != nil {
+		return nil
+	}
+	return metadata
+}
+
+func transcriptEntriesFromRecords(records []session.Record, metadata []session.TurnMetadata) []transcriptEntry {
+	metadataByRecordIndex := make(map[int]session.TurnMetadata, len(metadata))
+	for _, item := range metadata {
+		if item.Status != session.TurnStatusCompleted || item.AssistantSeq == nil || item.ResponseAt == nil {
+			continue
+		}
+		// Forks resolve parent records and current-session records together;
+		// both ranges can start at sequence zero. The last matching record is
+		// the current session's own record and avoids decorating a parent entry.
+		for index := len(records) - 1; index >= 0; index-- {
+			if records[index].Seq == *item.AssistantSeq {
+				metadataByRecordIndex[index] = item
+				break
+			}
+		}
+	}
+	entries := make([]transcriptEntry, 0, len(records))
+	for recordIndex, record := range records {
+		createdAt := record.CreatedAt
+		if createdAt.IsZero() {
+			createdAt = time.Now()
+		}
+		recordEntries := transcriptEntriesFromMessage(record.Message, createdAt)
+		if item, ok := metadataByRecordIndex[recordIndex]; ok {
+			for index := len(recordEntries) - 1; index >= 0; index-- {
+				if recordEntries[index].kind == entryAssistant {
+					copyMetadata := item
+					recordEntries[index].turnMetadata = &copyMetadata
+					break
+				}
+			}
+		}
+		entries = append(entries, recordEntries...)
+	}
+	return entries
+}
+
+func attachRestoreMetadataByAssistantOrder(entries []transcriptEntry, metadata []session.TurnMetadata) {
+	metadataIndex := 0
+	for index := range entries {
+		if entries[index].kind != entryAssistant {
+			continue
+		}
+		for metadataIndex < len(metadata) && metadata[metadataIndex].Status != session.TurnStatusCompleted {
+			metadataIndex++
+		}
+		if metadataIndex >= len(metadata) {
+			return
+		}
+		copyMetadata := metadata[metadataIndex]
+		entries[index].turnMetadata = &copyMetadata
+		metadataIndex++
+	}
 }
 
 // renderSessionPickerBox 渲染会话选择器面板。

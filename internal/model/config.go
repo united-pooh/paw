@@ -18,42 +18,46 @@ const (
 )
 
 type Config struct {
-	Provider      string
-	Transport     string
-	ProfileID     string
-	ProfileName   string
-	APIBaseURL    string
-	APIPath       string
-	APIKey        string
-	APIKeyEnvName string
-	Model         string
-	Models        []string
-	Timeout       time.Duration
-	RetryCount    int
-	Stream        bool
-	streamSet     bool
-	Profiles      []Profile
+	Provider       string
+	Transport      string
+	ProfileID      string
+	ProfileName    string
+	APIBaseURL     string
+	APIPath        string
+	APIKey         string
+	APIKeyEnvName  string
+	Model          string
+	Models         []string
+	ExtraBody      RequestBody
+	ModelExtraBody map[string]RequestBody
+	Timeout        time.Duration
+	RetryCount     int
+	Stream         bool
+	streamSet      bool
+	Profiles       []Profile
 }
 
 // Profile is one fully configured provider entry from ~/.paw/config.json.
 // The UI uses one profile as the first-level provider choice and its Models
 // as the second-level model choices.
 type Profile struct {
-	ID            string
-	Name          string
-	Provider      string
-	Transport     string
-	APIBaseURL    string
-	APIPath       string
-	APIKey        string
-	APIKeyEnvName string
-	Model         string
-	Models        []string
-	Timeout       time.Duration
-	RetryCount    int
-	Stream        bool
-	StreamSet     bool
-	CredentialID  string
+	ID             string
+	Name           string
+	Provider       string
+	Transport      string
+	APIBaseURL     string
+	APIPath        string
+	APIKey         string
+	APIKeyEnvName  string
+	Model          string
+	Models         []string
+	ExtraBody      RequestBody
+	ModelExtraBody map[string]RequestBody
+	Timeout        time.Duration
+	RetryCount     int
+	Stream         bool
+	StreamSet      bool
+	CredentialID   string
 }
 
 func (p Profile) Config() Config {
@@ -63,38 +67,138 @@ func (p Profile) Config() Config {
 		modelName = models[0]
 	}
 	return Config{
-		Provider:      p.Provider,
-		Transport:     p.Transport,
-		ProfileID:     p.ID,
-		ProfileName:   p.Name,
-		APIBaseURL:    p.APIBaseURL,
-		APIPath:       p.APIPath,
-		APIKey:        p.APIKey,
-		APIKeyEnvName: p.APIKeyEnvName,
-		Model:         modelName,
-		Models:        models,
-		Timeout:       p.Timeout,
-		RetryCount:    p.RetryCount,
-		Stream:        p.Stream,
-		streamSet:     p.StreamSet,
+		Provider:       p.Provider,
+		Transport:      p.Transport,
+		ProfileID:      p.ID,
+		ProfileName:    p.Name,
+		APIBaseURL:     p.APIBaseURL,
+		APIPath:        p.APIPath,
+		APIKey:         p.APIKey,
+		APIKeyEnvName:  p.APIKeyEnvName,
+		Model:          modelName,
+		Models:         models,
+		ExtraBody:      CloneRequestBody(p.ExtraBody),
+		ModelExtraBody: CloneModelExtraBodies(p.ModelExtraBody),
+		Timeout:        p.Timeout,
+		RetryCount:     p.RetryCount,
+		Stream:         p.Stream,
+		streamSet:      p.StreamSet,
 	}
 }
 
 type persistedModelConfig struct {
-	ID            string   `json:"id,omitempty"`
-	Name          string   `json:"name,omitempty"`
-	Provider      string   `json:"provider,omitempty"`
-	Transport     string   `json:"transport,omitempty"`
-	APIBaseURL    string   `json:"baseUrl,omitempty"`
-	APIPath       string   `json:"apiPath,omitempty"`
-	APIKeyEnvName string   `json:"apiKeyEnvName,omitempty"`
-	APIKey        string   `json:"apiKey,omitempty"`
-	Model         string   `json:"model,omitempty"`
-	Models        []string `json:"models,omitempty"`
-	Timeout       int      `json:"timeoutSeconds,omitempty"`
-	RetryCount    int      `json:"retryCount,omitempty"`
-	Stream        *bool    `json:"stream,omitempty"`
-	CredentialID  string   `json:"credentialId,omitempty"`
+	ID                string                 `json:"id,omitempty"`
+	Name              string                 `json:"name,omitempty"`
+	Provider          string                 `json:"provider,omitempty"`
+	Transport         string                 `json:"transport,omitempty"`
+	APIBaseURL        string                 `json:"baseUrl,omitempty"`
+	APIPath           string                 `json:"apiPath,omitempty"`
+	APIKeyEnvName     string                 `json:"apiKeyEnvName,omitempty"`
+	APIKey            string                 `json:"apiKey,omitempty"`
+	Model             string                 `json:"model,omitempty"`
+	Models            []string               `json:"models,omitempty"`
+	Timeout           int                    `json:"timeoutSeconds,omitempty"`
+	RetryCount        int                    `json:"retryCount,omitempty"`
+	Stream            *bool                  `json:"stream,omitempty"`
+	CredentialID      string                 `json:"credentialId,omitempty"`
+	ExtraBody         RequestBody            `json:"-"`
+	ModelExtraBody    map[string]RequestBody `json:"-"`
+	extraBodySet      bool
+	modelExtraBodySet bool
+}
+
+func (p *persistedModelConfig) UnmarshalJSON(data []byte) error {
+	type alias persistedModelConfig
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*p = persistedModelConfig(decoded)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if raw, ok := fields["extraBody"]; ok {
+		p.extraBodySet = true
+		body, err := decodeRequiredRequestBody(raw, "extraBody")
+		if err != nil {
+			return fmt.Errorf("model profile %q: %w", persistedProfileLabel(*p), err)
+		}
+		p.ExtraBody = body
+	}
+	if raw, ok := fields["modelExtraBody"]; ok {
+		p.modelExtraBodySet = true
+		values, err := decodeModelExtraBodies(raw)
+		if err != nil {
+			return fmt.Errorf("model profile %q: %w", persistedProfileLabel(*p), err)
+		}
+		p.ModelExtraBody = values
+	}
+	return nil
+}
+
+func persistedProfileLabel(p persistedModelConfig) string {
+	for _, value := range []string{p.ID, p.Name, p.Provider} {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return "default"
+}
+
+func (p persistedModelConfig) MarshalJSON() ([]byte, error) {
+	type fields persistedModelConfig
+
+	// Keep nil maps omitted for backwards-compatible config output, while
+	// retaining explicitly configured empty objects as {} rather than null.
+	var extraBody *RequestBody
+	if p.ExtraBody != nil {
+		cloned := CloneRequestBody(p.ExtraBody)
+		extraBody = &cloned
+	}
+	var modelExtraBody *map[string]RequestBody
+	if p.ModelExtraBody != nil {
+		cloned := CloneModelExtraBodies(p.ModelExtraBody)
+		modelExtraBody = &cloned
+	}
+
+	return json.Marshal(struct {
+		fields
+		ExtraBody      *RequestBody            `json:"extraBody,omitempty"`
+		ModelExtraBody *map[string]RequestBody `json:"modelExtraBody,omitempty"`
+	}{
+		fields:         fields(p),
+		ExtraBody:      extraBody,
+		ModelExtraBody: modelExtraBody,
+	})
+}
+
+func decodeRequiredRequestBody(raw json.RawMessage, location string) (RequestBody, error) {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, fmt.Errorf("%s: %w", location, err)
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s must be a JSON object", location)
+	}
+	return CloneRequestBody(RequestBody(object)), nil
+}
+
+func decodeModelExtraBodies(raw json.RawMessage) (map[string]RequestBody, error) {
+	body, err := decodeRequiredRequestBody(raw, "modelExtraBody")
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]RequestBody, len(body))
+	for _, modelName := range sortedRequestBodyKeys(body) {
+		object, ok := jsonObject(body[modelName])
+		if !ok {
+			return nil, fmt.Errorf("modelExtraBody[%q] must be a JSON object", modelName)
+		}
+		result[modelName] = CloneRequestBody(object)
+	}
+	return result, nil
 }
 
 type persistedPawConfig struct {
@@ -117,7 +221,10 @@ func LoadConfigFromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	profiles := configuredProfiles(persisted.ModelProfiles, fileEnvValues)
+	profiles, err := configuredProfiles(persisted.ModelProfiles, fileEnvValues)
+	if err != nil {
+		return Config{}, err
+	}
 	if len(profiles) == 0 {
 		if document == nil {
 			if err := savePawConfigDocument(configPath, map[string]any{
@@ -160,6 +267,9 @@ func SaveModelConfig(cfg Config) error {
 
 func saveModelConfigAtPath(cfg Config, configPath string) error {
 	cfg = fillConfigDefaults(cfg)
+	if err := ValidateExtraRequestBodies(cfg); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		return fmt.Errorf("create config directory: %w", err)
 	}
@@ -231,6 +341,16 @@ func saveModelConfigAtPath(cfg Config, configPath string) error {
 		profile["retryCount"] = cfg.RetryCount
 	}
 	profile["stream"] = cfg.Stream
+	if cfg.ExtraBody != nil {
+		profile["extraBody"] = CloneRequestBody(cfg.ExtraBody)
+	} else {
+		delete(profile, "extraBody")
+	}
+	if cfg.ModelExtraBody != nil {
+		profile["modelExtraBody"] = CloneModelExtraBodies(cfg.ModelExtraBody)
+	} else {
+		delete(profile, "modelExtraBody")
+	}
 	document["modelProfiles"] = profiles
 	document["activeModelProfileId"] = profileID
 
@@ -273,22 +393,24 @@ func fillConfigDefaults(cfg Config) Config {
 	return cfg
 }
 
-func configuredProfiles(persisted []persistedModelConfig, envValues map[string]string) []Profile {
+func configuredProfiles(persisted []persistedModelConfig, envValues map[string]string) ([]Profile, error) {
 	profiles := make([]Profile, 0, len(persisted))
 	for _, raw := range persisted {
 		profile := Profile{
-			ID:            strings.TrimSpace(raw.ID),
-			Name:          strings.TrimSpace(raw.Name),
-			Provider:      strings.TrimSpace(raw.Provider),
-			Transport:     strings.TrimSpace(raw.Transport),
-			APIBaseURL:    strings.TrimSpace(raw.APIBaseURL),
-			APIPath:       strings.TrimSpace(raw.APIPath),
-			APIKey:        strings.TrimSpace(raw.APIKey),
-			APIKeyEnvName: strings.TrimSpace(raw.APIKeyEnvName),
-			Model:         strings.TrimSpace(raw.Model),
-			Models:        normalizeModelNames(raw.Models),
-			CredentialID:  strings.TrimSpace(raw.CredentialID),
-			StreamSet:     raw.Stream != nil,
+			ID:             strings.TrimSpace(raw.ID),
+			Name:           strings.TrimSpace(raw.Name),
+			Provider:       strings.TrimSpace(raw.Provider),
+			Transport:      strings.TrimSpace(raw.Transport),
+			APIBaseURL:     strings.TrimSpace(raw.APIBaseURL),
+			APIPath:        strings.TrimSpace(raw.APIPath),
+			APIKey:         strings.TrimSpace(raw.APIKey),
+			APIKeyEnvName:  strings.TrimSpace(raw.APIKeyEnvName),
+			Model:          strings.TrimSpace(raw.Model),
+			Models:         normalizeModelNames(raw.Models),
+			ExtraBody:      CloneRequestBody(raw.ExtraBody),
+			ModelExtraBody: CloneModelExtraBodies(raw.ModelExtraBody),
+			CredentialID:   strings.TrimSpace(raw.CredentialID),
+			StreamSet:      raw.Stream != nil,
 		}
 		if raw.Timeout > 0 {
 			profile.Timeout = time.Duration(raw.Timeout) * time.Second
@@ -310,9 +432,12 @@ func configuredProfiles(persisted []persistedModelConfig, envValues map[string]s
 		if profile.ID == "" {
 			profile.ID = profile.Provider
 		}
+		if err := ValidateExtraRequestBodies(profile.Config()); err != nil {
+			return nil, err
+		}
 		profiles = append(profiles, profile)
 	}
-	return profiles
+	return profiles, nil
 }
 
 func cloneProfiles(profiles []Profile) []Profile {
@@ -320,6 +445,8 @@ func cloneProfiles(profiles []Profile) []Profile {
 	for index, profile := range profiles {
 		cloned[index] = profile
 		cloned[index].Models = append([]string(nil), profile.Models...)
+		cloned[index].ExtraBody = CloneRequestBody(profile.ExtraBody)
+		cloned[index].ModelExtraBody = CloneModelExtraBodies(profile.ModelExtraBody)
 	}
 	return cloned
 }
@@ -332,20 +459,22 @@ func ConfiguredProfiles(cfg Config) []Profile {
 		return cloneProfiles(cfg.Profiles)
 	}
 	return []Profile{{
-		ID:            cfg.ProfileID,
-		Name:          cfg.ProfileName,
-		Provider:      cfg.Provider,
-		Transport:     cfg.Transport,
-		APIBaseURL:    cfg.APIBaseURL,
-		APIPath:       cfg.APIPath,
-		APIKey:        cfg.APIKey,
-		APIKeyEnvName: cfg.APIKeyEnvName,
-		Model:         cfg.Model,
-		Models:        append([]string(nil), cfg.Models...),
-		Timeout:       cfg.Timeout,
-		RetryCount:    cfg.RetryCount,
-		Stream:        cfg.Stream,
-		StreamSet:     cfg.streamSet,
+		ID:             cfg.ProfileID,
+		Name:           cfg.ProfileName,
+		Provider:       cfg.Provider,
+		Transport:      cfg.Transport,
+		APIBaseURL:     cfg.APIBaseURL,
+		APIPath:        cfg.APIPath,
+		APIKey:         cfg.APIKey,
+		APIKeyEnvName:  cfg.APIKeyEnvName,
+		Model:          cfg.Model,
+		Models:         append([]string(nil), cfg.Models...),
+		ExtraBody:      CloneRequestBody(cfg.ExtraBody),
+		ModelExtraBody: CloneModelExtraBodies(cfg.ModelExtraBody),
+		Timeout:        cfg.Timeout,
+		RetryCount:     cfg.RetryCount,
+		Stream:         cfg.Stream,
+		StreamSet:      cfg.streamSet,
 	}}
 }
 

@@ -207,6 +207,7 @@ func NewCommandRegistry() *CommandRegistry {
 		Description:       "quit the TUI",
 		AllowWhileRunning: true,
 		Handler: func(m *appModel, invocation string) tea.Cmd {
+			m.cancelModelWork()
 			m.queryGuard.Cancel()
 			m.chatQueue.Clear()
 			return tea.Quit

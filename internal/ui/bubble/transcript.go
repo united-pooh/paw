@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"paw/internal/session"
 )
 
 const transcriptStreamingRefreshInterval = cursorFrameInterval
@@ -49,6 +50,7 @@ type transcriptRenderCacheKey struct {
 	toolStartedAtUnixNS  int64
 	toolFinishedAtUnixNS int64
 	toolElapsedSecond    int64
+	turnMetadata         string
 }
 
 func (m *appModel) ensureAssistantStreamEntry() {
@@ -191,7 +193,9 @@ func (m *appModel) resetStreamingBuffers() {
 	m.thinkingStream.Reset()
 	m.activeAssistant = -1
 	m.activeThinking = -1
+	m.activeTurnUserEntry = -1
 	m.doneAssistant = -1
+	m.turnHasModelOutput = false
 }
 
 func (m appModel) streamingBodyWidth() int {
@@ -414,9 +418,10 @@ func assistantEntryIsRenderable(entry transcriptEntry) bool {
 }
 
 // refreshViewport 将 transcript 重新渲染到 viewport。
-// 如果刷新前用户位于底部，则继续跟随新内容；否则保留手动滚动位置。
+// 如果刷新前 viewport 位于底部，则继续跟随新内容；否则保留手动滚动位置。
+// 文字选区只影响渲染，不影响用户已经回到底部后的自动跟随。
 func (m *appModel) refreshViewport() {
-	m.refreshViewportWithBottomState(!m.selectionActive && m.viewport.AtBottom())
+	m.refreshViewportWithBottomState(m.viewport.AtBottom())
 }
 
 func (m *appModel) refreshViewportWithBottomState(wasAtBottom bool) {
@@ -564,7 +569,13 @@ func (m *appModel) renderTranscriptContentAt(width int, showThinking bool, at ti
 		previousKind = entry.kind
 		hasPrevious = true
 	}
-	return renderedTranscript.String()
+	if !hasPrevious {
+		return ""
+	}
+	// Keep one real content row below the final transcript entry. The row is
+	// part of viewport content, so scrolling/GotoBottom accounts for the dock
+	// gap instead of placing the footer directly against the input box.
+	return renderedTranscript.String() + "\n"
 }
 
 func transcriptRenderKey(entry transcriptEntry, width int, at time.Time) transcriptRenderCacheKey {
@@ -592,6 +603,7 @@ func transcriptRenderKey(entry transcriptEntry, width int, at time.Time) transcr
 		createdAtIsZero:      entry.createdAt.IsZero(),
 		toolStartedAtUnixNS:  entry.toolStartedAt.UnixNano(),
 		toolFinishedAtUnixNS: entry.toolFinishedAt.UnixNano(),
+		turnMetadata:         transcriptTurnMetadataSnapshot(entry.turnMetadata),
 	}
 	if toolEntryStatus(entry) == "running" {
 		key.toolElapsedSecond = toolElapsedSeconds(entry, at)
@@ -602,6 +614,17 @@ func transcriptRenderKey(entry transcriptEntry, width int, at time.Time) transcr
 		key.citations = transcriptCitationSnapshot(entry.citations)
 	}
 	return key
+}
+
+func transcriptTurnMetadataSnapshot(metadata *session.TurnMetadata) string {
+	if metadata == nil {
+		return ""
+	}
+	data, err := json.Marshal(metadata)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func toolElapsedSeconds(entry transcriptEntry, at time.Time) int64 {
@@ -728,6 +751,14 @@ func renderEntryAt(entry transcriptEntry, width int, at time.Time) string {
 	}
 	bodyWidth := transcriptBodyWidth(width)
 	body := renderEntryBodyAt(entry, bodyWidth, at)
+	if entry.kind == entryAssistant && entry.turnMetadata != nil {
+		footer := contextFreeStyle.Render(formatTurnFooter(*entry.turnMetadata))
+		if body == "" {
+			body = footer
+		} else {
+			body += "\n" + footer
+		}
+	}
 	if entry.kind == entryTool {
 		if body == "" {
 			return ""

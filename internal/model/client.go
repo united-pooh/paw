@@ -25,7 +25,7 @@ type Client struct {
 
 // NewClient 创建模型客户端。
 func NewClient(cfg Config) *Client {
-	cfg = fillConfigDefaults(cfg)
+	cfg = CloneConfig(fillConfigDefaults(cfg))
 	return &Client{
 		httpClient: &http.Client{Timeout: cfg.Timeout},
 		cfg:        cfg,
@@ -162,15 +162,19 @@ func (c *Client) setRequestHeaders(req *http.Request) {
 func (c *Client) CurrentModelConfig() Config {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.cfg
+	return CloneConfig(c.cfg)
 }
 
 func (c *Client) ApplyModelConfig(cfg Config) error {
 	cfg = fillConfigDefaults(cfg)
+	if err := ValidateExtraRequestBodies(cfg); err != nil {
+		return err
+	}
 	if strings.TrimSpace(cfg.APIKey) == "" {
 		cfg.APIKey = loadAPIKeyByEnvName(cfg.APIKeyEnvName, nil)
 	}
 	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
+	cfg = CloneConfig(cfg)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -201,7 +205,10 @@ func (c *Client) RunMessage(ctx context.Context, messages []message.Message) (st
 		Messages: apiMessages,
 	}
 
-	bodyBytes, err := json.Marshal(reqBody)
+	if err := ValidateExtraRequestBodies(cfg); err != nil {
+		return "", fmt.Errorf("校验请求体配置失败: %w", err)
+	}
+	bodyBytes, err := MarshalRequestBody(reqBody, EffectiveExtraRequestBody(cfg))
 	if err != nil {
 		return "", fmt.Errorf("序列化请求体失败: %w", err)
 	}

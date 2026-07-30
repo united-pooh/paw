@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"paw/internal/message"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -677,5 +678,250 @@ func TestStreamMessageUsesNonStreamingResponseWhenExplicitlyDisabled(t *testing.
 	}
 	if got != "non-stream" || !done {
 		t.Fatalf("events = content %q done=%v, want non-stream/true", got, done)
+	}
+}
+
+func TestStreamMessageMergesProfileAndModelExtraBodyIntoOpenAIStreamRequest(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = r.Body.Close() }()
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Provider:   "openai-gateway",
+		Transport:  "openai-compatible",
+		APIBaseURL: server.URL,
+		APIPath:    "/chat/completions",
+		Model:      "model-a",
+		Models:     []string{"model-a", "model-b"},
+		Stream:     true,
+		ExtraBody: RequestBody{
+			"metadata": RequestBody{
+				"profile": "profile-value",
+				"nested":  RequestBody{"profile": true},
+			},
+			"array":    []any{"profile"},
+			"scalar":   "profile-value",
+			"nullable": "profile-value",
+		},
+		ModelExtraBody: map[string]RequestBody{
+			"model-a": {
+				"metadata": RequestBody{
+					"model":  "model-value",
+					"nested": RequestBody{"model": true},
+				},
+				"array":       []any{"model", 2},
+				"scalar":      float64(42),
+				"nullable":    nil,
+				"temperature": float64(0.2),
+			},
+		},
+		Timeout: time.Second,
+	})
+
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "hello"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+	for event := range events {
+		if event.Err != nil {
+			t.Fatalf("stream event error = %v", event.Err)
+		}
+	}
+
+	if captured["model"] != "model-a" || captured["stream"] != true {
+		t.Fatalf("protected fields = %#v, want model-a/true", captured)
+	}
+	if !reflect.DeepEqual(captured["metadata"], map[string]any{
+		"profile": "profile-value",
+		"model":   "model-value",
+		"nested":  map[string]any{"profile": true, "model": true},
+	}) {
+		t.Fatalf("metadata = %#v, want recursively merged object", captured["metadata"])
+	}
+	if !reflect.DeepEqual(captured["array"], []any{"model", float64(2)}) {
+		t.Fatalf("array = %#v, want model-level replacement", captured["array"])
+	}
+	if captured["scalar"] != float64(42) {
+		t.Fatalf("scalar = %#v, want model-level replacement", captured["scalar"])
+	}
+	if value, ok := captured["nullable"]; !ok || value != nil {
+		t.Fatalf("nullable = %#v (present=%v), want explicit null", value, ok)
+	}
+	if captured["temperature"] != float64(0.2) {
+		t.Fatalf("temperature = %#v, want legal extension", captured["temperature"])
+	}
+	streamOptions, ok := captured["stream_options"].(map[string]any)
+	if !ok || streamOptions["include_usage"] != true {
+		t.Fatalf("stream_options = %#v, want include_usage=true", captured["stream_options"])
+	}
+}
+
+func TestStreamMessageMergesExtraBodyIntoOpenAINonStreamingRequest(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = r.Body.Close() }()
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Provider:   "openai-gateway",
+		Transport:  "openai-compatible",
+		APIBaseURL: server.URL,
+		APIPath:    "/chat/completions",
+		Model:      "model-a",
+		Models:     []string{"model-a"},
+		Stream:     false,
+		streamSet:  true,
+		ExtraBody:  RequestBody{"temperature": float64(0.7)},
+		ModelExtraBody: map[string]RequestBody{
+			"model-a": {"max_tokens": float64(123)},
+		},
+		Timeout: time.Second,
+	})
+
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "hello"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+	for event := range events {
+		if event.Err != nil {
+			t.Fatalf("stream event error = %v", event.Err)
+		}
+	}
+	if captured["model"] != "model-a" || captured["stream"] != false {
+		t.Fatalf("protected fields = %#v, want model-a/false", captured)
+	}
+	if captured["temperature"] != float64(0.7) || captured["max_tokens"] != float64(123) {
+		t.Fatalf("extensions = %#v, want temperature/max_tokens", captured)
+	}
+	if _, ok := captured["stream_options"]; ok {
+		t.Fatalf("stream_options = %#v, want omitted for non-streaming request", captured["stream_options"])
+	}
+}
+
+func TestOpenAIExtraBodyRejectsProtectedFields(t *testing.T) {
+	protected := []string{"model", "messages", "tools", "stream", "stream_options"}
+	for _, field := range protected {
+		t.Run(field, func(t *testing.T) {
+			client := NewClient(Config{Provider: "openai-gateway", Transport: "openai-compatible", Model: "model-a", Models: []string{"model-a"}})
+			err := client.ApplyModelConfig(Config{
+				Provider:  "openai-gateway",
+				Transport: "openai-compatible",
+				Model:     "model-a",
+				Models:    []string{"model-a"},
+				ExtraBody: RequestBody{
+					field: "must-not-override",
+				},
+			})
+			if err == nil || !strings.Contains(err.Error(), `contains protected field "`+field+`"`) {
+				t.Fatalf("ApplyModelConfig() error = %v, want protected-field error for %s", err, field)
+			}
+		})
+	}
+}
+
+func TestStreamMessageMergesAnthropicExtraBodyAndAllowsMaxTokens(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = r.Body.Close() }()
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		if r.Header.Get("Anthropic-Version") != anthropicVersion {
+			t.Fatalf("Anthropic-Version = %q, want %s", r.Header.Get("Anthropic-Version"), anthropicVersion)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Provider:   "anthropic-gateway",
+		Transport:  "anthropic-compatible",
+		APIBaseURL: server.URL,
+		APIPath:    "/v1/messages",
+		Model:      "claude-model",
+		Models:     []string{"claude-model"},
+		ExtraBody: RequestBody{
+			"temperature": float64(0.4),
+			"metadata":    RequestBody{"profile": "profile-value"},
+		},
+		ModelExtraBody: map[string]RequestBody{
+			"claude-model": {
+				"max_tokens": float64(1234),
+				"metadata":   RequestBody{"model": "model-value"},
+			},
+		},
+		Timeout: time.Second,
+	})
+
+	events, err := client.StreamMessage(context.Background(), []message.Message{
+		{Role: message.RoleSystem, Content: "system prompt"},
+		{Role: message.RoleUser, Content: "hello"},
+	}, []ToolDefinition{{
+		Name:        "Read",
+		Description: "read a file",
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+	}})
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+	for event := range events {
+		if event.Err != nil {
+			t.Fatalf("stream event error = %v", event.Err)
+		}
+	}
+
+	if captured["model"] != "claude-model" || captured["stream"] != true {
+		t.Fatalf("protected fields = %#v, want claude-model/true", captured)
+	}
+	if _, ok := captured["system"]; !ok {
+		t.Fatalf("system missing from request: %#v", captured)
+	}
+	if _, ok := captured["messages"]; !ok {
+		t.Fatalf("messages missing from request: %#v", captured)
+	}
+	if _, ok := captured["tools"]; !ok {
+		t.Fatalf("tools missing from request: %#v", captured)
+	}
+	if captured["max_tokens"] != float64(1234) || captured["temperature"] != float64(0.4) {
+		t.Fatalf("extensions = %#v, want max_tokens/temperature", captured)
+	}
+	if !reflect.DeepEqual(captured["metadata"], map[string]any{
+		"profile": "profile-value",
+		"model":   "model-value",
+	}) {
+		t.Fatalf("metadata = %#v, want recursively merged object", captured["metadata"])
+	}
+}
+
+func TestAnthropicExtraBodyRejectsProtectedFields(t *testing.T) {
+	protected := []string{"model", "system", "messages", "tools", "stream", "stream_options"}
+	for _, field := range protected {
+		t.Run(field, func(t *testing.T) {
+			client := NewClient(Config{Provider: "anthropic-gateway", Transport: "anthropic-compatible", Model: "claude-model", Models: []string{"claude-model"}})
+			err := client.ApplyModelConfig(Config{
+				Provider:  "anthropic-gateway",
+				Transport: "anthropic-compatible",
+				Model:     "claude-model",
+				Models:    []string{"claude-model"},
+				ExtraBody: RequestBody{field: "must-not-override"},
+			})
+			if err == nil || !strings.Contains(err.Error(), `contains protected field "`+field+`"`) {
+				t.Fatalf("ApplyModelConfig() error = %v, want protected-field error for %s", err, field)
+			}
+		})
 	}
 }

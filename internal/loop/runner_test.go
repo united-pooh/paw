@@ -1211,6 +1211,78 @@ func TestRunTurnExecutesToolAndReturnsFinalAnswer(t *testing.T) {
 	}
 }
 
+func TestRunTurnJournalRetainsToolHistoryAfterModelFailure(t *testing.T) {
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	failingModel := &fakeModel{rounds: []fakeRound{
+		{events: []model.StreamEvent{
+			{Delta: `{"type":"tool_use","id":"call_1","name":"Read","input":{"file_path":"go.mod"}}`},
+			{Done: true},
+		}},
+		{err: errors.New("模型接口返回异常状态 502")},
+	}}
+	registry := tool.NewRegistry()
+	registry.Register(&fakeTool{name: "Read", output: "module paw"})
+	runner := NewRunner(failingModel, &fakeUI{}, registry, store, "session-1")
+
+	if _, err := runner.RunTurn(context.Background(), "inspect"); err == nil {
+		t.Fatal("RunTurn() error = nil, want model failure")
+	}
+	snapshot, err := store.LoadSnapshot(context.Background(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Messages) != 3 || snapshot.Recovery == nil {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+	if snapshot.Messages[0].Content != "inspect" || snapshot.Messages[1].ToolUse == nil || snapshot.Messages[2].ToolResult == nil {
+		t.Fatalf("persisted messages=%#v", snapshot.Messages)
+	}
+
+	recoveryModel := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{
+		{Delta: "continued"},
+		{Done: true},
+	}}}}
+	runner.model = recoveryModel
+	if _, err := runner.RunTurn(context.Background(), "continue"); err != nil {
+		t.Fatal(err)
+	}
+	if len(recoveryModel.calls) != 1 || !messagesContainContent(recoveryModel.calls[0], "module paw") || !messagesContainContent(recoveryModel.calls[0], "Paw recovery") {
+		t.Fatalf("recovery model call=%#v", recoveryModel.calls)
+	}
+	finalSnapshot, err := store.LoadSnapshot(context.Background(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finalSnapshot.Recovery != nil {
+		t.Fatalf("successful recovery left pending state=%#v", finalSnapshot.Recovery)
+	}
+}
+
+func TestRunTurnJournalDoesNotPersistPartialAssistantOutput(t *testing.T) {
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	failingModel := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{
+		{Delta: "partial answer"},
+		{Err: errors.New("502")},
+	}}}}
+	runner := NewRunner(failingModel, &fakeUI{}, tool.NewRegistry(), store, "session-1")
+	if _, err := runner.RunTurn(context.Background(), "hello"); err == nil {
+		t.Fatal("RunTurn() error = nil, want stream failure")
+	}
+	history, err := store.LoadResolvedHistory(context.Background(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || history[0].Content != "hello" {
+		t.Fatalf("history=%#v, want only user message", history)
+	}
+}
+
 func TestRunTurnExecutesMultipleToolUsesAndCarriesAllResults(t *testing.T) {
 	ui := &fakeUI{}
 	model := &fakeModel{

@@ -120,7 +120,7 @@ func (c *Client) nonStreamingOpenAIMessage(ctx context.Context, cfg Config, mess
 			},
 		})
 	}
-	bodyBytes, err := json.Marshal(reqBody)
+	bodyBytes, err := MarshalRequestBody(reqBody, EffectiveExtraRequestBody(cfg))
 	if err != nil {
 		return nil, fmt.Errorf("序列化请求体失败: %w", err)
 	}
@@ -206,7 +206,7 @@ func (c *Client) streamOpenAIMessage(ctx context.Context, cfg Config, messages [
 	}
 
 	// 组装 JSON 请求体。
-	bodyBytes, err := json.Marshal(reqBody)
+	bodyBytes, err := MarshalRequestBody(reqBody, EffectiveExtraRequestBody(cfg))
 	if err != nil {
 		return nil, fmt.Errorf("序列化请求体失败: %w", err)
 	}

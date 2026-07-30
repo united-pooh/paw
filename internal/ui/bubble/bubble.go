@@ -7,6 +7,7 @@ import (
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
 	"os"
+	"paw/internal/loop"
 	coremcp "paw/internal/mcp"
 	"paw/internal/message"
 	"paw/internal/model"
@@ -31,6 +32,13 @@ type RichInputRunner interface {
 	RunRichTurn(ctx context.Context, input message.Message) (message.Message, error)
 }
 
+// TimedRunner is an optional capability used to persist and display the
+// complete foreground model-turn duration. It is deliberately separate from
+// Runner so existing integrations and test doubles remain source-compatible.
+type TimedRunner interface {
+	loop.TimedRunner
+}
+
 // SupplementSubmitter describes runners that can accept instructions while a
 // model turn is already running.
 type SupplementSubmitter interface {
@@ -45,6 +53,12 @@ type SupplementStatsProvider interface {
 // SessionStore 描述 TUI 列举和管理会话所需的最小接口。
 type SessionStore interface {
 	ListSessions(ctx context.Context) ([]session.SessionSummary, error)
+}
+
+// ResolvedRecordLoader is an optional restore capability that preserves the
+// transcript sequence attached to each message.
+type ResolvedRecordLoader interface {
+	LoadResolvedRecords(ctx context.Context, sessionID string) ([]session.Record, error)
 }
 
 // ModelConfigController 描述运行时读取和应用模型配置的控制器。

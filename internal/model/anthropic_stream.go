@@ -82,7 +82,7 @@ func (c *Client) streamAnthropicMessage(ctx context.Context, cfg Config, message
 	if err != nil {
 		return nil, fmt.Errorf("构造 Anthropic 请求消息失败: %w", err)
 	}
-	bodyBytes, err := json.Marshal(requestBody)
+	bodyBytes, err := MarshalRequestBody(requestBody, EffectiveExtraRequestBody(cfg))
 	if err != nil {
 		return nil, fmt.Errorf("序列化 Anthropic 请求体失败: %w", err)
 	}

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"paw/internal/message"
 	"paw/internal/model"
+	"paw/internal/session"
 	"paw/internal/skill"
 	"paw/internal/tokentracer"
 	"paw/internal/tool"
@@ -16,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -33,6 +35,13 @@ type ModelStreamer interface {
 type HistoryStore interface {
 	LoadResolvedHistory(ctx context.Context, sessionID string) ([]message.Message, error)
 	Append(ctx context.Context, sessionID string, msgs ...message.Message) error
+}
+
+// SessionLoadResult contains the display transcript and the model-safe
+// history reconstructed from an incremental journal.
+type SessionLoadResult struct {
+	Messages []message.Message
+	Recovery *session.RecoveryState
 }
 
 // AttachmentStore persists clipboard images and loads them for restored
@@ -80,11 +89,13 @@ type Runner struct {
 	streamMAEnabled        bool
 	streamMASubagents      StreamMASubagentRunner
 	subagentTokensProvider SubagentTokensProvider
+	recovery               *session.RecoveryState
 	skillRegistry          *skill.Registry
 	activeSkillContext     string
 	tokenTracer            *tokentracer.Tracer
 	traceStageID           string
 	traceAgentID           string
+	nowFn                  func() time.Time
 }
 
 type tokenUsageTotals struct {
@@ -148,6 +159,7 @@ func NewRunnerWithInstructionRoot(model ModelStreamer, output ui.UI, registry *t
 		prompt:          NewPromptBuilder(NewInstructionManager(instructionRoot)),
 		skillRegistry:   skill.NewRegistry(skill.DefaultRoots(instructionRoot)),
 		streamMAEnabled: true,
+		nowFn:           time.Now,
 	}
 }
 
@@ -162,7 +174,8 @@ func (runner *Runner) ReplaceToolNamespace(namespace string, tools []tool.Tool) 
 
 // RunTurn 执行一次最小工具闭环流程，并返回最终 assistant 消息。
 func (runner *Runner) RunTurn(ctx context.Context, input string) (msg message.Message, err error) {
-	return runner.runTurn(ctx, message.Message{Role: message.RoleUser, Content: input})
+	execution, err := runner.runTurn(ctx, message.Message{Role: message.RoleUser, Content: input})
+	return execution.Message, err
 }
 
 // RunRichTurn runs a user turn containing ordered text/image parts. Clipboard
@@ -174,45 +187,67 @@ func (runner *Runner) RunRichTurn(ctx context.Context, input message.Message) (m
 	if input.Role != message.RoleUser {
 		return message.Message{}, fmt.Errorf("rich turn 必须使用 user role")
 	}
-	return runner.runTurn(ctx, input)
+	execution, err := runner.runTurn(ctx, input)
+	return execution.Message, err
 }
 
-func (runner *Runner) runTurn(ctx context.Context, userInput message.Message) (msg message.Message, err error) {
+func (runner *Runner) runTurn(ctx context.Context, userInput message.Message) (TurnExecution, error) {
+	return runner.runTurnWithTiming(ctx, userInput, nil)
+}
+
+func (runner *Runner) runTurnWithTiming(ctx context.Context, userInput message.Message, timing *TurnTiming) (execution TurnExecution, err error) {
 	if err := runner.validate(); err != nil {
-		return message.Message{}, err
+		return execution, err
 	}
 	if err := runner.persistInputAttachments(ctx, &userInput); err != nil {
-		return message.Message{}, err
+		return execution, err
 	}
 	runner.activateSkillContext(userInput.Content)
 	defer runner.clearActiveSkillContext()
 
 	if runner.historyIsNil() && runner.store != nil {
-		messages, err := runner.store.LoadResolvedHistory(ctx, runner.sessionID)
+		var messages []message.Message
+		var recovery *session.RecoveryState
+		if journal := runner.turnJournal(); journal != nil {
+			snapshot, snapshotErr := journal.LoadSnapshot(ctx, runner.sessionID)
+			if snapshotErr == nil {
+				messages = snapshot.ActiveHistory
+				recovery = snapshot.Recovery
+			} else {
+				err = snapshotErr
+			}
+		} else {
+			messages, err = runner.store.LoadResolvedHistory(ctx, runner.sessionID)
+		}
 		if err != nil {
 			if existsStore, ok := runner.store.(historyExistenceStore); ok {
 				exists, existsErr := existsStore.Exists(ctx, runner.sessionID)
 				if existsErr != nil {
-					return message.Message{}, existsErr
+					return execution, existsErr
 				}
 				if !exists {
 					runner.setHistoryIfNil(nil)
 				} else {
-					return message.Message{}, err
+					return execution, err
 				}
 			} else {
-				return message.Message{}, err
+				return execution, err
 			}
 		} else {
 			runner.setHistoryIfNil(messages)
+			runner.setRecoveryIfNil(recovery)
 		}
 	}
 
 	if invocation, ok := parseStreamMAInvocation(userInput.Content); ok {
 		if !runner.currentStreamMAEnabled() {
-			return message.Message{}, fmt.Errorf("streamma is disabled; start with -streamma=true or set PAW_STREAMMA=1 to enable /streamma")
+			return execution, fmt.Errorf("streamma is disabled; start with -streamma=true or set PAW_STREAMMA=1 to enable /streamma")
 		}
-		return runner.runStreamMATurn(ctx, userInput.Content, invocation)
+		assistant, err := runner.runStreamMATurn(ctx, userInput.Content, invocation)
+		if err != nil {
+			return execution, err
+		}
+		return runner.completeTurnExecution(ctx, timing, assistant, -1), nil
 	}
 
 	trace := runner.beginTraceTurn(userInput.Content, "conversation")
@@ -220,44 +255,118 @@ func (runner *Runner) runTurn(ctx context.Context, userInput message.Message) (m
 		runner.finishTraceTurn(trace, err)
 	}()
 
-	// 每一轮都基于“已提交的历史副本”工作。
-	// 这样即使当前轮中途失败，也不会污染下一轮上下文。
+	// 每一轮都基于“已提交的历史副本”工作。Recovery 只存在于本轮
+	// prompt，不会作为 synthetic user message 写入持久化 transcript。
 	history, injectedSupplements := runner.buildTurnHistory(userInput)
-	committed := false
+	pendingRecovery := runner.takeRecovery()
+	if pendingRecovery != nil {
+		history = insertRecoveryMessage(history, pendingRecovery)
+	}
+	journal := runner.turnJournal()
+	turnID, turnIDErr := runner.resolveTurnID(timing)
+	if turnIDErr != nil {
+		runner.setRecovery(pendingRecovery)
+		return execution, turnIDErr
+	}
+	journalStarted := false
+	settled := false
 	defer func() {
-		if !committed && len(injectedSupplements) > 0 {
+		if !settled && len(injectedSupplements) > 0 {
 			runner.prependSupplements(injectedSupplements)
 		}
+		if !journalStarted && pendingRecovery != nil {
+			runner.setRecovery(pendingRecovery)
+		}
+		if journal == nil || !journalStarted || settled {
+			return
+		}
+		failure := err
+		if failure == nil {
+			failure = fmt.Errorf("turn ended before completion")
+		}
+		failureCtx := context.WithoutCancel(ctx)
+		if failErr := journal.FailTurn(failureCtx, runner.sessionID, turnID, failure); failErr != nil && err == nil {
+			err = fmt.Errorf("保存 turn failure 失败: %w", failErr)
+		}
+		if snapshot, snapshotErr := journal.LoadSnapshot(failureCtx, runner.sessionID); snapshotErr == nil {
+			runner.setHistory(snapshot.ActiveHistory)
+			runner.setRecovery(snapshot.Recovery)
+		} else {
+			runner.setHistory(stripRecoveryMessages(history))
+			runner.setRecovery(&session.RecoveryState{TurnID: turnID, Error: failure.Error()})
+		}
 	}()
+	if journal != nil {
+		startMessages := stripRecoveryMessages(history)
+		previousLen := len(runner.currentHistory())
+		if previousLen < len(startMessages) {
+			startMessages = startMessages[previousLen:]
+		}
+		if err := journal.BeginTurn(ctx, runner.sessionID, turnID, startMessages...); err != nil {
+			return execution, fmt.Errorf("开始保存 turn 失败: %w", err)
+		}
+		journalStarted = true
+	}
 	for round := 0; round < maxToolRounds; round++ {
 		var injected []string
 		history, injected = runner.appendPendingSupplements(history)
 		injectedSupplements = append(injectedSupplements, injected...)
+		if journal != nil && len(injected) > 0 {
+			if appendErr := runner.store.Append(ctx, runner.sessionID, buildSupplementMessages(injected)...); appendErr != nil {
+				return execution, fmt.Errorf("保存 supplement 失败: %w", appendErr)
+			}
+		}
 
 		assistantMessage, err := runner.runModelTurn(ctx, history)
 		if err != nil {
-			return message.Message{}, err
+			return execution, err
+		}
+		assistantSeq := int64(-1)
+		if journal != nil {
+			if sequencedJournal, ok := journal.(sequencedTurnJournal); ok {
+				assistantSeq, err = sequencedJournal.AppendAssistantWithSequence(ctx, runner.sessionID, turnID, assistantMessage)
+			} else {
+				err = journal.AppendAssistant(ctx, runner.sessionID, turnID, assistantMessage)
+			}
+			if err != nil {
+				return execution, fmt.Errorf("保存 assistant turn 失败: %w", err)
+			}
 		}
 		history = append(history, assistantMessage)
 
 		toolCalls := toolCallsFromMessage(assistantMessage)
 		if len(toolCalls) == 0 {
 			// 只有当本轮完整结束时，才把本轮消息提交为新的会话历史。
-			if err := runner.commitHistory(ctx, history); err != nil {
-				return message.Message{}, err
+			if journal != nil {
+				if err := journal.CompleteTurn(ctx, runner.sessionID, turnID); err != nil {
+					return execution, fmt.Errorf("完成保存 turn 失败: %w", err)
+				}
+			} else {
+				var commitErr error
+				assistantSeq, commitErr = runner.commitHistory(ctx, stripRecoveryMessages(history))
+				if commitErr != nil {
+					return execution, commitErr
+				}
 			}
-			committed = true
-			return assistantMessage, nil
+			runner.setHistory(stripRecoveryMessages(history))
+			settled = true
+			return runner.completeTurnExecution(ctx, timing, assistantMessage, assistantSeq), nil
 		}
 
-		toolResult, err := runner.runToolCalls(ctx, toolCalls)
+		var checkpoint toolResultCheckpoint
+		if journal != nil {
+			checkpoint = func(callIndex int, result message.ToolResult) error {
+				return journal.AppendToolResult(ctx, runner.sessionID, turnID, callIndex, result)
+			}
+		}
+		toolResult, err := runner.runToolCallsWithCheckpoint(ctx, toolCalls, checkpoint)
 		if err != nil {
-			return message.Message{}, err
+			return execution, err
 		}
 		history = append(history, toolResult)
 	}
 
-	return message.Message{}, fmt.Errorf("tool loop exceeded max rounds: %d", maxToolRounds)
+	return execution, fmt.Errorf("tool loop exceeded max rounds: %d", maxToolRounds)
 }
 
 func (runner *Runner) validate() error {
@@ -445,9 +554,157 @@ func buildSupplementMessages(supplements []string) []message.Message {
 	return messages
 }
 
+const recoveryMessagePrefix = "[Paw recovery]"
+
+func (runner *Runner) turnJournal() session.TurnJournal {
+	if runner == nil || runner.store == nil {
+		return nil
+	}
+	journal, _ := runner.store.(session.TurnJournal)
+	return journal
+}
+
+func (runner *Runner) resolveTurnID(timing *TurnTiming) (string, error) {
+	if timing != nil && strings.TrimSpace(timing.TurnID) != "" {
+		return strings.TrimSpace(timing.TurnID), nil
+	}
+	id, err := session.GenerateSessionID()
+	if err != nil {
+		return "", fmt.Errorf("生成 turn ID 失败: %w", err)
+	}
+	return "turn-" + id, nil
+}
+
+func (runner *Runner) currentHistory() []message.Message {
+	if runner == nil {
+		return nil
+	}
+	runner.mu.RLock()
+	defer runner.mu.RUnlock()
+	return append([]message.Message(nil), runner.history...)
+}
+
+func (runner *Runner) setHistory(history []message.Message) {
+	if runner == nil {
+		return
+	}
+	runner.mu.Lock()
+	runner.history = append([]message.Message(nil), history...)
+	runner.mu.Unlock()
+}
+
+func (runner *Runner) setRecovery(recovery *session.RecoveryState) {
+	if runner == nil {
+		return
+	}
+	runner.mu.Lock()
+	runner.recovery = copyRecoveryState(recovery)
+	runner.mu.Unlock()
+}
+
+func (runner *Runner) setRecoveryIfNil(recovery *session.RecoveryState) {
+	if runner == nil || recovery == nil {
+		return
+	}
+	runner.mu.Lock()
+	if runner.recovery == nil {
+		runner.recovery = copyRecoveryState(recovery)
+	}
+	runner.mu.Unlock()
+}
+
+func (runner *Runner) takeRecovery() *session.RecoveryState {
+	if runner == nil {
+		return nil
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	recovery := copyRecoveryState(runner.recovery)
+	runner.recovery = nil
+	return recovery
+}
+
+func copyRecoveryState(recovery *session.RecoveryState) *session.RecoveryState {
+	if recovery == nil {
+		return nil
+	}
+	copyValue := *recovery
+	copyValue.CompletedToolResults = append([]message.ToolResult(nil), recovery.CompletedToolResults...)
+	copyValue.DroppedToolCalls = append([]message.ToolCall(nil), recovery.DroppedToolCalls...)
+	return &copyValue
+}
+
+func recoveryMessage(recovery *session.RecoveryState) message.Message {
+	if recovery == nil {
+		return message.Message{}
+	}
+	var builder strings.Builder
+	builder.WriteString(recoveryMessagePrefix)
+	builder.WriteString("\nThe previous Paw turn ended before completion.\n")
+	if errText := strings.TrimSpace(recovery.Error); errText != "" {
+		builder.WriteString("Failure: ")
+		builder.WriteString(errText)
+		builder.WriteByte('\n')
+	}
+	if len(recovery.CompletedToolResults) > 0 {
+		builder.WriteString("Completed tool results are authoritative; do not repeat them:\n")
+		for _, result := range recovery.CompletedToolResults {
+			builder.WriteString("- ")
+			builder.WriteString(result.ToolUseID)
+			builder.WriteString(": ")
+			builder.WriteString(result.Content)
+			builder.WriteByte('\n')
+		}
+	}
+	if len(recovery.DroppedToolCalls) > 0 {
+		builder.WriteString("The following tool calls were not completed and may be reconsidered only if needed:\n")
+		for _, call := range recovery.DroppedToolCalls {
+			builder.WriteString("- ")
+			builder.WriteString(call.Name)
+			builder.WriteString(" (")
+			builder.WriteString(call.ID)
+			builder.WriteString(")\n")
+		}
+	}
+	builder.WriteString("Continue from the recorded state and answer the new user request.")
+	return message.Message{Role: message.RoleUser, Content: builder.String()}
+}
+
+func insertRecoveryMessage(history []message.Message, recovery *session.RecoveryState) []message.Message {
+	if recovery == nil {
+		return history
+	}
+	msg := recoveryMessage(recovery)
+	if msg.Content == "" {
+		return history
+	}
+	insertAt := len(history)
+	if len(history) > 0 && history[len(history)-1].Role == message.RoleUser {
+		insertAt = len(history) - 1
+	}
+	result := make([]message.Message, 0, len(history)+1)
+	result = append(result, history[:insertAt]...)
+	result = append(result, msg)
+	result = append(result, history[insertAt:]...)
+	return result
+}
+
+func stripRecoveryMessages(history []message.Message) []message.Message {
+	result := make([]message.Message, 0, len(history))
+	for _, msg := range history {
+		if msg.Role == message.RoleUser && strings.HasPrefix(strings.TrimSpace(msg.Content), recoveryMessagePrefix) {
+			continue
+		}
+		result = append(result, msg)
+	}
+	return result
+}
+
 // commitHistory 在一次 turn 成功结束后提交历史。
 // 先计算新增消息，再更新内存、持久化磁盘，两步顺序不能颠倒。
-func (runner *Runner) commitHistory(ctx context.Context, history []message.Message) error {
+
+func (runner *Runner) commitHistory(ctx context.Context, history []message.Message) (int64, error) {
+	lastSeq := int64(-1)
 	if runner.store != nil {
 		// 在更新 runner.history 之前，先用旧长度算出本轮新增的消息。
 		// runner.history 是上一轮结束时的状态，history 是本轮完整状态。
@@ -456,8 +713,14 @@ func (runner *Runner) commitHistory(ctx context.Context, history []message.Messa
 		runner.mu.RUnlock()
 		newMsgs := history[prevLen:]
 		if len(newMsgs) > 0 {
-			if err := runner.store.Append(ctx, runner.sessionID, newMsgs...); err != nil {
-				return fmt.Errorf("保存会话历史失败: %w", err)
+			if sequencedStore, ok := runner.store.(SequencedHistoryStore); ok {
+				var err error
+				_, lastSeq, err = sequencedStore.AppendWithSequences(ctx, runner.sessionID, newMsgs...)
+				if err != nil {
+					return -1, fmt.Errorf("保存会话历史失败: %w", err)
+				}
+			} else if err := runner.store.Append(ctx, runner.sessionID, newMsgs...); err != nil {
+				return -1, fmt.Errorf("保存会话历史失败: %w", err)
 			}
 		}
 	}
@@ -466,7 +729,7 @@ func (runner *Runner) commitHistory(ctx context.Context, history []message.Messa
 	runner.mu.Lock()
 	runner.history = append([]message.Message(nil), history...)
 	runner.mu.Unlock()
-	return nil
+	return lastSeq, nil
 }
 
 // ResetHistory 清空当前对话上下文。
@@ -481,28 +744,52 @@ func (runner *Runner) ResetHistory() {
 	runner.sessionUsage = model.Usage{}
 	runner.sessionUsageKnown = false
 	runner.supplements = nil
+	runner.recovery = nil
 }
 
-// LoadHistory 从 store 加载指定 session 的历史，并替换当前 runner 的历史。
-// 同时更新 runner.sessionID 以指向新会话，并返回加载到的消息供 UI 重建 transcript。
-func (runner *Runner) LoadHistory(ctx context.Context, sessionID string) ([]message.Message, error) {
+// LoadSession loads the display transcript and reconstructs safe model history
+// plus any pending recovery state.
+func (runner *Runner) LoadSession(ctx context.Context, sessionID string) (SessionLoadResult, error) {
 	if runner.store == nil {
-		return nil, fmt.Errorf("runner store is nil")
+		return SessionLoadResult{}, fmt.Errorf("runner store is nil")
 	}
-	messages, err := runner.store.LoadResolvedHistory(ctx, sessionID)
-	if err != nil {
-		return nil, err
+	var result SessionLoadResult
+	if journal := runner.turnJournal(); journal != nil {
+		snapshot, err := journal.LoadSnapshot(ctx, sessionID)
+		if err != nil {
+			return SessionLoadResult{}, err
+		}
+		result.Messages = append([]message.Message(nil), snapshot.Messages...)
+		result.Recovery = copyRecoveryState(snapshot.Recovery)
+		runner.setHistory(snapshot.ActiveHistory)
+	} else {
+		messages, err := runner.store.LoadResolvedHistory(ctx, sessionID)
+		if err != nil {
+			return SessionLoadResult{}, err
+		}
+		result.Messages = append([]message.Message(nil), messages...)
+		runner.setHistory(messages)
 	}
 	runner.mu.Lock()
-	runner.history = append([]message.Message(nil), messages...)
 	runner.sessionID = sessionID
 	runner.usage = model.Usage{}
 	runner.usageKnown = false
 	runner.sessionUsage = model.Usage{}
 	runner.sessionUsageKnown = false
 	runner.supplements = nil
+	runner.recovery = copyRecoveryState(result.Recovery)
 	runner.mu.Unlock()
-	return messages, nil
+	return result, nil
+}
+
+// LoadHistory keeps the original message-only API used by the TUI and
+// embedded callers while LoadSession exposes recovery metadata when present.
+func (runner *Runner) LoadHistory(ctx context.Context, sessionID string) ([]message.Message, error) {
+	result, err := runner.LoadSession(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return result.Messages, nil
 }
 
 func (runner *Runner) ContextStats(limitTokens int, _ string) ContextStats {
@@ -1788,7 +2075,13 @@ func (runner *Runner) failAfterPartialOutput(wroteOutput bool, err error) error 
 	return err
 }
 
+type toolResultCheckpoint func(callIndex int, result message.ToolResult) error
+
 func (runner *Runner) runToolCalls(ctx context.Context, calls []message.ToolCall) (message.Message, error) {
+	return runner.runToolCallsWithCheckpoint(ctx, calls, nil)
+}
+
+func (runner *Runner) runToolCallsWithCheckpoint(ctx context.Context, calls []message.ToolCall, checkpoint toolResultCheckpoint) (message.Message, error) {
 	results := make([]message.ToolResult, 0, len(calls))
 	for start := 0; start < len(calls); {
 		if runner.isToolCallConcurrencySafe(calls[start]) {
@@ -1796,7 +2089,7 @@ func (runner *Runner) runToolCalls(ctx context.Context, calls []message.ToolCall
 			for end < len(calls) && runner.isToolCallConcurrencySafe(calls[end]) {
 				end++
 			}
-			batchResults, err := runner.runToolCallBatch(ctx, calls[start:end])
+			batchResults, err := runner.runToolCallBatch(ctx, calls[start:end], start, checkpoint)
 			if err != nil {
 				return message.Message{}, err
 			}
@@ -1805,7 +2098,7 @@ func (runner *Runner) runToolCalls(ctx context.Context, calls []message.ToolCall
 			continue
 		}
 
-		result, err := runner.runToolCall(ctx, calls[start])
+		result, err := runner.runToolCallWithCheckpoint(ctx, calls[start], start, checkpoint)
 		if err != nil {
 			return message.Message{}, err
 		}
@@ -1815,7 +2108,7 @@ func (runner *Runner) runToolCalls(ctx context.Context, calls []message.ToolCall
 	return buildToolResultsMessage(results), nil
 }
 
-func (runner *Runner) runToolCallBatch(ctx context.Context, calls []message.ToolCall) ([]message.ToolResult, error) {
+func (runner *Runner) runToolCallBatch(ctx context.Context, calls []message.ToolCall, offset int, checkpoint toolResultCheckpoint) ([]message.ToolResult, error) {
 	for _, call := range calls {
 		if err := runner.emitToolCall(call); err != nil {
 			return nil, err
@@ -1823,6 +2116,8 @@ func (runner *Runner) runToolCallBatch(ctx context.Context, calls []message.Tool
 	}
 
 	results := make([]message.ToolResult, len(calls))
+	var checkpointMu sync.Mutex
+	var checkpointErr error
 	var wg sync.WaitGroup
 	for i := range calls {
 		i := i
@@ -1830,9 +2125,21 @@ func (runner *Runner) runToolCallBatch(ctx context.Context, calls []message.Tool
 		go func() {
 			defer wg.Done()
 			results[i] = runner.executeToolCall(ctx, calls[i])
+			if checkpoint != nil {
+				if err := checkpoint(offset+i, results[i]); err != nil {
+					checkpointMu.Lock()
+					if checkpointErr == nil {
+						checkpointErr = err
+					}
+					checkpointMu.Unlock()
+				}
+			}
 		}()
 	}
 	wg.Wait()
+	if checkpointErr != nil {
+		return nil, checkpointErr
+	}
 
 	for i, result := range results {
 		if err := runner.emitToolResult(calls[i], result); err != nil {
@@ -1843,11 +2150,20 @@ func (runner *Runner) runToolCallBatch(ctx context.Context, calls []message.Tool
 }
 
 func (runner *Runner) runToolCall(ctx context.Context, call message.ToolCall) (message.ToolResult, error) {
+	return runner.runToolCallWithCheckpoint(ctx, call, 0, nil)
+}
+
+func (runner *Runner) runToolCallWithCheckpoint(ctx context.Context, call message.ToolCall, callIndex int, checkpoint toolResultCheckpoint) (message.ToolResult, error) {
 	if err := runner.emitToolCall(call); err != nil {
 		return message.ToolResult{}, err
 	}
 
 	result := runner.executeToolCall(ctx, call)
+	if checkpoint != nil {
+		if err := checkpoint(callIndex, result); err != nil {
+			return message.ToolResult{}, err
+		}
+	}
 	if err := runner.emitToolResult(call, result); err != nil {
 		return message.ToolResult{}, err
 	}
