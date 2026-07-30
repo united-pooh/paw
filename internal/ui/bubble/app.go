@@ -140,7 +140,15 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refreshViewportPreservingOffset()
 			}
 		}
-		return m, tea.Batch(cursorFrameTick(), pipelinePollCmd(m.pipelineActiveAfter))
+		var frameCmd tea.Cmd
+		if m.needsUIAnimationFrames(time.Time(msg)) {
+			frameCmd = cursorFrameTick()
+		}
+		pollCmd := pipelinePollCmd(m.pipelineActiveAfter)
+		if frameCmd == nil {
+			return m, pollCmd
+		}
+		return m, tea.Batch(frameCmd, pollCmd)
 	case assistantDeltaMsg:
 		if string(msg) != "" {
 			m.turnHasModelOutput = true
@@ -383,12 +391,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err == nil && msg.snapshot.visible() {
 			m.worktree = msg.snapshot
 		}
-		return m, worktreeRefreshTickCmd()
+		// Do not keep an idle polling loop alive. Any periodic Bubble Tea message
+		// redraws the frame and would pull Ghostty's IME cursor back to the
+		// textarea's committed position while preedit text is advancing it.
+		return m, nil
 	case worktreeRefreshTickMsg:
-		if m.worktreeCWD == "" {
-			return m, nil
-		}
-		return m, worktreeRefreshCmd(m.ctx, m.worktreeCWD, m.worktreeReader)
+		return m, nil
 	case tea.KeyMsg:
 		var rawMouseFragment bool
 		msg, rawMouseFragment = m.filterRawMouseEscapeKey(msg)

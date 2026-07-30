@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -350,6 +351,7 @@ func (m appModel) inputCursorTerminalPosition(layout tuiLayout) terminalCursorPo
 		active:       true,
 		upFromBottom: upFromBottom,
 		column:       maxInt(0, column),
+		background:   m.theme.Colors.TerminalBackground,
 	}
 }
 
@@ -445,6 +447,7 @@ func (m appModel) renderInputContent() string {
 		return m.renderTokenInputContent()
 	}
 	input := m.input
+	input.Cursor.SetMode(cursor.CursorHide)
 	if m.isTerminalInputActive() || m.runningTerminal {
 		applyTextareaTerminalStyle(&input)
 	}
@@ -474,6 +477,7 @@ func (m appModel) shouldRenderFoldedInput() bool {
 }
 
 func renderFoldedInputContent(input textarea.Model) string {
+	input.Cursor.SetMode(cursor.CursorHide)
 	projected, _, ok := inputPasteFoldProjection(input.Value())
 	if !ok {
 		return input.View()

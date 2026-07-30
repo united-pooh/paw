@@ -111,8 +111,8 @@ func TestWorktreeRefreshKeepsLastSnapshotOnError(t *testing.T) {
 	if model.worktree.ref != "dev" || model.worktree.state != worktreeClean {
 		t.Fatalf("snapshot changed on refresh error: %#v", model.worktree)
 	}
-	if cmd == nil {
-		t.Fatal("refresh error did not schedule next tick")
+	if cmd != nil {
+		t.Fatal("refresh error scheduled an idle redraw tick that can disturb IME preedit")
 	}
 }
 

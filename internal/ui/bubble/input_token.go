@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -737,11 +738,12 @@ func (m appModel) renderTokenInputContent() string {
 					}
 					atomIndex++
 				}
-				cursor := m.input.Cursor
-				cursor.SetChar(char)
-				cursor.TextStyle = style
-				cursor.Style = style
-				out.WriteString(cursor.View())
+				cursorModel := m.input.Cursor
+				cursorModel.SetMode(cursor.CursorHide)
+				cursorModel.SetChar(char)
+				cursorModel.TextStyle = style
+				cursorModel.Style = style
+				out.WriteString(cursorModel.View())
 				continue
 			}
 			if atom.text != "" {
