@@ -12,7 +12,8 @@ import (
 // workspace. It mirrors Claude Code's Edit contract: old_string must be unique
 // unless replace_all is true, and the file is overwritten atomically.
 type EditTool struct {
-	Root string
+	Root      string
+	ReadState *ReadStateStore
 }
 
 type editInput struct {
@@ -61,6 +62,11 @@ func (t *EditTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 	if err != nil {
 		return "", err
 	}
+	if t.ReadState != nil {
+		if err := t.ReadState.Verify(target, current); err != nil {
+			return "", err
+		}
+	}
 	count := strings.Count(string(current), in.OldString)
 	if count == 0 {
 		return "", fmt.Errorf("old_string not found in %s", relativePath(t.Root, target))
@@ -78,6 +84,9 @@ func (t *EditTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 
 	if err := atomicWriteFile(target, []byte(updated)); err != nil {
 		return "", err
+	}
+	if t.ReadState != nil {
+		t.ReadState.RecordAfterWrite(target, []byte(updated))
 	}
 
 	replacements := count

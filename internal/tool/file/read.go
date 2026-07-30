@@ -10,6 +10,7 @@ import (
 type ReadTool struct {
 	Root      string
 	ReadRoots []string
+	ReadState *ReadStateStore
 }
 
 type readInput struct {
@@ -53,6 +54,9 @@ func (t *ReadTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 	data, err := os.ReadFile(target)
 	if err != nil {
 		return "", err
+	}
+	if t.ReadState != nil {
+		t.ReadState.Record(target, data)
 	}
 	return string(data), nil
 }

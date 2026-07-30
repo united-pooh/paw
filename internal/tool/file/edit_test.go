@@ -145,3 +145,39 @@ func jsonString(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
 }
+
+func TestEditRejectsStaleWriteAfterExternalModification(t *testing.T) {
+	root := t.TempDir()
+	full := writeExistingFile(t, root, "a.go", "func a() int { return 1 }\n")
+
+	readState := NewReadStateStore()
+	readTool := &ReadTool{Root: root, ReadState: readState}
+	_, _ = readTool.Run(context.Background(), []byte(`{"file_path":"a.go"}`))
+
+	// External modification after the model's Read.
+	_ = os.WriteFile(full, []byte("func a() int { return 9 }\n"), 0o644)
+
+	tool := &EditTool{Root: root, ReadState: readState}
+	_, err := runEdit(t, tool, `{"file_path":"a.go","old_string":"return 1","new_string":"return 2"}`)
+	if err == nil || !strings.Contains(err.Error(), "modified since last read") {
+		t.Fatalf("err = %v, want stale-write error", err)
+	}
+}
+
+func TestEditSucceedsAfterUnchangedRead(t *testing.T) {
+	root := t.TempDir()
+	writeExistingFile(t, root, "a.go", "func a() int { return 1 }\n")
+
+	readState := NewReadStateStore()
+	readTool := &ReadTool{Root: root, ReadState: readState}
+	_, _ = readTool.Run(context.Background(), []byte(`{"file_path":"a.go"}`))
+
+	tool := &EditTool{Root: root, ReadState: readState}
+	out, err := runEdit(t, tool, `{"file_path":"a.go","old_string":"return 1","new_string":"return 2"}`)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(out, "1 replacement") {
+		t.Fatalf("output = %q", out)
+	}
+}

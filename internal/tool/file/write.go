@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 )
 
 type WriteTool struct {
-	Root string
+	Root      string
+	ReadState *ReadStateStore
 }
 
 type writeInput struct {
@@ -47,11 +47,23 @@ func (t *WriteTool) Run(ctx context.Context, input json.RawMessage) (string, err
 		return "", err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+	// Stale-write guard: if the model Read this file earlier, reject when the
+	// on-disk content no longer matches the recorded baseline.
+	if existing, rerr := os.ReadFile(target); rerr == nil {
+		if t.ReadState != nil {
+			if verr := t.ReadState.Verify(target, existing); verr != nil {
+				return "", verr
+			}
+		}
+	} else if !os.IsNotExist(rerr) {
+		return "", rerr
+	}
+
+	if err := atomicWriteFile(target, []byte(in.Content)); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(target, []byte(in.Content), 0o644); err != nil {
-		return "", err
+	if t.ReadState != nil {
+		t.ReadState.RecordAfterWrite(target, []byte(in.Content))
 	}
 	return fmt.Sprintf("wrote %d bytes to %s", len(in.Content), relativePath(t.Root, target)), nil
 }
