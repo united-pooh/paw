@@ -578,6 +578,7 @@ func registerTools(registry *tool.Registry, root string, readRoots []string, sub
 	registry.Register(&toolfile.LSTool{Root: root, ReadRoots: readRoots})
 	registry.Register(&toolfile.ReadTool{Root: root, ReadRoots: readRoots})
 	registry.Register(&toolfile.WriteTool{Root: root})
+	registry.Register(&toolfile.EditTool{Root: root})
 	registry.Register(&toolfile.GrepTool{Root: root, ReadRoots: readRoots})
 	registry.Register(&toolfile.GlobTool{Root: root, ReadRoots: readRoots})
 	registry.Register(&toolexec.BashTool{Root: root})
