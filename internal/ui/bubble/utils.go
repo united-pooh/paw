@@ -106,11 +106,7 @@ func formatFileMutationToolCallBody(name string, fields []toolDisplayField, oldC
 }
 
 func fileMutationDiffPreview(fields []toolDisplayField, oldContent string) string {
-	// Edit 工具自带 old_content/old_string；Write 工具的旧内容由调用方在工具执行前读取后传入
-	if fc := firstNonEmptyField(fields, "old_content", "old_string", "before"); fc != "" {
-		oldContent = fc
-	}
-	newContent := firstNonEmptyField(fields, "new_content", "new_string", "replacement", "content", "after")
+	oldContent, newContent := fileMutationContents(fields, oldContent)
 
 	if oldContent == "" && newContent == "" {
 		return ""
@@ -124,144 +120,8 @@ func fileMutationDiffPreview(fields []toolDisplayField, oldContent string) strin
 		return strings.Join(limitDiffPreviewLines(numberedLines("-", oldContent)), "\n")
 	}
 
-	oldLines := splitLines(oldContent)
-	newLines := splitLines(newContent)
-
-	ops := lcsEditScript(oldLines, newLines)
-
-	// 参考 Claude Code numberDiffLines 策略：单列行号（基于旧文件行号）
-	// nochange/remove: 递增行号计数器
-	// add: 显示当前行号但不推进（插入不占旧文件行号）
-	// remove 块: 各行显示递增行号，块结束后回退（删除的行在旧文件中连续占位）
-	type numberedOp struct {
-		kind rune
-		line int
-		text string
-	}
-	numbered := make([]numberedOp, 0, len(ops))
-	lineNum := 1
-	for idx := 0; idx < len(ops); {
-		op := ops[idx]
-		switch op.kind {
-		case ' ':
-			numbered = append(numbered, numberedOp{' ', lineNum, op.text})
-			lineNum++
-			idx++
-		case '+':
-			// 插入行不占旧文件行号，显示当前位置但不递增
-			numbered = append(numbered, numberedOp{'+', lineNum, op.text})
-			idx++
-		case '-':
-			// 收集连续的 remove 块，各行显示递增行号，结束后回退
-			// 删除的行在旧文件中占位，但新文件中不存在，后续行从同一位置继续
-			numRemoved := 0
-			for idx < len(ops) && ops[idx].kind == '-' {
-				numbered = append(numbered, numberedOp{'-', lineNum, ops[idx].text})
-				lineNum++
-				numRemoved++
-				idx++
-			}
-			lineNum -= numRemoved
-		}
-	}
-
-	// 计算行号宽度
-	maxLine := 0
-	for _, n := range numbered {
-		if n.line > maxLine {
-			maxLine = n.line
-		}
-	}
-	width := 1
-	if maxLine > 0 {
-		width = len(fmt.Sprintf("%d", maxLine))
-	}
-
-	const context = 3
-	visible := make([]bool, len(numbered))
-	for i, n := range numbered {
-		if n.kind != ' ' {
-			for j := maxInt(0, i-context); j <= minInt(len(numbered)-1, i+context); j++ {
-				visible[j] = true
-			}
-		}
-	}
-
-	out := []string{}
-	prevVisible := false
-	for i, n := range numbered {
-		if !visible[i] {
-			prevVisible = false
-			continue
-		}
-		if !prevVisible && i > 0 {
-			out = append(out, "···")
-		}
-		prevVisible = true
-		switch n.kind {
-		case '-':
-			out = append(out, fmt.Sprintf("%*d - │ %s", width, n.line, n.text))
-		case '+':
-			out = append(out, fmt.Sprintf("%*d + │ %s", width, n.line, n.text))
-		default:
-			out = append(out, fmt.Sprintf("%*d   │ %s", width, n.line, n.text))
-		}
-	}
-	return strings.Join(limitDiffPreviewLines(out), "\n")
-}
-
-// lcsEditScript 使用 Myers 算法计算最短编辑脚本。
-func lcsEditScript(a, b []string) []struct {
-	kind rune
-	oi   int
-	ni   int
-	text string
-} {
-	type op = struct {
-		kind rune
-		oi   int
-		ni   int
-		text string
-	}
-	n, m := len(a), len(b)
-	// dp[i][j] = LCS length of a[:i] and b[:j]
-	dp := make([][]int, n+1)
-	for i := range dp {
-		dp[i] = make([]int, m+1)
-	}
-	for i := 1; i <= n; i++ {
-		for j := 1; j <= m; j++ {
-			if a[i-1] == b[j-1] {
-				dp[i][j] = dp[i-1][j-1] + 1
-			} else if dp[i-1][j] >= dp[i][j-1] {
-				dp[i][j] = dp[i-1][j]
-			} else {
-				dp[i][j] = dp[i][j-1]
-			}
-		}
-	}
-	// 回溯
-	ops := []op{}
-	i, j := n, m
-	for i > 0 || j > 0 {
-		switch {
-		case i > 0 && j > 0 && a[i-1] == b[j-1]:
-			ops = append(ops, op{' ', i, j, a[i-1]})
-			i--
-			j--
-		case j > 0 && (i == 0 || dp[i][j-1] >= dp[i-1][j]):
-			ops = append(ops, op{'+', 0, j, b[j-1]})
-			j--
-		default:
-			ops = append(ops, op{'-', i, 0, a[i-1]})
-			i--
-		}
-	}
-	// 反转（回溯是倒序的）
-	for l, r := 0, len(ops)-1; l < r; l, r = l+1, r-1 {
-		ops[l], ops[r] = ops[r], ops[l]
-	}
-	return ops
+	lines := structuredDiff(splitLines(oldContent), splitLines(newContent))
+	return renderDiffPreview(lines)
 }
 
 func splitLines(s string) []string {
