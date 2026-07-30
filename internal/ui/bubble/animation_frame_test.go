@@ -1,6 +1,8 @@
 package bubble
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -112,5 +114,76 @@ func TestSyncSubagentWakesAnimation(t *testing.T) {
 	}
 	if !model.uiAnimationFrameScheduled {
 		t.Fatal("sync subagent should wake animation")
+	}
+}
+
+func TestTurnCompletionKeepsFramesAliveForRippleExit(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.uiAnimationFrameScheduled = false
+	if !model.queryGuard.StartModel() {
+		t.Fatal("failed to start model guard")
+	}
+	model.syncRunningFlags()
+	model.cursorFrameAt = time.Unix(0, 0).Add(time.Second)
+
+	next, _ := model.Update(turnFinishedMsg{})
+	model = next.(appModel)
+
+	if model.tokenRippleHideAt.IsZero() {
+		t.Fatal("turn completion should record a ripple exit deadline")
+	}
+	if !model.uiAnimationFrameScheduled {
+		t.Fatal("turn completion should wake and mark a ripple exit frame")
+	}
+}
+
+func TestRippleExitFrameStopsAfterDeadline(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.uiAnimationFrameScheduled = true
+	model.waveAmpStartedAt = time.Time{}
+	model.tokenRippleHideAt = time.Unix(500, 0)
+
+	next, _ := model.Update(cursorFrameMsg(model.tokenRippleHideAt))
+	model = next.(appModel)
+
+	// Ignore the unrelated one-shot pipeline poll command; only the scheduler
+	// marker identifies an animation successor.
+	if model.uiAnimationFrameScheduled {
+		t.Fatal("completed ripple exit should clear scheduled marker")
+	}
+}
+
+func TestTurnOutcomesWakeRippleExit(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  turnFinishedMsg
+	}{
+		{name: "success", msg: turnFinishedMsg{}},
+		{name: "error", msg: turnFinishedMsg{err: errors.New("boom")}},
+		{name: "expected cancellation", msg: turnFinishedMsg{err: context.Canceled}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			model := newTestModel(&fakeRunner{})
+			model.uiAnimationFrameScheduled = false
+			if !model.queryGuard.StartModel() {
+				t.Fatal("failed to start model guard")
+			}
+			model.syncRunningFlags()
+			model.cursorFrameAt = time.Unix(0, 0).Add(2 * time.Second)
+			if errors.Is(tc.msg.err, context.Canceled) {
+				model.modelCancelRequested = true
+			}
+
+			next, _ := model.Update(tc.msg)
+			model = next.(appModel)
+
+			if !model.uiAnimationFrameScheduled {
+				t.Fatal("turn outcome should wake ripple exit animation")
+			}
+			if model.tokenRippleHideAt.IsZero() {
+				t.Fatal("turn outcome should set ripple exit deadline")
+			}
+		})
 	}
 }

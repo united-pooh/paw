@@ -229,6 +229,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncRunningFlags()
 		if wasWorking && !m.isAgentWorking() {
 			m.startTokenRippleExit(m.animationNow())
+			if frameCmd := m.scheduleUIAnimationFrame(); frameCmd != nil {
+				cmds = append(cmds, frameCmd)
+			}
 		}
 		if expectedCancel && !hadModelOutput {
 			m.removeInterruptedTurnUserEntry()
@@ -288,6 +291,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncRunningFlags()
 		if wasWorking && !m.isAgentWorking() {
 			m.startTokenRippleExit(m.animationNow())
+			if frameCmd := m.scheduleUIAnimationFrame(); frameCmd != nil {
+				cmds = append(cmds, frameCmd)
+			}
 		}
 		agentTitle := resultDisplayName(msg.result)
 		agentColor := strings.TrimSpace(msg.result.AgentColor)

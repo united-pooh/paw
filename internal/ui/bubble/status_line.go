@@ -36,11 +36,7 @@ func (m *appModel) startTokenRippleExit(now time.Time) {
 	if m == nil || now.IsZero() {
 		return
 	}
-	remaining := tokenRippleCycle - tokenRipplePhase(now)
-	if remaining <= 0 {
-		remaining = tokenRippleCycle
-	}
-	m.tokenRippleHideAt = now.Add(remaining)
+	m.tokenRippleHideAt = now.Add(tokenRippleRemainingUntilExit(now))
 }
 
 func (m appModel) tokenRippleActive(now time.Time) bool {
@@ -223,6 +219,16 @@ func tokenRipplePhase(now time.Time) time.Duration {
 		phase += tokenRippleCycle
 	}
 	return phase
+}
+
+// tokenRippleRemainingUntilExit returns the time until the active cycle's head
+// and complete tail have passed the context meter's right edge.
+func tokenRippleRemainingUntilExit(now time.Time) time.Duration {
+	remaining := tokenRippleCycle - tokenRipplePhase(now)
+	if remaining <= 0 {
+		return tokenRippleCycle
+	}
+	return remaining
 }
 
 func tokenRippleHead(usedCells, width int, phase time.Duration) int {

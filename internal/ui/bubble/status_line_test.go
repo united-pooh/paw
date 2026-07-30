@@ -180,3 +180,53 @@ func TestStatusLineWorkingDuringToolCall(t *testing.T) {
 		t.Fatalf("tool-call dock = %q, want working only", dock)
 	}
 }
+
+func TestTokenRippleRemainingUntilExitUsesCurrentCycle(t *testing.T) {
+	epoch := time.Unix(0, 0)
+	cases := []struct {
+		name string
+		at   time.Time
+		want time.Duration
+	}{
+		{name: "cycle start needs full travel and tail exit", at: epoch, want: tokenRippleCycle},
+		{name: "mid travel keeps remaining travel and exit", at: epoch.Add(time.Second), want: tokenRippleCycle - time.Second},
+		{name: "mid exit keeps only remaining tail exit", at: epoch.Add(tokenRippleTravel + 200*time.Millisecond), want: tokenRippleExit - 200*time.Millisecond},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tokenRippleRemainingUntilExit(tc.at); got != tc.want {
+				t.Fatalf("remaining = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStartTokenRippleExitPreservesPhaseAndVelocity(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	now := time.Unix(0, 0).Add(1250 * time.Millisecond)
+	before := tokenRippleHead(4, 40, tokenRipplePhase(now))
+
+	model.startTokenRippleExit(now)
+	after := tokenRippleHead(4, 40, tokenRipplePhase(now.Add(cursorFrameInterval)))
+
+	if after < before {
+		t.Fatalf("ripple moved backward on exit: before=%d after=%d", before, after)
+	}
+	wantHideAt := now.Add(tokenRippleRemainingUntilExit(now))
+	if !model.tokenRippleHideAt.Equal(wantHideAt) {
+		t.Fatalf("hideAt = %v, want %v", model.tokenRippleHideAt, wantHideAt)
+	}
+}
+
+func TestTokenRippleExitRemainsActiveUntilCycleTailCompletes(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	now := time.Unix(0, 0).Add(tokenRippleTravel + 200*time.Millisecond)
+	model.startTokenRippleExit(now)
+
+	if !model.tokenRippleActive(model.tokenRippleHideAt.Add(-time.Nanosecond)) {
+		t.Fatal("ripple should remain active until the full tail exits")
+	}
+	if model.tokenRippleActive(model.tokenRippleHideAt) {
+		t.Fatal("ripple should stop when the full tail has exited")
+	}
+}
