@@ -245,9 +245,8 @@ func TestModalListsKeepSelectionVisibleInShortTranscript(t *testing.T) {
 	}
 
 	model.settingWizard = newSettingWizard(settings.DefaultConfig())
-	model.settingWizard.step = settingWizardLimit
-	model.settingWizard.selected[settingWizardLimit] = len(settingOptions(settingWizardLimit)) - 1
-	if got := ansi.Strip(model.renderSettingChoiceStep()); !strings.Contains(got, "128000") {
+	model.settingWizard.selected[settingWizardContext] = len(settingOptions(settingWizardContext)) - 1
+	if got := ansi.Strip(model.renderSettingChoiceStep()); !strings.Contains(got, "fork") {
 		t.Fatalf("short settings modal hid selected option:\n%s", got)
 	}
 

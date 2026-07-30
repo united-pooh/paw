@@ -5,6 +5,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"math"
 	"paw/internal/loop"
+	"paw/internal/model"
 	"paw/internal/settings"
 	"strconv"
 	"strings"
@@ -93,8 +94,7 @@ func trimTrailingDecimalZeros(text string) string {
 }
 
 func (m appModel) contextStats() loop.ContextStats {
-	cfg := m.currentSettings()
-	limit := cfg.UI.ContextLimitTokens
+	limit := model.EffectiveContextLimitTokens(m.currentModelConfig())
 	if provider, ok := m.runner.(contextStatsProvider); ok {
 		return provider.ContextStats(limit, m.input.Value())
 	}

@@ -39,6 +39,10 @@ type fakeRunner struct {
 	lastDraft        string
 	lastLimit        int
 	supplements      []string
+	contextLimits    []int
+	compactFocus     string
+	compactResult    loop.ContextCompactionResult
+	compactErr       error
 }
 
 type ctrlCRunner struct {
@@ -80,6 +84,15 @@ func (r *fakeRunner) SubmitSupplement(input string) bool {
 
 func (r *fakeRunner) PendingSupplementCount() int {
 	return len(r.supplements)
+}
+
+func (r *fakeRunner) SetContextLimitTokens(limit int) {
+	r.contextLimits = append(r.contextLimits, limit)
+}
+
+func (r *fakeRunner) CompactContext(ctx context.Context, focus string) (loop.ContextCompactionResult, error) {
+	r.compactFocus = focus
+	return r.compactResult, r.compactErr
 }
 
 // ContextStats returns deterministic context-usage data for meter tests.
@@ -343,6 +356,53 @@ func TestCommandsHandleStatusAndClear(t *testing.T) {
 	}
 	if len(model.transcript) != 1 || model.transcript[0].body != "history cleared" {
 		t.Fatalf("transcript = %#v", model.transcript)
+	}
+}
+
+func TestCompactCommandPassesFocusAndShowsMessageCounts(t *testing.T) {
+	runner := &fakeRunner{compactResult: loop.ContextCompactionResult{
+		BeforeMessages: 18,
+		AfterMessages:  7,
+		FoldedMessages: 12,
+	}}
+	model := newTestModel(runner)
+	handled, cmd := model.handleCommand("/compact prioritize parser failures")
+	if !handled || cmd == nil {
+		t.Fatalf("/compact handled/cmd = %v/%v", handled, cmd)
+	}
+	if !model.isModelWorkRunning() {
+		t.Fatal("/compact did not mark model work running")
+	}
+	msg := cmd()
+	finished, ok := msg.(contextCompactionFinishedMsg)
+	if !ok {
+		t.Fatalf("cmd() = %#v", msg)
+	}
+	if runner.compactFocus != "prioritize parser failures" {
+		t.Fatalf("focus = %q", runner.compactFocus)
+	}
+	next, _ := model.Update(finished)
+	model = next.(appModel)
+	if model.isModelWorkRunning() {
+		t.Fatal("compaction completion left model work running")
+	}
+	body := model.transcript[len(model.transcript)-1].body
+	for _, want := range []string{"compacted 12 messages", "18 → 7", "full journal preserved"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body = %q, want %q", body, want)
+		}
+	}
+}
+
+func TestNewModelUsesConfiguredModelContextLimit(t *testing.T) {
+	runner := &fakeRunner{}
+	controller := &fakeModelConfigController{current: modelcfg.Config{
+		Model:                   "model-b",
+		ModelContextLimitTokens: map[string]int{"model-b": 131072},
+	}}
+	_ = newModel(context.Background(), runner, "session-1", controller, nil, nil, nil, newTerminalCursorAnchor())
+	if len(runner.contextLimits) == 0 || runner.contextLimits[len(runner.contextLimits)-1] != 131072 {
+		t.Fatalf("context limits = %#v", runner.contextLimits)
 	}
 }
 
@@ -718,11 +778,6 @@ func TestSettingCommandPersistsWizardSelections(t *testing.T) {
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
 
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
-	model = next.(appModel)
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = next.(appModel)
-
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
 
@@ -735,15 +790,13 @@ func TestSettingCommandPersistsWizardSelections(t *testing.T) {
 	got := settingsController.saved[0]
 	if got.Subagent.DefaultContextMode != settings.ContextModeEmpty ||
 		got.Subagent.DefaultRunMode != settings.RunModeBackground ||
-		got.UI.ContextMeterLocation != settings.MeterLocationInputAbove ||
-		got.UI.ContextLimitTokens != 200000 {
+		got.UI.ContextMeterLocation != settings.MeterLocationInputAbove {
 		t.Fatalf("saved config = %#v", got)
 	}
 	body := model.transcript[len(model.transcript)-1].body
 	for _, want := range []string{
 		"subagent.context=empty",
 		"subagent.run=background",
-		"ui.context_limit=200000",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("settings summary = %q, want %q", body, want)
@@ -3231,26 +3284,26 @@ func TestFoldedPasteUnfoldsWhenCursorMovesIntoHiddenMiddle(t *testing.T) {
 func TestContextMeterUsesDefaultLimitAndStableSegments(t *testing.T) {
 	runner := &fakeRunner{
 		stats: loop.ContextStats{
-			UsedTokens:  262144,
-			CacheTokens: 104858,
+			UsedTokens:  modelcfg.DefaultContextLimitTokens / 4,
+			CacheTokens: modelcfg.DefaultContextLimitTokens / 10,
 		},
 	}
 	model := newTestModel(runner)
 	model.input.SetValue("draft prompt")
 
 	title := model.contextMeterTitle()
-	if runner.lastLimit != settings.DefaultContextLimitTokens {
-		t.Fatalf("lastLimit = %d, want %d", runner.lastLimit, settings.DefaultContextLimitTokens)
+	if runner.lastLimit != modelcfg.DefaultContextLimitTokens {
+		t.Fatalf("lastLimit = %d, want %d", runner.lastLimit, modelcfg.DefaultContextLimitTokens)
 	}
 	if runner.lastDraft != "draft prompt" {
 		t.Fatalf("lastDraft = %q, want draft prompt", runner.lastDraft)
 	}
-	for _, want := range []string{"262k↑", "25%(10%)", "free(75%)"} {
+	for _, want := range []string{"65.5k↑", "25%(10%)", "free(75%)"} {
 		if !strings.Contains(title, want) {
 			t.Fatalf("contextMeterTitle() = %q, want %q", title, want)
 		}
 	}
-	bar := renderContextBar(runner.stats.UsedTokens, runner.stats.CacheTokens, settings.DefaultContextLimitTokens, 40, "")
+	bar := renderContextBar(runner.stats.UsedTokens, runner.stats.CacheTokens, modelcfg.DefaultContextLimitTokens, 40, "")
 	if strings.Count(bar, "▰") != 10 || strings.Count(bar, "▱") != 30 {
 		t.Fatalf("renderContextBar() = %q, want 10 filled and 30 free cells", bar)
 	}
@@ -5741,7 +5794,7 @@ func TestFullLayout_StatusDockVisibleWithoutSidebar(t *testing.T) {
 	model.relayout()
 
 	view := model.View()
-	if !strings.Contains(view, "0 / 1.05M") {
+	if !strings.Contains(view, "0 / 262k") {
 		t.Errorf("View() = %q, want bottom token status", view)
 	}
 	if strings.Contains(view, "subagents") {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"paw/internal/model"
 	"paw/internal/settings"
 	"paw/internal/skill"
 	"paw/internal/theme"
@@ -53,6 +55,13 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 	cfg := settings.DefaultConfig()
 	if settingsController != nil {
 		cfg = settings.Normalize(settingsController.CurrentSettings())
+	}
+	if setter, ok := runner.(interface{ SetContextLimitTokens(int) }); ok {
+		modelCfg := model.Config{}
+		if controller != nil {
+			modelCfg = controller.CurrentModelConfig()
+		}
+		setter.SetContextLimitTokens(model.EffectiveContextLimitTokens(modelCfg))
 	}
 	selectedTheme, ok := theme.ByID(cfg.UI.Theme)
 	if !ok {
@@ -202,6 +211,24 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.isGenerating = false
 		m.refreshViewport()
 		return m, nil
+	case contextCompactionFinishedMsg:
+		m.finishModelWork()
+		m.modelCancelRequested = false
+		m.queryGuard.FinishModel()
+		m.syncRunningFlags()
+		if msg.err != nil {
+			m.addEntry(transcriptEntry{kind: entryError, title: "compact", body: msg.err.Error()})
+		} else if msg.result.FoldedMessages == 0 {
+			m.addEntry(transcriptEntry{kind: entrySystem, title: "compact", body: fmt.Sprintf("nothing to compact: %d messages", msg.result.BeforeMessages)})
+		} else {
+			m.addEntry(transcriptEntry{
+				kind:  entrySystem,
+				title: "compact",
+				body:  fmt.Sprintf("compacted %d messages: %d → %d; full journal preserved", msg.result.FoldedMessages, msg.result.BeforeMessages, msg.result.AfterMessages),
+			})
+		}
+		cmds = append(cmds, m.input.Focus())
+		return m, tea.Batch(cmds...)
 	case turnFinishedMsg:
 		wasWorking := m.isAgentWorking()
 		hadModelOutput := m.turnHasModelOutput

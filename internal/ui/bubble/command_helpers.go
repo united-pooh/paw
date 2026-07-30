@@ -29,7 +29,7 @@ func (m *appModel) handleModelCommand(invocation string) tea.Cmd {
 		m.addEntry(transcriptEntry{
 			kind:  entrySystem,
 			title: "model",
-			body:  fmt.Sprintf("provider=%s base=%s path=%s model=%s models=%s retries=%d key=%s", cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, strings.Join(model.AvailableModels(cfg), ","), cfg.RetryCount, cfg.APIKeyEnvName),
+			body:  fmt.Sprintf("provider=%s base=%s path=%s model=%s models=%s context=%d retries=%d key=%s", cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, strings.Join(model.AvailableModels(cfg), ","), model.EffectiveContextLimitTokens(cfg), cfg.RetryCount, cfg.APIKeyEnvName),
 		})
 	default:
 		cfg := m.currentModelConfig()
@@ -69,10 +69,11 @@ func (m *appModel) applyModelConfigFromCommand(cfg model.Config) {
 		m.addEntry(transcriptEntry{kind: entryError, title: "model", body: err.Error()})
 		return
 	}
+	m.syncRunnerModelContextLimit(cfg)
 	m.addEntry(transcriptEntry{
 		kind:  entrySystem,
 		title: "model",
-		body:  fmt.Sprintf("provider=%s base=%s path=%s model=%s models=%s retries=%d key=%s", cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, strings.Join(model.AvailableModels(cfg), ","), cfg.RetryCount, cfg.APIKeyEnvName),
+		body:  fmt.Sprintf("provider=%s base=%s path=%s model=%s models=%s context=%d retries=%d key=%s", cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, strings.Join(model.AvailableModels(cfg), ","), model.EffectiveContextLimitTokens(cfg), cfg.RetryCount, cfg.APIKeyEnvName),
 	})
 }
 
@@ -277,14 +278,14 @@ func (m appModel) statusText(sessionID string) string {
 	}
 	stats := m.contextStats()
 	return fmt.Sprintf(
-		"session: %s\nmodel: %s/%s\nsettings: context=%s run=%s meter=%s limit=%d\ntheme: %s\nqueue: %d\nsubagent tasks: %d\ncontext: used=%d cache=%d limit=%d",
+		"session: %s\nmodel: %s/%s context_limit=%d\nsettings: context=%s run=%s meter=%s\ntheme: %s\nqueue: %d\nsubagent tasks: %d\ncontext: used=%d cache=%d limit=%d",
 		sessionID,
 		modelCfg.Provider,
 		modelCfg.Model,
+		model.EffectiveContextLimitTokens(modelCfg),
 		cfg.Subagent.DefaultContextMode,
 		cfg.Subagent.DefaultRunMode,
 		cfg.UI.ContextMeterLocation,
-		cfg.UI.ContextLimitTokens,
 		m.theme.ID,
 		m.chatQueue.Len(),
 		taskCount,
@@ -368,4 +369,10 @@ func resultDisplayName(result subagent.Result) string {
 		return name
 	}
 	return shortTaskID(result.AgentID)
+}
+
+func (m *appModel) syncRunnerModelContextLimit(cfg model.Config) {
+	if setter, ok := m.runner.(interface{ SetContextLimitTokens(int) }); ok {
+		setter.SetContextLimitTokens(model.EffectiveContextLimitTokens(cfg))
+	}
 }

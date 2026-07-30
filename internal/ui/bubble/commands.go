@@ -213,3 +213,14 @@ func shellResultBody(msg shellFinishedMsg) string {
 	}
 	return strings.Join(parts, "\n")
 }
+
+func runContextCompactionCmd(ctx context.Context, runner Runner, focus string) tea.Cmd {
+	return func() tea.Msg {
+		compactor, ok := runner.(contextCompactor)
+		if !ok {
+			return contextCompactionFinishedMsg{err: fmt.Errorf("runner does not support context compaction")}
+		}
+		result, err := compactor.CompactContext(ctx, focus)
+		return contextCompactionFinishedMsg{result: result, err: err}
+	}
+}

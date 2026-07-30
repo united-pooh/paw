@@ -86,6 +86,7 @@ type Runner struct {
 	supplements            []string
 	systemSupplement       string
 	compactToolPrompt      bool
+	contextLimitTokens     int
 	streamMAEnabled        bool
 	streamMASubagents      StreamMASubagentRunner
 	subagentTokensProvider SubagentTokensProvider
@@ -150,16 +151,17 @@ func NewRunner(model ModelStreamer, output ui.UI, registry *tool.Registry, store
 // NewRunnerWithInstructionRoot 创建带项目指令根目录的调度器。
 func NewRunnerWithInstructionRoot(model ModelStreamer, output ui.UI, registry *tool.Registry, store HistoryStore, sessionID, instructionRoot string) *Runner {
 	return &Runner{
-		model:           model,
-		ui:              output,
-		registry:        registry,
-		store:           store,
-		sessionID:       sessionID,
-		workRoot:        instructionRoot,
-		prompt:          NewPromptBuilder(NewInstructionManager(instructionRoot)),
-		skillRegistry:   skill.NewRegistry(skill.DefaultRoots(instructionRoot)),
-		streamMAEnabled: true,
-		nowFn:           time.Now,
+		model:              model,
+		ui:                 output,
+		registry:           registry,
+		store:              store,
+		sessionID:          sessionID,
+		workRoot:           instructionRoot,
+		prompt:             NewPromptBuilder(NewInstructionManager(instructionRoot)),
+		skillRegistry:      skill.NewRegistry(skill.DefaultRoots(instructionRoot)),
+		contextLimitTokens: initialContextLimitTokens(model),
+		streamMAEnabled:    true,
+		nowFn:              time.Now,
 	}
 }
 
@@ -314,6 +316,16 @@ func (runner *Runner) runTurnWithTiming(ctx context.Context, userInput message.M
 		if journal != nil && len(injected) > 0 {
 			if appendErr := runner.store.Append(ctx, runner.sessionID, buildSupplementMessages(injected)...); appendErr != nil {
 				return execution, fmt.Errorf("保存 supplement 失败: %w", appendErr)
+			}
+		}
+
+		if round == 0 {
+			compactedHistory, compaction, compactErr := runner.maybeCompactHistory(ctx, history)
+			if compactErr != nil {
+				runner.notifySystem("context-compaction", "context compaction skipped: "+compactErr.Error())
+			} else if compaction != nil {
+				history = compactedHistory
+				runner.notifySystem("context-compaction", fmt.Sprintf("compacted %d messages: %d → %d; recent messages and user constraints were kept verbatim", compaction.FoldedMessages, compaction.BeforeMessages, compaction.AfterMessages))
 			}
 		}
 

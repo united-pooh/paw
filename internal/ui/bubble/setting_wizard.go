@@ -16,7 +16,6 @@ func newSettingWizard(current settings.Config) *settingWizard {
 	}
 	w.selected[settingWizardContext] = selectedSettingIndex(settingOptions(settingWizardContext), string(current.Subagent.DefaultContextMode))
 	w.selected[settingWizardRunMode] = selectedSettingIndex(settingOptions(settingWizardRunMode), string(current.Subagent.DefaultRunMode))
-	w.selected[settingWizardLimit] = selectedSettingLimitIndex(settingOptions(settingWizardLimit), current.UI.ContextLimitTokens)
 	return w
 }
 
@@ -27,11 +26,6 @@ func selectedSettingIndex(options []settingOption, value string) int {
 		}
 	}
 	return 0
-}
-
-func selectedSettingLimitIndex(options []settingOption, limit int) int {
-	label := fmt.Sprintf("%d", limit)
-	return selectedSettingIndex(options, label)
 }
 
 func settingOptions(step settingWizardStep) []settingOption {
@@ -46,12 +40,6 @@ func settingOptions(step settingWizardStep) []settingOption {
 			{label: string(settings.RunModeSync), description: "wait for subagent result", apply: func(cfg *settings.Config) { cfg.Subagent.DefaultRunMode = settings.RunModeSync }},
 			{label: string(settings.RunModeBackground), description: "return a task id immediately", apply: func(cfg *settings.Config) { cfg.Subagent.DefaultRunMode = settings.RunModeBackground }},
 		}
-	case settingWizardLimit:
-		return []settingOption{
-			{label: fmt.Sprintf("%d", settings.DefaultContextLimitTokens), description: "1024 * 1024 default", apply: func(cfg *settings.Config) { cfg.UI.ContextLimitTokens = settings.DefaultContextLimitTokens }},
-			{label: "200000", description: "smaller local model context", apply: func(cfg *settings.Config) { cfg.UI.ContextLimitTokens = 200000 }},
-			{label: "128000", description: "common long-context baseline", apply: func(cfg *settings.Config) { cfg.UI.ContextLimitTokens = 128000 }},
-		}
 	default:
 		return nil
 	}
@@ -63,8 +51,6 @@ func settingStepTitle(step settingWizardStep) string {
 		return "Subagent context"
 	case settingWizardRunMode:
 		return "Subagent run mode"
-	case settingWizardLimit:
-		return "Context limit"
 	default:
 		return "Confirm settings"
 	}
@@ -205,9 +191,8 @@ func (m appModel) renderSettingConfirmStep() string {
 func renderSettingsSummary(cfg settings.Config) string {
 	cfg = settings.Normalize(cfg)
 	return fmt.Sprintf(
-		"subagent.context=%s\nsubagent.run=%s\nui.context_limit=%d",
+		"subagent.context=%s\nsubagent.run=%s",
 		cfg.Subagent.DefaultContextMode,
 		cfg.Subagent.DefaultRunMode,
-		cfg.UI.ContextLimitTokens,
 	)
 }

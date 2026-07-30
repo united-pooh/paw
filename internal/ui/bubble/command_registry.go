@@ -172,6 +172,26 @@ func NewCommandRegistry() *CommandRegistry {
 		},
 	})
 	registry.Register(Command{
+		Name:              "/compact",
+		Description:       "compact the model context while preserving the full journal",
+		ArgumentHint:      "[focus]",
+		AllowWhileRunning: false,
+		Handler: func(m *appModel, invocation string) tea.Cmd {
+			if m.runner == nil {
+				m.addEntry(transcriptEntry{kind: entryError, title: "compact", body: "runner is unavailable"})
+				return nil
+			}
+			if !m.queryGuard.StartModel() {
+				m.addEntry(transcriptEntry{kind: entrySystem, title: "busy", body: "/compact is unavailable while a turn is running"})
+				return nil
+			}
+			m.syncRunningFlags()
+			m.addEntry(transcriptEntry{kind: entrySystem, title: "compact", body: "compacting model context…"})
+			ctx := m.beginModelWorkContext()
+			return runContextCompactionCmd(ctx, m.runner, commandArgs(invocation))
+		},
+	})
+	registry.Register(Command{
 		Name:              "/clear",
 		Description:       "clear in-process chat history",
 		AllowWhileRunning: false,

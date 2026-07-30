@@ -107,6 +107,11 @@ type doneMsg struct{}
 // turnFinishedMsg 表示一轮模型调用已经结束，并携带可能的错误。
 // restoreDraft is populated for failed rich-image turns so the user can fix
 // the model/endpoint or retry without losing the clipboard image.
+type contextCompactionFinishedMsg struct {
+	result loop.ContextCompactionResult
+	err    error
+}
+
 type turnFinishedMsg struct {
 	err              error
 	metadata         *session.TurnMetadata
@@ -167,7 +172,6 @@ type settingWizardStep int
 const (
 	settingWizardContext settingWizardStep = iota
 	settingWizardRunMode
-	settingWizardLimit
 	settingWizardConfirm
 )
 
@@ -449,6 +453,10 @@ type pipelineStateUpdatedMsg struct {
 
 type contextStatsProvider interface {
 	ContextStats(limitTokens int, draft string) loop.ContextStats
+}
+
+type contextCompactor interface {
+	CompactContext(context.Context, string) (loop.ContextCompactionResult, error)
 }
 
 type tokenTracerURLProvider interface {

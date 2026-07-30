@@ -157,12 +157,13 @@ func (m appModel) applyModelWizardSelection() appModel {
 		m.modelWizard.err = err.Error()
 		return m
 	}
+	m.syncRunnerModelContextLimit(cfg)
 
 	m.modelWizard = nil
 	m.addEntry(transcriptEntry{
 		kind:  entrySystem,
 		title: "model",
-		body:  fmt.Sprintf("provider=%s base=%s path=%s model=%s retries=%d key=%s", cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, cfg.RetryCount, cfg.APIKeyEnvName),
+		body:  fmt.Sprintf("provider=%s base=%s path=%s model=%s context=%d retries=%d key=%s", cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, model.EffectiveContextLimitTokens(cfg), cfg.RetryCount, cfg.APIKeyEnvName),
 	})
 	return m
 }

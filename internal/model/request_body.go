@@ -37,6 +37,7 @@ func CloneConfig(cfg Config) Config {
 	cfg.Models = append([]string(nil), cfg.Models...)
 	cfg.ExtraBody = CloneRequestBody(cfg.ExtraBody)
 	cfg.ModelExtraBody = CloneModelExtraBodies(cfg.ModelExtraBody)
+	cfg.ModelContextLimitTokens = cloneModelContextLimits(cfg.ModelContextLimitTokens)
 	cfg.Profiles = cloneProfiles(cfg.Profiles)
 	return cfg
 }

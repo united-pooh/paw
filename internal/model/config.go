@@ -11,53 +11,58 @@ import (
 )
 
 const (
-	defaultTimeoutSeconds  = 60
-	defaultRetryCountValue = 3
-	modelConfigDirName     = ".paw"
-	modelConfigFileName    = "config.json"
+	defaultTimeoutSeconds     = 60
+	defaultRetryCountValue    = 3
+	DefaultContextLimitTokens = 256 * 1024
+	modelConfigDirName        = ".paw"
+	modelConfigFileName       = "config.json"
 )
 
 type Config struct {
-	Provider       string
-	Transport      string
-	ProfileID      string
-	ProfileName    string
-	APIBaseURL     string
-	APIPath        string
-	APIKey         string
-	APIKeyEnvName  string
-	Model          string
-	Models         []string
-	ExtraBody      RequestBody
-	ModelExtraBody map[string]RequestBody
-	Timeout        time.Duration
-	RetryCount     int
-	Stream         bool
-	streamSet      bool
-	Profiles       []Profile
+	Provider                string
+	Transport               string
+	ProfileID               string
+	ProfileName             string
+	APIBaseURL              string
+	APIPath                 string
+	APIKey                  string
+	APIKeyEnvName           string
+	Model                   string
+	Models                  []string
+	ExtraBody               RequestBody
+	ModelExtraBody          map[string]RequestBody
+	ContextLimitTokens      int
+	ModelContextLimitTokens map[string]int
+	Timeout                 time.Duration
+	RetryCount              int
+	Stream                  bool
+	streamSet               bool
+	Profiles                []Profile
 }
 
 // Profile is one fully configured provider entry from ~/.paw/config.json.
 // The UI uses one profile as the first-level provider choice and its Models
 // as the second-level model choices.
 type Profile struct {
-	ID             string
-	Name           string
-	Provider       string
-	Transport      string
-	APIBaseURL     string
-	APIPath        string
-	APIKey         string
-	APIKeyEnvName  string
-	Model          string
-	Models         []string
-	ExtraBody      RequestBody
-	ModelExtraBody map[string]RequestBody
-	Timeout        time.Duration
-	RetryCount     int
-	Stream         bool
-	StreamSet      bool
-	CredentialID   string
+	ID                      string
+	Name                    string
+	Provider                string
+	Transport               string
+	APIBaseURL              string
+	APIPath                 string
+	APIKey                  string
+	APIKeyEnvName           string
+	Model                   string
+	Models                  []string
+	ExtraBody               RequestBody
+	ModelExtraBody          map[string]RequestBody
+	ContextLimitTokens      int
+	ModelContextLimitTokens map[string]int
+	Timeout                 time.Duration
+	RetryCount              int
+	Stream                  bool
+	StreamSet               bool
+	CredentialID            string
 }
 
 func (p Profile) Config() Config {
@@ -67,44 +72,48 @@ func (p Profile) Config() Config {
 		modelName = models[0]
 	}
 	return Config{
-		Provider:       p.Provider,
-		Transport:      p.Transport,
-		ProfileID:      p.ID,
-		ProfileName:    p.Name,
-		APIBaseURL:     p.APIBaseURL,
-		APIPath:        p.APIPath,
-		APIKey:         p.APIKey,
-		APIKeyEnvName:  p.APIKeyEnvName,
-		Model:          modelName,
-		Models:         models,
-		ExtraBody:      CloneRequestBody(p.ExtraBody),
-		ModelExtraBody: CloneModelExtraBodies(p.ModelExtraBody),
-		Timeout:        p.Timeout,
-		RetryCount:     p.RetryCount,
-		Stream:         p.Stream,
-		streamSet:      p.StreamSet,
+		Provider:                p.Provider,
+		Transport:               p.Transport,
+		ProfileID:               p.ID,
+		ProfileName:             p.Name,
+		APIBaseURL:              p.APIBaseURL,
+		APIPath:                 p.APIPath,
+		APIKey:                  p.APIKey,
+		APIKeyEnvName:           p.APIKeyEnvName,
+		Model:                   modelName,
+		Models:                  models,
+		ExtraBody:               CloneRequestBody(p.ExtraBody),
+		ModelExtraBody:          CloneModelExtraBodies(p.ModelExtraBody),
+		ContextLimitTokens:      p.ContextLimitTokens,
+		ModelContextLimitTokens: cloneModelContextLimits(p.ModelContextLimitTokens),
+		Timeout:                 p.Timeout,
+		RetryCount:              p.RetryCount,
+		Stream:                  p.Stream,
+		streamSet:               p.StreamSet,
 	}
 }
 
 type persistedModelConfig struct {
-	ID                string                 `json:"id,omitempty"`
-	Name              string                 `json:"name,omitempty"`
-	Provider          string                 `json:"provider,omitempty"`
-	Transport         string                 `json:"transport,omitempty"`
-	APIBaseURL        string                 `json:"baseUrl,omitempty"`
-	APIPath           string                 `json:"apiPath,omitempty"`
-	APIKeyEnvName     string                 `json:"apiKeyEnvName,omitempty"`
-	APIKey            string                 `json:"apiKey,omitempty"`
-	Model             string                 `json:"model,omitempty"`
-	Models            []string               `json:"models,omitempty"`
-	Timeout           int                    `json:"timeoutSeconds,omitempty"`
-	RetryCount        int                    `json:"retryCount,omitempty"`
-	Stream            *bool                  `json:"stream,omitempty"`
-	CredentialID      string                 `json:"credentialId,omitempty"`
-	ExtraBody         RequestBody            `json:"-"`
-	ModelExtraBody    map[string]RequestBody `json:"-"`
-	extraBodySet      bool
-	modelExtraBodySet bool
+	ID                      string                 `json:"id,omitempty"`
+	Name                    string                 `json:"name,omitempty"`
+	Provider                string                 `json:"provider,omitempty"`
+	Transport               string                 `json:"transport,omitempty"`
+	APIBaseURL              string                 `json:"baseUrl,omitempty"`
+	APIPath                 string                 `json:"apiPath,omitempty"`
+	APIKeyEnvName           string                 `json:"apiKeyEnvName,omitempty"`
+	APIKey                  string                 `json:"apiKey,omitempty"`
+	Model                   string                 `json:"model,omitempty"`
+	Models                  []string               `json:"models,omitempty"`
+	Timeout                 int                    `json:"timeoutSeconds,omitempty"`
+	RetryCount              int                    `json:"retryCount,omitempty"`
+	Stream                  *bool                  `json:"stream,omitempty"`
+	CredentialID            string                 `json:"credentialId,omitempty"`
+	ExtraBody               RequestBody            `json:"-"`
+	ModelExtraBody          map[string]RequestBody `json:"-"`
+	ContextLimitTokens      int                    `json:"context_limit_tokens,omitempty"`
+	ModelContextLimitTokens map[string]int         `json:"model_context_limit_tokens,omitempty"`
+	extraBodySet            bool
+	modelExtraBodySet       bool
 }
 
 func (p *persistedModelConfig) UnmarshalJSON(data []byte) error {
@@ -117,6 +126,16 @@ func (p *persistedModelConfig) UnmarshalJSON(data []byte) error {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
+	}
+	if p.ContextLimitTokens == 0 {
+		if raw, ok := fields["contextLimitTokens"]; ok {
+			_ = json.Unmarshal(raw, &p.ContextLimitTokens)
+		}
+	}
+	if len(p.ModelContextLimitTokens) == 0 {
+		if raw, ok := fields["modelContextLimitTokens"]; ok {
+			_ = json.Unmarshal(raw, &p.ModelContextLimitTokens)
+		}
 	}
 	if raw, ok := fields["extraBody"]; ok {
 		p.extraBodySet = true
@@ -351,6 +370,20 @@ func saveModelConfigAtPath(cfg Config, configPath string) error {
 	} else {
 		delete(profile, "modelExtraBody")
 	}
+	if cfg.ContextLimitTokens > 0 {
+		profile["context_limit_tokens"] = cfg.ContextLimitTokens
+		delete(profile, "contextLimitTokens")
+	} else {
+		delete(profile, "context_limit_tokens")
+		delete(profile, "contextLimitTokens")
+	}
+	if len(cfg.ModelContextLimitTokens) > 0 {
+		profile["model_context_limit_tokens"] = cloneModelContextLimits(cfg.ModelContextLimitTokens)
+		delete(profile, "modelContextLimitTokens")
+	} else {
+		delete(profile, "model_context_limit_tokens")
+		delete(profile, "modelContextLimitTokens")
+	}
 	document["modelProfiles"] = profiles
 	document["activeModelProfileId"] = profileID
 
@@ -375,6 +408,7 @@ func fillConfigDefaults(cfg Config) Config {
 	cfg.APIKeyEnvName = strings.TrimSpace(cfg.APIKeyEnvName)
 	cfg.Model = strings.TrimSpace(cfg.Model)
 	cfg.Models = normalizeModelNames(cfg.Models)
+	cfg.ModelContextLimitTokens = normalizeModelContextLimits(cfg.ModelContextLimitTokens)
 	if cfg.Model == "" && len(cfg.Models) > 0 {
 		cfg.Model = cfg.Models[0]
 	}
@@ -397,20 +431,22 @@ func configuredProfiles(persisted []persistedModelConfig, envValues map[string]s
 	profiles := make([]Profile, 0, len(persisted))
 	for _, raw := range persisted {
 		profile := Profile{
-			ID:             strings.TrimSpace(raw.ID),
-			Name:           strings.TrimSpace(raw.Name),
-			Provider:       strings.TrimSpace(raw.Provider),
-			Transport:      strings.TrimSpace(raw.Transport),
-			APIBaseURL:     strings.TrimSpace(raw.APIBaseURL),
-			APIPath:        strings.TrimSpace(raw.APIPath),
-			APIKey:         strings.TrimSpace(raw.APIKey),
-			APIKeyEnvName:  strings.TrimSpace(raw.APIKeyEnvName),
-			Model:          strings.TrimSpace(raw.Model),
-			Models:         normalizeModelNames(raw.Models),
-			ExtraBody:      CloneRequestBody(raw.ExtraBody),
-			ModelExtraBody: CloneModelExtraBodies(raw.ModelExtraBody),
-			CredentialID:   strings.TrimSpace(raw.CredentialID),
-			StreamSet:      raw.Stream != nil,
+			ID:                      strings.TrimSpace(raw.ID),
+			Name:                    strings.TrimSpace(raw.Name),
+			Provider:                strings.TrimSpace(raw.Provider),
+			Transport:               strings.TrimSpace(raw.Transport),
+			APIBaseURL:              strings.TrimSpace(raw.APIBaseURL),
+			APIPath:                 strings.TrimSpace(raw.APIPath),
+			APIKey:                  strings.TrimSpace(raw.APIKey),
+			APIKeyEnvName:           strings.TrimSpace(raw.APIKeyEnvName),
+			Model:                   strings.TrimSpace(raw.Model),
+			Models:                  normalizeModelNames(raw.Models),
+			ExtraBody:               CloneRequestBody(raw.ExtraBody),
+			ModelExtraBody:          CloneModelExtraBodies(raw.ModelExtraBody),
+			ContextLimitTokens:      raw.ContextLimitTokens,
+			ModelContextLimitTokens: cloneModelContextLimits(raw.ModelContextLimitTokens),
+			CredentialID:            strings.TrimSpace(raw.CredentialID),
+			StreamSet:               raw.Stream != nil,
 		}
 		if raw.Timeout > 0 {
 			profile.Timeout = time.Duration(raw.Timeout) * time.Second
@@ -447,6 +483,7 @@ func cloneProfiles(profiles []Profile) []Profile {
 		cloned[index].Models = append([]string(nil), profile.Models...)
 		cloned[index].ExtraBody = CloneRequestBody(profile.ExtraBody)
 		cloned[index].ModelExtraBody = CloneModelExtraBodies(profile.ModelExtraBody)
+		cloned[index].ModelContextLimitTokens = cloneModelContextLimits(profile.ModelContextLimitTokens)
 	}
 	return cloned
 }
@@ -522,6 +559,44 @@ func containsModel(models []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func EffectiveContextLimitTokens(cfg Config) int {
+	if limit := cfg.ModelContextLimitTokens[strings.TrimSpace(cfg.Model)]; limit > 0 {
+		return limit
+	}
+	if cfg.ContextLimitTokens > 0 {
+		return cfg.ContextLimitTokens
+	}
+	return DefaultContextLimitTokens
+}
+
+func cloneModelContextLimits(values map[string]int) map[string]int {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]int, len(values))
+	for name, limit := range values {
+		out[name] = limit
+	}
+	return out
+}
+
+func normalizeModelContextLimits(values map[string]int) map[string]int {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(values))
+	for name, limit := range values {
+		name = strings.TrimSpace(name)
+		if name != "" && limit > 0 {
+			out[name] = limit
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func modelConfigPath() (string, error) {

@@ -512,3 +512,68 @@ func chdirForTest(t *testing.T, dir string) func() {
 		}
 	}
 }
+
+func TestModelContextLimitConfigurationAndDefault(t *testing.T) {
+	restoreCWD := chdirForTest(t, t.TempDir())
+	defer restoreCWD()
+	writePawConfig(t, map[string]any{
+		"modelProfiles": []any{map[string]any{
+			"id":                   "gateway",
+			"model":                "model-a",
+			"models":               []string{"model-a", "model-b", "model-c"},
+			"context_limit_tokens": 200000,
+			"model_context_limit_tokens": map[string]any{
+				"model-b": 131072,
+			},
+		}},
+	})
+	cfg, err := LoadConfigFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := EffectiveContextLimitTokens(cfg); got != 200000 {
+		t.Fatalf("model-a limit = %d, want profile fallback 200000", got)
+	}
+	cfg.Model = "model-b"
+	if got := EffectiveContextLimitTokens(cfg); got != 131072 {
+		t.Fatalf("model-b limit = %d, want override 131072", got)
+	}
+	cfg.Model = "model-c"
+	if got := EffectiveContextLimitTokens(cfg); got != 200000 {
+		t.Fatalf("model-c limit = %d, want profile fallback 200000", got)
+	}
+	if got := EffectiveContextLimitTokens(Config{Model: "unconfigured"}); got != 256*1024 {
+		t.Fatalf("default limit = %d, want 256 Ki tokens", got)
+	}
+}
+
+func TestSaveModelConfigPersistsContextLimits(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := Config{
+		ProfileID:               "gateway",
+		Model:                   "model-b",
+		Models:                  []string{"model-a", "model-b"},
+		ContextLimitTokens:      200000,
+		ModelContextLimitTokens: map[string]int{"model-b": 131072},
+	}
+	if err := saveModelConfigAtPath(cfg, path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	profiles := document["modelProfiles"].([]any)
+	profile := profiles[0].(map[string]any)
+	if profile["context_limit_tokens"] != float64(200000) {
+		t.Fatalf("context_limit_tokens = %#v", profile["context_limit_tokens"])
+	}
+	overrides := profile["model_context_limit_tokens"].(map[string]any)
+	if overrides["model-b"] != float64(131072) {
+		t.Fatalf("model_context_limit_tokens = %#v", overrides)
+	}
+}
