@@ -94,15 +94,38 @@ func isFileMutationTool(name string) bool {
 }
 
 func formatFileMutationToolCallBody(name string, fields []toolDisplayField, oldContent string) string {
-	target := firstNonEmptyField(fields, "file_path", "path")
-	lines := []string{name}
-	if target != "" {
+	summary := name
+	if totals, ok := fileMutationChangeCounts(fields, oldContent); ok {
+		summary = fmt.Sprintf("%s · +%d -%d", name, totals.added, totals.removed)
+	}
+	lines := []string{summary}
+	if target := firstNonEmptyField(fields, "file_path", "path"); target != "" {
 		lines = append(lines, target)
 	}
 	if diff := fileMutationDiffPreview(fields, oldContent); diff != "" {
 		lines = append(lines, diff)
 	}
 	return strings.Join(lines, "\n")
+}
+
+type diffTotals struct{ added, removed int }
+
+// fileMutationChangeCounts reports added/removed line counts for the
+// file-mutation diff. Returns false when there is no old or new content
+// (no diff to summarize).
+func fileMutationChangeCounts(fields []toolDisplayField, oldContent string) (diffTotals, bool) {
+	old, newContent := fileMutationContents(fields, oldContent)
+	if old == "" && newContent == "" {
+		return diffTotals{}, false
+	}
+	if old == "" {
+		return diffTotals{added: len(splitLines(newContent))}, true
+	}
+	if newContent == "" {
+		return diffTotals{removed: len(splitLines(old))}, true
+	}
+	added, removed := diffCounts(structuredDiff(splitLines(old), splitLines(newContent)))
+	return diffTotals{added: added, removed: removed}, true
 }
 
 func fileMutationDiffPreview(fields []toolDisplayField, oldContent string) string {

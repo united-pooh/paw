@@ -125,3 +125,53 @@ func TestDiffCounts(t *testing.T) {
 		t.Fatalf("counts = +%d -%d, want +1 -1", added, removed)
 	}
 }
+
+func TestFormatFileMutationToolCallBodyEditSummary(t *testing.T) {
+	input := editInputJSON(t, "a.go", "return 1", "return 2")
+	body := formatFileMutationToolCallBody("Edit", toolInputFields(input), "")
+	first := firstToolEntryLine(body)
+	if !strings.Contains(first, "Edit · +1 -1") {
+		t.Fatalf("first line = %q, want summary Edit · +1 -1", first)
+	}
+	if !strings.Contains(body, "a.go") {
+		t.Fatalf("missing target in body: %q", body)
+	}
+	if !strings.Contains(body, "+ │ return 2") || !strings.Contains(body, "- │ return 1") {
+		t.Fatalf("missing diff lines: %q", body)
+	}
+}
+
+func TestFormatFileMutationToolCallBodyWriteNewFileSummary(t *testing.T) {
+	input := writeInputJSON(t, "new.go", "package p\n")
+	body := formatFileMutationToolCallBody("Write", toolInputFields(input), "")
+	first := firstToolEntryLine(body)
+	if !strings.Contains(first, "Write · +1 -0") {
+		t.Fatalf("first line = %q, want Write · +1 -0", first)
+	}
+}
+
+func TestFormatFileMutationToolCallBodyNoDiffNoSummary(t *testing.T) {
+	// Neither old nor new content: no summary token, just the name.
+	input := []byte(`{"file_path":"a.go"}`)
+	body := formatFileMutationToolCallBody("Write", toolInputFields(input), "")
+	first := firstToolEntryLine(body)
+	if first != "Write" {
+		t.Fatalf("first line = %q, want Write (no counts)", first)
+	}
+}
+
+func TestFormatRunningToolCallBodyInsertsStatusBeforeCounts(t *testing.T) {
+	input := editInputJSON(t, "a.go", "return 1", "return 2")
+	body := formatRunningToolCallBody("Edit", input, "")
+	first := firstToolEntryLine(body)
+	// status inserted as 2nd part: Edit · running · +1 -1
+	if !strings.Contains(first, "Edit · running · +1 -1") {
+		t.Fatalf("first line = %q, want Edit · running · +1 -1", first)
+	}
+	// Completing the tool replaces running with ok; counts survive.
+	completed := completeRunningToolCallBody(body, "ok")
+	firstCompleted := firstToolEntryLine(completed)
+	if !strings.Contains(firstCompleted, "Edit · ok · +1 -1") {
+		t.Fatalf("completed first line = %q, want Edit · ok · +1 -1", firstCompleted)
+	}
+}
