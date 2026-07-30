@@ -15,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 
 	"paw/internal/loop"
 	"paw/internal/message"
@@ -1977,6 +1978,32 @@ func TestTextareaInputUsesThemeBackground(t *testing.T) {
 		if got := style.GetBackground(); got != want {
 			t.Fatalf("%s background = %#v, want %#v", name, got, want)
 		}
+	}
+}
+
+// TestFirstTypedLineUsesThemeBackground verifies textarea's internal active
+// style pointer belongs to the model copy. Focusing the temporary textarea
+// before assigning it into appModel leaves that pointer attached to the old
+// copy, so the first typed row keeps the library's default ANSI-black
+// CursorLine background instead of the selected theme.
+func TestFirstTypedLineUsesThemeBackground(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
+
+	model := newTestModel(&fakeRunner{})
+	model.width = 80
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	model = next.(appModel)
+	rendered := model.renderInputContent()
+	want := lipgloss.NewStyle().Background(model.styles.Colors.LipglossColor(colorTerminalBackground)).Render("x")
+
+	if !strings.Contains(rendered, want) {
+		t.Fatalf("first input render = %q, want themed cell %q", rendered, want)
+	}
+	if strings.Contains(rendered, "\x1b[40m") {
+		t.Fatalf("first input render retained textarea default ANSI-black background: %q", rendered)
 	}
 }
 

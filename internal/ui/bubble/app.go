@@ -49,7 +49,6 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 		key.WithHelp("ctrl+j", "newline"),
 	)
 	input.Cursor.SetMode(cursor.CursorStatic)
-	input.Focus()
 
 	cfg := settings.DefaultConfig()
 	if settingsController != nil {
@@ -97,6 +96,10 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 	}
 	model.activateThemeStyles()
 	model.applyTextareaTheme()
+	// Focus only after the themed styles are installed. textarea keeps an
+	// internal pointer to the active style; focusing earlier would leave the
+	// first render bound to its default black CursorLine style.
+	model.input.Focus()
 	model.applyCursorAnimation()
 	model.refreshViewport()
 	return model
