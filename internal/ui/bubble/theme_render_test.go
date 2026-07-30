@@ -1,9 +1,11 @@
 package bubble
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	"paw/internal/theme"
 )
 
@@ -40,5 +42,42 @@ func TestThemeSwitchChangesWholeFrameBackground(t *testing.T) {
 	}
 	if newBackground != lipgloss.Color(model.theme.Colors.TerminalBackground) {
 		t.Fatalf("new background = %#v, want %q", newBackground, model.theme.Colors.TerminalBackground)
+	}
+}
+
+func TestRestoreBackgroundAfterANSIResetReappliesThemeCanvas(t *testing.T) {
+	const background = "#1a1b26"
+	input := "before\x1b[0mafter\x1b[49mtail\x1b[mend"
+	got := restoreBackgroundAfterANSIReset(input, background)
+	wantBackground := "\x1b[48;2;26;27;38m"
+	for _, reset := range []string{"\x1b[0m", "\x1b[49m", "\x1b[m"} {
+		if !strings.Contains(got, reset+wantBackground) {
+			t.Fatalf("restored output = %q, want %q followed by theme background", got, reset)
+		}
+	}
+	if !strings.HasPrefix(got, wantBackground) {
+		t.Fatalf("restored output = %q, want theme background prefix", got)
+	}
+}
+
+func TestViewReappliesThemeBackgroundAfterNestedStyleResets(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
+
+	model := newThemedTestModel(t, theme.TokyoNight)
+	model.ready = true
+	model.width = 80
+	model.height = 24
+	model.transcript = []transcriptEntry{{
+		kind: entryAssistant,
+		body: "# Heading\n\nplain **bold** and `code`\n\n```go\nfmt.Println(\"hello\")\n```",
+	}}
+	model.relayout()
+	model.refreshViewport()
+	view := model.View()
+	background := "\x1b[48;2;26;27;38m"
+	if !strings.Contains(view, "\x1b[0m"+background) {
+		t.Fatalf("view does not restore theme background after nested resets")
 	}
 }

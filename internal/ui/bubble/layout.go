@@ -2,6 +2,7 @@
 package bubble
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -103,18 +104,32 @@ func (m appModel) View() string {
 
 	inner := fitStyledRect(strings.Join(parts, "\n"), layout.contentWidth, layout.contentHeight)
 	view := renderHairlineFrame(inner, layout.frameWidth, layout.frameHeight)
-	view = paintStyledBackground(view, layout.frameWidth, layout.frameHeight, m.styles.Frame)
+	view = paintStyledBackground(view, layout.frameWidth, layout.frameHeight, m.styles.Frame, m.theme.Colors.TerminalBackground)
 	m.updateTerminalCursorAnchor(layout)
 	return view
 }
 
-func paintStyledBackground(text string, width, height int, style lipgloss.Style) string {
+func paintStyledBackground(text string, width, height int, style lipgloss.Style, background string) string {
 	text = fitStyledRect(text, width, height)
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
-		lines[i] = style.Width(width).Render(fitStyledCellLine(line, width))
+		painted := style.Width(width).Render(fitStyledCellLine(line, width))
+		lines[i] = restoreBackgroundAfterANSIReset(painted, background)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// restoreBackgroundAfterANSIReset keeps the application canvas opaque when a
+// nested style (Markdown, code, selection, etc.) emits an SGR reset. Without
+// this, the reset also clears the outer frame background and exposes the
+// terminal's own background color between styled spans.
+func restoreBackgroundAfterANSIReset(text, background string) string {
+	r, g, b := parseHexColor(background)
+	backgroundSGR := fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r, g, b)
+	text = strings.ReplaceAll(text, "\x1b[0m", "\x1b[0m"+backgroundSGR)
+	text = strings.ReplaceAll(text, "\x1b[m", "\x1b[m"+backgroundSGR)
+	text = strings.ReplaceAll(text, "\x1b[49m", "\x1b[49m"+backgroundSGR)
+	return backgroundSGR + text + "\x1b[0m"
 }
 
 func renderHairlineFrame(inner string, width, height int) string {
