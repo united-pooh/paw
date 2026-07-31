@@ -84,3 +84,29 @@ func TestGrepToolAllowsConfiguredSkillRoot(t *testing.T) {
 		t.Fatalf("output = %q, want match in %q", output, skillFile)
 	}
 }
+
+func TestDisplayPathUsesWorkspaceRelativeSlashPath(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "internal", "ui", "bubble", "transcript.go")
+
+	if got := DisplayPath(root, target); got != "internal/ui/bubble/transcript.go" {
+		t.Fatalf("DisplayPath() = %q, want workspace-relative slash path", got)
+	}
+}
+
+func TestDisplayPathResolvesRelativeTargetAgainstWorkspace(t *testing.T) {
+	root := t.TempDir()
+
+	if got := DisplayPath(root, "internal/ui"); got != "internal/ui" {
+		t.Fatalf("DisplayPath() = %q, want internal/ui", got)
+	}
+}
+
+func TestDisplayPathKeepsOutsideTargetAbsolute(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "outside.txt")
+
+	if got := DisplayPath(root, target); got != filepath.ToSlash(target) {
+		t.Fatalf("DisplayPath() = %q, want outside absolute path %q", got, filepath.ToSlash(target))
+	}
+}

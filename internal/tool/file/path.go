@@ -83,6 +83,18 @@ func displayPath(root, target string) string {
 	return filepath.ToSlash(absTarget)
 }
 
+// DisplayPath formats a resolved file path for user-facing output.
+// Paths inside root are slash-normalized and relative to root; paths outside
+// root remain absolute.
+func DisplayPath(root, target string) string {
+	root = strings.TrimSpace(root)
+	target = strings.TrimSpace(target)
+	if root != "" && target != "" && !filepath.IsAbs(target) {
+		target = filepath.Join(root, target)
+	}
+	return displayPath(root, target)
+}
+
 func cleanExtraRoots(roots []string) []string {
 	cleaned := make([]string, 0, len(roots))
 	seen := make(map[string]bool, len(roots))

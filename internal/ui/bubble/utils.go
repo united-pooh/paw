@@ -117,15 +117,23 @@ func completeToolCallBody(name, body, status, content string) string {
 	if !strings.EqualFold(strings.TrimSpace(name), "Select") || status != "ok" {
 		return completeRunningToolCallBody(body, status)
 	}
-	summary, ok := selectToolResultTarget(name, status, content)
-	if !ok {
+	var result selecttool.Result
+	if json.Unmarshal([]byte(content), &result) != nil {
 		return completeRunningToolCallBody(body, status)
+	}
+	summary := "Select · cancelled"
+	if !result.Cancelled {
+		noun := "options"
+		if len(result.SelectedOptions) == 1 {
+			noun = "option"
+		}
+		summary = fmt.Sprintf("Select · selected %d %s", len(result.SelectedOptions), noun)
 	}
 	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
 	if len(lines) == 0 {
-		return "Select · " + summary
+		return summary
 	}
-	lines[0] = "Select · " + summary
+	lines[0] = summary
 	return strings.Join(lines, "\n")
 }
 
@@ -411,22 +419,7 @@ func primaryToolInput(name string, fields []toolDisplayField) string {
 
 // toolSummaryTarget 提取最适合单行工具轨道展示的目标值，不暴露参数键名。
 func toolSummaryTarget(name string, input json.RawMessage) string {
-	fields := toolInputFields(input)
-	lower := strings.ToLower(strings.TrimSpace(name))
-	for _, key := range primaryToolInputKeys(lower) {
-		if value := strings.TrimSpace(fieldValue(fields, key)); value != "" {
-			return strings.Join(strings.Fields(value), " ")
-		}
-	}
-	for _, field := range fields {
-		if shouldHideToolDetailField(name, field) {
-			continue
-		}
-		if value := strings.TrimSpace(field.value); value != "" {
-			return strings.Join(strings.Fields(value), " ")
-		}
-	}
-	return ""
+	return displayToolTarget(name, input, "")
 }
 
 func primaryToolInputKeys(name string) []string {
@@ -443,8 +436,6 @@ func primaryToolInputKeys(name string) []string {
 		return []string{"command"}
 	case "webfetch":
 		return []string{"url"}
-	case "select":
-		return []string{"prompt"}
 	case "subagentstop":
 		return []string{"id"}
 	default:

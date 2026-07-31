@@ -19,6 +19,9 @@ var (
 	toolCitationKeyStyle         lipgloss.Style
 	toolCitationOKStyle          lipgloss.Style
 	toolCitationErrorStyle       lipgloss.Style
+	toolStatusOKStyle            lipgloss.Style
+	toolStatusRunningStyle       lipgloss.Style
+	toolStatusErrorStyle         lipgloss.Style
 	toolCitationQuoteBorderStyle lipgloss.Style
 	toolCitationRailStyle        lipgloss.Style
 	labelSystemStyle             lipgloss.Style
@@ -118,6 +121,21 @@ func rebuildLegacyStyles() {
 	toolCitationErrorStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorLabelError)).
 		Bold(true)
+	toolStatusOKStyle = lipgloss.NewStyle().
+		Foreground(colorManager.LipglossColor(colorTerminalBackground)).
+		Background(colorManager.LipglossColor(colorWorktreeClean)).
+		Bold(true).
+		Padding(0, 1)
+	toolStatusRunningStyle = lipgloss.NewStyle().
+		Foreground(colorManager.LipglossColor(colorTerminalBackground)).
+		Background(colorManager.LipglossColor(colorWorktreeDirty)).
+		Bold(true).
+		Padding(0, 1)
+	toolStatusErrorStyle = lipgloss.NewStyle().
+		Foreground(colorManager.LipglossColor(colorTerminalBackground)).
+		Background(colorManager.LipglossColor(colorWorktreeConflict)).
+		Bold(true).
+		Padding(0, 1)
 	toolCitationQuoteBorderStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorMarkdownQuoteBorder))
 	toolCitationRailStyle = lipgloss.NewStyle().

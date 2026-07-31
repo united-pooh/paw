@@ -244,7 +244,7 @@ func (m *appModel) consumePendingToolCitations() []toolCitation {
 }
 
 func (m *appModel) recordToolCallCitation(toolUseID, name string, input json.RawMessage) {
-	cite := newToolCallCitation(toolUseID, name, input)
+	cite := newToolCallCitation(toolUseID, name, input, m.workspaceRoot)
 	if idx := m.lastAssistantCitationHostIndex(); idx >= 0 {
 		m.transcript[idx].citations = append(m.transcript[idx].citations, cite)
 		touchTranscriptEntry(&m.transcript[idx])
@@ -266,7 +266,7 @@ func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMes
 	if name == "" {
 		name = "tool"
 	}
-	target := toolSummaryTarget(name, input)
+	target := displayToolTarget(name, input, m.workspaceRoot)
 	if selectTarget, ok := selectToolCallTarget(name, input); ok {
 		target = selectTarget
 	}
@@ -962,27 +962,24 @@ func renderCompactToolSummary(entry transcriptEntry, width int, at time.Time) st
 	width = maxInt(1, width)
 	status := toolEntryStatus(entry)
 	icon := "✓"
-	statusText := "ok"
-	statusStyle := toolCitationOKStyle
+	iconStyle := toolCitationOKStyle
 	nameStyle := toolHeaderStyle
 	targetStyle := toolCitationStyle
 	switch status {
 	case "running":
 		icon = "◌"
-		statusText = "running"
-		statusStyle = toolHeaderStyle
+		iconStyle = toolHeaderStyle
 	case "error":
 		icon = "×"
-		statusText = "error"
-		statusStyle = toolCitationErrorStyle
+		iconStyle = toolCitationErrorStyle
 	}
 	if entry.toolHovered && !entry.toolFocused {
-		statusStyle = statusStyle.Underline(true)
+		iconStyle = iconStyle.Underline(true)
 		nameStyle = nameStyle.Underline(true)
 		targetStyle = targetStyle.Underline(true)
 	}
 
-	name := strings.Join(strings.Fields(sanitizeTerminalText(toolEntryDisplayName(entry))), " ")
+	name := strings.Join(strings.Fields(sanitizeTerminalText(displayToolName(toolEntryDisplayName(entry)))), " ")
 	target := strings.Join(strings.Fields(sanitizeTerminalText(entry.toolTarget)), " ")
 	if name == "" {
 		name = "tool"
@@ -993,54 +990,53 @@ func renderCompactToolSummary(entry transcriptEntry, width int, at time.Time) st
 		focusPrefix = "› "
 	}
 	iconText := icon + " "
-	statusSuffix := " · " + statusText
+	duration := ""
 	if status == "running" {
-		statusSuffix += " · " + formatRunningToolElapsed(entry.toolStartedAt, at)
+		duration = formatRunningToolElapsed(entry.toolStartedAt, at)
 	} else if !entry.toolFinishedAt.IsZero() {
-		statusSuffix += " · " + formatToolDuration(entry.toolStartedAt, entry.toolFinishedAt)
+		duration = formatToolDuration(entry.toolStartedAt, entry.toolFinishedAt)
 	}
-	nameWidth := lipgloss.Width(name)
-	baseWidth := lipgloss.Width(focusPrefix) + lipgloss.Width(iconText) + nameWidth
-	statusWidth := lipgloss.Width(statusSuffix)
+	statusStyle := toolStatusStyle(status)
+	if entry.toolHovered && !entry.toolFocused {
+		statusStyle = statusStyle.Underline(true)
+	}
+	statusSeparator := " ·"
+	statusAvailable := width - lipgloss.Width(focusPrefix) - lipgloss.Width(iconText) - lipgloss.Width(statusSeparator)
+	if statusAvailable < lipgloss.Width(toolStatusLabel(status)) {
+		iconText = icon
+		statusSeparator = "·"
+		statusAvailable = width - lipgloss.Width(focusPrefix) - lipgloss.Width(iconText) - lipgloss.Width(statusSeparator)
+	}
+	statusChip := toolStatusChipWithinWidth(status, duration, maxInt(1, statusAvailable), statusStyle)
 
-	showStatus := true
+	nameWidth := lipgloss.Width(name)
+	fixedWithoutTarget := lipgloss.Width(focusPrefix) + lipgloss.Width(iconText) + lipgloss.Width(statusSeparator) + lipgloss.Width(statusChip)
+	if fixedWithoutTarget+nameWidth > width {
+		nameBudget := width - fixedWithoutTarget
+		if nameBudget >= 1 {
+			name = truncateDisplayWidth(name, nameBudget)
+		} else {
+			name = ""
+		}
+		nameWidth = lipgloss.Width(name)
+	}
 	targetText := ""
 	if target != "" {
-		targetBudget := width - baseWidth - statusWidth - 1
+		targetBudget := width - fixedWithoutTarget - nameWidth - 1
 		if targetBudget >= 1 {
 			targetText = truncateDisplayWidth(target, targetBudget)
-		} else {
-			showStatus = false
-			targetBudget = width - baseWidth - 1
-			if targetBudget >= 1 {
-				targetText = truncateDisplayWidth(target, targetBudget)
-			}
 		}
-	} else if baseWidth+statusWidth > width {
-		showStatus = false
-	}
-
-	fixedWidth := lipgloss.Width(focusPrefix) + lipgloss.Width(iconText)
-	if targetText != "" {
-		fixedWidth += 1 + lipgloss.Width(targetText)
-	}
-	if showStatus {
-		fixedWidth += statusWidth
-	}
-	if fixedWidth+nameWidth > width {
-		name = truncateDisplayWidth(name, maxInt(1, width-fixedWidth))
 	}
 
 	var line strings.Builder
 	line.WriteString(focusPrefix)
-	line.WriteString(statusStyle.Render(iconText))
+	line.WriteString(iconStyle.Render(iconText))
 	line.WriteString(nameStyle.Render(name))
 	if targetText != "" {
 		line.WriteString(targetStyle.Render(" " + targetText))
 	}
-	if showStatus {
-		line.WriteString(statusStyle.Render(statusSuffix))
-	}
+	line.WriteString(statusSeparator)
+	line.WriteString(statusChip)
 	return truncateStyledDisplayWidth(line.String(), width)
 }
 
@@ -1139,16 +1135,16 @@ func renderAssistantBodyWithCitations(body string, width int, citations []toolCi
 	return rendered + "\n" + quote
 }
 
-func newToolCallCitation(toolUseID, name string, input json.RawMessage) toolCitation {
+func newToolCallCitation(toolUseID, name string, input json.RawMessage, workspaceRoot string) toolCitation {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = "tool"
 	}
-	fields := toolInputFields(input)
+	display := buildToolDisplay(name, input, workspaceRoot)
 	return toolCitation{
 		toolUseID: strings.TrimSpace(toolUseID),
-		name:      name,
-		target:    primaryToolInput(name, fields),
+		name:      display.name,
+		target:    display.target,
 		status:    "running",
 	}
 }
@@ -1164,7 +1160,7 @@ func newToolResultCitation(toolUseID, name, status, content string, isError bool
 	}
 	return toolCitation{
 		toolUseID: strings.TrimSpace(toolUseID),
-		name:      name,
+		name:      displayToolName(name),
 		status:    status,
 		preview:   summarizeToolContent(content),
 		isError:   isError,

@@ -128,7 +128,7 @@ func TestRestoredImageHistoryRebuildsChipAndAttachmentReference(t *testing.T) {
 			{Type: message.ContentPartText, Text: "inspect "},
 			{Type: message.ContentPartImage, Image: &message.ImagePart{MIMEType: "image/png", Attachment: "attachments/hash.png"}},
 		},
-	}, time.Now())
+	}, time.Now(), "")
 	if len(entries) != 1 || len(entries[0].inputTokens) != 1 {
 		t.Fatalf("restored entries = %#v", entries)
 	}

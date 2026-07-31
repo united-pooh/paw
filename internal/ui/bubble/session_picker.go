@@ -78,13 +78,13 @@ func loadSessionHistoryCmd(ctx context.Context, runner Runner, store SessionStor
 		entries := make([]transcriptEntry, 0, len(messages))
 		if recordLoader, ok := store.(ResolvedRecordLoader); ok {
 			if records, recordsErr := recordLoader.LoadResolvedRecords(ctx, sessionID); recordsErr == nil {
-				entries = transcriptEntriesFromRecords(records, metadata)
+				entries = transcriptEntriesFromRecords(records, metadata, workspaceRootOf(runner))
 			}
 		}
 		if len(entries) == 0 && len(messages) > 0 {
 			createdAt := time.Now()
 			for _, msg := range messages {
-				entries = append(entries, transcriptEntriesFromMessage(msg, createdAt)...)
+				entries = append(entries, transcriptEntriesFromMessage(msg, createdAt, workspaceRootOf(runner))...)
 			}
 			attachRestoreMetadataByAssistantOrder(entries, metadata)
 		}
@@ -157,7 +157,7 @@ func loadRestoreTurnMetadata(ctx context.Context, store SessionStore, sessionID 
 	return metadata
 }
 
-func transcriptEntriesFromRecords(records []session.Record, metadata []session.TurnMetadata) []transcriptEntry {
+func transcriptEntriesFromRecords(records []session.Record, metadata []session.TurnMetadata, workspaceRoot string) []transcriptEntry {
 	metadataByRecordIndex := make(map[int]session.TurnMetadata, len(metadata))
 	for _, item := range metadata {
 		if item.Status != session.TurnStatusCompleted || item.AssistantSeq == nil || item.ResponseAt == nil {
@@ -179,7 +179,7 @@ func transcriptEntriesFromRecords(records []session.Record, metadata []session.T
 		if createdAt.IsZero() {
 			createdAt = time.Now()
 		}
-		recordEntries := transcriptEntriesFromMessage(record.Message, createdAt)
+		recordEntries := transcriptEntriesFromMessage(record.Message, createdAt, workspaceRoot)
 		if item, ok := metadataByRecordIndex[recordIndex]; ok {
 			for index := len(recordEntries) - 1; index >= 0; index-- {
 				if recordEntries[index].kind == entryAssistant {

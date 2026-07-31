@@ -128,12 +128,12 @@ func (m appModel) previewSubagentTranscript(task subagent.TaskSnapshot) (tea.Mod
 		parentTranscript: parentTranscript,
 		liveContent:      liveSubagentContent(task),
 	}
-	return m, loadSubagentTranscriptPreviewCmd(m.ctx, task, sessionID, preview)
+	return m, loadSubagentTranscriptPreviewCmd(m.ctx, task, sessionID, preview, m.workspaceRoot)
 }
 
-func loadSubagentTranscriptPreviewCmd(ctx context.Context, task subagent.TaskSnapshot, sessionID string, preview *subagentTranscriptPreview) tea.Cmd {
+func loadSubagentTranscriptPreviewCmd(ctx context.Context, task subagent.TaskSnapshot, sessionID string, preview *subagentTranscriptPreview, workspaceRoot string) tea.Cmd {
 	return func() tea.Msg {
-		entries, err := loadSubagentTranscriptEntries(ctx, task, time.Now())
+		entries, err := loadSubagentTranscriptEntries(ctx, task, time.Now(), workspaceRoot)
 		if err != nil {
 			return sessionRestoredMsg{source: sessionRestoreSubagentEnter, subagentPreview: preview, err: err}
 		}
@@ -146,7 +146,7 @@ func loadSubagentTranscriptPreviewCmd(ctx context.Context, task subagent.TaskSna
 	}
 }
 
-func loadSubagentTranscriptEntries(ctx context.Context, task subagent.TaskSnapshot, at time.Time) ([]transcriptEntry, error) {
+func loadSubagentTranscriptEntries(ctx context.Context, task subagent.TaskSnapshot, at time.Time, workspaceRoot string) ([]transcriptEntry, error) {
 	path := strings.TrimSpace(task.TranscriptPath)
 	if path == "" {
 		if content := strings.TrimSpace(task.Content); content != "" {
@@ -179,7 +179,7 @@ func loadSubagentTranscriptEntries(ctx context.Context, task subagent.TaskSnapsh
 		if createdAt.IsZero() {
 			createdAt = at
 		}
-		entries = append(entries, transcriptEntriesFromMessage(record.Message, createdAt)...)
+		entries = append(entries, transcriptEntriesFromMessage(record.Message, createdAt, workspaceRoot)...)
 	}
 	if err := scanner.Err(); err != nil {
 		return entries, err
@@ -192,7 +192,7 @@ func loadSubagentTranscriptEntries(ctx context.Context, task subagent.TaskSnapsh
 	return mergeTranscriptToolEntries(entries), nil
 }
 
-func transcriptEntriesFromMessage(msg message.Message, createdAt time.Time) []transcriptEntry {
+func transcriptEntriesFromMessage(msg message.Message, createdAt time.Time, workspaceRoot string) []transcriptEntry {
 	var entries []transcriptEntry
 	if content := strings.TrimSpace(msg.Content); content != "" {
 		switch msg.Role {
@@ -215,7 +215,7 @@ func transcriptEntriesFromMessage(msg message.Message, createdAt time.Time) []tr
 		if name == "" {
 			name = "tool"
 		}
-		target := toolSummaryTarget(name, call.Input)
+		target := displayToolTarget(name, call.Input, workspaceRoot)
 		if selectTarget, ok := selectToolCallTarget(name, call.Input); ok {
 			target = selectTarget
 		}

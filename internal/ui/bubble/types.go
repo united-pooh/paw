@@ -331,6 +331,7 @@ type appModel struct {
 	styles                    StyleSet
 	themePicker               *themePickerState
 	runner                    Runner
+	workspaceRoot             string
 	selectionBroker           *selecttool.Broker
 	selectionDock             *selectionDock
 	sessionID                 string

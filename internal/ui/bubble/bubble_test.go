@@ -1050,7 +1050,7 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 	next, _ = model.Update(toolCallMsg(ui.ToolCallEvent{Name: "Read", Input: []byte(`{"file_path":"go.mod"}`)}))
 	model = next.(appModel)
 	runningRendered := renderTranscript(model.transcript, 80, model.showThinking)
-	for _, want := range []string{"hello", "◌ Read go.mod · running"} {
+	for _, want := range []string{"hello", "◌ Read: go.mod · 运行中"} {
 		if !strings.Contains(runningRendered, want) {
 			t.Fatalf("running transcript = %q, want %q", runningRendered, want)
 		}
@@ -1069,15 +1069,15 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{Name: "Read", Content: "module paw"}))
 	model = next.(appModel)
 	okRendered := renderTranscript(model.transcript, 80, model.showThinking)
-	for _, want := range []string{"hello", "✓ Read go.mod · ok"} {
+	for _, want := range []string{"hello", "✓ Read: go.mod · 完成"} {
 		if !strings.Contains(okRendered, want) {
 			t.Fatalf("ok transcript = %q, want %q", okRendered, want)
 		}
 	}
-	if strings.Contains(okRendered, "[Read]") || strings.Contains(okRendered, "◌ Read go.mod · running") || strings.Contains(okRendered, "file_path=") || strings.Contains(okRendered, "file_path  ") {
+	if strings.Contains(okRendered, "[Read]") || strings.Contains(okRendered, "◌ Read: go.mod · 运行中") || strings.Contains(okRendered, "file_path=") || strings.Contains(okRendered, "file_path  ") {
 		t.Fatalf("ok transcript = %q, should replace running status", okRendered)
 	}
-	if !strings.Contains(okRendered, "✓ Read go.mod · ok") {
+	if !strings.Contains(okRendered, "✓ Read: go.mod · 完成") {
 		t.Fatalf("ok transcript = %q, want completed tool block", okRendered)
 	}
 	for _, hidden := range []string{"\n  tool\n", "\n  result\n"} {
@@ -1091,12 +1091,12 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 	model = next.(appModel)
 
 	rendered := renderTranscript(model.transcript, 80, model.showThinking)
-	for _, want := range []string{"loaded go.mod", "✓ Read go.mod · ok"} {
+	for _, want := range []string{"loaded go.mod", "✓ Read: go.mod · 完成"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered transcript = %q, want %q", rendered, want)
 		}
 	}
-	for _, hidden := range []string{"\n  tool\n", "\n  result\n", "[Read]", "file_path=", "file_path  ", "◌ Read go.mod · running", "module paw", "tool cites"} {
+	for _, hidden := range []string{"\n  tool\n", "\n  result\n", "[Read]", "file_path=", "file_path  ", "◌ Read: go.mod · 运行中", "module paw", "tool cites"} {
 		if strings.Contains(rendered, hidden) {
 			t.Fatalf("rendered transcript = %q, should not contain old tool block marker/content %q", rendered, hidden)
 		}
@@ -1320,10 +1320,10 @@ func TestToolResultEntryMatchesByToolUseID(t *testing.T) {
 	model = next.(appModel)
 
 	rendered := renderTranscript(model.transcript, 80, model.showThinking)
-	if !strings.Contains(rendered, "✓ Read first.go · ok") {
+	if !strings.Contains(rendered, "✓ Read: first.go · 完成") {
 		t.Fatalf("rendered transcript = %q, want call_1 completed", rendered)
 	}
-	if !strings.Contains(rendered, "◌ Read second.go · running") {
+	if !strings.Contains(rendered, "◌ Read: second.go · 运行中") {
 		t.Fatalf("rendered transcript = %q, want call_2 still running", rendered)
 	}
 }
@@ -1334,7 +1334,7 @@ func TestToolCallWithoutAssistantTextRendersRunningEntry(t *testing.T) {
 	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{Name: "LS", Input: []byte(`{"path":"."}`)}))
 	model = next.(appModel)
 	rendered := renderTranscript(model.transcript, 54, model.showThinking)
-	for _, want := range []string{"◌ LS . · running"} {
+	for _, want := range []string{"◌ LS: . · 运行中"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("running-only tool entry = %q, want %q", rendered, want)
 		}
@@ -1346,12 +1346,12 @@ func TestToolCallWithoutAssistantTextRendersRunningEntry(t *testing.T) {
 	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{Name: "LS", Content: "README.md"}))
 	model = next.(appModel)
 	rendered = renderTranscript(model.transcript, 54, model.showThinking)
-	for _, want := range []string{"✓ LS . · ok"} {
+	for _, want := range []string{"✓ LS: . · 完成"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("completed-only tool entry = %q, want %q", rendered, want)
 		}
 	}
-	if strings.Contains(rendered, "[LS]") || strings.Contains(rendered, "path=") || strings.Contains(rendered, "path  ") || strings.Contains(rendered, "◌ LS . · running") || strings.Contains(rendered, "README.md") {
+	if strings.Contains(rendered, "[LS]") || strings.Contains(rendered, "path=") || strings.Contains(rendered, "path  ") || strings.Contains(rendered, "◌ LS: . · 运行中") || strings.Contains(rendered, "README.md") {
 		t.Fatalf("completed-only tool entry = %q, should hide duplicate citation/running state/long output", rendered)
 	}
 }
@@ -1509,7 +1509,7 @@ func TestToolDiffRowsAlignLineNumberWithStatusMarker(t *testing.T) {
 	lines := strings.Split(rendered, "\n")
 	var headerLine, diffLine string
 	for _, line := range lines {
-		if strings.Contains(line, "✓ Write test.txt · ok") {
+		if strings.Contains(line, "✓ Write: test.txt · 完成") {
 			headerLine = line
 		}
 		if strings.Contains(line, "1 + │") {
@@ -4356,7 +4356,7 @@ func TestSessionRestoreClearsInputHistoryForEmptySession(t *testing.T) {
 
 func TestRestoredSkillReferenceRebuildsTranscriptAndInputTokens(t *testing.T) {
 	raw := "[$design](/tmp/design/SKILL.md)"
-	entries := transcriptEntriesFromMessage(message.Message{Role: message.RoleUser, Content: raw}, time.Now())
+	entries := transcriptEntriesFromMessage(message.Message{Role: message.RoleUser, Content: raw}, time.Now(), "")
 	if len(entries) != 1 || len(entries[0].inputTokens) != 1 {
 		t.Fatalf("restored entries = %#v, want one user skill token", entries)
 	}

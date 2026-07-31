@@ -33,6 +33,12 @@ type RichInputRunner interface {
 	RunRichTurn(ctx context.Context, input message.Message) (message.Message, error)
 }
 
+// WorkspaceRootProvider is an optional runner capability used to render
+// workspace-relative file targets in the transcript.
+type WorkspaceRootProvider interface {
+	WorkspaceRoot() string
+}
+
 // TimedRunner is an optional capability used to persist and display the
 // complete foreground model-turn duration. It is deliberately separate from
 // Runner so existing integrations and test doubles remain source-compatible.
@@ -188,6 +194,7 @@ func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 	anchor := newTerminalCursorAnchor()
 	appModel := newModel(ctx, runner, sessionID, controller, settingsController, subagentController, sessionStore, anchor)
 	appModel.selectionBroker = selectionBroker
+	appModel.workspaceRoot = workspaceRootOf(runner)
 	appModel.mcpController = mcpController
 	// WithInput 包一层 ESC 聚合 reader：在 BubbleTea 解析字节之前，把被读边界
 	// 切断的 \x1b[<...M 鼠标序列重新拼合，从源头杜绝 ESC 与 [ 分离导致的
