@@ -77,3 +77,11 @@ func TestTranscriptRenderKeyIncludesSelectToolInput(t *testing.T) {
 		t.Fatal("tool input did not participate in transcript render cache key")
 	}
 }
+
+func TestSelectToolPresentationNormalizesInputAndAllowsUnknownFields(t *testing.T) {
+	input := json.RawMessage(`{"prompt":"  Pick  ","mode":"single","future":true,"options":[{"id":" a ","label":" A ","description":" Detail ","extra":1}]}`)
+	presentation, ok := parseSelectToolPresentation(input, `{"cancelled":false,"selected_options":[{"id":" a ","label":" A "}],"future":"ok"}`)
+	if !ok || presentation.target != "selected 1 option" || presentation.detail != "Pick\n\nA\n  Detail" {
+		t.Fatalf("presentation=%#v ok=%v", presentation, ok)
+	}
+}

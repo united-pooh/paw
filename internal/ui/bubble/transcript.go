@@ -309,7 +309,7 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 		entry.isError = isError
 		entry.toolStatus = status
 		entry.toolResult = content
-		if strings.EqualFold(name, "Select") {
+		if strings.EqualFold(name, "Select") && strings.EqualFold(status, "ok") {
 			if presentation, ok := parseSelectToolPresentation(entry.toolInput, content); ok {
 				entry.toolTarget = presentation.target
 			}
@@ -942,7 +942,7 @@ func renderToolTransactionEntry(entry transcriptEntry, width int, at time.Time) 
 	}
 
 	result := entry.toolResult
-	if strings.EqualFold(toolEntryDisplayName(entry), "Select") {
+	if strings.EqualFold(toolEntryDisplayName(entry), "Select") && status == "ok" {
 		if presentation, ok := parseSelectToolPresentation(entry.toolInput, entry.toolResult); ok {
 			result = presentation.detail
 		}

@@ -291,7 +291,7 @@ func mergeTranscriptToolEntries(entries []transcriptEntry) []transcriptEntry {
 				call.toolExpanded = entry.isError
 				call.toolResultOnly = false
 				call.body = completeToolCallBody(call.toolName, call.body, entry.toolStatus, entry.toolResult)
-				if strings.EqualFold(call.toolName, "Select") {
+				if strings.EqualFold(call.toolName, "Select") && strings.EqualFold(call.toolStatus, "ok") {
 					if presentation, ok := parseSelectToolPresentation(call.toolInput, call.toolResult); ok {
 						call.toolTarget = presentation.target
 					}

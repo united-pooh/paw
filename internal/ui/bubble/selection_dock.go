@@ -152,7 +152,7 @@ func (d *selectionDock) selectFocusedAnswer() bool {
 		return true
 	}
 	if d.selectedCount() >= d.request.MaxSelect {
-		d.errorText = fmt.Sprintf("You can select at most %d options.", d.request.MaxSelect)
+		d.errorText = fmt.Sprintf("You can select at most %d %s.", d.request.MaxSelect, optionNoun(d.request.MaxSelect))
 		return false
 	}
 	d.selected[id] = true
@@ -181,7 +181,7 @@ func (d *selectionDock) submit() (selecttool.Result, bool) {
 		return selecttool.Result{}, false
 	}
 	if count > d.request.MaxSelect {
-		d.errorText = fmt.Sprintf("You can select at most %d options.", d.request.MaxSelect)
+		d.errorText = fmt.Sprintf("You can select at most %d %s.", d.request.MaxSelect, optionNoun(d.request.MaxSelect))
 		return selecttool.Result{}, false
 	}
 	d.errorText = ""
@@ -268,11 +268,14 @@ func (d *selectionDock) visibleRange(heights []int, budget int) (int, int) {
 		return 0, 0
 	}
 	focused := d.answerIndexForScroll(len(heights))
+	if maxInt(1, heights[focused]) > budget {
+		return 0, 0
+	}
 	start := clampInt(d.firstVisible, 0, focused)
-	for {
+	for start <= focused {
 		used := 0
 		end := start
-		for end < len(heights) && (used+maxInt(1, heights[end]) <= budget || end == start) {
+		for end < len(heights) && used+maxInt(1, heights[end]) <= budget {
 			used += maxInt(1, heights[end])
 			end++
 		}
@@ -282,6 +285,7 @@ func (d *selectionDock) visibleRange(heights []int, budget int) (int, int) {
 		}
 		start++
 	}
+	return 0, 0
 }
 
 func waitSelectionBrokerEventCmd(ctx context.Context, broker *selecttool.Broker) tea.Cmd {
@@ -331,9 +335,7 @@ func (m appModel) handleSelectionDockKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "end":
 		m.selectionDock.end()
 	case " ", "space":
-		if m.selectionDock.focus.kind == selectionFocusChat {
-			cmd = m.completeSelection(m.selectionDock.cancel())
-		} else {
+		if m.selectionDock.focus.kind != selectionFocusChat {
 			m.selectionDock.activateFocused()
 		}
 	case "enter":

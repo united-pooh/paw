@@ -75,3 +75,70 @@ func TestToolRunReturnsContextCancellation(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestInputSchemaExcludesReservedCustomOptionID(t *testing.T) {
+	var schema map[string]any
+	if err := json.Unmarshal(New(NewBroker()).InputSchema(), &schema); err != nil {
+		t.Fatal(err)
+	}
+	options := schema["properties"].(map[string]any)["options"].(map[string]any)
+	items := options["items"].(map[string]any)
+	id := items["properties"].(map[string]any)["id"].(map[string]any)
+	not := id["not"].(map[string]any)
+	if not["const"] != CustomOptionID {
+		t.Fatalf("id schema = %#v", id)
+	}
+}
+
+func TestNormalizeResult(t *testing.T) {
+	single := Request{Mode: ModeSingle, Options: []Option{{ID: "a", Label: "Canonical A"}}, MinSelect: 1, MaxSelect: 1}
+	multiple := Request{Mode: ModeMultiple, Options: []Option{{ID: "a", Label: "A"}, {ID: "b", Label: "B"}}, MinSelect: 0, MaxSelect: 2}
+
+	got, err := normalizeResult(single, Result{SelectedOptions: []SelectedOption{{ID: " a ", Label: "wrong"}}})
+	if err != nil || got.SelectedOptions[0] != (SelectedOption{ID: "a", Label: "Canonical A"}) {
+		t.Fatalf("canonical result=%#v err=%v", got, err)
+	}
+	got, err = normalizeResult(multiple, Result{})
+	if err != nil || got.SelectedOptions == nil || len(got.SelectedOptions) != 0 {
+		t.Fatalf("empty multiple result=%#v err=%v", got, err)
+	}
+	got, err = normalizeResult(single, Result{Cancelled: true, SelectedOptions: []SelectedOption{{ID: "a", Label: "A"}}})
+	if err != nil || !got.Cancelled || got.SelectedOptions == nil || len(got.SelectedOptions) != 0 {
+		t.Fatalf("cancelled result=%#v err=%v", got, err)
+	}
+
+	tests := []struct {
+		name    string
+		request Request
+		result  Result
+		want    string
+	}{
+		{"single empty", single, Result{}, "single mode requires exactly one"},
+		{"single many", single, Result{SelectedOptions: []SelectedOption{{ID: "a"}, {ID: CustomOptionID, Label: "Other"}}}, "single mode requires exactly one"},
+		{"unknown", single, Result{SelectedOptions: []SelectedOption{{ID: "missing", Label: "Missing"}}}, "not in the request"},
+		{"duplicate", multiple, Result{SelectedOptions: []SelectedOption{{ID: "a"}, {ID: "a"}}}, "duplicate selected option id"},
+		{"empty custom", multiple, Result{SelectedOptions: []SelectedOption{{ID: CustomOptionID, Label: "  "}}}, "custom option label is required"},
+		{"too many", Request{Mode: ModeMultiple, Options: multiple.Options, MinSelect: 0, MaxSelect: 1}, Result{SelectedOptions: []SelectedOption{{ID: "a"}, {ID: "b"}}}, "outside allowed range"},
+		{"too few", Request{Mode: ModeMultiple, Options: multiple.Options, MinSelect: 1, MaxSelect: 2}, Result{}, "outside allowed range"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := normalizeResult(tt.request, tt.result)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error=%v want substring %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestToolRunRejectsInvalidBrokerResult(t *testing.T) {
+	b := NewBroker()
+	go func() {
+		e, _ := b.NextEvent(context.Background())
+		b.Complete(e.Request.ID, Result{})
+	}()
+	_, err := New(b).Run(context.Background(), validSingleInput())
+	if err == nil || !strings.Contains(err.Error(), "invalid Select broker result") {
+		t.Fatalf("error=%v", err)
+	}
+}

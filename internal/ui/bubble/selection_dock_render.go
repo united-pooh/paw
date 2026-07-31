@@ -14,13 +14,12 @@ func (d *selectionDock) preferredHeight(width int) int {
 		return inputMinVisibleLines
 	}
 	width = maxInt(1, width)
-	// Title, prompt, answer status, scroll status, separator, two fixed actions,
-	// and the keyboard hint are independent of the caller-provided answers.
-	height := 7 + len(wrapDisplayWidthLine(sanitizeTerminalText(d.request.Prompt), width))
+	promptLines := wrapDisplayWidthLine(sanitizeTerminalText(d.request.Prompt), width)
+	height := 7 + minInt(3, maxInt(1, len(promptLines)))
 	for _, option := range d.request.Options {
 		height++
-		if option.Description != "" {
-			height += len(wrapDisplayWidthLine(sanitizeTerminalText(option.Description), maxInt(1, width-8)))
+		if strings.TrimSpace(option.Description) != "" {
+			height++
 		}
 	}
 	return clampInt(height, 1, selectionDockMaxVisibleLines)
@@ -34,17 +33,14 @@ func (m appModel) renderSelectionDock(width, height int) string {
 	width = maxInt(1, width)
 	height = maxInt(1, height)
 
-	promptLines := wrapDisplayWidthLine(sanitizeTerminalText(d.request.Prompt), width)
-	if len(promptLines) == 0 {
-		promptLines = []string{""}
-	}
-
+	// Seven rows are structural: title, status, exact scroll counts, separator,
+	// Custom, Chat, and the hint. At normal dock heights reserve two more rows
+	// for the current answer (label plus an optional description), then give the
+	// remaining bounded budget to the caller-controlled prompt.
+	promptBudget := maxInt(1, height-9)
+	promptLines := limitedWrappedLines(sanitizeTerminalText(d.request.Prompt), width, promptBudget)
 	answerLines, answerHeights := selectionAnswerRows(d, width)
-	// In a normal dock, reserve the range/status rows, fixed action area, and
-	// hint before assigning space to caller answers. Tiny terminals may crop
-	// lower-priority header/answer content, but never overflow their rectangle.
-	fixedRows := 1 + len(promptLines) + 1 + 1 + 3 + 1
-	answerBudget := maxInt(0, height-fixedRows)
+	answerBudget := maxInt(0, height-7-len(promptLines))
 	start, end := d.visibleRange(answerHeights, answerBudget)
 
 	title := "SELECT · " + strings.ToUpper(string(d.request.Mode))
@@ -57,13 +53,8 @@ func (m appModel) renderSelectionDock(width, height int) string {
 		lines = append(lines, m.styles.Body.Render(truncateDisplayWidth(line, width)))
 	}
 	lines = append(lines, m.styles.StatusMuted.Render(truncateDisplayWidth(answerStatusLine(d, start, end), width)))
-
-	answerLimit := maxInt(0, height-5) // Keep separator, actions, and hint when possible.
-	for i := start; i < end && len(lines) < answerLimit; i++ {
+	for i := start; i < end; i++ {
 		for rowIndex, row := range answerLines[i] {
-			if len(lines) >= answerLimit {
-				break
-			}
 			style := m.styles.Unselected
 			if d.focus.kind == selectionFocusAnswer && d.focus.answerIndex == i {
 				style = m.styles.Selected
@@ -74,27 +65,33 @@ func (m appModel) renderSelectionDock(width, height int) string {
 		}
 	}
 
-	if len(lines) < height-4 {
-		lines = append(lines, m.styles.StatusMuted.Render(truncateDisplayWidth(answerScrollLine(start, end, len(d.request.Options), width), width)))
-	}
-	if len(lines) < height-3 {
-		lines = append(lines, m.styles.StatusMuted.Render(strings.Repeat("─", width)))
-	}
-	if len(lines) < height-2 {
-		lines = append(lines, renderSelectionCustomAction(m, d, width))
-	}
-	if len(lines) < height-1 {
-		lines = append(lines, renderSelectionChatAction(m, d, width))
-	}
-	if len(lines) < height {
-		hint := selectionDockHint(d)
-		if d.errorText != "" {
-			lines = append(lines, m.styles.StatusError.Render(truncateDisplayWidth(d.errorText, width)))
-		} else {
-			lines = append(lines, m.styles.InputHint.Render(truncateDisplayWidth(hint, width)))
-		}
+	lines = append(lines, m.styles.StatusMuted.Render(truncateDisplayWidth(answerScrollLine(start, end, len(d.request.Options), width), width)))
+	lines = append(lines, m.styles.StatusMuted.Render(strings.Repeat("─", width)))
+	lines = append(lines, renderSelectionCustomAction(m, d, width))
+	lines = append(lines, renderSelectionChatAction(m, d, width))
+	hint := selectionDockHint(d)
+	if d.errorText != "" {
+		lines = append(lines, m.styles.StatusError.Render(truncateDisplayWidth(d.errorText, width)))
+	} else {
+		lines = append(lines, m.styles.InputHint.Render(truncateDisplayWidth(hint, width)))
 	}
 	return fitStyledRect(strings.Join(lines, "\n"), width, height)
+}
+
+func limitedWrappedLines(text string, width, budget int) []string {
+	if budget <= 0 {
+		return nil
+	}
+	lines := wrapDisplayWidthLine(text, maxInt(1, width))
+	if len(lines) == 0 {
+		return []string{""}
+	}
+	if len(lines) <= budget {
+		return lines
+	}
+	lines = append([]string(nil), lines[:budget]...)
+	lines[budget-1] = truncateDisplayWidth(strings.TrimRight(lines[budget-1], " ")+" …", width)
+	return lines
 }
 
 func selectionAnswerRows(d *selectionDock, width int) ([][]string, []int) {
@@ -112,11 +109,10 @@ func selectionAnswerRows(d *selectionDock, width int) ([][]string, []int) {
 		prefix := focusMark + selectedMark
 		labelWidth := maxInt(1, width-terminalCellWidth(prefix))
 		optionRows := []string{prefix + truncateDisplayWidth(sanitizeTerminalText(option.Label), labelWidth)}
-		if option.Description != "" {
+		if description := strings.TrimSpace(sanitizeTerminalText(option.Description)); description != "" {
 			indent := strings.Repeat(" ", terminalCellWidth(prefix))
-			for _, description := range wrapDisplayWidthLine(sanitizeTerminalText(option.Description), maxInt(1, width-terminalCellWidth(indent))) {
-				optionRows = append(optionRows, indent+description)
-			}
+			descriptionWidth := maxInt(1, width-terminalCellWidth(indent))
+			optionRows = append(optionRows, indent+truncateDisplayWidth(description, descriptionWidth))
 		}
 		rows[i] = optionRows
 		heights[i] = len(optionRows)

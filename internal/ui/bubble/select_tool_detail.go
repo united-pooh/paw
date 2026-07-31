@@ -1,10 +1,8 @@
 package bubble
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
 
 	selecttool "paw/internal/tool/select"
@@ -32,15 +30,26 @@ type selectToolResult struct {
 
 func parseSelectToolPresentation(input json.RawMessage, content string) (selectToolPresentation, bool) {
 	var request selectToolRequest
-	if !decodeStrictJSON(input, &request) || !validSelectToolRequest(request) {
+	if !decodeJSON(input, &request) {
+		return selectToolPresentation{}, false
+	}
+	normalizeSelectToolRequest(&request)
+	if !validSelectToolRequest(request) {
 		return selectToolPresentation{}, false
 	}
 	var result selectToolResult
-	if !decodeStrictJSON([]byte(content), &result) || result.SelectedOptions == nil || !validSelectedOptions(request, result) {
+	if !decodeJSON([]byte(content), &result) || result.SelectedOptions == nil {
+		return selectToolPresentation{}, false
+	}
+	for i := range result.SelectedOptions {
+		result.SelectedOptions[i].ID = strings.TrimSpace(result.SelectedOptions[i].ID)
+		result.SelectedOptions[i].Label = strings.TrimSpace(result.SelectedOptions[i].Label)
+	}
+	if !validSelectedOptions(request, result) {
 		return selectToolPresentation{}, false
 	}
 
-	prompt := strings.TrimSpace(request.Prompt)
+	prompt := request.Prompt
 	if result.Cancelled {
 		return selectToolPresentation{
 			target: "cancelled",
@@ -71,13 +80,17 @@ func parseSelectToolPresentation(input json.RawMessage, content string) (selectT
 	}, true
 }
 
-func decodeStrictJSON(data []byte, target any) bool {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return false
+func decodeJSON(data []byte, target any) bool {
+	return json.Unmarshal(data, target) == nil
+}
+
+func normalizeSelectToolRequest(request *selectToolRequest) {
+	request.Prompt = strings.TrimSpace(request.Prompt)
+	for i := range request.Options {
+		request.Options[i].ID = strings.TrimSpace(request.Options[i].ID)
+		request.Options[i].Label = strings.TrimSpace(request.Options[i].Label)
+		request.Options[i].Description = strings.TrimSpace(request.Options[i].Description)
 	}
-	return decoder.Decode(&struct{}{}) == io.EOF
 }
 
 func validSelectToolRequest(request selectToolRequest) bool {

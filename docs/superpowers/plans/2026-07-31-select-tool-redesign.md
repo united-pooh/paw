@@ -428,7 +428,7 @@ git commit -m "feat: add Select dock action focus model"
 在 `internal/ui/bubble/selection_dock_test.go` 增加：
 
 ```go
-func TestSelectionDockSingleCustomOptionSubmitsImmediately(t *testing.T) {
+func TestSelectionDockSingleCustomOptionSavesBeforeSubmit(t *testing.T) {
 	d := newSelectionDock(selectionRequest("x", selecttool.ModeSingle))
 	d.focus = selectionFocus{kind: selectionFocusCustom}
 	if result, complete := d.activateFocused(); complete || len(result.SelectedOptions) != 0 || !d.editingCustom {
@@ -436,9 +436,13 @@ func TestSelectionDockSingleCustomOptionSubmitsImmediately(t *testing.T) {
 	}
 	d.customInput.SetValue("  Custom answer  ")
 	result, complete := d.confirmCustom()
+	if complete || len(result.SelectedOptions) != 0 || d.editingCustom || d.customLabel != "Custom answer" {
+		t.Fatalf("result=%#v complete=%v dock=%#v", result, complete, d)
+	}
+	result, complete = d.submit()
 	want := []selecttool.SelectedOption{{ID: selecttool.CustomOptionID, Label: "Custom answer"}}
 	if !complete || !reflect.DeepEqual(result.SelectedOptions, want) {
-		t.Fatalf("result=%#v complete=%v", result, complete)
+		t.Fatalf("submit result=%#v complete=%v", result, complete)
 	}
 }
 
@@ -497,7 +501,7 @@ func TestSelectionDockCustomOptionValidatesEmptyAndMax(t *testing.T) {
 运行：
 
 ```bash
-go test ./internal/ui/bubble -run 'TestSelectionDock(SingleCustomOptionSubmitsImmediately|MultipleCustomOptionAddsAndEditsOneAnswer|CustomOptionValidatesEmptyAndMax)' -v
+go test ./internal/ui/bubble -run 'TestSelectionDock(SingleCustomOptionSavesBeforeSubmit|MultipleCustomOptionAddsAndEditsOneAnswer|CustomOptionValidatesEmptyAndMax)' -v
 ```
 
 预期：编译失败，提示 `editingCustom`、`customInput` 或 `confirmCustom` 未定义。
@@ -617,16 +621,16 @@ if m.selectionDock.editingCustom {
 
 普通状态下：
 
-- `Space` 在答案焦点时切换多选，在操作焦点时调用 `activateFocused()`。
-- `Enter` 在多选答案焦点时调用 `submit()`；在单选答案或两个操作焦点时调用 `activateFocused()`。
-- `Chat about this` 的完成路径与 `Esc` 共用 `completeSelection(cancel())`。
+- `Space` 在答案焦点时选择或切换答案，在 `Custom option` 上进入编辑，在 `Chat about this` 上不执行操作。
+- `Enter` 提交当前选择；在 `Chat about this` 上与 `Esc` 共用 `completeSelection(cancel())`。
+- 自定义编辑器中的 `Enter` 只保存答案并退出编辑，随后需要再次按 `Enter` 提交 Select。
 
 - [ ] **步骤 5：运行自定义答案和按键测试**
 
 运行：
 
 ```bash
-go test ./internal/ui/bubble -run 'TestSelectionDock(SingleCustomOptionSubmitsImmediately|MultipleCustomOptionAddsAndEditsOneAnswer|CustomOptionValidatesEmptyAndMax|BrokerRequestAndKeys|ConsumesCtrlCAsCancellation)' -v
+go test ./internal/ui/bubble -run 'TestSelectionDock(SingleCustomOptionSavesBeforeSubmit|MultipleCustomOptionAddsAndEditsOneAnswer|CustomOptionValidatesEmptyAndMax|BrokerRequestAndKeys|ConsumesCtrlCAsCancellation)' -v
 ```
 
 预期：PASS。
@@ -1311,7 +1315,7 @@ git commit -m "test: complete Select redesign regression coverage"
 - [ ] 每个选择结果只有 `id` 和 `label`。
 - [ ] `custom_option` 为保留 ID，调用方无法定义同名预设答案。
 - [ ] 每次最多保留一个自定义答案；再次进入会编辑已有值。
-- [ ] 单选自定义答案按 Enter 立即提交。
+- [ ] 自定义编辑器中的 Enter 只保存答案；随后再次按 Enter 提交当前选择。
 - [ ] 多选自定义答案加入当前选择后可继续勾选。
 - [ ] `Custom option` 与 `Chat about this` 始终显示且不计入业务答案总数。
 - [ ] `Chat about this` 与 `Esc` 返回相同取消协议。

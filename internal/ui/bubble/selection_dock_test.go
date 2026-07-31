@@ -212,7 +212,7 @@ func TestSelectionDockMultipleSpaceEnforcesMaximumWithoutCompleting(t *testing.T
 	if got.selectionDock == nil || !got.selectionDock.selected["logs"] || got.selectionDock.selected["metrics"] {
 		t.Fatalf("maximum selection state=%#v", got.selectionDock)
 	}
-	if got.selectionDock.errorText != "You can select at most 1 options." {
+	if got.selectionDock.errorText != "You can select at most 1 option." {
 		t.Fatalf("errorText=%q", got.selectionDock.errorText)
 	}
 	select {
@@ -670,5 +670,72 @@ func TestCurrentLayoutAllowsTallerSelectionDockWithoutChangingInputLimit(t *test
 	normalLayout := normal.currentLayout()
 	if normalLayout.inputHeight != inputMaxVisibleLines {
 		t.Fatalf("normal input height=%d, want %d", normalLayout.inputHeight, inputMaxVisibleLines)
+	}
+}
+
+func TestSelectionDockChatSpaceDoesNotCompleteButEnterCancels(t *testing.T) {
+	m, done := selectionKeyTestModel(t, selectionRequest("", selecttool.ModeMultiple))
+	m.selectionDock.focus = selectionFocus{kind: selectionFocusChat}
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	got := next.(appModel)
+	if got.selectionDock == nil {
+		t.Fatal("Space completed Chat cancellation")
+	}
+	select {
+	case result := <-done:
+		t.Fatalf("Space completed result: %#v", result)
+	default:
+	}
+	next, _ = got.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(appModel)
+	if got.selectionDock != nil {
+		t.Fatal("Enter did not activate Chat cancellation")
+	}
+	select {
+	case result := <-done:
+		if !result.Cancelled {
+			t.Fatalf("result=%#v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Enter cancellation blocked")
+	}
+}
+
+func TestSelectionDockLongPromptAndDescriptionPreserveStructureAndExactRange(t *testing.T) {
+	r := selectionRequest("x", selecttool.ModeMultiple)
+	r.Prompt = strings.Repeat("long prompt words ", 30)
+	r.Options[0].Description = strings.Repeat("long description words ", 30)
+	m := newModel(context.Background(), &fakeRunner{}, "", nil, nil, nil, nil, nil)
+	m.selectionDock = newSelectionDock(r)
+	plain := ansi.Strip(m.renderSelectionDock(42, 16))
+	for _, want := range []string{"SELECT · MULTIPLE", "…", "3 answers · showing 1-", "› [ ] Logs", "↑ 0 answers above", "answers below", "Custom option", "Chat about this", "enter submit"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("missing %q in %q", want, plain)
+		}
+	}
+	rows, heights := selectionAnswerRows(m.selectionDock, 42)
+	start, end := m.selectionDock.visibleRange(heights, 16-7-len(limitedWrappedLines(sanitizeTerminalText(r.Prompt), 42, 7)))
+	for i := start; i < end; i++ {
+		for _, row := range rows[i] {
+			if !strings.Contains(plain, strings.TrimSpace(row)) {
+				t.Fatalf("range includes answer %d row %q not fully rendered in %q", i, row, plain)
+			}
+		}
+	}
+	if !strings.Contains(plain, fmt.Sprintf("showing %d-%d", start+1, end)) {
+		t.Fatalf("range %d-%d not exact in %q", start, end, plain)
+	}
+}
+
+func TestSelectionDockVisibleRangeRequiresCompleteOption(t *testing.T) {
+	d := newSelectionDock(selectionRequest("x", selecttool.ModeMultiple))
+	if start, end := d.visibleRange([]int{3, 1}, 0); start != 0 || end != 0 {
+		t.Fatalf("zero budget range=%d,%d", start, end)
+	}
+	if start, end := d.visibleRange([]int{3, 1}, 2); start != 0 || end != 0 {
+		t.Fatalf("partial option counted in range=%d,%d", start, end)
+	}
+	if start, end := d.visibleRange([]int{2, 1}, 2); start != 0 || end != 1 {
+		t.Fatalf("complete option range=%d,%d", start, end)
 	}
 }
