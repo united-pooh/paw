@@ -29,17 +29,15 @@ type selectionFocus struct {
 }
 
 type selectionDock struct {
-	request       selecttool.Request
-	focus         selectionFocus
-	selected      map[string]bool
-	customLabel   string
-	customInput   textinput.Model
-	editingCustom bool
-	firstVisible  int
-	errorText     string
-
-	// highlighted is retained until the task 4 renderer is migrated to focus.
-	highlighted int
+	request         selecttool.Request
+	focus           selectionFocus
+	selected        map[string]bool
+	customLabel     string
+	customInput     textinput.Model
+	editingCustom   bool
+	firstVisible    int
+	lastAnswerIndex int
+	errorText       string
 }
 
 func newSelectionDock(request selecttool.Request) *selectionDock {
@@ -61,7 +59,7 @@ func newSelectionDock(request selecttool.Request) *selectionDock {
 		for i, option := range request.Options {
 			if option.ID == request.InitialSelectedIDs[0] {
 				d.focus.answerIndex = i
-				d.highlighted = i
+				d.lastAnswerIndex = i
 				break
 			}
 		}
@@ -95,17 +93,11 @@ func (d *selectionDock) setFocusPosition(position int) {
 	switch {
 	case position < len(d.request.Options):
 		d.focus = selectionFocus{kind: selectionFocusAnswer, answerIndex: position}
-		d.highlighted = position
+		d.lastAnswerIndex = position
 	case position == len(d.request.Options):
 		d.focus = selectionFocus{kind: selectionFocusCustom}
-		if len(d.request.Options) > 0 {
-			d.highlighted = len(d.request.Options) - 1
-		}
 	default:
 		d.focus = selectionFocus{kind: selectionFocusChat}
-		if len(d.request.Options) > 0 {
-			d.highlighted = len(d.request.Options) - 1
-		}
 	}
 	d.errorText = ""
 }
@@ -261,12 +253,22 @@ func (d *selectionDock) activateFocused() (selecttool.Result, bool) {
 	}
 }
 
+func (d *selectionDock) answerIndexForScroll(answerCount int) int {
+	if d == nil || answerCount == 0 {
+		return 0
+	}
+	if d.focus.kind == selectionFocusAnswer {
+		d.lastAnswerIndex = clampInt(d.focus.answerIndex, 0, answerCount-1)
+	}
+	return clampInt(d.lastAnswerIndex, 0, answerCount-1)
+}
+
 func (d *selectionDock) visibleRange(heights []int, budget int) (int, int) {
 	if d == nil || len(heights) == 0 || budget <= 0 {
 		return 0, 0
 	}
-	d.highlighted = clampInt(d.highlighted, 0, len(heights)-1)
-	start := clampInt(d.firstVisible, 0, d.highlighted)
+	focused := d.answerIndexForScroll(len(heights))
+	start := clampInt(d.firstVisible, 0, focused)
 	for {
 		used := 0
 		end := start
@@ -274,7 +276,7 @@ func (d *selectionDock) visibleRange(heights []int, budget int) (int, int) {
 			used += maxInt(1, heights[end])
 			end++
 		}
-		if d.highlighted < end {
+		if focused < end {
 			d.firstVisible = start
 			return start, end
 		}

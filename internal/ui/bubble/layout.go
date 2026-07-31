@@ -32,6 +32,10 @@ type tuiLayout struct {
 }
 
 func computeTUILayout(width, height, requestedInputHeight int) tuiLayout {
+	return computeTUILayoutWithInputLimit(width, height, requestedInputHeight, inputMaxVisibleLines)
+}
+
+func computeTUILayoutWithInputLimit(width, height, requestedInputHeight, inputHeightLimit int) tuiLayout {
 	frameWidth := maxInt(1, width)
 	frameHeight := maxInt(1, height)
 	contentWidth := maxInt(1, frameWidth-mainFrameHorizontalFrame)
@@ -50,7 +54,7 @@ func computeTUILayout(width, height, requestedInputHeight int) tuiLayout {
 	// at zero prevents the input dock from growing a second metadata row.
 	worktreeHeight := 0
 
-	inputHeight := clampInt(requestedInputHeight, 1, inputMaxVisibleLines)
+	inputHeight := clampInt(requestedInputHeight, 1, maxInt(1, inputHeightLimit))
 	// 正常尺寸下始终给 transcript 留至少一行；极小终端优先保留输入。
 	maxInputHeight := maxInt(1, contentHeight-headerHeight-statusHeight-worktreeHeight-1)
 	inputHeight = minInt(inputHeight, maxInputHeight)
@@ -77,6 +81,7 @@ func (m appModel) currentLayout() tuiLayout {
 	if m.selectionDock != nil {
 		base := computeTUILayout(m.width, m.height, inputMinVisibleLines)
 		inputHeight = m.selectionDock.preferredHeight(inputDockContentWidth(base.contentWidth))
+		return computeTUILayoutWithInputLimit(m.width, m.height, inputHeight, selectionDockMaxVisibleLines)
 	}
 	if inputHeight <= 0 {
 		inputHeight = inputMinVisibleLines
@@ -554,6 +559,9 @@ func (m *appModel) relayout() {
 		requestedInputHeight = m.selectionDock.preferredHeight(inputWidth)
 	}
 	layout := computeTUILayout(m.width, m.height, requestedInputHeight)
+	if m.selectionDock != nil {
+		layout = computeTUILayoutWithInputLimit(m.width, m.height, requestedInputHeight, selectionDockMaxVisibleLines)
+	}
 	if m.selectionDock == nil {
 		m.input.SetHeight(layout.inputHeight)
 	} else {

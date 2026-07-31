@@ -40,23 +40,23 @@ func TestNewSelectionDockAndNavigation(t *testing.T) {
 	r := selectionRequest("x", selecttool.ModeMultiple)
 	r.InitialSelectedIDs = []string{"metrics"}
 	d := newSelectionDock(r)
-	if d.highlighted != 0 || !d.selected["metrics"] {
+	if d.focus.answerIndex != 0 || d.lastAnswerIndex != 0 || !d.selected["metrics"] {
 		t.Fatalf("dock=%#v", d)
 	}
 	d.move(-1)
-	if d.highlighted != 0 {
+	if d.focus.kind != selectionFocusAnswer || d.focus.answerIndex != 0 {
 		t.Fatal("above")
 	}
 	d.end()
-	if d.highlighted != 2 || d.focus.kind != selectionFocusChat {
-		t.Fatalf("end highlighted=%d focus=%#v", d.highlighted, d.focus)
+	if d.lastAnswerIndex != 0 || d.focus.kind != selectionFocusChat {
+		t.Fatalf("end lastAnswerIndex=%d focus=%#v", d.lastAnswerIndex, d.focus)
 	}
 	d.move(1)
-	if d.highlighted != 2 {
+	if d.focus.kind != selectionFocusChat {
 		t.Fatal("wrapped")
 	}
 	d.home()
-	if d.highlighted != 0 {
+	if d.focus.kind != selectionFocusAnswer || d.focus.answerIndex != 0 {
 		t.Fatal("home")
 	}
 }
@@ -326,11 +326,22 @@ func TestSelectionDockConsumesCtrlCAsCancellation(t *testing.T) {
 func TestRenderSelectionDock(t *testing.T) {
 	m := newModel(context.Background(), &fakeRunner{}, "", nil, nil, nil, nil, nil)
 	m.selectionDock = newSelectionDock(selectionRequest("x", selecttool.ModeMultiple))
-	plain := ansi.Strip(m.renderSelectionDock(60, 8))
-	for _, want := range []string{"Select · multiple", "Choose signals", "Logs", "space toggle"} {
+	plain := ansi.Strip(m.renderSelectionDock(60, 14))
+	for _, want := range []string{
+		"SELECT · MULTIPLE",
+		"Choose signals",
+		"3 answers",
+		"Custom option",
+		"Chat about this",
+		"space toggle",
+		"enter submit",
+	} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("missing %q in %q", want, plain)
 		}
+	}
+	if strings.Contains(plain, "more") {
+		t.Fatalf("ambiguous scroll text in %q", plain)
 	}
 }
 func TestCurrentLayoutUsesSelectionDock(t *testing.T) {
@@ -586,7 +597,7 @@ func TestSelectionDockCustomEditEscPreservesSelectAndCtrlCCancels(t *testing.T) 
 	})
 }
 
-func TestSelectionDockLongListShowsScrollIndicators(t *testing.T) {
+func TestSelectionDockLongListShowsExactRangeAndRemainingCounts(t *testing.T) {
 	r := selectionRequest("x", selecttool.ModeMultiple)
 	r.Options = nil
 	for i := 0; i < 12; i++ {
@@ -595,13 +606,69 @@ func TestSelectionDockLongListShowsScrollIndicators(t *testing.T) {
 	r.MaxSelect = len(r.Options)
 	m := newModel(context.Background(), &fakeRunner{}, "", nil, nil, nil, nil, nil)
 	m.selectionDock = newSelectionDock(r)
-	first := ansi.Strip(m.renderSelectionDock(40, 8))
-	if !strings.Contains(first, "↓ more") {
-		t.Fatalf("missing lower indicator: %q", first)
+	first := ansi.Strip(m.renderSelectionDock(48, 14))
+	if !strings.Contains(first, "12 answers") || !strings.Contains(first, "showing 1-") || !strings.Contains(first, "answers below") {
+		t.Fatalf("first page=%q", first)
 	}
-	m.selectionDock.end()
-	last := ansi.Strip(m.renderSelectionDock(40, 8))
-	if !strings.Contains(last, "↑ more") || !strings.Contains(last, "Option 11") {
-		t.Fatalf("missing upper indicator or final option: %q", last)
+	if !strings.Contains(first, "Custom option") || !strings.Contains(first, "Chat about this") {
+		t.Fatalf("fixed actions missing=%q", first)
+	}
+	m.selectionDock.focus = selectionFocus{kind: selectionFocusAnswer, answerIndex: 11}
+	last := ansi.Strip(m.renderSelectionDock(48, 14))
+	if !strings.Contains(last, "answers above") || !strings.Contains(last, "Option 11") {
+		t.Fatalf("last page=%q", last)
+	}
+	if strings.Contains(last, "more") {
+		t.Fatalf("ambiguous more indicator remains=%q", last)
+	}
+}
+
+func TestSelectionDockSingleSelectedAndFocusRemainDistinct(t *testing.T) {
+	r := selectionRequest("x", selecttool.ModeSingle)
+	r.InitialSelectedIDs = []string{"logs"}
+	m := newModel(context.Background(), &fakeRunner{}, "", nil, nil, nil, nil, nil)
+	m.selectionDock = newSelectionDock(r)
+	m.selectionDock.focus = selectionFocus{kind: selectionFocusAnswer, answerIndex: 1}
+	plain := ansi.Strip(m.renderSelectionDock(60, 14))
+	if !strings.Contains(plain, "  [x] Logs") || !strings.Contains(plain, "› [ ] Metrics") {
+		t.Fatalf("selected and focus are not distinct: %q", plain)
+	}
+}
+
+func TestSelectionDockCustomSelectedAndEditHints(t *testing.T) {
+	m := newModel(context.Background(), &fakeRunner{}, "", nil, nil, nil, nil, nil)
+	m.selectionDock = newSelectionDock(selectionRequest("x", selecttool.ModeMultiple))
+	m.selectionDock.customLabel = "Saved answer"
+	m.selectionDock.focus = selectionFocus{kind: selectionFocusCustom}
+	plain := ansi.Strip(m.renderSelectionDock(60, 14))
+	if !strings.Contains(plain, "› [x] Custom option · Saved answer") || !strings.Contains(plain, "Chat about this") {
+		t.Fatalf("saved custom state missing: %q", plain)
+	}
+	m.selectionDock.beginCustomEdit()
+	editing := ansi.Strip(m.renderSelectionDock(60, 14))
+	if !strings.Contains(editing, "enter save") || strings.Contains(editing, "enter submit") || !strings.Contains(editing, "Chat about this") {
+		t.Fatalf("custom edit hints/actions wrong: %q", editing)
+	}
+}
+
+func TestCurrentLayoutAllowsTallerSelectionDockWithoutChangingInputLimit(t *testing.T) {
+	selection := newModel(context.Background(), &fakeRunner{}, "", nil, nil, nil, nil, nil)
+	selection.ready = true
+	selection.width = 100
+	selection.height = 32
+	selection.selectionDock = newSelectionDock(selectionRequest("x", selecttool.ModeMultiple))
+	selectionLayout := selection.currentLayout()
+	if selectionLayout.inputHeight <= inputMaxVisibleLines {
+		t.Fatalf("selection input height=%d, want above normal max=%d", selectionLayout.inputHeight, inputMaxVisibleLines)
+	}
+
+	normal := newModel(context.Background(), &fakeRunner{}, "", nil, nil, nil, nil, nil)
+	normal.ready = true
+	normal.width = 100
+	normal.height = 32
+	normal.input.SetHeight(inputMaxVisibleLines + 8)
+	normalLayout := normal.currentLayout()
+	if normalLayout.inputHeight != inputMaxVisibleLines {
+		t.Fatalf("normal input height=%d, want %d", normalLayout.inputHeight, inputMaxVisibleLines)
 	}
 }
