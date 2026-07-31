@@ -318,6 +318,79 @@ func TestSelectionDockTinyTerminalDoesNotOverflow(t *testing.T) {
 	}
 }
 
+func TestSelectionDockSingleCustomReplacesInitialPresetAtMax(t *testing.T) {
+	for _, key := range []tea.KeyType{tea.KeyEnter, tea.KeySpace} {
+		t.Run(key.String(), func(t *testing.T) {
+			r := selectionRequest("", selecttool.ModeSingle)
+			r.MinSelect = 1
+			r.MaxSelect = 1
+			r.InitialSelectedIDs = []string{"logs"}
+			m, done := selectionKeyTestModel(t, r)
+			m.selectionDock.focus = selectionFocus{kind: selectionFocusCustom}
+
+			next, _ := m.Update(tea.KeyMsg{Type: key})
+			got := next.(appModel)
+			if got.selectionDock == nil || !got.selectionDock.editingCustom {
+				t.Fatalf("key %q did not activate custom editing at max: dock=%#v", key.String(), got.selectionDock)
+			}
+			got.selectionDock.customInput.SetValue("Replacement")
+			next, _ = got.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			got = next.(appModel)
+			if got.selectionDock != nil {
+				t.Fatalf("custom confirmation did not complete single selection: dock=%#v", got.selectionDock)
+			}
+			select {
+			case result := <-done:
+				want := []selecttool.SelectedOption{{ID: selecttool.CustomOptionID, Label: "Replacement"}}
+				if !reflect.DeepEqual(result.SelectedOptions, want) {
+					t.Fatalf("result=%#v, want %#v", result.SelectedOptions, want)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("custom confirmation blocked")
+			}
+		})
+	}
+}
+
+func TestSelectionDockMultipleEditsExistingCustomWhenMaxIsFull(t *testing.T) {
+	r := selectionRequest("x", selecttool.ModeMultiple)
+	r.MaxSelect = 2
+	d := newSelectionDock(r)
+	d.selected["logs"] = true
+	d.focus = selectionFocus{kind: selectionFocusCustom}
+	d.activateFocused()
+	d.customInput.SetValue("Existing custom")
+	d.confirmCustom()
+	if d.selectedCount() != d.request.MaxSelect {
+		t.Fatalf("selectedCount=%d, want max %d", d.selectedCount(), d.request.MaxSelect)
+	}
+
+	d.activateFocused()
+	if !d.editingCustom || d.customInput.Value() != "Existing custom" {
+		t.Fatalf("existing custom could not be reopened at max: dock=%#v", d)
+	}
+	d.customInput.SetValue("Edited custom")
+	if result, complete := d.confirmCustom(); complete || len(result.SelectedOptions) != 0 {
+		t.Fatalf("unexpected edit completion: result=%#v complete=%v", result, complete)
+	}
+	result, ok := d.submit()
+	if !ok {
+		t.Fatalf("submit failed: dock=%#v", d)
+	}
+	customCount := 0
+	for _, option := range result.SelectedOptions {
+		if option.ID == selecttool.CustomOptionID {
+			customCount++
+			if option.Label != "Edited custom" {
+				t.Fatalf("custom label=%q", option.Label)
+			}
+		}
+	}
+	if customCount != 1 {
+		t.Fatalf("custom option count=%d in result %#v", customCount, result.SelectedOptions)
+	}
+}
+
 func TestSelectionDockSingleCustomOptionSubmitsImmediately(t *testing.T) {
 	d := newSelectionDock(selectionRequest("x", selecttool.ModeSingle))
 	d.focus = selectionFocus{kind: selectionFocusCustom}

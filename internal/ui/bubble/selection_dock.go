@@ -189,7 +189,7 @@ func (d *selectionDock) cancel() selecttool.Result {
 }
 
 func (d *selectionDock) beginCustomEdit() {
-	if d.customLabel == "" && d.selectedCount() >= d.request.MaxSelect {
+	if d.request.Mode == selecttool.ModeMultiple && d.customLabel == "" && d.selectedCount() >= d.request.MaxSelect {
 		d.errorText = fmt.Sprintf("You can select at most %d %s.", d.request.MaxSelect, optionNoun(d.request.MaxSelect))
 		return
 	}
@@ -212,7 +212,7 @@ func (d *selectionDock) confirmCustom() (selecttool.Result, bool) {
 		d.errorText = "Custom option cannot be empty."
 		return selecttool.Result{}, false
 	}
-	if d.customLabel == "" && d.selectedCount() >= d.request.MaxSelect {
+	if d.request.Mode == selecttool.ModeMultiple && d.customLabel == "" && d.selectedCount() >= d.request.MaxSelect {
 		d.errorText = fmt.Sprintf("You can select at most %d %s.", d.request.MaxSelect, optionNoun(d.request.MaxSelect))
 		return selecttool.Result{}, false
 	}
