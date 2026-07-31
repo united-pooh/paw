@@ -16,6 +16,26 @@ import (
 func selectionRequest(id string, mode selecttool.Mode) selecttool.Request {
 	return selecttool.Request{ID: id, Prompt: "Choose signals", Mode: mode, Options: []selecttool.Option{{ID: "logs", Label: "Logs", Description: "Application logs"}, {ID: "metrics", Label: "Metrics"}, {ID: "traces", Label: "Traces"}}, MinSelect: 0, MaxSelect: 3}
 }
+
+func selectionKeyTestModel(t *testing.T, request selecttool.Request) (appModel, <-chan selecttool.Result) {
+	t.Helper()
+	broker := selecttool.NewBroker()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancel)
+	done := make(chan selecttool.Result, 1)
+	go func() {
+		result, _ := broker.Ask(ctx, request)
+		done <- result
+	}()
+	event, err := broker.NextEvent(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newModel(ctx, &fakeRunner{}, "", nil, nil, nil, nil, nil)
+	m.selectionBroker = broker
+	m.selectionDock = newSelectionDock(event.Request)
+	return m, done
+}
 func TestNewSelectionDockAndNavigation(t *testing.T) {
 	r := selectionRequest("x", selecttool.ModeMultiple)
 	r.InitialSelectedIDs = []string{"metrics"}
@@ -28,8 +48,8 @@ func TestNewSelectionDockAndNavigation(t *testing.T) {
 		t.Fatal("above")
 	}
 	d.end()
-	if d.highlighted != 2 {
-		t.Fatal("end")
+	if d.highlighted != 2 || d.focus.kind != selectionFocusChat {
+		t.Fatalf("end highlighted=%d focus=%#v", d.highlighted, d.focus)
 	}
 	d.move(1)
 	if d.highlighted != 2 {
@@ -104,16 +124,6 @@ func TestSelectionDockToggleAndSubmit(t *testing.T) {
 		t.Fatalf("result=%#v ok=%v", result, ok)
 	}
 }
-func TestSelectionDockStableOrder(t *testing.T) {
-	d := newSelectionDock(selectionRequest("x", selecttool.ModeMultiple))
-	d.selected["traces"] = true
-	d.selected["logs"] = true
-	r, ok := d.submit()
-	want := []selecttool.SelectedOption{{ID: "logs", Label: "Logs"}, {ID: "traces", Label: "Traces"}}
-	if !ok || !reflect.DeepEqual(r.SelectedOptions, want) {
-		t.Fatalf("%#v", r)
-	}
-}
 func TestSelectionDockSingleSubmit(t *testing.T) {
 	r := selectionRequest("x", selecttool.ModeSingle)
 	r.MinSelect = 1
@@ -126,6 +136,88 @@ func TestSelectionDockSingleSubmit(t *testing.T) {
 		t.Fatalf("%#v", got)
 	}
 }
+func TestSelectionDockMultipleKeysSpaceTogglesAndEnterSubmits(t *testing.T) {
+	r := selectionRequest("", selecttool.ModeMultiple)
+	r.MinSelect = 1
+	r.MaxSelect = 2
+	m, done := selectionKeyTestModel(t, r)
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	got := next.(appModel)
+	if got.selectionDock == nil || !got.selectionDock.selected["logs"] {
+		t.Fatalf("Space did not select focused answer: dock=%#v", got.selectionDock)
+	}
+	select {
+	case result := <-done:
+		t.Fatalf("Space completed multiple selection: %#v", result)
+	default:
+	}
+
+	next, _ = got.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(appModel)
+	if got.selectionDock != nil {
+		t.Fatalf("Enter did not submit current selection: dock=%#v", got.selectionDock)
+	}
+	select {
+	case result := <-done:
+		want := []selecttool.SelectedOption{{ID: "logs", Label: "Logs"}}
+		if !reflect.DeepEqual(result.SelectedOptions, want) {
+			t.Fatalf("result=%#v, want %#v", result, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Enter submission blocked")
+	}
+}
+
+func TestSelectionDockMultipleEnterValidatesMinimumWithoutToggling(t *testing.T) {
+	r := selectionRequest("", selecttool.ModeMultiple)
+	r.MinSelect = 2
+	r.MaxSelect = 3
+	r.InitialSelectedIDs = []string{"logs"}
+	m, done := selectionKeyTestModel(t, r)
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got := next.(appModel)
+	if got.selectionDock == nil {
+		t.Fatal("Enter completed selection below minimum")
+	}
+	if !got.selectionDock.selected["logs"] {
+		t.Fatal("Enter toggled the focused answer instead of validating")
+	}
+	if got.selectionDock.errorText != "Select at least 2 options." {
+		t.Fatalf("errorText=%q", got.selectionDock.errorText)
+	}
+	select {
+	case result := <-done:
+		t.Fatalf("invalid Enter completed selection: %#v", result)
+	default:
+	}
+}
+
+func TestSelectionDockMultipleSpaceEnforcesMaximumWithoutCompleting(t *testing.T) {
+	r := selectionRequest("", selecttool.ModeMultiple)
+	r.MaxSelect = 1
+	m, done := selectionKeyTestModel(t, r)
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	got := next.(appModel)
+	next, _ = got.Update(tea.KeyMsg{Type: tea.KeyDown})
+	got = next.(appModel)
+	next, _ = got.Update(tea.KeyMsg{Type: tea.KeySpace})
+	got = next.(appModel)
+	if got.selectionDock == nil || !got.selectionDock.selected["logs"] || got.selectionDock.selected["metrics"] {
+		t.Fatalf("maximum selection state=%#v", got.selectionDock)
+	}
+	if got.selectionDock.errorText != "You can select at most 1 options." {
+		t.Fatalf("errorText=%q", got.selectionDock.errorText)
+	}
+	select {
+	case result := <-done:
+		t.Fatalf("Space completed selection at maximum: %#v", result)
+	default:
+	}
+}
+
 func TestSelectionBrokerRequestAndKeys(t *testing.T) {
 	b := selecttool.NewBroker()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

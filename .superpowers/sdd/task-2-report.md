@@ -79,3 +79,76 @@ A full `go test ./internal/ui/bubble` consequently still fails in two pre-existi
 
 - The temporary `highlighted` compatibility field should be removed when task 4 migrates rendering to `focus`.
 - The full bubble package remains red solely due to untouched old-protocol display test fixtures, as described above.
+
+## Review-finding fix
+
+### Status
+
+All task 2 review findings were addressed without implementing task 3 or task 4.
+
+### Changes
+
+- Changed key-layer Enter handling so a focused multiple-choice answer calls `submit()` instead of `activateFocused()`; Space remains the only key that toggles a multiple-choice answer.
+- Preserved immediate Enter completion for single-choice answers and `activateFocused()` dispatch for Custom/Chat action focus.
+- Added key-layer broker/dock regressions proving Space toggles without completion, Enter submits the existing selection without toggling it, and Enter enforces `MinSelect` without completion.
+- Added the closest reachable max regression: because normal toggling prevents constructing an over-max selection, the test proves a second Space at `MaxSelect` is rejected and does not complete.
+- Strengthened the legacy navigation test to assert `selectionFocusChat` after `end()` in addition to the temporary `highlighted` bridge.
+- Removed the duplicate stable-order test while retaining the equivalent readable stable-order coverage.
+
+### RED
+
+Command:
+
+```bash
+gofmt -w internal/ui/bubble/selection_dock_test.go && go test ./internal/ui/bubble -run 'TestSelectionDockMultiple(KeysSpaceTogglesAndEnterSubmits|EnterValidatesMinimumWithoutToggling|SpaceEnforcesMaximumWithoutCompleting)' -v
+```
+
+Result: expected failure. The Enter-submit test left the dock open after deselecting `logs`, and the minimum-validation test showed Enter toggled the focused answer instead of validating the existing selection. The max-reachable Space behavior already passed.
+
+### GREEN
+
+Focused review tests:
+
+```bash
+go test ./internal/ui/bubble -run 'TestSelectionDockMultiple(KeysSpaceTogglesAndEnterSubmits|EnterValidatesMinimumWithoutToggling|SpaceEnforcesMaximumWithoutCompleting)' -v
+```
+
+Result: PASS; all 3 tests passed.
+
+Task 2 focused tests:
+
+```bash
+go test ./internal/ui/bubble -run 'TestSelectionDock(NavigatesAnswersAndFixedActions|BuildsStableReadableOptions|ChatUsesCancellationResult|ToggleAndSubmit|SingleSubmit|MultipleKeysSpaceTogglesAndEnterSubmits|MultipleEnterValidatesMinimumWithoutToggling|MultipleSpaceEnforcesMaximumWithoutCompleting)' -v
+```
+
+Result: PASS; all 8 tests passed.
+
+Related dock/broker regression:
+
+```bash
+go test ./internal/ui/bubble -run 'Test(NewSelectionDock|SelectionDock|SelectionBroker)' -v
+```
+
+Result: PASS; all 13 selected tests passed.
+
+Validation:
+
+```bash
+git diff --check
+```
+
+Result: PASS.
+
+### Modified files
+
+- `internal/ui/bubble/selection_dock.go`
+- `internal/ui/bubble/selection_dock_test.go`
+- `.superpowers/sdd/task-2-report.md` (report append only)
+
+### Self-review
+
+- Multiple-answer Enter now validates and submits the current set without mutating it.
+- Space still cannot complete a request and remains constrained by `MaxSelect`.
+- Single-answer and fixed-action Enter paths retain their previous semantics.
+- Tests exercise the public Bubble Tea key-update path and broker completion rather than only dock helper methods.
+- No task 3 custom input or task 4 renderer migration was added.

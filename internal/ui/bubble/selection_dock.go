@@ -243,7 +243,14 @@ func (m appModel) handleSelectionDockKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case " ", "space":
 		m.selectionDock.toggleHighlighted()
 	case "enter":
-		if result, ok := m.selectionDock.activateFocused(); ok {
+		var result selecttool.Result
+		var ok bool
+		if m.selectionDock.focus.kind == selectionFocusAnswer && m.selectionDock.request.Mode == selecttool.ModeMultiple {
+			result, ok = m.selectionDock.submit()
+		} else {
+			result, ok = m.selectionDock.activateFocused()
+		}
+		if ok {
 			cmd = m.completeSelection(result)
 		}
 	case "esc", "ctrl+c":
