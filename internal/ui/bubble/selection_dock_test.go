@@ -124,16 +124,20 @@ func TestSelectionDockToggleAndSubmit(t *testing.T) {
 		t.Fatalf("result=%#v ok=%v", result, ok)
 	}
 }
-func TestSelectionDockSingleSubmit(t *testing.T) {
+func TestSelectionDockSingleSubmitUsesSelectedState(t *testing.T) {
 	r := selectionRequest("x", selecttool.ModeSingle)
 	r.MinSelect = 1
 	r.MaxSelect = 1
 	d := newSelectionDock(r)
 	d.move(1)
+	if got, ok := d.submit(); ok || len(got.SelectedOptions) != 0 || d.errorText != "Select at least 1 option." {
+		t.Fatalf("focused unselected answer submitted: result=%#v ok=%v error=%q", got, ok, d.errorText)
+	}
+	d.selected["logs"] = true
 	got, ok := d.submit()
-	want := []selecttool.SelectedOption{{ID: "metrics", Label: "Metrics"}}
+	want := []selecttool.SelectedOption{{ID: "logs", Label: "Logs"}}
 	if !ok || !reflect.DeepEqual(got.SelectedOptions, want) {
-		t.Fatalf("%#v", got)
+		t.Fatalf("result=%#v ok=%v", got, ok)
 	}
 }
 func TestSelectionDockMultipleKeysSpaceTogglesAndEnterSubmits(t *testing.T) {
@@ -218,7 +222,7 @@ func TestSelectionDockMultipleSpaceEnforcesMaximumWithoutCompleting(t *testing.T
 	}
 }
 
-func TestSelectionBrokerRequestAndKeys(t *testing.T) {
+func TestSelectionBrokerSingleSpaceSelectsAndEnterSubmits(t *testing.T) {
 	b := selecttool.NewBroker()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -237,13 +241,20 @@ func TestSelectionBrokerRequestAndKeys(t *testing.T) {
 	}
 	next, _ = got.Update(tea.KeyMsg{Type: tea.KeyDown})
 	got = next.(appModel)
-	if got.selectionDock.highlighted != 1 {
-		t.Fatal("down")
+	next, _ = got.Update(tea.KeyMsg{Type: tea.KeySpace})
+	got = next.(appModel)
+	if got.selectionDock == nil || !got.selectionDock.selected["metrics"] {
+		t.Fatalf("Space did not select metrics: dock=%#v", got.selectionDock)
+	}
+	select {
+	case result := <-done:
+		t.Fatalf("Space submitted single selection: %#v", result)
+	default:
 	}
 	next, _ = got.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	got = next.(appModel)
 	if got.selectionDock != nil {
-		t.Fatal("dock remains")
+		t.Fatal("Enter did not close dock")
 	}
 	select {
 	case r := <-done:
@@ -253,6 +264,43 @@ func TestSelectionBrokerRequestAndKeys(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("blocked")
+	}
+}
+
+func TestSelectionDockSingleInitialPresetEnterSubmits(t *testing.T) {
+	r := selectionRequest("", selecttool.ModeSingle)
+	r.InitialSelectedIDs = []string{"metrics"}
+	m, done := selectionKeyTestModel(t, r)
+	if !m.selectionDock.selected["metrics"] {
+		t.Fatal("initial preset is not selected")
+	}
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got := next.(appModel)
+	if got.selectionDock != nil {
+		t.Fatal("Enter did not submit initial preset")
+	}
+	select {
+	case result := <-done:
+		want := []selecttool.SelectedOption{{ID: "metrics", Label: "Metrics"}}
+		if !reflect.DeepEqual(result.SelectedOptions, want) {
+			t.Fatalf("result=%#v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("initial preset submission blocked")
+	}
+}
+
+func TestSelectionDockSingleEnterWithoutSelectionValidates(t *testing.T) {
+	m, done := selectionKeyTestModel(t, selectionRequest("", selecttool.ModeSingle))
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got := next.(appModel)
+	if got.selectionDock == nil || got.selectionDock.errorText != "Select at least 1 option." {
+		t.Fatalf("dock=%#v", got.selectionDock)
+	}
+	select {
+	case result := <-done:
+		t.Fatalf("unselected Enter submitted: %#v", result)
+	default:
 	}
 }
 func TestSelectionDockConsumesCtrlCAsCancellation(t *testing.T) {
@@ -318,37 +366,43 @@ func TestSelectionDockTinyTerminalDoesNotOverflow(t *testing.T) {
 	}
 }
 
-func TestSelectionDockSingleCustomReplacesInitialPresetAtMax(t *testing.T) {
-	for _, key := range []tea.KeyType{tea.KeyEnter, tea.KeySpace} {
-		t.Run(key.String(), func(t *testing.T) {
-			r := selectionRequest("", selecttool.ModeSingle)
-			r.MinSelect = 1
-			r.MaxSelect = 1
-			r.InitialSelectedIDs = []string{"logs"}
-			m, done := selectionKeyTestModel(t, r)
-			m.selectionDock.focus = selectionFocus{kind: selectionFocusCustom}
+func TestSelectionDockSingleCustomReplacesInitialPresetAndRequiresSubmit(t *testing.T) {
+	r := selectionRequest("", selecttool.ModeSingle)
+	r.MinSelect = 1
+	r.MaxSelect = 1
+	r.InitialSelectedIDs = []string{"logs"}
+	m, done := selectionKeyTestModel(t, r)
+	m.selectionDock.focus = selectionFocus{kind: selectionFocusCustom}
 
-			next, _ := m.Update(tea.KeyMsg{Type: key})
-			got := next.(appModel)
-			if got.selectionDock == nil || !got.selectionDock.editingCustom {
-				t.Fatalf("key %q did not activate custom editing at max: dock=%#v", key.String(), got.selectionDock)
-			}
-			got.selectionDock.customInput.SetValue("Replacement")
-			next, _ = got.Update(tea.KeyMsg{Type: tea.KeyEnter})
-			got = next.(appModel)
-			if got.selectionDock != nil {
-				t.Fatalf("custom confirmation did not complete single selection: dock=%#v", got.selectionDock)
-			}
-			select {
-			case result := <-done:
-				want := []selecttool.SelectedOption{{ID: selecttool.CustomOptionID, Label: "Replacement"}}
-				if !reflect.DeepEqual(result.SelectedOptions, want) {
-					t.Fatalf("result=%#v, want %#v", result.SelectedOptions, want)
-				}
-			case <-time.After(time.Second):
-				t.Fatal("custom confirmation blocked")
-			}
-		})
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	got := next.(appModel)
+	if got.selectionDock == nil || !got.selectionDock.editingCustom {
+		t.Fatalf("Space did not activate custom editing: dock=%#v", got.selectionDock)
+	}
+	got.selectionDock.customInput.SetValue("Replacement")
+	next, _ = got.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(appModel)
+	if got.selectionDock == nil || got.selectionDock.editingCustom || got.selectionDock.selected["logs"] || got.selectionDock.customLabel != "Replacement" {
+		t.Fatalf("custom confirmation state=%#v", got.selectionDock)
+	}
+	select {
+	case result := <-done:
+		t.Fatalf("custom confirmation submitted single selection: %#v", result)
+	default:
+	}
+	next, _ = got.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(appModel)
+	if got.selectionDock != nil {
+		t.Fatalf("second Enter did not submit custom: dock=%#v", got.selectionDock)
+	}
+	select {
+	case result := <-done:
+		want := []selecttool.SelectedOption{{ID: selecttool.CustomOptionID, Label: "Replacement"}}
+		if !reflect.DeepEqual(result.SelectedOptions, want) {
+			t.Fatalf("result=%#v, want %#v", result.SelectedOptions, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("custom submission blocked")
 	}
 }
 
@@ -391,17 +445,34 @@ func TestSelectionDockMultipleEditsExistingCustomWhenMaxIsFull(t *testing.T) {
 	}
 }
 
-func TestSelectionDockSingleCustomOptionSubmitsImmediately(t *testing.T) {
+func TestSelectionDockSingleCustomConfirmationSelectsWithoutSubmitting(t *testing.T) {
 	d := newSelectionDock(selectionRequest("x", selecttool.ModeSingle))
+	d.selected["logs"] = true
 	d.focus = selectionFocus{kind: selectionFocusCustom}
 	if result, complete := d.activateFocused(); complete || len(result.SelectedOptions) != 0 || !d.editingCustom {
 		t.Fatalf("activation result=%#v complete=%v dock=%#v", result, complete, d)
 	}
 	d.customInput.SetValue("  Custom answer  ")
 	result, complete := d.confirmCustom()
+	if complete || len(result.SelectedOptions) != 0 || d.editingCustom || d.customLabel != "Custom answer" || len(d.selected) != 0 {
+		t.Fatalf("result=%#v complete=%v dock=%#v", result, complete, d)
+	}
+	result, complete = d.submit()
 	want := []selecttool.SelectedOption{{ID: selecttool.CustomOptionID, Label: "Custom answer"}}
 	if !complete || !reflect.DeepEqual(result.SelectedOptions, want) {
 		t.Fatalf("result=%#v complete=%v", result, complete)
+	}
+}
+
+func TestSelectionDockSinglePresetSpaceClearsCustom(t *testing.T) {
+	d := newSelectionDock(selectionRequest("x", selecttool.ModeSingle))
+	d.customLabel = "Custom answer"
+	d.focus = selectionFocus{kind: selectionFocusAnswer, answerIndex: 1}
+	if result, complete := d.activateFocused(); complete || len(result.SelectedOptions) != 0 {
+		t.Fatalf("activation result=%#v complete=%v", result, complete)
+	}
+	if d.customLabel != "" || !d.selected["metrics"] || len(d.selected) != 1 {
+		t.Fatalf("dock=%#v", d)
 	}
 }
 
@@ -454,22 +525,27 @@ func TestSelectionDockCustomOptionValidatesEmptyAndMax(t *testing.T) {
 	}
 }
 
-func TestSelectionDockCustomKeysActivateWithEnterAndSpace(t *testing.T) {
-	for _, key := range []tea.KeyType{tea.KeyEnter, tea.KeySpace} {
-		t.Run(key.String(), func(t *testing.T) {
-			m, done := selectionKeyTestModel(t, selectionRequest("", selecttool.ModeMultiple))
-			m.selectionDock.focus = selectionFocus{kind: selectionFocusCustom}
-			next, _ := m.Update(tea.KeyMsg{Type: key})
-			got := next.(appModel)
-			if got.selectionDock == nil || !got.selectionDock.editingCustom {
-				t.Fatalf("key %q did not activate custom editing: dock=%#v", key.String(), got.selectionDock)
-			}
-			select {
-			case result := <-done:
-				t.Fatalf("key %q completed selection: %#v", key.String(), result)
-			default:
-			}
-		})
+func TestSelectionDockCustomSpaceActivatesAndEnterOnlySubmitsSelection(t *testing.T) {
+	r := selectionRequest("", selecttool.ModeMultiple)
+	r.MinSelect = 1
+	m, done := selectionKeyTestModel(t, r)
+	m.selectionDock.focus = selectionFocus{kind: selectionFocusCustom}
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got := next.(appModel)
+	if got.selectionDock == nil || got.selectionDock.editingCustom {
+		t.Fatalf("Enter activated custom editing or closed dock: dock=%#v", got.selectionDock)
+	}
+
+	next, _ = got.Update(tea.KeyMsg{Type: tea.KeySpace})
+	got = next.(appModel)
+	if got.selectionDock == nil || !got.selectionDock.editingCustom {
+		t.Fatalf("Space did not activate custom editing: dock=%#v", got.selectionDock)
+	}
+	select {
+	case result := <-done:
+		t.Fatalf("custom activation completed selection: %#v", result)
+	default:
 	}
 }
 

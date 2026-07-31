@@ -142,11 +142,18 @@ func (d *selectionDock) selectedOptions() []selecttool.SelectedOption {
 	return out
 }
 
-func (d *selectionDock) toggleHighlighted() bool {
-	if d == nil || d.focus.kind != selectionFocusAnswer || d.request.Mode != selecttool.ModeMultiple || len(d.request.Options) == 0 {
+func (d *selectionDock) selectFocusedAnswer() bool {
+	if d == nil || d.focus.kind != selectionFocusAnswer || len(d.request.Options) == 0 {
 		return false
 	}
 	id := d.request.Options[d.focus.answerIndex].ID
+	if d.request.Mode == selecttool.ModeSingle {
+		clear(d.selected)
+		d.selected[id] = true
+		d.customLabel = ""
+		d.errorText = ""
+		return true
+	}
 	if d.selected[id] {
 		delete(d.selected, id)
 		d.errorText = ""
@@ -161,26 +168,31 @@ func (d *selectionDock) toggleHighlighted() bool {
 	return true
 }
 
+func (d *selectionDock) toggleHighlighted() bool {
+	if d == nil || d.request.Mode != selecttool.ModeMultiple {
+		return false
+	}
+	return d.selectFocusedAnswer()
+}
+
 func (d *selectionDock) submit() (selecttool.Result, bool) {
-	if d == nil || len(d.request.Options) == 0 {
+	if d == nil {
 		return selecttool.Result{}, false
 	}
-	if d.request.Mode == selecttool.ModeSingle {
-		if d.focus.kind != selectionFocusAnswer {
-			return selecttool.Result{}, false
-		}
-		option := d.request.Options[d.focus.answerIndex]
-		return selecttool.Result{SelectedOptions: []selecttool.SelectedOption{{ID: option.ID, Label: option.Label}}}, true
-	}
 	count := d.selectedCount()
-	if count < d.request.MinSelect {
-		d.errorText = fmt.Sprintf("Select at least %d options.", d.request.MinSelect)
+	minSelect := d.request.MinSelect
+	if d.request.Mode == selecttool.ModeSingle && minSelect < 1 {
+		minSelect = 1
+	}
+	if count < minSelect {
+		d.errorText = fmt.Sprintf("Select at least %d %s.", minSelect, optionNoun(minSelect))
 		return selecttool.Result{}, false
 	}
 	if count > d.request.MaxSelect {
 		d.errorText = fmt.Sprintf("You can select at most %d options.", d.request.MaxSelect)
 		return selecttool.Result{}, false
 	}
+	d.errorText = ""
 	return selecttool.Result{SelectedOptions: d.selectedOptions()}, true
 }
 
@@ -217,10 +229,10 @@ func (d *selectionDock) confirmCustom() (selecttool.Result, bool) {
 		return selecttool.Result{}, false
 	}
 	d.customLabel = label
-	d.cancelCustomEdit()
 	if d.request.Mode == selecttool.ModeSingle {
-		return selecttool.Result{SelectedOptions: []selecttool.SelectedOption{{ID: selecttool.CustomOptionID, Label: label}}}, true
+		clear(d.selected)
 	}
+	d.cancelCustomEdit()
 	return selecttool.Result{}, false
 }
 
@@ -242,14 +254,7 @@ func (d *selectionDock) activateFocused() (selecttool.Result, bool) {
 		d.beginCustomEdit()
 		return selecttool.Result{}, false
 	case selectionFocusAnswer:
-		if len(d.request.Options) == 0 {
-			return selecttool.Result{}, false
-		}
-		if d.request.Mode == selecttool.ModeSingle {
-			option := d.request.Options[d.focus.answerIndex]
-			return selecttool.Result{SelectedOptions: []selecttool.SelectedOption{{ID: option.ID, Label: option.Label}}}, true
-		}
-		d.toggleHighlighted()
+		d.selectFocusedAnswer()
 		return selecttool.Result{}, false
 	default:
 		return selecttool.Result{}, false
@@ -324,20 +329,15 @@ func (m appModel) handleSelectionDockKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "end":
 		m.selectionDock.end()
 	case " ", "space":
-		if m.selectionDock.focus.kind == selectionFocusAnswer {
-			m.selectionDock.toggleHighlighted()
-		} else if result, complete := m.selectionDock.activateFocused(); complete {
-			cmd = m.completeSelection(result)
+		if m.selectionDock.focus.kind == selectionFocusChat {
+			cmd = m.completeSelection(m.selectionDock.cancel())
+		} else {
+			m.selectionDock.activateFocused()
 		}
 	case "enter":
-		var result selecttool.Result
-		var complete bool
-		if m.selectionDock.focus.kind == selectionFocusAnswer && m.selectionDock.request.Mode == selecttool.ModeMultiple {
-			result, complete = m.selectionDock.submit()
-		} else {
-			result, complete = m.selectionDock.activateFocused()
-		}
-		if complete {
+		if m.selectionDock.focus.kind == selectionFocusChat {
+			cmd = m.completeSelection(m.selectionDock.cancel())
+		} else if result, complete := m.selectionDock.submit(); complete {
 			cmd = m.completeSelection(result)
 		}
 	case "esc", "ctrl+c":
