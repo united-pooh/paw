@@ -92,7 +92,7 @@ func selectToolCallTarget(name string, input json.RawMessage) (string, bool) {
 	if !strings.EqualFold(strings.TrimSpace(name), "Select") {
 		return "", false
 	}
-	return strings.Join(strings.Fields(fieldValue(toolInputFields(input), "prompt")), " "), true
+	return "", true
 }
 
 func selectToolResultTarget(name, status, content string) (string, bool) {
@@ -100,7 +100,7 @@ func selectToolResultTarget(name, status, content string) (string, bool) {
 		return "", false
 	}
 	var result selecttool.Result
-	if json.Unmarshal([]byte(content), &result) != nil {
+	if json.Unmarshal([]byte(content), &result) != nil || result.SelectedOptions == nil {
 		return "", false
 	}
 	if result.Cancelled {

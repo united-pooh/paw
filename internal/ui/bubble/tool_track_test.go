@@ -491,3 +491,99 @@ func lineContainingAfter(t *testing.T, lines []string, needle string, start int)
 	t.Fatalf("line containing %q not found in:\n%s", needle, strings.Join(lines, "\n"))
 	return -1
 }
+
+func TestSelectToolTrackCollapsesToOneLineAndExpandsReadableDetail(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	input := json.RawMessage(`{"prompt":"Which animals are mammals?","mode":"multiple","options":[{"id":"whale","label":"Whale","description":"Breathes with lungs"},{"id":"shark","label":"Shark","description":"A fish"}]}`)
+	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{ID: "select-1", Name: "Select", Input: input}))
+	model = next.(appModel)
+	running := ansi.Strip(renderTranscript(model.transcript, 100, true))
+	if strings.Contains(running, "Which animals") || strings.Contains(running, "Whale") {
+		t.Fatalf("running Select leaked question or answer: %q", running)
+	}
+	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{
+		ToolUseID: "select-1",
+		Name:      "Select",
+		Content:   `{"cancelled":false,"selected_options":[{"id":"whale","label":"Whale"},{"id":"custom_option","label":"Platypus"}]}`,
+	}))
+	model = next.(appModel)
+
+	collapsed := ansi.Strip(renderTranscript(model.transcript, 100, true))
+	if len(strings.Split(strings.TrimSpace(collapsed), "\n")) != 1 {
+		t.Fatalf("collapsed Select uses multiple rows:\n%s", collapsed)
+	}
+	if !strings.Contains(collapsed, "selected 2 options") || strings.Contains(collapsed, "Which animals") || strings.Contains(collapsed, "Whale") || strings.Contains(collapsed, "Platypus") {
+		t.Fatalf("collapsed Select=%q", collapsed)
+	}
+
+	if !model.toggleToolExpansion(0) {
+		t.Fatal("Select transaction did not expand")
+	}
+	expanded := ansi.Strip(renderTranscript(model.transcript, 100, true))
+	for _, want := range []string{"Which animals are mammals?", "Whale", "Breathes with lungs", "Platypus", "Custom option"} {
+		if !strings.Contains(expanded, want) {
+			t.Fatalf("expanded Select missing %q:\n%s", want, expanded)
+		}
+	}
+	for _, unwanted := range []string{"Shark", "selected_options", `"cancelled"`} {
+		if strings.Contains(expanded, unwanted) {
+			t.Fatalf("expanded Select leaked %q:\n%s", unwanted, expanded)
+		}
+	}
+}
+
+func TestHistoricalSelectTransactionPreservesInputForReadableExpansion(t *testing.T) {
+	callEntries := transcriptEntriesFromMessage(message.Message{
+		Role: message.RoleAssistant,
+		ToolUses: []message.ToolCall{{
+			ID: "select-1", Name: "Select",
+			Input: json.RawMessage(`{"prompt":"Pick a signal","mode":"single","options":[{"id":"logs","label":"Logs","description":"Application logs"}]}`),
+		}},
+	}, time.Now())
+	if strings.Contains(callEntries[0].toolTarget, "Pick a signal") {
+		t.Fatalf("historical running Select leaked prompt: %#v", callEntries[0])
+	}
+	resultEntries := transcriptEntriesFromMessage(message.Message{
+		Role: message.RoleUser,
+		ToolResults: []message.ToolResult{{
+			ToolUseID: "select-1",
+			Content:   `{"cancelled":false,"selected_options":[{"id":"logs","label":"Logs"}]}`,
+		}},
+	}, time.Now())
+	merged := mergeTranscriptToolEntries(append(callEntries, resultEntries...))
+	if len(merged) != 1 || string(merged[0].toolInput) == "" || merged[0].toolTarget != "selected 1 option" {
+		t.Fatalf("merged=%#v", merged)
+	}
+	collapsed := ansi.Strip(renderTranscript(merged, 100, true))
+	if len(strings.Split(strings.TrimSpace(collapsed), "\n")) != 1 || strings.Contains(collapsed, "Pick a signal") || strings.Contains(collapsed, "Logs") {
+		t.Fatalf("historical collapsed Select=%q", collapsed)
+	}
+	merged[0].toolExpanded = true
+	rendered := ansi.Strip(renderTranscript(merged, 100, true))
+	if !strings.Contains(rendered, "Pick a signal") || !strings.Contains(rendered, "Logs") || !strings.Contains(rendered, "Application logs") {
+		t.Fatalf("historical Select detail missing:\n%s", rendered)
+	}
+}
+
+func TestSelectToolCallInputIsDeepCopiedAndMalformedFallsBackToRawResult(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	input := json.RawMessage(`{"prompt":"Pick","mode":"single","options":[{"id":"a","label":"A"}]}`)
+	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{ID: "select-copy", Name: "Select", Input: input}))
+	model = next.(appModel)
+	input[0] = '['
+	if got := string(model.transcript[0].toolInput); !strings.HasPrefix(got, "{") {
+		t.Fatalf("live tool input was not deep copied: %q", got)
+	}
+
+	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{
+		ToolUseID: "select-copy",
+		Name:      "Select",
+		Content:   `{"cancelled":false,"selected_options":null,"diagnostic":"raw fallback"}`,
+	}))
+	model = next.(appModel)
+	model.transcript[0].toolExpanded = true
+	rendered := ansi.Strip(renderTranscript(model.transcript, 100, true))
+	if !strings.Contains(rendered, "raw fallback") || !strings.Contains(rendered, "selected_options") {
+		t.Fatalf("malformed Select result did not use raw fallback:\n%s", rendered)
+	}
+}

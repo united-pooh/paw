@@ -3,6 +3,7 @@ package bubble
 
 import (
 	"context"
+	"encoding/json"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	"paw/internal/loop"
@@ -58,6 +59,7 @@ type transcriptEntry struct {
 	toolName              string
 	toolStatus            string
 	toolTarget            string
+	toolInput             json.RawMessage
 	toolResult            string
 	toolExpanded          bool
 	toolFocused           bool

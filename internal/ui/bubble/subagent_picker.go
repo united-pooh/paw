@@ -215,6 +215,10 @@ func transcriptEntriesFromMessage(msg message.Message, createdAt time.Time) []tr
 		if name == "" {
 			name = "tool"
 		}
+		target := toolSummaryTarget(name, call.Input)
+		if selectTarget, ok := selectToolCallTarget(name, call.Input); ok {
+			target = selectTarget
+		}
 		entries = append(entries, transcriptEntry{
 			kind:       entryTool,
 			title:      "tool",
@@ -222,7 +226,8 @@ func transcriptEntriesFromMessage(msg message.Message, createdAt time.Time) []tr
 			toolUseID:  strings.TrimSpace(call.ID),
 			toolName:   name,
 			toolStatus: "running",
-			toolTarget: toolSummaryTarget(name, call.Input),
+			toolTarget: target,
+			toolInput:  append(json.RawMessage(nil), call.Input...),
 			createdAt:  createdAt,
 		})
 	}
@@ -285,7 +290,12 @@ func mergeTranscriptToolEntries(entries []transcriptEntry) []transcriptEntry {
 				call.isError = entry.isError
 				call.toolExpanded = entry.isError
 				call.toolResultOnly = false
-				call.body = completeRunningToolCallBody(call.body, entry.toolStatus)
+				call.body = completeToolCallBody(call.toolName, call.body, entry.toolStatus, entry.toolResult)
+				if strings.EqualFold(call.toolName, "Select") {
+					if presentation, ok := parseSelectToolPresentation(call.toolInput, call.toolResult); ok {
+						call.toolTarget = presentation.target
+					}
+				}
 				touchTranscriptEntry(call)
 				delete(pendingByID, entry.toolUseID)
 				continue

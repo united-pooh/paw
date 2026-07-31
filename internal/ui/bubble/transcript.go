@@ -34,6 +34,7 @@ type transcriptRenderCacheKey struct {
 	toolName             string
 	toolStatus           string
 	toolTarget           string
+	toolInput            string
 	toolResult           string
 	toolResultLen        int
 	toolExpanded         bool
@@ -277,6 +278,7 @@ func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMes
 		toolName:      name,
 		toolStatus:    "running",
 		toolTarget:    target,
+		toolInput:     append(json.RawMessage(nil), input...),
 		createdAt:     m.animationNow(),
 		toolStartedAt: m.animationNow(),
 	})
@@ -307,8 +309,10 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 		entry.isError = isError
 		entry.toolStatus = status
 		entry.toolResult = content
-		if summary, ok := selectToolResultTarget(name, status, content); ok {
-			entry.toolTarget = summary
+		if strings.EqualFold(name, "Select") {
+			if presentation, ok := parseSelectToolPresentation(entry.toolInput, content); ok {
+				entry.toolTarget = presentation.target
+			}
 		}
 		entry.toolExpanded = isError
 		entry.toolResultOnly = false
@@ -597,6 +601,7 @@ func transcriptRenderKey(entry transcriptEntry, width int, at time.Time) transcr
 		toolName:             entry.toolName,
 		toolStatus:           entry.toolStatus,
 		toolTarget:           entry.toolTarget,
+		toolInput:            string(entry.toolInput),
 		toolResultLen:        len(entry.toolResult),
 		toolExpanded:         entry.toolExpanded,
 		toolFocused:          entry.toolFocused,
@@ -936,7 +941,13 @@ func renderToolTransactionEntry(entry transcriptEntry, width int, at time.Time) 
 		return borderStyle.Width(contentWidth).Render(summary)
 	}
 
-	result := renderTerminalLinks(sanitizeTerminalText(entry.toolResult))
+	result := entry.toolResult
+	if strings.EqualFold(toolEntryDisplayName(entry), "Select") {
+		if presentation, ok := parseSelectToolPresentation(entry.toolInput, entry.toolResult); ok {
+			result = presentation.detail
+		}
+	}
+	result = renderTerminalLinks(sanitizeTerminalText(result))
 	result = strings.TrimRight(result, "\n")
 	if result == "" {
 		result = "(empty result)"
