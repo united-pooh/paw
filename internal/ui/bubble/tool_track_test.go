@@ -355,6 +355,41 @@ func TestToolTrackMouseHoverHighlightsAndClears(t *testing.T) {
 	}
 }
 
+func TestIdleMouseMotionFilterPassesToolHoverTransitions(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 24
+	model.transcript = []transcriptEntry{{
+		kind:       entryTool,
+		title:      "tool",
+		toolName:   "Read",
+		toolTarget: "README.md",
+		toolStatus: "ok",
+	}}
+	model.relayout()
+	model.refreshViewport()
+	location := transcriptEntryLocations(model.transcript, model.viewport.Width, true, model.animationNow())[0]
+	y := 1 + model.currentLayout().headerHeight + location.startRow - model.viewport.YOffset
+	inside := tea.MouseMsg{X: 5, Y: y, Button: tea.MouseButtonNone, Action: tea.MouseActionMotion}
+	outside := tea.MouseMsg{X: model.width - 1, Y: model.height - 1, Button: tea.MouseButtonNone, Action: tea.MouseActionMotion}
+
+	if got := filterIdleMouseMotion(model, inside); got == nil {
+		t.Fatal("tool enter motion was filtered")
+	}
+	model.toolHoverIndex = 0
+	if got := filterIdleMouseMotion(model, inside); got != nil {
+		t.Fatalf("unchanged tool motion = %#v, want filtered", got)
+	}
+	if got := filterIdleMouseMotion(model, outside); got == nil {
+		t.Fatal("tool leave motion was filtered")
+	}
+	model.toolHoverIndex = -1
+	if got := filterIdleMouseMotion(model, outside); got != nil {
+		t.Fatalf("unchanged outside motion = %#v, want filtered", got)
+	}
+}
+
 func TestToolTrackHoverDoesNotLeakANSISequences(t *testing.T) {
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.ANSI256)

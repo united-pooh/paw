@@ -48,10 +48,7 @@ func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.C
 		return m, true, nil
 	case tea.MouseActionMotion:
 		if !m.selecting {
-			hoverIndex := -1
-			if point, ok := m.transcriptPointForMouse(msg.X, msg.Y); ok {
-				hoverIndex, _ = m.toolIndexAtTranscriptRow(point.row)
-			}
+			hoverIndex := m.toolHoverIndexAtMouse(msg.X, msg.Y)
 			changed := m.setToolHover(hoverIndex)
 			if changed {
 				m.refreshViewportPreservingOffset()
@@ -166,6 +163,15 @@ func (m appModel) transcriptPointForMouse(x, y int) (selectionPoint, bool) {
 		col = 0
 	}
 	return selectionPoint{row: line, col: maxInt(0, col)}, true
+}
+
+func (m appModel) toolHoverIndexAtMouse(x, y int) int {
+	point, ok := m.transcriptPointForMouse(x, y)
+	if !ok {
+		return -1
+	}
+	index, _ := m.toolIndexAtTranscriptRow(point.row)
+	return index
 }
 
 // transcriptContentRow 返回 y 坐标在 transcript 内容区内的行号。

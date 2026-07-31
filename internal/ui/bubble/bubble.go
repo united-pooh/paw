@@ -166,7 +166,9 @@ func filterIdleMouseMotion(model tea.Model, msg tea.Msg) tea.Msg {
 		return msg
 	}
 	inside := m.transcriptNoticeBounds().contains(mouse.X, mouse.Y)
-	if inside != m.newMessageNoticeHovered {
+	noticeHoverChanged := inside != m.newMessageNoticeHovered
+	toolHoverChanged := m.toolHoverIndexAtMouse(mouse.X, mouse.Y) != m.toolHoverIndex
+	if noticeHoverChanged || toolHoverChanged {
 		return msg
 	}
 	return nil

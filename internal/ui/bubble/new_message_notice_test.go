@@ -207,7 +207,7 @@ func TestNoticeHoverClearsWhenPointerLeaves(t *testing.T) {
 	}
 }
 
-func TestIdleMouseMotionFilterOnlyPassesNoticeTransitions(t *testing.T) {
+func TestIdleMouseMotionFilterPassesNoticeTransitions(t *testing.T) {
 	model := newTranscriptScrollTestModel()
 	model.newMessageNoticeCount = 1
 	bounds := model.transcriptNoticeBounds()
