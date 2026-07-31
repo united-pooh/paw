@@ -3920,7 +3920,7 @@ func TestMarkdownCodeBlockWrapsLongLinesWithinWidth(t *testing.T) {
 	rendered := renderMarkdown("```go\nfmt.Println(\"这是很长很长的中文内容\") // abcdefghijklmnopqrstuvwxyz\n```\n", width)
 	stripped := ansi.Strip(rendered)
 
-	for _, want := range []string{"go", "┌", "┐", "└", "┘", "│", "fmt.Println"} {
+	for _, want := range []string{"go", "╭", "╮", "╰", "╯", "│", "fmt.Println"} {
 		if !strings.Contains(stripped, want) {
 			t.Fatalf("rendered code block = %q, want %q", stripped, want)
 		}
@@ -3946,7 +3946,7 @@ func TestMarkdownCodeBlockDoesNotForceFullViewportWidth(t *testing.T) {
 	if got := maxRenderedLineWidth(stripped); got >= width/2 {
 		t.Fatalf("max rendered line width = %d, want compact code block:\n%s", got, stripped)
 	}
-	for _, want := range []string{"┌", "┐", "└", "┘", "│", "{\"ok\": true}"} {
+	for _, want := range []string{"╭", "╮", "╰", "╯", "│", "{\"ok\": true}"} {
 		if !strings.Contains(stripped, want) {
 			t.Fatalf("rendered code block = %q, want %q", stripped, want)
 		}
@@ -3960,7 +3960,7 @@ func TestMarkdownCodeBlockKeepsLanguageLabelOnTopBorder(t *testing.T) {
 	if len(lines) != 3 {
 		t.Fatalf("rendered code block lines = %d, want 3:\n%s", len(lines), rendered)
 	}
-	if !strings.Contains(lines[0], " json ") || !strings.Contains(lines[0], "┌") || !strings.Contains(lines[0], "┐") {
+	if !strings.Contains(lines[0], " json ") || !strings.Contains(lines[0], "╭") || !strings.Contains(lines[0], "╮") {
 		t.Fatalf("top border = %q, want centered json label", lines[0])
 	}
 	if strings.Contains(lines[1], "json") {

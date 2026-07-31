@@ -135,7 +135,7 @@ func renderCodeBlockPanel(code string, width int, label string) string {
 			markdownCodeBlockBorderStyle.Render("│")+body+markdownCodeBlockBorderStyle.Render("│"),
 		)
 	}
-	rendered = append(rendered, renderCodeBlockBorderLine("└", "─", "┘", blockWidth))
+	rendered = append(rendered, renderCodeBlockBorderLine("╰", "─", "╯", blockWidth))
 	return strings.Join(rendered, "\n")
 }
 
@@ -165,12 +165,12 @@ func markdownCodeBlockWidth(code, label string, width int) int {
 func renderCodeBlockTopBorder(label string, width int) string {
 	label = strings.TrimSpace(label)
 	if label == "" || width < 7 {
-		return renderCodeBlockBorderLine("┌", "─", "┐", width)
+		return renderCodeBlockBorderLine("╭", "─", "╮", width)
 	}
 
 	label = truncateDisplayWidth(label, width-6)
 	if label == "" {
-		return renderCodeBlockBorderLine("┌", "─", "┐", width)
+		return renderCodeBlockBorderLine("╭", "─", "╮", width)
 	}
 
 	chipText := " " + label + " "
@@ -178,9 +178,9 @@ func renderCodeBlockTopBorder(label string, width int) string {
 	fillWidth := maxInt(0, width-2-terminalCellWidth(chipText))
 	leftWidth := fillWidth / 2
 	rightWidth := fillWidth - leftWidth
-	return markdownCodeBlockBorderStyle.Render("┌"+strings.Repeat("─", leftWidth)) +
+	return markdownCodeBlockBorderStyle.Render("╭"+strings.Repeat("─", leftWidth)) +
 		chip +
-		markdownCodeBlockBorderStyle.Render(strings.Repeat("─", rightWidth)+"┐")
+		markdownCodeBlockBorderStyle.Render(strings.Repeat("─", rightWidth)+"╮")
 }
 
 func renderCodeBlockBorderLine(left, fill, right string, width int) string {
