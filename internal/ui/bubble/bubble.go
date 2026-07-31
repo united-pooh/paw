@@ -3,6 +3,7 @@ package bubble
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
@@ -108,6 +109,7 @@ type UI struct {
 	sessionStore          SessionStore
 	mcpController         MCPStatusController
 	selectionBroker       *selecttool.Broker
+	sendMsg               func(tea.Msg)
 }
 
 // 确保 UI 满足通用终端 UI 接口。
@@ -247,12 +249,31 @@ func (u *UI) OnThinkingDelta(text string) error {
 
 // OnToolCall 接收工具调用事件，并转发给 Bubble Tea 状态机展示。
 func (u *UI) OnToolCall(event ui.ToolCallEvent) error {
-	return u.send(toolCallMsg(event))
+	return u.send(cloneToolCallMsg(event))
+}
+
+func cloneToolCallMsg(event ui.ToolCallEvent) toolCallMsg {
+	event.Input = append(json.RawMessage(nil), event.Input...)
+	event.FileMutation = cloneFileMutationSnapshot(event.FileMutation)
+	return toolCallMsg(event)
 }
 
 // OnToolResult 接收工具结果事件，并转发给 Bubble Tea 状态机展示。
 func (u *UI) OnToolResult(event ui.ToolResultEvent) error {
-	return u.send(toolResultMsg(event))
+	return u.send(cloneToolResultMsg(event))
+}
+
+func cloneToolResultMsg(event ui.ToolResultEvent) toolResultMsg {
+	event.FileMutation = cloneFileMutationSnapshot(event.FileMutation)
+	return toolResultMsg(event)
+}
+
+func cloneFileMutationSnapshot(snapshot *ui.FileMutationSnapshot) *ui.FileMutationSnapshot {
+	if snapshot == nil {
+		return nil
+	}
+	copied := *snapshot
+	return &copied
 }
 
 // OnDone 通知 TUI 当前 assistant 响应已经结束。
@@ -260,8 +281,8 @@ func (u *UI) OnDone() error {
 	return u.send(doneMsg{})
 }
 
-// ConsumesOldContent 声明 bubble UI 会消费 OldContent 用于 diff 展示。
-func (u *UI) ConsumesOldContent() bool { return true }
+// ConsumesFileMutations opts Bubble into before/after file snapshots.
+func (u *UI) ConsumesFileMutations() bool { return true }
 
 // OnSystemMessage 接收后台任务等系统事件，并转发给 Bubble Tea 状态机展示。
 func (u *UI) OnSystemMessage(event ui.SystemEvent) error {
@@ -272,7 +293,12 @@ func (u *UI) OnSystemMessage(event ui.SystemEvent) error {
 func (u *UI) send(msg tea.Msg) error {
 	u.mu.Lock()
 	program := u.program
+	sendMsg := u.sendMsg
 	u.mu.Unlock()
+	if sendMsg != nil {
+		sendMsg(msg)
+		return nil
+	}
 	if program == nil {
 		return fmt.Errorf("bubble UI program is not running")
 	}

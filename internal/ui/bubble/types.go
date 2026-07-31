@@ -60,6 +60,8 @@ type transcriptEntry struct {
 	toolStatus            string
 	toolTarget            string
 	toolInput             json.RawMessage
+	fileMutationKnown     bool
+	isFileMutation        bool
 	toolResult            string
 	toolExpanded          bool
 	toolFocused           bool

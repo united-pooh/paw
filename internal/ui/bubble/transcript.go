@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"paw/internal/session"
+	"paw/internal/ui"
 )
 
 const transcriptStreamingRefreshInterval = cursorFrameInterval
@@ -261,7 +262,7 @@ func (m *appModel) recordToolCallCitation(toolUseID, name string, input json.Raw
 	m.refreshViewport()
 }
 
-func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMessage, oldContent string) {
+func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMessage, mutationKnown, isMutation bool, mutation *ui.FileMutationSnapshot) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = "tool"
@@ -271,20 +272,22 @@ func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMes
 		target = selectTarget
 	}
 	m.addEntry(transcriptEntry{
-		kind:          entryTool,
-		title:         "tool",
-		body:          formatRunningToolCallBody(name, input, oldContent),
-		toolUseID:     strings.TrimSpace(toolUseID),
-		toolName:      name,
-		toolStatus:    "running",
-		toolTarget:    target,
-		toolInput:     append(json.RawMessage(nil), input...),
-		createdAt:     m.animationNow(),
-		toolStartedAt: m.animationNow(),
+		kind:              entryTool,
+		title:             "tool",
+		body:              formatRunningToolCallBodyWithSnapshot(name, input, "", mutationKnown, isMutation, mutation),
+		toolUseID:         strings.TrimSpace(toolUseID),
+		toolName:          name,
+		toolStatus:        "running",
+		toolTarget:        target,
+		toolInput:         append(json.RawMessage(nil), input...),
+		fileMutationKnown: mutationKnown,
+		isFileMutation:    isMutation,
+		createdAt:         m.animationNow(),
+		toolStartedAt:     m.animationNow(),
 	})
 }
 
-func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string, isError bool) {
+func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string, isError, mutationKnown, isMutation bool, mutation *ui.FileMutationSnapshot) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = "tool"
@@ -305,7 +308,29 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 			continue
 		}
 		entry.title = "tool"
-		entry.body = completeToolCallBody(name, entry.body, status, content)
+		effectiveKnown := mutationKnown || entry.fileMutationKnown
+		effectiveMutation := entry.isFileMutation
+		if mutationKnown {
+			effectiveMutation = isMutation
+		}
+		switch {
+		case effectiveKnown && effectiveMutation && isError:
+			entry.body = completeFileMutationToolCallBody(name, entry.toolInput, "", status, &ui.FileMutationSnapshot{BeforeExists: true, AfterExists: true})
+		case effectiveKnown && effectiveMutation && mutation != nil:
+			entry.body = completeFileMutationToolCallBody(name, entry.toolInput, "", status, mutation)
+		case effectiveKnown && effectiveMutation:
+			entry.body = completeRunningToolCallBody(entry.body, status)
+		case effectiveKnown:
+			entry.body = completeToolCallBody(name, entry.body, status, content)
+		case isFileMutationTool(name) && isError:
+			entry.body = completeFileMutationToolCallBody(name, entry.toolInput, "", status, &ui.FileMutationSnapshot{BeforeExists: true, AfterExists: true})
+		case isFileMutationTool(name):
+			entry.body = completeFileMutationToolCallBody(name, entry.toolInput, "", status, mutation)
+		default:
+			entry.body = completeToolCallBody(name, entry.body, status, content)
+		}
+		entry.fileMutationKnown = effectiveKnown
+		entry.isFileMutation = effectiveMutation
 		entry.isError = isError
 		entry.toolStatus = status
 		entry.toolResult = content

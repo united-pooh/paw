@@ -9,6 +9,7 @@ import (
 
 	"github.com/rivo/uniseg"
 	selecttool "paw/internal/tool/select"
+	"paw/internal/ui"
 )
 
 // summarizeToolContent 将工具输出压缩为单行短预览，避免 transcript 被长结果撑开。
@@ -52,6 +53,10 @@ type toolDisplayField struct {
 }
 
 func formatToolCallBody(name string, input json.RawMessage, oldContent string) string {
+	return formatToolCallBodyResolved(name, input, oldContent, true)
+}
+
+func formatToolCallBodyResolved(name string, input json.RawMessage, oldContent string, allowNameMutation bool) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = "tool"
@@ -63,7 +68,7 @@ func formatToolCallBody(name string, input json.RawMessage, oldContent string) s
 	if strings.EqualFold(name, "Subagent") {
 		return formatSubagentToolCallBody(name, fields)
 	}
-	if isFileMutationTool(name) {
+	if allowNameMutation && isFileMutationTool(name) {
 		return formatFileMutationToolCallBody(name, fields, oldContent)
 	}
 
@@ -158,16 +163,27 @@ func isFileMutationTool(name string) bool {
 }
 
 func formatFileMutationToolCallBody(name string, fields []toolDisplayField, oldContent string) string {
+	return formatFileMutationToolCallBodyWithSnapshot(name, fields, oldContent, nil)
+}
+
+func formatFileMutationToolCallBodyWithSnapshot(name string, fields []toolDisplayField, oldContent string, snapshot *ui.FileMutationSnapshot) string {
 	summary := name
-	if totals, ok := fileMutationChangeCounts(fields, oldContent); ok {
+	preview := ""
+	if lines, totals, ok := snapshotDiff(snapshot); ok {
 		summary = fmt.Sprintf("%s · +%d -%d", name, totals.added, totals.removed)
+		preview = renderDiffPreview(lines)
+	} else if snapshot == nil {
+		if totals, ok := fileMutationChangeCounts(fields, oldContent); ok {
+			summary = fmt.Sprintf("%s · +%d -%d", name, totals.added, totals.removed)
+		}
+		preview = fileMutationDiffPreview(fields, oldContent)
 	}
 	lines := []string{summary}
 	if target := firstNonEmptyField(fields, "file_path", "path"); target != "" {
 		lines = append(lines, target)
 	}
-	if diff := fileMutationDiffPreview(fields, oldContent); diff != "" {
-		lines = append(lines, diff)
+	if preview != "" {
+		lines = append(lines, preview)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -255,11 +271,27 @@ func firstNonEmptyField(fields []toolDisplayField, keys ...string) string {
 }
 
 func formatRunningToolCallBody(name string, input json.RawMessage, oldContent string) string {
-	return setToolCallBodyStatus(formatToolCallBody(name, input, oldContent), "running")
+	return formatRunningToolCallBodyWithSnapshot(name, input, oldContent, false, false, nil)
+}
+
+func formatRunningToolCallBodyWithSnapshot(name string, input json.RawMessage, oldContent string, mutationKnown, isMutation bool, before *ui.FileMutationSnapshot) string {
+	if mutationKnown {
+		if !isMutation || before == nil {
+			return setToolCallBodyStatus(formatToolCallBodyResolved(name, input, oldContent, false), "running")
+		}
+	} else if !isFileMutationTool(name) || before == nil {
+		return setToolCallBodyStatus(formatToolCallBody(name, input, oldContent), "running")
+	}
+	fields := toolInputFields(input)
+	return setToolCallBodyStatus(formatFileMutationToolCallBodyWithSnapshot(name, fields, oldContent, previewSnapshot(name, fields, before)), "running")
 }
 
 func completeRunningToolCallBody(body, status string) string {
 	return setToolCallBodyStatus(body, status)
+}
+
+func completeFileMutationToolCallBody(name string, input json.RawMessage, legacyOldContent, status string, snapshot *ui.FileMutationSnapshot) string {
+	return setToolCallBodyStatus(formatFileMutationToolCallBodyWithSnapshot(name, toolInputFields(input), legacyOldContent, snapshot), status)
 }
 
 func setToolCallBodyStatus(body, status string) string {

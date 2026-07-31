@@ -2,8 +2,11 @@ package bubble
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+
+	"paw/internal/ui"
 )
 
 func editInputJSON(t *testing.T, file, oldStr, newStr string) []byte {
@@ -226,6 +229,117 @@ func TestRenderToolDetailLinesHandlesNumberedDiff(t *testing.T) {
 	// Text content must survive styling (lipgloss escape sequences wrap it).
 	if !strings.Contains(rendered, "return 1") || !strings.Contains(rendered, "return 2") {
 		t.Fatalf("rendered diff lost text: %q", rendered)
+	}
+}
+
+func TestSnapshotDiffShowsNoDiffForEmptyFileCreationOrIdenticalEmptyFile(t *testing.T) {
+	for _, snapshot := range []*ui.FileMutationSnapshot{
+		{AfterExists: true},
+		{BeforeExists: true, AfterExists: true},
+	} {
+		if lines, totals, ok := snapshotDiff(snapshot); ok || lines != nil || totals != (diffTotals{}) {
+			t.Fatalf("snapshot %#v = lines:%#v totals:%+v ok:%v, want no content diff", snapshot, lines, totals, ok)
+		}
+	}
+}
+
+func TestCompletedEmptyFileCreationShowsNoZeroSummaryOrPreview(t *testing.T) {
+	snapshot := &ui.FileMutationSnapshot{AfterExists: true}
+	body := completeFileMutationToolCallBody("Write", writeInputJSON(t, "empty.txt", ""), "", "ok", snapshot)
+	if strings.Contains(body, "+0 -0") || strings.Contains(body, "│") {
+		t.Fatalf("empty-file creation displayed zero diff: %q", body)
+	}
+	if first := firstToolEntryLine(body); first != "Write · ok" {
+		t.Fatalf("first line = %q, want Write · ok", first)
+	}
+}
+
+func TestSnapshotDiffUsesCompleteFilesForReplaceAll(t *testing.T) {
+	before := "head\nold\nmiddle\nold\ntail\n"
+	after := "head\nnew one\nnew two\nmiddle\nnew one\nnew two\ntail\n"
+	lines, totals, ok := snapshotDiff(&ui.FileMutationSnapshot{
+		Before: before, After: after, BeforeExists: true, AfterExists: true,
+	})
+	if !ok || totals.added != 4 || totals.removed != 2 {
+		t.Fatalf("replace-all totals = %+v ok=%v, want +4 -2", totals, ok)
+	}
+	preview := renderDiffPreview(lines)
+	if strings.Count(preview, "- │ old") != 2 || strings.Count(preview, "+ │ new one") != 2 {
+		t.Fatalf("replace-all preview did not include both real replacements: %q", preview)
+	}
+}
+
+func TestPreviewSnapshotAppliesReplaceAllToBeforeFile(t *testing.T) {
+	input := []byte(`{"file_path":"a.txt","old_string":"old","new_string":"new\nline","replace_all":true}`)
+	before := &ui.FileMutationSnapshot{Before: "old\nkeep\nold\n", BeforeExists: true}
+	preview := previewSnapshot("Edit", toolInputFields(input), before)
+	if preview == nil || preview.After != "new\nline\nkeep\nnew\nline\n" {
+		t.Fatalf("preview snapshot = %#v", preview)
+	}
+	_, totals, ok := snapshotDiff(preview)
+	if !ok || totals.added != 4 || totals.removed != 2 {
+		t.Fatalf("preview totals = %+v ok=%v, want +4 -2", totals, ok)
+	}
+}
+
+func TestCompletedIdenticalSnapshotShowsNoZeroSummary(t *testing.T) {
+	snapshot := &ui.FileMutationSnapshot{
+		Before: "same\n", After: "same\n", BeforeExists: true, AfterExists: true,
+	}
+	body := completeFileMutationToolCallBody("Write", writeInputJSON(t, "a.txt", "same\n"), "", "ok", snapshot)
+	if strings.Contains(body, "+0 -0") || strings.Contains(body, "│") {
+		t.Fatalf("identical completed snapshot displayed zero diff: %q", body)
+	}
+	if first := firstToolEntryLine(body); first != "Write · ok" {
+		t.Fatalf("first line = %q, want Write · ok", first)
+	}
+}
+
+func TestSnapshotDiffDistantChangesCollapseAndPreviewLimit(t *testing.T) {
+	beforeLines := make([]string, 80)
+	afterLines := make([]string, 80)
+	for i := range beforeLines {
+		beforeLines[i] = fmt.Sprintf("line-%02d", i+1)
+		afterLines[i] = beforeLines[i]
+	}
+	afterLines[1] = "changed-near-start"
+	afterLines[78] = "changed-near-end"
+	lines, totals, ok := snapshotDiff(&ui.FileMutationSnapshot{
+		Before:       strings.Join(beforeLines, "\n") + "\n",
+		After:        strings.Join(afterLines, "\n") + "\n",
+		BeforeExists: true, AfterExists: true,
+	})
+	if !ok || totals != (diffTotals{added: 2, removed: 2}) {
+		t.Fatalf("totals = %+v ok=%v, want +2 -2", totals, ok)
+	}
+	preview := renderDiffPreview(lines)
+	for _, changed := range []string{"line-02", "changed-near-start", "line-79", "changed-near-end"} {
+		if !strings.Contains(preview, changed) {
+			t.Fatalf("preview missing %q: %q", changed, preview)
+		}
+	}
+	if !strings.Contains(preview, "···") {
+		t.Fatalf("distant unchanged region was not collapsed: %q", preview)
+	}
+
+	manyBefore := make([]string, 40)
+	manyAfter := make([]string, 40)
+	for i := range manyBefore {
+		manyBefore[i] = fmt.Sprintf("old-%02d", i+1)
+		manyAfter[i] = fmt.Sprintf("new-%02d", i+1)
+	}
+	manyLines, _, ok := snapshotDiff(&ui.FileMutationSnapshot{
+		Before:       strings.Join(manyBefore, "\n") + "\n",
+		After:        strings.Join(manyAfter, "\n") + "\n",
+		BeforeExists: true, AfterExists: true,
+	})
+	if !ok {
+		t.Fatal("many-change snapshot unexpectedly had no diff")
+	}
+	limited := strings.Split(renderDiffPreview(manyLines), "\n")
+	const expectedPreviewLines = 32
+	if len(limited) != expectedPreviewLines+1 || !strings.Contains(limited[len(limited)-1], "more diff lines") {
+		t.Fatalf("limited preview has %d lines and tail %q, want %d lines plus truncation marker", len(limited), limited[len(limited)-1], expectedPreviewLines)
 	}
 }
 

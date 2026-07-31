@@ -3,6 +3,8 @@ package bubble
 import (
 	"fmt"
 	"strings"
+
+	"paw/internal/ui"
 )
 
 // DiffLine is one line of a structured line diff.
@@ -156,13 +158,81 @@ func renderDiffPreview(lines []DiffLine) string {
 	return strings.Join(limitDiffPreviewLines(out), "\n")
 }
 
-// fileMutationContents extracts the old/new content pair used to compute a
-// file-mutation diff. Edit-style tools carry old_string/new_string in their
-// input fields; Write carries content and receives oldContent from the runner.
+// fileMutationContents extracts the legacy old/new content pair used when no
+// runner snapshot is available.
 func fileMutationContents(fields []toolDisplayField, oldContent string) (old, new string) {
 	if fc := firstNonEmptyField(fields, "old_content", "old_string", "before"); fc != "" {
 		oldContent = fc
 	}
 	newContent := firstNonEmptyField(fields, "new_content", "new_string", "replacement", "content", "after")
 	return oldContent, newContent
+}
+
+func snapshotDiff(snapshot *ui.FileMutationSnapshot) ([]DiffLine, diffTotals, bool) {
+	if snapshot == nil || (snapshot.BeforeExists == snapshot.AfterExists && snapshot.Before == snapshot.After) {
+		return nil, diffTotals{}, false
+	}
+	lines := structuredDiff(existingContentLines(snapshot.Before, snapshot.BeforeExists), existingContentLines(snapshot.After, snapshot.AfterExists))
+	added, removed := diffCounts(lines)
+	if added == 0 && removed == 0 {
+		return nil, diffTotals{}, false
+	}
+	return lines, diffTotals{added: added, removed: removed}, true
+}
+
+func existingContentLines(content string, exists bool) []string {
+	if !exists || content == "" {
+		return nil
+	}
+	return splitLines(content)
+}
+
+func previewSnapshot(name string, fields []toolDisplayField, before *ui.FileMutationSnapshot) *ui.FileMutationSnapshot {
+	if before == nil {
+		return nil
+	}
+	after, ok := anticipatedFileMutationAfter(name, fields, before.Before)
+	if !ok {
+		return nil
+	}
+	return &ui.FileMutationSnapshot{
+		Before:       before.Before,
+		After:        after,
+		BeforeExists: before.BeforeExists,
+		AfterExists:  true,
+	}
+}
+
+func anticipatedFileMutationAfter(name string, fields []toolDisplayField, before string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "write":
+		return fieldValue(fields, "content"), true
+	case "edit", "update":
+		oldString := fieldValue(fields, "old_string")
+		if oldString == "" {
+			oldString = fieldValue(fields, "old_content")
+		}
+		newString := firstFieldValue(fields, "new_string", "new_content", "replacement")
+		if oldString == "" || !strings.Contains(before, oldString) {
+			return "", false
+		}
+		count := 1
+		if strings.EqualFold(fieldValue(fields, "replace_all"), "true") {
+			count = -1
+		}
+		return strings.Replace(before, oldString, newString, count), true
+	default:
+		return "", false
+	}
+}
+
+func firstFieldValue(fields []toolDisplayField, keys ...string) string {
+	for _, key := range keys {
+		for _, field := range fields {
+			if field.key == key {
+				return field.value
+			}
+		}
+	}
+	return ""
 }

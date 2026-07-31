@@ -208,7 +208,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.finalizeThinkingStream()
 		m.finalizeAssistantStream(transcriptRenderFormatted)
 		m.isGenerating = false
-		m.recordToolCallEntry(msg.ID, msg.Name, json.RawMessage(msg.Input), msg.OldContent)
+		m.recordToolCallEntry(msg.ID, msg.Name, json.RawMessage(msg.Input), msg.FileMutationKnown, msg.IsFileMutation, msg.FileMutation)
 		return m, nil
 	case toolResultMsg:
 		m.finalizeThinkingStream()
@@ -217,7 +217,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.IsError {
 			status = "error"
 		}
-		m.recordToolResultEntry(msg.ToolUseID, msg.Name, status, msg.Content, msg.IsError)
+		m.recordToolResultEntry(msg.ToolUseID, msg.Name, status, msg.Content, msg.IsError, msg.FileMutationKnown, msg.IsFileMutation, msg.FileMutation)
 		return m, nil
 	case systemEventMsg:
 		title := strings.TrimSpace(msg.Title)

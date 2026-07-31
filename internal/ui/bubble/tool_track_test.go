@@ -13,7 +13,12 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
+	"paw/internal/loop"
+	coremcp "paw/internal/mcp"
 	"paw/internal/message"
+	"paw/internal/model"
+	"paw/internal/tool"
+	toolmcp "paw/internal/tool/mcp"
 	"paw/internal/ui"
 )
 
@@ -126,6 +131,227 @@ func TestToolTrackLifecycleAndResultVisibility(t *testing.T) {
 	failed = next.(appModel)
 	if got := failed.transcript[0].toolStatus; got != "error" {
 		t.Fatalf("unfinished tool status = %q, want error", got)
+	}
+}
+
+type bubbleScriptedModel struct {
+	rounds [][]model.StreamEvent
+	calls  int
+}
+
+func (m *bubbleScriptedModel) StreamMessage(context.Context, []message.Message, []model.ToolDefinition) (<-chan model.StreamEvent, error) {
+	ch := make(chan model.StreamEvent, len(m.rounds[m.calls]))
+	for _, event := range m.rounds[m.calls] {
+		ch <- event
+	}
+	m.calls++
+	close(ch)
+	return ch, nil
+}
+
+type bubbleMCPBroker struct{}
+
+func (bubbleMCPBroker) Snapshot() coremcp.Snapshot { return coremcp.Snapshot{} }
+func (bubbleMCPBroker) Call(context.Context, string, json.RawMessage) (string, error) {
+	return "mcp ok", nil
+}
+
+func TestRunnerBubbleSameNameNonMutationEndToEnd(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		tool tool.Tool
+	}{
+		{name: "ordinary", tool: &bubbleSameNameTool{}},
+		{name: "mcp", tool: toolmcp.NewTool(coremcp.ToolSpec{Name: "Edit", MCPName: "Edit", Kind: coremcp.KindTool}, bubbleMCPBroker{})},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			registry := tool.NewRegistry()
+			registry.Register(test.tool)
+			bubbleUI := New()
+			app := newTestModel(&fakeRunner{})
+			bubbleUI.sendMsg = func(msg tea.Msg) {
+				next, _ := app.Update(msg)
+				app = next.(appModel)
+			}
+			streamer := &bubbleScriptedModel{rounds: [][]model.StreamEvent{
+				{{ToolCalls: []message.ToolCall{{ID: "edit-1", Name: "Edit", Input: json.RawMessage(`{"file_path":"a.go","old_string":"return 1","new_string":"return 2"}`)}}, Done: true}},
+				{{Delta: "done", Done: true}},
+			}}
+			runner := loop.NewRunner(streamer, bubbleUI, registry, nil, "")
+			if _, err := runner.RunTurn(context.Background(), "test"); err != nil {
+				t.Fatal(err)
+			}
+			if len(app.transcript) == 0 {
+				t.Fatal("missing Bubble tool transcript entry")
+			}
+			body := app.transcript[0].body
+			if strings.Contains(body, "+1 -1") || strings.Contains(body, "- │") || strings.Contains(body, "+ │") {
+				t.Fatalf("%s same-name non-capability rendered diff end-to-end: %q", test.name, body)
+			}
+		})
+	}
+}
+
+type bubbleSameNameTool struct{}
+
+func (*bubbleSameNameTool) Name() string                                         { return "Edit" }
+func (*bubbleSameNameTool) Description() string                                  { return "same-name non-mutation" }
+func (*bubbleSameNameTool) InputSchema() json.RawMessage                         { return json.RawMessage(`{"type":"object"}`) }
+func (*bubbleSameNameTool) Run(context.Context, json.RawMessage) (string, error) { return "ok", nil }
+
+func TestBubbleToolIngressDeepCopiesMutableEventData(t *testing.T) {
+	var messages []tea.Msg
+	uiInstance := New()
+	uiInstance.sendMsg = func(msg tea.Msg) { messages = append(messages, msg) }
+
+	input := json.RawMessage(`{"file_path":"a.txt","content":"after"}`)
+	callSnapshot := &ui.FileMutationSnapshot{Before: "before", BeforeExists: true}
+	call := ui.ToolCallEvent{ID: "write-1", Name: "Write", Input: input, FileMutationKnown: true, IsFileMutation: true, FileMutation: callSnapshot}
+	if err := uiInstance.OnToolCall(call); err != nil {
+		t.Fatal(err)
+	}
+	input[2] = 'X'
+	callSnapshot.Before = "mutated"
+
+	resultSnapshot := &ui.FileMutationSnapshot{Before: "before", After: "after", BeforeExists: true, AfterExists: true}
+	result := ui.ToolResultEvent{ToolUseID: "write-1", Name: "Write", FileMutationKnown: true, IsFileMutation: true, FileMutation: resultSnapshot}
+	if err := uiInstance.OnToolResult(result); err != nil {
+		t.Fatal(err)
+	}
+	resultSnapshot.After = "mutated"
+
+	callMsg := messages[0].(toolCallMsg)
+	if string(callMsg.Input) != `{"file_path":"a.txt","content":"after"}` || callMsg.FileMutation.Before != "before" {
+		t.Fatalf("queued call changed after ingress: input=%s snapshot=%+v", callMsg.Input, callMsg.FileMutation)
+	}
+	resultMsg := messages[1].(toolResultMsg)
+	if resultMsg.FileMutation.After != "after" {
+		t.Fatalf("queued result changed after ingress: snapshot=%+v", resultMsg.FileMutation)
+	}
+
+	model := newTestModel(&fakeRunner{})
+	next, _ := model.Update(callMsg)
+	model = next.(appModel)
+	if string(model.transcript[0].toolInput) != `{"file_path":"a.txt","content":"after"}` || !strings.Contains(model.transcript[0].body, "before") || !strings.Contains(model.transcript[0].body, "after") {
+		t.Fatalf("transcript entry did not retain copied call data: %#v", model.transcript[0])
+	}
+	next, _ = model.Update(resultMsg)
+	model = next.(appModel)
+	if body := model.transcript[0].body; !strings.Contains(body, "before") || !strings.Contains(body, "after") || strings.Contains(body, "mutated") {
+		t.Fatalf("transcript entry did not retain copied result snapshot: %q", body)
+	}
+}
+
+func TestResolvedSameNameNonMutationToolsDoNotRenderDiff(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		toolID string
+	}{
+		{name: "ordinary", toolID: "ordinary-edit"},
+		{name: "mcp", toolID: "mcp-edit"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			model := newTestModel(&fakeRunner{})
+			input := json.RawMessage(`{"file_path":"a.go","old_string":"return 1","new_string":"return 2"}`)
+			next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{ID: test.toolID, Name: "Edit", Input: input, FileMutationKnown: true, IsFileMutation: false}))
+			model = next.(appModel)
+			next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{ToolUseID: test.toolID, Name: "Edit", Content: "ok", FileMutationKnown: true, IsFileMutation: false}))
+			model = next.(appModel)
+			body := model.transcript[0].body
+			if strings.Contains(body, "+1 -1") || strings.Contains(body, "- │") || strings.Contains(body, "+ │") {
+				t.Fatalf("resolved %s same-name tool rendered mutation diff: %q", test.name, body)
+			}
+		})
+	}
+}
+
+func TestFileMutationResultRebuildsDiffFromCompleteSnapshot(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	input := json.RawMessage(`{"file_path":"a.txt","old_string":"old","new_string":"new\nline","replace_all":true}`)
+	before := &ui.FileMutationSnapshot{Before: "old\nkeep\nold\n", BeforeExists: true}
+	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{ID: "edit-1", Name: "Edit", Input: input, FileMutation: before}))
+	model = next.(appModel)
+	if body := model.transcript[0].body; !strings.Contains(body, "+4 -2") {
+		t.Fatalf("running body = %q, want full-file preview counts", body)
+	}
+
+	after := &ui.FileMutationSnapshot{
+		Before: "old\nkeep\nold\n", After: "new\nline\nkeep\nnew\nline\n",
+		BeforeExists: true, AfterExists: true,
+	}
+	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{ToolUseID: "edit-1", Name: "Edit", Content: "edited", FileMutation: after}))
+	model = next.(appModel)
+	entry := model.transcript[0]
+	if !strings.Contains(entry.body, "Edit · ok · +4 -2") || strings.Count(entry.body, "- │ old") != 2 {
+		t.Fatalf("completed body was not rebuilt from result snapshot: %q", entry.body)
+	}
+}
+
+func TestFileMutationResultWithoutSnapshotFallsBackToLegacyInput(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	input := json.RawMessage(`{"file_path":"a.go","old_string":"return 1","new_string":"return 2"}`)
+	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{ID: "edit-legacy", Name: "Edit", Input: input}))
+	model = next.(appModel)
+	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{ToolUseID: "edit-legacy", Name: "Edit", Content: "edited"}))
+	model = next.(appModel)
+	if body := model.transcript[0].body; !strings.Contains(body, "+1 -1") || !strings.Contains(body, "return 2") {
+		t.Fatalf("legacy result body = %q, want input-derived diff", body)
+	}
+}
+
+func TestResolvedMutationAfterCaptureFailurePreservesCallPreview(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	input := json.RawMessage(`{"file_path":"a.go","old_string":"return 1","new_string":"return 2"}`)
+	before := &ui.FileMutationSnapshot{Before: "return 1\n", BeforeExists: true}
+	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{
+		ID: "edit-capture-fail", Name: "Edit", Input: input,
+		FileMutationKnown: true, IsFileMutation: true, FileMutation: before,
+	}))
+	model = next.(appModel)
+	preview := model.transcript[0].body
+	if !strings.Contains(preview, "+1 -1") || !strings.Contains(preview, "return 2") {
+		t.Fatalf("running preview = %q", preview)
+	}
+	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{
+		ToolUseID: "edit-capture-fail", Name: "Edit", Content: "edited",
+		FileMutationKnown: true, IsFileMutation: true,
+	}))
+	model = next.(appModel)
+	body := model.transcript[0].body
+	if !strings.Contains(body, "Edit · ok · +1 -1") || !strings.Contains(body, "return 1") || !strings.Contains(body, "return 2") {
+		t.Fatalf("successful result without after snapshot replaced call preview: %q", body)
+	}
+}
+
+func TestFailedFileMutationDoesNotShowSuccessDiff(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	input := json.RawMessage(`{"file_path":"a.go","old_string":"return 1","new_string":"return 2"}`)
+	before := &ui.FileMutationSnapshot{Before: "return 1\n", BeforeExists: true}
+	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{ID: "edit-error", Name: "Edit", Input: input, FileMutation: before}))
+	model = next.(appModel)
+	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{ToolUseID: "edit-error", Name: "Edit", Content: "old_string not found", IsError: true}))
+	model = next.(appModel)
+	entry := model.transcript[0]
+	if strings.Contains(entry.body, "+") || strings.Contains(entry.body, "- │") || strings.Contains(entry.body, "return 2") {
+		t.Fatalf("failed mutation retained success diff: %q", entry.body)
+	}
+	if entry.toolResult != "old_string not found" || !entry.toolExpanded {
+		t.Fatalf("failed mutation result state = %#v", entry)
+	}
+}
+
+func TestIdenticalFileMutationSnapshotShowsNoDiff(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	input := json.RawMessage(`{"file_path":"empty.txt","content":""}`)
+	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{ID: "write-identical", Name: "Write", Input: input,
+		FileMutation: &ui.FileMutationSnapshot{BeforeExists: true}}))
+	model = next.(appModel)
+	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{ToolUseID: "write-identical", Name: "Write", Content: "written",
+		FileMutation: &ui.FileMutationSnapshot{BeforeExists: true, AfterExists: true}}))
+	model = next.(appModel)
+	body := model.transcript[0].body
+	if strings.Contains(body, "+0 -0") || strings.Contains(body, "│") {
+		t.Fatalf("identical snapshot displayed diff: %q", body)
 	}
 }
 
