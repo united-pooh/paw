@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"html"
 	"os"
-	"path/filepath"
 	"paw/internal/message"
 	"paw/internal/model"
 	"paw/internal/session"
@@ -163,6 +162,16 @@ func NewRunnerWithInstructionRoot(model ModelStreamer, output ui.UI, registry *t
 		streamMAEnabled:    true,
 		nowFn:              time.Now,
 	}
+}
+
+// WorkspaceRoot returns the workspace root used to resolve tool paths.
+// It is exposed through an optional UI capability so existing Runner
+// implementations and test doubles remain source-compatible.
+func (runner *Runner) WorkspaceRoot() string {
+	if runner == nil {
+		return ""
+	}
+	return runner.workRoot
 }
 
 // ReplaceToolNamespace refreshes a dynamically discovered tool namespace while
@@ -2089,19 +2098,51 @@ func (runner *Runner) failAfterPartialOutput(wroteOutput bool, err error) error 
 
 type toolResultCheckpoint func(callIndex int, result message.ToolResult) error
 
+type resolvedToolCall struct {
+	call         message.ToolCall
+	selectedTool tool.Tool
+	resolveError string
+}
+
+func (runner *Runner) resolveToolCall(call message.ToolCall) resolvedToolCall {
+	resolved := resolvedToolCall{call: call}
+	if runner.registry == nil {
+		resolved.resolveError = "tool registry is nil"
+		return resolved
+	}
+	selected, ok := runner.registry.Get(call.Name)
+	if !ok {
+		resolved.resolveError = fmt.Sprintf("unknown tool: %s", call.Name)
+		return resolved
+	}
+	resolved.selectedTool = selected
+	return resolved
+}
+
 func (runner *Runner) runToolCalls(ctx context.Context, calls []message.ToolCall) (message.Message, error) {
 	return runner.runToolCallsWithCheckpoint(ctx, calls, nil)
 }
 
 func (runner *Runner) runToolCallsWithCheckpoint(ctx context.Context, calls []message.ToolCall, checkpoint toolResultCheckpoint) (message.Message, error) {
+	resolvedCalls := make([]resolvedToolCall, len(calls))
+	resolved := make([]bool, len(calls))
+	resolve := func(index int) resolvedToolCall {
+		if !resolved[index] {
+			resolvedCalls[index] = runner.resolveToolCall(calls[index])
+			resolved[index] = true
+		}
+		return resolvedCalls[index]
+	}
+
 	results := make([]message.ToolResult, 0, len(calls))
 	for start := 0; start < len(calls); {
-		if runner.isToolCallConcurrencySafe(calls[start]) {
+		resolvedStart := resolve(start)
+		if isToolCallConcurrencySafe(resolvedStart) {
 			end := start + 1
-			for end < len(calls) && runner.isToolCallConcurrencySafe(calls[end]) {
+			for end < len(calls) && isToolCallConcurrencySafe(resolve(end)) {
 				end++
 			}
-			batchResults, err := runner.runToolCallBatch(ctx, calls[start:end], start, checkpoint)
+			batchResults, err := runner.runToolCallBatch(ctx, resolvedCalls[start:end], start, checkpoint)
 			if err != nil {
 				return message.Message{}, err
 			}
@@ -2110,7 +2151,7 @@ func (runner *Runner) runToolCallsWithCheckpoint(ctx context.Context, calls []me
 			continue
 		}
 
-		result, err := runner.runToolCallWithCheckpoint(ctx, calls[start], start, checkpoint)
+		result, err := runner.runResolvedToolCallWithCheckpoint(ctx, resolvedStart, start, checkpoint)
 		if err != nil {
 			return message.Message{}, err
 		}
@@ -2120,14 +2161,17 @@ func (runner *Runner) runToolCallsWithCheckpoint(ctx context.Context, calls []me
 	return buildToolResultsMessage(results), nil
 }
 
-func (runner *Runner) runToolCallBatch(ctx context.Context, calls []message.ToolCall, offset int, checkpoint toolResultCheckpoint) ([]message.ToolResult, error) {
-	for _, call := range calls {
-		if err := runner.emitToolCall(call); err != nil {
+func (runner *Runner) runToolCallBatch(ctx context.Context, calls []resolvedToolCall, offset int, checkpoint toolResultCheckpoint) ([]message.ToolResult, error) {
+	captures := make([]*fileMutationCapture, len(calls))
+	for i, resolved := range calls {
+		captures[i] = runner.prepareFileMutation(resolved)
+		if err := runner.emitToolCall(resolved, captures[i]); err != nil {
 			return nil, err
 		}
 	}
 
 	results := make([]message.ToolResult, len(calls))
+	mutations := make([]*ui.FileMutationSnapshot, len(calls))
 	var checkpointMu sync.Mutex
 	var checkpointErr error
 	var wg sync.WaitGroup
@@ -2136,7 +2180,8 @@ func (runner *Runner) runToolCallBatch(ctx context.Context, calls []message.Tool
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results[i] = runner.executeToolCall(ctx, calls[i])
+			results[i] = executeResolvedToolCall(ctx, calls[i])
+			mutations[i] = completeFileMutationCapture(captures[i], results[i])
 			if checkpoint != nil {
 				if err := checkpoint(offset+i, results[i]); err != nil {
 					checkpointMu.Lock()
@@ -2154,7 +2199,7 @@ func (runner *Runner) runToolCallBatch(ctx context.Context, calls []message.Tool
 	}
 
 	for i, result := range results {
-		if err := runner.emitToolResult(calls[i], result); err != nil {
+		if err := runner.emitToolResult(calls[i], result, mutations[i]); err != nil {
 			return nil, err
 		}
 	}
@@ -2166,52 +2211,90 @@ func (runner *Runner) runToolCall(ctx context.Context, call message.ToolCall) (m
 }
 
 func (runner *Runner) runToolCallWithCheckpoint(ctx context.Context, call message.ToolCall, callIndex int, checkpoint toolResultCheckpoint) (message.ToolResult, error) {
-	if err := runner.emitToolCall(call); err != nil {
+	return runner.runResolvedToolCallWithCheckpoint(ctx, runner.resolveToolCall(call), callIndex, checkpoint)
+}
+
+func (runner *Runner) runResolvedToolCallWithCheckpoint(ctx context.Context, resolved resolvedToolCall, callIndex int, checkpoint toolResultCheckpoint) (message.ToolResult, error) {
+	capture := runner.prepareFileMutation(resolved)
+	if err := runner.emitToolCall(resolved, capture); err != nil {
 		return message.ToolResult{}, err
 	}
 
-	result := runner.executeToolCall(ctx, call)
+	result := executeResolvedToolCall(ctx, resolved)
+	mutation := completeFileMutationCapture(capture, result)
 	if checkpoint != nil {
 		if err := checkpoint(callIndex, result); err != nil {
 			return message.ToolResult{}, err
 		}
 	}
-	if err := runner.emitToolResult(call, result); err != nil {
+	if err := runner.emitToolResult(resolved, result, mutation); err != nil {
 		return message.ToolResult{}, err
 	}
 
 	return result, nil
 }
 
-func (runner *Runner) emitToolCall(call message.ToolCall) error {
-	event := ui.ToolCallEvent{
-		ID:    call.ID,
-		Name:  call.Name,
-		Input: append(json.RawMessage(nil), call.Input...),
+type fileMutationCapture struct {
+	target   tool.FileMutationTarget
+	before   string
+	beforeOK bool
+}
+
+func (runner *Runner) prepareFileMutation(resolved resolvedToolCall) *fileMutationCapture {
+	consumer, ok := runner.ui.(ui.FileMutationConsumer)
+	if !ok || !consumer.ConsumesFileMutations() || resolved.selectedTool == nil {
+		return nil
 	}
-	// Write/Edit 工具执行前同步读旧文件，供 UI diff 展示使用。
-	// 只有 UI 声明会消费 OldContent 时才读取，避免 sinkUI 等无显示 UI 浪费 I/O。
-	if consumer, ok := runner.ui.(ui.OldContentConsumer); ok && consumer.ConsumesOldContent() {
-		switch strings.ToLower(strings.TrimSpace(call.Name)) {
-		case "write", "edit", "update":
-			var input struct {
-				FilePath string `json:"file_path"`
-				Path     string `json:"path"`
-			}
-			if err := json.Unmarshal(call.Input, &input); err == nil {
-				path := input.FilePath
-				if path == "" {
-					path = input.Path
-				}
-				if path != "" {
-					if !filepath.IsAbs(path) && runner.workRoot != "" {
-						path = filepath.Join(runner.workRoot, path)
-					}
-					if data, err := os.ReadFile(path); err == nil {
-						event.OldContent = string(data)
-					}
-				}
-			}
+	mutationTool, ok := resolved.selectedTool.(tool.FileMutationTool)
+	if !ok {
+		return nil
+	}
+	target, err := mutationTool.FileMutationTarget(resolved.call.Input)
+	if err != nil {
+		return nil
+	}
+	capture := &fileMutationCapture{target: target}
+	if target.BeforeExists {
+		data, err := os.ReadFile(target.Path)
+		if err != nil {
+			return nil
+		}
+		capture.before = string(data)
+		capture.beforeOK = true
+	}
+	return capture
+}
+
+func completeFileMutationCapture(capture *fileMutationCapture, result message.ToolResult) *ui.FileMutationSnapshot {
+	if capture == nil || result.IsError {
+		return nil
+	}
+	data, err := os.ReadFile(capture.target.Path)
+	if err != nil {
+		return nil
+	}
+	return &ui.FileMutationSnapshot{
+		Before:       capture.before,
+		After:        string(data),
+		BeforeExists: capture.target.BeforeExists && capture.beforeOK,
+		AfterExists:  true,
+	}
+}
+
+func (runner *Runner) emitToolCall(resolved resolvedToolCall, capture *fileMutationCapture) error {
+	call := resolved.call
+	_, isFileMutation := resolved.selectedTool.(tool.FileMutationTool)
+	event := ui.ToolCallEvent{
+		ID:                call.ID,
+		Name:              call.Name,
+		Input:             append(json.RawMessage(nil), call.Input...),
+		FileMutationKnown: resolved.selectedTool != nil,
+		IsFileMutation:    isFileMutation,
+	}
+	if capture != nil {
+		event.FileMutation = &ui.FileMutationSnapshot{
+			Before:       capture.before,
+			BeforeExists: capture.target.BeforeExists && capture.beforeOK,
 		}
 	}
 	runner.recordTraceEvent("tool_call", map[string]any{
@@ -2222,7 +2305,9 @@ func (runner *Runner) emitToolCall(call message.ToolCall) error {
 	return runner.ui.OnToolCall(event)
 }
 
-func (runner *Runner) emitToolResult(call message.ToolCall, result message.ToolResult) error {
+func (runner *Runner) emitToolResult(resolved resolvedToolCall, result message.ToolResult, mutation *ui.FileMutationSnapshot) error {
+	call := resolved.call
+	_, isFileMutation := resolved.selectedTool.(tool.FileMutationTool)
 	runner.recordTraceEvent("tool_result", map[string]any{
 		"tool_use_id": result.ToolUseID,
 		"name":        call.Name,
@@ -2230,31 +2315,30 @@ func (runner *Runner) emitToolResult(call message.ToolCall, result message.ToolR
 		"content":     result.Content,
 	})
 	return runner.ui.OnToolResult(ui.ToolResultEvent{
-		ToolUseID: result.ToolUseID,
-		Name:      call.Name,
-		Content:   result.Content,
-		IsError:   result.IsError,
+		ToolUseID:         result.ToolUseID,
+		Name:              call.Name,
+		Content:           result.Content,
+		IsError:           result.IsError,
+		FileMutationKnown: resolved.selectedTool != nil,
+		IsFileMutation:    isFileMutation,
+		FileMutation:      mutation,
 	})
 }
 
-func (runner *Runner) isToolCallConcurrencySafe(call message.ToolCall) bool {
-	return runner.registry != nil && runner.registry.IsConcurrencySafe(call.Name, call.Input)
+func isToolCallConcurrencySafe(resolved resolvedToolCall) bool {
+	safeTool, ok := resolved.selectedTool.(tool.ConcurrencySafeTool)
+	return ok && safeTool.IsConcurrencySafe(append(json.RawMessage(nil), resolved.call.Input...))
 }
 
-func (runner *Runner) executeToolCall(ctx context.Context, call message.ToolCall) message.ToolResult {
-	if runner.registry == nil {
-		return message.ToolResult{ToolUseID: call.ID, Content: "tool registry is nil", IsError: true}
+func executeResolvedToolCall(ctx context.Context, resolved resolvedToolCall) message.ToolResult {
+	if resolved.resolveError != "" {
+		return message.ToolResult{ToolUseID: resolved.call.ID, Content: resolved.resolveError, IsError: true}
 	}
 
-	selectedTool, ok := runner.registry.Get(call.Name)
-	if !ok {
-		return message.ToolResult{ToolUseID: call.ID, Content: fmt.Sprintf("unknown tool: %s", call.Name), IsError: true}
-	}
-
-	output, err := selectedTool.Run(ctx, call.Input)
+	output, err := resolved.selectedTool.Run(ctx, resolved.call.Input)
 	if err != nil {
-		return message.ToolResult{ToolUseID: call.ID, Content: err.Error(), IsError: true}
+		return message.ToolResult{ToolUseID: resolved.call.ID, Content: err.Error(), IsError: true}
 	}
 
-	return message.ToolResult{ToolUseID: call.ID, Content: output}
+	return message.ToolResult{ToolUseID: resolved.call.ID, Content: output}
 }

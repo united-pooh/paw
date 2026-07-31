@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"paw/internal/message"
@@ -13,6 +14,7 @@ import (
 	"paw/internal/streamma"
 	"paw/internal/tokentracer"
 	"paw/internal/tool"
+	toolfile "paw/internal/tool/file"
 	"paw/internal/ui"
 	"strings"
 	"sync"
@@ -113,6 +115,43 @@ func (u *fakeUI) OnSystemMessage(event ui.SystemEvent) error {
 	return nil
 }
 
+type mutationCaptureUI struct {
+	calls   []ui.ToolCallEvent
+	results []ui.ToolResultEvent
+	onCall  func(ui.ToolCallEvent)
+}
+
+func (*mutationCaptureUI) OnAssistantDelta(string) error { return nil }
+func (u *mutationCaptureUI) OnToolCall(event ui.ToolCallEvent) error {
+	u.calls = append(u.calls, event)
+	if u.onCall != nil {
+		u.onCall(event)
+	}
+	return nil
+}
+func (u *mutationCaptureUI) OnToolResult(event ui.ToolResultEvent) error {
+	u.results = append(u.results, event)
+	return nil
+}
+func (*mutationCaptureUI) OnDone() error               { return nil }
+func (*mutationCaptureUI) ConsumesFileMutations() bool { return true }
+
+type nonMutationUI struct {
+	calls   []ui.ToolCallEvent
+	results []ui.ToolResultEvent
+}
+
+func (*nonMutationUI) OnAssistantDelta(string) error { return nil }
+func (u *nonMutationUI) OnToolCall(event ui.ToolCallEvent) error {
+	u.calls = append(u.calls, event)
+	return nil
+}
+func (u *nonMutationUI) OnToolResult(event ui.ToolResultEvent) error {
+	u.results = append(u.results, event)
+	return nil
+}
+func (*nonMutationUI) OnDone() error { return nil }
+
 func promptTextForTest(messages []message.Message) string {
 	var builder strings.Builder
 	for _, msg := range messages {
@@ -135,6 +174,364 @@ func writeLoopTestSkill(t *testing.T, root, name, body string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestRunnerWorkspaceRoot(t *testing.T) {
+	root := t.TempDir()
+	runner := NewRunnerWithInstructionRoot(nil, nil, nil, nil, "", root)
+
+	if got := runner.WorkspaceRoot(); got != root {
+		t.Fatalf("WorkspaceRoot() = %q, want %q", got, root)
+	}
+}
+
+func TestRunToolCallEmitsCompleteEditMutationSnapshot(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "a.txt")
+	before := "x\nkeep\nx\n"
+	if err := os.WriteFile(path, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	state := toolfile.NewReadStateStore()
+	state.Record(path, []byte(before))
+	registry := tool.NewRegistry()
+	registry.Register(&toolfile.EditTool{Root: root, ReadState: state})
+	capture := &mutationCaptureUI{}
+	runner := &Runner{ui: capture, registry: registry, workRoot: root}
+	tracer := tokentracer.New("mutation-test")
+	runner.SetTokenTracer(tracer)
+
+	result, err := runner.runToolCall(context.Background(), message.ToolCall{
+		ID:    "edit-1",
+		Name:  "Edit",
+		Input: []byte(`{"file_path":"a.txt","old_string":"x","new_string":"y","replace_all":true}`),
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if result.Content != "edited a.txt (2 replacements)" {
+		t.Fatalf("model-visible content = %q", result.Content)
+	}
+	if len(capture.calls) != 1 || capture.calls[0].FileMutation == nil {
+		t.Fatalf("calls = %+v", capture.calls)
+	}
+	if !capture.calls[0].FileMutationKnown || !capture.calls[0].IsFileMutation {
+		t.Fatalf("call mutation metadata = %+v", capture.calls[0])
+	}
+	if got := capture.calls[0].FileMutation; got.Before != before || !got.BeforeExists || got.After != "" || got.AfterExists {
+		t.Fatalf("call snapshot = %+v", got)
+	}
+	if len(capture.results) != 1 || capture.results[0].FileMutation == nil {
+		t.Fatalf("results = %+v", capture.results)
+	}
+	if !capture.results[0].FileMutationKnown || !capture.results[0].IsFileMutation {
+		t.Fatalf("result mutation metadata = %+v", capture.results[0])
+	}
+	snapshot := capture.results[0].FileMutation
+	if snapshot.Before != before || snapshot.After != "y\nkeep\ny\n" || !snapshot.BeforeExists || !snapshot.AfterExists {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+	if strings.Contains(result.Content, before) || strings.Contains(result.Content, snapshot.After) {
+		t.Fatalf("model-visible result leaked file contents: %q", result.Content)
+	}
+	foundTraceResult := false
+	for _, event := range tracer.Snapshot().Events {
+		if event.Type != "tool_result" {
+			continue
+		}
+		foundTraceResult = true
+		if event.Data["content"] != result.Content {
+			t.Fatalf("trace tool_result content = %#v, want %q", event.Data["content"], result.Content)
+		}
+		if _, ok := event.Data["file_mutation"]; ok {
+			t.Fatalf("trace tool_result leaked mutation snapshot: %#v", event.Data)
+		}
+		if strings.Contains(fmt.Sprint(event.Data), before) || strings.Contains(fmt.Sprint(event.Data), snapshot.After) {
+			t.Fatalf("trace tool_result leaked file contents: %#v", event.Data)
+		}
+	}
+	if !foundTraceResult {
+		t.Fatal("missing tool_result trace event")
+	}
+}
+
+func TestRunToolCallWriteEmptySnapshotPreservesExistence(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		createBefore bool
+	}{
+		{name: "new empty file"},
+		{name: "existing empty file", createBefore: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "empty.txt")
+			if test.createBefore {
+				if err := os.WriteFile(path, nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			registry := tool.NewRegistry()
+			registry.Register(&toolfile.WriteTool{Root: root, ReadState: toolfile.NewReadStateStore()})
+			capture := &mutationCaptureUI{}
+			runner := &Runner{ui: capture, registry: registry, workRoot: root}
+
+			result, err := runner.runToolCall(context.Background(), message.ToolCall{
+				ID: "write-empty", Name: "Write", Input: []byte(`{"file_path":"empty.txt","content":""}`),
+			})
+			if err != nil || result.IsError {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			if len(capture.calls) != 1 || capture.calls[0].FileMutation == nil {
+				t.Fatalf("calls = %+v", capture.calls)
+			}
+			if got := capture.calls[0].FileMutation; got.Before != "" || got.BeforeExists != test.createBefore || got.After != "" || got.AfterExists {
+				t.Fatalf("call snapshot = %+v, want BeforeExists=%v and no After", got, test.createBefore)
+			}
+			if len(capture.results) != 1 || capture.results[0].FileMutation == nil {
+				t.Fatalf("results = %+v", capture.results)
+			}
+			if got := capture.results[0].FileMutation; got.Before != "" || got.BeforeExists != test.createBefore || got.After != "" || !got.AfterExists {
+				t.Fatalf("result snapshot = %+v, want BeforeExists=%v AfterExists=true with empty contents", got, test.createBefore)
+			}
+		})
+	}
+}
+
+func TestRunToolCallAbsoluteMutationPathsRespectWorkspace(t *testing.T) {
+	root := t.TempDir()
+	inside := filepath.Join(root, "inside.txt")
+	before := "before\n"
+	if err := os.WriteFile(inside, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	state := toolfile.NewReadStateStore()
+	state.Record(inside, []byte(before))
+	registry := tool.NewRegistry()
+	registry.Register(&toolfile.EditTool{Root: root, ReadState: state})
+
+	t.Run("inside workspace", func(t *testing.T) {
+		capture := &mutationCaptureUI{}
+		runner := &Runner{ui: capture, registry: registry, workRoot: root}
+		input, err := json.Marshal(map[string]any{"file_path": inside, "old_string": "before", "new_string": "after"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := runner.runToolCall(context.Background(), message.ToolCall{ID: "edit-absolute", Name: "Edit", Input: input})
+		if err != nil || result.IsError {
+			t.Fatalf("result=%+v err=%v", result, err)
+		}
+		if len(capture.results) != 1 || capture.results[0].FileMutation == nil {
+			t.Fatalf("results = %+v", capture.results)
+		}
+		if got := capture.results[0].FileMutation; got.Before != before || got.After != "after\n" || !got.BeforeExists || !got.AfterExists {
+			t.Fatalf("absolute-path snapshot = %+v", got)
+		}
+	})
+
+	t.Run("outside workspace", func(t *testing.T) {
+		outside := filepath.Join(t.TempDir(), "outside.txt")
+		if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		capture := &mutationCaptureUI{}
+		runner := &Runner{ui: capture, registry: registry, workRoot: root}
+		input, err := json.Marshal(map[string]any{"file_path": outside, "old_string": "outside", "new_string": "changed"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := runner.runToolCall(context.Background(), message.ToolCall{ID: "edit-outside", Name: "Edit", Input: input})
+		if err != nil {
+			t.Fatalf("runToolCall: %v", err)
+		}
+		if !result.IsError || !strings.Contains(result.Content, "path escapes allowed roots") {
+			t.Fatalf("result = %+v, want workspace escape error", result)
+		}
+		if len(capture.calls) != 1 || capture.calls[0].FileMutation != nil || len(capture.results) != 1 || capture.results[0].FileMutation != nil {
+			t.Fatalf("outside path captured mutation: calls=%+v results=%+v", capture.calls, capture.results)
+		}
+		if !capture.calls[0].FileMutationKnown || !capture.calls[0].IsFileMutation || !capture.results[0].FileMutationKnown || !capture.results[0].IsFileMutation {
+			t.Fatalf("outside path lost resolved capability metadata: calls=%+v results=%+v", capture.calls, capture.results)
+		}
+	})
+}
+
+func TestRunToolCallDoesNotAttachMutationOnEditFailure(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "a.txt")
+	if err := os.WriteFile(path, []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	registry := tool.NewRegistry()
+	registry.Register(&toolfile.EditTool{Root: root, ReadState: toolfile.NewReadStateStore()})
+	capture := &mutationCaptureUI{}
+	runner := &Runner{ui: capture, registry: registry, workRoot: root}
+
+	result, err := runner.runToolCall(context.Background(), message.ToolCall{
+		ID:    "edit-fail",
+		Name:  "Edit",
+		Input: []byte(`{"file_path":"a.txt","old_string":"x","new_string":"y"}`),
+	})
+	if err != nil {
+		t.Fatalf("runToolCall: %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Content, "use Read first") {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(capture.results) != 1 || capture.results[0].FileMutation != nil {
+		t.Fatalf("result events = %+v", capture.results)
+	}
+}
+
+func TestRunToolCallSkipsSnapshotForUIWithoutMutationConsumer(t *testing.T) {
+	root := t.TempDir()
+	registry := tool.NewRegistry()
+	registry.Register(&toolfile.WriteTool{Root: root, ReadState: toolfile.NewReadStateStore()})
+	capture := &nonMutationUI{}
+	runner := &Runner{ui: capture, registry: registry, workRoot: root}
+
+	result, err := runner.runToolCall(context.Background(), message.ToolCall{
+		ID:    "write-1",
+		Name:  "Write",
+		Input: []byte(`{"file_path":"new.txt","content":"hello\n"}`),
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if len(capture.calls) != 1 || capture.calls[0].FileMutation != nil {
+		t.Fatalf("call events = %+v", capture.calls)
+	}
+	if len(capture.results) != 1 || capture.results[0].FileMutation != nil {
+		t.Fatalf("result events = %+v", capture.results)
+	}
+}
+
+func TestRunToolCallDoesNotTreatSameNameToolAsBuiltinMutation(t *testing.T) {
+	registry := tool.NewRegistry()
+	registry.Register(&fakeTool{name: "Edit", output: "fake"})
+	capture := &mutationCaptureUI{}
+	runner := &Runner{ui: capture, registry: registry, workRoot: t.TempDir()}
+
+	result, err := runner.runToolCall(context.Background(), message.ToolCall{
+		ID: "fake", Name: "Edit", Input: []byte(`{"file_path":"outside"}`),
+	})
+	if err != nil || result.Content != "fake" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if len(capture.results) != 1 || capture.results[0].FileMutation != nil {
+		t.Fatalf("same-name non-capability tool got snapshot: %+v", capture.results)
+	}
+	if !capture.calls[0].FileMutationKnown || capture.calls[0].IsFileMutation || !capture.results[0].FileMutationKnown || capture.results[0].IsFileMutation {
+		t.Fatalf("same-name non-capability metadata calls=%+v results=%+v", capture.calls, capture.results)
+	}
+}
+
+func TestRunToolCallDoesNotTreatSameNameMCPToolAsBuiltinMutation(t *testing.T) {
+	registry := tool.NewRegistry()
+	registry.Register(&fakeTool{name: "mcp__Edit", output: "mcp fake"})
+	capture := &mutationCaptureUI{}
+	runner := &Runner{ui: capture, registry: registry, workRoot: t.TempDir()}
+
+	result, err := runner.runToolCall(context.Background(), message.ToolCall{
+		ID: "mcp-fake", Name: "mcp__Edit", Input: []byte(`{"file_path":"outside"}`),
+	})
+	if err != nil || result.Content != "mcp fake" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if len(capture.results) != 1 || capture.results[0].FileMutation != nil {
+		t.Fatalf("same-name MCP tool got snapshot: %+v", capture.results)
+	}
+	if !capture.calls[0].FileMutationKnown || capture.calls[0].IsFileMutation || !capture.results[0].FileMutationKnown || capture.results[0].IsFileMutation {
+		t.Fatalf("same-name MCP metadata calls=%+v results=%+v", capture.calls, capture.results)
+	}
+}
+
+func TestRunToolCallDoesNotInspectMutationTargetForNonConsumer(t *testing.T) {
+	probe := &mutationProbeTool{name: "Probe", path: filepath.Join(t.TempDir(), "missing"), output: "ok"}
+	registry := tool.NewRegistry()
+	registry.Register(probe)
+	capture := &nonMutationUI{}
+	runner := &Runner{ui: capture, registry: registry}
+
+	result, err := runner.runToolCall(context.Background(), message.ToolCall{ID: "probe", Name: "Probe", Input: []byte(`{}`)})
+	if err != nil || result.IsError || result.Content != "ok" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if probe.targetCalls != 0 {
+		t.Fatalf("FileMutationTarget calls = %d, want 0", probe.targetCalls)
+	}
+}
+
+func TestRunToolCallSnapshotFailureDoesNotChangeToolSuccess(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "remove-after-run.txt")
+	if err := os.WriteFile(path, []byte("before"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	probe := &mutationProbeTool{
+		name: "Probe", path: path, beforeExists: true, output: "concise success", removeOnRun: true,
+	}
+	registry := tool.NewRegistry()
+	registry.Register(probe)
+	capture := &mutationCaptureUI{}
+	runner := &Runner{ui: capture, registry: registry}
+
+	result, err := runner.runToolCall(context.Background(), message.ToolCall{ID: "probe", Name: "Probe", Input: []byte(`{}`)})
+	if err != nil || result.IsError || result.Content != "concise success" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if len(capture.results) != 1 || capture.results[0].FileMutation != nil {
+		t.Fatalf("result events = %+v, want successful result without incomplete snapshot", capture.results)
+	}
+	if !capture.results[0].FileMutationKnown || !capture.results[0].IsFileMutation {
+		t.Fatalf("after-capture failure lost mutation metadata: %+v", capture.results[0])
+	}
+}
+
+func TestRunToolCallBindsMutationAndRunToResolvedTool(t *testing.T) {
+	root := t.TempDir()
+	originalPath := filepath.Join(root, "original.txt")
+	replacementPath := filepath.Join(root, "replacement.txt")
+	if err := os.WriteFile(originalPath, []byte("original before"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(replacementPath, []byte("replacement before"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	original := &mutationProbeTool{
+		name: "Probe", path: originalPath, beforeExists: true, output: "original result", writeOnRun: "original after",
+	}
+	replacement := &mutationProbeTool{
+		name: "Probe", path: replacementPath, beforeExists: true, output: "replacement result", writeOnRun: "replacement after",
+	}
+	registry := tool.NewRegistry()
+	registry.Register(original)
+	capture := &mutationCaptureUI{}
+	capture.onCall = func(ui.ToolCallEvent) { registry.Register(replacement) }
+	runner := &Runner{ui: capture, registry: registry}
+
+	result, err := runner.runToolCall(context.Background(), message.ToolCall{ID: "probe", Name: "Probe", Input: []byte(`{}`)})
+	if err != nil || result.IsError || result.Content != "original result" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if original.targetCalls != 1 || original.runCalls != 1 {
+		t.Fatalf("original targetCalls=%d runCalls=%d, want 1/1", original.targetCalls, original.runCalls)
+	}
+	if replacement.targetCalls != 0 || replacement.runCalls != 0 {
+		t.Fatalf("replacement targetCalls=%d runCalls=%d, want 0/0", replacement.targetCalls, replacement.runCalls)
+	}
+	if len(capture.results) != 1 || capture.results[0].FileMutation == nil {
+		t.Fatalf("results = %+v", capture.results)
+	}
+	if got := capture.results[0].FileMutation; got.Before != "original before" || got.After != "original after" || !got.BeforeExists || !got.AfterExists {
+		t.Fatalf("snapshot = %+v, want original tool mutation", got)
+	}
+	data, err := os.ReadFile(replacementPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "replacement before" {
+		t.Fatalf("replacement file = %q, want unchanged", data)
+	}
 }
 
 type fakeStreamMASubagentRunner struct {
@@ -243,12 +640,69 @@ type fakeTool struct {
 	safe   bool
 }
 
+type mutationProbeTool struct {
+	name         string
+	path         string
+	beforeExists bool
+	output       string
+	targetCalls  int
+	runCalls     int
+	removeOnRun  bool
+	writeOnRun   string
+}
+
+func (t *mutationProbeTool) Name() string               { return t.name }
+func (*mutationProbeTool) Description() string          { return "mutation probe" }
+func (*mutationProbeTool) InputSchema() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (t *mutationProbeTool) FileMutationTarget(json.RawMessage) (tool.FileMutationTarget, error) {
+	t.targetCalls++
+	return tool.FileMutationTarget{Path: t.path, BeforeExists: t.beforeExists}, nil
+}
+func (t *mutationProbeTool) Run(context.Context, json.RawMessage) (string, error) {
+	t.runCalls++
+	if t.removeOnRun {
+		if err := os.Remove(t.path); err != nil {
+			return "", err
+		}
+	}
+	if t.writeOnRun != "" {
+		if err := os.WriteFile(t.path, []byte(t.writeOnRun), 0o644); err != nil {
+			return "", err
+		}
+	}
+	return t.output, nil
+}
+
 type blockingTool struct {
 	name    string
 	output  string
 	started chan struct{}
 	release chan struct{}
 	safe    bool
+}
+
+type registryReplacingTool struct {
+	name        string
+	output      string
+	registry    *tool.Registry
+	replacement tool.Tool
+	safetyCalls int
+	runCalls    int
+}
+
+func (t *registryReplacingTool) Name() string      { return t.name }
+func (*registryReplacingTool) Description() string { return "registry replacing tool" }
+func (*registryReplacingTool) InputSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object"}`)
+}
+func (t *registryReplacingTool) IsConcurrencySafe(json.RawMessage) bool {
+	t.safetyCalls++
+	t.registry.Register(t.replacement)
+	return false
+}
+func (t *registryReplacingTool) Run(context.Context, json.RawMessage) (string, error) {
+	t.runCalls++
+	return t.output, nil
 }
 
 type fakeStore struct {
@@ -2233,7 +2687,7 @@ func TestToolCallsSerializeMultipleBarriers(t *testing.T) {
 	runner := NewRunner(&fakeModel{}, &fakeUI{}, registry, nil, "")
 	calls := []message.ToolCall{{ID: "1", Name: "Select-1", Input: json.RawMessage(`{}`)}, {ID: "2", Name: "Select-2", Input: json.RawMessage(`{}`)}, {ID: "3", Name: "safe-after", Input: json.RawMessage(`{}`)}}
 	done := make(chan error, 1)
-	go func() { _, err := runner.runToolCalls(context.Background(), calls); done <- err }()
+	go func() { _, e := runner.runToolCalls(context.Background(), calls); done <- e }()
 	if got := <-started; got != "Select-1" {
 		t.Fatal(got)
 	}
@@ -2245,7 +2699,31 @@ func TestToolCallsSerializeMultipleBarriers(t *testing.T) {
 	if got := <-started; got != "safe-after" {
 		t.Fatal(got)
 	}
-	if err := <-done; err != nil {
-		t.Fatal(err)
+	if e := <-done; e != nil {
+		t.Fatal(e)
+	}
+}
+
+func TestToolCallConcurrencySafetyAndRunUseResolvedTool(t *testing.T) {
+	registry := tool.NewRegistry()
+	replacement := &fakeTool{name: "Swap", output: "replacement result", safe: true}
+	original := &registryReplacingTool{
+		name: "Swap", output: "original result", registry: registry, replacement: replacement,
+	}
+	registry.Register(original)
+	runner := NewRunner(&fakeModel{}, &fakeUI{}, registry, nil, "")
+
+	results, err := runner.runToolCalls(context.Background(), []message.ToolCall{{ID: "swap", Name: "Swap", Input: json.RawMessage(`{}`)}})
+	if err != nil {
+		t.Fatalf("runToolCalls: %v", err)
+	}
+	if results.ToolResult == nil || results.ToolResult.Content != "original result" || results.ToolResult.IsError {
+		t.Fatalf("result = %+v", results.ToolResult)
+	}
+	if original.safetyCalls != 1 || original.runCalls != 1 {
+		t.Fatalf("original safetyCalls=%d runCalls=%d, want 1/1", original.safetyCalls, original.runCalls)
+	}
+	if replacement.input != nil {
+		t.Fatalf("replacement ran with input %s", replacement.input)
 	}
 }
