@@ -5,6 +5,60 @@ import (
 	"testing"
 )
 
+func TestReadStateStoreVerifyRequiredRejectsMissingBaseline(t *testing.T) {
+	s := NewReadStateStore()
+	err := s.VerifyRequired("core/utils.py", []byte("current"))
+	if err == nil {
+		t.Fatal("VerifyRequired without prior Read = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "file must be read before editing: core/utils.py; use Read first") {
+		t.Fatalf("err = %q", err)
+	}
+}
+
+func TestReadStateStoreVerifyRequiredAcceptsMatchingBaseline(t *testing.T) {
+	s := NewReadStateStore()
+	s.Record("core/utils.py", []byte("current"))
+	if err := s.VerifyRequired("core/utils.py", []byte("current")); err != nil {
+		t.Fatalf("VerifyRequired = %v", err)
+	}
+}
+
+func TestReadStateStoreVerifyRequiredRejectsChangedContent(t *testing.T) {
+	s := NewReadStateStore()
+	s.Record("core/utils.py", []byte("before"))
+	err := s.VerifyRequired("core/utils.py", []byte("after"))
+	if err == nil || !strings.Contains(err.Error(), "modified since last read") {
+		t.Fatalf("err = %v, want stale-read error", err)
+	}
+}
+
+func TestReadStateStoreStrictAndLenientVerificationAreIndependent(t *testing.T) {
+	s := NewReadStateStore()
+	if err := s.Verify("unread.txt", []byte("x")); err != nil {
+		t.Fatalf("lenient Verify = %v, want nil", err)
+	}
+	if err := s.VerifyRequired("unread.txt", []byte("x")); err == nil {
+		t.Fatal("strict VerifyRequired = nil, want error")
+	}
+}
+
+func TestReadStateStoreVerifyRequiredKeepsPathsIsolated(t *testing.T) {
+	s := NewReadStateStore()
+	s.Record("read.txt", []byte("same"))
+	if err := s.VerifyRequired("unread.txt", []byte("same")); err == nil {
+		t.Fatal("VerifyRequired accepted a baseline recorded for another path")
+	}
+}
+
+func TestReadStateStoreVerifyRequiredRejectsNilStore(t *testing.T) {
+	var s *ReadStateStore
+	err := s.VerifyRequired("nil.txt", []byte("current"))
+	if err == nil || !strings.Contains(err.Error(), "file must be read before editing: nil.txt; use Read first") {
+		t.Fatalf("err = %v, want missing-baseline error", err)
+	}
+}
+
 func TestReadStateStoreVerifyNoOpWithoutPriorRead(t *testing.T) {
 	s := NewReadStateStore()
 	// No prior Record: Verify must be lenient (no error).
@@ -56,6 +110,7 @@ func TestReadStateStoreVerifyConcurrentSafe(t *testing.T) {
 		defer close(done)
 		for i := 0; i < 200; i++ {
 			_ = s.Verify("/p", []byte("x"))
+			_ = s.VerifyRequired("/p", []byte("x"))
 		}
 	}()
 	for i := 0; i < 200; i++ {

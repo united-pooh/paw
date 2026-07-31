@@ -36,15 +36,34 @@ func (s *ReadStateStore) Record(path string, content []byte) {
 // Verify returns an error if a prior Read recorded a hash for path and
 // current no longer matches it. Returns nil when no prior Read was recorded.
 func (s *ReadStateStore) Verify(path string, current []byte) error {
-	if s == nil {
-		return nil
-	}
-	s.mu.Lock()
-	recorded, ok := s.states[path]
-	s.mu.Unlock()
+	recorded, ok := s.recordedHash(path)
 	if !ok {
 		return nil
 	}
+	return verifyRecordedHash(path, recorded, current)
+}
+
+// VerifyRequired returns an error unless a prior Read recorded a hash for path.
+// When a baseline exists, current must still match it.
+func (s *ReadStateStore) VerifyRequired(path string, current []byte) error {
+	recorded, ok := s.recordedHash(path)
+	if !ok {
+		return fmt.Errorf("file must be read before editing: %s; use Read first", path)
+	}
+	return verifyRecordedHash(path, recorded, current)
+}
+
+func (s *ReadStateStore) recordedHash(path string) (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	recorded, ok := s.states[path]
+	return recorded, ok
+}
+
+func verifyRecordedHash(path, recorded string, current []byte) error {
 	if got := contentHash(current); got != recorded {
 		return fmt.Errorf("file has been modified since last read: %s; read it again before editing", path)
 	}
