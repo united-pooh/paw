@@ -27,6 +27,36 @@ func TestDecodeInputDefaultsMultipleBounds(t *testing.T) {
 	}
 }
 
+func TestDecodeInputAcceptsSerializedOptionalDefaults(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{
+			name: "single with empty multiple defaults",
+			raw:  `{"prompt":"Pick","mode":"single","options":[{"id":"a","label":"A"}],"initial_selected_id":"a","initial_selected_ids":[],"min_select":1,"max_select":1}`,
+			want: []string{"a"},
+		},
+		{
+			name: "multiple with empty single default",
+			raw:  `{"prompt":"Pick","mode":"multiple","options":[{"id":"a","label":"A"}],"initial_selected_id":"","initial_selected_ids":[],"min_select":0,"max_select":1}`,
+			want: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := decodeInput(json.RawMessage(tt.raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got.InitialSelectedIDs, tt.want) {
+				t.Fatalf("selected=%v want=%v", got.InitialSelectedIDs, tt.want)
+			}
+		})
+	}
+}
+
 func TestRequestClone(t *testing.T) {
 	r := Request{Options: []Option{{ID: "a"}}, InitialSelectedIDs: []string{"a"}}
 	c := r.Clone()
@@ -61,10 +91,11 @@ func TestDecodeInputRejectsInvalidRequests(t *testing.T) {
 		{"empty id", `{"prompt":"Pick","mode":"single","options":[{"id":" ","label":"A"}]}`, "options[0].id is required"},
 		{"empty label", `{"prompt":"Pick","mode":"single","options":[{"id":"a","label":" "}]}`, "options[0].label is required"},
 		{"duplicate id", `{"prompt":"Pick","mode":"single","options":[{"id":"a","label":"A"},{"id":"a","label":"Again"}]}`, "duplicate option id: a"},
-		{"single initial ids", `{"prompt":"Pick","mode":"single","options":[{"id":"a","label":"A"}],"initial_selected_ids":["a"]}`, "initial_selected_ids is only valid in multiple mode"},
-		{"single min", `{"prompt":"Pick","mode":"single","options":[{"id":"a","label":"A"}],"min_select":0}`, "min_select is only valid in multiple mode"},
-		{"single max", `{"prompt":"Pick","mode":"single","options":[{"id":"a","label":"A"}],"max_select":1}`, "max_select is only valid in multiple mode"},
-		{"multiple initial", `{"prompt":"Pick","mode":"multiple","options":[{"id":"a","label":"A"}],"initial_selected_id":"a"}`, "initial_selected_id is only valid in single mode"},
+		{"single too many initial ids", `{"prompt":"Pick","mode":"single","options":[{"id":"a","label":"A"},{"id":"b","label":"B"}],"initial_selected_ids":["a","b"]}`, "initial_selected_ids must contain at most one id in single mode"},
+		{"single bad min", `{"prompt":"Pick","mode":"single","options":[{"id":"a","label":"A"}],"min_select":0}`, "min_select must be 1 in single mode"},
+		{"single bad max", `{"prompt":"Pick","mode":"single","options":[{"id":"a","label":"A"}],"max_select":0}`, "max_select must be 1 in single mode"},
+		{"conflicting single aliases", `{"prompt":"Pick","mode":"single","options":[{"id":"a","label":"A"},{"id":"b","label":"B"}],"initial_selected_id":"a","initial_selected_ids":["b"]}`, "initial_selected_id conflicts with initial_selected_ids"},
+		{"conflicting multiple aliases", `{"prompt":"Pick","mode":"multiple","options":[{"id":"a","label":"A"},{"id":"b","label":"B"}],"initial_selected_id":"a","initial_selected_ids":["b"]}`, "initial_selected_id conflicts with initial_selected_ids"},
 		{"unknown single", `{"prompt":"Pick","mode":"single","options":[{"id":"a","label":"A"}],"initial_selected_id":"missing"}`, "initial_selected_id references unknown option id: missing"},
 		{"unknown multiple", `{"prompt":"Pick","mode":"multiple","options":[{"id":"a","label":"A"}],"initial_selected_ids":["missing"]}`, "initial_selected_ids references unknown option id: missing"},
 		{"duplicate selected", `{"prompt":"Pick","mode":"multiple","options":[{"id":"a","label":"A"}],"initial_selected_ids":["a","a"]}`, "duplicate initial selected id: a"},

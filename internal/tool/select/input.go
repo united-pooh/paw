@@ -54,28 +54,47 @@ func decodeInput(raw json.RawMessage) (Request, error) {
 
 	request := Request{Prompt: in.Prompt, Mode: in.Mode, Options: options}
 	if in.Mode == ModeSingle {
-		if in.InitialSelectedIDs != nil {
-			return Request{}, fmt.Errorf("initial_selected_ids is only valid in multiple mode")
+		// Tool-call generators may serialize every optional schema property. Treat
+		// empty multiple-mode values as omitted instead of rejecting an otherwise
+		// valid single-choice request.
+		if in.InitialSelectedIDs != nil && len(*in.InitialSelectedIDs) > 1 {
+			return Request{}, fmt.Errorf("initial_selected_ids must contain at most one id in single mode")
 		}
-		if in.MinSelect != nil {
-			return Request{}, fmt.Errorf("min_select is only valid in multiple mode")
+		if in.MinSelect != nil && *in.MinSelect != 1 {
+			return Request{}, fmt.Errorf("min_select must be 1 in single mode")
 		}
-		if in.MaxSelect != nil {
-			return Request{}, fmt.Errorf("max_select is only valid in multiple mode")
+		if in.MaxSelect != nil && *in.MaxSelect != 1 {
+			return Request{}, fmt.Errorf("max_select must be 1 in single mode")
 		}
 		request.MinSelect, request.MaxSelect = 1, 1
+
+		initialID := ""
 		if in.InitialSelectedID != nil {
-			id := strings.TrimSpace(*in.InitialSelectedID)
-			if _, ok := ids[id]; !ok {
-				return Request{}, fmt.Errorf("initial_selected_id references unknown option id: %s", id)
+			initialID = strings.TrimSpace(*in.InitialSelectedID)
+		}
+		if in.InitialSelectedIDs != nil && len(*in.InitialSelectedIDs) == 1 {
+			listID := strings.TrimSpace((*in.InitialSelectedIDs)[0])
+			if initialID != "" && listID != "" && initialID != listID {
+				return Request{}, fmt.Errorf("initial_selected_id conflicts with initial_selected_ids")
 			}
-			request.InitialSelectedIDs = []string{id}
+			if initialID == "" {
+				initialID = listID
+			}
+		}
+		if initialID != "" {
+			if _, ok := ids[initialID]; !ok {
+				return Request{}, fmt.Errorf("initial_selected_id references unknown option id: %s", initialID)
+			}
+			request.InitialSelectedIDs = []string{initialID}
 		}
 		return request, nil
 	}
 
+	// Likewise, an empty scalar is just an unused single-mode field. A non-empty
+	// scalar is accepted as a convenient one-item alias when the list is empty.
+	initialID := ""
 	if in.InitialSelectedID != nil {
-		return Request{}, fmt.Errorf("initial_selected_id is only valid in single mode")
+		initialID = strings.TrimSpace(*in.InitialSelectedID)
 	}
 	request.MinSelect = 0
 	request.MaxSelect = len(options)
@@ -95,9 +114,12 @@ func decodeInput(raw json.RawMessage) (Request, error) {
 		return Request{}, fmt.Errorf("min_select must not exceed max_select")
 	}
 	if in.InitialSelectedIDs != nil {
-		seen := make(map[string]struct{}, len(*in.InitialSelectedIDs))
+		seen := make(map[string]struct{}, len(*in.InitialSelectedIDs)+1)
 		for _, rawID := range *in.InitialSelectedIDs {
 			id := strings.TrimSpace(rawID)
+			if id == "" {
+				continue
+			}
 			if _, duplicate := seen[id]; duplicate {
 				return Request{}, fmt.Errorf("duplicate initial selected id: %s", id)
 			}
@@ -107,6 +129,22 @@ func decodeInput(raw json.RawMessage) (Request, error) {
 			seen[id] = struct{}{}
 			request.InitialSelectedIDs = append(request.InitialSelectedIDs, id)
 		}
+		if initialID != "" {
+			if _, duplicate := seen[initialID]; !duplicate {
+				if len(request.InitialSelectedIDs) != 0 {
+					return Request{}, fmt.Errorf("initial_selected_id conflicts with initial_selected_ids")
+				}
+				if _, ok := ids[initialID]; !ok {
+					return Request{}, fmt.Errorf("initial_selected_id references unknown option id: %s", initialID)
+				}
+				request.InitialSelectedIDs = append(request.InitialSelectedIDs, initialID)
+			}
+		}
+	} else if initialID != "" {
+		if _, ok := ids[initialID]; !ok {
+			return Request{}, fmt.Errorf("initial_selected_id references unknown option id: %s", initialID)
+		}
+		request.InitialSelectedIDs = append(request.InitialSelectedIDs, initialID)
 	}
 	if len(request.InitialSelectedIDs) > request.MaxSelect {
 		return Request{}, fmt.Errorf("initial selection count %d exceeds max_select %d", len(request.InitialSelectedIDs), request.MaxSelect)
