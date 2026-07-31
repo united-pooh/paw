@@ -29,16 +29,23 @@ func (r Request) Clone() Request {
 	return r
 }
 
+const CustomOptionID = "custom_option"
+
+type SelectedOption struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
 type Result struct {
-	Cancelled   bool     `json:"cancelled"`
-	SelectedIDs []string `json:"selected_ids"`
+	Cancelled       bool             `json:"cancelled"`
+	SelectedOptions []SelectedOption `json:"selected_options"`
 }
 
 func (r Result) Clone() Result {
-	if r.SelectedIDs == nil {
-		r.SelectedIDs = nil
+	if r.SelectedOptions == nil {
+		r.SelectedOptions = nil
 	} else {
-		r.SelectedIDs = append([]string{}, r.SelectedIDs...)
+		r.SelectedOptions = append([]SelectedOption{}, r.SelectedOptions...)
 	}
 	return r
 }

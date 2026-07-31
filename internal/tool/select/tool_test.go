@@ -27,11 +27,17 @@ func TestToolRunReturnsStableSubmittedJSON(t *testing.T) {
 	x := New(b)
 	go func() {
 		e, _ := b.NextEvent(context.Background())
-		b.Complete(e.Request.ID, Result{SelectedIDs: []string{"metrics", "logs"}})
+		b.Complete(e.Request.ID, Result{SelectedOptions: []SelectedOption{
+			{ID: "metrics", Label: "Metrics"},
+			{ID: "logs", Label: "Logs"},
+		}})
 	}()
-	got, e := x.Run(context.Background(), json.RawMessage(`{"prompt":"Choose","mode":"multiple","options":[{"id":"logs","label":"Logs"},{"id":"metrics","label":"Metrics"}]}`))
-	if e != nil || got != `{"cancelled":false,"selected_ids":["metrics","logs"]}` {
-		t.Fatalf("got=%s err=%v", got, e)
+	got, err := x.Run(context.Background(), json.RawMessage(`{"prompt":"Choose","mode":"multiple","options":[{"id":"logs","label":"Logs"},{"id":"metrics","label":"Metrics"}]}`))
+	if err != nil || got != `{"cancelled":false,"selected_options":[{"id":"metrics","label":"Metrics"},{"id":"logs","label":"Logs"}]}` {
+		t.Fatalf("got=%s err=%v", got, err)
+	}
+	if strings.Contains(got, "selected_ids") {
+		t.Fatalf("legacy field leaked: %s", got)
 	}
 }
 func TestToolRunReturnsCancellationJSON(t *testing.T) {
@@ -39,11 +45,11 @@ func TestToolRunReturnsCancellationJSON(t *testing.T) {
 	x := New(b)
 	go func() {
 		e, _ := b.NextEvent(context.Background())
-		b.Complete(e.Request.ID, Result{Cancelled: true, SelectedIDs: []string{}})
+		b.Complete(e.Request.ID, Result{Cancelled: true})
 	}()
-	got, e := x.Run(context.Background(), validSingleInput())
-	if e != nil || got != `{"cancelled":true,"selected_ids":[]}` {
-		t.Fatalf("got=%s err=%v", got, e)
+	got, err := x.Run(context.Background(), validSingleInput())
+	if err != nil || got != `{"cancelled":true,"selected_options":[]}` {
+		t.Fatalf("got=%s err=%v", got, err)
 	}
 }
 func TestToolRunDoesNotPublishInvalidInput(t *testing.T) {

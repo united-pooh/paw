@@ -27,13 +27,13 @@ func TestBrokerPublishesAndCompletesRequest(t *testing.T) {
 	if event.Kind != EventRequest || event.Request.ID == "" {
 		t.Fatalf("event=%#v", event)
 	}
-	if !b.Complete(event.Request.ID, Result{SelectedIDs: []string{"a"}}) {
+	if !b.Complete(event.Request.ID, Result{SelectedOptions: []SelectedOption{{ID: "a", Label: "A"}}}) {
 		t.Fatal("complete false")
 	}
 	if err := <-errCh; err != nil {
 		t.Fatal(err)
 	}
-	if got := <-resultCh; !reflect.DeepEqual(got.SelectedIDs, []string{"a"}) {
+	if got := <-resultCh; !reflect.DeepEqual(got.SelectedOptions, []SelectedOption{{ID: "a", Label: "A"}}) {
 		t.Fatalf("got=%#v", got)
 	}
 }
@@ -54,7 +54,7 @@ func TestBrokerQueuesRequestsFIFO(t *testing.T) {
 	if _, e = b.NextEvent(short); !errors.Is(e, context.DeadlineExceeded) {
 		t.Fatalf("event before complete: %v", e)
 	}
-	b.Complete(first.Request.ID, Result{SelectedIDs: []string{"a"}})
+	b.Complete(first.Request.ID, Result{SelectedOptions: []SelectedOption{{ID: "a", Label: "A"}}})
 	second, e := b.NextEvent(ctx)
 	if e != nil {
 		t.Fatal(e)
@@ -62,7 +62,7 @@ func TestBrokerQueuesRequestsFIFO(t *testing.T) {
 	if second.Request.Prompt != "Second" || second.Request.ID == first.Request.ID {
 		t.Fatalf("second=%#v", second)
 	}
-	b.Complete(second.Request.ID, Result{SelectedIDs: []string{"a"}})
+	b.Complete(second.Request.ID, Result{SelectedOptions: []SelectedOption{{ID: "a", Label: "A"}}})
 	for range 2 {
 		if e := <-errs; e != nil {
 			t.Fatal(e)

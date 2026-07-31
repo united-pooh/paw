@@ -32,8 +32,8 @@ func (t *Tool) Run(ctx context.Context, raw json.RawMessage) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if result.SelectedIDs == nil {
-		result.SelectedIDs = []string{}
+	if result.SelectedOptions == nil {
+		result.SelectedOptions = []SelectedOption{}
 	}
 	data, err := json.Marshal(result)
 	if err != nil {

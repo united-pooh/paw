@@ -40,6 +40,9 @@ func decodeInput(raw json.RawMessage) (Request, error) {
 		if options[i].ID == "" {
 			return Request{}, fmt.Errorf("options[%d].id is required", i)
 		}
+		if options[i].ID == CustomOptionID {
+			return Request{}, fmt.Errorf("option id %q is reserved", CustomOptionID)
+		}
 		if options[i].Label == "" {
 			return Request{}, fmt.Errorf("options[%d].label is required", i)
 		}

@@ -37,6 +37,22 @@ func TestRequestClone(t *testing.T) {
 	}
 }
 
+func TestResultCloneCopiesSelectedOptions(t *testing.T) {
+	original := Result{SelectedOptions: []SelectedOption{{ID: "logs", Label: "Logs"}}}
+	cloned := original.Clone()
+	cloned.SelectedOptions[0].Label = "Changed"
+	if original.SelectedOptions[0].Label != "Logs" {
+		t.Fatalf("clone shares selected options: %#v", original)
+	}
+}
+
+func TestDecodeInputRejectsReservedCustomOptionID(t *testing.T) {
+	_, err := decodeInput(json.RawMessage(`{"prompt":"Pick","mode":"single","options":[{"id":"custom_option","label":"Other"}]}`))
+	if err == nil || err.Error() != `option id "custom_option" is reserved` {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 func TestDecodeInputRejectsInvalidRequests(t *testing.T) {
 	tests := []struct{ name, raw, want string }{
 		{"empty prompt", `{"prompt":" ","mode":"single","options":[{"id":"a","label":"A"}]}`, "prompt is required"},
