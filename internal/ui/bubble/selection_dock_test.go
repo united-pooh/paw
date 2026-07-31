@@ -318,6 +318,125 @@ func TestSelectionDockTinyTerminalDoesNotOverflow(t *testing.T) {
 	}
 }
 
+func TestSelectionDockSingleCustomOptionSubmitsImmediately(t *testing.T) {
+	d := newSelectionDock(selectionRequest("x", selecttool.ModeSingle))
+	d.focus = selectionFocus{kind: selectionFocusCustom}
+	if result, complete := d.activateFocused(); complete || len(result.SelectedOptions) != 0 || !d.editingCustom {
+		t.Fatalf("activation result=%#v complete=%v dock=%#v", result, complete, d)
+	}
+	d.customInput.SetValue("  Custom answer  ")
+	result, complete := d.confirmCustom()
+	want := []selecttool.SelectedOption{{ID: selecttool.CustomOptionID, Label: "Custom answer"}}
+	if !complete || !reflect.DeepEqual(result.SelectedOptions, want) {
+		t.Fatalf("result=%#v complete=%v", result, complete)
+	}
+}
+
+func TestSelectionDockMultipleCustomOptionAddsAndEditsOneAnswer(t *testing.T) {
+	d := newSelectionDock(selectionRequest("x", selecttool.ModeMultiple))
+	d.selected["logs"] = true
+	d.focus = selectionFocus{kind: selectionFocusCustom}
+	d.activateFocused()
+	d.customInput.SetValue("First custom")
+	if result, complete := d.confirmCustom(); complete || len(result.SelectedOptions) != 0 {
+		t.Fatalf("unexpected completion: %#v %v", result, complete)
+	}
+	if d.customLabel != "First custom" || d.selectedCount() != 2 {
+		t.Fatalf("dock=%#v", d)
+	}
+	d.focus = selectionFocus{kind: selectionFocusCustom}
+	d.activateFocused()
+	if d.customInput.Value() != "First custom" {
+		t.Fatalf("prefill=%q", d.customInput.Value())
+	}
+	d.customInput.SetValue("Edited custom")
+	d.confirmCustom()
+	result, ok := d.submit()
+	want := []selecttool.SelectedOption{
+		{ID: "logs", Label: "Logs"},
+		{ID: selecttool.CustomOptionID, Label: "Edited custom"},
+	}
+	if !ok || !reflect.DeepEqual(result.SelectedOptions, want) {
+		t.Fatalf("result=%#v ok=%v", result, ok)
+	}
+}
+
+func TestSelectionDockCustomOptionValidatesEmptyAndMax(t *testing.T) {
+	d := newSelectionDock(selectionRequest("x", selecttool.ModeMultiple))
+	d.request.MaxSelect = 1
+	d.selected["logs"] = true
+	d.focus = selectionFocus{kind: selectionFocusCustom}
+	d.activateFocused()
+	d.customInput.SetValue("Extra")
+	if _, complete := d.confirmCustom(); complete || d.errorText != "You can select at most 1 option." {
+		t.Fatalf("dock=%#v", d)
+	}
+
+	d = newSelectionDock(selectionRequest("x", selecttool.ModeMultiple))
+	d.focus = selectionFocus{kind: selectionFocusCustom}
+	d.activateFocused()
+	d.customInput.SetValue("   ")
+	if _, complete := d.confirmCustom(); complete || d.errorText != "Custom option cannot be empty." {
+		t.Fatalf("dock=%#v", d)
+	}
+}
+
+func TestSelectionDockCustomKeysActivateWithEnterAndSpace(t *testing.T) {
+	for _, key := range []tea.KeyType{tea.KeyEnter, tea.KeySpace} {
+		t.Run(key.String(), func(t *testing.T) {
+			m, done := selectionKeyTestModel(t, selectionRequest("", selecttool.ModeMultiple))
+			m.selectionDock.focus = selectionFocus{kind: selectionFocusCustom}
+			next, _ := m.Update(tea.KeyMsg{Type: key})
+			got := next.(appModel)
+			if got.selectionDock == nil || !got.selectionDock.editingCustom {
+				t.Fatalf("key %q did not activate custom editing: dock=%#v", key.String(), got.selectionDock)
+			}
+			select {
+			case result := <-done:
+				t.Fatalf("key %q completed selection: %#v", key.String(), result)
+			default:
+			}
+		})
+	}
+}
+
+func TestSelectionDockCustomEditEscPreservesSelectAndCtrlCCancels(t *testing.T) {
+	t.Run("esc", func(t *testing.T) {
+		m, done := selectionKeyTestModel(t, selectionRequest("", selecttool.ModeMultiple))
+		m.selectionDock.focus = selectionFocus{kind: selectionFocusCustom}
+		m.selectionDock.activateFocused()
+		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		got := next.(appModel)
+		if got.selectionDock == nil || got.selectionDock.editingCustom {
+			t.Fatalf("Esc did not leave custom editing while preserving Select: dock=%#v", got.selectionDock)
+		}
+		select {
+		case result := <-done:
+			t.Fatalf("Esc cancelled Select: %#v", result)
+		default:
+		}
+	})
+
+	t.Run("ctrl+c", func(t *testing.T) {
+		m, done := selectionKeyTestModel(t, selectionRequest("", selecttool.ModeMultiple))
+		m.selectionDock.focus = selectionFocus{kind: selectionFocusCustom}
+		m.selectionDock.activateFocused()
+		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+		got := next.(appModel)
+		if got.selectionDock != nil {
+			t.Fatalf("Ctrl+C preserved Select: dock=%#v", got.selectionDock)
+		}
+		select {
+		case result := <-done:
+			if !result.Cancelled {
+				t.Fatalf("Ctrl+C result=%#v", result)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Ctrl+C cancellation blocked")
+		}
+	})
+}
+
 func TestSelectionDockLongListShowsScrollIndicators(t *testing.T) {
 	r := selectionRequest("x", selecttool.ModeMultiple)
 	r.Options = nil

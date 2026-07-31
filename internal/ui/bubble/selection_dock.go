@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	selecttool "paw/internal/tool/select"
 )
@@ -28,12 +29,14 @@ type selectionFocus struct {
 }
 
 type selectionDock struct {
-	request      selecttool.Request
-	focus        selectionFocus
-	selected     map[string]bool
-	customLabel  string
-	firstVisible int
-	errorText    string
+	request       selecttool.Request
+	focus         selectionFocus
+	selected      map[string]bool
+	customLabel   string
+	customInput   textinput.Model
+	editingCustom bool
+	firstVisible  int
+	errorText     string
 
 	// highlighted is retained until the task 4 renderer is migrated to focus.
 	highlighted int
@@ -44,7 +47,16 @@ func newSelectionDock(request selecttool.Request) *selectionDock {
 	for _, id := range request.InitialSelectedIDs {
 		selected[id] = true
 	}
-	d := &selectionDock{request: request.Clone(), selected: selected}
+	customInput := textinput.New()
+	customInput.Prompt = ""
+	customInput.Placeholder = "Type a custom answer"
+	customInput.CharLimit = 0
+	customInput.Width = 40
+	d := &selectionDock{
+		request:     request.Clone(),
+		selected:    selected,
+		customInput: customInput,
+	}
 	if request.Mode == selecttool.ModeSingle && len(request.InitialSelectedIDs) > 0 {
 		for i, option := range request.Options {
 			if option.ID == request.InitialSelectedIDs[0] {
@@ -176,6 +188,49 @@ func (d *selectionDock) cancel() selecttool.Result {
 	return selecttool.Result{Cancelled: true, SelectedOptions: []selecttool.SelectedOption{}}
 }
 
+func (d *selectionDock) beginCustomEdit() {
+	if d.customLabel == "" && d.selectedCount() >= d.request.MaxSelect {
+		d.errorText = fmt.Sprintf("You can select at most %d %s.", d.request.MaxSelect, optionNoun(d.request.MaxSelect))
+		return
+	}
+	d.customInput.SetValue(d.customLabel)
+	d.customInput.CursorEnd()
+	d.customInput.Focus()
+	d.editingCustom = true
+	d.errorText = ""
+}
+
+func (d *selectionDock) cancelCustomEdit() {
+	d.editingCustom = false
+	d.customInput.Blur()
+	d.errorText = ""
+}
+
+func (d *selectionDock) confirmCustom() (selecttool.Result, bool) {
+	label := strings.TrimSpace(d.customInput.Value())
+	if label == "" {
+		d.errorText = "Custom option cannot be empty."
+		return selecttool.Result{}, false
+	}
+	if d.customLabel == "" && d.selectedCount() >= d.request.MaxSelect {
+		d.errorText = fmt.Sprintf("You can select at most %d %s.", d.request.MaxSelect, optionNoun(d.request.MaxSelect))
+		return selecttool.Result{}, false
+	}
+	d.customLabel = label
+	d.cancelCustomEdit()
+	if d.request.Mode == selecttool.ModeSingle {
+		return selecttool.Result{SelectedOptions: []selecttool.SelectedOption{{ID: selecttool.CustomOptionID, Label: label}}}, true
+	}
+	return selecttool.Result{}, false
+}
+
+func optionNoun(count int) string {
+	if count == 1 {
+		return "option"
+	}
+	return "options"
+}
+
 func (d *selectionDock) activateFocused() (selecttool.Result, bool) {
 	if d == nil {
 		return selecttool.Result{}, false
@@ -183,6 +238,9 @@ func (d *selectionDock) activateFocused() (selecttool.Result, bool) {
 	switch d.focus.kind {
 	case selectionFocusChat:
 		return d.cancel(), true
+	case selectionFocusCustom:
+		d.beginCustomEdit()
+		return selecttool.Result{}, false
 	case selectionFocusAnswer:
 		if len(d.request.Options) == 0 {
 			return selecttool.Result{}, false
@@ -230,6 +288,31 @@ func waitSelectionBrokerEventCmd(ctx context.Context, broker *selecttool.Broker)
 }
 
 func (m appModel) handleSelectionDockKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.selectionDock.editingCustom {
+		switch msg.String() {
+		case "enter":
+			if result, complete := m.selectionDock.confirmCustom(); complete {
+				cmd := m.completeSelection(result)
+				m.relayout()
+				return m, cmd
+			}
+		case "esc":
+			m.selectionDock.cancelCustomEdit()
+		case "ctrl+c":
+			cmd := m.completeSelection(m.selectionDock.cancel())
+			m.relayout()
+			return m, cmd
+		default:
+			var inputCmd tea.Cmd
+			m.selectionDock.customInput, inputCmd = m.selectionDock.customInput.Update(msg)
+			m.selectionDock.errorText = ""
+			m.relayout()
+			return m, inputCmd
+		}
+		m.relayout()
+		return m, nil
+	}
+
 	var cmd tea.Cmd
 	switch msg.String() {
 	case "up", "k":
@@ -241,16 +324,20 @@ func (m appModel) handleSelectionDockKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "end":
 		m.selectionDock.end()
 	case " ", "space":
-		m.selectionDock.toggleHighlighted()
+		if m.selectionDock.focus.kind == selectionFocusAnswer {
+			m.selectionDock.toggleHighlighted()
+		} else if result, complete := m.selectionDock.activateFocused(); complete {
+			cmd = m.completeSelection(result)
+		}
 	case "enter":
 		var result selecttool.Result
-		var ok bool
+		var complete bool
 		if m.selectionDock.focus.kind == selectionFocusAnswer && m.selectionDock.request.Mode == selecttool.ModeMultiple {
-			result, ok = m.selectionDock.submit()
+			result, complete = m.selectionDock.submit()
 		} else {
-			result, ok = m.selectionDock.activateFocused()
+			result, complete = m.selectionDock.activateFocused()
 		}
-		if ok {
+		if complete {
 			cmd = m.completeSelection(result)
 		}
 	case "esc", "ctrl+c":
