@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	coretool "paw/internal/tool"
 	"strings"
 )
 
 // EditTool performs an exact string replacement on an existing file in the
-// workspace. It mirrors Claude Code's Edit contract: old_string must be unique
-// unless replace_all is true, and the file is overwritten atomically.
+// workspace. It mirrors Claude Code's Edit contract: the file must have been
+// Read first, old_string must match exactly and be unique unless replace_all is
+// true, and the file is overwritten atomically.
 type EditTool struct {
 	Root      string
 	ReadState *ReadStateStore
@@ -26,13 +28,28 @@ type editInput struct {
 func (t *EditTool) Name() string { return "Edit" }
 
 func (t *EditTool) Description() string {
-	return "对工作区内已有文件做精确字符串替换：将 old_string 替换为 new_string。" +
-		"默认 old_string 必须在文件中唯一出现；设 replace_all=true 可替换全部匹配。" +
+	return "对工作区内已先用 Read 读取的文件做精确字符串替换：old_string 必须与文件内容逐字节匹配。" +
+		"默认 old_string 必须唯一；设 replace_all=true 可替换全部匹配。" +
 		`示例输入: {"file_path":"internal/foo.go","old_string":"return 1","new_string":"return 2"}`
 }
 
 func (t *EditTool) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"file_path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["file_path","old_string","new_string"]}`)
+}
+
+func (t *EditTool) FileMutationTarget(raw json.RawMessage) (coretool.FileMutationTarget, error) {
+	var in editInput
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return coretool.FileMutationTarget{}, err
+	}
+	if strings.TrimSpace(in.FilePath) == "" {
+		return coretool.FileMutationTarget{}, fmt.Errorf("file_path is required")
+	}
+	target, exists, err := resolveMutationPath(t.Root, in.FilePath, false)
+	if err != nil {
+		return coretool.FileMutationTarget{}, err
+	}
+	return coretool.FileMutationTarget{Path: target, BeforeExists: exists}, nil
 }
 
 func (t *EditTool) Run(ctx context.Context, input json.RawMessage) (string, error) {
@@ -53,26 +70,38 @@ func (t *EditTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 		return "", fmt.Errorf("old_string and new_string must differ")
 	}
 
-	target, err := resolvePathWithinRoot(t.Root, in.FilePath)
+	target, _, err := resolveMutationPath(t.Root, in.FilePath, false)
 	if err != nil {
 		return "", err
 	}
 
+	display := relativePath(t.Root, target)
+	info, err := os.Stat(target)
+	if err != nil {
+		return "", fmt.Errorf("stat edit target %s: %w", display, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("edit target is not a regular file: %s", display)
+	}
 	current, err := os.ReadFile(target)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("read edit target %s: %w", display, err)
 	}
-	if t.ReadState != nil {
-		if err := t.ReadState.Verify(target, current); err != nil {
-			return "", err
+	if t.ReadState == nil {
+		return "", fmt.Errorf("file must be read before editing: %s; use Read first", display)
+	}
+	if err := t.ReadState.VerifyRequired(target, current); err != nil {
+		if strings.Contains(err.Error(), "file must be read before editing") {
+			return "", fmt.Errorf("file must be read before editing: %s; use Read first", display)
 		}
+		return "", fmt.Errorf("file has been modified since last read: %s; read it again before editing", display)
 	}
 	count := strings.Count(string(current), in.OldString)
 	if count == 0 {
-		return "", fmt.Errorf("old_string not found in %s", relativePath(t.Root, target))
+		return "", fmt.Errorf("old_string not found in %s; it must match the file contents exactly", display)
 	}
 	if count > 1 && !in.ReplaceAll {
-		return "", fmt.Errorf("old_string matches %d locations in %s; set replace_all=true or add surrounding context to make it unique", count, relativePath(t.Root, target))
+		return "", fmt.Errorf("old_string matches %d locations in %s; set replace_all=true or include more surrounding context to make it unique", count, display)
 	}
 
 	var updated string
@@ -82,7 +111,7 @@ func (t *EditTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 		updated = strings.Replace(string(current), in.OldString, in.NewString, 1)
 	}
 
-	if err := atomicWriteFile(target, []byte(updated)); err != nil {
+	if err := atomicWriteFile(target, []byte(updated), info.Mode().Perm()); err != nil {
 		return "", err
 	}
 	if t.ReadState != nil {
@@ -96,3 +125,5 @@ func (t *EditTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 	}
 	return fmt.Sprintf("edited %s (%d replacement%s)", relativePath(t.Root, target), replacements, plural), nil
 }
+
+var _ coretool.FileMutationTool = (*EditTool)(nil)

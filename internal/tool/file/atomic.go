@@ -8,8 +8,8 @@ import (
 
 // atomicWriteFile writes content to target by first writing a temp file in
 // the same directory and renaming it, so a crash never leaves a partially
-// written file. Parent directories are created. Files are written 0o644.
-func atomicWriteFile(target string, content []byte) error {
+// written file. Parent directories are created, and mode is applied explicitly.
+func atomicWriteFile(target string, content []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err
 	}
@@ -25,7 +25,7 @@ func atomicWriteFile(target string, content []byte) error {
 		cleanup()
 		return err
 	}
-	if err := tmp.Chmod(0o644); err != nil {
+	if err := tmp.Chmod(mode.Perm()); err != nil {
 		_ = tmp.Close()
 		cleanup()
 		return err

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	coretool "paw/internal/tool"
+	"strings"
 )
 
 type WriteTool struct {
@@ -29,6 +31,21 @@ func (t *WriteTool) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"file_path":{"type":"string"},"content":{"type":"string"}},"required":["file_path","content"]}`)
 }
 
+func (t *WriteTool) FileMutationTarget(raw json.RawMessage) (coretool.FileMutationTarget, error) {
+	var in writeInput
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return coretool.FileMutationTarget{}, err
+	}
+	if strings.TrimSpace(in.FilePath) == "" {
+		return coretool.FileMutationTarget{}, fmt.Errorf("file_path is required")
+	}
+	target, exists, err := resolveMutationPath(t.Root, in.FilePath, true)
+	if err != nil {
+		return coretool.FileMutationTarget{}, err
+	}
+	return coretool.FileMutationTarget{Path: target, BeforeExists: exists}, nil
+}
+
 func (t *WriteTool) Run(ctx context.Context, input json.RawMessage) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -42,7 +59,7 @@ func (t *WriteTool) Run(ctx context.Context, input json.RawMessage) (string, err
 		return "", fmt.Errorf("file_path is required")
 	}
 
-	target, err := resolvePathWithinRoot(t.Root, in.FilePath)
+	target, _, err := resolveMutationPath(t.Root, in.FilePath, true)
 	if err != nil {
 		return "", err
 	}
@@ -59,7 +76,7 @@ func (t *WriteTool) Run(ctx context.Context, input json.RawMessage) (string, err
 		return "", rerr
 	}
 
-	if err := atomicWriteFile(target, []byte(in.Content)); err != nil {
+	if err := atomicWriteFile(target, []byte(in.Content), 0o644); err != nil {
 		return "", err
 	}
 	if t.ReadState != nil {
@@ -67,3 +84,5 @@ func (t *WriteTool) Run(ctx context.Context, input json.RawMessage) (string, err
 	}
 	return fmt.Sprintf("wrote %d bytes to %s", len(in.Content), relativePath(t.Root, target)), nil
 }
+
+var _ coretool.FileMutationTool = (*WriteTool)(nil)

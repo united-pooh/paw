@@ -15,3 +15,16 @@ type Tool interface {
 type ConcurrencySafeTool interface {
 	IsConcurrencySafe(input json.RawMessage) bool
 }
+
+// FileMutationTarget describes the resolved workspace path a tool may mutate
+// and whether it exists before the mutation runs.
+type FileMutationTarget struct {
+	Path         string
+	BeforeExists bool
+}
+
+// FileMutationTool is an optional capability used by the runner to safely
+// inspect a registered tool's mutation target without executing the tool.
+type FileMutationTool interface {
+	FileMutationTarget(input json.RawMessage) (FileMutationTarget, error)
+}
