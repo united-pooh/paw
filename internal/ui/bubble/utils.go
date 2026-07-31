@@ -107,10 +107,10 @@ func selectToolResultTarget(name, status, content string) (string, bool) {
 		return "cancelled", true
 	}
 	noun := "options"
-	if len(result.SelectedIDs) == 1 {
+	if len(result.SelectedOptions) == 1 {
 		noun = "option"
 	}
-	return fmt.Sprintf("selected %d %s", len(result.SelectedIDs), noun), true
+	return fmt.Sprintf("selected %d %s", len(result.SelectedOptions), noun), true
 }
 
 func completeToolCallBody(name, body, status, content string) string {

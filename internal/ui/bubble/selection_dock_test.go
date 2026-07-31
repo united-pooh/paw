@@ -3,6 +3,7 @@ package bubble
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -39,6 +40,52 @@ func TestNewSelectionDockAndNavigation(t *testing.T) {
 		t.Fatal("home")
 	}
 }
+func TestSelectionDockNavigatesAnswersAndFixedActions(t *testing.T) {
+	d := newSelectionDock(selectionRequest("x", selecttool.ModeMultiple))
+	if d.focus.kind != selectionFocusAnswer || d.focus.answerIndex != 0 {
+		t.Fatalf("initial focus=%#v", d.focus)
+	}
+	d.end()
+	if d.focus.kind != selectionFocusChat {
+		t.Fatalf("end focus=%#v, want chat action", d.focus)
+	}
+	d.move(-1)
+	if d.focus.kind != selectionFocusCustom {
+		t.Fatalf("focus=%#v, want custom action", d.focus)
+	}
+	d.move(-1)
+	if d.focus.kind != selectionFocusAnswer || d.focus.answerIndex != 2 {
+		t.Fatalf("focus=%#v, want final answer", d.focus)
+	}
+	d.home()
+	if d.focus.kind != selectionFocusAnswer || d.focus.answerIndex != 0 {
+		t.Fatalf("home focus=%#v", d.focus)
+	}
+}
+
+func TestSelectionDockBuildsStableReadableOptions(t *testing.T) {
+	d := newSelectionDock(selectionRequest("x", selecttool.ModeMultiple))
+	d.selected["traces"] = true
+	d.selected["logs"] = true
+	result, ok := d.submit()
+	want := []selecttool.SelectedOption{
+		{ID: "logs", Label: "Logs"},
+		{ID: "traces", Label: "Traces"},
+	}
+	if !ok || !reflect.DeepEqual(result.SelectedOptions, want) {
+		t.Fatalf("result=%#v ok=%v", result, ok)
+	}
+}
+
+func TestSelectionDockChatUsesCancellationResult(t *testing.T) {
+	d := newSelectionDock(selectionRequest("x", selecttool.ModeMultiple))
+	d.focus = selectionFocus{kind: selectionFocusChat}
+	result, complete := d.activateFocused()
+	if !complete || !result.Cancelled || result.SelectedOptions == nil || len(result.SelectedOptions) != 0 {
+		t.Fatalf("result=%#v complete=%v", result, complete)
+	}
+}
+
 func TestSelectionDockToggleAndSubmit(t *testing.T) {
 	r := selectionRequest("x", selecttool.ModeMultiple)
 	r.MinSelect = 1
@@ -52,16 +99,18 @@ func TestSelectionDockToggleAndSubmit(t *testing.T) {
 		t.Fatal("max")
 	}
 	result, ok := d.submit()
-	if !ok || len(result.SelectedIDs) != 1 || result.SelectedIDs[0] != "logs" {
+	want := []selecttool.SelectedOption{{ID: "logs", Label: "Logs"}}
+	if !ok || !reflect.DeepEqual(result.SelectedOptions, want) {
 		t.Fatalf("result=%#v ok=%v", result, ok)
 	}
 }
-func TestSelectionDockSubmitStableOrder(t *testing.T) {
+func TestSelectionDockStableOrder(t *testing.T) {
 	d := newSelectionDock(selectionRequest("x", selecttool.ModeMultiple))
 	d.selected["traces"] = true
 	d.selected["logs"] = true
 	r, ok := d.submit()
-	if !ok || strings.Join(r.SelectedIDs, ",") != "logs,traces" {
+	want := []selecttool.SelectedOption{{ID: "logs", Label: "Logs"}, {ID: "traces", Label: "Traces"}}
+	if !ok || !reflect.DeepEqual(r.SelectedOptions, want) {
 		t.Fatalf("%#v", r)
 	}
 }
@@ -72,7 +121,8 @@ func TestSelectionDockSingleSubmit(t *testing.T) {
 	d := newSelectionDock(r)
 	d.move(1)
 	got, ok := d.submit()
-	if !ok || got.SelectedIDs[0] != "metrics" {
+	want := []selecttool.SelectedOption{{ID: "metrics", Label: "Metrics"}}
+	if !ok || !reflect.DeepEqual(got.SelectedOptions, want) {
 		t.Fatalf("%#v", got)
 	}
 }
@@ -105,7 +155,8 @@ func TestSelectionBrokerRequestAndKeys(t *testing.T) {
 	}
 	select {
 	case r := <-done:
-		if r.SelectedIDs[0] != "metrics" {
+		want := []selecttool.SelectedOption{{ID: "metrics", Label: "Metrics"}}
+		if !reflect.DeepEqual(r.SelectedOptions, want) {
 			t.Fatal(r)
 		}
 	case <-time.After(time.Second):
@@ -128,7 +179,7 @@ func TestSelectionDockConsumesCtrlCAsCancellation(t *testing.T) {
 		t.Fatal("global ctrl-c used")
 	}
 	r := <-done
-	if !r.Cancelled || r.SelectedIDs == nil {
+	if !r.Cancelled || r.SelectedOptions == nil {
 		t.Fatalf("%#v", r)
 	}
 }
