@@ -61,6 +61,10 @@ func (t *Tool) Namespace() string {
 	return "mcp"
 }
 
+// ReadOnly is deliberately false: MCP discovery currently has no reliable
+// side-effect metadata, so context maintenance uses the balanced fallback.
+func (*Tool) ReadOnly() bool { return false }
+
 func (t *Tool) Run(ctx context.Context, input json.RawMessage) (string, error) {
 	if t == nil || t.broker == nil {
 		return "", errors.New("MCP tool broker is unavailable")
