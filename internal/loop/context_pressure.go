@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"fmt"
 
 	"paw/internal/message"
 	"paw/internal/settings"
@@ -121,6 +122,18 @@ func (runner *Runner) maintainContextProjection(ctx context.Context, history []m
 	result.estimatedTokensSaved += maxInt(0, postTokens-estimateMessageTokens(compacted))
 	runner.recordAutomaticCompaction(true, false)
 	return result, nil
+}
+
+func (runner *Runner) notifyContextMaintenance(result contextMaintenanceResult) {
+	if result.snippedResults > 0 {
+		runner.notifySystem("context-compaction", fmt.Sprintf("snipped %d stale tool result(s); estimated %d tokens saved", result.snippedResults, result.estimatedTokensSaved))
+	}
+	if result.prunedResults > 0 {
+		runner.notifySystem("context-compaction", fmt.Sprintf("pruned %d stale tool result(s); estimated %d tokens saved", result.prunedResults, result.estimatedTokensSaved))
+	}
+	if result.compaction != nil {
+		runner.notifySystem("context-compaction", fmt.Sprintf("compacted %d messages: %d → %d; recent messages and user constraints were kept verbatim", result.compaction.FoldedMessages, result.compaction.BeforeMessages, result.compaction.AfterMessages))
+	}
 }
 
 func pressureThreshold(limit int, ratio float64) int {

@@ -505,6 +505,12 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 	launcher.SetMCPBroker(broker)
 	registry := tool.NewRegistry()
 	runner := loop.NewRunnerWithInstructionRoot(client, output, registry, store, sessionID, root)
+	if err := runner.SetContextMaintenanceConfig(settingsController.CurrentSettings().ContextMaintenance); err != nil {
+		if mcpManager != nil {
+			_ = mcpManager.Close(context.Background())
+		}
+		return nil, "", nil, nil, nil, nil, nil, fmt.Errorf("configure context maintenance: %w", err)
+	}
 	subagentManager := subagent.NewManager(subagent.Config{
 		Model:        client,
 		Store:        store,

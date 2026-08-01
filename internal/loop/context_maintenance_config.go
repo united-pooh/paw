@@ -34,3 +34,21 @@ func contextMaintenanceConfigFromSettings(in settings.ContextMaintenanceConfig) 
 		archiveEnabled:      in.ArchiveEnabled,
 	}, nil
 }
+
+// SetContextMaintenanceConfig atomically replaces the runtime maintenance
+// policy and its archive destination. It does not rewrite existing history.
+func (runner *Runner) SetContextMaintenanceConfig(in settings.ContextMaintenanceConfig) error {
+	cfg, err := contextMaintenanceConfigFromSettings(in)
+	if err != nil {
+		return err
+	}
+	archive, err := newCompactionArchive(runner.workRoot, runner.sessionID, cfg.archiveEnabled)
+	if err != nil {
+		return err
+	}
+	runner.mu.Lock()
+	runner.contextMaintenance = cfg
+	runner.compactionArchive = archive
+	runner.mu.Unlock()
+	return nil
+}
