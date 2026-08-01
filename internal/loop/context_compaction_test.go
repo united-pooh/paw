@@ -103,7 +103,7 @@ func TestRunTurnAutomaticallyCompactsOlderHistory(t *testing.T) {
 		t.Fatalf("old assistant history remained verbatim after compaction")
 	}
 	foundNotice := false
-	for _, event := range ui.system {
+	for _, event := range ui.systemEvents() {
 		if event.Title == "context-compaction" {
 			foundNotice = true
 		}

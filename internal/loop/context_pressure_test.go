@@ -151,7 +151,7 @@ func TestSoftPressureNoticeOnlyOnceAndResetsBelowThreshold(t *testing.T) {
 	if _, err := runner.maintainContextProjection(context.Background(), history, false); err != nil {
 		t.Fatal(err)
 	}
-	if got := countSystemEvents(output.system, "context pressure reached"); got != 1 {
+	if got := countSystemEvents(output.systemEvents(), "context pressure reached"); got != 1 {
 		t.Fatalf("soft notices = %d, want 1: %#v", got, output.system)
 	}
 
@@ -163,7 +163,7 @@ func TestSoftPressureNoticeOnlyOnceAndResetsBelowThreshold(t *testing.T) {
 	if _, err := runner.maintainContextProjection(context.Background(), history, false); err != nil {
 		t.Fatal(err)
 	}
-	if got := countSystemEvents(output.system, "context pressure reached"); got != 2 {
+	if got := countSystemEvents(output.systemEvents(), "context pressure reached"); got != 2 {
 		t.Fatalf("soft notices after reset = %d, want 2: %#v", got, output.system)
 	}
 }

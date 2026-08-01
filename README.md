@@ -237,9 +237,23 @@ context meter 左侧显示紧凑 token 与比例，例如 `260k↑ 2.05k↓ 25%(
     "theme": "default",
     "context_limit_tokens": 1048576,
     "context_meter_location": "input-above"
+  },
+  "context_maintenance": {
+    "soft_compact_ratio": 0.5,
+    "tool_result_snip_ratio": 0.6,
+    "compact_ratio": 0.8,
+    "compact_force_ratio": 0.9,
+    "compact_target_ratio": 0.5,
+    "tail_tokens": 16384,
+    "min_tool_result_bytes": 1024,
+    "keep_errors": true,
+    "keep_user_marked": true,
+    "archive_enabled": true
   }
 }
 ```
+
+上下文维护按 50%/60%/80%/90% 压力阈值依次提示、裁剪旧大型 Tool Result、执行摘要压缩并在高压时强制压缩。被重写的原始消息会先归档到 `.paw/sessions/<session-id>/compactions/`；session journal（`transcript.jsonl`）仍保留完整 Tool Result，归档只服务于压缩投影、去重和恢复。
 
 内置 True Color 主题 ID：`default`、`tokyo-night`、`tokyo-night-storm`、`tokyo-night-light`、`catppuccin-mocha`、`dracula`、`gruvbox-dark`。首版不支持自定义主题文件、256 色降级或 `NO_COLOR`。
 
