@@ -141,7 +141,7 @@ func (runner *Runner) compactHistory(ctx context.Context, history []message.Mess
 		return history, nil, nil
 	}
 	region := history[head:tail]
-	kept, fold := partitionCompactionRegion(region, limit)
+	kept, fold := partitionCompactionRegionWithPolicy(region, limit, keepPolicy{errors: true, userMarked: true})
 	if len(fold) == 0 {
 		return history, nil, nil
 	}
@@ -208,25 +208,7 @@ func planHistoryCompaction(history []message.Message, limit int) (head, tail int
 	if byWindow := int(float64(limit) * defaultCompactTargetRatio); byWindow < budget {
 		budget = byWindow
 	}
-	if budget < 1 {
-		budget = 1
-	}
-	tail = len(history)
-	used := 0
-	for i := len(history) - 1; i > head; i-- {
-		cost := estimateMessageTokens([]message.Message{history[i]})
-		if len(history)-i > minimumRecentMessages && used+cost > budget {
-			break
-		}
-		used += cost
-		tail = i
-	}
-	// Never start the recent tail with a tool result whose assistant call would
-	// have been folded into prose.
-	for tail > head && tail < len(history) && len(toolResultsFromMessage(history[tail])) > 0 {
-		tail--
-	}
-	return head, tail
+	return head, protectedTailStart(history, head, budget, minimumRecentMessages)
 }
 
 func pinnedHistoryPrefix(history []message.Message, limit int) int {
