@@ -16,6 +16,21 @@ type ConcurrencySafeTool interface {
 	IsConcurrencySafe(input json.RawMessage) bool
 }
 
+type SnipHint struct {
+	Head      int
+	Tail      int
+	HeadChars int
+	TailChars int
+}
+
+type SnipHinter interface {
+	SnipHint() SnipHint
+}
+
+type ReadOnlyTool interface {
+	ReadOnly() bool
+}
+
 // FileMutationTarget describes the resolved workspace path a tool may mutate
 // and whether it exists before the mutation runs.
 type FileMutationTarget struct {
