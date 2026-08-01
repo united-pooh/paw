@@ -203,9 +203,20 @@ func planManualHistoryCompaction(history []message.Message, limit int) (head, ta
 }
 
 func planHistoryCompaction(history []message.Message, limit int) (head, tail int) {
+	return planHistoryCompactionWithConfig(history, limit, defaultContextMaintenanceConfig())
+}
+
+func planHistoryCompactionWithConfig(history []message.Message, limit int, cfg contextMaintenanceConfig) (head, tail int) {
 	head = pinnedHistoryPrefix(history, limit)
-	budget := defaultCompactTailTokens
-	if byWindow := int(float64(limit) * defaultCompactTargetRatio); byWindow < budget {
+	budget := cfg.tailTokens
+	if budget <= 0 {
+		budget = defaultCompactTailTokens
+	}
+	targetRatio := cfg.compactTargetRatio
+	if targetRatio <= 0 {
+		targetRatio = defaultCompactTargetRatio
+	}
+	if byWindow := int(float64(limit) * targetRatio); byWindow < budget {
 		budget = byWindow
 	}
 	return head, protectedTailStart(history, head, budget, minimumRecentMessages)

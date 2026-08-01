@@ -86,6 +86,11 @@ type Runner struct {
 	systemSupplement       string
 	compactToolPrompt      bool
 	contextLimitTokens     int
+	contextMaintenance     contextMaintenanceConfig
+	compactionArchive      *compactionArchive
+	softCompactNoticed     bool
+	consecutiveCompacts    int
+	compactStuck           bool
 	streamMAEnabled        bool
 	streamMASubagents      StreamMASubagentRunner
 	subagentTokensProvider SubagentTokensProvider
