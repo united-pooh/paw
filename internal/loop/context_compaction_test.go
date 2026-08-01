@@ -2,6 +2,8 @@ package loop
 
 import (
 	"context"
+	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -126,6 +128,65 @@ func TestCompactionSkipsLegacyAppendOnlyStore(t *testing.T) {
 	}
 	if compacted != nil || len(got) != len(history) {
 		t.Fatalf("legacy store history changed: compacted=%v got=%#v", compacted, got)
+	}
+}
+
+func TestManualCompactionUsesMechanicalFoldAfterSummaryFailure(t *testing.T) {
+	root := t.TempDir()
+	modelClient := &fakeModel{rounds: []fakeRound{{err: errors.New("provider down")}}}
+	runner := NewRunnerWithInstructionRoot(modelClient, &fakeUI{}, tool.NewRegistry(), nil, "manual-fallback", root)
+	history := []message.Message{
+		{Role: message.RoleUser, Content: "migrate parser"},
+		{Role: message.RoleAssistant, Content: strings.Repeat("old investigation ", 120)},
+		{Role: message.RoleUser, Content: "preserve API"},
+		{Role: message.RoleAssistant, Content: strings.Repeat("old implementation ", 120)},
+		{Role: message.RoleAssistant, Content: "recent"},
+		{Role: message.RoleUser, Content: "continue"},
+	}
+	runner.setHistory(history)
+
+	result, err := runner.CompactContext(context.Background(), "keep build state")
+	if err != nil {
+		t.Fatalf("CompactContext() error = %v", err)
+	}
+	if !result.Mechanical || result.FoldedMessages == 0 || len(result.ArchivePaths) == 0 {
+		t.Fatalf("result = %+v", result)
+	}
+	if !strings.Contains(result.Summary, "summary was unavailable") {
+		t.Fatalf("summary = %q", result.Summary)
+	}
+}
+
+func TestManualCompactionArchiveFailureLeavesHistoryUnchanged(t *testing.T) {
+	runner := NewRunnerWithInstructionRoot(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), nil, "archive-failure", t.TempDir())
+	history := []message.Message{
+		{Role: message.RoleUser, Content: "task"},
+		{Role: message.RoleAssistant, Content: strings.Repeat("old work ", 200)},
+		{Role: message.RoleAssistant, Content: "recent"},
+		{Role: message.RoleUser, Content: "continue"},
+	}
+	runner.setHistory(history)
+	runner.compactionArchive.syncFile = func(*os.File) error { return errors.New("disk full") }
+
+	if _, err := runner.CompactContext(context.Background(), ""); err == nil || !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("CompactContext() error = %v", err)
+	}
+	if got := runner.currentHistory(); len(got) != len(history) || got[1].Content != history[1].Content {
+		t.Fatalf("history changed after archive failure: %#v", got)
+	}
+}
+
+func TestRenderCompactionTranscriptUsesSnippedProjection(t *testing.T) {
+	snipped := snipToolResult("Read", strings.Repeat("line\n", 200), "archive.jsonl", snipStrategy{head: 2, tail: 1, headChars: 8, tailChars: 4})
+	transcript := renderCompactionTranscript([]message.Message{
+		buildAssistantToolCallMessage([]message.ToolCall{{ID: "call", Name: "Read", Input: []byte(`{"file_path":"secret","offset":1}`)}}),
+		buildToolResultMessage("call", snipped, false),
+	})
+	if !strings.Contains(transcript, snippedToolResultMarker) || !strings.Contains(transcript, "{file_path, offset}") {
+		t.Fatalf("transcript = %q", transcript)
+	}
+	if strings.Contains(transcript, strings.Repeat("line\n", 20)) {
+		t.Fatal("transcript expanded archived content")
 	}
 }
 

@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -43,10 +44,15 @@ Preserve paths, identifiers, versions, numbers, user constraints, edits, command
 const compactionTimeout = 90 * time.Second
 
 type ContextCompactionResult struct {
-	BeforeMessages int
-	AfterMessages  int
-	FoldedMessages int
-	Summary        string
+	BeforeMessages       int
+	AfterMessages        int
+	FoldedMessages       int
+	SnippedResults       int
+	PrunedResults        int
+	EstimatedTokensSaved int
+	Summary              string
+	ArchivePaths         []string
+	Mechanical           bool
 }
 
 func initialContextLimitTokens(streamer ModelStreamer) int {
@@ -146,14 +152,25 @@ func (runner *Runner) compactHistory(ctx context.Context, history []message.Mess
 		return history, nil, nil
 	}
 
-	summary, summaryUsage, err := runner.summarizeHistory(ctx, fold, focus)
-	if err != nil {
-		if force {
-			return history, nil, err
+	archiveRequests := foldArchiveRequests(fold, head)
+	archive := runner.compactionArchive
+	if archive == nil {
+		var archiveErr error
+		archive, archiveErr = newCompactionArchive(runner.workRoot, runner.sessionID, runner.contextMaintenance.archiveEnabled)
+		if archiveErr != nil {
+			return history, nil, archiveErr
 		}
-		// Automatic compaction must still create headroom if the summarizer is
-		// temporarily unavailable. The full originals remain in the journal.
-		summary = fmt.Sprintf("%d earlier message(s) were folded because the automatic summary was unavailable. Ask the user if details from before this point are needed.", len(fold))
+	}
+	archived, archiveErr := archive.archive(archiveRequests)
+	if archiveErr != nil {
+		return history, nil, archiveErr
+	}
+
+	summary, summaryUsage, err := runner.summarizeHistoryWithRetry(ctx, fold, focus)
+	mechanical := false
+	if err != nil {
+		mechanical = true
+		summary = mechanicalFoldSummary(len(fold), archived.Paths)
 	}
 	if summaryUsage != nil {
 		runner.addSessionUsage(usageTotalsFromUsage(*summaryUsage, true))
@@ -170,10 +187,13 @@ func (runner *Runner) compactHistory(ctx context.Context, history []message.Mess
 	})
 	compacted = append(compacted, history[tail:]...)
 	return compacted, &ContextCompactionResult{
-		BeforeMessages: len(history),
-		AfterMessages:  len(compacted),
-		FoldedMessages: len(fold),
-		Summary:        strings.TrimSpace(summary),
+		BeforeMessages:       len(history),
+		AfterMessages:        len(compacted),
+		FoldedMessages:       len(fold),
+		EstimatedTokensSaved: maxInt(0, estimateMessageTokens(history)-estimateMessageTokens(compacted)),
+		Summary:              strings.TrimSpace(summary),
+		ArchivePaths:         append([]string(nil), archived.Paths...),
+		Mechanical:           mechanical,
 	}, nil
 }
 
@@ -340,6 +360,39 @@ func (runner *Runner) summarizeHistory(ctx context.Context, history []message.Me
 			}
 		}
 	}
+}
+
+func (runner *Runner) summarizeHistoryWithRetry(ctx context.Context, history []message.Message, focus string) (string, *model.Usage, error) {
+	summary, usage, err := runner.summarizeHistory(ctx, history, focus)
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return summary, usage, err
+	}
+	return runner.summarizeHistory(ctx, history, focus)
+}
+
+func foldArchiveRequests(fold []message.Message, offset int) []archiveRequest {
+	requests := make([]archiveRequest, 0, len(fold))
+	for index, msg := range fold {
+		content, _ := json.Marshal(msg)
+		requests = append(requests, archiveRequest{
+			Operation:       "fold",
+			MessageIndex:    offset + index,
+			ToolResultIndex: -1,
+			ToolUseID:       fmt.Sprintf("fold-message-%d", offset+index),
+			OriginalBytes:   len(content),
+			Message:         cloneMessage(msg),
+			OriginalContent: string(content),
+		})
+	}
+	return requests
+}
+
+func mechanicalFoldSummary(folded int, archivePaths []string) string {
+	archiveNote := "The original messages were not archived."
+	if len(archivePaths) > 0 {
+		archiveNote = "The complete original messages were archived before folding."
+	}
+	return fmt.Sprintf("%d earlier message(s) were folded because the automatic summary was unavailable. %s Ask the user if details from before this point are needed.", folded, archiveNote)
 }
 
 func renderCompactionTranscript(history []message.Message) string {

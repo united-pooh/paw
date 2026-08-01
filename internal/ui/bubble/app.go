@@ -247,10 +247,17 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if msg.result.FoldedMessages == 0 {
 			m.addEntry(transcriptEntry{kind: entrySystem, title: "compact", body: fmt.Sprintf("nothing to compact: %d messages", msg.result.BeforeMessages)})
 		} else {
+			lines := []string{fmt.Sprintf("compacted %d messages: %d → %d; full journal preserved", msg.result.FoldedMessages, msg.result.BeforeMessages, msg.result.AfterMessages)}
+			if len(msg.result.ArchivePaths) > 0 {
+				lines = append(lines, "archive: "+msg.result.ArchivePaths[0])
+			}
+			if msg.result.Mechanical {
+				lines = append(lines, "summary unavailable; folded mechanically")
+			}
 			m.addEntry(transcriptEntry{
 				kind:  entrySystem,
 				title: "compact",
-				body:  fmt.Sprintf("compacted %d messages: %d → %d; full journal preserved", msg.result.FoldedMessages, msg.result.BeforeMessages, msg.result.AfterMessages),
+				body:  strings.Join(lines, "\n"),
 			})
 		}
 		cmds = append(cmds, m.input.Focus())

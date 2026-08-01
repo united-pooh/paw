@@ -364,6 +364,8 @@ func TestCompactCommandPassesFocusAndShowsMessageCounts(t *testing.T) {
 		BeforeMessages: 18,
 		AfterMessages:  7,
 		FoldedMessages: 12,
+		ArchivePaths:   []string{".paw/sessions/session-1/compactions/fold.jsonl"},
+		Mechanical:     true,
 	}}
 	model := newTestModel(runner)
 	handled, cmd := model.handleCommand("/compact prioritize parser failures")
@@ -387,7 +389,7 @@ func TestCompactCommandPassesFocusAndShowsMessageCounts(t *testing.T) {
 		t.Fatal("compaction completion left model work running")
 	}
 	body := model.transcript[len(model.transcript)-1].body
-	for _, want := range []string{"compacted 12 messages", "18 → 7", "full journal preserved"} {
+	for _, want := range []string{"compacted 12 messages", "18 → 7", "full journal preserved", "archive:", "fold.jsonl", "folded mechanically"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body = %q, want %q", body, want)
 		}

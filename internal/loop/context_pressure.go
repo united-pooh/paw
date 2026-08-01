@@ -117,9 +117,14 @@ func (runner *Runner) maintainContextProjection(ctx context.Context, history []m
 		return result, nil
 	}
 	result.history = compacted
+	compaction.SnippedResults += result.snippedResults
+	compaction.PrunedResults += result.prunedResults
+	compaction.EstimatedTokensSaved += result.estimatedTokensSaved
+	compaction.ArchivePaths = appendUniqueStrings(compaction.ArchivePaths, result.archivePaths...)
 	result.compaction = compaction
 	result.summaryPerformed = true
 	result.estimatedTokensSaved += maxInt(0, postTokens-estimateMessageTokens(compacted))
+	compaction.EstimatedTokensSaved = result.estimatedTokensSaved
 	runner.recordAutomaticCompaction(true, false)
 	return result, nil
 }
@@ -134,6 +139,19 @@ func (runner *Runner) notifyContextMaintenance(result contextMaintenanceResult) 
 	if result.compaction != nil {
 		runner.notifySystem("context-compaction", fmt.Sprintf("compacted %d messages: %d → %d; recent messages and user constraints were kept verbatim", result.compaction.FoldedMessages, result.compaction.BeforeMessages, result.compaction.AfterMessages))
 	}
+}
+
+func appendUniqueStrings(base []string, values ...string) []string {
+	seen := make(map[string]bool, len(base)+len(values))
+	result := make([]string, 0, len(base)+len(values))
+	for _, value := range append(append([]string(nil), base...), values...) {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
 }
 
 func pressureThreshold(limit int, ratio float64) int {
