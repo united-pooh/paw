@@ -86,6 +86,11 @@ type Runner struct {
 	systemSupplement       string
 	compactToolPrompt      bool
 	contextLimitTokens     int
+	contextMaintenance     contextMaintenanceConfig
+	compactionArchive      *compactionArchive
+	softCompactNoticed     bool
+	consecutiveCompacts    int
+	compactStuck           bool
 	streamMAEnabled        bool
 	streamMASubagents      StreamMASubagentRunner
 	subagentTokensProvider SubagentTokensProvider
@@ -149,6 +154,8 @@ func NewRunner(model ModelStreamer, output ui.UI, registry *tool.Registry, store
 
 // NewRunnerWithInstructionRoot 创建带项目指令根目录的调度器。
 func NewRunnerWithInstructionRoot(model ModelStreamer, output ui.UI, registry *tool.Registry, store HistoryStore, sessionID, instructionRoot string) *Runner {
+	maintenance := defaultContextMaintenanceConfig()
+	archive, _ := newCompactionArchive(instructionRoot, sessionID, maintenance.archiveEnabled)
 	return &Runner{
 		model:              model,
 		ui:                 output,
@@ -159,6 +166,8 @@ func NewRunnerWithInstructionRoot(model ModelStreamer, output ui.UI, registry *t
 		prompt:             NewPromptBuilder(NewInstructionManager(instructionRoot)),
 		skillRegistry:      skill.NewRegistry(skill.DefaultRoots(instructionRoot)),
 		contextLimitTokens: initialContextLimitTokens(model),
+		contextMaintenance: maintenance,
+		compactionArchive:  archive,
 		streamMAEnabled:    true,
 		nowFn:              time.Now,
 	}
@@ -245,6 +254,13 @@ func (runner *Runner) runTurnWithTiming(ctx context.Context, userInput message.M
 				return execution, err
 			}
 		} else {
+			maintenance, maintenanceErr := runner.maintainContextProjection(ctx, messages, true)
+			if maintenanceErr != nil {
+				runner.notifySystem("context-compaction", "cold-resume context cleanup skipped: "+maintenanceErr.Error())
+			} else {
+				messages = maintenance.history
+				runner.notifyContextMaintenance(maintenance)
+			}
 			runner.setHistoryIfNil(messages)
 			runner.setRecoveryIfNil(recovery)
 		}
@@ -329,12 +345,12 @@ func (runner *Runner) runTurnWithTiming(ctx context.Context, userInput message.M
 		}
 
 		if round == 0 {
-			compactedHistory, compaction, compactErr := runner.maybeCompactHistory(ctx, history)
-			if compactErr != nil {
-				runner.notifySystem("context-compaction", "context compaction skipped: "+compactErr.Error())
-			} else if compaction != nil {
-				history = compactedHistory
-				runner.notifySystem("context-compaction", fmt.Sprintf("compacted %d messages: %d → %d; recent messages and user constraints were kept verbatim", compaction.FoldedMessages, compaction.BeforeMessages, compaction.AfterMessages))
+			maintenance, maintenanceErr := runner.maintainContextProjection(ctx, history, true)
+			if maintenanceErr != nil {
+				runner.notifySystem("context-compaction", "context cleanup skipped: "+maintenanceErr.Error())
+			} else {
+				history = maintenance.history
+				runner.notifyContextMaintenance(maintenance)
 			}
 		}
 

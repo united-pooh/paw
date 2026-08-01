@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"paw/internal/tool"
 )
 
 const (
@@ -40,6 +42,12 @@ func (t *Tool) InputSchema() json.RawMessage {
 
 func (t *Tool) IsConcurrencySafe(json.RawMessage) bool {
 	return true
+}
+
+func (*Tool) ReadOnly() bool { return true }
+
+func (*Tool) SnipHint() tool.SnipHint {
+	return tool.SnipHint{Head: 80, Tail: 12, HeadChars: 10000, TailChars: 2000}
 }
 
 func (t *Tool) Run(ctx context.Context, raw json.RawMessage) (string, error) {

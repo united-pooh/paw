@@ -77,6 +77,7 @@ func (m *blockingModel) StreamMessage(ctx context.Context, messages []message.Me
 }
 
 type fakeUI struct {
+	systemMu    sync.Mutex
 	deltas      []string
 	thinking    []string
 	toolCalls   []ui.ToolCallEvent
@@ -111,8 +112,16 @@ func (u *fakeUI) OnDone() error {
 }
 
 func (u *fakeUI) OnSystemMessage(event ui.SystemEvent) error {
+	u.systemMu.Lock()
 	u.system = append(u.system, event)
+	u.systemMu.Unlock()
 	return nil
+}
+
+func (u *fakeUI) systemEvents() []ui.SystemEvent {
+	u.systemMu.Lock()
+	defer u.systemMu.Unlock()
+	return append([]ui.SystemEvent(nil), u.system...)
 }
 
 type mutationCaptureUI struct {
@@ -882,7 +891,7 @@ Design body line.`)
 	if _, err := runner.RunTurn(context.Background(), "use $design"); err != nil {
 		t.Fatalf("RunTurn(skill) error = %v", err)
 	}
-	for _, event := range ui.system {
+	for _, event := range ui.systemEvents() {
 		if event.Title == "skills" && strings.HasPrefix(event.Body, "loaded ") {
 			t.Fatalf("unexpected skill loaded notification: %#v", event)
 		}
@@ -943,11 +952,12 @@ func TestRunTurnStreamMACommandUsesRuntime(t *testing.T) {
 	if output.doneCount != 1 {
 		t.Fatalf("doneCount = %d, want 1", output.doneCount)
 	}
-	if len(output.system) == 0 || output.system[0].Title != "streamma" {
-		t.Fatalf("system events = %#v, want streamma events", output.system)
+	systemEvents := output.systemEvents()
+	if len(systemEvents) == 0 || systemEvents[0].Title != "streamma" {
+		t.Fatalf("system events = %#v, want streamma events", systemEvents)
 	}
-	if !strings.Contains(output.system[0].Body, "subagent-backed") {
-		t.Fatalf("first system event = %#v, want subagent-backed graph notice", output.system[0])
+	if !strings.Contains(systemEvents[0].Body, "subagent-backed") {
+		t.Fatalf("first system event = %#v, want subagent-backed graph notice", systemEvents[0])
 	}
 	if len(streamer.calls) != 0 {
 		t.Fatalf("model calls = %d, want direct model unused when StreamMA subagents are configured", len(streamer.calls))
@@ -1029,7 +1039,7 @@ func TestRunTurnStreamMATraceEmitsRuntimeEvents(t *testing.T) {
 	}
 
 	var sawStarted, sawStep, sawUsage bool
-	for _, event := range output.system {
+	for _, event := range output.systemEvents() {
 		if event.Title != "streamma-trace" {
 			continue
 		}

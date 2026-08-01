@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"paw/internal/tool"
 )
 
 const (
@@ -59,6 +61,12 @@ func (t *BashTool) Description() string {
 
 func (t *BashTool) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"},"cwd":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1}},"required":["command"]}`)
+}
+
+func (*BashTool) ReadOnly() bool { return false }
+
+func (*BashTool) SnipHint() tool.SnipHint {
+	return tool.SnipHint{Head: 40, Tail: 40, HeadChars: 8000, TailChars: 8000}
 }
 
 func (t *BashTool) Run(ctx context.Context, input json.RawMessage) (string, error) {

@@ -12,6 +12,91 @@ import (
 	"paw/internal/theme"
 )
 
+func TestDefaultConfigEnablesReasonixContextMaintenance(t *testing.T) {
+	cfg := DefaultConfig()
+	got := cfg.ContextMaintenance
+	if got.SoftCompactRatio != 0.50 || got.ToolResultSnipRatio != 0.60 ||
+		got.CompactRatio != 0.80 || got.CompactForceRatio != 0.90 ||
+		got.CompactTargetRatio != 0.50 {
+		t.Fatalf("unexpected ratios: %+v", got)
+	}
+	if got.TailTokens != 16384 || got.MinToolResultBytes != 1024 {
+		t.Fatalf("unexpected budgets: %+v", got)
+	}
+	if !got.KeepErrors || !got.KeepUserMarked || !got.ArchiveEnabled {
+		t.Fatalf("maintenance must default on: %+v", got)
+	}
+}
+
+func TestLoadRejectsInvalidContextMaintenanceOrder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	raw := `{
+      "context_maintenance": {
+        "soft_compact_ratio": 0.7,
+        "tool_result_snip_ratio": 0.6,
+        "compact_ratio": 0.8,
+        "compact_force_ratio": 0.9,
+        "compact_target_ratio": 0.5,
+        "tail_tokens": 16384,
+        "min_tool_result_bytes": 1024,
+        "keep_errors": true,
+        "keep_user_marked": true,
+        "archive_enabled": true
+      }
+    }`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "soft_compact_ratio") {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
+func TestContextMaintenanceRoundTripAndMissingDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	want := DefaultConfig()
+	want.ContextMaintenance = ContextMaintenanceConfig{
+		SoftCompactRatio: 0.45, ToolResultSnipRatio: 0.55,
+		CompactRatio: 0.75, CompactForceRatio: 0.88,
+		CompactTargetRatio: 0.40, TailTokens: 8192,
+		MinToolResultBytes: 2048, KeepErrors: false,
+		KeepUserMarked: false, ArchiveEnabled: false,
+	}
+	if err := Save(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ContextMaintenance != want.ContextMaintenance {
+		t.Fatalf("context maintenance = %+v, want %+v", got.ContextMaintenance, want.ContextMaintenance)
+	}
+
+	legacyPath := filepath.Join(t.TempDir(), "legacy.json")
+	if err := os.WriteFile(legacyPath, []byte(`{"ui":{"theme":"default"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := Load(legacyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.ContextMaintenance != DefaultContextMaintenanceConfig() {
+		t.Fatalf("legacy context maintenance = %+v", legacy.ContextMaintenance)
+	}
+}
+
+func TestLoadRejectsExplicitZeroContextMaintenanceBudget(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	raw := `{"context_maintenance":{"soft_compact_ratio":0.5,"tool_result_snip_ratio":0.6,"compact_ratio":0.8,"compact_force_ratio":0.9,"compact_target_ratio":0.5,"tail_tokens":0,"min_tool_result_bytes":1024,"keep_errors":true,"keep_user_marked":true,"archive_enabled":true}}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "budgets") {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
 func TestLoadMissingFileReturnsDefaultConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing", "settings.json")
 	cfg, err := Load(path)
@@ -58,16 +143,15 @@ func TestNormalizeLegacyInputTitleMeterLocation(t *testing.T) {
 
 func TestSaveLoadAndControllerRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".paw", "settings.json")
-	want := Config{
-		Subagent: SubagentConfig{
-			DefaultContextMode: ContextModeFork,
-			DefaultRunMode:     RunModeBackground,
-		},
-		UI: UIConfig{
-			Theme:                theme.Default,
-			ContextLimitTokens:   200000,
-			ContextMeterLocation: MeterLocationInputAbove,
-		},
+	want := DefaultConfig()
+	want.Subagent = SubagentConfig{
+		DefaultContextMode: ContextModeFork,
+		DefaultRunMode:     RunModeBackground,
+	}
+	want.UI = UIConfig{
+		Theme:                theme.Default,
+		ContextLimitTokens:   200000,
+		ContextMeterLocation: MeterLocationInputAbove,
 	}
 
 	if err := Save(path, want); err != nil {
@@ -90,16 +174,15 @@ func TestSaveLoadAndControllerRoundTrip(t *testing.T) {
 		t.Fatalf("CurrentSettings() = %#v, want %#v", controller.CurrentSettings(), want)
 	}
 
-	next := Config{
-		Subagent: SubagentConfig{
-			DefaultContextMode: ContextModeEmpty,
-			DefaultRunMode:     RunModeSync,
-		},
-		UI: UIConfig{
-			Theme:                theme.Default,
-			ContextLimitTokens:   DefaultContextLimitTokens,
-			ContextMeterLocation: MeterLocationInputAbove,
-		},
+	next := DefaultConfig()
+	next.Subagent = SubagentConfig{
+		DefaultContextMode: ContextModeEmpty,
+		DefaultRunMode:     RunModeSync,
+	}
+	next.UI = UIConfig{
+		Theme:                theme.Default,
+		ContextLimitTokens:   DefaultContextLimitTokens,
+		ContextMeterLocation: MeterLocationInputAbove,
 	}
 	if err := controller.SaveSettings(next); err != nil {
 		t.Fatalf("SaveSettings() error = %v", err)

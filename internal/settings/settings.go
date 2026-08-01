@@ -32,8 +32,22 @@ type MeterLocation string
 type HomeDirFunc func() (string, error)
 
 type Config struct {
-	Subagent SubagentConfig `json:"subagent"`
-	UI       UIConfig       `json:"ui"`
+	Subagent           SubagentConfig           `json:"subagent"`
+	UI                 UIConfig                 `json:"ui"`
+	ContextMaintenance ContextMaintenanceConfig `json:"context_maintenance"`
+}
+
+type ContextMaintenanceConfig struct {
+	SoftCompactRatio    float64 `json:"soft_compact_ratio"`
+	ToolResultSnipRatio float64 `json:"tool_result_snip_ratio"`
+	CompactRatio        float64 `json:"compact_ratio"`
+	CompactForceRatio   float64 `json:"compact_force_ratio"`
+	CompactTargetRatio  float64 `json:"compact_target_ratio"`
+	TailTokens          int     `json:"tail_tokens"`
+	MinToolResultBytes  int     `json:"min_tool_result_bytes"`
+	KeepErrors          bool    `json:"keep_errors"`
+	KeepUserMarked      bool    `json:"keep_user_marked"`
+	ArchiveEnabled      bool    `json:"archive_enabled"`
 }
 
 type SubagentConfig struct {
@@ -55,8 +69,24 @@ type Controller struct {
 
 func DefaultConfig() Config {
 	return Config{
-		Subagent: SubagentConfig{DefaultContextMode: ContextModeEmpty, DefaultRunMode: RunModeBackground},
-		UI:       UIConfig{Theme: theme.Default, ContextLimitTokens: DefaultContextLimitTokens, ContextMeterLocation: MeterLocationInputAbove},
+		Subagent:           SubagentConfig{DefaultContextMode: ContextModeEmpty, DefaultRunMode: RunModeBackground},
+		UI:                 UIConfig{Theme: theme.Default, ContextLimitTokens: DefaultContextLimitTokens, ContextMeterLocation: MeterLocationInputAbove},
+		ContextMaintenance: DefaultContextMaintenanceConfig(),
+	}
+}
+
+func DefaultContextMaintenanceConfig() ContextMaintenanceConfig {
+	return ContextMaintenanceConfig{
+		SoftCompactRatio:    0.50,
+		ToolResultSnipRatio: 0.60,
+		CompactRatio:        0.80,
+		CompactForceRatio:   0.90,
+		CompactTargetRatio:  0.50,
+		TailTokens:          16384,
+		MinToolResultBytes:  1024,
+		KeepErrors:          true,
+		KeepUserMarked:      true,
+		ArchiveEnabled:      true,
 	}
 }
 
@@ -105,11 +135,18 @@ func Load(path string) (Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return Config{}, fmt.Errorf("parse settings %s: %w", path, err)
 	}
-	return Normalize(cfg), nil
+	cfg = Normalize(cfg)
+	if err := Validate(cfg); err != nil {
+		return Config{}, fmt.Errorf("validate settings %s: %w", path, err)
+	}
+	return cfg, nil
 }
 
 func Save(path string, cfg Config) error {
 	cfg = Normalize(cfg)
+	if err := Validate(cfg); err != nil {
+		return fmt.Errorf("validate settings %s: %w", path, err)
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create settings directory %s: %w", filepath.Dir(path), err)
 	}
@@ -132,7 +169,30 @@ func Normalize(cfg Config) Config {
 	if cfg.UI.ContextLimitTokens <= 0 {
 		cfg.UI.ContextLimitTokens = DefaultContextLimitTokens
 	}
+	if cfg.ContextMaintenance == (ContextMaintenanceConfig{}) {
+		cfg.ContextMaintenance = DefaultContextMaintenanceConfig()
+	}
 	return cfg
+}
+
+func Validate(cfg Config) error {
+	c := cfg.ContextMaintenance
+	if !(c.SoftCompactRatio > 0 && c.SoftCompactRatio <= c.ToolResultSnipRatio) {
+		return fmt.Errorf("context_maintenance.soft_compact_ratio must be > 0 and <= tool_result_snip_ratio")
+	}
+	if c.ToolResultSnipRatio > c.CompactRatio {
+		return fmt.Errorf("context_maintenance.tool_result_snip_ratio must be <= compact_ratio")
+	}
+	if c.CompactRatio > c.CompactForceRatio || c.CompactForceRatio >= 1 {
+		return fmt.Errorf("context_maintenance ratios must satisfy compact_ratio <= compact_force_ratio < 1")
+	}
+	if c.CompactTargetRatio <= 0 || c.CompactTargetRatio >= c.CompactRatio {
+		return fmt.Errorf("context_maintenance.compact_target_ratio must be > 0 and < compact_ratio")
+	}
+	if c.TailTokens <= 0 || c.MinToolResultBytes <= 0 {
+		return fmt.Errorf("context_maintenance token and byte budgets must be positive")
+	}
+	return nil
 }
 
 func NormalizeContextMode(mode ContextMode) ContextMode {
