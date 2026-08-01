@@ -56,7 +56,9 @@ func (runner *Runner) maintainContextProjection(ctx context.Context, history []m
 		return result, nil
 	}
 	if promptTokens < snip {
-		runner.markSoftContextPressure()
+		if runner.markSoftContextPressure() {
+			runner.notifySystem("context-compaction", fmt.Sprintf("context pressure reached %.0f%%; preserving the cache-stable prefix until cleanup is needed", cfg.softCompactRatio*100))
+		}
 		return result, nil
 	}
 
@@ -125,7 +127,9 @@ func (runner *Runner) maintainContextProjection(ctx context.Context, history []m
 	result.summaryPerformed = true
 	result.estimatedTokensSaved += maxInt(0, postTokens-estimateMessageTokens(compacted))
 	compaction.EstimatedTokensSaved = result.estimatedTokensSaved
-	runner.recordAutomaticCompaction(true, false)
+	if runner.recordAutomaticCompaction(true, false) {
+		runner.notifySystem("context-compaction", "automatic summary compaction paused after two consecutive folds; tool-result pruning remains active")
+	}
 	return result, nil
 }
 
@@ -203,9 +207,9 @@ func (runner *Runner) automaticSummaryAllowed() bool {
 	return !runner.compactStuck
 }
 
-func (runner *Runner) recordAutomaticCompaction(performed bool, belowThreshold bool) {
+func (runner *Runner) recordAutomaticCompaction(performed bool, belowThreshold bool) bool {
 	if runner == nil {
-		return
+		return false
 	}
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
@@ -213,15 +217,17 @@ func (runner *Runner) recordAutomaticCompaction(performed bool, belowThreshold b
 		runner.softCompactNoticed = false
 		runner.consecutiveCompacts = 0
 		runner.compactStuck = false
-		return
+		return false
 	}
 	if !performed {
-		return
+		return false
 	}
+	wasStuck := runner.compactStuck
 	runner.consecutiveCompacts++
 	if runner.consecutiveCompacts >= 2 {
 		runner.compactStuck = true
 	}
+	return !wasStuck && runner.compactStuck
 }
 
 func defaultContextMaintenanceConfig() contextMaintenanceConfig {

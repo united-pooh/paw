@@ -52,6 +52,51 @@ func TestLoadRejectsInvalidContextMaintenanceOrder(t *testing.T) {
 	}
 }
 
+func TestContextMaintenanceRoundTripAndMissingDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	want := DefaultConfig()
+	want.ContextMaintenance = ContextMaintenanceConfig{
+		SoftCompactRatio: 0.45, ToolResultSnipRatio: 0.55,
+		CompactRatio: 0.75, CompactForceRatio: 0.88,
+		CompactTargetRatio: 0.40, TailTokens: 8192,
+		MinToolResultBytes: 2048, KeepErrors: false,
+		KeepUserMarked: false, ArchiveEnabled: false,
+	}
+	if err := Save(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ContextMaintenance != want.ContextMaintenance {
+		t.Fatalf("context maintenance = %+v, want %+v", got.ContextMaintenance, want.ContextMaintenance)
+	}
+
+	legacyPath := filepath.Join(t.TempDir(), "legacy.json")
+	if err := os.WriteFile(legacyPath, []byte(`{"ui":{"theme":"default"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := Load(legacyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.ContextMaintenance != DefaultContextMaintenanceConfig() {
+		t.Fatalf("legacy context maintenance = %+v", legacy.ContextMaintenance)
+	}
+}
+
+func TestLoadRejectsExplicitZeroContextMaintenanceBudget(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	raw := `{"context_maintenance":{"soft_compact_ratio":0.5,"tool_result_snip_ratio":0.6,"compact_ratio":0.8,"compact_force_ratio":0.9,"compact_target_ratio":0.5,"tail_tokens":0,"min_tool_result_bytes":1024,"keep_errors":true,"keep_user_marked":true,"archive_enabled":true}}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "budgets") {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
 func TestLoadMissingFileReturnsDefaultConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing", "settings.json")
 	cfg, err := Load(path)

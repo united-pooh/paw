@@ -9,6 +9,7 @@ import (
 	"paw/internal/model"
 	"paw/internal/settings"
 	"paw/internal/tool"
+	"paw/internal/ui"
 )
 
 func TestMaintainContextProjectionThresholds(t *testing.T) {
@@ -134,6 +135,61 @@ func TestAutomaticCompactionStuckPausesAndClears(t *testing.T) {
 	if !runner.automaticSummaryAllowed() {
 		t.Fatal("summary did not resume below compact threshold")
 	}
+}
+
+func TestSoftPressureNoticeOnlyOnceAndResetsBelowThreshold(t *testing.T) {
+	output := &fakeUI{}
+	runner := NewRunnerWithInstructionRoot(&fakeModel{}, output, tool.NewRegistry(), nil, "notice", t.TempDir())
+	runner.SetContextLimitTokens(1000)
+	history := []message.Message{{Role: message.RoleUser, Content: "small"}}
+
+	runner.usage = model.Usage{PromptTokens: 550}
+	runner.usageKnown = true
+	if _, err := runner.maintainContextProjection(context.Background(), history, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.maintainContextProjection(context.Background(), history, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := countSystemEvents(output.system, "context pressure reached"); got != 1 {
+		t.Fatalf("soft notices = %d, want 1: %#v", got, output.system)
+	}
+
+	runner.usage = model.Usage{PromptTokens: 400}
+	if _, err := runner.maintainContextProjection(context.Background(), history, false); err != nil {
+		t.Fatal(err)
+	}
+	runner.usage = model.Usage{PromptTokens: 550}
+	if _, err := runner.maintainContextProjection(context.Background(), history, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := countSystemEvents(output.system, "context pressure reached"); got != 2 {
+		t.Fatalf("soft notices after reset = %d, want 2: %#v", got, output.system)
+	}
+}
+
+func TestAutomaticCompactionStuckNotificationOnlyOnTransition(t *testing.T) {
+	output := &fakeUI{}
+	runner := NewRunnerWithInstructionRoot(&fakeModel{}, output, tool.NewRegistry(), nil, "stuck", t.TempDir())
+	if runner.recordAutomaticCompaction(true, false) {
+		t.Fatal("entered stuck after first compaction")
+	}
+	if !runner.recordAutomaticCompaction(true, false) {
+		t.Fatal("did not enter stuck after second compaction")
+	}
+	if runner.recordAutomaticCompaction(true, false) {
+		t.Fatal("reported repeated stuck transition")
+	}
+}
+
+func countSystemEvents(events []ui.SystemEvent, text string) int {
+	count := 0
+	for _, event := range events {
+		if strings.Contains(event.Body, text) {
+			count++
+		}
+	}
+	return count
 }
 
 func TestFoldEconomics(t *testing.T) {
