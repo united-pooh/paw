@@ -344,6 +344,9 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 				entry.toolTarget = presentation.target
 			}
 		}
+		if strings.EqualFold(name, "update_todo") && strings.EqualFold(status, "ok") && !isError {
+			entry.toolTarget = compactUpdateTodoResult(content)
+		}
 		entry.toolExpanded = isError
 		entry.toolResultOnly = false
 		entry.toolFinishedAt = m.animationNow()
@@ -351,6 +354,10 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 		m.recordTranscriptEntryActivity(idx, true)
 		m.refreshViewport()
 		return
+	}
+	target := ""
+	if strings.EqualFold(name, "update_todo") && strings.EqualFold(status, "ok") && !isError {
+		target = compactUpdateTodoResult(content)
 	}
 	m.addEntry(transcriptEntry{
 		kind:           entryTool,
@@ -360,6 +367,7 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 		toolUseID:      strings.TrimSpace(toolUseID),
 		toolName:       name,
 		toolStatus:     status,
+		toolTarget:     target,
 		toolResult:     content,
 		toolExpanded:   isError,
 		toolResultOnly: true,
