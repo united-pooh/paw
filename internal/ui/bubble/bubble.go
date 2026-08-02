@@ -15,6 +15,7 @@ import (
 	"paw/internal/session"
 	"paw/internal/settings"
 	"paw/internal/subagent"
+	"paw/internal/todo"
 	selecttool "paw/internal/tool/select"
 	"paw/internal/ui"
 	"sync"
@@ -109,6 +110,7 @@ type UI struct {
 	sessionStore          SessionStore
 	mcpController         MCPStatusController
 	selectionBroker       *selecttool.Broker
+	todoBroker            *todo.Broker
 	sendMsg               func(tea.Msg)
 }
 
@@ -124,6 +126,12 @@ func (u *UI) SetSelectionBroker(broker *selecttool.Broker) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.selectionBroker = broker
+}
+
+func (u *UI) SetTodoBroker(broker *todo.Broker) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.todoBroker = broker
 }
 
 // SetModelConfigController 注入模型配置控制器，供 /model 向导读取和保存配置。
@@ -191,11 +199,13 @@ func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 	sessionStore := u.sessionStore
 	mcpController := u.mcpController
 	selectionBroker := u.selectionBroker
+	todoBroker := u.todoBroker
 	u.mu.Unlock()
 
 	anchor := newTerminalCursorAnchor()
 	appModel := newModel(ctx, runner, sessionID, controller, settingsController, subagentController, sessionStore, anchor)
 	appModel.selectionBroker = selectionBroker
+	appModel.todoBroker = todoBroker
 	appModel.workspaceRoot = workspaceRootOf(runner)
 	appModel.mcpController = mcpController
 	// WithInput 包一层 ESC 聚合 reader：在 BubbleTea 解析字节之前，把被读边界

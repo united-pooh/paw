@@ -138,6 +138,7 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	defer selectionBroker.Close()
 	defer todoBroker.Close()
 	output.SetSelectionBroker(selectionBroker)
+	output.SetTodoBroker(todoBroker)
 	runner, sessionID, client, settingsController, subagentManager, store, mcpManager, err := buildRunner(ctx, opts.sessionID, output, func(registry *tool.Registry) error {
 		if err := registerMainAgentTools(registry, todoBroker); err != nil {
 			return err

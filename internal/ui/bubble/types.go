@@ -13,6 +13,7 @@ import (
 	"paw/internal/skill"
 	"paw/internal/subagent"
 	"paw/internal/theme"
+	"paw/internal/todo"
 	selecttool "paw/internal/tool/select"
 	"paw/internal/ui"
 	"strings"
@@ -42,6 +43,8 @@ const (
 	entryThinking
 	// entryTool 表示工具调用、工具结果或终端命令消息。
 	entryTool
+	// entryTodo 表示 Agent 提交的一次 Todo 完整快照。
+	entryTodo
 	// entryError 表示错误消息。
 	entryError
 )
@@ -67,6 +70,11 @@ type transcriptEntry struct {
 	toolFocused           bool
 	toolHovered           bool
 	toolResultOnly        bool
+	todoSnapshot          *todo.Snapshot
+	todoExpanded          bool
+	todoLatest            bool
+	todoCompletedFold     bool
+	todoCleared           bool
 	citations             []toolCitation
 	createdAt             time.Time
 	toolStartedAt         time.Time
@@ -336,6 +344,11 @@ type appModel struct {
 	workspaceRoot             string
 	selectionBroker           *selecttool.Broker
 	selectionDock             *selectionDock
+	todoBroker                *todo.Broker
+	currentTodo               todo.Snapshot
+	hasCurrentTodo            bool
+	todoWasCleared            bool
+	latestTodoIndex           int
 	sessionID                 string
 	modelConfig               ModelConfigController
 	settingsConfig            SettingsController
