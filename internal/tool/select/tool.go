@@ -15,7 +15,7 @@ type Tool struct{ broker *Broker }
 func New(broker *Broker) *Tool { return &Tool{broker: broker} }
 func (*Tool) Name() string     { return "Select" }
 func (*Tool) Description() string {
-	return "Render a blocking single- or multiple-choice prompt in the main TUI and wait for the user to submit or cancel."
+	return "Ask the user a structured single- or multiple-choice question in the main TUI and wait for their answer. When you need the user to choose among two or more concrete options, prefer this tool instead of writing an A/B/C list or asking the question in normal assistant text. Use single mode when exactly one choice is needed and multiple mode when several choices may be selected. Provide short, distinct option labels and use descriptions for consequences or trade-offs. Do not use this tool for open-ended questions, rhetorical questions, confirmations with no meaningful alternatives, or information you can determine yourself."
 }
 func (*Tool) InputSchema() json.RawMessage { return json.RawMessage(selectInputSchema) }
 func (t *Tool) Run(ctx context.Context, raw json.RawMessage) (string, error) {
