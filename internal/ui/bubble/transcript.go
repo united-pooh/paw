@@ -285,6 +285,9 @@ func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMes
 		createdAt:         m.animationNow(),
 		toolStartedAt:     m.animationNow(),
 	})
+	m.toolGroupExpanded = true
+	m.transcriptRenderCache = nil
+	m.refreshViewport()
 }
 
 func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string, isError, mutationKnown, isMutation bool, mutation *ui.FileMutationSnapshot) {
@@ -339,7 +342,7 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 				entry.toolTarget = presentation.target
 			}
 		}
-		entry.toolExpanded = isError
+		entry.toolExpanded = isError || (effectiveKnown && effectiveMutation) || (!effectiveKnown && isFileMutationTool(name))
 		entry.toolResultOnly = false
 		entry.toolFinishedAt = m.animationNow()
 		touchTranscriptEntry(entry)
@@ -566,7 +569,14 @@ func (m *appModel) markRunningToolsError(err error) {
 }
 
 func (m *appModel) renderTranscriptContent() string {
-	return m.renderTranscriptContentAt(maxInt(20, m.viewport.Width), m.showThinking, m.animationNow())
+	content := m.renderTranscriptContentAt(maxInt(20, m.viewport.Width), m.showThinking, m.animationNow())
+	m.transcriptRenderedContent = content
+	m.transcriptContentCached = true
+	m.transcriptLineCache = nil
+	m.transcriptLineCacheReady = false
+	m.transcriptLocationCache = nil
+	m.transcriptLocationsReady = false
+	return content
 }
 
 func (m *appModel) renderTranscriptContentAt(width int, showThinking bool, at time.Time) string {
@@ -587,6 +597,48 @@ func (m *appModel) renderTranscriptContentAt(width int, showThinking bool, at ti
 			continue
 		}
 		if !assistantEntryIsRenderable(entry) {
+			continue
+		}
+		if isToolTransaction(entry) {
+			first, last := toolGroupRange(m.transcript, idx)
+			if first != idx {
+				continue
+			}
+			key := transcriptRenderKey(entry, width, at)
+			groupEntries := toolEntriesForGroup(m.transcript, idx)
+			// A group that is still running stays expanded while the tool runs
+			// (toolGroupExpanded). A completed group collapses by default; the
+			// user expands it by clicking anywhere inside it, which toggles the
+			// first entry's toolExpanded flag. This keeps multiple completed
+			// groups in one turn independent of each other instead of sharing a
+			// single global flag that would expand every group at once.
+			groupExpanded := m.toolGroupExpanded
+			if !toolGroupHasRunning(m.transcript, first, last) {
+				groupExpanded = m.transcript[first].toolExpanded
+			}
+			// The group is rendered from every tool entry, so the cache key must
+			// include every entry as well. Otherwise hovering, completing, or
+			// expanding a later call leaves the cached first frame on screen.
+			key.body = toolGroupRenderSnapshot(groupEntries, width, at)
+			key.version = 0
+			if groupExpanded {
+				key.toolExpanded = true
+			}
+			key.toolFocused = key.toolFocused || m.toolGroupFullResult
+			if m.transcriptRenderCache[idx].key == key {
+				appendTranscriptRenderedEntry(&renderedTranscript, m.transcriptRenderCache[idx].rendered, entryTool, previousKind, hasPrevious)
+				previousKind = entryTool
+				hasPrevious = true
+				continue
+			}
+			rendered := renderToolsGroup(groupEntries, width, at, groupExpanded, m.toolGroupFullResult)
+			if rendered == "" {
+				continue
+			}
+			m.transcriptRenderCache[idx] = transcriptRenderCacheEntry{key: key, rendered: rendered}
+			appendTranscriptRenderedEntry(&renderedTranscript, rendered, entryTool, previousKind, hasPrevious)
+			previousKind = entryTool
+			hasPrevious = true
 			continue
 		}
 		key := transcriptRenderKey(entry, width, at)
@@ -721,11 +773,22 @@ func transcriptCitationSnapshot(citations []toolCitation) string {
 	return b.String()
 }
 
+func toolGroupRenderSnapshot(entries []transcriptEntry, width int, at time.Time) string {
+	var snapshot strings.Builder
+	for _, entry := range entries {
+		// Include every entry because one cached frame represents the whole group.
+		snapshot.WriteString(fmt.Sprintf("%#v;", transcriptRenderKey(entry, width, at)))
+	}
+	return snapshot.String()
+}
+
 // renderTranscript 把多条 transcript 记录渲染为 viewport 内容。
 func renderTranscript(entries []transcriptEntry, width int, showThinking bool) string {
 	return renderTranscriptAt(entries, width, showThinking, time.Time{})
 }
 
+// renderTranscriptAt 渲染历史记录；appModel 的实际 viewport 使用
+// renderTranscriptContentAt，以便把同一轮工具调用合并为一个 Tools 组。
 func renderTranscriptAt(entries []transcriptEntry, width int, showThinking bool, at time.Time) string {
 	if len(entries) == 0 {
 		return ""
@@ -749,6 +812,217 @@ func renderTranscriptAt(entries []transcriptEntry, width int, showThinking bool,
 		hasPrevious = true
 	}
 	return renderedTranscript.String()
+}
+
+// renderTranscriptWithToolGroup 是实际聊天 viewport 使用的渲染路径。
+// 每个 user entry 开始一个 turn；该 turn 中的 direct tool transaction 在
+// 第一个工具的位置合并成一个 Tools 组，原始 transcript entry 仍保留用于
+// 键盘检查、鼠标选择和结果状态更新。
+func renderTranscriptWithToolGroup(entries []transcriptEntry, width int, showThinking bool, at time.Time, groupExpanded, fullResult bool) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	var renderedTranscript strings.Builder
+	hasPrevious := false
+	var previousKind entryKind
+	for index := 0; index < len(entries); index++ {
+		entry := entries[index]
+		if entry.kind == entryThinking && !showThinking {
+			continue
+		}
+		if !assistantEntryIsRenderable(entry) {
+			continue
+		}
+		if isToolTransaction(entry) {
+			first, _ := toolGroupRange(entries, index)
+			if first == index {
+				groupEntries := toolEntriesForGroup(entries, index)
+				group := renderToolsGroup(groupEntries, width, at, groupExpanded, fullResult)
+				appendTranscriptRenderedEntry(&renderedTranscript, group, entryTool, previousKind, hasPrevious)
+				if group != "" {
+					previousKind = entryTool
+					hasPrevious = true
+				}
+			}
+			continue
+		}
+		rendered := renderEntryAt(entry, width, at)
+		if rendered == "" {
+			continue
+		}
+		appendTranscriptRenderedEntry(&renderedTranscript, rendered, entry.kind, previousKind, hasPrevious)
+		previousKind = entry.kind
+		hasPrevious = true
+	}
+	return renderedTranscript.String()
+}
+
+func toolGroupRange(entries []transcriptEntry, start int) (int, int) {
+	if start < 0 || start >= len(entries) || !isToolTransaction(entries[start]) {
+		return start, start
+	}
+
+	// Find the first tool in the current user turn.  Returning start here would
+	// make every tool look like a new group, so the same group would be rendered
+	// once for every call.
+	first := start
+	for index := start - 1; index >= 0 && entries[index].kind != entryUser; index-- {
+		if !isToolTransaction(entries[index]) {
+			break
+		}
+		first = index
+	}
+
+	// A group covers the contiguous tool transaction run within one user turn.
+	// Any non-tool entry (agent text, thinking, a system row…) ends the run so
+	// a later tool call renders as its own group instead of merging into the
+	// previous one. The second call must not be swallowed by the first group,
+	// otherwise the caller sees one big "Tools  N calls" box instead of the
+	// two groups the user expects around the interleaved agent reply.
+	last := start
+	for index := start + 1; index < len(entries) && entries[index].kind != entryUser; index++ {
+		if !isToolTransaction(entries[index]) {
+			break
+		}
+		last = index
+	}
+	return first, last
+}
+
+// toolEntriesForGroup returns the tool transaction entries belonging to the
+// contiguous group that starts at start. It deliberately stops at the first
+// non-tool entry (agent text, thinking, etc.) so interleaved model replies
+// split one user turn into separate Tools groups.
+func toolEntriesForGroup(entries []transcriptEntry, start int) []transcriptEntry {
+	if start < 0 || start >= len(entries) {
+		return nil
+	}
+	first := start
+	for first > 0 && entries[first-1].kind != entryUser && isToolTransaction(entries[first-1]) {
+		first--
+	}
+	tools := make([]transcriptEntry, 0)
+	for index := first; index < len(entries) && entries[index].kind != entryUser && isToolTransaction(entries[index]); index++ {
+		tools = append(tools, entries[index])
+	}
+	return tools
+}
+
+func toolEntriesForTurn(entries []transcriptEntry, start int) []transcriptEntry {
+	if start < 0 || start >= len(entries) {
+		return nil
+	}
+	first := start
+	for first > 0 && entries[first-1].kind != entryUser {
+		first--
+	}
+	tools := make([]transcriptEntry, 0)
+	for index := first; index < len(entries) && entries[index].kind != entryUser; index++ {
+		if isToolTransaction(entries[index]) {
+			tools = append(tools, entries[index])
+		}
+	}
+	return tools
+}
+
+// toolGroupHasRunning reports whether any tool transaction in [first, last]
+// is still running. It is used to keep completed tool groups collapsed even
+// while a later group in the same turn is active.
+func toolGroupHasRunning(entries []transcriptEntry, first, last int) bool {
+	if first < 0 || last < first || last >= len(entries) {
+		return false
+	}
+	for index := first; index <= last; index++ {
+		if isToolTransaction(entries[index]) && toolEntryStatus(entries[index]) == "running" {
+			return true
+		}
+	}
+	return false
+}
+
+func renderToolsGroup(entries []transcriptEntry, width int, at time.Time, expanded, fullResult bool) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	status := "ok"
+	for _, entry := range entries {
+		if toolEntryStatus(entry) == "error" {
+			status = "error"
+			break
+		}
+		if toolEntryStatus(entry) == "running" {
+			status = "running"
+		}
+	}
+	style := toolResultBorderStyle
+	if status == "error" {
+		style = toolErrorBorderStyle
+	} else if status == "running" {
+		style = toolCallBorderStyle
+	}
+	marker := "▸"
+	if expanded || anyToolGroupOpen(entries) {
+		marker = "▾"
+	}
+	started, finished := time.Time{}, time.Time{}
+	for _, entry := range entries {
+		if started.IsZero() || (!entry.toolStartedAt.IsZero() && entry.toolStartedAt.Before(started)) {
+			started = entry.toolStartedAt
+		}
+		end := entry.toolFinishedAt
+		if toolEntryStatus(entry) == "running" {
+			end = at
+		}
+		if !end.IsZero() && (finished.IsZero() || end.After(finished)) {
+			finished = end
+		}
+	}
+	duration := formatToolDuration(started, finished)
+	if status == "running" {
+		duration = formatToolDuration(started, at)
+	}
+	label := fmt.Sprintf("%s Tools  %d calls  %s", marker, len(entries), duration)
+	contentWidth := toolEntryContentWidth(width, style)
+	innerWidth := maxInt(1, contentWidth-style.GetHorizontalFrameSize())
+	lines := []string{toolHeaderStyle.Render(truncateDisplayWidth(label, innerWidth))}
+	if expanded {
+		for _, entry := range entries {
+			call := renderCompactToolSummary(entry, maxInt(1, innerWidth-4), at)
+			lines = append(lines, "  "+call)
+			// A tool's result detail is shown only when this particular tool is
+			// open (toolGroupOpen), independent of the other tools in the group.
+			if toolEntryStatus(entry) == "running" || !entry.toolGroupOpen {
+				continue
+			}
+			result := toolResultForDisplay(entry)
+			if result == "" {
+				result = "(empty result)"
+			}
+			resultLines := strings.Split(result, "\n")
+			if !(fullResult && entry.toolFocused) {
+				resultLines = limitRenderedDetailLines(resultLines, maxRenderedToolDetailLines)
+			}
+			for _, line := range strings.Split(renderToolDetailLines(resultLines, maxInt(1, innerWidth-6)), "\n") {
+				lines = append(lines, "    "+line)
+			}
+		}
+	}
+	return style.Width(contentWidth).Render(strings.Join(lines, "\n"))
+}
+
+func toolResultForDisplay(entry transcriptEntry) string {
+	result := entry.toolResult
+	name := toolEntryDisplayName(entry)
+	if entry.fileMutationKnown && entry.isFileMutation || (!entry.fileMutationKnown && isFileMutationTool(name)) {
+		if _, detail := splitToolSummary(entry.body); strings.TrimSpace(detail) != "" {
+			result = detail
+		}
+	} else if strings.EqualFold(name, "Select") && toolEntryStatus(entry) == "ok" {
+		if presentation, ok := parseSelectToolPresentation(entry.toolInput, entry.toolResult); ok {
+			result = presentation.detail
+		}
+	}
+	return strings.TrimRight(renderTerminalLinks(sanitizeTerminalText(result)), "\n")
 }
 
 func appendTranscriptRenderedEntry(builder *strings.Builder, rendered string, currentKind, previousKind entryKind, hasPrevious bool) {
@@ -967,7 +1241,12 @@ func renderToolTransactionEntry(entry transcriptEntry, width int, at time.Time) 
 	}
 
 	result := entry.toolResult
-	if strings.EqualFold(toolEntryDisplayName(entry), "Select") && status == "ok" {
+	name := toolEntryDisplayName(entry)
+	if status == "ok" && ((entry.fileMutationKnown && entry.isFileMutation) || (!entry.fileMutationKnown && isFileMutationTool(name))) {
+		if _, detail := splitToolSummary(entry.body); strings.TrimSpace(detail) != "" {
+			result = detail
+		}
+	} else if strings.EqualFold(name, "Select") && status == "ok" {
 		if presentation, ok := parseSelectToolPresentation(entry.toolInput, entry.toolResult); ok {
 			result = presentation.detail
 		}
@@ -1025,11 +1304,11 @@ func renderCompactToolSummary(entry transcriptEntry, width int, at time.Time) st
 	if entry.toolHovered && !entry.toolFocused {
 		statusStyle = statusStyle.Underline(true)
 	}
-	statusSeparator := " ·"
+	statusSeparator := "  "
 	statusAvailable := width - lipgloss.Width(focusPrefix) - lipgloss.Width(iconText) - lipgloss.Width(statusSeparator)
 	if statusAvailable < lipgloss.Width(toolStatusLabel(status)) {
 		iconText = icon
-		statusSeparator = "·"
+		statusSeparator = "  "
 		statusAvailable = width - lipgloss.Width(focusPrefix) - lipgloss.Width(iconText) - lipgloss.Width(statusSeparator)
 	}
 	statusChip := toolStatusChipWithinWidth(status, duration, maxInt(1, statusAvailable), statusStyle)
@@ -1058,7 +1337,11 @@ func renderCompactToolSummary(entry transcriptEntry, width int, at time.Time) st
 	line.WriteString(iconStyle.Render(iconText))
 	line.WriteString(nameStyle.Render(name))
 	if targetText != "" {
-		line.WriteString(targetStyle.Render(" " + targetText))
+		separator := "  "
+		if strings.HasSuffix(name, ":") {
+			separator = " "
+		}
+		line.WriteString(targetStyle.Render(separator + targetText))
 	}
 	line.WriteString(statusSeparator)
 	line.WriteString(statusChip)
@@ -1236,8 +1519,8 @@ func renderToolCitationQuoteLine(cite toolCitation, width int) string {
 	if target == "" {
 		return key + " " + status
 	}
-	targetWidth := maxInt(1, width-lineWidth-lipgloss.Width(" · "))
-	return key + " " + status + toolCitationStyle.Render(" · "+truncateDisplayWidth(target, targetWidth))
+	targetWidth := maxInt(1, width-lineWidth-lipgloss.Width("  "))
+	return key + "  " + status + toolCitationStyle.Render("  "+truncateDisplayWidth(target, targetWidth))
 }
 
 func toolCitationStatusText(cite toolCitation) string {
@@ -1320,7 +1603,11 @@ func renderToolDetailLines(lines []string, width int) string {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		style := toolDetailStyle
-		renderedLine := "  " + trimmed
+		// Keep the detail gutter separate from the tool output itself. Leading
+		// whitespace is meaningful in file contents and command output (for
+		// example Read, sed, and go test), so use trimmed text only for line
+		// classification and remove trailing whitespace only for display.
+		renderedLine := "  " + strings.TrimRight(line, " \t\r")
 		isDiffLine := false
 		switch {
 		case containsUnifiedDiffHunk && isUnifiedDiffMetadataLine(trimmed):
@@ -1339,8 +1626,18 @@ func renderToolDetailLines(lines []string, width int) string {
 				Bold(true)
 			renderedLine = strings.TrimRight(line, " \t\r")
 			isDiffLine = true
+		case isNumberedDiffLine(line):
+			// Diff preview context lines already contain their alignment prefix.
+			// Do not add the normal detail indentation to them, otherwise their
+			// line number and separator drift relative to +/- lines.
+			renderedLine = strings.TrimRight(line, " \t\r")
+		case containsUnifiedDiffHunk && strings.HasPrefix(line, " "):
+			// A leading space in a unified diff is the context marker, not source
+			// indentation. Replace that marker with the normal detail gutter while
+			// preserving any whitespace that follows it.
+			renderedLine = "  " + strings.TrimRight(strings.TrimPrefix(line, " "), " \t\r")
 		}
-		if isDiffLine {
+		if isDiffLine || isNumberedDiffLine(line) {
 			renderedLine = padDisplayWidth(truncateDisplayWidth(renderedLine, diffRowWidth), diffRowWidth)
 			rendered = append(rendered, style.Render(renderedLine))
 			continue
@@ -1353,6 +1650,17 @@ func renderToolDetailLines(lines []string, width int) string {
 
 func diffDetailRowsWidth(_ []string, width int) int {
 	return maxInt(1, width)
+}
+
+func isNumberedDiffLine(line string) bool {
+	fields := strings.Fields(line)
+	if len(fields) < 2 || !isDecimalNumber(fields[0]) {
+		return false
+	}
+	if fields[1] == "│" {
+		return true
+	}
+	return len(fields) >= 3 && (fields[1] == "+" || fields[1] == "-") && fields[2] == "│"
 }
 
 func hasUnifiedDiffHunk(lines []string) bool {

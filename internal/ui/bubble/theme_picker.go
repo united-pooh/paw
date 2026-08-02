@@ -123,7 +123,7 @@ func (m appModel) renderThemePickerBox() string {
 	if m.themePicker.saveError != "" {
 		lines = append(lines, m.styles.LabelError.Render(m.themePicker.saveError))
 	}
-	lines = append(lines, m.styles.StatusMuted.Render("↑/↓ preview · enter save · esc cancel"))
+	lines = append(lines, m.styles.StatusMuted.Render("↑/↓ preview  enter save  esc cancel"))
 	return m.renderModalPanel(strings.Join(lines, "\n"))
 }
 

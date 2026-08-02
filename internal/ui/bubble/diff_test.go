@@ -73,7 +73,7 @@ func TestFileMutationDiffPreviewCollapsesUnchangedRuns(t *testing.T) {
 	input := writeInputJSON(t, "a.go", newS)
 	fields := toolInputFields(input)
 	got := fileMutationDiffPreview(fields, old)
-	if !strings.Contains(got, "···") {
+	if !strings.Contains(got, "...") {
 		t.Fatalf("expected collapse marker in %q", got)
 	}
 }
@@ -133,8 +133,8 @@ func TestFormatFileMutationToolCallBodyEditSummary(t *testing.T) {
 	input := editInputJSON(t, "a.go", "return 1", "return 2")
 	body := formatFileMutationToolCallBody("Edit", toolInputFields(input), "")
 	first := firstToolEntryLine(body)
-	if !strings.Contains(first, "Edit · +1 -1") {
-		t.Fatalf("first line = %q, want summary Edit · +1 -1", first)
+	if !strings.Contains(first, "Edit  +1 -1") {
+		t.Fatalf("first line = %q, want summary Edit  +1 -1", first)
 	}
 	if !strings.Contains(body, "a.go") {
 		t.Fatalf("missing target in body: %q", body)
@@ -148,8 +148,8 @@ func TestFormatFileMutationToolCallBodyWriteNewFileSummary(t *testing.T) {
 	input := writeInputJSON(t, "new.go", "package p\n")
 	body := formatFileMutationToolCallBody("Write", toolInputFields(input), "")
 	first := firstToolEntryLine(body)
-	if !strings.Contains(first, "Write · +1 -0") {
-		t.Fatalf("first line = %q, want Write · +1 -0", first)
+	if !strings.Contains(first, "Write  +1 -0") {
+		t.Fatalf("first line = %q, want Write  +1 -0", first)
 	}
 }
 
@@ -167,15 +167,15 @@ func TestFormatRunningToolCallBodyInsertsStatusBeforeCounts(t *testing.T) {
 	input := editInputJSON(t, "a.go", "return 1", "return 2")
 	body := formatRunningToolCallBody("Edit", input, "")
 	first := firstToolEntryLine(body)
-	// status inserted as 2nd part: Edit · running · +1 -1
-	if !strings.Contains(first, "Edit · running · +1 -1") {
-		t.Fatalf("first line = %q, want Edit · running · +1 -1", first)
+	// status inserted as 2nd part: Edit  running  +1 -1
+	if !strings.Contains(first, "Edit  running  +1 -1") {
+		t.Fatalf("first line = %q, want Edit  running  +1 -1", first)
 	}
 	// Completing the tool replaces running with ok; counts survive.
 	completed := completeRunningToolCallBody(body, "ok")
 	firstCompleted := firstToolEntryLine(completed)
-	if !strings.Contains(firstCompleted, "Edit · ok · +1 -1") {
-		t.Fatalf("completed first line = %q, want Edit · ok · +1 -1", firstCompleted)
+	if !strings.Contains(firstCompleted, "Edit  ok  +1 -1") {
+		t.Fatalf("completed first line = %q, want Edit  ok  +1 -1", firstCompleted)
 	}
 }
 
@@ -185,7 +185,7 @@ func TestEditRunningBodyRendersRegionDiff(t *testing.T) {
 	body := formatRunningToolCallBody("Edit", input, old)
 
 	first := firstToolEntryLine(body)
-	if !strings.Contains(first, "Edit · running · +1 -1") {
+	if !strings.Contains(first, "Edit  running  +1 -1") {
 		t.Fatalf("summary line = %q", first)
 	}
 	if !strings.Contains(body, "internal/foo.go") {
@@ -203,7 +203,7 @@ func TestWriteRunningBodyRendersFullFileDiff(t *testing.T) {
 	body := formatRunningToolCallBody("Write", input, old)
 
 	first := firstToolEntryLine(body)
-	if !strings.Contains(first, "Write · running · +1 -1") {
+	if !strings.Contains(first, "Write  running  +1 -1") {
 		t.Fatalf("summary line = %q", first)
 	}
 	// Full-file diff: unchanged context lines + the changed line.
@@ -249,8 +249,8 @@ func TestCompletedEmptyFileCreationShowsNoZeroSummaryOrPreview(t *testing.T) {
 	if strings.Contains(body, "+0 -0") || strings.Contains(body, "│") {
 		t.Fatalf("empty-file creation displayed zero diff: %q", body)
 	}
-	if first := firstToolEntryLine(body); first != "Write · ok" {
-		t.Fatalf("first line = %q, want Write · ok", first)
+	if first := firstToolEntryLine(body); first != "Write  ok" {
+		t.Fatalf("first line = %q, want Write  ok", first)
 	}
 }
 
@@ -290,8 +290,8 @@ func TestCompletedIdenticalSnapshotShowsNoZeroSummary(t *testing.T) {
 	if strings.Contains(body, "+0 -0") || strings.Contains(body, "│") {
 		t.Fatalf("identical completed snapshot displayed zero diff: %q", body)
 	}
-	if first := firstToolEntryLine(body); first != "Write · ok" {
-		t.Fatalf("first line = %q, want Write · ok", first)
+	if first := firstToolEntryLine(body); first != "Write  ok" {
+		t.Fatalf("first line = %q, want Write  ok", first)
 	}
 }
 
@@ -318,7 +318,7 @@ func TestSnapshotDiffDistantChangesCollapseAndPreviewLimit(t *testing.T) {
 			t.Fatalf("preview missing %q: %q", changed, preview)
 		}
 	}
-	if !strings.Contains(preview, "···") {
+	if !strings.Contains(preview, "...") {
 		t.Fatalf("distant unchanged region was not collapsed: %q", preview)
 	}
 

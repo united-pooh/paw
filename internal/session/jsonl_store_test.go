@@ -82,8 +82,8 @@ func TestListSessions_EmptyDir(t *testing.T) {
 	}
 }
 
-// TestListSessions_MultipleSessionsDescOrder 验证多个会话按创建时间倒序返回。
-func TestListSessions_MultipleSessionsDescOrder(t *testing.T) {
+// TestListSessions_MultipleSessionsLRUOrder 验证多个会话按最近使用时间倒序返回。
+func TestListSessions_MultipleSessionsLRUOrder(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
@@ -112,6 +112,51 @@ func TestListSessions_MultipleSessionsDescOrder(t *testing.T) {
 	}
 	if summaries[1].SessionID != "session-old" {
 		t.Fatalf("summaries[1].SessionID = %q, want session-old", summaries[1].SessionID)
+	}
+}
+
+func TestListSessions_TouchMovesSessionToFront(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	older := time.Now().Add(-2 * time.Hour).UTC()
+	newer := time.Now().Add(-time.Hour).UTC()
+	touched := time.Now().UTC()
+
+	store.nowFn = func() time.Time { return older }
+	createTestSession(t, store, "session-old", nil)
+	store.nowFn = func() time.Time { return newer }
+	createTestSession(t, store, "session-new", nil)
+	store.nowFn = func() time.Time { return touched }
+	if err := store.TouchSession(ctx, "session-old"); err != nil {
+		t.Fatalf("TouchSession() error = %v", err)
+	}
+
+	summaries, err := store.ListSessions(ctx)
+	if err != nil {
+		t.Fatalf("ListSessions() error = %v", err)
+	}
+	if len(summaries) != 2 || summaries[0].SessionID != "session-old" {
+		t.Fatalf("summaries = %#v, want touched session-old first", summaries)
+	}
+	if !summaries[0].LastUsedAt.Equal(touched) {
+		t.Fatalf("LastUsedAt = %v, want %v", summaries[0].LastUsedAt, touched)
+	}
+}
+
+func TestListSessions_ExcludesSubagentSessions(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	createTestSession(t, store, "foreground", nil)
+	if _, err := store.CreateRoot(ctx, CreateRootRequest{SessionID: "worker", Subagent: true}); err != nil {
+		t.Fatalf("CreateRoot subagent: %v", err)
+	}
+
+	summaries, err := store.ListSessions(ctx)
+	if err != nil {
+		t.Fatalf("ListSessions() error = %v", err)
+	}
+	if len(summaries) != 1 || summaries[0].SessionID != "foreground" {
+		t.Fatalf("summaries = %#v, want foreground session only", summaries)
 	}
 }
 

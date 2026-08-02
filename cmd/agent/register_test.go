@@ -22,7 +22,7 @@ func TestRegisterInteractiveToolsAddsSelect(t *testing.T) {
 
 func TestRegisterToolsDoesNotAddSelect(t *testing.T) {
 	registry := tool.NewRegistry()
-	if err := registerTools(registry, t.TempDir(), nil, nil, "", nil); err != nil {
+	if err := registerTools(registry, t.TempDir(), nil, nil, "", nil, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := registry.Get("Select"); ok {
@@ -43,7 +43,7 @@ func TestRegisterInteractiveToolsRejectsNil(t *testing.T) {
 
 func TestRegisterToolsIncludesEdit(t *testing.T) {
 	registry := tool.NewRegistry()
-	if err := registerTools(registry, t.TempDir(), nil, nil, "", nil); err != nil {
+	if err := registerTools(registry, t.TempDir(), nil, nil, "", nil, false); err != nil {
 		t.Fatalf("registerTools: %v", err)
 	}
 	ed, ok := registry.Get("Edit")
@@ -55,5 +55,23 @@ func TestRegisterToolsIncludesEdit(t *testing.T) {
 	}
 	if _, ok := ed.(*toolfile.EditTool); !ok {
 		t.Fatalf("Edit tool concrete type = %T, want *toolfile.EditTool", ed)
+	}
+}
+
+func TestRegisterToolsEnablesOutsideReadInDangerousMode(t *testing.T) {
+	registry := tool.NewRegistry()
+	if err := registerTools(registry, t.TempDir(), nil, nil, "", nil, true); err != nil {
+		t.Fatalf("registerTools: %v", err)
+	}
+	registered, ok := registry.Get("Read")
+	if !ok {
+		t.Fatal("Read tool not registered")
+	}
+	readTool, ok := registered.(*toolfile.ReadTool)
+	if !ok {
+		t.Fatalf("Read tool concrete type = %T, want *toolfile.ReadTool", registered)
+	}
+	if !readTool.AllowOutsideRoot {
+		t.Fatal("Read tool outside-root access is disabled")
 	}
 }

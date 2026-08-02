@@ -43,7 +43,7 @@ func (m appModel) renderSelectionDock(width, height int) string {
 	answerBudget := maxInt(0, height-7-len(promptLines))
 	start, end := d.visibleRange(answerHeights, answerBudget)
 
-	title := "SELECT · " + strings.ToUpper(string(d.request.Mode))
+	title := "SELECT  " + strings.ToUpper(string(d.request.Mode))
 	selectionSummary := fmt.Sprintf("selected %d / max %d", d.selectedCount(), d.request.MaxSelect)
 	title = alignSelectionDockEnds(title, selectionSummary, width)
 
@@ -139,7 +139,7 @@ func answerStatusLine(d *selectionDock, start, end int) string {
 			constraint = fmt.Sprintf("choose up to %d", d.request.MaxSelect)
 		}
 	}
-	return fmt.Sprintf("%d answers · %s · %s", total, rangeText, constraint)
+	return fmt.Sprintf("%d answers  %s  %s", total, rangeText, constraint)
 }
 
 func answerScrollLine(start, end, total, width int) string {
@@ -163,7 +163,7 @@ func renderSelectionCustomAction(m appModel, d *selectionDock, width int) string
 		d.customInput.Width = maxInt(1, width-terminalCellWidth(prefix))
 		line = prefix + d.customInput.View()
 	} else if d.customLabel != "" {
-		line += " · " + sanitizeTerminalText(d.customLabel)
+		line += "  " + sanitizeTerminalText(d.customLabel)
 	}
 	style := m.styles.Unselected
 	if d.focus.kind == selectionFocusCustom {

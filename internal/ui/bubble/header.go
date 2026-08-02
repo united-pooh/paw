@@ -23,7 +23,7 @@ type headerSnapshot struct {
 }
 
 // headerFieldSeparator 是字段间的分隔符，占 3 个 cell。
-const headerFieldSeparator = " · "
+const headerFieldSeparator = "  "
 
 // renderHeader 把快照渲染成严格 width cell 宽的一行。纯函数。
 // 左侧显示模型和运行状态，当前时间固定贴右。

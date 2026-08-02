@@ -126,13 +126,13 @@ func completeToolCallBody(name, body, status, content string) string {
 	if json.Unmarshal([]byte(content), &result) != nil {
 		return completeRunningToolCallBody(body, status)
 	}
-	summary := "Select · cancelled"
+	summary := "Select  cancelled"
 	if !result.Cancelled {
 		noun := "options"
 		if len(result.SelectedOptions) == 1 {
 			noun = "option"
 		}
-		summary = fmt.Sprintf("Select · selected %d %s", len(result.SelectedOptions), noun)
+		summary = fmt.Sprintf("Select  selected %d %s", len(result.SelectedOptions), noun)
 	}
 	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
 	if len(lines) == 0 {
@@ -170,11 +170,11 @@ func formatFileMutationToolCallBodyWithSnapshot(name string, fields []toolDispla
 	summary := name
 	preview := ""
 	if lines, totals, ok := snapshotDiff(snapshot); ok {
-		summary = fmt.Sprintf("%s · +%d -%d", name, totals.added, totals.removed)
+		summary = fmt.Sprintf("%s  +%d -%d", name, totals.added, totals.removed)
 		preview = renderDiffPreview(lines)
 	} else if snapshot == nil {
 		if totals, ok := fileMutationChangeCounts(fields, oldContent); ok {
-			summary = fmt.Sprintf("%s · +%d -%d", name, totals.added, totals.removed)
+			summary = fmt.Sprintf("%s  +%d -%d", name, totals.added, totals.removed)
 		}
 		preview = fileMutationDiffPreview(fields, oldContent)
 	}
@@ -309,12 +309,12 @@ func setToolCallBodyStatus(body, status string) string {
 	} else {
 		parts = append(parts[:1], append([]string{status}, parts[1:]...)...)
 	}
-	lines[0] = strings.Join(parts, " · ")
+	lines[0] = strings.Join(parts, "  ")
 	return strings.Join(lines, "\n")
 }
 
 func splitToolSummaryParts(summary string) []string {
-	rawParts := strings.Split(summary, " · ")
+	rawParts := strings.Split(summary, "  ")
 	parts := make([]string, 0, len(rawParts))
 	for _, part := range rawParts {
 		part = strings.TrimSpace(part)
@@ -339,7 +339,7 @@ func formatToolResultBody(name, status, content string) string {
 	if status == "" {
 		status = "ok"
 	}
-	lines := []string{name + " · " + status}
+	lines := []string{name + "  " + status}
 	if preview := summarizeToolContent(content); preview != "" {
 		lines = append(lines, preview)
 	}
@@ -352,10 +352,10 @@ func formatSubagentToolCallBody(name string, fields []toolDisplayField) string {
 	description := fieldValue(fields, "description")
 	prompt := fieldValue(fields, "prompt")
 
-	suffix := strings.Join(nonEmptyStrings(runMode, contextMode), " · ")
+	suffix := strings.Join(nonEmptyStrings(runMode, contextMode), "  ")
 	summary := name
 	if suffix != "" {
-		summary += " · " + suffix
+		summary += "  " + suffix
 	}
 
 	lines := []string{summary}
@@ -363,7 +363,7 @@ func formatSubagentToolCallBody(name string, fields []toolDisplayField) string {
 		lines = append(lines, "description  "+description)
 	}
 	if contextMode != "" || runMode != "" {
-		lines = append(lines, "mode  "+strings.Join(nonEmptyStrings(runMode, contextMode), " · "))
+		lines = append(lines, "mode  "+strings.Join(nonEmptyStrings(runMode, contextMode), "  "))
 	}
 	if prompt != "" {
 		lines = append(lines, "prompt  "+summarizeToolContent(prompt))

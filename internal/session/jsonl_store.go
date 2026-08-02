@@ -80,6 +80,7 @@ func (s *JSONLStore) CreateRoot(ctx context.Context, request CreateRootRequest) 
 	meta := Meta{
 		SessionID: sessionID,
 		CreatedAt: s.nowFn().UTC(),
+		Subagent:  request.Subagent,
 	}
 	if err := s.writeMeta(ctx, meta); err != nil {
 		return Meta{}, err
@@ -131,6 +132,7 @@ func (s *JSONLStore) Fork(ctx context.Context, request ForkRequest) (Meta, error
 		ParentSessionID: parentID,
 		ForkFromSeq:     forkFromSeq,
 		CreatedAt:       s.nowFn().UTC(),
+		Subagent:        request.Subagent,
 	}
 	if err := s.writeMeta(ctx, meta); err != nil {
 		return Meta{}, err
@@ -259,6 +261,9 @@ func (s *JSONLStore) appendRecords(ctx context.Context, sessionID string, record
 	}
 	if err := f.Sync(); err != nil {
 		return -1, -1, fmt.Errorf("同步 transcript 失败: %w", err)
+	}
+	if err := os.Chtimes(s.metaPath(sessionID), now, now); err != nil {
+		return -1, -1, fmt.Errorf("更新 session 最近使用时间失败: %w", err)
 	}
 	return firstSeq, lastSeq, nil
 }
@@ -501,7 +506,17 @@ func (s *JSONLStore) writeMeta(ctx context.Context, meta Meta) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.metaPath(meta.SessionID), data, 0o644)
+	path := s.metaPath(meta.SessionID)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return err
+	}
+	if !meta.CreatedAt.IsZero() {
+		createdAt := meta.CreatedAt.UTC()
+		if err := os.Chtimes(path, createdAt, createdAt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *JSONLStore) readOwnRecords(ctx context.Context, sessionID string) ([]Record, error) {
@@ -724,12 +739,30 @@ func (s *JSONLStore) keyIndexPath(key string) string {
 type SessionSummary struct {
 	SessionID      string
 	CreatedAt      time.Time
+	LastUsedAt     time.Time
 	FirstMessage   string // 第一条用户消息的前 80 个字符，可能为空
 	TranscriptSize int64  // transcript 文件大小（字节）
 }
 
-// ListSessions 枚举所有已存储的会话，按创建时间倒序返回。
-// 读取失败的会话会被跳过。
+// TouchSession marks a foreground session as recently used. The metadata file's
+// modification time is deliberately used as a lightweight access marker so the
+// persisted metadata schema remains backward compatible.
+func (s *JSONLStore) TouchSession(ctx context.Context, sessionID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := s.GetMeta(ctx, sessionID); err != nil {
+		return err
+	}
+	now := s.nowFn().UTC()
+	if err := os.Chtimes(s.metaPath(sessionID), now, now); err != nil {
+		return fmt.Errorf("更新 session 最近使用时间失败: %w", err)
+	}
+	return nil
+}
+
+// ListSessions 枚举所有可恢复的前台会话，按最近使用时间倒序返回。
+// subagent 会话及读取失败的会话会被跳过。
 func (s *JSONLStore) ListSessions(ctx context.Context) ([]SessionSummary, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -757,10 +790,18 @@ func (s *JSONLStore) ListSessions(ctx context.Context) ([]SessionSummary, error)
 		if err != nil {
 			continue // 跳过读取失败的会话
 		}
+		if meta.Subagent || s.isLegacySubagentSession(sessionID) {
+			continue
+		}
 
+		lastUsedAt := meta.CreatedAt
+		if info, statErr := os.Stat(s.metaPath(sessionID)); statErr == nil && info.ModTime().After(lastUsedAt) {
+			lastUsedAt = info.ModTime()
+		}
 		summary := SessionSummary{
-			SessionID: meta.SessionID,
-			CreatedAt: meta.CreatedAt,
+			SessionID:  meta.SessionID,
+			CreatedAt:  meta.CreatedAt,
+			LastUsedAt: lastUsedAt,
 		}
 
 		// 尝试读取第一条用户消息和 transcript 文件大小
@@ -784,10 +825,18 @@ func (s *JSONLStore) ListSessions(ctx context.Context) ([]SessionSummary, error)
 		summaries = append(summaries, summary)
 	}
 
-	// 按创建时间倒序排列（最新的在前）
+	// LRU 顺序：最近使用的会话在前；时间相同时用 session ID 保证稳定顺序。
 	sort.Slice(summaries, func(i, j int) bool {
-		return summaries[i].CreatedAt.After(summaries[j].CreatedAt)
+		if summaries[i].LastUsedAt.Equal(summaries[j].LastUsedAt) {
+			return summaries[i].SessionID < summaries[j].SessionID
+		}
+		return summaries[i].LastUsedAt.After(summaries[j].LastUsedAt)
 	})
 
 	return summaries, nil
+}
+
+func (s *JSONLStore) isLegacySubagentSession(sessionID string) bool {
+	_, err := os.Stat(filepath.Join(s.baseDir, "tasks", sessionID, "meta.json"))
+	return err == nil
 }

@@ -11,11 +11,13 @@ type Meta struct {
 	ParentSessionID string    `json:"parent_session_id,omitempty"`
 	ForkFromSeq     int64     `json:"fork_from_seq,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
+	Subagent        bool      `json:"subagent,omitempty"`
 }
 
 type CreateRootRequest struct {
 	// 创建请求的约束性质数据结构
 	SessionID string
+	Subagent  bool
 }
 
 type ForkRequest struct {
@@ -23,6 +25,7 @@ type ForkRequest struct {
 	SessionID       string
 	ParentSessionID string
 	ForkFromSeq     int64
+	Subagent        bool
 }
 
 type Store interface {

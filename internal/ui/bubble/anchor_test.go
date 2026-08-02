@@ -122,3 +122,34 @@ func TestAnchoredOutputCloseRestoresTerminalStateOnce(t *testing.T) {
 		t.Fatalf("close output = %q, want one restore %q", got, want)
 	}
 }
+
+func TestAnchoredOutputHidesCursorWhenInputAnchorIsSuspended(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "cursor-hidden-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	anchor := newTerminalCursorAnchor()
+	output := newAnchoredOutput(file, anchor)
+	defer output.Close()
+
+	anchor.hide()
+	if _, err := output.Write([]byte("modal frame")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "modal frame" + terminalCursorHide + resetTerminalCursorColorSequence() + terminalSGRReset
+	if got := string(data); got != want {
+		t.Fatalf("hidden cursor output = %q, want %q", got, want)
+	}
+	if strings.Contains(string(data), terminalCursorShow) {
+		t.Fatalf("hidden cursor output unexpectedly shows cursor: %q", data)
+	}
+}

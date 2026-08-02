@@ -75,6 +75,67 @@ func TestManagerKeepsDisabledServerWithoutLaunchingIt(t *testing.T) {
 	}
 }
 
+func TestManagerKeepsStartingWhenEnabledServerIsUnavailable(t *testing.T) {
+	manager, err := Start(context.Background(), Config{Servers: map[string]ServerConfig{
+		"unavailable": {
+			Name:    "unavailable",
+			Command: "paw-mcp-command-that-does-not-exist",
+			WorkDir: t.TempDir(),
+			Enabled: true,
+		},
+	}})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+
+	if tools := manager.Snapshot().Tools; len(tools) != 0 {
+		t.Fatalf("tools=%#v, want none from unavailable server", tools)
+	}
+	statuses := manager.Status()
+	if len(statuses) != 1 || statuses[0].State != "unavailable" {
+		t.Fatalf("statuses=%#v", statuses)
+	}
+	if !strings.Contains(statuses[0].LastError, `MCP server "unavailable"`) {
+		t.Fatalf("LastError=%q", statuses[0].LastError)
+	}
+}
+
+func TestManagerRetainsHealthyServersWhenAnotherIsUnavailable(t *testing.T) {
+	manager, err := Start(context.Background(), Config{Servers: map[string]ServerConfig{
+		"codegraph": {
+			Name:    "codegraph",
+			Command: os.Args[0],
+			Args:    []string{"-test.run=TestMCPManagerHelper"},
+			WorkDir: t.TempDir(),
+			Enabled: true,
+			Env:     map[string]string{"GO_WANT_MCP_MANAGER_HELPER": "1"},
+		},
+		"unavailable": {
+			Name:    "unavailable",
+			Command: "paw-mcp-command-that-does-not-exist",
+			WorkDir: t.TempDir(),
+			Enabled: true,
+		},
+	}})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+
+	snapshot := manager.Snapshot()
+	if !snapshotHasTool(snapshot, "codegraph__explore") {
+		t.Fatalf("healthy server tools missing: %#v", snapshot.Tools)
+	}
+	if snapshotHasTool(snapshot, "unavailable__list_resources") {
+		t.Fatalf("unavailable server exposed tools: %#v", snapshot.Tools)
+	}
+	statuses := manager.Status()
+	if len(statuses) != 2 || statuses[0].Name != "codegraph" || statuses[0].State != "running" || statuses[1].Name != "unavailable" || statuses[1].State != "unavailable" {
+		t.Fatalf("statuses=%#v", statuses)
+	}
+}
+
 func TestCodeGraphSmokeWhenEnabled(t *testing.T) {
 	if os.Getenv("PAW_RUN_CODEGRAPH_SMOKE") != "1" {
 		t.Skip("set PAW_RUN_CODEGRAPH_SMOKE=1 to run the local CodeGraph smoke test")

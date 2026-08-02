@@ -100,6 +100,7 @@ type Runner struct {
 	tokenTracer            *tokentracer.Tracer
 	traceStageID           string
 	traceAgentID           string
+	yoloModeHandler        func(bool)
 	nowFn                  func() time.Time
 }
 
@@ -190,6 +191,56 @@ func (runner *Runner) ReplaceToolNamespace(namespace string, tools []tool.Tool) 
 		return fmt.Errorf("runner tool registry is unavailable")
 	}
 	return runner.registry.ReplaceNamespace(namespace, tools)
+}
+
+// SetYoloModeHandler installs a callback used to propagate runtime mode changes
+// to components such as future subagent worker processes.
+func (runner *Runner) SetYoloModeHandler(handler func(bool)) {
+	if runner == nil {
+		return
+	}
+	runner.mu.Lock()
+	runner.yoloModeHandler = handler
+	runner.mu.Unlock()
+}
+
+// SetYoloMode toggles outside-workspace access for the registered Read tool.
+func (runner *Runner) SetYoloMode(enabled bool) (bool, error) {
+	if runner == nil || runner.registry == nil {
+		return false, fmt.Errorf("runner tool registry is unavailable")
+	}
+	registered, ok := runner.registry.Get("Read")
+	if !ok {
+		return false, fmt.Errorf("Read tool is unavailable")
+	}
+	controller, ok := registered.(interface {
+		SetAllowOutsideRoot(bool)
+		OutsideRootAllowed() bool
+	})
+	if !ok {
+		return false, fmt.Errorf("Read tool does not support yolo mode")
+	}
+	controller.SetAllowOutsideRoot(enabled)
+	runner.mu.RLock()
+	handler := runner.yoloModeHandler
+	runner.mu.RUnlock()
+	if handler != nil {
+		handler(enabled)
+	}
+	return controller.OutsideRootAllowed(), nil
+}
+
+// YoloMode reports whether Read may currently access paths outside the workspace.
+func (runner *Runner) YoloMode() bool {
+	if runner == nil || runner.registry == nil {
+		return false
+	}
+	registered, ok := runner.registry.Get("Read")
+	if !ok {
+		return false
+	}
+	controller, ok := registered.(interface{ OutsideRootAllowed() bool })
+	return ok && controller.OutsideRootAllowed()
 }
 
 // RunTurn 执行一次最小工具闭环流程，并返回最终 assistant 消息。

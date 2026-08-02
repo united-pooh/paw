@@ -156,16 +156,16 @@ func (m appModel) renderWorktreeChip(width int) string {
 
 	label := name
 	if ref != "" {
-		label += " · " + ref
+		label += "  " + ref
 	}
 	labelBudget := maxInt(1, width-worktreeChipStyle.GetHorizontalPadding())
 	label = truncateDisplayWidth(label, labelBudget)
 	separator := ""
-	if ref != "" && strings.Contains(label, " · ") {
-		parts := strings.SplitN(label, " · ", 2)
+	if ref != "" && strings.Contains(label, "  ") {
+		parts := strings.SplitN(label, "  ", 2)
 		name = parts[0]
 		ref = parts[1]
-		separator = " · "
+		separator = "  "
 	} else {
 		name = label
 		ref = ""

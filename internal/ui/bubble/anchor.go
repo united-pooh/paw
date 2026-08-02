@@ -20,6 +20,7 @@ const (
 // terminalCursorPosition 描述一次重绘后真实终端光标应停留的位置。
 type terminalCursorPosition struct {
 	active       bool
+	hidden       bool
 	upFromBottom int
 	column       int
 	background   string
@@ -112,6 +113,12 @@ func (a *terminalCursorAnchor) currentAnimation() (terminalCursorAnimation, bool
 // clear 请求下一次输出后恢复终端默认光标状态。
 func (a *terminalCursorAnchor) clear() {
 	a.set(terminalCursorPosition{})
+}
+
+// hide 请求下一次输出后隐藏真实终端光标，但不把它锚定到输入框。
+// modal/selection 界面没有可编辑文本时应使用该状态，避免默认光标暴露在固定帧之外。
+func (a *terminalCursorAnchor) hide() {
+	a.set(terminalCursorPosition{hidden: true})
 }
 
 // consume 取走并清空待应用的位置状态。
@@ -250,6 +257,14 @@ func (w *anchoredOutput) Write(p []byte) (int, error) {
 	}
 
 	if position, ok := w.anchor.consume(); ok {
+		if position.hidden {
+			if _, err := w.out.Write([]byte(terminalCursorHide + resetTerminalCursorColorSequence() + terminalSGRReset)); err != nil {
+				return n, err
+			}
+			w.last = terminalCursorPosition{}
+			w.visual = terminalCursorVisual{}
+			return n, nil
+		}
 		if !position.active {
 			if _, err := w.out.Write([]byte(restoreTerminalCursorState())); err != nil {
 				return n, err

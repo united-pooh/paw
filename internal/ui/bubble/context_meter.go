@@ -366,7 +366,7 @@ func compactContextStatusLine(width int, options ...[]string) string {
 		return ""
 	}
 	for _, parts := range options {
-		visible := strings.Join(nonEmptyStrings(parts...), " · ")
+		visible := strings.Join(nonEmptyStrings(parts...), "  ")
 		if lipgloss.Width(visible) <= width {
 			return centeredContextStatusText(width, visible)
 		}

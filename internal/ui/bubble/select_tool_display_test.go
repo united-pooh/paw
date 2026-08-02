@@ -19,15 +19,15 @@ func TestFormatSelectToolCallBodyHidesOptionPayload(t *testing.T) {
 func TestCompleteSelectToolCallBodySummarizesResult(t *testing.T) {
 	running := formatRunningToolCallBody("Select", json.RawMessage(`{"prompt":"Pick","mode":"multiple","options":[{"id":"a","label":"A"}]}`), "")
 	got := completeToolCallBody("Select", running, "ok", `{"cancelled":false,"selected_options":[{"id":"a","label":"A"}]}`)
-	if strings.Split(got, "\n")[0] != "Select · selected 1 option" {
+	if strings.Split(got, "\n")[0] != "Select  selected 1 option" {
 		t.Fatalf("body = %q", got)
 	}
 	got = completeToolCallBody("Select", running, "ok", `{"cancelled":false,"selected_options":[{"id":"a","label":"A"},{"id":"b","label":"B"}]}`)
-	if strings.Split(got, "\n")[0] != "Select · selected 2 options" {
+	if strings.Split(got, "\n")[0] != "Select  selected 2 options" {
 		t.Fatalf("body = %q", got)
 	}
 	got = completeToolCallBody("Select", running, "ok", `{"cancelled":true,"selected_options":[]}`)
-	if strings.Split(got, "\n")[0] != "Select · cancelled" {
+	if strings.Split(got, "\n")[0] != "Select  cancelled" {
 		t.Fatalf("body = %q", got)
 	}
 }

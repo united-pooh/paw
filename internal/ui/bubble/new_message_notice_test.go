@@ -13,7 +13,7 @@ func TestNewMessageNoticeText(t *testing.T) {
 	if got := newMessageNoticeText(3, false, 80); got != "↓ 3 条新消息" {
 		t.Fatalf("default text = %q", got)
 	}
-	if got := newMessageNoticeText(3, true, 80); got != "↓ 3 条新消息 · 回到底部" {
+	if got := newMessageNoticeText(3, true, 80); got != "↓ 3 条新消息  回到底部" {
 		t.Fatalf("hover text = %q", got)
 	}
 }

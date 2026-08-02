@@ -333,7 +333,10 @@ func (m appModel) updateTerminalCursorAnchor(layout tuiLayout) {
 		return
 	}
 	if !m.shouldAnchorTextInputCursor() {
-		m.cursorAnchor.clear()
+		// 浮层、选择器和运行态没有可供真实终端光标锚定的 textarea。
+		// 此时必须隐藏光标；恢复为终端默认可见状态会让它停在整帧输出后的
+		// 帧外位置（通常是底部边框下一行）。
+		m.cursorAnchor.hide()
 		return
 	}
 	m.cursorAnchor.set(m.inputCursorTerminalPosition(layout))

@@ -1,6 +1,6 @@
-// 底部 status 行渲染层（方案 B · 细线分隔）。
+// 底部 status 行渲染层（方案 B  细线分隔）。
 //
-// 布局：[状态] · [模式] · [token ripple] · [token count]  [工作树]
+// 布局：[状态]  [模式]  [token ripple]  [token count]  [工作树]
 // 生成态前导 braille 旋转 spinner；均衡器 idle=进度填充、generating=波浪起伏。
 // 遵循 UI/数据隔离：各段从 appModel accessor 读数据，按 cell 预算截断，整体
 // 严格等于 width 个 cell，数据内容绝不破坏布局。
@@ -14,7 +14,7 @@ import (
 )
 
 // statusSegmentSeparator 是 B 布局各段之间的点号分隔符（轻盈）。
-const statusSegmentSeparator = " · "
+const statusSegmentSeparator = "  "
 
 // spinnerFrames 是 braille 旋转 spinner 帧序列，生成态前导。
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}

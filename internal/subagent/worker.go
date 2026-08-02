@@ -53,6 +53,7 @@ type Process interface {
 }
 
 type ProcessLauncher struct {
+	mu      sync.RWMutex
 	Command string
 	Args    []string
 	Dir     string
@@ -70,20 +71,49 @@ func NewProcessLauncher(command, dir string) *ProcessLauncher {
 
 func (l *ProcessLauncher) SetMCPBroker(broker coremcp.Broker) {
 	if l != nil {
+		l.mu.Lock()
 		l.Broker = broker
+		l.mu.Unlock()
 	}
+}
+
+func (l *ProcessLauncher) SetDangerousMode(enabled bool) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	args := make([]string, 0, len(l.Args)+1)
+	for _, arg := range l.Args {
+		if arg != "--dangerously" && arg != "--yolo" {
+			args = append(args, arg)
+		}
+	}
+	if enabled {
+		args = append(args, "--dangerously")
+	}
+	l.Args = args
+}
+
+func (l *ProcessLauncher) commandConfig() (args, env []string, dir string, broker coremcp.Broker) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return append([]string(nil), l.Args...), append([]string(nil), l.Env...), l.Dir, l.Broker
 }
 
 func (l *ProcessLauncher) Start(ctx context.Context, req WorkerRequest) (Process, error) {
 	if l == nil {
 		return nil, fmt.Errorf("subagent process launcher is nil")
 	}
+	l.mu.RLock()
 	command := strings.TrimSpace(l.Command)
+	l.mu.RUnlock()
 	if command == "" {
 		return nil, fmt.Errorf("subagent worker command is empty")
 	}
-	if l.Broker != nil {
-		return l.startFramed(ctx, req, command)
+	args, env, dir, broker := l.commandConfig()
+	if broker != nil {
+		return l.startFramed(ctx, req, command, args, env, dir, broker)
 	}
 
 	payload, err := json.Marshal(req)
@@ -93,9 +123,9 @@ func (l *ProcessLauncher) Start(ctx context.Context, req WorkerRequest) (Process
 	payload = append(payload, '\n')
 
 	childCtx, cancel := context.WithCancel(ctx)
-	cmd := exec.CommandContext(childCtx, command, l.Args...)
-	cmd.Dir = l.Dir
-	cmd.Env = append(os.Environ(), l.Env...)
+	cmd := exec.CommandContext(childCtx, command, args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdin = bytes.NewReader(payload)
 
 	var stdout bytes.Buffer
@@ -110,11 +140,11 @@ func (l *ProcessLauncher) Start(ctx context.Context, req WorkerRequest) (Process
 	return &execProcess{cmd: cmd, cancel: cancel, stdout: &stdout, stderr: &stderr}, nil
 }
 
-func (l *ProcessLauncher) startFramed(ctx context.Context, req WorkerRequest, command string) (Process, error) {
+func (l *ProcessLauncher) startFramed(ctx context.Context, req WorkerRequest, command string, args, env []string, dir string, broker coremcp.Broker) (Process, error) {
 	childCtx, cancel := context.WithCancel(ctx)
-	cmd := exec.CommandContext(childCtx, command, l.Args...)
-	cmd.Dir = l.Dir
-	cmd.Env = append(os.Environ(), l.Env...)
+	cmd := exec.CommandContext(childCtx, command, args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
@@ -147,7 +177,7 @@ func (l *ProcessLauncher) startFramed(ctx context.Context, req WorkerRequest, co
 		stdin:      stdin,
 		stdout:     stdout,
 		stderr:     &bytes.Buffer{},
-		broker:     l.Broker,
+		broker:     broker,
 		readDone:   make(chan struct{}),
 		resultDone: make(chan struct{}),
 	}
@@ -156,7 +186,7 @@ func (l *ProcessLauncher) startFramed(ctx context.Context, req WorkerRequest, co
 		_ = stderr.Close()
 	}()
 	go p.readLoop()
-	if err := p.send(NewWorkerStartMessage(req, l.Broker.Snapshot())); err != nil {
+	if err := p.send(NewWorkerStartMessage(req, broker.Snapshot())); err != nil {
 		_ = p.Stop()
 		return nil, err
 	}

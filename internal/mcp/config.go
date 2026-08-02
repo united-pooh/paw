@@ -9,6 +9,35 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// expandEnvList expands ${VAR} / $VAR references in a list of strings using the
+// current process environment. Each element is expanded independently so a
+// missing variable yields an empty argument rather than a malformed one.
+func expandEnvList(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	expanded := make([]string, len(values))
+	for i, value := range values {
+		expanded[i] = os.ExpandEnv(value)
+	}
+	return expanded
+}
+
+// expandEnvMap expands ${VAR} / $VAR references in env map values using the
+// current process environment. Keys are left untouched so callers can rely on
+// the configured variable names, and so undefined variables resolve to empty
+// values instead of a literal reference reaching the child process.
+func expandEnvMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	expanded := make(map[string]string, len(values))
+	for key, value := range values {
+		expanded[key] = os.ExpandEnv(value)
+	}
+	return expanded
+}
+
 const (
 	configDirectoryName = ".paw"
 	configFileName      = "mcp.toml"
@@ -93,10 +122,10 @@ func LoadConfig(homeDir, workspaceRoot string) (Config, error) {
 		servers[name] = ServerConfig{
 			Name:    name,
 			Command: command,
-			Args:    append([]string(nil), raw.Args...),
+			Args:    expandEnvList(raw.Args),
 			WorkDir: workDir,
 			Enabled: enabled,
-			Env:     cloneStringMap(raw.Env),
+			Env:     expandEnvMap(raw.Env),
 		}
 	}
 
@@ -136,15 +165,4 @@ func validateServerName(name string) error {
 		return fmt.Errorf("invalid MCP server name %q: use only letters, digits, underscore, or hyphen", name)
 	}
 	return nil
-}
-
-func cloneStringMap(values map[string]string) map[string]string {
-	if len(values) == 0 {
-		return nil
-	}
-	cloned := make(map[string]string, len(values))
-	for key, value := range values {
-		cloned[key] = value
-	}
-	return cloned
 }

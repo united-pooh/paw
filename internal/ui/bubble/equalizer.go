@@ -47,7 +47,7 @@ func renderEqualizer(usedPct, amp float64, frameIdx int, cells int) string {
 }
 
 // equalizerLevel 返回第 i 格（0-indexed）的高度级别 0..7。
-// 公式：level = clamp(round(fill + amp*waveAmp*sin(2π·(i/cells − phase))), 0, 7)
+// 公式：level = clamp(round(fill + amp*waveAmp*sin(2π*(i/cells − phase))), 0, 7)
 func equalizerLevel(usedPct, amp float64, frameIdx int, i, cells int) int {
 	base := equalizerFillLevel(usedPct, i, cells)
 	if amp <= 0 {

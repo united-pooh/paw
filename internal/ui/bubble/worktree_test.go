@@ -73,7 +73,7 @@ func TestWorktreeLabelUsesOnlyBranchColorForGitState(t *testing.T) {
 	model.worktree = worktreeSnapshot{name: "paw", ref: "dev", state: worktreeDirty, isGit: true}
 	rendered := model.renderWorktreeLine(80)
 	plain := ansi.Strip(rendered)
-	if !strings.Contains(plain, "paw · dev") {
+	if !strings.Contains(plain, "paw  dev") {
 		t.Fatalf("worktree label = %q, want name and branch", plain)
 	}
 	for _, forbidden := range []string{"●", "⌂", "⎇"} {
@@ -90,7 +90,7 @@ func TestWorktreeLabelUsesOnlyBranchColorForGitState(t *testing.T) {
 
 	model.worktree = worktreeSnapshot{name: "paw", ref: "abc1234", state: worktreeClean, isGit: true, detached: true}
 	plain = ansi.Strip(model.renderWorktreeLine(80))
-	if !strings.Contains(plain, "paw · abc1234") {
+	if !strings.Contains(plain, "paw  abc1234") {
 		t.Fatalf("detached label = %q", plain)
 	}
 }
@@ -169,7 +169,7 @@ func TestStatusLinePlacesWorktreeAfterTokenInfo(t *testing.T) {
 	ready := strings.Index(dock, "ready")
 	chat := strings.Index(dock, "chat")
 	count := strings.Index(dock, " / ")
-	worktree := strings.Index(dock, "paw · dev")
+	worktree := strings.Index(dock, "paw  dev")
 	if ready < 0 || chat < 0 || count < 0 || worktree < 0 || !(ready < chat && chat < count && count < worktree) {
 		t.Fatalf("status line order = %q", dock)
 	}

@@ -1,4 +1,4 @@
-// 本文件定义 /sessions 命令的会话选择器 TUI 组件。
+// 本文件定义 /resume 命令的会话选择器 TUI 组件。
 package bubble
 
 import (
@@ -16,7 +16,7 @@ type sessionStateLoader interface {
 	LoadSession(ctx context.Context, sessionID string) (loop.SessionLoadResult, error)
 }
 
-// sessionPicker 保存 /sessions 交互选择器的临时 UI 状态。
+// sessionPicker 保存 /resume 交互选择器的临时 UI 状态。
 type sessionPicker struct {
 	sessions      []sessionSummaryItem
 	selectedIndex int
@@ -43,7 +43,7 @@ func loadSessionsCmd(ctx context.Context, store SessionStore) tea.Cmd {
 		for _, s := range summaries {
 			items = append(items, sessionSummaryItem{
 				sessionID:      s.SessionID,
-				createdAt:      s.CreatedAt,
+				lastUsedAt:     s.LastUsedAt,
 				firstMessage:   s.FirstMessage,
 				transcriptSize: s.TranscriptSize,
 			})
@@ -71,6 +71,13 @@ func loadSessionHistoryCmd(ctx context.Context, runner Runner, store SessionStor
 			var err error
 			messages, err = runner.LoadHistory(ctx, sessionID)
 			if err != nil {
+				return sessionRestoredMsg{err: err}
+			}
+		}
+		if toucher, ok := store.(interface {
+			TouchSession(context.Context, string) error
+		}); ok {
+			if err := toucher.TouchSession(ctx, sessionID); err != nil {
 				return sessionRestoredMsg{err: err}
 			}
 		}
@@ -224,7 +231,7 @@ func (m appModel) renderSessionPickerBox() string {
 // renderSessionPickerContent 渲染会话列表内容。
 func (m appModel) renderSessionPickerContent() string {
 	picker := m.sessionPicker
-	lines := []string{wizardTitleStyle.Render("Sessions")}
+	lines := []string{wizardTitleStyle.Render("Resume Session")}
 
 	if picker.err != "" {
 		lines = append(lines, labelErrorStyle.Render(picker.err))
@@ -271,16 +278,16 @@ func (m appModel) renderSessionPickerContent() string {
 	return strings.Join(lines, "\n")
 }
 
-// formatSessionLabel 格式化会话列表项的显示文本。创建时间在隐藏
+// formatSessionLabel 格式化会话列表项的显示文本。最近使用时间在隐藏
 // session ID 后提供稳定的、可读的候选项区分信息。
 func formatSessionLabel(item sessionSummaryItem) string {
-	createdAt := item.createdAt.Format("2006-01-02 15:04:05")
+	lastUsedAt := item.lastUsedAt.Format("2006-01-02 15:04:05")
 	size := formatFileSize(item.transcriptSize)
 	msg := strings.Join(strings.Fields(sanitizeTerminalText(item.firstMessage)), " ")
 	if msg != "" {
-		return fmt.Sprintf("%s  %s  %s", createdAt, size, truncateDisplayWidth(msg, 80))
+		return fmt.Sprintf("%s  %s  %s", lastUsedAt, size, truncateDisplayWidth(msg, 80))
 	}
-	return fmt.Sprintf("%s  %s  (empty)", createdAt, size)
+	return fmt.Sprintf("%s  %s  (empty)", lastUsedAt, size)
 }
 
 // formatFileSize 将字节数格式化为人类可读的文件大小。

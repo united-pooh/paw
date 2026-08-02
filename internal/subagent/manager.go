@@ -726,11 +726,12 @@ func (m *Manager) prepareSession(ctx context.Context, req Request) (string, erro
 				SessionID:       sessionID,
 				ParentSessionID: parentID,
 				ForkFromSeq:     -1,
+				Subagent:        true,
 			}); err != nil {
 				return "", err
 			}
 		default:
-			if _, err := m.store.CreateRoot(ctx, session.CreateRootRequest{SessionID: sessionID}); err != nil {
+			if _, err := m.store.CreateRoot(ctx, session.CreateRootRequest{SessionID: sessionID, Subagent: true}); err != nil {
 				return "", err
 			}
 		}
@@ -750,11 +751,12 @@ func (m *Manager) prepareSession(ctx context.Context, req Request) (string, erro
 			SessionID:       sessionID,
 			ParentSessionID: parentID,
 			ForkFromSeq:     -1,
+			Subagent:        true,
 		}); err != nil {
 			return "", err
 		}
 	default:
-		if _, err := m.store.CreateRoot(ctx, session.CreateRootRequest{SessionID: sessionID}); err != nil {
+		if _, err := m.store.CreateRoot(ctx, session.CreateRootRequest{SessionID: sessionID, Subagent: true}); err != nil {
 			return "", err
 		}
 	}

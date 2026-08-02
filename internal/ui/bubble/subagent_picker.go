@@ -288,7 +288,7 @@ func mergeTranscriptToolEntries(entries []transcriptEntry) []transcriptEntry {
 				call.toolStatus = entry.toolStatus
 				call.toolResult = entry.toolResult
 				call.isError = entry.isError
-				call.toolExpanded = entry.isError
+				call.toolExpanded = entry.isError || isFileMutationTool(call.toolName)
 				call.toolResultOnly = false
 				call.body = completeToolCallBody(call.toolName, call.body, entry.toolStatus, entry.toolResult)
 				if strings.EqualFold(call.toolName, "Select") && strings.EqualFold(call.toolStatus, "ok") {
@@ -336,7 +336,7 @@ func decorateSubagentTranscript(task subagent.TaskSnapshot, entries []transcript
 	header := transcriptEntry{
 		kind:      entrySystem,
 		title:     "subagent",
-		body:      fmt.Sprintf("viewing %s · session %s", taskDisplayName(task), shortTaskID(firstNonEmptyString(task.SessionID, task.ID))),
+		body:      fmt.Sprintf("viewing %s  session %s", taskDisplayName(task), shortTaskID(firstNonEmptyString(task.SessionID, task.ID))),
 		createdAt: createdAt,
 	}
 	out := make([]transcriptEntry, 0, len(entries)+1)
@@ -430,6 +430,37 @@ func copyTranscriptEntries(entries []transcriptEntry) []transcriptEntry {
 	return out
 }
 
+// finalizeRestoredRunningTools 把历史恢复后仍然处于 running 的孤儿工具调用
+// 收尾为 error（等价于实时流程 markRunningToolsError 的处理）。历史记录里
+// 没有对应结果的调用只可能来自被中断的上一轮；保持 running 会让工具组按
+// 折叠态渲染（running 组使用全局 toolGroupExpanded=false），而 toggleToolExpansion
+// 拒绝切换 running 事务，于是点击\"无法展开\"。收尾成 error 后组内不再有
+// running，折叠态改由首个条目的 toolExpanded 决定，点击即可正常展开。
+func (m *appModel) finalizeRestoredRunningTools() {
+	if m == nil {
+		return
+	}
+	now := m.animationNow()
+	changed := false
+	for index := range m.transcript {
+		entry := &m.transcript[index]
+		if !isToolTransaction(*entry) || toolEntryStatus(*entry) != "running" {
+			continue
+		}
+		entry.body = completeRunningToolCallBody(entry.body, "error")
+		entry.toolStatus = "error"
+		entry.isError = true
+		entry.toolResult = "interrupted: previous turn ended before completion"
+		entry.toolExpanded = true
+		entry.toolFinishedAt = now
+		touchTranscriptEntry(entry)
+		changed = true
+	}
+	if changed {
+		m.lastToolProgressSecond = -1
+	}
+}
+
 func (m *appModel) applySessionPickerRestore(msg sessionRestoredMsg) {
 	m.resetToolInspect()
 	m.clearNewMessageNotice()
@@ -439,6 +470,7 @@ func (m *appModel) applySessionPickerRestore(msg sessionRestoredMsg) {
 	m.subagentPreview = nil
 	m.syncInputPlaceholder()
 	m.transcript = mergeTranscriptToolEntries(copyTranscriptEntries(msg.entries))
+	m.finalizeRestoredRunningTools()
 	m.inputHistory = inputHistoryFromTranscript(msg.entries)
 	m.resetHistoryNavigation()
 	m.addEntry(transcriptEntry{kind: entrySystem, title: "sessions", body: fmt.Sprintf("已切换到会话: %s", msg.sessionID)})

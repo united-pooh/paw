@@ -124,18 +124,15 @@ func rebuildLegacyStyles() {
 	toolStatusOKStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorTerminalBackground)).
 		Background(colorManager.LipglossColor(colorWorktreeClean)).
-		Bold(true).
-		Padding(0, 1)
+		Bold(true)
 	toolStatusRunningStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorTerminalBackground)).
 		Background(colorManager.LipglossColor(colorWorktreeDirty)).
-		Bold(true).
-		Padding(0, 1)
+		Bold(true)
 	toolStatusErrorStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorTerminalBackground)).
 		Background(colorManager.LipglossColor(colorWorktreeConflict)).
-		Bold(true).
-		Padding(0, 1)
+		Bold(true)
 	toolCitationQuoteBorderStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorMarkdownQuoteBorder))
 	toolCitationRailStyle = lipgloss.NewStyle().

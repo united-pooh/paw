@@ -31,8 +31,8 @@ func TestToolTrackUsesSemanticEntrySpacing(t *testing.T) {
 	}
 	lines := strings.Split(ansi.Strip(renderTranscript(entries, 72, true)), "\n")
 	before := lineContaining(t, lines, "before")
-	firstTool := lineContaining(t, lines, "✓ Read: one.go · 完成")
-	secondTool := lineContaining(t, lines, "◌ Read: two.go · 运行中")
+	firstTool := lineContaining(t, lines, "✓ Read: one.go  完成")
+	secondTool := lineContaining(t, lines, "◌ Read: two.go  运行中")
 	afterLabel := lineContainingAfter(t, lines, "agent >", secondTool+1)
 
 	if firstTool != before+1 {
@@ -65,10 +65,10 @@ func TestToolTrackLifecycleAndResultVisibility(t *testing.T) {
 	}
 	runningAt := model.transcript[entryIndex].toolStartedAt.Add(12 * time.Second)
 	runningRendered := ansi.Strip(renderTranscriptAt(model.transcript, 80, true, runningAt))
-	if !strings.Contains(runningRendered, "运行中 · 12s") {
+	if !strings.Contains(runningRendered, "运行中  12s") {
 		t.Fatalf("running transcript = %q, want elapsed status", runningRendered)
 	}
-	if model.toggleToolExpansion(entryIndex) {
+	if model.toggleToolExpansion(entryIndex, false) {
 		t.Fatalf("running transaction must remain single-line")
 	}
 
@@ -89,13 +89,13 @@ func TestToolTrackLifecycleAndResultVisibility(t *testing.T) {
 	if !entry.toolFinishedAt.Equal(startedAt.Add(13*time.Second + 100*time.Millisecond)) {
 		t.Fatalf("finished at = %v, want %v", entry.toolFinishedAt, startedAt.Add(13*time.Second+100*time.Millisecond))
 	}
-	if rendered := ansi.Strip(renderTranscript(model.transcript, 80, true)); !strings.Contains(rendered, "✓ Read: README.md · 完成 · 13.1s") {
+	if rendered := ansi.Strip(renderTranscript(model.transcript, 80, true)); !strings.Contains(rendered, "✓ Read: README.md  完成  13.1s") {
 		t.Fatalf("completed duration = %q, want formatted actual duration", rendered)
 	}
 	if rendered := ansi.Strip(renderTranscript(model.transcript, 80, true)); strings.Contains(rendered, "full README result") {
 		t.Fatalf("collapsed success leaked result:\n%s", rendered)
 	}
-	if !model.toggleToolExpansion(entryIndex) {
+	if !model.toggleToolExpansion(entryIndex, false) {
 		t.Fatalf("success entry did not expand")
 	}
 	if rendered := ansi.Strip(renderTranscript(model.transcript, 80, true)); !strings.Contains(rendered, "full README result") {
@@ -120,7 +120,7 @@ func TestToolTrackLifecycleAndResultVisibility(t *testing.T) {
 		t.Fatalf("error entry = %#v, want expanded error", errorEntry)
 	}
 	rendered := ansi.Strip(renderTranscript(model.transcript, 80, true))
-	if !strings.Contains(rendered, "× Bash: go test ./... · 出错") || !strings.Contains(rendered, "exit status 1") {
+	if !strings.Contains(rendered, "× Bash: go test ./...  出错") || !strings.Contains(rendered, "exit status 1") {
 		t.Fatalf("rendered error transaction:\n%s", rendered)
 	}
 
@@ -282,7 +282,7 @@ func TestFileMutationResultRebuildsDiffFromCompleteSnapshot(t *testing.T) {
 	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{ToolUseID: "edit-1", Name: "Edit", Content: "edited", FileMutation: after}))
 	model = next.(appModel)
 	entry := model.transcript[0]
-	if !strings.Contains(entry.body, "Edit · ok · +4 -2") || strings.Count(entry.body, "- │ old") != 2 {
+	if !strings.Contains(entry.body, "Edit  ok  +4 -2") || strings.Count(entry.body, "- │ old") != 2 {
 		t.Fatalf("completed body was not rebuilt from result snapshot: %q", entry.body)
 	}
 }
@@ -318,7 +318,7 @@ func TestResolvedMutationAfterCaptureFailurePreservesCallPreview(t *testing.T) {
 	}))
 	model = next.(appModel)
 	body := model.transcript[0].body
-	if !strings.Contains(body, "Edit · ok · +1 -1") || !strings.Contains(body, "return 1") || !strings.Contains(body, "return 2") {
+	if !strings.Contains(body, "Edit  ok  +1 -1") || !strings.Contains(body, "return 1") || !strings.Contains(body, "return 2") {
 		t.Fatalf("successful result without after snapshot replaced call preview: %q", body)
 	}
 }
@@ -376,7 +376,7 @@ func TestToolResultWithoutIDUpdatesRunningEntryByName(t *testing.T) {
 		t.Fatalf("updated entry = %#v, want completed running entry", entry)
 	}
 	rendered := ansi.Strip(renderTranscript(model.transcript, 80, true))
-	if strings.Contains(rendered, "运行中") || !strings.Contains(rendered, "✓ Read: README.md · 完成") {
+	if strings.Contains(rendered, "运行中") || !strings.Contains(rendered, "✓ Read: README.md  完成") {
 		t.Fatalf("rendered transcript = %q, want only completed row", rendered)
 	}
 }
@@ -459,7 +459,7 @@ func TestToolInspectModePreservesInputAndNavigatesTransactions(t *testing.T) {
 	if !model.toolInspectActive || model.toolInspectIndex != 2 || model.input.Focused() || model.shouldAnchorTextInputCursor() {
 		t.Fatalf("inspect state = active:%v index:%d focused:%v anchor:%v", model.toolInspectActive, model.toolInspectIndex, model.input.Focused(), model.shouldAnchorTextInputCursor())
 	}
-	if rendered := ansi.Strip(renderTranscript(model.transcript, 80, true)); !strings.Contains(rendered, "› × Bash: go test · 出错") {
+	if rendered := ansi.Strip(renderTranscript(model.transcript, 80, true)); !strings.Contains(rendered, "› × Bash: go test  出错") {
 		t.Fatalf("inspect focus lacks non-color marker:\n%s", rendered)
 	}
 	if got := model.input.Value(); got != "draft stays" {
@@ -505,43 +505,316 @@ func TestToolTrackMouseClickTogglesButDragSelects(t *testing.T) {
 	y := 1 + model.currentLayout().headerHeight + location.startRow - model.viewport.YOffset
 	x := 5
 
-	next, _ := model.Update(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
-	model = next.(appModel)
-	next, _ = model.Update(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
-	model = next.(appModel)
+	click := func(row int) {
+		next, _ := model.Update(tea.MouseMsg{X: x, Y: row, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+		model = next.(appModel)
+		next, _ = model.Update(tea.MouseMsg{X: x, Y: row, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
+		model = next.(appModel)
+	}
+
+	// A collapsed group is a single header row; clicking it expands the group
+	// to list each tool's summary (the result detail stays closed).
+	click(y)
 	if !model.transcript[0].toolExpanded {
 		t.Fatalf("summary click did not expand tool")
 	}
-
-	// 展开后结果区也属于同一工具事务，点击任意详情行都应能折叠。
-	detailY := y + 1
-	next, _ = model.Update(tea.MouseMsg{X: x, Y: detailY, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
-	model = next.(appModel)
-	next, _ = model.Update(tea.MouseMsg{X: x, Y: detailY, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
-	model = next.(appModel)
-	if model.transcript[0].toolExpanded {
-		t.Fatalf("detail click did not collapse expanded tool")
+	if got := ansi.Strip(model.renderTranscriptContent()); !strings.Contains(got, "✓ Read: README.md  完成") {
+		t.Fatalf("expanded group hid tool summary:\n%s", got)
+	}
+	if got := ansi.Strip(model.renderTranscriptContent()); strings.Contains(got, "result") {
+		t.Fatalf("expanded group leaked result before detail open:\n%s", got)
 	}
 
-	next, _ = model.Update(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
-	model = next.(appModel)
-	next, _ = model.Update(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
-	model = next.(appModel)
+	// Clicking the tool's own summary row opens just that tool's detail
+	// (toolGroupOpen); the group itself stays expanded.
+	detailY := y + 1
+	click(detailY)
 	if !model.transcript[0].toolExpanded {
-		t.Fatalf("summary click did not re-expand tool")
+		t.Fatalf("tool detail click collapsed the whole group")
+	}
+	if !model.transcript[0].toolGroupOpen {
+		t.Fatalf("tool detail click did not open per-tool detail")
+	}
+	if got := ansi.Strip(model.renderTranscriptContent()); !strings.Contains(got, "result") {
+		t.Fatalf("opened detail missing result:\n%s", got)
+	}
+
+	// Clicking the tool row again closes just that detail, group stays open.
+	click(detailY)
+	if model.transcript[0].toolGroupOpen {
+		t.Fatalf("second tool detail click did not close detail")
+	}
+	if !model.transcript[0].toolExpanded {
+		t.Fatalf("closing detail collapsed the whole group")
+	}
+	if got := ansi.Strip(model.renderTranscriptContent()); strings.Contains(got, "result") {
+		t.Fatalf("closed detail still visible:\n%s", got)
+	}
+
+	// Re-open the detail so the drag-selection assertion below has a stable state.
+	click(detailY)
+	if !model.transcript[0].toolGroupOpen {
+		t.Fatalf("third tool detail click did not re-open detail")
 	}
 
 	previousWriteClipboard := writeClipboard
 	writeClipboard = func(string) error { return nil }
 	t.Cleanup(func() { writeClipboard = previousWriteClipboard })
-	next, _ = model.Update(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	next, _ := model.Update(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
 	model = next.(appModel)
 	next, _ = model.Update(tea.MouseMsg{X: x + 4, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
 	model = next.(appModel)
 	next, _ = model.Update(tea.MouseMsg{X: x + 4, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
 	model = next.(appModel)
-	if !model.selectionActive || !model.transcript[0].toolExpanded {
-		t.Fatalf("drag selection toggled tool or failed selection: active=%v expanded=%v", model.selectionActive, model.transcript[0].toolExpanded)
+	if !model.selectionActive {
+		t.Fatalf("drag selection failed: active=%v", model.selectionActive)
+	}
+	// The drag must not have collapsed the group or closed the detail.
+	if !model.transcript[0].toolExpanded || !model.transcript[0].toolGroupOpen {
+		t.Fatalf("drag selection toggled group state: expanded=%v open=%v", model.transcript[0].toolExpanded, model.transcript[0].toolGroupOpen)
+	}
+}
+
+// mouseClickAt 在指定屏幕坐标发送一次左键单击（press + release）。
+func mouseClickAt(model appModel, x, y int) appModel {
+	next, _ := model.Update(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	model = next.(appModel)
+	next, _ = model.Update(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
+	model = next.(appModel)
+	return model
+}
+
+// TestReadyStateCollapsedGroupClickExpands 回归：ready（空闲/一轮结束）状态下，
+// 工具组折叠为单个 header 行（▸ Tools），点击该行应整组展开，列出每个工具的摘要。
+func TestReadyStateCollapsedGroupClickExpands(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 24
+
+	model.transcript = []transcriptEntry{
+		{kind: entryUser, title: "you", body: "帮我看看项目"},
+		{kind: entryAssistant, title: "assistant", body: "好的，先读取一下"},
+	}
+	model.addEntry(transcriptEntry{kind: entryTool, title: "tool", toolName: "Read", toolTarget: "a.go", toolStatus: "ok", toolResult: "full content"})
+	model.addEntry(transcriptEntry{kind: entryTool, title: "tool", toolName: "Bash", toolTarget: "go test", toolStatus: "ok", toolResult: "ok"})
+	model.toolGroupExpanded = false
+	model.relayout()
+	model.refreshViewport()
+
+	rendered := ansi.Strip(model.renderTranscriptContent())
+	if !strings.Contains(rendered, "▸ Tools  2 calls") {
+		t.Fatalf("want collapsed ready group, got:\n%s", rendered)
+	}
+
+	// 工具组是 transcript 中的第 3 条（user、assistant 之后）；定位它，不能点 user 行。
+	locs := model.transcriptEntryLocationsAt()
+	var loc transcriptEntryLocation
+	found := false
+	for _, candidate := range locs {
+		if model.transcript[candidate.transcriptIndex].toolName == "Read" {
+			loc = candidate
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("tool group location not found")
+	}
+	y := 1 + model.currentLayout().headerHeight + loc.startRow - model.viewport.YOffset
+
+	model = mouseClickAt(model, 5, y)
+
+	if !model.transcript[2].toolExpanded {
+		t.Fatalf("click on collapsed header in ready state did not expand: %#v", model.transcript[2])
+	}
+	expanded := ansi.Strip(model.renderTranscriptContent())
+	if !strings.Contains(expanded, "✓ Read: a.go") || !strings.Contains(expanded, "✓ Bash: go test") {
+		t.Fatalf("expanded group missing tool summaries:\n%s", expanded)
+	}
+}
+
+// TestReadyStateSecondGroupClickExpands 回归：多轮会话中第二个折叠工具组在 ready 态
+// 点击只能展开自己，不能错位误展开第一个组。
+func TestReadyStateSecondGroupClickExpands(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 24
+
+	model.transcript = []transcriptEntry{
+		{kind: entryUser, title: "you", body: "第一轮"},
+		{kind: entryTool, title: "tool", toolName: "LS", toolTarget: ".", toolStatus: "ok", toolResult: "a.go"},
+		{kind: entryAssistant, title: "assistant", body: "第一轮结果"},
+		{kind: entryUser, title: "you", body: "第二轮"},
+		{kind: entryTool, title: "tool", toolName: "Read", toolTarget: "b.go", toolStatus: "ok", toolResult: "content"},
+	}
+	model.toolGroupExpanded = false
+	model.relayout()
+	model.refreshViewport()
+
+	locs := model.transcriptEntryLocationsAt()
+	if len(locs) < 2 {
+		t.Fatalf("want >=2 locations, got %d", len(locs))
+	}
+	var second transcriptEntryLocation
+	for _, loc := range locs {
+		if model.transcript[loc.transcriptIndex].toolName == "Read" {
+			second = loc
+		}
+	}
+	if second.transcriptIndex == 0 {
+		t.Fatal("second group location not found")
+	}
+	y := 1 + model.currentLayout().headerHeight + second.startRow - model.viewport.YOffset
+
+	model = mouseClickAt(model, 5, y)
+
+	readIdx := second.transcriptIndex
+	if !model.transcript[readIdx].toolExpanded {
+		t.Fatalf("click on second group header did not expand: idx=%d %#v", readIdx, model.transcript[readIdx])
+	}
+	if model.transcript[1].toolExpanded {
+		t.Fatalf("first group unexpectedly expanded: %#v", model.transcript[1])
+	}
+	expanded := ansi.Strip(model.renderTranscriptContent())
+	if !strings.Contains(expanded, "✓ Read: b.go") {
+		t.Fatalf("second expanded group missing summary:\n%s", expanded)
+	}
+}
+
+// TestReadyStateLifecycleCollapsedGroupClickExpands 回归：走真实事件流
+// toolCall → toolResult → turnFinished 进入 ready 态后，折叠的工具组点击可展开。
+func TestReadyStateLifecycleCollapsedGroupClickExpands(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 24
+
+	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{ID: "call-1", Name: "Read", Input: []byte(`{"file_path":"a.go"}`)}))
+	model = next.(appModel)
+	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{ToolUseID: "call-1", Name: "Read", Content: "full content"}))
+	model = next.(appModel)
+	next, _ = model.Update(turnFinishedMsg{})
+	model = next.(appModel)
+
+	model.relayout()
+	model.refreshViewport()
+
+	rendered := ansi.Strip(model.renderTranscriptContent())
+	if !strings.Contains(rendered, "▸ Tools") {
+		t.Fatalf("want collapsed ready group, got:\n%s", rendered)
+	}
+
+	loc := model.transcriptEntryLocationsAt()[0]
+	y := 1 + model.currentLayout().headerHeight + loc.startRow - model.viewport.YOffset
+	model = mouseClickAt(model, 5, y)
+
+	if !model.transcript[0].toolExpanded {
+		t.Fatalf("lifecycle ready-state click did not expand: %#v", model.transcript[0])
+	}
+}
+
+// TestSessionRestoreFinalizesOrphanedRunningToolsAndExpands 回归：恢复一个
+// 上一轮被中断的会话（工具调用没有对应结果记录）时，孤儿调用会以 running
+// 状态进入历史。必须把它们收尾为 error（等价于实时流程 markRunningToolsError
+// 的处理），否则工具组渲染为折叠（running 组用全局 toolGroupExpanded=false）
+// 但点击被 toggleToolExpansion 拒绝（running 不可切换），看起来"无法展开"。
+func TestSessionRestoreFinalizesOrphanedRunningToolsAndExpands(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 24
+	model.relayout()
+
+	orphanCalls := transcriptEntriesFromMessage(message.Message{
+		Role: message.RoleAssistant,
+		ToolUses: []message.ToolCall{{
+			ID:    "call-orphan",
+			Name:  "Read",
+			Input: json.RawMessage(`{"file_path":"stuck.go"}`),
+		}},
+	}, time.Now(), "")
+	okCalls := transcriptEntriesFromMessage(message.Message{
+		Role: message.RoleAssistant,
+		ToolUses: []message.ToolCall{{
+			ID:    "call-ok",
+			Name:  "Bash",
+			Input: json.RawMessage(`{"command":"go test ./..."}`),
+		}},
+	}, time.Now(), "")
+	okResults := transcriptEntriesFromMessage(message.Message{
+		Role:        message.RoleUser,
+		ToolResults: []message.ToolResult{{ToolUseID: "call-ok", Content: "ok"}},
+	}, time.Now(), "")
+
+	entries := []transcriptEntry{{kind: entryUser, title: "you", body: "第一轮"}}
+	entries = append(entries, orphanCalls...)
+	entries = append(entries, okCalls...)
+	entries = append(entries, okResults...)
+
+	next, _ := model.Update(sessionRestoredMsg{sessionID: "interrupted-session", entries: entries})
+	model = next.(appModel)
+
+	orphanIdx, okIdx := -1, -1
+	for i := range model.transcript {
+		switch model.transcript[i].toolUseID {
+		case "call-orphan":
+			orphanIdx = i
+		case "call-ok":
+			okIdx = i
+		}
+	}
+	if orphanIdx < 0 || okIdx < 0 {
+		t.Fatalf("restored transcript missing tools: %#v", model.transcript)
+	}
+	if got := model.transcript[orphanIdx]; got.toolStatus != "error" || !got.toolExpanded || !got.isError {
+		t.Fatalf("orphan tool = %#v, want error + expanded", got)
+	}
+	if got := model.transcript[okIdx]; got.toolStatus != "ok" {
+		t.Fatalf("completed tool = %#v, want ok preserved", got)
+	}
+
+	model.relayout()
+	model.refreshViewport()
+	rendered := ansi.Strip(model.renderTranscriptContent())
+	for _, want := range []string{"× Read: stuck.go", "✓ Bash: go test"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("restored group missing %q:\n%s", want, rendered)
+		}
+	}
+
+	// 组内不再有 running：点击 header 可折叠、再点击可重新展开。
+	var loc transcriptEntryLocation
+	found := false
+	for _, candidate := range model.transcriptEntryLocationsAt() {
+		if model.transcript[candidate.transcriptIndex].toolUseID == "call-orphan" {
+			loc = candidate
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("tool group location not found")
+	}
+	y := 1 + model.currentLayout().headerHeight + loc.startRow - model.viewport.YOffset
+
+	model = mouseClickAt(model, 5, y)
+	if model.transcript[orphanIdx].toolExpanded {
+		t.Fatalf("header click on expanded group did not collapse: %#v", model.transcript[orphanIdx])
+	}
+	collapsed := ansi.Strip(model.renderTranscriptContent())
+	if !strings.Contains(collapsed, "▸ Tools") {
+		t.Fatalf("group did not collapse:\n%s", collapsed)
+	}
+
+	model = mouseClickAt(model, 5, y)
+	if !model.transcript[orphanIdx].toolExpanded {
+		t.Fatalf("click on collapsed group did not expand: %#v", model.transcript[orphanIdx])
+	}
+	expanded := ansi.Strip(model.renderTranscriptContent())
+	if !strings.Contains(expanded, "× Read: stuck.go") || !strings.Contains(expanded, "✓ Bash: go test") {
+		t.Fatalf("group did not re-expand:\n%s", expanded)
 	}
 }
 
@@ -570,7 +843,7 @@ func TestToolTrackMouseHoverHighlightsAndClears(t *testing.T) {
 	if model.transcriptKeyScrollActive {
 		t.Fatalf("hover must not steal keyboard scroll focus")
 	}
-	if rendered := ansi.Strip(renderTranscript(model.transcript, 80, true)); !strings.Contains(rendered, "┃ ✓ Read: README.md · 完成") {
+	if rendered := ansi.Strip(renderTranscript(model.transcript, 80, true)); !strings.Contains(rendered, "┃ ✓ Read: README.md  完成") {
 		t.Fatalf("hover marker missing:\n%s", rendered)
 	}
 
@@ -632,7 +905,7 @@ func TestToolTrackHoverDoesNotLeakANSISequences(t *testing.T) {
 		toolHovered: true,
 	}, 80)
 	plain := ansi.Strip(rendered)
-	if !strings.Contains(plain, "┃ ✓ Read: README.md · 完成") {
+	if !strings.Contains(plain, "┃ ✓ Read: README.md  完成") {
 		t.Fatalf("hovered tool = %q, want intact summary", plain)
 	}
 	for _, leaked := range []string{"[0m", "[1;", "[4m", "[38;"} {
@@ -658,6 +931,33 @@ func TestToolInspectResetsWithClear(t *testing.T) {
 	handled, _ := model.handleCommand("/clear")
 	if !handled || model.toolInspectActive || model.toolInspectIndex != -1 || !model.input.Focused() {
 		t.Fatalf("clear did not restore input state: handled=%v active=%v index=%d focused=%v", handled, model.toolInspectActive, model.toolInspectIndex, model.input.Focused())
+	}
+}
+
+func TestHistoricalFileMutationRestoresExpandedDiffFromToolInput(t *testing.T) {
+	callEntries := transcriptEntriesFromMessage(message.Message{
+		Role: message.RoleAssistant,
+		ToolUses: []message.ToolCall{{
+			ID: "edit-history", Name: "Edit",
+			Input: json.RawMessage(`{"file_path":"a.go","old_string":"return 1","new_string":"return 2"}`),
+		}},
+	}, time.Now(), "")
+	resultEntries := transcriptEntriesFromMessage(message.Message{
+		Role:        message.RoleUser,
+		ToolResults: []message.ToolResult{{ToolUseID: "edit-history", Content: "edited a.go (1 replacement)"}},
+	}, time.Now(), "")
+	merged := mergeTranscriptToolEntries(append(callEntries, resultEntries...))
+	if len(merged) != 1 || !merged[0].toolExpanded {
+		t.Fatalf("restored mutation = %#v, want one expanded transaction", merged)
+	}
+	rendered := ansi.Strip(renderTranscript(merged, 100, true))
+	for _, want := range []string{"return 1", "return 2"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("restored mutation missing %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "edited a.go") {
+		t.Fatalf("restored mutation rendered result text instead of diff:\n%s", rendered)
 	}
 }
 
@@ -710,7 +1010,7 @@ func TestToolExpansionKeepsFixedFrameAndDock(t *testing.T) {
 	layoutBefore := model.currentLayout()
 	assertFixedFrame(t, model.View(), 80, 24)
 
-	if !model.toggleToolExpansion(0) {
+	if !model.toggleToolExpansion(0, false) {
 		t.Fatalf("tool did not expand")
 	}
 	assertFixedFrame(t, model.View(), 80, 24)
@@ -798,7 +1098,7 @@ func TestSelectToolTrackCollapsesToOneLineAndExpandsReadableDetail(t *testing.T)
 		t.Fatalf("collapsed Select=%q", collapsed)
 	}
 
-	if !model.toggleToolExpansion(0) {
+	if !model.toggleToolExpansion(0, false) {
 		t.Fatal("Select transaction did not expand")
 	}
 	expanded := ansi.Strip(renderTranscript(model.transcript, 100, true))

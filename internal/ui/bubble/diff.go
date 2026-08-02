@@ -111,7 +111,7 @@ func diffCounts(lines []DiffLine) (added, removed int) {
 }
 
 // renderDiffPreview applies a 3-line context window around changed lines,
-// collapses unchanged runs with "···", formats each line with a number column,
+// collapses unchanged runs with "...", formats each line with a number column,
 // and caps total output length via limitDiffPreviewLines.
 func renderDiffPreview(lines []DiffLine) string {
 	maxLine := 0
@@ -143,7 +143,7 @@ func renderDiffPreview(lines []DiffLine) string {
 			continue
 		}
 		if !prevVisible && i > 0 {
-			out = append(out, "···")
+			out = append(out, "...")
 		}
 		prevVisible = true
 		switch n.Kind {

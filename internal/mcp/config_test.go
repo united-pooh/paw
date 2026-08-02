@@ -106,6 +106,84 @@ enabled = false
 	}
 }
 
+func TestLoadConfigExpandsEnvInArgsAndEnv(t *testing.T) {
+	t.Setenv("PAW_MCP_TEST_TOKEN", "secret-value")
+
+	home := t.TempDir()
+	workspace := t.TempDir()
+	writeMCPConfig(t, home, `
+[mcp_servers.jina]
+command = "npx"
+args = ["-y", "mcp-remote", "https://mcp.example/v1", "--header", "Authorization: Bearer ${PAW_MCP_TEST_TOKEN}"]
+env = { REMOTE_BASE = "https://host:${PAW_MCP_TEST_TOKEN}" }
+`)
+
+	cfg, err := LoadConfig(home, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, ok := cfg.Servers["jina"]
+	if !ok {
+		t.Fatal("jina server not found")
+	}
+	wantArgs := []string{"-y", "mcp-remote", "https://mcp.example/v1", "--header", "Authorization: Bearer secret-value"}
+	if !reflect.DeepEqual(server.Args, wantArgs) {
+		t.Fatalf("args=%#v, want %#v", server.Args, wantArgs)
+	}
+	if server.Env["REMOTE_BASE"] != "https://host:secret-value" {
+		t.Fatalf("env=%#v", server.Env)
+	}
+}
+
+func TestLoadConfigExpandsUndefinedEnvToEmpty(t *testing.T) {
+	t.Setenv("PAW_MCP_TEST_TOKEN", "secret-value")
+	t.Setenv("PAW_MCP_TEST_UNDEFINED", "")
+
+	home := t.TempDir()
+	workspace := t.TempDir()
+	writeMCPConfig(t, home, `
+[mcp_servers.jina]
+command = "npx"
+args = ["--header", "Bearer ${PAW_MCP_TEST_UNDEFINED}"]
+env = { OPTIONAL = "${PAW_MCP_TEST_UNDEFINED}" }
+`)
+
+	cfg, err := LoadConfig(home, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := cfg.Servers["jina"]
+	if got := server.Args[1]; got != "Bearer " {
+		t.Fatalf("arg=%q, want %q", got, "Bearer ")
+	}
+	if got := server.Env["OPTIONAL"]; got != "" {
+		t.Fatalf("env OPTIONAL=%q, want empty", got)
+	}
+}
+
+func TestLoadConfigLeavesEnvFreeArgsUntouched(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	writeMCPConfig(t, home, `
+[mcp_servers.plain]
+command = "codegraph"
+args = ["serve", "--mcp"]
+env = { CODEGRAPH_MCP_TOOLS = "explore,context" }
+`)
+
+	cfg, err := LoadConfig(home, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := cfg.Servers["plain"]
+	if !reflect.DeepEqual(server.Args, []string{"serve", "--mcp"}) {
+		t.Fatalf("args=%#v, want unchanged", server.Args)
+	}
+	if server.Env["CODEGRAPH_MCP_TOOLS"] != "explore,context" {
+		t.Fatalf("env=%#v", server.Env)
+	}
+}
+
 func TestLoadConfigRejectsInvalidEnabledServer(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()

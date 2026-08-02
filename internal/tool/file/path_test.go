@@ -43,6 +43,44 @@ func TestReadToolRejectsAbsolutePathOutsideAllowedRoots(t *testing.T) {
 	}
 }
 
+func TestReadToolAllowsOutsidePathInDangerousMode(t *testing.T) {
+	workspace := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "secret.md")
+	if err := os.WriteFile(outside, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := &ReadTool{Root: workspace, AllowOutsideRoot: true}
+	output, err := tool.Run(context.Background(), []byte(`{"file_path":"`+outside+`"}`))
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if output != "secret" {
+		t.Fatalf("output = %q, want secret", output)
+	}
+}
+
+func TestReadToolAllowsRelativeEscapeInDangerousMode(t *testing.T) {
+	parent := t.TempDir()
+	workspace := filepath.Join(parent, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(parent, "secret.md")
+	if err := os.WriteFile(outside, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := &ReadTool{Root: workspace, AllowOutsideRoot: true}
+	output, err := tool.Run(context.Background(), []byte(`{"file_path":"../secret.md"}`))
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if output != "secret" {
+		t.Fatalf("output = %q, want secret", output)
+	}
+}
+
 func TestGlobToolAllowsConfiguredSkillRoot(t *testing.T) {
 	workspace := t.TempDir()
 	skillRoot := t.TempDir()

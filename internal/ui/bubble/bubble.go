@@ -147,7 +147,7 @@ func (u *UI) SetSubagentController(controller SubagentController) {
 	u.subagentController = controller
 }
 
-// SetSessionStore 注入 session store，供 /sessions 命令列举历史会话。
+// SetSessionStore 注入 session store，供 /resume 命令列举历史会话。
 func (u *UI) SetSessionStore(store SessionStore) {
 	u.mu.Lock()
 	defer u.mu.Unlock()

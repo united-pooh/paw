@@ -192,6 +192,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case assistantDeltaMsg:
 		if string(msg) != "" {
 			m.turnHasModelOutput = true
+			if !m.toolInspectActive {
+				m.toolGroupExpanded = false
+				m.toolGroupFullResult = false
+			}
 		}
 		m.isGenerating = true
 		m.consumeAssistantStreamDelta(string(msg))
@@ -289,6 +293,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.queryGuard.FinishModel()
 		m.turnStartedAt = time.Time{}
 		m.turnID = ""
+		m.toolGroupExpanded = false
+		m.toolGroupFullResult = false
 		m.syncRunningFlags()
 		if wasWorking && !m.isAgentWorking() {
 			m.startTokenRippleExit(m.animationNow())

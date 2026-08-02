@@ -328,7 +328,7 @@ func TestRenderSelectionDock(t *testing.T) {
 	m.selectionDock = newSelectionDock(selectionRequest("x", selecttool.ModeMultiple))
 	plain := ansi.Strip(m.renderSelectionDock(60, 14))
 	for _, want := range []string{
-		"SELECT · MULTIPLE",
+		"SELECT  MULTIPLE",
 		"Choose signals",
 		"3 answers",
 		"Custom option",
@@ -641,7 +641,7 @@ func TestSelectionDockCustomSelectedAndEditHints(t *testing.T) {
 	m.selectionDock.customLabel = "Saved answer"
 	m.selectionDock.focus = selectionFocus{kind: selectionFocusCustom}
 	plain := ansi.Strip(m.renderSelectionDock(60, 14))
-	if !strings.Contains(plain, "› [x] Custom option · Saved answer") || !strings.Contains(plain, "Chat about this") {
+	if !strings.Contains(plain, "› [x] Custom option  Saved answer") || !strings.Contains(plain, "Chat about this") {
 		t.Fatalf("saved custom state missing: %q", plain)
 	}
 	m.selectionDock.beginCustomEdit()
@@ -708,7 +708,7 @@ func TestSelectionDockLongPromptAndDescriptionPreserveStructureAndExactRange(t *
 	m := newModel(context.Background(), &fakeRunner{}, "", nil, nil, nil, nil, nil)
 	m.selectionDock = newSelectionDock(r)
 	plain := ansi.Strip(m.renderSelectionDock(42, 16))
-	for _, want := range []string{"SELECT · MULTIPLE", "…", "3 answers · showing 1-", "› [ ] Logs", "↑ 0 answers above", "answers below", "Custom option", "Chat about this", "enter submit"} {
+	for _, want := range []string{"SELECT  MULTIPLE", "…", "3 answers  showing 1-", "› [ ] Logs", "↑ 0 answers above", "answers below", "Custom option", "Chat about this", "enter submit"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("missing %q in %q", want, plain)
 		}

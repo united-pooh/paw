@@ -5,12 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 )
 
 type ReadTool struct {
-	Root      string
-	ReadRoots []string
-	ReadState *ReadStateStore
+	mu               sync.RWMutex
+	Root             string
+	ReadRoots        []string
+	ReadState        *ReadStateStore
+	AllowOutsideRoot bool
 }
 
 type readInput struct {
@@ -22,7 +27,28 @@ func (t *ReadTool) Name() string {
 }
 
 func (t *ReadTool) Description() string {
+	if t.OutsideRootAllowed() {
+		return "读取单个文件的完整内容；dangerously/yolo 模式下允许工作区外路径"
+	}
 	return "读取工作区内单个文件的完整内容"
+}
+
+func (t *ReadTool) SetAllowOutsideRoot(enabled bool) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.AllowOutsideRoot = enabled
+	t.mu.Unlock()
+}
+
+func (t *ReadTool) OutsideRootAllowed() bool {
+	if t == nil {
+		return false
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.AllowOutsideRoot
 }
 
 func (t *ReadTool) InputSchema() json.RawMessage {
@@ -46,7 +72,20 @@ func (t *ReadTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 		return "", fmt.Errorf("file_path is required")
 	}
 
-	target, err := resolvePathWithinRoots(t.Root, in.FilePath, t.ReadRoots)
+	var target string
+	var err error
+	if t.OutsideRootAllowed() {
+		target = strings.TrimSpace(in.FilePath)
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(t.Root, target)
+		}
+		target, err = filepath.Abs(target)
+		if err == nil {
+			target = filepath.Clean(target)
+		}
+	} else {
+		target, err = resolvePathWithinRoots(t.Root, in.FilePath, t.ReadRoots)
+	}
 	if err != nil {
 		return "", err
 	}

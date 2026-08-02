@@ -287,6 +287,8 @@ func (m appModel) startChatTurn(line string) (appModel, tea.Cmd) {
 		return m, nil
 	}
 	m.resetStreamingBuffers()
+	m.toolGroupExpanded = false
+	m.toolGroupFullResult = false
 	m.addEntry(m.userTranscriptEntry("you", line))
 	m.activeTurnUserEntry = len(m.transcript) - 1
 	m.turnStartedAt = time.Now()

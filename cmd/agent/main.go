@@ -32,13 +32,14 @@ import (
 )
 
 type options struct {
-	prompt          string
-	sessionID       string
-	subagentWorker  bool
-	streamMA        bool
-	tokenTracer     bool
-	tokenTracerOpen bool
-	tokenTracerPort int
+	prompt           string
+	sessionID        string
+	subagentWorker   bool
+	streamMA         bool
+	tokenTracer      bool
+	tokenTracerOpen  bool
+	tokenTracerPort  int
+	allowOutsideRead bool
 }
 
 func parseOptions() options {
@@ -49,16 +50,19 @@ func parseOptions() options {
 	tokenTracer := flag.Bool("token-tracer", defaultTokenTracerEnabled(), "start local Token Tracer dashboard in interactive mode")
 	tokenTracerOpen := flag.Bool("token-tracer-open", defaultTokenTracerOpen(), "open Token Tracer dashboard in the default browser")
 	tokenTracerPort := flag.Int("token-tracer-port", defaultTokenTracerPort(), "Token Tracer dashboard port; 0 selects a free port")
+	yolo := flag.Bool("yolo", false, "dangerous mode: allow Read to access files outside the workspace")
+	dangerously := flag.Bool("dangerously", false, "dangerous mode: allow Read to access files outside the workspace")
 	flag.Parse()
 
 	return options{
-		prompt:          *prompt,
-		sessionID:       *sessionID,
-		subagentWorker:  *subagentWorker,
-		streamMA:        *streamMA,
-		tokenTracer:     *tokenTracer,
-		tokenTracerOpen: *tokenTracerOpen,
-		tokenTracerPort: *tokenTracerPort,
+		prompt:           *prompt,
+		sessionID:        *sessionID,
+		subagentWorker:   *subagentWorker,
+		streamMA:         *streamMA,
+		tokenTracer:      *tokenTracer,
+		tokenTracerOpen:  *tokenTracerOpen,
+		tokenTracerPort:  *tokenTracerPort,
+		allowOutsideRead: *yolo || *dangerously,
 	}
 }
 
@@ -94,7 +98,7 @@ func main() {
 	ctx := context.Background()
 
 	if opts.subagentWorker {
-		if err := runSubagentWorkerMode(ctx, os.Stdin, os.Stdout); err != nil {
+		if err := runSubagentWorkerMode(ctx, os.Stdin, os.Stdout, opts.allowOutsideRead); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -114,7 +118,7 @@ func main() {
 
 func runSingleTurnMode(ctx context.Context, opts options) error {
 	output := headless.New(os.Stdout)
-	runner, sessionID, _, _, _, _, mcpManager, err := buildRunner(ctx, opts.sessionID, output)
+	runner, sessionID, _, _, _, _, mcpManager, err := buildRunner(ctx, opts.sessionID, output, opts.allowOutsideRead)
 	if err != nil {
 		return err
 	}
@@ -135,7 +139,7 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	selectionBroker := selecttool.NewBroker()
 	defer selectionBroker.Close()
 	output.SetSelectionBroker(selectionBroker)
-	runner, sessionID, client, settingsController, subagentManager, store, mcpManager, err := buildRunner(ctx, opts.sessionID, output, func(registry *tool.Registry) error {
+	runner, sessionID, client, settingsController, subagentManager, store, mcpManager, err := buildRunner(ctx, opts.sessionID, output, opts.allowOutsideRead, func(registry *tool.Registry) error {
 		return registerInteractiveTools(registry, selectionBroker)
 	})
 	if err != nil {
@@ -184,7 +188,7 @@ func startTokenTracer(ctx context.Context, sessionID string, opts options) (*tok
 	return tracer, server, nil
 }
 
-func runSubagentWorkerMode(ctx context.Context, input io.Reader, output io.Writer) error {
+func runSubagentWorkerMode(ctx context.Context, input io.Reader, output io.Writer, allowOutsideRead bool) error {
 	decoder := json.NewDecoder(input)
 	var start subagent.WorkerMessage
 	if err := decoder.Decode(&start); err != nil {
@@ -204,7 +208,7 @@ func runSubagentWorkerMode(ctx context.Context, input io.Reader, output io.Write
 	workerDone := make(chan subagent.WorkerResult, 1)
 	go func() {
 		workerUI := &workerUsageUI{UI: headless.New(io.Discard)}
-		runner, sessionID, _, _, _, _, _, err := buildRunnerWithSubagentContext(workerCtx, req.SessionID, workerUI, subagentRuntimeContext{
+		runner, sessionID, _, _, _, _, _, err := buildRunnerWithSubagentContext(workerCtx, req.SessionID, workerUI, allowOutsideRead, subagentRuntimeContext{
 			depth:        req.Depth,
 			maxDepth:     req.MaxDepth,
 			parentTaskID: req.TaskID,
@@ -450,11 +454,11 @@ type subagentRuntimeContext struct {
 
 type runnerToolConfigurator func(*tool.Registry) error
 
-func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI, configurators ...runnerToolConfigurator) (*loop.Runner, string, *model.Client, *settings.Controller, *subagent.Manager, *session.JSONLStore, *coremcp.Manager, error) {
-	return buildRunnerWithSubagentContext(ctx, sessionIDFlag, output, subagentRuntimeContext{}, configurators...)
+func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI, allowOutsideRead bool, configurators ...runnerToolConfigurator) (*loop.Runner, string, *model.Client, *settings.Controller, *subagent.Manager, *session.JSONLStore, *coremcp.Manager, error) {
+	return buildRunnerWithSubagentContext(ctx, sessionIDFlag, output, allowOutsideRead, subagentRuntimeContext{}, configurators...)
 }
 
-func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, output uiiface.UI, subCtx subagentRuntimeContext, configurators ...runnerToolConfigurator) (*loop.Runner, string, *model.Client, *settings.Controller, *subagent.Manager, *session.JSONLStore, *coremcp.Manager, error) {
+func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, output uiiface.UI, allowOutsideRead bool, subCtx subagentRuntimeContext, configurators ...runnerToolConfigurator) (*loop.Runner, string, *model.Client, *settings.Controller, *subagent.Manager, *session.JSONLStore, *coremcp.Manager, error) {
 	cfg, err := model.LoadConfigFromEnv()
 	if err != nil {
 		return nil, "", nil, nil, nil, nil, nil, err
@@ -502,6 +506,7 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 		broker = mcpManager
 	}
 	launcher := subagent.NewProcessLauncher(executable, root)
+	launcher.SetDangerousMode(allowOutsideRead)
 	launcher.SetMCPBroker(broker)
 	registry := tool.NewRegistry()
 	runner := loop.NewRunnerWithInstructionRoot(client, output, registry, store, sessionID, root)
@@ -529,12 +534,13 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 		parentSessionID: sessionID,
 	})
 	runner.SetSubagentTokensProvider(subagentManager)
-	if err := registerTools(registry, root, runner.SkillRoots(), subagentManager, sessionID, broker); err != nil {
+	if err := registerTools(registry, root, runner.SkillRoots(), subagentManager, sessionID, broker, allowOutsideRead); err != nil {
 		if mcpManager != nil {
 			_ = mcpManager.Close(context.Background())
 		}
 		return nil, "", nil, nil, nil, nil, nil, err
 	}
+	runner.SetYoloModeHandler(launcher.SetDangerousMode)
 	for _, configure := range configurators {
 		if configure == nil {
 			continue
@@ -607,13 +613,13 @@ func registerInteractiveTools(registry *tool.Registry, broker *selecttool.Broker
 	return nil
 }
 
-func registerTools(registry *tool.Registry, root string, readRoots []string, subagentManager *subagent.Manager, sessionID string, broker coremcp.Broker) error {
+func registerTools(registry *tool.Registry, root string, readRoots []string, subagentManager *subagent.Manager, sessionID string, broker coremcp.Broker, allowOutsideRead bool) error {
 	if registry == nil {
 		return fmt.Errorf("tool registry is nil")
 	}
 	readState := toolfile.NewReadStateStore()
 	registry.Register(&toolfile.LSTool{Root: root, ReadRoots: readRoots})
-	registry.Register(&toolfile.ReadTool{Root: root, ReadRoots: readRoots, ReadState: readState})
+	registry.Register(&toolfile.ReadTool{Root: root, ReadRoots: readRoots, ReadState: readState, AllowOutsideRoot: allowOutsideRead})
 	registry.Register(&toolfile.WriteTool{Root: root, ReadState: readState})
 	registry.Register(&toolfile.EditTool{Root: root, ReadState: readState})
 	registry.Register(&toolfile.GrepTool{Root: root, ReadRoots: readRoots})

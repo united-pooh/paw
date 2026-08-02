@@ -219,7 +219,7 @@ func renderToolStatusChip(status, duration string) string {
 func renderToolStatusChipWithStyle(status, duration string, style lipgloss.Style) string {
 	label := toolStatusLabel(status)
 	if duration = strings.TrimSpace(duration); duration != "" {
-		label += " · " + duration
+		label += "  " + duration
 	}
 	return style.Render(label)
 }

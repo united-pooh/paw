@@ -206,7 +206,7 @@ func TestDockStatusLineFitsNarrowWidths(t *testing.T) {
 		}
 	}
 
-	// 状态行按信息优先级排列：ready · chat · token info。
+	// 状态行按信息优先级排列：ready  chat  token info。
 	line := ansi.Strip(model.renderDockStatusLine(80))
 	if ready, chat := strings.Index(line, "ready"), strings.Index(line, "chat"); ready < 0 || chat < 0 || ready >= chat {
 		t.Fatalf("status order = %q", line)
@@ -272,7 +272,7 @@ func TestSessionPickerModalKeepsBottomBorderWhenSummaryIsLong(t *testing.T) {
 		loading: false,
 		sessions: []sessionSummaryItem{{
 			sessionID:    "session-1",
-			createdAt:    time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC),
+			lastUsedAt:   time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC),
 			firstMessage: strings.Repeat("long summary ", 12),
 		}},
 	}

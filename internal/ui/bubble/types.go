@@ -64,6 +64,7 @@ type transcriptEntry struct {
 	isFileMutation        bool
 	toolResult            string
 	toolExpanded          bool
+	toolGroupOpen         bool
 	toolFocused           bool
 	toolHovered           bool
 	toolResultOnly        bool
@@ -306,7 +307,7 @@ type fileCompletionLoadedMsg struct {
 // sessionSummaryItem 是 session picker 中的一行显示项。
 type sessionSummaryItem struct {
 	sessionID      string
-	createdAt      time.Time
+	lastUsedAt     time.Time
 	firstMessage   string
 	transcriptSize int64
 }
@@ -377,6 +378,12 @@ type appModel struct {
 	inputPasteFoldActive      bool
 	transcript                []transcriptEntry
 	transcriptRenderCache     []transcriptRenderCacheEntry
+	transcriptRenderedContent string
+	transcriptContentCached   bool
+	transcriptLineCache       []transcriptLineSnapshot
+	transcriptLineCacheReady  bool
+	transcriptLocationCache   []transcriptEntryLocation
+	transcriptLocationsReady  bool
 	transcriptRefreshPending  bool
 	transcriptKeyScrollActive bool
 	newMessageNoticeCycle     uint64
@@ -387,6 +394,8 @@ type appModel struct {
 	toolInspectActive         bool
 	toolInspectIndex          int
 	toolHoverIndex            int
+	toolGroupExpanded         bool
+	toolGroupFullResult       bool
 	lastTranscriptRefreshAt   time.Time
 	lastToolProgressSecond    int64
 	activeAssistant           int

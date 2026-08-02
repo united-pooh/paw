@@ -434,7 +434,7 @@ func pipelineStageGlyphAndStatus(status pipelinePhaseStatus) (string, string) {
 	case phaseStatusRetry:
 		return "↻", "retry"
 	default:
-		return "·", "pending"
+		return "", "pending"
 	}
 }
 

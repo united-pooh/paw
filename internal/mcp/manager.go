@@ -111,13 +111,17 @@ func Start(ctx context.Context, config Config) (*Manager, error) {
 		}()
 	}
 
-	var firstErr error
 	for range names {
 		result := <-results
 		server := m.servers[result.name]
 		if result.err != nil {
-			if firstErr == nil {
-				firstErr = result.err
+			server.status.State = "unavailable"
+			server.status.LastError = truncateDiagnostic(result.err.Error())
+			if result.session != nil {
+				server.status.PID = result.session.PID()
+				closeCtx, cancelClose := context.WithTimeout(context.Background(), closeTimeout)
+				_ = result.session.Close(closeCtx)
+				cancelClose()
 			}
 			continue
 		}
@@ -131,18 +135,21 @@ func Start(ctx context.Context, config Config) (*Manager, error) {
 		server.status.Templates = result.counts.templates
 		server.status.Prompts = result.counts.prompts
 	}
-	if firstErr != nil {
-		_ = m.Close(context.Background())
-		return nil, firstErr
-	}
 	for _, name := range names {
-		if err := m.replaceServerTools(name, m.servers[name].tools); err != nil {
+		server := m.servers[name]
+		if server.status.State != "running" {
+			continue
+		}
+		if err := m.replaceServerTools(name, server.tools); err != nil {
 			_ = m.Close(context.Background())
 			return nil, err
 		}
 	}
 	for _, name := range names {
-		m.watchServer(name, m.servers[name])
+		server := m.servers[name]
+		if server.status.State == "running" {
+			m.watchServer(name, server)
+		}
 	}
 	go func() {
 		<-managerCtx.Done()

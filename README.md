@@ -22,19 +22,27 @@ internal/model/types.go
 internal/model/client.go
 internal/model/stream.go
 internal/model/anthropic_stream.go
+internal/model/request_body.go
 
 internal/tool/tool.go
 internal/tool/register.go
 internal/tool/file/path.go
 internal/tool/file/ls.go
 internal/tool/file/read.go
+internal/tool/file/read_state.go
 internal/tool/file/write.go
+internal/tool/file/edit.go
+internal/tool/file/atomic.go
+internal/tool/file/mutation_path.go
 internal/tool/file/grep.go
 internal/tool/file/glob.go
 internal/tool/exec/bash.go
 internal/tool/webfetch/webfetch.go
+internal/tool/select/
+internal/tool/mcp/tool.go
 
 internal/session/jsonl_store.go
+internal/session/journal.go
 internal/settings/settings.go
 internal/skill/registry.go
 internal/subagent/manager.go
@@ -45,6 +53,13 @@ internal/ui/headless/headless.go
 internal/ui/bubble/
 
 internal/loop/runner.go
+internal/loop/prompt_builder.go
+internal/loop/instruction_manager.go
+internal/loop/context_compaction.go
+internal/loop/turn_timing.go
+internal/loop/token_tracer.go
+
+internal/tokentracer/
 ```
 
 ## 快速使用
@@ -84,7 +99,8 @@ go run ./cmd/agent -s <session-id>
 职责:
 - 读取 `-p`
 - 读取 `-s`
-- 读取隐藏的 `-subagent-worker`
+- 读取 `-subagent-worker`
+- 读取 `-streamma` / `-token-tracer` / `-token-tracer-open` / `-token-tracer-port`（均有 `PAW_*` 环境变量默认值）
 
 行为:
 - `-p` 有值: 执行单轮
@@ -99,7 +115,7 @@ go run ./cmd/agent -s <session-id>
 - 加载模型配置
 - 创建模型客户端和会话存储
 - 装配 settings 控制器和 subagent 管理器
-- 注册文件、shell、webfetch、subagent 相关工具
+- 注册文件、shell、webfetch、subagent、select 相关工具
 - 启动主进程持有的 MCP Manager，并注册 namespaced MCP 工具
 - 返回 `Runner`、sessionID 和运行时控制器
 
@@ -110,6 +126,16 @@ go run ./cmd/agent -s <session-id>
 - `~/.paw/settings.json`（全局 settings；项目内 `.paw/settings.json` 不再读取或迁移）
 - `.paw/exports/`
 - `.paw/sessions/<sessionID>/`
+
+#### `registerTools(registry, root, readRoots, subagentManager, sessionID, broker) error`
+
+职责:
+- 注册文件工具（LS / Read / Write / Edit / Grep / Glob），其中 Write 与 Edit 共享同一个 `ReadStateStore`
+- 注册 Bash、WebFetch
+- 注册 subagent 相关的 `Subagent` / `SubagentStatus` / `SubagentStop`
+- 注册 MCP namespaced 工具（`ReplaceNamespace("mcp", ...)`）
+
+交互模式额外通过 `registerInteractiveTools` 注册 `Select` 工具（绑定 TUI selection broker）。
 
 ### MCP / CodeGraph
 
@@ -127,7 +153,7 @@ enabled = true
 
 发现的工具使用 `<server>__<tool>` 名称，例如 `codegraph__codegraph_explore`。资源、资源模板和 prompts 会映射为对应的 namespaced 虚拟工具；交互模式输入 `/mcp` 可查看配置路径、进程状态、能力数量和诊断信息。
 
-主 Agent 持有唯一的 MCP server 会话。外部 subagent 不会重复启动 CodeGraph，而是通过父进程的 `mcp.call` / `mcp.result` request-ID 协议转发调用；能力列表变化时父进程会推送 `mcp.snapshot` 更新代理工具名称空间。
+主 Agent 持有唯一的 MCP server 会话。外部 subagent 不会重复启动 CodeGraph，而是通过父进程的 `mcp.call` / `mcp.result` request-ID 协议转发调用；能力列表变化时父进程会推送 `mcp.snapshot` 更新代理工具名称空间。`tool.Registry` 提供 `ReplaceNamespace` / `RemoveNamespace` 原子替换能力，MCP 快照更新会实时同步进注册表。
 
 #### `runSingleTurnMode(ctx, opts) error`
 
@@ -142,8 +168,10 @@ enabled = true
 
 职责:
 - 启动 Bubble Tea 主界面
+- 创建 Select tool 的 `selecttool.Broker` 并注入 Bubble UI
 - 注入模型配置、settings、subagent 控制器
 - 以当前 session 进入可恢复的交互式对话
+- 按参数启动 Token Tracer dashboard
 
 #### `runSubagentWorkerMode(ctx)`
 
@@ -151,7 +179,7 @@ enabled = true
 - 以子进程模式运行（由主 Agent 进程 fork 启动）
 - 从 stdin 读取 JSON 格式的 `WorkerRequest`（含 `ParentSessionID`、`Prompt`、`Tools`、`MaxTurns` 等）
 - 构建带有 subagent 上下文的 Runner（通过 `subagentRuntimeContext` 控制递归深度）
-- 执行 `runner.RunTurn()`，将 `WorkerResult`（含 TaskID、SessionID、Content、Error、ExitCode）写入 stdout
+- 执行 `runner.RunTurn()`，将 `WorkerResult`（含 TaskID、SessionID、Content、Error、ExitCode、Usage）写入 stdout
 
 #### 当前交互命令
 
@@ -167,10 +195,12 @@ enabled = true
 - `/streamma [--profile adaptive|paper] [--topology adaptive|chain|tree|graph] [--agents N] [--steps N] [--protocol stream|single] <prompt>`
 - `/streamma-trace [--profile adaptive|paper] [--topology adaptive|chain|tree|graph] [--agents N] [--steps N] [--protocol stream|single] <prompt>`
 - `/tasks`
+- `/pipeline`
 - `/skills`
 - `/token-tracer` / `/tt`
 - `/status`
 - `/mcp`
+- `/compact [focus]`
 - `/clear`
 - `/exit` / `/quit`
 
@@ -185,8 +215,10 @@ enabled = true
 - `/streamma-trace <prompt>` 使用同一套真实 StreamMA/subagent 路径，并额外输出 live runtime trace（如 `subagent.started`、`agent.step.committed`、`control.upstream_eof`、per-invocation usage/cache），用于观察 step fanout 是否发生在上游 agent `Done` 前，以及同一 agent 是否复用同一 session
 - `multi-agent-pipeline` skill 是 Codex/Paw 的阶段化工作流指导，不会自动要求 StreamMA runtime。`/streamma` 和 `/streamma-trace` 是显式 runtime 调试入口；如果只想测试 skill、slash completion、普通 subagent 或 Token Tracer，可用 `PAW_STREAMMA=0` 或 `-streamma=false` 关闭这两个入口
 - `/tasks` 展示当前后台 subagent 任务及 transcript 路径
+- `/pipeline` 展示当前 pipeline activity 面板
 - `/skills` 展示当前可发现的本地 skills 及其 `SKILL.md` 路径
 - `/token-tracer` 展示当前启动的 Token Tracer dashboard URL；交互模式默认启动本地 HTTP 服务，`/` 为实时页面，`/api/state` 为完整快照，`/events` 为 SSE 实时事件流
+- `/compact [focus]` 在保留完整 journal 的前提下压缩模型上下文；`focus` 可指定聚焦压缩方向，压缩会保留最近消息、用户约束与未完成工作原文
 
 Token Tracer:
 - StreamMA 可用 `PAW_STREAMMA=0` 或 `-streamma=false` 手动关闭；关闭后输入 `/streamma` 或 `/streamma-trace` 会直接提示已禁用，不会启动 worker，也不会触发 `END_STEP` parser
@@ -197,7 +229,7 @@ Token Tracer:
 
 #### 当前输入区状态
 
-context meter 默认展示在消息历史区下方、输入框上方；输入框保持在窗口底部，不再显示 `Input`、`Waiting`、`Terminal` 标签。
+context meter 默认展示在消息历史区下方、输入框上方；输入框保持在窗口底部，不再显示 `Input`、`Waiting`、`Terminal` 标签。状态行内联展示 worktree 元信息（git 仓库名、当前分支/HEAD、clean/dirty/conflict 状态），空间不足时自动让位给 token 信息。
 
 输入补全:
 - 在行首输入 `/` 或 `/query` 会显示全部命令与 skill 候选；前面已有内容时只显示 `/subagent`、`/streamma` 和全部 skill，并仅使用末尾当前斜杠词筛选；URL、路径或普通文本内部的斜杠不会触发
@@ -265,6 +297,7 @@ context meter 左侧显示紧凑 token 与比例，例如 `260k↑ 2.05k↓ 25%(
 - `session`、`settings`、`subagent`、`streamma` 是新增的运行时支撑模块，负责 `.paw/` 持久化、用户默认配置、子代理调度和 StreamMA runtime；主对话链路仍按下面的 5 层理解即可。
 - `internal/skill` 负责发现本地 `skill-name/SKILL.md`、解析输入中的 skill 引用，并把选中的 skill 文件格式化为当前 turn 的 system context。
 - `internal/streamma` 是独立的内存版 multi-agent runtime，目前覆盖 fake model + runtime 验收，并通过 `/streamma <prompt>` 接入 `loop.Runner` 的显式分支；交互入口会使用真实 subagent worker 作为 StreamMA agent，生产版 NATS、Postgres、MinIO 适配器仍未接入。
+- `internal/tokentracer` 提供 token 用量追踪与本地 HTTP dashboard。
 
 ### 1. `message`
 
@@ -290,8 +323,25 @@ context meter 左侧显示紧凑 token 与比例，例如 `260k↑ 2.05k↓ 25%(
 字段:
 - `Role` — 消息角色
 - `Content` — 文本内容
-- `ToolUse` (`*ToolCall`) — 工具调用请求（assistant 发出）
-- `ToolResult` (`*ToolResult`) — 工具执行结果（user 角色发出）
+- `Parts` (`[]ContentPart`) — 有序 text/image 片段（富文本多模态消息；`Content` 保留为兼容表示）
+- `ToolUse` (`*ToolCall`) — 工具调用请求（assistant 发出，单个）
+- `ToolUses` (`[]ToolCall`) — 工具调用请求（assistant 发出，多个）
+- `ToolResult` (`*ToolResult`) — 工具执行结果（user 角色发出，单个）
+- `ToolResults` (`[]ToolResult`) — 工具执行结果（user 角色发出，多个）
+
+##### `type ContentPart struct`
+
+字段:
+- `Type` — `text` 或 `image`
+- `Text` — 文本内容
+- `Image` (`*ImagePart`) — 图片片段
+
+##### `type ImagePart struct`
+
+字段:
+- `MIMEType` — 图片 MIME 类型
+- `Attachment` — 附件相对引用（持久化时写入，不写 base64）
+- `Data` (`[]byte`) — 仅在提交/物化请求时内存持有，JSON 序列化忽略
 
 ##### `type ToolCall struct`
 
@@ -353,6 +403,9 @@ context meter 左侧显示紧凑 token 与比例，例如 `260k↑ 2.05k↓ 25%(
 - 回灌 tool result
 - 维护内存中的对话历史
 - 记录最近一次模型流返回的真实 usage，供 context meter 展示
+- 读取 `AGENTS.md` 项目指令并注入 system prompt
+- 触发上下文自动压缩（保留完整 journal）
+- 通过 Turn Journal 增量持久化每轮消息（turn_started / assistant_message / tool_result / turn_completed / turn_failed）
 
 这是当前系统的协调层。
 
@@ -407,13 +460,23 @@ main (-subagent-worker)
 字段:
 - `Role`
 - `Content`
+- `Parts`
 - `ToolUse`
+- `ToolUses`
 - `ToolResult`
+- `ToolResults`
 
 用法:
 - 普通文本消息: `Role + Content`
-- 工具调用消息: `Role + ToolUse`
-- 工具结果消息: `Role + ToolResult`
+- 富文本多模态消息: `Role + Parts`
+- 工具调用消息: `Role + ToolUse` / `Role + ToolUses`
+- 工具结果消息: `Role + ToolResult` / `Role + ToolResults`
+
+#### `type ContentPart` / `type ImagePart`
+
+用途:
+- 描述有序的 text/image 片段
+- 图片以附件引用持久化，以内存 `Data` 物化到 provider 请求
 
 #### `type ToolCall struct`
 
@@ -452,9 +515,24 @@ main (-subagent-worker)
 - `APIKeyEnvName`
 - `Model`
 - `Models`
+- `ExtraBody`（`RequestBody`，合并进每个 provider 请求体的任意 JSON 对象）
+- `ModelExtraBody`（`map[string]RequestBody`，按模型名附加的请求体）
+- `ContextLimitTokens` / `ModelContextLimitTokens`（上下文 token 上限，可按模型覆盖）
 - `Timeout`
 - `RetryCount`（持久化为 `~/.paw/config.json` 当前 model profile 的 `retryCount`；网络请求失败或遇到 408/425/429/5xx 时的重试次数，默认 3）
 - `Stream`（持久化为 `~/.paw/config.json` 当前 model profile 的 `stream`；默认 `true`，只有显式写为 `false` 才使用非流式请求）
+- `Profiles`（全部已配置 profile）
+
+##### `type Profile struct`
+
+字段:
+- `ID` / `Name` / `Provider` / `Transport`
+- `APIBaseURL` / `APIPath` / `APIKey` / `APIKeyEnvName`
+- `Model` / `Models`
+- `ExtraBody` / `ModelExtraBody`
+- `ContextLimitTokens` / `ModelContextLimitTokens`
+- `Timeout` / `RetryCount` / `Stream` / `StreamSet`
+- `CredentialID`
 
 ##### `LoadConfigFromEnv() (Config, error)`
 
@@ -489,6 +567,10 @@ main (-subagent-worker)
 
 代码只负责按 `transport` 和 profile 中的 endpoint 发请求；不会内置 provider、API URL、API path、API key 或模型名。
 
+##### `type RequestBody map[string]any`
+
+任意 JSON 对象，通过 `extraBody` / `modelExtraBody` 合并进 provider 请求体。受保护字段（如 `model`、`system`、`messages`、`tools`、`stream` 等）不允许出现在 extra body 中；`ValidateExtraRequestBodies` 会在加载配置时校验。
+
 #### 请求/响应类型
 
 文件: [types.go](./internal/model/types.go)
@@ -517,6 +599,7 @@ main (-subagent-worker)
 职责:
 - 发送 HTTP 请求
 - 解析同步响应
+- 解析流式响应
 
 字段:
 - `httpClient`
@@ -536,6 +619,13 @@ main (-subagent-worker)
 - CLI 主路径不依赖它
 - 仍然保留作为同步调用能力
 
+##### `StreamMessage(ctx, messages, tools) (<-chan StreamEvent, error)`
+
+职责:
+- 发起流式请求（按 `transport` 分发到 OpenAI-compatible 或 Anthropic-compatible 流式解析）
+- 返回事件 channel
+- `tools` 为原生工具定义（`[]model.ToolDefinition`），用于 LLM API 的原生工具调用请求
+
 #### 流式层
 
 文件: [stream.go](./internal/model/stream.go)
@@ -551,12 +641,6 @@ main (-subagent-worker)
 
 约定:
 - 一次事件只表达一种状态
-
-##### `StreamMessage(ctx, messages) (<-chan StreamEvent, error)`
-
-职责:
-- 发起流式请求
-- 返回事件 channel
 
 ##### 关键内部函数
 
@@ -591,6 +675,16 @@ main (-subagent-worker)
 
 职责:
 - 后台消费整个 SSE 响应流
+
+#### Anthropic 流式层
+
+文件: [anthropic_stream.go](./internal/model/anthropic_stream.go)
+
+职责:
+- 针对 Anthropic Messages API 的流式解析（`message_start` / `content_block_start` / `content_block_delta` / `message_delta` 等）
+- 处理 thinking、text、tool_use 内容块
+- 支持 system prompt 的 `cache_control`（`type: "ephemeral"`）
+- 把 provider 返回的 usage 汇总到 `StreamEvent.Usage`
 
 ### `internal/streamma`
 
@@ -814,6 +908,29 @@ main (-subagent-worker)
 扩展规则:
 - 新工具只要实现这个接口，并注册到 `Registry`，不需要改 loop 核心逻辑
 
+##### `type ConcurrencySafeTool interface`
+
+方法:
+- `IsConcurrencySafe(input json.RawMessage) bool`
+
+用途:
+- 声明某次调用是否可并发执行；runner 会把连续的安全工具调用并行批处理，非安全调用仍串行
+
+##### `type FileMutationTool interface`
+
+方法:
+- `FileMutationTarget(input json.RawMessage) (FileMutationTarget, error)`
+
+用途:
+- runner 在不执行工具的前提下安全检查目标文件（路径 + 写入前是否存在）
+- 当前由 `WriteTool` 和 `EditTool` 实现，用于向 UI 提供真实修改差异
+
+##### `type FileMutationTarget struct`
+
+字段:
+- `Path` — 解析后的工作区绝对路径
+- `BeforeExists` — 写入前目标是否存在
+
 #### 注册层
 
 文件: [register.go](./internal/tool/register.go)
@@ -822,6 +939,7 @@ main (-subagent-worker)
 
 职责:
 - 按名称保存工具实例
+- 支持 namespace 级原子替换（MCP 动态工具）
 
 ##### `NewRegistry() *Registry`
 
@@ -838,6 +956,20 @@ main (-subagent-worker)
 职责:
 - 按名称查找工具
 
+##### `ReplaceNamespace(namespace string, tools []Tool) error`
+
+职责:
+- 原子替换属于某逻辑 namespace 的全部工具
+- 不与其它 namespace 的工具发生覆盖冲突
+
+用途:
+- MCP 能力快照变化时更新注册表
+
+##### `RemoveNamespace(namespace string)`
+
+职责:
+- 移除某逻辑 namespace 的全部工具
+
 ##### `Describe() []string`
 
 职责:
@@ -847,10 +979,20 @@ main (-subagent-worker)
 用途:
 - 给 `Runner` 拼 system prompt
 
+##### `DescribeBrief() []string`
+
+职责:
+- 生成不带 schema 的工具说明文本
+
 ##### `Definitions() []model.ToolDefinition`
 
 职责:
 - 返回 `[]model.ToolDefinition`，用于 LLM API 的原生工具调用请求
+
+##### `IsConcurrencySafe(name string, input []byte) bool`
+
+职责:
+- 查询某次调用是否可并发执行
 
 #### 文件工具
 
@@ -858,7 +1000,11 @@ main (-subagent-worker)
 - [path.go](./internal/tool/file/path.go)
 - [ls.go](./internal/tool/file/ls.go)
 - [read.go](./internal/tool/file/read.go)
+- [read_state.go](./internal/tool/file/read_state.go)
 - [write.go](./internal/tool/file/write.go)
+- [edit.go](./internal/tool/file/edit.go)
+- [atomic.go](./internal/tool/file/atomic.go)
+- [mutation_path.go](./internal/tool/file/mutation_path.go)
 - [grep.go](./internal/tool/file/grep.go)
 - [glob.go](./internal/tool/file/glob.go)
 
@@ -866,6 +1012,7 @@ main (-subagent-worker)
 
 字段:
 - `Root`
+- `ReadRoots`
 
 方法:
 - `Name()`
@@ -888,15 +1035,19 @@ main (-subagent-worker)
 
 字段:
 - `Root`
+- `ReadRoots`
+- `ReadState` (`*ReadStateStore`)
 
 方法:
 - `Name()`
 - `Description()`
 - `InputSchema()`
+- `IsConcurrencySafe(input) bool`
 - `Run(ctx, input)`
 
 职责:
 - 读取工作区内文件内容
+- 读取成功后把内容哈希记录到 `ReadStateStore`，作为后续 Edit/Write 的基线
 
 输入格式:
 
@@ -910,15 +1061,18 @@ main (-subagent-worker)
 
 字段:
 - `Root`
+- `ReadState` (`*ReadStateStore`)
 
 方法:
 - `Name()`
 - `Description()`
 - `InputSchema()`
+- `FileMutationTarget(input) (FileMutationTarget, error)`
 - `Run(ctx, input)`
 
 职责:
-- 覆盖写入工作区内文件
+- 覆盖写入工作区内文件（`atomicWriteFile` 原子写入）
+- 若模型此前 Read 过该文件，写入前校验磁盘内容仍匹配记录基线，防止丢失更新
 
 输入格式:
 
@@ -929,10 +1083,76 @@ main (-subagent-worker)
 }
 ```
 
+##### `type EditTool struct`
+
+字段:
+- `Root`
+- `ReadState` (`*ReadStateStore`)
+
+方法:
+- `Name()`
+- `Description()`
+- `InputSchema()`
+- `FileMutationTarget(input) (FileMutationTarget, error)`
+- `Run(ctx, input)`
+
+职责:
+- 对工作区内已先用 Read 读取的文件做精确字符串替换（对齐 Claude Code 的 Edit 契约）
+- 目标必须是常规文件、必须先被 Read 记录基线、`old_string` 必须逐字节匹配且默认唯一
+- 写入使用 `atomicWriteFile` 原子替换；成功后更新 ReadState 基线
+
+输入格式:
+
+```json
+{
+  "file_path": "internal/foo.go",
+  "old_string": "return 1",
+  "new_string": "return 2",
+  "replace_all": false
+}
+```
+
+行为:
+- `old_string` 未命中 → 报错并提示必须与文件内容精确匹配
+- 命中多处且未设 `replace_all` → 报错并提示补充上下文或设置 `replace_all=true`
+- 自上次 Read 后文件被外部修改 → 报错并要求重新 Read
+
+##### `type ReadStateStore struct`
+
+职责:
+- 按路径记录最近一次 Read 的内容哈希（sha256）
+- 为 Edit/Write 提供 stale-write / lost-update 保护
+
+方法:
+- `Record(path, content)` — 记录基线
+- `Verify(path, current) error` — 有基线时校验当前内容仍匹配；无基线时宽松返回 nil
+- `VerifyRequired(path, current) error` — 必须有基线且匹配（Edit 使用）
+- `RecordAfterWrite(path, content)` — 写入后刷新基线，避免连续 Edit 误报
+
+##### `atomicWriteFile(target, content, mode) error`
+
+职责:
+- 同目录写临时文件后 rename，崩溃不会留下半写文件
+- 自动创建父目录并显式应用权限位
+
+##### `resolveMutationPath(root, target, allowMissing) (string, bool, error)`
+
+职责:
+- 解析工作区内路径
+- 阻止路径经符号链接逃出工作区根目录
+- `allowMissing=true` 时解析最近存在的祖先，校验缺失后缀不越界
+
+##### `resolvePathWithinRoot(root, target) (string, error)`
+
+职责:
+- 解析文件路径
+- 阻止路径逃出工作区根目录
+
 ##### `type GrepTool struct`
 
 字段:
 - `Root`
+- `ReadRoots`
 
 方法:
 - `Name()`
@@ -958,6 +1178,7 @@ main (-subagent-worker)
 
 字段:
 - `Root`
+- `ReadRoots`
 
 方法:
 - `Name()`
@@ -977,12 +1198,6 @@ main (-subagent-worker)
   "max_results": 50
 }
 ```
-
-##### `resolvePathWithinRoot(root, target) (string, error)`
-
-职责:
-- 解析文件路径
-- 阻止路径逃出工作区根目录
 
 #### 命令执行工具
 
@@ -1050,6 +1265,7 @@ main (-subagent-worker)
 职责:
 - 发起 HTTP(S) GET 请求
 - 返回状态行、响应头中的 `Content-Type` 和响应体文本
+- 响应体截断到 32 KiB，超出时追加 `[response truncated]`
 
 输入格式:
 
@@ -1059,6 +1275,72 @@ main (-subagent-worker)
   "timeout_seconds": 30
 }
 ```
+
+#### 选择工具（交互）
+
+目录: [select](./internal/tool/select/)
+
+职责:
+- 在主 TUI 中渲染阻塞式单选/多选 prompt，等待用户提交或取消
+- 通过 `Broker` 把工具调用桥接到 Bubble Tea UI
+
+##### `type Broker struct`
+
+职责:
+- 维护请求队列与活动请求
+- `Ask(ctx, request)` 阻塞等待用户结果
+- `NextEvent(ctx)` / `Complete(id, result)` / `Close()` 供 UI 侧消费与回填
+
+##### `type Request struct`
+
+字段:
+- `ID` — 由 broker 分配的请求 ID（`select-<n>`）
+- `Prompt`
+- `Mode` — `single` / `multiple`
+- `Options` — `[]Option{ID, Label, Description}`
+- `InitialSelectedIDs`
+- `MinSelect` / `MaxSelect`
+
+##### `type Result struct`
+
+字段:
+- `Cancelled`
+- `SelectedOptions` — `[]SelectedOption{ID, Label}`
+
+行为:
+- 单选模式必须恰好选中一个选项；多选模式校验 `min_select` / `max_select`
+- 支持一个 `custom_option` 自定义选项（`id` 为保留值 `custom_option`，需提供 label）
+- 结果会与请求的 canonical 选项做一致性校验，非法结果返回错误
+
+输入格式:
+
+```json
+{
+  "prompt": "Pick one",
+  "mode": "single",
+  "options": [
+    {"id": "a", "label": "Option A"},
+    {"id": "b", "label": "Option B"}
+  ]
+}
+```
+
+#### MCP 工具适配
+
+文件: [mcp/tool.go](./internal/tool/mcp/tool.go)
+
+##### `type Tool struct`
+
+字段:
+- `spec` (`coremcp.ToolSpec`)
+- `broker` (`coremcp.Broker`)
+
+职责:
+- 把一个 MCP 能力适配为 Paw 的普通工具接口
+- broker 可以是主进程 Manager，也可以是 subagent 转发代理
+
+方法:
+- `Name()` / `Description()` / `InputSchema()` / `Namespace()` / `Run(ctx, input)` / `Spec()`
 
 ### `internal/ui`
 
@@ -1072,6 +1354,9 @@ main (-subagent-worker)
 - `ID`
 - `Name`
 - `Input`
+- `FileMutationKnown` — 是否知道文件变更目标
+- `IsFileMutation` — 是否文件变更类工具
+- `FileMutation` (`*FileMutationSnapshot`) — 变更前后快照
 
 ##### `type ToolResultEvent struct`
 
@@ -1080,17 +1365,59 @@ main (-subagent-worker)
 - `Name`
 - `Content`
 - `IsError`
+- `FileMutationKnown`
+- `IsFileMutation`
+- `FileMutation` (`*FileMutationSnapshot`)
+
+##### `type FileMutationSnapshot struct`
+
+字段:
+- `Before` / `After` — 变更前后内容
+- `BeforeExists` / `AfterExists` — 变更前后文件是否存在
+
+用途:
+- 只用于 UI 展示真实修改差异，不写入 `message.ToolResult` 或 tracing payload
+
+##### `type SystemEvent struct`
+
+字段:
+- `Title`
+- `Body`
+- `Color`
 
 ##### `type UI interface`
 
 方法:
 - `OnAssistantDelta(text string) error`
-- `OnThoughtDelta(text string) error`
 - `OnToolCall(event ToolCallEvent) error`
 - `OnToolResult(event ToolResultEvent) error`
 - `OnDone() error`
 
 这是 loop 层唯一依赖的 UI 抽象。
+
+##### `type ThinkingDeltaReceiver interface`
+
+方法:
+- `OnThinkingDelta(text string) error`
+
+用途:
+- 可选扩展：接收模型 thinking 流
+
+##### `type SystemNotifier interface`
+
+方法:
+- `OnSystemMessage(event SystemEvent) error`
+
+用途:
+- 可选扩展：接收后台任务完成等系统事件
+
+##### `type FileMutationConsumer interface`
+
+方法:
+- `ConsumesFileMutations() bool`
+
+用途:
+- 只有选择消费的 UI 才会让 runner 去检查变更目标或读取文件快照
 
 #### Headless 实现
 
@@ -1133,6 +1460,15 @@ main (-subagent-worker)
 职责:
 - 一轮结束时补一个换行
 
+#### Bubble Tea 实现
+
+目录: [bubble](./internal/ui/bubble/)
+
+职责:
+- 完整 TUI：消息历史、输入框、context meter、worktree 状态行、slash 命令、补全弹窗、subagent 面板、Select dock、图片芯片、thinking 折叠
+- 使用 ESC 聚合 reader 防止鼠标/键盘序列被读边界切断（`escCoalescingReader`）
+- 输出带光标锚点修正的终端流
+
 ### `internal/loop`
 
 文件: [runner.go](./internal/loop/runner.go)
@@ -1140,12 +1476,21 @@ main (-subagent-worker)
 #### `type ModelStreamer interface`
 
 方法:
-- `StreamMessage(ctx context.Context, messages []message.Message) (<-chan model.StreamEvent, error)`
+- `StreamMessage(ctx context.Context, messages []message.Message, tools []model.ToolDefinition) (<-chan model.StreamEvent, error)`
 
 作用:
 - 抽象模型流式能力
 
 这让 `Runner` 不直接依赖具体 provider 类型。
+
+#### `type HistoryStore interface`
+
+方法:
+- `LoadResolvedHistory(ctx, sessionID) ([]message.Message, error)`
+- `Append(ctx, sessionID, msgs ...message.Message) error`
+
+作用:
+- 抽象历史加载/追加
 
 #### `type Runner struct`
 
@@ -1155,21 +1500,34 @@ main (-subagent-worker)
 - `registry` (`*tool.Registry`) — 工具注册表
 - `store` (`HistoryStore`) — 历史存储接口
 - `sessionID` — 当前会话 ID
-- `prompt` (`*PromptBuilder`) — 系统提示词构建器
+- `workRoot` — 工具使用的 workspace 根目录
+- `prompt` (`*PromptBuilder`) — 系统提示词构建器（含 AGENTS.md 项目指令）
 - `history` — 已成功完成的多轮对话消息列表（内存缓存）
 - `usage` / `sessionUsage` — 当前轮/整个会话的 token 用量统计
+- `recovery` (`*session.RecoveryState`) — 最近一次未正常完成 turn 的恢复状态
 - `supplements` — 用户在当前轮运行期间提交的补充指令（支持并发注入）
 - `skillRegistry` / `activeSkillContext` — 本地 skill 发现与当前 turn 的临时 skill 指令上下文
+- `streamMAEnabled` / `streamMASubagents` — StreamMA 开关与 subagent runner 适配器
+- `tokenTracer` / `traceStageID` / `traceAgentID` — Token Tracer 与当前 pipeline 定位
+- `nowFn` — 可注入时钟（测试用）
 
 职责:
 - 驱动单次 agent turn
 - 在成功 turn 后维护内存中的多轮历史
 - 用模型服务端 usage 字段更新 context 计量，不做本地 token 估算
+- 通过 Turn Journal 增量持久化每轮消息
 
 #### `NewRunner(model, output, registry) *Runner`
 
 职责:
-- 创建调度器
+- 创建调度器（空 instruction root）
+
+#### `NewRunnerWithInstructionRoot(model, output, registry, store, sessionID, instructionRoot) *Runner`
+
+职责:
+- 创建带项目指令根目录的调度器
+- 构造 `PromptBuilder(NewInstructionManager(root))` 与 skill registry
+- 默认开启 StreamMA
 
 #### `RunTurn(ctx, input) (message.Message, error)`
 
@@ -1177,13 +1535,14 @@ main (-subagent-worker)
 - 执行一次完整 turn
 
 当前逻辑:
-1. 验证与初始化：检查 runner 初始化状态；按输入中的 `$skill` 或 `[$skill](.../SKILL.md)` 解析并加载当前 turn 的 skill 指令；首次运行时从 store 加载历史
+1. 验证与初始化：检查 runner 初始化状态；持久化输入中的图片附件；按输入中的 `$skill` 或 `[$skill](.../SKILL.md)` 解析并加载当前 turn 的 skill 指令；首次运行时从 store 加载历史（含 Turn Journal snapshot 与 recovery 状态）
 2. 构建本轮历史副本：复制已提交历史，插入未注入的 supplements，再追加当前用户输入（失败时不污染已提交历史）
 3. 多轮工具循环（最多 500 轮）：
    - 每轮开始时检查是否有新注入的 supplements 并追加
+   - 首轮前检查是否需要自动上下文压缩（`maybeCompactHistory`），压缩时保留最近消息与用户约束原文
    - 调用 `runModelTurn`：构造 system prompt + 历史消息，通过 `model.StreamMessage` 发送给 LLM 并消费流式事件
-   - 若返回消息不含 `ToolUse`，调用 `commitHistory` 持久化并返回该 assistant 消息
-   - 若含 `ToolUse`，调用 `runToolCall` 执行工具，将 tool_result 追加到历史副本，继续下一轮
+   - 若返回消息不含 ToolUse，调用 `commitHistory` 持久化并返回该 assistant 消息
+   - 若含 ToolUse，调用 `runToolCall` 执行工具（连续并发安全的调用会并行批处理），将 tool_result 追加到历史副本，继续下一轮
 4. 超限保护：超过 500 轮返回错误
 
 #### `ResetHistory()`
@@ -1194,6 +1553,11 @@ main (-subagent-worker)
 
 当前用途:
 - REPL 的 `/clear`
+
+#### `runModelTurn(ctx, history) (message.Message, error)`
+
+职责:
+- 从 registry 取原生工具定义，构造模型消息并消费流式事件
 
 #### `buildModelMessages(history) []message.Message`
 
@@ -1221,7 +1585,7 @@ main (-subagent-worker)
 职责:
 - 判断模型输出是普通文本还是 `tool_use` JSON
 
-#### `runToolCall(ctx, call) (message.Message, error)`
+#### `runToolCall(ctx, call) (message.ToolResult, error)`
 
 职责:
 - 向 UI 发工具调用事件
@@ -1233,6 +1597,83 @@ main (-subagent-worker)
 
 职责:
 - 只执行工具，不做 UI 输出
+
+#### `prepareFileMutation(call) *fileMutationCapture`
+
+职责:
+- 若 UI 消费文件变更快照且工具实现 `FileMutationTool`，在工具执行前捕获目标路径与磁盘内容
+
+#### `maybeCompactHistory(ctx, history) ([]message.Message, *ContextCompactionResult, error)`
+
+职责:
+- 上下文接近上限时自动压缩历史（非阻塞、失败可跳过）
+- 详情见 `internal/loop/context_compaction.go`
+
+#### 指令管理
+
+文件: [instruction_manager.go](./internal/loop/instruction_manager.go)
+
+##### `type InstructionManager struct`
+
+职责:
+- 从工作区向上查找 `AGENTS.md`，缓存其内容作为“项目指令”
+- 内容作为 inert text 注入 system prompt，不执行
+
+方法:
+- `NewInstructionManager(root)`
+- `ProjectInstructions() string`
+
+#### 提示词构建
+
+文件: [prompt_builder.go](./internal/loop/prompt_builder.go)
+
+##### `type PromptBuilder struct`
+
+职责:
+- 以稳定顺序组装 system prompt：默认指令 → AGENTS.md 项目指令 → 工具说明 → 工具调用格式约定
+
+方法:
+- `Build(toolDescriptions []string) string`
+
+#### 上下文压缩
+
+文件: [context_compaction.go](./internal/loop/context_compaction.go)
+
+##### `type ContextCompactionResult struct`
+
+字段:
+- `BeforeMessages`
+- `AfterMessages`
+- `FoldedMessages`
+- `Summary`
+
+职责:
+- 描述一次压缩前后的消息数量与摘要
+
+##### 行为
+
+- 压缩由模型生成摘要，保留路径、标识符、版本、数字、用户约束、编辑、命令结果与未完成工作原文
+- 压缩只影响模型上下文，完整 journal 始终保留
+- 超时 90 秒，失败时跳过并在 UI 提示
+
+#### Turn Journal
+
+文件: [journal.go](./internal/session/journal.go)
+
+##### `type TurnJournal interface`
+
+方法:
+- `BeginTurn(ctx, sessionID, turnID, messages ...) error`
+- `AppendAssistant(ctx, sessionID, turnID, msg) error`
+- `AppendToolResult(ctx, sessionID, turnID, callIndex, result) error`
+- `CompleteTurn(ctx, sessionID, turnID) error`
+- `FailTurn(ctx, sessionID, turnID, err) error`
+- `LoadSnapshot(ctx, sessionID) (SessionSnapshot, error)`
+
+职责:
+- 增量持久化一轮的每条消息与工具结果
+- `SessionSnapshot` 区分 UI 展示消息与喂给模型的 safe history
+- `RecoveryState` 记录未完成 turn 的已完成工具结果与丢弃的工具调用，重启后可恢复
 
 ### `internal/subagent`
 
@@ -1267,6 +1708,11 @@ main (-subagent-worker)
 职责:
 - 同步运行子 agent，等待执行完成并返回结果
 
+##### `Stream(ctx, req) (Stream, error)`
+
+职责:
+- 以同步方式启动子 agent 并返回流式事件 channel
+
 ##### `Launch(ctx, req) (TaskSnapshot, error)`
 
 职责:
@@ -1286,6 +1732,11 @@ main (-subagent-worker)
 
 职责:
 - 列出所有任务（内存 + 磁盘），按启动时间排序
+
+##### `TotalSubagentTokens(parentSessionID string) int`
+
+职责:
+- 返回指定父会话下全部已完成任务的 token 总量
 
 ##### 内置 Tool 实现
 
@@ -1317,11 +1768,17 @@ Manager 同文件中实现了三个供 LLM 调用的工具：
 
 字段:
 - `ID` — 任务 ID
+- `Name` / `Color` — 任务展示名与颜色
+- `SessionID` / `ParentSessionID`
+- `Description` / `Prompt` / `SystemPrompt`
+- `ContextMode` / `RunMode`
 - `Status` — running / completed / failed / stopped
-- `StartedAt` — 开始时间
-- `FinishedAt` — 结束时间
-- `Content` — 结果内容
-- `Error` — 错误信息
+- `TranscriptPath` / `OutputPath`
+- `PID` / `ExitCode`
+- `Depth` / `ParentTaskID`
+- `StartedAt` / `FinishedAt`
+- `Content` / `Error`
+- `UsedTokens` / `Usage`
 
 ### `internal/settings`
 
@@ -1372,6 +1829,19 @@ Manager 同文件中实现了三个供 LLM 调用的工具：
 职责:
 - 规范化配置字段值（大小写无关，非法值回退到默认）
 
+### `internal/tokentracer`
+
+目录: [tokentracer](./internal/tokentracer)
+
+职责:
+- 记录普通对话、工具调用、StreamMA runtime events、subagent usage/cache 的 token 用量
+- 提供本地 HTTP dashboard（`/` 实时页面、`/api/state` 快照、`/events` SSE）
+
+核心类型:
+- `Tracer` — 内存聚合器，按 pipeline → stage → agent 组织
+- `Snapshot` — 可审计的完整快照（含 timeline 与事件流）
+- `Timeline` / `Event` — 时间线视图与事件记录
+
 ## 抽象层总结
 
 当前有 3 个核心抽象层。
@@ -1395,6 +1865,7 @@ Manager 同文件中实现了三个供 LLM 调用的工具：
 
 替换方式:
 - 新工具实现接口后注册即可
+- 可选扩展：`tool.ConcurrencySafeTool`（并发批处理）、`tool.FileMutationTool`（文件变更快照）
 
 ### 3. UI 抽象
 
@@ -1405,6 +1876,7 @@ Manager 同文件中实现了三个供 LLM 调用的工具：
 
 替换方式:
 - 可将 `headless` 换成 TUI、日志型 UI、测试 UI
+- 可选扩展：`ui.ThinkingDeltaReceiver`、`ui.SystemNotifier`、`ui.FileMutationConsumer`
 
 ## 扩展点
 
@@ -1426,6 +1898,10 @@ Manager 同文件中实现了三个供 LLM 调用的工具：
 4. 实现 `InputSchema`
 5. 实现 `Run`
 6. 在 `buildRunner()` 里 `registry.Register(...)`
+
+可选能力:
+- 实现 `IsConcurrencySafe` 启用并行批处理
+- 实现 `FileMutationTarget` 让 UI 展示真实文件差异
 
 ### 替换 UI
 
@@ -1459,6 +1935,16 @@ Manager 同文件中实现了三个供 LLM 调用的工具：
 - 修改 `maxDepth` 限制递归深度
 - 实现新的 `Store` 接口替换默认 JSONL 存储
 
+### 接入新 MCP server
+
+位置:
+- `~/.paw/mcp.toml`（用户侧）
+- `internal/mcp/`（协议实现）
+
+扩展方式:
+- 添加 `[mcp_servers.<name>]` 表并 `enabled = true`
+- 发现的能力自动以 `<server>__<tool>` 名称注册进 `tool.Registry`
+
 ## 当前不属于扩展面的函数
 
 下列函数是内部实现细节，不建议作为外部依赖面：
@@ -1466,6 +1952,7 @@ Manager 同文件中实现了三个供 LLM 调用的工具：
 - `loop` 中的输出状态函数
 - `model/stream.go` 中的 SSE 解析函数
 - `bash.go` 中的输入解码和缓冲细节
+- `select/input.go` 中的输入解码与校验
 
 如果要扩展功能，优先从这几个位置下手：
 - `tool.Tool`
@@ -1473,6 +1960,7 @@ Manager 同文件中实现了三个供 LLM 调用的工具：
 - `loop.ModelStreamer`
 - `main.buildRunner()`
 - `subagent.Manager`
+- `tool.Registry.ReplaceNamespace`（动态工具命名空间）
 
 ## 启动要求
 

@@ -1052,7 +1052,7 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 	next, _ = model.Update(toolCallMsg(ui.ToolCallEvent{Name: "Read", Input: []byte(`{"file_path":"go.mod"}`)}))
 	model = next.(appModel)
 	runningRendered := renderTranscript(model.transcript, 80, model.showThinking)
-	for _, want := range []string{"hello", "◌ Read: go.mod · 运行中"} {
+	for _, want := range []string{"hello", "◌ Read: go.mod  运行中"} {
 		if !strings.Contains(runningRendered, want) {
 			t.Fatalf("running transcript = %q, want %q", runningRendered, want)
 		}
@@ -1071,15 +1071,15 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{Name: "Read", Content: "module paw"}))
 	model = next.(appModel)
 	okRendered := renderTranscript(model.transcript, 80, model.showThinking)
-	for _, want := range []string{"hello", "✓ Read: go.mod · 完成"} {
+	for _, want := range []string{"hello", "✓ Read: go.mod  完成"} {
 		if !strings.Contains(okRendered, want) {
 			t.Fatalf("ok transcript = %q, want %q", okRendered, want)
 		}
 	}
-	if strings.Contains(okRendered, "[Read]") || strings.Contains(okRendered, "◌ Read: go.mod · 运行中") || strings.Contains(okRendered, "file_path=") || strings.Contains(okRendered, "file_path  ") {
+	if strings.Contains(okRendered, "[Read]") || strings.Contains(okRendered, "◌ Read: go.mod  运行中") || strings.Contains(okRendered, "file_path=") || strings.Contains(okRendered, "file_path  ") {
 		t.Fatalf("ok transcript = %q, should replace running status", okRendered)
 	}
-	if !strings.Contains(okRendered, "✓ Read: go.mod · 完成") {
+	if !strings.Contains(okRendered, "✓ Read: go.mod  完成") {
 		t.Fatalf("ok transcript = %q, want completed tool block", okRendered)
 	}
 	for _, hidden := range []string{"\n  tool\n", "\n  result\n"} {
@@ -1093,12 +1093,12 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 	model = next.(appModel)
 
 	rendered := renderTranscript(model.transcript, 80, model.showThinking)
-	for _, want := range []string{"loaded go.mod", "✓ Read: go.mod · 完成"} {
+	for _, want := range []string{"loaded go.mod", "✓ Read: go.mod  完成"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered transcript = %q, want %q", rendered, want)
 		}
 	}
-	for _, hidden := range []string{"\n  tool\n", "\n  result\n", "[Read]", "file_path=", "file_path  ", "◌ Read: go.mod · 运行中", "module paw", "tool cites"} {
+	for _, hidden := range []string{"\n  tool\n", "\n  result\n", "[Read]", "file_path=", "file_path  ", "◌ Read: go.mod  运行中", "module paw", "tool cites"} {
 		if strings.Contains(rendered, hidden) {
 			t.Fatalf("rendered transcript = %q, should not contain old tool block marker/content %q", rendered, hidden)
 		}
@@ -1278,6 +1278,53 @@ func TestRenderTranscriptContentCachesUnchangedEntries(t *testing.T) {
 	}
 }
 
+func TestTranscriptInteractionCachesReuseRenderedLongTranscript(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 12
+	model.relayout()
+	for i := 0; i < 400; i++ {
+		model.transcript = append(model.transcript, transcriptEntry{
+			kind:    entryAssistant,
+			title:   "assistant",
+			body:    fmt.Sprintf("history line %03d", i),
+			version: 1,
+		})
+	}
+	model.refreshViewport()
+
+	if !model.transcriptContentCached {
+		t.Fatal("refreshViewport did not retain the rendered transcript content")
+	}
+	firstLines := model.transcriptLineSnapshots()
+	if len(firstLines) == 0 || !model.transcriptLineCacheReady {
+		t.Fatal("transcript line snapshot cache was not populated")
+	}
+	firstLocations := model.transcriptEntryLocationsAt()
+	if len(firstLocations) != len(model.transcript) || !model.transcriptLocationsReady {
+		t.Fatalf("location cache len = %d, want %d", len(firstLocations), len(model.transcript))
+	}
+
+	if secondLines := model.transcriptLineSnapshots(); len(secondLines) != len(firstLines) || &secondLines[0] != &firstLines[0] {
+		t.Fatal("repeated transcript hit testing rebuilt line snapshots")
+	}
+	if secondLocations := model.transcriptEntryLocationsAt(); len(secondLocations) != len(firstLocations) || &secondLocations[0] != &firstLocations[0] {
+		t.Fatal("repeated transcript hit testing rebuilt entry locations")
+	}
+
+	model.transcript[0].body = "updated history"
+	touchTranscriptEntry(&model.transcript[0])
+	model.refreshViewportPreservingOffset()
+	if model.transcriptLineCacheReady || model.transcriptLocationsReady {
+		t.Fatal("transcript refresh did not invalidate interaction caches")
+	}
+	updatedLines := model.transcriptLineSnapshots()
+	if len(updatedLines) == 0 || &updatedLines[0] == &firstLines[0] {
+		t.Fatal("line snapshot cache was not rebuilt after transcript refresh")
+	}
+}
+
 func TestAssistantCitationRendersAsBlockquoteUnderMessage(t *testing.T) {
 	entry := transcriptEntry{
 		kind:  entryAssistant,
@@ -1322,10 +1369,10 @@ func TestToolResultEntryMatchesByToolUseID(t *testing.T) {
 	model = next.(appModel)
 
 	rendered := renderTranscript(model.transcript, 80, model.showThinking)
-	if !strings.Contains(rendered, "✓ Read: first.go · 完成") {
+	if !strings.Contains(rendered, "✓ Read: first.go  完成") {
 		t.Fatalf("rendered transcript = %q, want call_1 completed", rendered)
 	}
-	if !strings.Contains(rendered, "◌ Read: second.go · 运行中") {
+	if !strings.Contains(rendered, "◌ Read: second.go  运行中") {
 		t.Fatalf("rendered transcript = %q, want call_2 still running", rendered)
 	}
 }
@@ -1336,7 +1383,7 @@ func TestToolCallWithoutAssistantTextRendersRunningEntry(t *testing.T) {
 	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{Name: "LS", Input: []byte(`{"path":"."}`)}))
 	model = next.(appModel)
 	rendered := renderTranscript(model.transcript, 54, model.showThinking)
-	for _, want := range []string{"◌ LS: . · 运行中"} {
+	for _, want := range []string{"◌ LS: .  运行中"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("running-only tool entry = %q, want %q", rendered, want)
 		}
@@ -1348,12 +1395,12 @@ func TestToolCallWithoutAssistantTextRendersRunningEntry(t *testing.T) {
 	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{Name: "LS", Content: "README.md"}))
 	model = next.(appModel)
 	rendered = renderTranscript(model.transcript, 54, model.showThinking)
-	for _, want := range []string{"✓ LS: . · 完成"} {
+	for _, want := range []string{"✓ LS: .  完成"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("completed-only tool entry = %q, want %q", rendered, want)
 		}
 	}
-	if strings.Contains(rendered, "[LS]") || strings.Contains(rendered, "path=") || strings.Contains(rendered, "path  ") || strings.Contains(rendered, "◌ LS: . · 运行中") || strings.Contains(rendered, "README.md") {
+	if strings.Contains(rendered, "[LS]") || strings.Contains(rendered, "path=") || strings.Contains(rendered, "path  ") || strings.Contains(rendered, "◌ LS: .  运行中") || strings.Contains(rendered, "README.md") {
 		t.Fatalf("completed-only tool entry = %q, should hide duplicate citation/running state/long output", rendered)
 	}
 }
@@ -1382,7 +1429,7 @@ func TestSubagentToolCallBodySummarizesPrompt(t *testing.T) {
 		"prompt":"读取并分析当前项目。\n1. 读取 go.mod\n2. 读取 README.md",
 		"run_mode":"sync"
 	}`), "")
-	for _, want := range []string{"Subagent · sync · empty", "description", "读取并分析项目结构", "prompt"} {
+	for _, want := range []string{"Subagent  sync  empty", "description", "读取并分析项目结构", "prompt"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("subagent body = %q, want %q", body, want)
 		}
@@ -1472,6 +1519,58 @@ func TestMarkdownListDetailLinesKeepDetailBackground(t *testing.T) {
 	}
 }
 
+func TestToolDetailLinesPreserveCommandOutputIndentation(t *testing.T) {
+	lines := []string{
+		"package main",
+		"    if ready {",
+		"        go test ./...",
+	}
+	rendered := ansi.Strip(renderToolDetailLines(lines, 48))
+	renderedLines := strings.Split(rendered, "\n")
+	if len(renderedLines) != len(lines) {
+		t.Fatalf("rendered lines = %#v, want %d lines", renderedLines, len(lines))
+	}
+	for index, line := range lines {
+		want := "  " + line
+		if !strings.HasPrefix(renderedLines[index], want) {
+			t.Fatalf("line %d = %q, want prefix %q", index+1, renderedLines[index], want)
+		}
+	}
+}
+
+func TestGroupedBashResultPreservesSedAndGoTestIndentation(t *testing.T) {
+	result := "package main\n    func main() {\n\tgo test ./...\n    }"
+	rendered := ansi.Strip(renderToolsGroup([]transcriptEntry{{
+		kind:          entryTool,
+		toolName:      "Bash",
+		toolStatus:    "ok",
+		toolTarget:    "sed -n '1,4p' main.go && go test ./...",
+		toolResult:    result,
+		toolGroupOpen: true,
+	}}, 80, time.Time{}, true, true))
+
+	var packageColumn, funcColumn, testColumn int = -1, -1, -1
+	for _, line := range strings.Split(rendered, "\n") {
+		switch {
+		case strings.Contains(line, "package main"):
+			packageColumn = strings.Index(line, "package main")
+		case strings.Contains(line, "func main() {"):
+			funcColumn = strings.Index(line, "func main() {")
+		case strings.Contains(line, "go test ./..."):
+			testColumn = strings.Index(line, "go test ./...")
+		}
+	}
+	if packageColumn < 0 || funcColumn < 0 || testColumn < 0 {
+		t.Fatalf("grouped Bash output is incomplete:\n%s", rendered)
+	}
+	if funcColumn-packageColumn != 4 {
+		t.Fatalf("sed source indentation changed: package column=%d func column=%d\n%s", packageColumn, funcColumn, rendered)
+	}
+	if testColumn-packageColumn != streamTabWidth {
+		t.Fatalf("go test tab indentation changed: package column=%d test column=%d want delta=%d\n%s", packageColumn, testColumn, streamTabWidth, rendered)
+	}
+}
+
 func TestUnifiedDiffLinesUseBackgroundColorsOnlyWithinHunk(t *testing.T) {
 	lines := []string{"@@ -1,2 +1,2 @@", " - keep this markdown item", "-old", "+new"}
 	rendered := renderToolDetailLines(lines, 40)
@@ -1511,7 +1610,7 @@ func TestToolDiffRowsAlignLineNumberWithStatusMarker(t *testing.T) {
 	lines := strings.Split(rendered, "\n")
 	var headerLine, diffLine string
 	for _, line := range lines {
-		if strings.Contains(line, "✓ Write: test.txt · 完成") {
+		if strings.Contains(line, "✓ Write: test.txt  完成") {
 			headerLine = line
 		}
 		if strings.Contains(line, "1 + │") {
@@ -2149,7 +2248,7 @@ func TestSubagentCommandUsesDefaultsAndTasksRender(t *testing.T) {
 	if req.ContextMode != settings.ContextModeFork || req.RunMode != settings.RunModeBackground || req.ParentSessionID != "session-1" || req.Prompt != "summarize recent changes" {
 		t.Fatalf("launch request = %#v", req)
 	}
-	if got := model.transcript[len(model.transcript)-1].body; !strings.Contains(got, "task-42 · running · fork") {
+	if got := model.transcript[len(model.transcript)-1].body; !strings.Contains(got, "task-42  running  fork") {
 		t.Fatalf("launch transcript = %q", got)
 	}
 
@@ -2202,7 +2301,7 @@ func TestSyncSubagentCompletionStartsQueuedTurn(t *testing.T) {
 		t.Fatalf("sync subagent completion should start queued turn")
 	}
 	last := model.transcript[len(model.transcript)-1]
-	if last.title != "agent-7" || !strings.Contains(last.body, "done · depth 0") || !strings.Contains(last.body, "/tmp/agent-7.jsonl") {
+	if last.title != "agent-7" || !strings.Contains(last.body, "done  depth 0") || !strings.Contains(last.body, "/tmp/agent-7.jsonl") {
 		t.Fatalf("subagent transcript = %#v", last)
 	}
 
@@ -4196,16 +4295,16 @@ func TestContextMeter_doneMsg清除isGenerating(t *testing.T) {
 	}
 }
 
-// TestSessionsCommandOpensPicker 验证 /sessions 命令打开 sessionPicker。
-func TestSessionsCommandOpensPicker(t *testing.T) {
+// TestResumeCommandOpensPicker 验证 /resume 命令打开 sessionPicker。
+func TestResumeCommandOpensPicker(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 
-	handled, _ := model.handleCommand("/sessions")
+	handled, _ := model.handleCommand("/resume")
 	if !handled {
-		t.Fatalf("/sessions not handled")
+		t.Fatalf("/resume not handled")
 	}
 	if model.sessionPicker == nil {
-		t.Fatalf("sessionPicker = nil, want non-nil after /sessions")
+		t.Fatalf("sessionPicker = nil, want non-nil after /resume")
 	}
 }
 
@@ -4642,7 +4741,7 @@ func TestInlineSlashCompletionKeepsPromptCommandsAndAllSkills(t *testing.T) {
 			t.Fatalf("items = %#v, want %q", items, want)
 		}
 	}
-	for _, unwanted := range []string{"/help", "/model", "/export", "/setting", "/streamma-trace", "/tasks", "/skills", "/status", "/clear", "/sessions", "/exit"} {
+	for _, unwanted := range []string{"/help", "/model", "/export", "/setting", "/streamma-trace", "/tasks", "/skills", "/status", "/clear", "/resume", "/exit"} {
 		if containsString(items, unwanted) {
 			t.Fatalf("items = %#v, do not want inline command %q", items, unwanted)
 		}
@@ -4735,7 +4834,7 @@ func TestCompletionTabAppliesSelection(t *testing.T) {
 	model.height = 20
 	model.completion = &completion{
 		kind:          completionKindCommand,
-		items:         []string{"/help", "/model", "/sessions"},
+		items:         []string{"/help", "/model", "/resume"},
 		selectedIndex: 0,
 		loading:       false,
 	}
@@ -4899,7 +4998,7 @@ func TestFormatSessionLabel_SizeDisplay(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			item := sessionSummaryItem{
 				sessionID:      "abcdef1234567890",
-				createdAt:      base,
+				lastUsedAt:     base,
 				firstMessage:   "hello",
 				transcriptSize: tc.size,
 			}
@@ -4916,23 +5015,26 @@ func TestFormatSessionLabel_SizeDisplay(t *testing.T) {
 		})
 	}
 
-	first := formatSessionLabel(sessionSummaryItem{createdAt: base, firstMessage: "same"})
-	second := formatSessionLabel(sessionSummaryItem{createdAt: base.Add(time.Second), firstMessage: "same"})
+	first := formatSessionLabel(sessionSummaryItem{lastUsedAt: base, firstMessage: "same"})
+	second := formatSessionLabel(sessionSummaryItem{lastUsedAt: base.Add(time.Second), firstMessage: "same"})
 	if first == second {
 		t.Fatalf("same-summary sessions need a non-ID discriminator: %q", first)
 	}
 }
 
-// TestHelpIncludesSessionsCommand 验证 /help 输出包含 /sessions 命令。
-func TestHelpIncludesSessionsCommand(t *testing.T) {
+// TestHelpIncludesResumeCommand 验证 /help 输出包含 /resume 且不再包含 /sessions。
+func TestHelpIncludesResumeCommand(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	handled, cmd := model.handleCommand("/help")
 	if !handled || cmd != nil {
 		t.Fatalf("/help handled/cmd = %v/%v", handled, cmd)
 	}
 	body := model.transcript[len(model.transcript)-1].body
-	if !strings.Contains(body, "/sessions") {
-		t.Fatalf("help body = %q, want /sessions", body)
+	if !strings.Contains(body, "/resume") {
+		t.Fatalf("help body = %q, want /resume", body)
+	}
+	if strings.Contains(body, "/sessions") {
+		t.Fatalf("help body = %q, should not contain /sessions", body)
 	}
 }
 

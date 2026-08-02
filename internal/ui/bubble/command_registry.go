@@ -40,6 +40,32 @@ func NewCommandRegistry() *CommandRegistry {
 		},
 	})
 	registry.Register(Command{
+		Name:              "/yolo",
+		Description:       "toggle dangerous Read access outside the workspace",
+		AllowWhileRunning: false,
+		Handler: func(m *appModel, invocation string) tea.Cmd {
+			controller, ok := m.runner.(interface {
+				SetYoloMode(bool) (bool, error)
+				YoloMode() bool
+			})
+			if !ok {
+				m.addEntry(transcriptEntry{kind: entryError, title: "yolo", body: "yolo mode is unavailable"})
+				return nil
+			}
+			enabled, err := controller.SetYoloMode(!controller.YoloMode())
+			if err != nil {
+				m.addEntry(transcriptEntry{kind: entryError, title: "yolo", body: err.Error()})
+				return nil
+			}
+			state := "disabled"
+			if enabled {
+				state = "enabled: Read may access files outside the workspace"
+			}
+			m.addEntry(transcriptEntry{kind: entrySystem, title: "yolo", body: "yolo mode " + state})
+			return nil
+		},
+	})
+	registry.Register(Command{
 		Name:              "/model",
 		Description:       "open the model switcher",
 		ArgumentHint:      "[status|<profile>|<model>]",
@@ -212,7 +238,7 @@ func NewCommandRegistry() *CommandRegistry {
 		},
 	})
 	registry.Register(Command{
-		Name:              "/sessions",
+		Name:              "/resume",
 		Description:       "browse and restore previous sessions",
 		AllowWhileRunning: false,
 		Handler: func(m *appModel, invocation string) tea.Cmd {

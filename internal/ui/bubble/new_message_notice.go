@@ -20,7 +20,7 @@ func newMessageNoticeText(count int, hovered bool, width int) string {
 	}
 	full := fmt.Sprintf("↓ %d 条新消息", count)
 	if hovered {
-		full += " · 回到底部"
+		full += "  回到底部"
 	}
 	if terminalCellWidth(full) <= width {
 		return full

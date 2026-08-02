@@ -85,11 +85,11 @@ func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.C
 				m.refreshViewportPreservingOffset()
 				return m, true, openTerminalURLCmd(target)
 			}
-			if index, ok := m.toolIndexAtTranscriptRow(m.selectionStart.row); ok {
+			if index, header, ok := m.toolHitAtTranscriptRow(m.selectionStart.row); ok {
 				if m.toolInspectActive {
 					m.selectInspectedTool(index)
 				}
-				if !m.toggleToolExpansion(index) {
+				if !m.toggleToolExpansion(index, header) {
 					m.refreshViewportPreservingOffset()
 				}
 			} else {
@@ -222,13 +222,37 @@ func (m appModel) transcriptContentLines() []string {
 }
 
 // transcriptLineSnapshots 返回未应用选择高亮的 transcript 渲染行快照。
-func (m appModel) transcriptLineSnapshots() []transcriptLineSnapshot {
-	content := renderTranscript(m.transcript, maxInt(20, m.viewport.Width), m.showThinking)
-	return buildTranscriptLineSnapshots(content)
+// 必须与 viewport 实际显示的内容同源（renderTranscriptContent 的组渲染器）：
+// 否则一旦工具组展开或某个工具详情打开，非组渲染器的行数与屏幕显示的行数
+// 分叉，鼠标 press/release 的行坐标就会错位，点击落在错误的工具行上。
+func (m *appModel) transcriptLineSnapshots() []transcriptLineSnapshot {
+	if m == nil {
+		return nil
+	}
+	if m.transcriptLineCacheReady {
+		return m.transcriptLineCache
+	}
+	content := m.transcriptRenderedContent
+	if !m.transcriptContentCached {
+		content = m.renderTranscriptContentAt(maxInt(20, m.viewport.Width), m.showThinking, m.animationNow())
+		m.transcriptRenderedContent = content
+		m.transcriptContentCached = true
+	}
+	m.transcriptLineCache = buildTranscriptLineSnapshots(content)
+	m.transcriptLineCacheReady = true
+	return m.transcriptLineCache
 }
 
-func (m appModel) transcriptHyperlinkAtPoint(point selectionPoint) string {
-	content := renderTranscript(m.transcript, maxInt(20, m.viewport.Width), m.showThinking)
+func (m *appModel) transcriptHyperlinkAtPoint(point selectionPoint) string {
+	if m == nil {
+		return ""
+	}
+	content := m.transcriptRenderedContent
+	if !m.transcriptContentCached {
+		content = m.renderTranscriptContentAt(maxInt(20, m.viewport.Width), m.showThinking, m.animationNow())
+		m.transcriptRenderedContent = content
+		m.transcriptContentCached = true
+	}
 	return terminalHyperlinkAtPoint(content, point)
 }
 

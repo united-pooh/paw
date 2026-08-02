@@ -38,7 +38,7 @@ func (m appModel) renderActivityBox() string {
 	default:
 		lines = append(lines, "", m.renderActivitySubagents(contentWidth, maxInt(1, contentHeight-len(lines))))
 	}
-	lines = append(lines, "", unselectedProviderStyle.Render("Tab/←/→ switch · ↑/↓ select · Enter open · Esc close"))
+	lines = append(lines, "", unselectedProviderStyle.Render("Tab/←/→ switch  ↑/↓ select  Enter open  Esc close"))
 	return m.renderModalPanel(strings.Join(lines, "\n"))
 }
 
