@@ -178,6 +178,71 @@ func TestNewTodoAfterCompletedFoldStartsExpanded(t *testing.T) {
 	}
 }
 
+func TestTodoUpdatePreservesDetachedScrollAndCountsOnce(t *testing.T) {
+	model := newTranscriptScrollTestModel()
+	model.viewport.SetYOffset(3)
+	if model.viewport.AtBottom() {
+		t.Fatal("test model unexpectedly at bottom")
+	}
+	before := model.viewport.YOffset
+
+	model.applyTodoSnapshot(testTodoSnapshot(todo.StatusInProgress), true)
+	if model.viewport.YOffset != before {
+		t.Fatalf("YOffset = %d, want %d", model.viewport.YOffset, before)
+	}
+	if model.newMessageNoticeCount != 1 {
+		t.Fatalf("newMessageNoticeCount = %d, want 1", model.newMessageNoticeCount)
+	}
+	model.refreshViewportPreservingOffset()
+	if model.newMessageNoticeCount != 1 {
+		t.Fatalf("refresh recounted Todo: %d", model.newMessageNoticeCount)
+	}
+}
+
+func TestTodoUpdateAtBottomFollowsWithoutNotice(t *testing.T) {
+	model := newTranscriptScrollTestModel()
+	model.viewport.GotoBottom()
+	model.applyTodoSnapshot(testTodoSnapshot(todo.StatusInProgress), true)
+	if !model.viewport.AtBottom() || model.newMessageNoticeCount != 0 {
+		t.Fatalf("bottom state: atBottom=%v count=%d", model.viewport.AtBottom(), model.newMessageNoticeCount)
+	}
+}
+
+func TestTodoExpansionAndCompletionFoldDoNotCountAsNewMessages(t *testing.T) {
+	model := newTranscriptScrollTestModel()
+	model.viewport.SetYOffset(3)
+	model.applyTodoSnapshot(allCompletedTodo(), true)
+	if model.newMessageNoticeCount != 1 {
+		t.Fatalf("initial count = %d", model.newMessageNoticeCount)
+	}
+	model.foldCompletedTodoAfterFinalAnswer()
+	if model.newMessageNoticeCount != 1 {
+		t.Fatalf("fold recounted Todo: %d", model.newMessageNoticeCount)
+	}
+	row := transcriptEntryLocations(model.transcript, model.viewport.Width, true, model.animationNow())[model.latestTodoIndex].startRow
+	model.toggleTodoAtTranscriptRow(row)
+	if model.newMessageNoticeCount != 1 {
+		t.Fatalf("toggle recounted Todo: %d", model.newMessageNoticeCount)
+	}
+}
+
+func TestTodoUpdateWhilePageOpenCountsOnceAndResetsScroll(t *testing.T) {
+	model := newTranscriptScrollTestModel()
+	model.viewport.SetYOffset(3)
+	model.todoPage = &todoPage{offset: 5}
+	model.applyTodoSnapshot(testTodoSnapshot(todo.StatusInProgress), true)
+	if model.newMessageNoticeCount != 1 || model.todoPage.offset != 0 {
+		t.Fatalf("count=%d offset=%d", model.newMessageNoticeCount, model.todoPage.offset)
+	}
+	if model.newMessageNoticeCanRender() {
+		t.Fatal("notice rendered while Todo page was open")
+	}
+	model.todoPage = nil
+	if !model.newMessageNoticeCanRender() || model.newMessageNoticeCount != 1 {
+		t.Fatalf("notice not restored after close: canRender=%v count=%d", model.newMessageNoticeCanRender(), model.newMessageNoticeCount)
+	}
+}
+
 func allCompletedTodo() todo.Snapshot {
 	return todo.Snapshot{Items: []todo.Item{
 		{ID: "a", Content: "A", Status: todo.StatusCompleted},

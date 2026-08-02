@@ -192,6 +192,7 @@ func TestSessionRestoreAppliesAndClearsTodoState(t *testing.T) {
 	model.hasCurrentTodo = true
 	model.todoWasCleared = false
 	model.latestTodoIndex = 7
+	model.todoPage = newTodoPage()
 
 	snapshot := todo.Snapshot{Items: []todo.Item{{ID: "new", Content: "New", Status: todo.StatusInProgress}}}
 	entrySnapshot := snapshot.Clone()
@@ -202,7 +203,7 @@ func TestSessionRestoreAppliesAndClearsTodoState(t *testing.T) {
 		hasCurrentTodo:  true,
 		latestTodoIndex: 0,
 	})
-	if !model.hasCurrentTodo || model.currentTodo.Items[0].ID != "new" || model.latestTodoIndex != 0 {
+	if !model.hasCurrentTodo || model.currentTodo.Items[0].ID != "new" || model.latestTodoIndex != 0 || model.todoPage != nil {
 		t.Fatalf("restored model = %#v", model)
 	}
 
