@@ -441,6 +441,7 @@ func (m *appModel) applySessionPickerRestore(msg sessionRestoredMsg) {
 	m.sessionPicker = nil
 	m.subagentPicker = nil
 	m.subagentPreview = nil
+	m.todoPage = nil
 	m.syncInputPlaceholder()
 	m.transcript = mergeTranscriptToolEntries(copyTranscriptEntries(msg.entries))
 	m.currentTodo = msg.currentTodo.Clone()

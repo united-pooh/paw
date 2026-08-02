@@ -353,6 +353,7 @@ type appModel struct {
 	hasCurrentTodo            bool
 	todoWasCleared            bool
 	latestTodoIndex           int
+	todoPage                  *todoPage
 	sessionID                 string
 	modelConfig               ModelConfigController
 	settingsConfig            SettingsController

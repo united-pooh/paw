@@ -70,6 +70,9 @@ func (m *appModel) applyTodoSnapshot(snapshot todo.Snapshot, live bool) bool {
 		m.transcript = append(m.transcript, entry)
 	}
 	m.latestTodoIndex = len(m.transcript) - 1
+	if m.todoPage != nil {
+		m.todoPage.resetForSnapshot()
+	}
 	return true
 }
 

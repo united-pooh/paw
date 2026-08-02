@@ -502,11 +502,17 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.subagentPicker != nil {
 			return m.handleSubagentPickerKey(msg)
 		}
+		if m.todoPage != nil {
+			return m.handleTodoPageKey(msg)
+		}
 		if m.toolInspectActive {
 			return m.handleToolInspectKey(msg)
 		}
 		if msg.String() == "ctrl+t" {
 			return m.openToolInspect()
+		}
+		if msg.String() == "ctrl+p" {
+			return m.openTodoPage()
 		}
 		if msg.String() == "ctrl+v" && !m.isTerminalWorkRunning() {
 			return m, clipboardPasteCmd(m.ctx, textareaAbsoluteCursor(m.input))
@@ -649,6 +655,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tea.MouseMsg:
 		m.rawMouseEscapePending = ""
+		if m.todoPage != nil {
+			return m.handleTodoPageMouse(msg)
+		}
 		if isHorizontalMouseWheel(msg) {
 			return m, nil
 		}
