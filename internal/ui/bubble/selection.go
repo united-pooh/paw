@@ -85,6 +85,9 @@ func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.C
 				m.refreshViewportPreservingOffset()
 				return m, true, openTerminalURLCmd(target)
 			}
+			if m.toggleTodoAtTranscriptRow(m.selectionStart.row) {
+				return m, true, nil
+			}
 			if index, header, ok := m.toolHitAtTranscriptRow(m.selectionStart.row); ok {
 				if m.toolInspectActive {
 					m.selectInspectedTool(index)

@@ -28,6 +28,32 @@ func TestPromptBuilderWithToolsKeepsToolUseContract(t *testing.T) {
 	}
 }
 
+func TestPromptBuilderWithSelectAddsStructuredQuestionPolicy(t *testing.T) {
+	prompt := NewPromptBuilder(nil).Build([]string{
+		"Read: read files",
+		"Select: Ask the user a structured single- or multiple-choice question.",
+	})
+	for _, want := range []string{
+		"User interaction policy:",
+		"two or more concrete options",
+		"call the Select tool",
+		"Do not ask a structured multiple-choice question in plain text",
+		"genuinely open-ended questions",
+		"repository, existing context, or a reasonable default",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt = %q, want %q", prompt, want)
+		}
+	}
+}
+
+func TestPromptBuilderWithoutSelectOmitsStructuredQuestionPolicy(t *testing.T) {
+	prompt := NewPromptBuilder(nil).Build([]string{"Read: read files"})
+	if strings.Contains(prompt, "User interaction policy:") || strings.Contains(prompt, "call the Select tool") {
+		t.Fatalf("prompt contains Select policy without Select tool: %q", prompt)
+	}
+}
+
 func TestPromptBuilderOrdersDefaultProjectAndTools(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, projectInstructionFile), []byte("project-only rule"), 0o644); err != nil {

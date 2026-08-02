@@ -83,6 +83,13 @@ var (
 	toolResultBorderStyle        lipgloss.Style
 	toolErrorBorderStyle         lipgloss.Style
 	toolFocusedStyle             lipgloss.Style
+	todoTitleStyle               lipgloss.Style
+	todoCountStyle               lipgloss.Style
+	todoCompletedStyle           lipgloss.Style
+	todoInProgressStyle          lipgloss.Style
+	todoPendingStyle             lipgloss.Style
+	todoExplanationStyle         lipgloss.Style
+	todoSummaryStyle             lipgloss.Style
 	selectedTranscriptLineStyle  lipgloss.Style
 )
 
@@ -325,6 +332,24 @@ func rebuildLegacyStyles() {
 		Background(colorManager.LipglossColor(colorSelectionBackground)).
 		Foreground(colorManager.LipglossColor(colorSelectionForeground)).
 		Bold(true)
+	todoTitleStyle = lipgloss.NewStyle().
+		Foreground(colorManager.LipglossColor(colorLabelAssistant)).
+		Bold(true)
+	todoCountStyle = lipgloss.NewStyle().
+		Foreground(colorManager.LipglossColor(colorContextFree))
+	todoCompletedStyle = lipgloss.NewStyle().
+		Foreground(colorManager.LipglossColor(colorWorktreeClean)).
+		Bold(true)
+	todoInProgressStyle = lipgloss.NewStyle().
+		Foreground(colorManager.LipglossColor(colorSignal)).
+		Bold(true)
+	todoPendingStyle = lipgloss.NewStyle().
+		Foreground(colorManager.LipglossColor(colorContextFree))
+	todoExplanationStyle = lipgloss.NewStyle().
+		Foreground(colorManager.LipglossColor(colorMarkdownQuote)).
+		Italic(true)
+	todoSummaryStyle = lipgloss.NewStyle().
+		Foreground(colorManager.LipglossColor(colorMarkdownQuote))
 
 	selectedTranscriptLineStyle = lipgloss.NewStyle().
 		Background(colorManager.LipglossColor(colorSelectionBackground)).

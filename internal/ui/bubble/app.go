@@ -102,6 +102,7 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 		toolInspectIndex:          -1,
 		toolHoverIndex:            -1,
 		historyIndex:              -1,
+		latestTodoIndex:           -1,
 		transcript:                nil,
 	}
 	model.activateThemeStyles()
@@ -121,6 +122,9 @@ func (m appModel) Init() tea.Cmd {
 	if m.selectionBroker != nil {
 		cmds = append(cmds, waitSelectionBrokerEventCmd(m.ctx, m.selectionBroker))
 	}
+	if m.todoBroker != nil {
+		cmds = append(cmds, waitTodoBrokerEventCmd(m.ctx, m.todoBroker))
+	}
 	if m.worktreeCWD != "" {
 		cmds = append(cmds, worktreeRefreshCmd(m.ctx, m.worktreeCWD, m.worktreeReader))
 	}
@@ -132,6 +136,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case todoBrokerEventMsg:
+		next, cmd := todoBrokerEventCommand(m, msg)
+		return next, cmd
 	case selectionBrokerEventMsg:
 		if errors.Is(msg.err, selecttool.ErrBrokerClosed) || errors.Is(msg.err, context.Canceled) || msg.event.Kind == selecttool.EventClosed {
 			m.selectionDock = nil
@@ -284,6 +291,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.transcript[assistantIndex].turnMetadata = &metadata
 				touchTranscriptEntry(&m.transcript[assistantIndex])
 				m.refreshViewport()
+			}
+			if hadModelOutput && m.assistantFinalAnswerVisible(assistantIndex) {
+				m.foldCompletedTodoAfterFinalAnswer()
 			}
 		}
 		m.doneAssistant = -1
@@ -498,11 +508,17 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.subagentPicker != nil {
 			return m.handleSubagentPickerKey(msg)
 		}
+		if m.todoPage != nil {
+			return m.handleTodoPageKey(msg)
+		}
 		if m.toolInspectActive {
 			return m.handleToolInspectKey(msg)
 		}
 		if msg.String() == "ctrl+t" {
 			return m.openToolInspect()
+		}
+		if msg.String() == "ctrl+p" {
+			return m.openTodoPage()
 		}
 		if msg.String() == "ctrl+v" && !m.isTerminalWorkRunning() {
 			return m, clipboardPasteCmd(m.ctx, textareaAbsoluteCursor(m.input))
@@ -645,6 +661,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tea.MouseMsg:
 		m.rawMouseEscapePending = ""
+		if m.todoPage != nil {
+			return m.handleTodoPageMouse(msg)
+		}
 		if isHorizontalMouseWheel(msg) {
 			return m, nil
 		}

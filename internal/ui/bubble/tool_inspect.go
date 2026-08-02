@@ -207,6 +207,37 @@ func renderToolResultDetailHeight(entry transcriptEntry, width int, fullResult b
 	return len(detailLines)
 }
 
+func (m appModel) todoIndexAtTranscriptRow(row int) (int, bool) {
+	for _, location := range transcriptEntryLocations(m.transcript, maxInt(20, m.viewport.Width), m.showThinking, m.animationNow()) {
+		if row < location.startRow || row >= location.startRow+location.height {
+			continue
+		}
+		if m.transcript[location.transcriptIndex].kind == entryTodo {
+			return location.transcriptIndex, true
+		}
+		return -1, false
+	}
+	return -1, false
+}
+
+func (m *appModel) toggleTodoAtTranscriptRow(row int) bool {
+	if m == nil {
+		return false
+	}
+	index, ok := m.todoIndexAtTranscriptRow(row)
+	if !ok {
+		return false
+	}
+	entry := &m.transcript[index]
+	if entry.todoCleared {
+		return true
+	}
+	entry.todoExpanded = !entry.todoExpanded
+	touchTranscriptEntry(entry)
+	m.refreshViewportPreservingOffset()
+	return true
+}
+
 func (m *appModel) openToolInspect() (tea.Model, tea.Cmd) {
 	if m == nil {
 		return appModel{}, nil

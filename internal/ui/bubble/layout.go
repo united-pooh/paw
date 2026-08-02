@@ -100,6 +100,15 @@ func (m appModel) View() string {
 	}
 
 	layout := m.currentLayout()
+	if m.todoPage != nil {
+		inner := fitStyledRect(m.renderTodoPage(layout.contentWidth, layout.contentHeight), layout.contentWidth, layout.contentHeight)
+		view := renderHairlineFrame(inner, layout.frameWidth, layout.frameHeight)
+		view = paintStyledBackground(view, layout.frameWidth, layout.frameHeight, m.styles.Frame, m.theme.Colors.TerminalBackground)
+		if m.cursorAnchor != nil {
+			m.cursorAnchor.clear()
+		}
+		return view
+	}
 	parts := make([]string, 0, 4)
 	if layout.headerHeight > 0 {
 		parts = append(parts, m.renderHeaderLine(layout.contentWidth))
@@ -351,7 +360,8 @@ func (m appModel) shouldAnchorTextInputCursor() bool {
 		m.modelWizard == nil &&
 		m.settingWizard == nil &&
 		m.sessionPicker == nil &&
-		m.subagentPicker == nil
+		m.subagentPicker == nil &&
+		m.todoPage == nil
 }
 
 // inputCursorTerminalPosition 直接由固定布局矩形计算，不再依赖拼接后字符串高度。

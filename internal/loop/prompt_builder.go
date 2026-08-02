@@ -14,6 +14,20 @@ func NewPromptBuilder(instructions *InstructionManager) *PromptBuilder {
 	return &PromptBuilder{instructions: instructions}
 }
 
+func hasToolDescription(descriptions []string, name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	for _, description := range descriptions {
+		description = strings.TrimSpace(description)
+		if description == name || strings.HasPrefix(description, name+":") {
+			return true
+		}
+	}
+	return false
+}
+
 // Build returns the system prompt assembled from default instructions, project
 // instructions, and tool usage guidance.
 func (b *PromptBuilder) Build(toolDescriptions []string) string {
@@ -44,6 +58,13 @@ func (b *PromptBuilder) Build(toolDescriptions []string) string {
 		prompt.WriteString("- ")
 		prompt.WriteString(description)
 		prompt.WriteByte('\n')
+	}
+	if hasToolDescription(toolDescriptions, "Select") {
+		prompt.WriteString("User interaction policy:\n")
+		prompt.WriteString("- If progress requires the user to choose among two or more concrete options, call the Select tool instead of presenting an A/B/C list in assistant text.\n")
+		prompt.WriteString("- Do not ask a structured multiple-choice question in plain text when Select is available.\n")
+		prompt.WriteString("- Use normal assistant text only for genuinely open-ended questions or when the user must provide free-form information.\n")
+		prompt.WriteString("- Do not ask the user if the answer can be safely inferred from the repository, existing context, or a reasonable default.\n")
 	}
 	prompt.WriteString("When you need one tool, respond with ONLY a JSON object in this format:\n")
 	prompt.WriteString(`{"type":"tool_use","id":"call_1","name":"tool_name","input":{}}`)

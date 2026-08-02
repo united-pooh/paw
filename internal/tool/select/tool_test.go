@@ -14,8 +14,19 @@ func validSingleInput() json.RawMessage {
 }
 func TestToolMetadata(t *testing.T) {
 	x := New(NewBroker())
-	if x.Name() != "Select" || !strings.Contains(x.Description(), "wait") || !strings.Contains(x.Description(), "TUI") {
-		t.Fatal("metadata")
+	if x.Name() != "Select" {
+		t.Fatalf("Name() = %q", x.Name())
+	}
+	for _, phrase := range []string{
+		"two or more concrete options",
+		"prefer this tool",
+		"A/B/C list",
+		"open-ended questions",
+		"determine yourself",
+	} {
+		if !strings.Contains(x.Description(), phrase) {
+			t.Fatalf("Description() missing %q: %q", phrase, x.Description())
+		}
 	}
 	var schema map[string]any
 	if e := json.Unmarshal(x.InputSchema(), &schema); e != nil {

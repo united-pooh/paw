@@ -424,6 +424,10 @@ func copyTranscriptEntries(entries []transcriptEntry) []transcriptEntry {
 	for i := range out {
 		out[i].citations = append([]toolCitation(nil), out[i].citations...)
 		out[i].inputTokens = cloneInputTokens(out[i].inputTokens)
+		if out[i].todoSnapshot != nil {
+			snapshot := out[i].todoSnapshot.Clone()
+			out[i].todoSnapshot = &snapshot
+		}
 		out[i].toolFocused = false
 		out[i].toolHovered = false
 	}
@@ -468,9 +472,21 @@ func (m *appModel) applySessionPickerRestore(msg sessionRestoredMsg) {
 	m.sessionPicker = nil
 	m.subagentPicker = nil
 	m.subagentPreview = nil
+	m.todoPage = nil
 	m.syncInputPlaceholder()
 	m.transcript = mergeTranscriptToolEntries(copyTranscriptEntries(msg.entries))
 	m.finalizeRestoredRunningTools()
+	m.currentTodo = msg.currentTodo.Clone()
+	m.hasCurrentTodo = msg.hasCurrentTodo
+	m.todoWasCleared = msg.todoWasCleared
+	m.latestTodoIndex = msg.latestTodoIndex
+	if m.latestTodoIndex < 0 || m.latestTodoIndex >= len(m.transcript) || m.transcript[m.latestTodoIndex].kind != entryTodo {
+		projection := todoProjectionFromEntries(m.transcript)
+		m.currentTodo = projection.Current.Clone()
+		m.hasCurrentTodo = projection.HasCurrent
+		m.todoWasCleared = projection.WasCleared
+		m.latestTodoIndex = projection.LatestIndex
+	}
 	m.inputHistory = inputHistoryFromTranscript(msg.entries)
 	m.resetHistoryNavigation()
 	m.addEntry(transcriptEntry{kind: entrySystem, title: "sessions", body: fmt.Sprintf("已切换到会话: %s", msg.sessionID)})

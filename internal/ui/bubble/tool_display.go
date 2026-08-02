@@ -2,10 +2,12 @@ package bubble
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"paw/internal/todo"
 	filetool "paw/internal/tool/file"
 )
 
@@ -55,6 +57,9 @@ func buildToolDisplay(name string, input json.RawMessage, workspaceRoot string) 
 // Namespaced tools are rendered as "Server: action"; native tools as
 // "Tool:" so a following target reads naturally in the terminal row.
 func displayToolName(name string) string {
+	if strings.EqualFold(strings.TrimSpace(name), "update_todo") {
+		return "Todo:"
+	}
 	server, action, namespaced := splitToolName(name)
 	if namespaced {
 		server = displayServerName(server)
@@ -79,6 +84,9 @@ func displayToolAction(name string) string {
 }
 
 func displayToolTarget(name string, input json.RawMessage, workspaceRoot string) string {
+	if strings.EqualFold(strings.TrimSpace(name), "update_todo") {
+		return "update"
+	}
 	fields := toolInputFields(input)
 	server, action, namespaced := splitToolName(name)
 	keys := primaryToolInputKeys(strings.ToLower(strings.TrimSpace(name)))
@@ -107,6 +115,21 @@ func displayToolTarget(name string, input json.RawMessage, workspaceRoot string)
 		}
 	}
 	return ""
+}
+
+func compactUpdateTodoResult(content string) string {
+	var result todo.UpdateResult
+	if err := json.Unmarshal([]byte(content), &result); err != nil || !result.Accepted {
+		return "updated"
+	}
+	snapshot, err := todo.ValidateSnapshot(result.Snapshot)
+	if err != nil {
+		return "updated"
+	}
+	if snapshot.Cleared() {
+		return "cleared"
+	}
+	return fmt.Sprintf("updated %d/%d", snapshot.CompletedCount(), snapshot.TotalCount())
 }
 
 func toolDisplayFieldValue(fields []toolDisplayField, key string) string {

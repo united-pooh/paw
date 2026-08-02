@@ -309,6 +309,13 @@ func withDefaultPersonas(t *testing.T, personas []persona) {
 	})
 }
 
+func TestBaseToolRegistryDoesNotContainUpdateTodo(t *testing.T) {
+	registry := newBaseToolRegistry(t.TempDir())
+	if _, ok := registry.Get("update_todo"); ok {
+		t.Fatal("subagent base registry unexpectedly contains update_todo")
+	}
+}
+
 func TestRunEmptyContextStartsIndependentRootSession(t *testing.T) {
 	modelStreamer := &recordingModel{
 		rounds: []fakeRound{

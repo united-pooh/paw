@@ -14,6 +14,7 @@ import (
 	"paw/internal/session"
 	"paw/internal/settings"
 	"paw/internal/subagent"
+	"paw/internal/todo"
 	"paw/internal/tokentracer"
 	"paw/internal/tool"
 	toolexec "paw/internal/tool/exec"
@@ -137,9 +138,15 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 
 	output := bubbleui.New()
 	selectionBroker := selecttool.NewBroker()
+	todoBroker := todo.NewBroker()
 	defer selectionBroker.Close()
+	defer todoBroker.Close()
 	output.SetSelectionBroker(selectionBroker)
+	output.SetTodoBroker(todoBroker)
 	runner, sessionID, client, settingsController, subagentManager, store, mcpManager, err := buildRunner(ctx, opts.sessionID, output, opts.allowOutsideRead, func(registry *tool.Registry) error {
+		if err := registerMainAgentTools(registry, todoBroker); err != nil {
+			return err
+		}
 		return registerInteractiveTools(registry, selectionBroker)
 	})
 	if err != nil {
@@ -209,10 +216,11 @@ func runSubagentWorkerMode(ctx context.Context, input io.Reader, output io.Write
 	go func() {
 		workerUI := &workerUsageUI{UI: headless.New(io.Discard)}
 		runner, sessionID, _, _, _, _, _, err := buildRunnerWithSubagentContext(workerCtx, req.SessionID, workerUI, allowOutsideRead, subagentRuntimeContext{
-			depth:        req.Depth,
-			maxDepth:     req.MaxDepth,
-			parentTaskID: req.TaskID,
-			mcpBroker:    broker,
+			depth:           req.Depth,
+			maxDepth:        req.MaxDepth,
+			parentTaskID:    req.TaskID,
+			mcpBroker:       broker,
+			disableMainTodo: true,
 		})
 		result := subagent.WorkerResult{TaskID: req.TaskID, SessionID: sessionID, ExitCode: 0}
 		if err != nil {
@@ -446,10 +454,11 @@ func clearTerminalWindow(w io.Writer) {
 }
 
 type subagentRuntimeContext struct {
-	depth        int
-	maxDepth     int
-	parentTaskID string
-	mcpBroker    coremcp.Broker
+	depth           int
+	maxDepth        int
+	parentTaskID    string
+	mcpBroker       coremcp.Broker
+	disableMainTodo bool
 }
 
 type runnerToolConfigurator func(*tool.Registry) error
@@ -541,6 +550,14 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 		return nil, "", nil, nil, nil, nil, nil, err
 	}
 	runner.SetYoloModeHandler(launcher.SetDangerousMode)
+	if !subCtx.disableMainTodo {
+		if err := registerMainAgentTools(registry, nil); err != nil {
+			if mcpManager != nil {
+				_ = mcpManager.Close(context.Background())
+			}
+			return nil, "", nil, nil, nil, nil, nil, err
+		}
+	}
 	for _, configure := range configurators {
 		if configure == nil {
 			continue
@@ -600,6 +617,14 @@ func (a streamMASubagentAdapter) StreamSubagent(ctx context.Context, req loop.St
 		TranscriptPath: stream.TranscriptPath,
 		OutputPath:     stream.OutputPath,
 	}, nil
+}
+
+func registerMainAgentTools(registry *tool.Registry, broker *todo.Broker) error {
+	if registry == nil {
+		return fmt.Errorf("tool registry is nil")
+	}
+	registry.Register(todo.NewTool(broker))
+	return nil
 }
 
 func registerInteractiveTools(registry *tool.Registry, broker *selecttool.Broker) error {

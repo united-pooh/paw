@@ -22,6 +22,71 @@ import (
 	"paw/internal/ui"
 )
 
+func TestUpdateTodoToolCallUsesCompactDisplay(t *testing.T) {
+	entry := transcriptEntry{
+		kind:       entryTool,
+		title:      "tool",
+		toolName:   "update_todo",
+		toolStatus: "running",
+		toolInput: json.RawMessage(`{
+            "explanation":"start build",
+            "items":[
+                {"id":"secret-internal-id","content":"Build page","status":"in_progress"},
+                {"id":"tests","content":"Add tests","status":"pending"}
+            ]
+        }`),
+		toolTarget: displayToolTarget("update_todo", json.RawMessage(`{"items":[]}`), ""),
+	}
+	rendered := ansi.Strip(renderEntry(entry, 100))
+	if !strings.Contains(rendered, "Todo") || !strings.Contains(rendered, "update") {
+		t.Fatalf("render = %q", rendered)
+	}
+	for _, forbidden := range []string{"secret-internal-id", "Build page", "pending", `"items"`} {
+		if strings.Contains(rendered, forbidden) {
+			t.Fatalf("render leaked %q: %q", forbidden, rendered)
+		}
+	}
+}
+
+func TestUpdateTodoToolResultSummary(t *testing.T) {
+	updated := compactUpdateTodoResult(`{"accepted":true,"snapshot":{"items":[{"id":"a","content":"A","status":"completed"},{"id":"b","content":"B","status":"in_progress"}],"updated_at":"2026-08-02T10:00:00Z"}}`)
+	if updated != "updated 1/2" {
+		t.Fatalf("summary = %q", updated)
+	}
+	cleared := compactUpdateTodoResult(`{"accepted":true,"snapshot":{"items":[],"updated_at":"2026-08-02T10:00:00Z"}}`)
+	if cleared != "cleared" {
+		t.Fatalf("summary = %q", cleared)
+	}
+	if invalid := compactUpdateTodoResult(`{`); invalid != "updated" {
+		t.Fatalf("invalid summary = %q", invalid)
+	}
+}
+
+func TestUpdateTodoToolTrackKeepsRawInspectData(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	input := json.RawMessage(`{"items":[{"id":"build","content":"Build page","status":"in_progress"}]}`)
+	result := `{"accepted":true,"snapshot":{"items":[{"id":"build","content":"Build page","status":"in_progress"}],"updated_at":"2026-08-02T10:00:00Z"}}`
+	model.recordToolCallEntry("call-1", "update_todo", input, false, false, nil)
+	model.recordToolResultEntry("call-1", "update_todo", "ok", result, false, false, false, nil)
+
+	if len(model.transcript) != 1 {
+		t.Fatalf("transcript length = %d", len(model.transcript))
+	}
+	entry := model.transcript[0]
+	if string(entry.toolInput) != string(input) || entry.toolResult != result || entry.toolTarget != "updated 0/1" {
+		t.Fatalf("entry = %#v", entry)
+	}
+	compact := ansi.Strip(renderEntry(entry, 100))
+	if strings.Contains(compact, "Build page") || !strings.Contains(compact, "updated 0/1") {
+		t.Fatalf("compact render = %q", compact)
+	}
+	entry.toolExpanded = true
+	expanded := ansi.Strip(renderEntry(entry, 100))
+	if !strings.Contains(expanded, "Build page") {
+		t.Fatalf("expanded inspect data missing: %q", expanded)
+	}
+}
+
 func TestToolTrackUsesSemanticEntrySpacing(t *testing.T) {
 	entries := []transcriptEntry{
 		{kind: entryAssistant, title: "assistant", body: "before"},
