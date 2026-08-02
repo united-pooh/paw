@@ -76,9 +76,11 @@ func loadSessionHistoryCmd(ctx context.Context, runner Runner, store SessionStor
 		}
 		metadata := loadRestoreTurnMetadata(ctx, store, sessionID)
 		entries := make([]transcriptEntry, 0, len(messages))
+		projection := todoRestoreProjection{LatestIndex: -1}
 		if recordLoader, ok := store.(ResolvedRecordLoader); ok {
 			if records, recordsErr := recordLoader.LoadResolvedRecords(ctx, sessionID); recordsErr == nil {
 				entries = transcriptEntriesFromRecords(records, metadata, workspaceRootOf(runner))
+				projection = todoProjectionFromEntries(entries)
 			}
 		}
 		if len(entries) == 0 && len(messages) > 0 {
@@ -96,7 +98,14 @@ func loadSessionHistoryCmd(ctx context.Context, runner Runner, store SessionStor
 				createdAt: time.Now(),
 			})
 		}
-		return sessionRestoredMsg{sessionID: sessionID, entries: entries}
+		return sessionRestoredMsg{
+			sessionID:       sessionID,
+			entries:         entries,
+			currentTodo:     projection.Current.Clone(),
+			hasCurrentTodo:  projection.HasCurrent,
+			todoWasCleared:  projection.WasCleared,
+			latestTodoIndex: projection.LatestIndex,
+		}
 	}
 }
 
@@ -174,11 +183,14 @@ func transcriptEntriesFromRecords(records []session.Record, metadata []session.T
 		}
 	}
 	entries := make([]transcriptEntry, 0, len(records))
+	todoTracker := newTodoRestoreTracker()
 	for recordIndex, record := range records {
 		createdAt := record.CreatedAt
 		if createdAt.IsZero() {
 			createdAt = time.Now()
 		}
+		todoTracker.observeCalls(record)
+		todoTracker.foldForAssistant(record, entries)
 		recordEntries := transcriptEntriesFromMessage(record.Message, createdAt, workspaceRoot)
 		if item, ok := metadataByRecordIndex[recordIndex]; ok {
 			for index := len(recordEntries) - 1; index >= 0; index-- {
@@ -190,6 +202,7 @@ func transcriptEntriesFromRecords(records []session.Record, metadata []session.T
 			}
 		}
 		entries = append(entries, recordEntries...)
+		entries = todoTracker.entriesForResultsAt(record, entries)
 	}
 	return entries
 }

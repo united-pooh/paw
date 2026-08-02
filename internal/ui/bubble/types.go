@@ -293,6 +293,10 @@ type sessionRestoredMsg struct {
 	entries         []transcriptEntry
 	source          sessionRestoreSource
 	subagentPreview *subagentTranscriptPreview
+	currentTodo     todo.Snapshot
+	hasCurrentTodo  bool
+	todoWasCleared  bool
+	latestTodoIndex int
 	err             error
 }
 
