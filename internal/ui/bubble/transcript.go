@@ -42,6 +42,11 @@ type transcriptRenderCacheKey struct {
 	toolFocused          bool
 	toolHovered          bool
 	toolResultOnly       bool
+	todoSnapshot         string
+	todoExpanded         bool
+	todoLatest           bool
+	todoCompletedFold    bool
+	todoCleared          bool
 	citations            string
 	width                int
 	version              int
@@ -632,6 +637,11 @@ func transcriptRenderKey(entry transcriptEntry, width int, at time.Time) transcr
 		toolFocused:          entry.toolFocused,
 		toolHovered:          entry.toolHovered,
 		toolResultOnly:       entry.toolResultOnly,
+		todoSnapshot:         transcriptTodoSnapshot(entry.todoSnapshot),
+		todoExpanded:         entry.todoExpanded,
+		todoLatest:           entry.todoLatest,
+		todoCompletedFold:    entry.todoCompletedFold,
+		todoCleared:          entry.todoCleared,
 		width:                width,
 		version:              entry.version,
 		bodyLen:              len(entry.body),
@@ -651,6 +661,17 @@ func transcriptRenderKey(entry transcriptEntry, width int, at time.Time) transcr
 		key.citations = transcriptCitationSnapshot(entry.citations)
 	}
 	return key
+}
+
+func transcriptTodoSnapshot(snapshot any) string {
+	if snapshot == nil {
+		return ""
+	}
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func transcriptTurnMetadataSnapshot(metadata *session.TurnMetadata) string {
@@ -778,6 +799,12 @@ func renderEntry(entry transcriptEntry, width int) string {
 }
 
 func renderEntryAt(entry transcriptEntry, width int, at time.Time) string {
+	if entry.kind == entryTodo {
+		if width <= terminalCellWidth(transcriptEntryGutter) {
+			return fitStyledCellLine(renderTodoEntry(entry, width), width)
+		}
+		return indentLines(renderTodoEntry(entry, transcriptBodyWidth(width)), transcriptEntryGutter)
+	}
 	title := displayEntryTitle(entry)
 	color := sanitizeTerminalText(entry.color)
 	var label string
