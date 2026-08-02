@@ -3,6 +3,7 @@ package bubble
 import (
 	"context"
 	"errors"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"paw/internal/todo"
@@ -70,6 +71,32 @@ func (m *appModel) applyTodoSnapshot(snapshot todo.Snapshot, live bool) bool {
 	}
 	m.latestTodoIndex = len(m.transcript) - 1
 	return true
+}
+
+func (m *appModel) foldCompletedTodoAfterFinalAnswer() {
+	if m == nil || !m.hasCurrentTodo || !m.currentTodo.AllCompleted() {
+		return
+	}
+	index := m.latestTodoIndex
+	if index < 0 || index >= len(m.transcript) {
+		return
+	}
+	entry := &m.transcript[index]
+	if entry.kind != entryTodo || entry.todoSnapshot == nil || !entry.todoSnapshot.AllCompleted() {
+		return
+	}
+	entry.todoExpanded = false
+	entry.todoCompletedFold = true
+	touchTranscriptEntry(entry)
+	m.refreshViewportPreservingOffset()
+}
+
+func (m appModel) assistantFinalAnswerVisible(index int) bool {
+	if index < 0 || index >= len(m.transcript) {
+		return false
+	}
+	entry := m.transcript[index]
+	return entry.kind == entryAssistant && strings.TrimSpace(sanitizeAssistantVisibleBody(entry.body)) != ""
 }
 
 func todoBrokerEventCommand(m appModel, msg todoBrokerEventMsg) (appModel, tea.Cmd) {

@@ -288,6 +288,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				touchTranscriptEntry(&m.transcript[assistantIndex])
 				m.refreshViewport()
 			}
+			if hadModelOutput && m.assistantFinalAnswerVisible(assistantIndex) {
+				m.foldCompletedTodoAfterFinalAnswer()
+			}
 		}
 		m.doneAssistant = -1
 		m.isGenerating = false
