@@ -144,13 +144,15 @@ type responsesError struct {
 }
 
 type responsesStreamEvent struct {
-	Type        string               `json:"type"`
-	Delta       string               `json:"delta,omitempty"`
-	ItemID      string               `json:"item_id,omitempty"`
-	OutputIndex int                  `json:"output_index,omitempty"`
-	Item        json.RawMessage      `json:"item,omitempty"`
+	Type        string                `json:"type"`
+	Delta       string                `json:"delta,omitempty"`
+	ItemID      string                `json:"item_id,omitempty"`
+	OutputIndex int                   `json:"output_index,omitempty"`
+	CallID      string                `json:"call_id,omitempty"`
+	Name        string                `json:"name,omitempty"`
+	Item        json.RawMessage       `json:"item,omitempty"`
 	Response    *responsesAPIResponse `json:"response,omitempty"`
-	Error       *responsesError      `json:"error,omitempty"`
+	Error       *responsesError       `json:"error,omitempty"`
 }
 
 func shouldUseResponsesAPI(cfg Config) bool {
@@ -496,9 +498,11 @@ func responseToolCall(view responsesOutputItemView) (message.ToolCall, error) {
 }
 
 type activeResponseToolCall struct {
-	item json.RawMessage
-	args strings.Builder
-	view responsesOutputItemView
+	item   json.RawMessage
+	args   strings.Builder
+	id     string
+	callID string
+	name   string
 }
 
 func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response, events chan<- StreamEvent) {
@@ -507,8 +511,9 @@ func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, streamScannerInitialBufferBytes), streamScannerMaxTokenBytes)
-	// 按 output_index 收集 response.output_item.done 的 raw items，作为 completed 快照
-	active := make(map[int]json.RawMessage)
+	// Keep both the provider's raw item and argument deltas. Some gateways omit
+	// arguments from output_item.done or response.completed entirely.
+	active := make(map[int]*activeResponseToolCall)
 	completed := false
 
 	for scanner.Scan() {
@@ -530,15 +535,51 @@ func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response
 			if event.Delta != "" && !emitStreamEvent(ctx, events, StreamEvent{Delta: event.Delta}) {
 				return
 			}
+		case "response.output_item.added":
+			if len(event.Item) != 0 {
+				call := &activeResponseToolCall{item: append(json.RawMessage(nil), event.Item...)}
+				var view responsesOutputItemView
+				if json.Unmarshal(event.Item, &view) == nil && view.Type == "function_call" {
+					call.id = view.ID
+					call.callID = view.CallID
+					call.name = view.Name
+					call.args.WriteString(view.Arguments)
+					active[event.OutputIndex] = call
+				}
+			}
+		case "response.function_call_arguments.delta":
+			call := active[event.OutputIndex]
+			if call == nil {
+				call = &activeResponseToolCall{id: event.ItemID, callID: event.CallID, name: event.Name}
+				active[event.OutputIndex] = call
+			} else {
+				if event.ItemID != "" {
+					call.id = event.ItemID
+				}
+				if event.CallID != "" {
+					call.callID = event.CallID
+				}
+				if event.Name != "" {
+					call.name = event.Name
+				}
+			}
+			call.args.WriteString(event.Delta)
+			if call.item == nil {
+				call.item = json.RawMessage(fmt.Sprintf(`{"type":"function_call","id":%q,"call_id":%q,"name":%q}`, call.id, call.callID, call.name))
+			}
 		case "response.output_item.done":
 			if len(event.Item) != 0 {
-				active[event.OutputIndex] = append(json.RawMessage(nil), event.Item...)
+				call := active[event.OutputIndex]
+				if call == nil {
+					call = &activeResponseToolCall{}
+					active[event.OutputIndex] = call
+				}
+				call.item = append(json.RawMessage(nil), event.Item...)
 			}
 		case "response.completed":
-			output := responsesRawOutput(active)
-			// 兼容网关未在 completed 事件携带 output 时，使用收集到的 raw items
+			output := responsesRawOutputWithDeltas(active)
 			if event.Response != nil && len(event.Response.Output) != 0 {
-				output = event.Response.Output
+				output = mergeResponsesOutputWithDeltas(event.Response.Output, active)
 			}
 			var usage *Usage
 			if event.Response != nil {
@@ -572,6 +613,54 @@ func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response
 	if !completed {
 		_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("Responses stream ended before response.completed")})
 	}
+}
+
+func responsesRawOutputWithDeltas(active map[int]*activeResponseToolCall) []json.RawMessage {
+	indexes := make([]int, 0, len(active))
+	for index := range active {
+		indexes = append(indexes, index)
+	}
+	sort.Ints(indexes)
+	output := make([]json.RawMessage, 0, len(indexes))
+	for _, index := range indexes {
+		call := active[index]
+		if call == nil || len(call.item) == 0 {
+			continue
+		}
+		if len(call.args.String()) != 0 {
+			call.item = responseItemWithArguments(call.item, call.args.String())
+		}
+		output = append(output, call.item)
+	}
+	return output
+}
+
+func mergeResponsesOutputWithDeltas(output []json.RawMessage, active map[int]*activeResponseToolCall) []json.RawMessage {
+	merged := append([]json.RawMessage(nil), output...)
+	for index, call := range active {
+		if call == nil || call.args.Len() == 0 {
+			continue
+		}
+		if index >= 0 && index < len(merged) {
+			merged[index] = responseItemWithArguments(merged[index], call.args.String())
+		} else if len(call.item) != 0 {
+			merged = append(merged, responseItemWithArguments(call.item, call.args.String()))
+		}
+	}
+	return merged
+}
+
+func responseItemWithArguments(raw json.RawMessage, arguments string) json.RawMessage {
+	var item map[string]any
+	if json.Unmarshal(raw, &item) != nil {
+		return raw
+	}
+	item["arguments"] = arguments
+	encoded, err := json.Marshal(item)
+	if err != nil {
+		return raw
+	}
+	return encoded
 }
 
 // emitFinalResponsesEvent 把权威完成事件作为单个原子事件投递，保证

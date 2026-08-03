@@ -303,9 +303,9 @@ func TestBuildResponsesInputFallsBackForLegacyAssistant(t *testing.T) {
 
 func TestBuildResponsesInputFallsBackForDamagedProviderData(t *testing.T) {
 	assistant := message.Message{
-		Role:    message.RoleAssistant,
-		Content: "visible fallback",
-		ToolUse: &message.ToolCall{ID: "call_1", Name: "Read", Input: json.RawMessage(`{"file_path":"README.md"}`)},
+		Role:         message.RoleAssistant,
+		Content:      "visible fallback",
+		ToolUse:      &message.ToolCall{ID: "call_1", Name: "Read", Input: json.RawMessage(`{"file_path":"README.md"}`)},
 		ProviderData: json.RawMessage(`{"transport":"openai-responses","version":99,"output_items":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"Read","arguments":"{\"file_path\":\"README.md\"}"}]}`),
 	}
 
@@ -488,5 +488,68 @@ func TestStreamingResponsesRejectsInvalidArguments(t *testing.T) {
 	}
 	if gotErr == nil || !strings.Contains(gotErr.Error(), "invalid JSON object arguments") {
 		t.Fatalf("error = %v, want invalid arguments error", gotErr)
+	}
+}
+
+func TestStreamingResponsesRecoversToolCallFromArgumentsDelta(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_delta","call_id":"call_delta","name":"Read","delta":"{\"file_path\":\"go.mod\"}"}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.completed","response":{}}`+"\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Transport: "openai-responses", APIBaseURL: server.URL, APIPath: "/responses", Model: "gpt-test", Timeout: time.Second,
+	})
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "read"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+	var calls []message.ToolCall
+	var sawDone bool
+	for event := range events {
+		if event.Err != nil {
+			t.Fatalf("stream error = %v", event.Err)
+		}
+		calls = append(calls, event.ToolCalls...)
+		sawDone = sawDone || event.Done
+	}
+	if !sawDone || len(calls) != 1 {
+		t.Fatalf("done=%v calls=%#v, want one recovered call", sawDone, calls)
+	}
+	if calls[0].ID != "call_delta" || calls[0].Name != "Read" || string(calls[0].Input) != `{"file_path":"go.mod"}` {
+		t.Fatalf("recovered call = %#v", calls[0])
+	}
+}
+
+func TestStreamingResponsesDeltaOverridesEmptyCompletedArguments(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_empty","call_id":"call_empty","name":"Read","arguments":""}}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_empty","delta":"{\"file_path\":\"fresh.go\"}"}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_empty","call_id":"call_empty","name":"Read","arguments":""}}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.completed","response":{"output":[{"type":"function_call","id":"fc_empty","call_id":"call_empty","name":"Read","arguments":""}]}}`+"\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Transport: "openai-responses", APIBaseURL: server.URL, APIPath: "/responses", Model: "gpt-test", Timeout: time.Second,
+	})
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "read"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+	var calls []message.ToolCall
+	for event := range events {
+		if event.Err != nil {
+			t.Fatalf("stream error = %v", event.Err)
+		}
+		calls = append(calls, event.ToolCalls...)
+	}
+	if len(calls) != 1 || string(calls[0].Input) != `{"file_path":"fresh.go"}` {
+		t.Fatalf("calls = %#v, want delta arguments", calls)
 	}
 }
