@@ -75,6 +75,25 @@ go run ./cmd/agent -s <session-id>
 
 当前运行目录会作为工作区 root，同时也是 `.paw/` 状态目录的基准路径。
 
+## 自动发布（pre-push hook）
+
+仓库自带一个随仓库分发的 git pre-push 钩子：**每次推送 `dev` 分支时，自动把最新 dev 快照构建成 `paw` 可执行文件并安装到 `~/go/bin/paw`**，方便直接用 `paw` 命令启动。
+
+启用方式（克隆仓库后执行一次）：
+
+```bash
+git config core.hooksPath .githooks
+```
+
+行为说明：
+
+- 钩子文件：`.githooks/pre-push`（源码副本 `scripts/pre-push.sh`）
+- 触发条件：推送目标为 `refs/heads/dev`；其他分支直接放行
+- 构建命令：`go build -trimpath -ldflags "-s -w" -o ~/go/bin/paw ./cmd/agent`
+- 版本一致性：用被推送的 `refs/heads/dev` 快照构建（不在 dev 上时会自动创建临时 worktree），保证二进制与推送内容一致
+- 构建失败会中止本次 push；安装目录可用 `GOBIN` 环境变量覆盖
+- 钩子只在本机生效，不会影响 CI
+
 ## 入口
 
 文件: [cmd/agent/main.go](./cmd/agent/main.go)
