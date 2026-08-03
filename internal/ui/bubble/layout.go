@@ -129,6 +129,9 @@ func (m appModel) View() string {
 		parts = append(parts, m.renderDockStatusLine(layout.contentWidth))
 	}
 	parts = append(parts, m.renderInputBoxForLayout(layout))
+	if layout.queueHeight > 0 {
+		parts = append(parts, m.renderQueuePanel(layout.contentWidth, layout.queueHeight))
+	}
 
 	inner := fitStyledRect(strings.Join(parts, "\n"), layout.contentWidth, layout.contentHeight)
 	view := renderHairlineFrame(inner, layout.frameWidth, layout.frameHeight)
@@ -375,8 +378,11 @@ func (m appModel) shouldAnchorTextInputCursor() bool {
 
 // inputCursorTerminalPosition 直接由固定布局矩形计算，不再依赖拼接后字符串高度。
 func (m appModel) inputCursorTerminalPosition(layout tuiLayout) terminalCursorPosition {
-	row := minInt(m.visibleInputCursorRow(), maxInt(0, layout.inputHeight-1))
-	upFromBottom := 1 + layout.worktreeHeight + maxInt(0, layout.inputHeight-row-1)
+	queueHeight := minInt(layout.queueHeight, maxInt(0, layout.inputHeight-1))
+	textareaHeight := maxInt(1, layout.inputHeight-queueHeight)
+	row := minInt(m.visibleInputCursorRow(), maxInt(0, textareaHeight-1))
+	// queue 面板位于输入框下方；从终端底部回退时必须跨过 queue 区域。
+	upFromBottom := 1 + queueHeight + layout.worktreeHeight + maxInt(0, textareaHeight-row-1)
 	column := inputDockStyle.GetPaddingLeft() + m.visibleInputCursorColumn()
 	column = minInt(column, maxInt(0, layout.frameWidth-1))
 	return terminalCursorPosition{
@@ -449,18 +455,14 @@ func (m appModel) renderInputBoxForLayout(layout tuiLayout) string {
 		style = inputDockMultilineStyle
 	}
 	bodyWidth := inputDockContentWidth(layout.contentWidth)
-	textareaHeight := maxInt(1, layout.inputHeight-layout.queueHeight)
+	queueHeight := minInt(layout.queueHeight, maxInt(0, layout.inputHeight-1))
+	textareaHeight := maxInt(1, layout.inputHeight-queueHeight)
 	inputBody := m.renderInputContentWithHints(bodyWidth, textareaHeight)
-	queueBody := m.renderQueuePanel(bodyWidth, minInt(layout.queueHeight, maxInt(0, layout.inputHeight-1)))
-	body := inputBody
-	if queueBody != "" {
-		body = queueBody + "\n" + inputBody
-	}
 	return renderFixedStyledPanel(
 		style,
 		layout.contentWidth,
-		layout.inputHeight,
-		body,
+		textareaHeight,
+		inputBody,
 	)
 }
 
@@ -519,17 +521,18 @@ func applyTextareaTerminalStyle(input *textarea.Model) {
 
 func (m appModel) shouldRenderFoldedInput() bool {
 	return m.inputPasteFoldActive &&
-		inputPasteFoldable(m.input.Value()) &&
-		!inputCursorInPasteFoldHiddenRange(m.input)
+		inputPasteFoldableWithWidth(m.input.Value(), m.input.Width()) &&
+		!inputCursorInPasteFoldHiddenRangeWithWidth(m.input, m.input.Width())
 }
 
 func renderFoldedInputContent(input textarea.Model) string {
 	input.Cursor.SetMode(cursor.CursorHide)
-	projected, _, ok := inputPasteFoldProjection(input.Value())
+	width := maxInt(1, input.Width())
+	value := input.Value()
+	projected, _, ok := inputPasteFoldProjectionWithWidth(value, width)
 	if !ok {
 		return input.View()
 	}
-	width := maxInt(1, input.Width())
 	height := maxInt(1, input.Height())
 	lines := make([]string, 0, height)
 	for _, line := range projected {
@@ -545,15 +548,27 @@ func renderFoldedInputContent(input textarea.Model) string {
 }
 
 func foldedInputCursorRow(input textarea.Model) int {
-	start, end, ok := inputPasteFoldHiddenRange(input.Value())
+	value := input.Value()
+	width := maxInt(1, input.Width())
+	start, end, ok := inputPasteFoldHiddenRangeWithWidth(value, width)
 	if !ok {
 		return visibleTextareaCursorRow(input)
 	}
-	line := input.Line()
-	if line < start {
-		return minInt(maxInt(0, line), maxInt(0, input.Height()-1))
+	if inputPasteFoldable(value) {
+		line := input.Line()
+		if line < start {
+			return minInt(maxInt(0, line), maxInt(0, input.Height()-1))
+		}
+		row := start + 1 + (line - end)
+		return minInt(maxInt(0, row), maxInt(0, input.Height()-1))
 	}
-	row := start + 1 + (line - end)
+	// 单条长行折叠：光标位于可视行 RowOffset，落在隐藏区间之前直接返回；
+	// 之后映射为 marker 行 + 尾部偏移。
+	rowOffset := input.LineInfo().RowOffset
+	if rowOffset < start {
+		return minInt(maxInt(0, rowOffset), maxInt(0, input.Height()-1))
+	}
+	row := start + 1 + (rowOffset - end)
 	return minInt(maxInt(0, row), maxInt(0, input.Height()-1))
 }
 

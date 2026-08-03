@@ -582,16 +582,24 @@ func projectInput(raw string, tokens []inputToken, cursor, width int, folded boo
 	}
 
 	if folded {
-		start, end, ok := inputPasteFoldHiddenRange(raw)
+		start, end, ok := inputPasteFoldHiddenRangeWithWidth(raw, width)
 		if ok {
 			filtered := make([]inputProjectionLine, 0, len(lines))
 			markerAdded := false
-			for _, line := range lines {
-				if line.logicalLine >= start && line.logicalLine < end {
+			hidden := end - start
+			for index, line := range lines {
+				var inRange bool
+				if inputPasteFoldable(raw) {
+					inRange = line.logicalLine >= start && line.logicalLine < end
+				} else {
+					// 单条长行折叠：投影行索引就是 soft-wrap 后的可视行偏移。
+					inRange = index >= start && index < end
+				}
+				if inRange {
 					if !markerAdded {
 						marker := inputProjectionLine{logicalLine: start}
 						text := truncateDisplayWidth(
-							formatInputFoldMarker(end-start),
+							formatInputFoldMarker(hidden),
 							width,
 						)
 						markerWidth := terminalCellWidth(text)
@@ -717,8 +725,9 @@ func (m appModel) renderTokenInputContent() string {
 	start = clampInt(start, 0, maxInt(0, len(projection.lines)-height))
 	end := minInt(len(projection.lines), start+height)
 	rendered := make([]string, 0, height)
-	for _, line := range projection.lines[start:end] {
+	for row, line := range projection.lines[start:end] {
 		var out strings.Builder
+		cursorLine := row == projection.cursorRow-start
 		for atomIndex := 0; atomIndex < len(line.atoms); atomIndex++ {
 			atom := line.atoms[atomIndex]
 			style := bodyStyle
@@ -750,7 +759,13 @@ func (m appModel) renderTokenInputContent() string {
 				out.WriteString(style.Render(atom.text))
 			}
 		}
-		rendered = append(rendered, out.String())
+		lineWidth := maxInt(1, line.width)
+		rendered = append(rendered, padDisplayWidth(out.String(), lineWidth))
+		if cursorLine {
+			// 恢复 textarea 自带的当前行高亮（CursorLine 背景），使多行/token
+			// 渲染与单行 chat 渲染保持一致的当前行视觉。
+			rendered[len(rendered)-1] = m.input.FocusedStyle.CursorLine.Render(padDisplayWidth(rendered[len(rendered)-1], lineWidth))
+		}
 	}
 	for len(rendered) < height {
 		rendered = append(rendered, "")

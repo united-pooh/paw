@@ -46,6 +46,116 @@ func inputPasteFoldable(value string) bool {
 	return logicalInputLineCount(value) > inputPasteFoldThreshold
 }
 
+// inputWrappedVisualLineCount 计算 value 在指定宽度下 soft-wrap 后的可视行数
+// （含截断到 width 的单行，保证任何输入都不会让布局超过输入框高度）。
+func inputWrappedVisualLineCount(value string, width int) int {
+	width = maxInt(1, width)
+	if value == "" {
+		return 1
+	}
+	total := 0
+	for _, line := range strings.Split(value, "\n") {
+		lineWidth := terminalCellWidth(line)
+		total += maxInt(1, (lineWidth+width-1)/width)
+	}
+	return maxInt(1, total)
+}
+
+// inputPasteFoldableWithWidth 按可视行数（宽度感知）判定是否可折叠：
+// 逻辑行数超过阈值，或任何输入在给定宽度下 soft-wrap 后超过输入框上限，
+// 都会被折叠，避免长单行软换行把输入框撑爆。
+func inputPasteFoldableWithWidth(value string, width int) bool {
+	if inputPasteFoldable(value) {
+		return true
+	}
+	return inputWrappedVisualLineCount(value, width) > inputMaxVisibleLines
+}
+
+// visualRowLines 把 value 按 width 宽度切分为 soft-wrap 后的可视行（保留尾行
+// 原样，不截断），与 projectInput 的换行语义一致（按 grapheme cluster 换行）。
+func visualRowLines(value string, width int) []string {
+	width = maxInt(1, width)
+	if value == "" {
+		return []string{""}
+	}
+	var rows []string
+	for _, line := range strings.Split(value, "\n") {
+		cells := 0
+		var sb strings.Builder
+		for remaining := line; remaining != ""; {
+			cluster, _ := terminalFirstGraphemeCluster(remaining)
+			remaining = remaining[len(cluster):]
+			clusterWidth := terminalCellWidth(cluster)
+			if clusterWidth < 1 {
+				clusterWidth = 1
+			}
+			if cells > 0 && cells+clusterWidth > width {
+				rows = append(rows, sb.String())
+				sb.Reset()
+				cells = 0
+			}
+			sb.WriteString(cluster)
+			cells += clusterWidth
+		}
+		rows = append(rows, sb.String())
+	}
+	return rows
+}
+
+// inputPasteFoldProjectionWithWidth 折叠投影：优先按逻辑行折叠（与旧行为一致）；
+// 当只有单条长行（逻辑行少但 soft-wrap 后行数超上限）时，按可视行折叠并插入
+// 折叠标记。
+func inputPasteFoldProjectionWithWidth(value string, width int) ([]string, int, bool) {
+	if inputPasteFoldable(value) {
+		return inputPasteFoldProjection(value)
+	}
+	rows := visualRowLines(value, width)
+	if len(rows) <= inputMaxVisibleLines {
+		return strings.Split(value, "\n"), 0, false
+	}
+	head := minInt(inputPasteFoldHeadLines, len(rows))
+	tail := minInt(inputPasteFoldTailLines, maxInt(0, len(rows)-head))
+	hidden := len(rows) - head - tail
+	if hidden <= 0 {
+		return rows, 0, false
+	}
+	projected := make([]string, 0, head+1+tail)
+	projected = append(projected, rows[:head]...)
+	projected = append(projected, fmt.Sprintf(inputPasteFoldMarkerLine, hidden))
+	projected = append(projected, rows[len(rows)-tail:]...)
+	return projected, hidden, true
+}
+
+// inputPasteFoldHiddenRangeWithWidth 返回折叠隐藏的闭区间。逻辑行折叠按逻辑行
+// 区间；单条长行折叠按可视行区间。
+func inputPasteFoldHiddenRangeWithWidth(value string, width int) (int, int, bool) {
+	if inputPasteFoldable(value) {
+		return inputPasteFoldHiddenRange(value)
+	}
+	rows := visualRowLines(value, width)
+	if len(rows) <= inputMaxVisibleLines {
+		return 0, 0, false
+	}
+	start := minInt(inputPasteFoldHeadLines, len(rows))
+	end := maxInt(start, len(rows)-inputPasteFoldTailLines)
+	return start, end, end > start
+}
+
+// inputCursorInPasteFoldHiddenRangeWithWidth 判断光标是否位于折叠隐藏区间。
+// 逻辑行折叠用 input.Line()；单条长行折叠用当前逻辑行内的可视行偏移 RowOffset。
+func inputCursorInPasteFoldHiddenRangeWithWidth(input textarea.Model, width int) bool {
+	value := input.Value()
+	if inputPasteFoldable(value) {
+		return inputCursorInPasteFoldHiddenRange(input)
+	}
+	start, end, ok := inputPasteFoldHiddenRangeWithWidth(value, width)
+	if !ok {
+		return false
+	}
+	row := input.LineInfo().RowOffset
+	return row >= start && row < end
+}
+
 func inputPasteFoldProjection(value string) ([]string, int, bool) {
 	lines := strings.Split(value, "\n")
 	if len(lines) <= inputPasteFoldThreshold {

@@ -330,11 +330,18 @@ func (m appModel) updateInputWithKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *appModel) syncInputPasteFoldState(msg tea.Msg, beforeValue string, textChanged bool) {
 	value := m.input.Value()
-	if !inputPasteFoldable(value) {
+	width := maxInt(1, m.input.Width())
+	if !inputPasteFoldableWithWidth(value, width) {
 		m.inputPasteFoldActive = false
 		return
 	}
 	if m.inputPasteFoldActive {
+		return
+	}
+	// 单条长行 soft-wrap 后超过输入框上限：无论是否为粘贴都直接折叠，
+	// 避免长行把输入框撑爆。多条逻辑行仍沿用"粘贴才折叠"的旧行为。
+	if inputWrappedVisualLineCount(value, width) > inputMaxVisibleLines {
+		m.inputPasteFoldActive = true
 		return
 	}
 	if textChanged && inputTextMutationLooksLikeMultilinePaste(msg, beforeValue, value) {
