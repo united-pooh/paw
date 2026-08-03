@@ -50,10 +50,7 @@ func (m appModel) handleSubmit() (tea.Model, tea.Cmd) {
 	}
 
 	if m.isModelWorkRunning() {
-		if len(imageTokensInDraft(m.submittedDraft)) > 0 {
-			return m.queueChatInput(line), nil
-		}
-		return m.submitSupplement(line), nil
+		return m.queueChatInput(line), nil
 	}
 	if m.isTerminalWorkRunning() {
 		m.addEntry(transcriptEntry{kind: entrySystem, title: "busy", body: "chat is unavailable while a terminal command is running"})

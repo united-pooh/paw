@@ -859,7 +859,41 @@ func TestRunningCommandPolicyAllowsStatusAndBlocksClear(t *testing.T) {
 	}
 }
 
-// TestRunningModelEnterSubmitsSupplement 验证模型运行中 Enter 会作为当前 turn 的补充输入。
+// TestRunningModelQueuesPlainText 验证模型运行中普通文本也会进入 queue，而不是作为当前 turn 的补充输入。
+func TestRunningModelQueuesPlainText(t *testing.T) {
+	runner := &fakeRunner{}
+	model := newTestModel(runner)
+	model.input.SetValue("first")
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if cmd == nil {
+		t.Fatalf("first submit cmd is nil")
+	}
+
+	model.input.SetValue("queued plain text")
+	next, queuedCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if queuedCmd != nil {
+		t.Fatalf("queued submit returned cmd")
+	}
+	if got := model.chatQueue.Len(); got != 1 {
+		t.Fatalf("queue len = %d, want 1", got)
+	}
+	if len(runner.supplements) != 0 {
+		t.Fatalf("runner.supplements = %#v, want none", runner.supplements)
+	}
+	last := model.transcript[len(model.transcript)-2]
+	if last.title != "you (queued)" || last.body != "queued plain text" {
+		t.Fatalf("queued transcript = %#v", last)
+	}
+	if got := model.input.Value(); got != "" {
+		t.Fatalf("input value = %q, want cleared", got)
+	}
+	_ = cmd()
+}
+
+// TestRunningModelEnterSubmitsSupplement 验证旧的 supplement runner 能力不再被普通文本 Enter 隐式调用。
 func TestRunningModelEnterSubmitsSupplement(t *testing.T) {
 	runner := &fakeRunner{}
 	model := newTestModel(runner)
@@ -872,28 +906,25 @@ func TestRunningModelEnterSubmitsSupplement(t *testing.T) {
 	}
 
 	model.input.SetValue("supplement this turn")
-	next, supplementCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, queuedCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
-	if supplementCmd != nil {
-		t.Fatalf("supplement submit returned cmd")
+	if queuedCmd != nil {
+		t.Fatalf("queued submit returned cmd")
 	}
-	if got := model.chatQueue.Len(); got != 0 {
-		t.Fatalf("queue len = %d, want 0", got)
+	if got := model.chatQueue.Len(); got != 1 {
+		t.Fatalf("queue len = %d, want 1", got)
 	}
-	if got := runner.supplements; !equalStrings(got, []string{"supplement this turn"}) {
-		t.Fatalf("runner.supplements = %#v", got)
+	if got := runner.supplements; len(got) != 0 {
+		t.Fatalf("runner.supplements = %#v, want no implicit supplement", got)
 	}
-	last := model.transcript[len(model.transcript)-1]
-	if last.title != "you (supplement)" || last.body != "supplement this turn" {
+	last := model.transcript[len(model.transcript)-2]
+	if last.title != "you (queued)" || last.body != "supplement this turn" {
 		t.Fatalf("last transcript = %#v", last)
 	}
 	if got := model.input.Value(); got != "" {
 		t.Fatalf("input value = %q, want cleared", got)
 	}
 	_ = cmd()
-	if len(runner.inputs) != 1 || runner.inputs[0] != "first" {
-		t.Fatalf("runner.inputs = %#v, want [first]", runner.inputs)
-	}
 }
 
 func TestRunningModelRejectsTerminalModeSubmit(t *testing.T) {

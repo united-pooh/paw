@@ -34,7 +34,7 @@ func (m appModel) queuePanelContent(width int) string {
 		if selected < 0 {
 			selected = 0
 		}
-		lines := []string{queueSelectingStyle.Render(fmt.Sprintf("QUEUE · %d · %d/%d    SELECTING", len(items), selected+1, len(items)))}
+		lines := []string{queueSelectingStyle.Render(fmt.Sprintf("⏳ %d 个任务排队中 · %d/%d", len(items), selected+1, len(items)))}
 		visibleRows := maxInt(0, queuePanelMaxHeight-2)
 		if visibleRows > len(items) {
 			visibleRows = len(items)
@@ -61,12 +61,12 @@ func (m appModel) queuePanelContent(width int) string {
 		if m.queueEdit != nil {
 			position = m.queueEdit.originalAt + 1
 		}
-		return queueEditStyle.Render(truncateDisplayWidth(fmt.Sprintf("EDIT · queue item #%d    Enter 保存到队尾 · Esc 取消", position), width))
+		return queueEditStyle.Render(truncateDisplayWidth(fmt.Sprintf("✎ 编辑排队任务 #%d · Enter 保存到队尾 · Esc 取消", position), width))
 	default:
 		if len(items) == 0 {
 			return ""
 		}
-		return queueSummaryStyle.Render(truncateDisplayWidth(fmt.Sprintf("QUEUE · %d · %s    ↓ 选择", len(items), queueItemText(items[0], maxInt(1, width-18))), width))
+		return queueSummaryStyle.Render(truncateDisplayWidth(fmt.Sprintf("⏳ %d 个任务排队中 · ↓ 查看", len(items)), width))
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"paw/internal/todo"
 )
 
@@ -62,6 +63,14 @@ func renderTodoExpanded(snapshot todo.Snapshot, width int) string {
 	return strings.Join(lines, "\n")
 }
 
+func todoItemBodyStyle(status todo.Status) lipgloss.Style {
+	style := bodyStyle
+	if status == todo.StatusCompleted {
+		style = style.Copy().Strikethrough(true)
+	}
+	return style
+}
+
 func renderTodoItem(item todo.Item, width int, showStatusLabel bool) []string {
 	if width <= 0 {
 		return nil
@@ -79,15 +88,16 @@ func renderTodoItem(item todo.Item, width int, showStatusLabel bool) []string {
 	if showStatusLabel {
 		suffix = "  " + label
 	}
+	bodyStyleForItem := todoItemBodyStyle(item.Status)
 	bodyWidth := maxInt(1, width-terminalCellWidth(prefix)-terminalCellWidth(suffix))
 	wrapped := wrapDisplayWidthLine(item.Content, bodyWidth)
 	lines := make([]string, 0, len(wrapped))
 	for i, line := range wrapped {
 		if i == 0 {
-			lines = append(lines, fitStyledCellLine(style.Render(prefix)+bodyStyle.Render(line)+style.Render(suffix), width))
+			lines = append(lines, fitStyledCellLine(style.Render(prefix)+bodyStyleForItem.Render(line)+style.Render(suffix), width))
 			continue
 		}
-		lines = append(lines, fitStyledCellLine(strings.Repeat(" ", terminalCellWidth(prefix))+bodyStyle.Render(line), width))
+		lines = append(lines, fitStyledCellLine(strings.Repeat(" ", terminalCellWidth(prefix))+bodyStyleForItem.Render(line), width))
 	}
 	return lines
 }

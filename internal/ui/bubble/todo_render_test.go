@@ -48,6 +48,23 @@ func TestRenderExpandedTodoCard(t *testing.T) {
 	}
 }
 
+func TestCompletedTodoItemUsesStrikethrough(t *testing.T) {
+	if !todoItemBodyStyle(todo.StatusCompleted).GetStrikethrough() {
+		t.Fatal("completed item style does not enable strikethrough")
+	}
+	if todoItemBodyStyle(todo.StatusPending).GetStrikethrough() {
+		t.Fatal("pending item style unexpectedly enables strikethrough")
+	}
+
+	completed := renderTodoItem(todo.Item{Content: "Finished task", Status: todo.StatusCompleted}, 80, true)
+	if len(completed) != 1 {
+		t.Fatalf("rendered lines = %#v", completed)
+	}
+	plain := ansi.Strip(completed[0])
+	if !strings.Contains(plain, "✓") || !strings.Contains(plain, "Finished task") {
+		t.Fatalf("completed item lost content: %q", plain)
+	}
+}
 func TestRenderTodoSummaryVariants(t *testing.T) {
 	completed := transcriptEntry{
 		kind: entryTodo,
