@@ -167,14 +167,15 @@ func (m *appModel) startNextQueuedTurn() tea.Cmd {
 	if m == nil || !m.queryGuard.CanStartQueued() || m.ctx.Err() != nil {
 		return nil
 	}
-	draft, ok := m.chatQueue.DequeueDraft()
+	item, ok := m.chatQueue.DequeueDraft()
 	if !ok {
 		return nil
 	}
 	if !m.queryGuard.StartModel() {
-		_ = m.chatQueue.EnqueueDraft(draft)
+		_ = m.chatQueue.InsertAt(0, item)
 		return nil
 	}
+	draft := item.Draft
 	m.resetStreamingBuffers()
 	m.toolGroupExpanded = false
 	m.toolGroupFullResult = false

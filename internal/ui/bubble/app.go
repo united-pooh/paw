@@ -515,6 +515,19 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.toolInspectActive {
 			return m.handleToolInspectKey(msg)
 		}
+		// Queue interaction owns its keys before completion, transcript scrolling,
+		// history navigation, and textarea handling. This prevents Down from being
+		// mistaken for history navigation and keeps edit mode from submitting a
+		// normal chat turn.
+		if m.queueMode == queueModeEditing {
+			return m.handleQueueEditKey(msg)
+		}
+		if m.queueMode == queueModeSelecting {
+			return m.handleQueueKey(msg)
+		}
+		if msg.String() == "down" && m.canEnterQueueSelection() {
+			return m.enterQueueSelection()
+		}
 		if msg.String() == "ctrl+t" {
 			return m.openToolInspect()
 		}

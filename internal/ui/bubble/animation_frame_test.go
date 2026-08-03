@@ -63,7 +63,7 @@ func TestStartChatTurnWakesAnimationBeforeFirstDelta(t *testing.T) {
 func TestQueuedTurnWakesAnimationBeforeFirstDelta(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.uiAnimationFrameScheduled = false
-	if !model.chatQueue.Enqueue("queued") {
+	if _, ok := model.chatQueue.Enqueue("queued"); !ok {
 		t.Fatal("failed to enqueue test turn")
 	}
 

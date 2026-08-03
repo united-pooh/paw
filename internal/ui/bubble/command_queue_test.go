@@ -4,7 +4,7 @@ import "testing"
 
 func TestCommandQueueFIFOAndSkipsEmpty(t *testing.T) {
 	var queue CommandQueue
-	if queue.Enqueue("  ") {
+	if _, ok := queue.Enqueue("  "); ok {
 		t.Fatalf("empty input was enqueued")
 	}
 	queue.Enqueue("first")

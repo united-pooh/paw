@@ -310,7 +310,7 @@ func (m appModel) queueChatInput(line string) appModel {
 		draft = inputDraft{Text: line}
 	}
 	m.rememberInputHistory(line)
-	if m.chatQueue.EnqueueDraft(draft) {
+	if _, ok := m.chatQueue.EnqueueDraft(draft); ok {
 		m.addEntry(m.userTranscriptEntry("you (queued)", line))
 		m.addEntry(transcriptEntry{
 			kind:  entrySystem,
@@ -324,6 +324,7 @@ func (m appModel) queueChatInput(line string) appModel {
 // updateInputWithKey 将按键交给 textarea 处理，并同步输入模式、布局和光标动画。
 func (m appModel) updateInputWithKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	cmd := m.updateTokenAwareInput(msg)
+	m.inputSource = inputSourceFresh
 	m.syncInputMode()
 	m.relayout()
 	m.applyCursorAnimation()
@@ -397,6 +398,7 @@ func (m appModel) handleHistoryNavigation(direction int) (tea.Model, tea.Cmd) {
 			m.historyIndex--
 		}
 		m.setInputDraft(m.inputHistory[m.historyIndex])
+		m.inputSource = inputSourceHistory
 		m.inputPasteFoldActive = false
 		m.syncInputMode()
 		m.relayout()
@@ -410,10 +412,12 @@ func (m appModel) handleHistoryNavigation(direction int) (tea.Model, tea.Cmd) {
 	if m.historyIndex < len(m.inputHistory)-1 {
 		m.historyIndex++
 		m.setInputDraft(m.inputHistory[m.historyIndex])
+		m.inputSource = inputSourceHistory
 		m.historyDownLock = true
 	} else {
 		m.historyIndex = -1
 		m.setInputDraft(m.historyDraft)
+		m.inputSource = inputSourceFresh
 		m.historyDraft = inputDraft{}
 		m.historyDownLock = false
 	}

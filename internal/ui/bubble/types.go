@@ -366,6 +366,10 @@ type appModel struct {
 	skillRegistry             *skill.Registry
 	queryGuard                QueryGuard
 	chatQueue                 CommandQueue
+	queueMode                 queueInteractionMode
+	queueSelectedID           string
+	queueEdit                 *queueEditState
+	inputSource               inputSource
 	cursorAnchor              *terminalCursorAnchor
 	input                     textarea.Model
 	viewport                  viewport.Model

@@ -29,6 +29,7 @@ type tuiLayout struct {
 	statusHeight     int
 	worktreeHeight   int
 	inputHeight      int
+	queueHeight      int
 }
 
 func computeTUILayout(width, height, requestedInputHeight int) tuiLayout {
@@ -77,16 +78,24 @@ func computeTUILayoutWithInputLimit(width, height, requestedInputHeight, inputHe
 }
 
 func (m appModel) currentLayout() tuiLayout {
-	inputHeight := m.input.Height()
 	if m.selectionDock != nil {
 		base := computeTUILayout(m.width, m.height, inputMinVisibleLines)
-		inputHeight = m.selectionDock.preferredHeight(inputDockContentWidth(base.contentWidth))
+		inputHeight := m.selectionDock.preferredHeight(inputDockContentWidth(base.contentWidth))
 		return computeTUILayoutWithInputLimit(m.width, m.height, inputHeight, selectionDockMaxVisibleLines)
 	}
-	if inputHeight <= 0 {
-		inputHeight = inputMinVisibleLines
+	queueHeight := m.queuePanelHeight()
+	textareaHeight := m.input.Height()
+	if textareaHeight <= 0 {
+		textareaHeight = inputMinVisibleLines
 	}
-	return computeTUILayout(m.width, m.height, inputHeight)
+	requestedInputHeight := textareaHeight + queueHeight
+	inputLimit := inputMaxVisibleLines
+	if queueHeight > 0 {
+		inputLimit += queuePanelMaxHeight
+	}
+	layout := computeTUILayoutWithInputLimit(m.width, m.height, requestedInputHeight, inputLimit)
+	layout.queueHeight = minInt(queueHeight, maxInt(0, layout.inputHeight-1))
+	return layout
 }
 
 // View 渲染一个尺寸严格等于当前终端的单一固定外框。
@@ -440,11 +449,18 @@ func (m appModel) renderInputBoxForLayout(layout tuiLayout) string {
 		style = inputDockMultilineStyle
 	}
 	bodyWidth := inputDockContentWidth(layout.contentWidth)
+	textareaHeight := maxInt(1, layout.inputHeight-layout.queueHeight)
+	inputBody := m.renderInputContentWithHints(bodyWidth, textareaHeight)
+	queueBody := m.renderQueuePanel(bodyWidth, minInt(layout.queueHeight, maxInt(0, layout.inputHeight-1)))
+	body := inputBody
+	if queueBody != "" {
+		body = queueBody + "\n" + inputBody
+	}
 	return renderFixedStyledPanel(
 		style,
 		layout.contentWidth,
 		layout.inputHeight,
-		m.renderInputContentWithHints(bodyWidth, layout.inputHeight),
+		body,
 	)
 }
 
@@ -571,12 +587,17 @@ func (m *appModel) relayout() {
 	if m.selectionDock != nil {
 		requestedInputHeight = m.selectionDock.preferredHeight(inputWidth)
 	}
+	queueHeight := m.queuePanelHeight()
+	if m.selectionDock == nil {
+		requestedInputHeight += queueHeight
+	}
 	layout := computeTUILayout(m.width, m.height, requestedInputHeight)
 	if m.selectionDock != nil {
 		layout = computeTUILayoutWithInputLimit(m.width, m.height, requestedInputHeight, selectionDockMaxVisibleLines)
 	}
 	if m.selectionDock == nil {
-		m.input.SetHeight(layout.inputHeight)
+		actualQueueHeight := minInt(queueHeight, maxInt(0, layout.inputHeight-1))
+		m.input.SetHeight(maxInt(1, layout.inputHeight-actualQueueHeight))
 	} else {
 		m.input.SetHeight(clampInt(m.tokenAwareInputVisibleLineCount(), 1, inputMaxVisibleLines))
 	}
