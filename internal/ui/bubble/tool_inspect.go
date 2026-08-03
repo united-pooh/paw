@@ -32,8 +32,9 @@ func (m *appModel) transcriptEntryLocationsAt() []transcriptEntryLocation {
 	return m.transcriptLocationCache
 }
 
-// transcriptEntryLocations is the free-function form used by tests; running
-// groups count as expanded, completed groups use their own toolExpanded flag.
+// transcriptEntryLocations is the free-function form used by tests; pending
+// tools stay itemized, while ready groups count as expanded only when their
+// first entry's group toggle is open.
 func transcriptEntryLocations(entries []transcriptEntry, width int, showThinking bool, at time.Time) []transcriptEntryLocation {
 	return transcriptEntryLocationsWith(entries, width, showThinking, at, false, false)
 }
@@ -55,7 +56,7 @@ func transcriptEntryLocationsWith(entries []transcriptEntry, width int, showThin
 		rendered := ""
 		locationIndex := index
 		kind := entry.kind
-		if isToolTransaction(entry) {
+		if toolEntryUsesReadyGroup(entries, index) {
 			first, last := toolGroupRange(entries, index)
 			if first != index {
 				continue
@@ -88,10 +89,9 @@ func transcriptEntryLocationsWith(entries []transcriptEntry, width int, showThin
 	return locations
 }
 
-// toolIndexAtTranscriptRow maps a rendered transcript row back to the group
-// (or per-tool detail) that contains it. When a completed group is expanded
-// and the clicked row lies inside a tool's result detail block, it resolves
-// to that individual tool entry instead of the whole group.
+// toolIndexAtTranscriptRow maps a rendered transcript row back to the tool
+// entry that owns it. Pending tools resolve directly to the individual entry;
+// ready groups resolve to the group header or the owning grouped entry.
 func (m appModel) toolIndexAtTranscriptRow(row int) (int, bool) {
 	index, _, ok := m.toolHitAtTranscriptRow(row)
 	return index, ok
@@ -107,8 +107,12 @@ func (m appModel) toolHitAtTranscriptRow(row int) (index int, isHeaderRow bool, 
 		if row < location.startRow || row >= location.startRow+location.height {
 			continue
 		}
-		if !isToolTransaction(m.transcript[location.transcriptIndex]) {
+		entry := m.transcript[location.transcriptIndex]
+		if !isToolTransaction(entry) {
 			return -1, false, false
+		}
+		if !toolEntryUsesReadyGroup(m.transcript, location.transcriptIndex) {
+			return location.transcriptIndex, false, true
 		}
 		first, last := toolGroupRange(m.transcript, location.transcriptIndex)
 		groupExpanded := m.toolGroupExpanded
@@ -121,8 +125,8 @@ func (m appModel) toolHitAtTranscriptRow(row int) (index int, isHeaderRow bool, 
 		if !groupExpanded {
 			return first, false, true
 		}
-		entry, _ := m.toolDetailEntryAtRow(row, location)
-		return entry, false, true
+		entryIndex, _ := m.toolDetailEntryAtRow(row, location)
+		return entryIndex, false, true
 	}
 	return -1, false, false
 }
@@ -140,17 +144,12 @@ func (m *appModel) toolDetailEntryAtRow(row int, location transcriptEntryLocatio
 	if len(groupEntries) == 0 {
 		return location.transcriptIndex, true
 	}
-	inner := maxInt(1, location.height-2)
-	// The group header row belongs to the group as a whole; tool rows start
-	// on the row right below it.
+	style := toolGroupBorderStyle(groupEntries)
+	contentWidth := toolEntryContentWidth(maxInt(20, m.viewport.Width), style)
+	innerWidth := maxInt(1, contentWidth-style.GetHorizontalFrameSize())
 	cursor := location.startRow + 1
 	for i, entry := range groupEntries {
-		summaryHeight := renderToolSummaryHeight(entry, inner)
-		detailHeight := 0
-		if entry.toolGroupOpen && toolEntryStatus(entry) != "running" {
-			detailHeight = renderToolResultDetailHeight(entry, maxInt(1, inner-6), m.toolGroupFullResult)
-		}
-		entryHeight := summaryHeight + detailHeight
+		entryHeight := maxInt(1, lipgloss.Height(renderGroupedToolEntry(entry, innerWidth, m.animationNow(), m.toolGroupFullResult)))
 		end := cursor + entryHeight
 		if row < end {
 			return m.transcriptIndexForGroupEntry(location.transcriptIndex, i), true
@@ -438,9 +437,23 @@ func (m *appModel) toggleToolExpansion(index int, isHeaderRow bool) bool {
 	if !isToolTransaction(*entry) || toolEntryStatus(*entry) == "running" {
 		return false
 	}
+	if !toolEntryUsesReadyGroup(m.transcript, index) {
+		entry.toolExpanded = !entry.toolExpanded
+		entry.toolGroupOpen = false
+		touchTranscriptEntry(entry)
+		m.transcriptRenderCache = nil
+		m.refreshViewportPreservingOffset()
+		if m.toolInspectActive {
+			m.ensureInspectedToolVisible()
+		}
+		return true
+	}
 	first, last := toolGroupRange(m.transcript, index)
 	if first < 0 {
 		first = index
+	}
+	if toolGroupHasRunning(m.transcript, first, last) {
+		return false
 	}
 	groupExpanded := m.toolGroupExpanded
 	if !toolGroupHasRunning(m.transcript, first, last) {
@@ -489,8 +502,12 @@ func (m *appModel) ensureInspectedToolVisible() {
 	if m == nil || !m.toolInspectActive || m.viewport.Height <= 0 {
 		return
 	}
+	targetIndex := m.toolInspectIndex
+	if targetIndex >= 0 && targetIndex < len(m.transcript) && toolEntryUsesReadyGroup(m.transcript, targetIndex) {
+		targetIndex, _ = toolGroupRange(m.transcript, targetIndex)
+	}
 	for _, location := range m.transcriptEntryLocationsAt() {
-		if location.transcriptIndex != m.toolInspectIndex {
+		if location.transcriptIndex != targetIndex {
 			continue
 		}
 		switch {

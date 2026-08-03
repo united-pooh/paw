@@ -199,6 +199,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case assistantDeltaMsg:
 		if string(msg) != "" {
 			m.turnHasModelOutput = true
+			m.readyPendingToolSegmentsInCurrentTurn()
 			if !m.toolInspectActive {
 				m.toolGroupExpanded = false
 				m.toolGroupFullResult = false

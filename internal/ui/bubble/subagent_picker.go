@@ -245,7 +245,7 @@ func transcriptEntriesFromMessage(msg message.Message, createdAt time.Time, work
 			toolName:       "tool",
 			toolStatus:     status,
 			toolResult:     result.Content,
-			toolExpanded:   result.IsError,
+			toolExpanded:   false,
 			toolResultOnly: true,
 			createdAt:      createdAt,
 		})
@@ -288,7 +288,9 @@ func mergeTranscriptToolEntries(entries []transcriptEntry) []transcriptEntry {
 				call.toolStatus = entry.toolStatus
 				call.toolResult = entry.toolResult
 				call.isError = entry.isError
-				call.toolExpanded = entry.isError || isFileMutationTool(call.toolName)
+				call.toolExpanded = false
+				call.toolGroupPending = false
+				call.toolGroupOpen = false
 				call.toolResultOnly = false
 				call.body = completeToolCallBody(call.toolName, call.body, entry.toolStatus, entry.toolResult)
 				if strings.EqualFold(call.toolName, "Select") && strings.EqualFold(call.toolStatus, "ok") {
@@ -300,12 +302,16 @@ func mergeTranscriptToolEntries(entries []transcriptEntry) []transcriptEntry {
 				delete(pendingByID, entry.toolUseID)
 				continue
 			}
-			entry.toolExpanded = entry.isError
+			entry.toolExpanded = false
+			entry.toolGroupPending = false
+			entry.toolGroupOpen = false
 			out = append(out, entry)
 			continue
 		}
 
-		entry.toolExpanded = entry.isError
+		entry.toolExpanded = false
+		entry.toolGroupPending = false
+		entry.toolGroupOpen = false
 		out = append(out, entry)
 		if entry.toolStatus == "running" && entry.toolUseID != "" {
 			pendingByID[entry.toolUseID] = len(out) - 1
@@ -444,10 +450,15 @@ func (m *appModel) finalizeRestoredRunningTools() {
 	if m == nil {
 		return
 	}
-	now := m.animationNow()
+	if finalizeRestoredRunningToolEntries(m.transcript, m.animationNow()) {
+		m.lastToolProgressSecond = -1
+	}
+}
+
+func finalizeRestoredRunningToolEntries(entries []transcriptEntry, now time.Time) bool {
 	changed := false
-	for index := range m.transcript {
-		entry := &m.transcript[index]
+	for index := range entries {
+		entry := &entries[index]
 		if !isToolTransaction(*entry) || toolEntryStatus(*entry) != "running" {
 			continue
 		}
@@ -455,14 +466,14 @@ func (m *appModel) finalizeRestoredRunningTools() {
 		entry.toolStatus = "error"
 		entry.isError = true
 		entry.toolResult = "interrupted: previous turn ended before completion"
-		entry.toolExpanded = true
+		entry.toolExpanded = false
+		entry.toolGroupPending = false
+		entry.toolGroupOpen = false
 		entry.toolFinishedAt = now
 		touchTranscriptEntry(entry)
 		changed = true
 	}
-	if changed {
-		m.lastToolProgressSecond = -1
-	}
+	return changed
 }
 
 func (m *appModel) applySessionPickerRestore(msg sessionRestoredMsg) {
@@ -502,6 +513,7 @@ func (m *appModel) applySubagentPreviewRestore(msg sessionRestoredMsg) {
 		preview := *msg.subagentPreview
 		preview.parentTranscript = copyTranscriptEntries(msg.subagentPreview.parentTranscript)
 		preview.entries = mergeTranscriptToolEntries(copyTranscriptEntries(msg.entries))
+		finalizeRestoredRunningToolEntries(preview.entries, m.animationNow())
 		m.subagentPreview = &preview
 	}
 	m.transcript = renderSubagentPreviewTranscript(m.subagentPreview, m.animationNow())

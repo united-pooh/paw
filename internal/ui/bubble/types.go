@@ -67,6 +67,7 @@ type transcriptEntry struct {
 	isFileMutation        bool
 	toolResult            string
 	toolExpanded          bool
+	toolGroupPending      bool
 	toolGroupOpen         bool
 	toolFocused           bool
 	toolHovered           bool

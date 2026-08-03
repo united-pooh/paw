@@ -181,12 +181,18 @@ func TestToolTrackLifecycleAndResultVisibility(t *testing.T) {
 	}))
 	model = next.(appModel)
 	errorEntry := model.transcript[len(model.transcript)-1]
-	if errorEntry.toolStatus != "error" || !errorEntry.toolExpanded {
-		t.Fatalf("error entry = %#v, want expanded error", errorEntry)
+	if errorEntry.toolStatus != "error" || errorEntry.toolExpanded {
+		t.Fatalf("error entry = %#v, want collapsed pending error", errorEntry)
 	}
 	rendered := ansi.Strip(renderTranscript(model.transcript, 80, true))
-	if !strings.Contains(rendered, "× Bash: go test ./...  出错") || !strings.Contains(rendered, "exit status 1") {
+	if !strings.Contains(rendered, "× Bash: go test ./...  出错") || strings.Contains(rendered, "exit status 1") {
 		t.Fatalf("rendered error transaction:\n%s", rendered)
+	}
+	if !model.toggleToolExpansion(len(model.transcript)-1, false) {
+		t.Fatalf("pending error entry did not expand")
+	}
+	if rendered := ansi.Strip(renderTranscript(model.transcript, 80, true)); !strings.Contains(rendered, "exit status 1") {
+		t.Fatalf("expanded error transaction hid result:\n%s", rendered)
 	}
 
 	failed := newTestModel(&fakeRunner{})
@@ -196,6 +202,15 @@ func TestToolTrackLifecycleAndResultVisibility(t *testing.T) {
 	failed = next.(appModel)
 	if got := failed.transcript[0].toolStatus; got != "error" {
 		t.Fatalf("unfinished tool status = %q, want error", got)
+	}
+	if failed.transcript[0].toolExpanded {
+		t.Fatalf("unfinished tool should remain collapsed after turn failure: %#v", failed.transcript[0])
+	}
+	if !failed.toggleToolExpansion(0, false) {
+		t.Fatalf("unfinished tool error should stay clickable")
+	}
+	if rendered := ansi.Strip(renderTranscript(failed.transcript, 80, true)); !strings.Contains(rendered, "tool failed") {
+		t.Fatalf("expanded turn-failure tool hid result:\n%s", rendered)
 	}
 }
 
@@ -400,8 +415,14 @@ func TestFailedFileMutationDoesNotShowSuccessDiff(t *testing.T) {
 	if strings.Contains(entry.body, "+") || strings.Contains(entry.body, "- │") || strings.Contains(entry.body, "return 2") {
 		t.Fatalf("failed mutation retained success diff: %q", entry.body)
 	}
-	if entry.toolResult != "old_string not found" || !entry.toolExpanded {
+	if entry.toolResult != "old_string not found" || entry.toolExpanded {
 		t.Fatalf("failed mutation result state = %#v", entry)
+	}
+	if !model.toggleToolExpansion(0, false) {
+		t.Fatalf("failed mutation error should remain expandable")
+	}
+	if rendered := ansi.Strip(renderTranscript(model.transcript, 100, true)); !strings.Contains(rendered, "old_string not found") {
+		t.Fatalf("expanded failed mutation hid error detail:\n%s", rendered)
 	}
 }
 
@@ -649,6 +670,15 @@ func mouseClickAt(model appModel, x, y int) appModel {
 	return model
 }
 
+func styleRenderPrefix(style lipgloss.Style) string {
+	rendered := style.Render("x")
+	index := strings.Index(rendered, "x")
+	if index < 0 {
+		return rendered
+	}
+	return rendered[:index]
+}
+
 // TestReadyStateCollapsedGroupClickExpands 回归：ready（空闲/一轮结束）状态下，
 // 工具组折叠为单个 header 行（▸ Tools），点击该行应整组展开，列出每个工具的摘要。
 func TestReadyStateCollapsedGroupClickExpands(t *testing.T) {
@@ -748,8 +778,8 @@ func TestReadyStateSecondGroupClickExpands(t *testing.T) {
 	}
 }
 
-// TestReadyStateLifecycleCollapsedGroupClickExpands 回归：走真实事件流
-// toolCall → toolResult → turnFinished 进入 ready 态后，折叠的工具组点击可展开。
+// TestReadyStateLifecycleCollapsedGroupClickExpands 回归：只有 assistant 开始回复后，
+// pending 工具段才会转成 ready 分组并默认折叠。
 func TestReadyStateLifecycleCollapsedGroupClickExpands(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
@@ -759,6 +789,8 @@ func TestReadyStateLifecycleCollapsedGroupClickExpands(t *testing.T) {
 	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{ID: "call-1", Name: "Read", Input: []byte(`{"file_path":"a.go"}`)}))
 	model = next.(appModel)
 	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{ToolUseID: "call-1", Name: "Read", Content: "full content"}))
+	model = next.(appModel)
+	next, _ = model.Update(assistantDeltaMsg("总结如下"))
 	model = next.(appModel)
 	next, _ = model.Update(turnFinishedMsg{})
 	model = next.(appModel)
@@ -777,6 +809,289 @@ func TestReadyStateLifecycleCollapsedGroupClickExpands(t *testing.T) {
 
 	if !model.transcript[0].toolExpanded {
 		t.Fatalf("lifecycle ready-state click did not expand: %#v", model.transcript[0])
+	}
+}
+
+func TestPendingToolsDoNotGroupBeforeAssistantOrThinking(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 90
+	model.height = 24
+
+	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{ID: "call-1", Name: "Read", Input: []byte(`{"file_path":"a.go"}`)}))
+	model = next.(appModel)
+	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{ToolUseID: "call-1", Name: "Read", Content: "alpha"}))
+	model = next.(appModel)
+	next, _ = model.Update(toolCallMsg(ui.ToolCallEvent{ID: "call-2", Name: "Bash", Input: []byte(`{"command":"go test ./..."}`)}))
+	model = next.(appModel)
+	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{ToolUseID: "call-2", Name: "Bash", Content: "ok"}))
+	model = next.(appModel)
+
+	rendered := ansi.Strip(model.renderTranscriptContent())
+	if strings.Contains(rendered, "Tools  2 calls") {
+		t.Fatalf("pending tools grouped before assistant:\n%s", rendered)
+	}
+	for _, want := range []string{"✓ Read: a.go  完成", "✓ Bash: go test ./...  完成"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("pending transcript missing %q:\n%s", want, rendered)
+		}
+	}
+
+	next, _ = model.Update(thinkingDeltaMsg("thinking only"))
+	model = next.(appModel)
+	rendered = ansi.Strip(model.renderTranscriptContent())
+	if strings.Contains(rendered, "Tools  2 calls") {
+		t.Fatalf("thinkingDelta should not group pending tools:\n%s", rendered)
+	}
+
+	next, _ = model.Update(assistantDeltaMsg("answer"))
+	model = next.(appModel)
+	rendered = ansi.Strip(model.renderTranscriptContent())
+	if !strings.Contains(rendered, "▸ Tools  2 calls") {
+		t.Fatalf("assistantDelta should group pending tools into collapsed ready group:\n%s", rendered)
+	}
+	for _, hidden := range []string{"alpha", "ok"} {
+		if strings.Contains(rendered, hidden) {
+			t.Fatalf("ready group leaked detail %q:\n%s", hidden, rendered)
+		}
+	}
+	if model.transcript[0].toolGroupPending || model.transcript[1].toolGroupPending {
+		t.Fatalf("assistantDelta should clear pending flags: %#v", model.transcript)
+	}
+	if model.transcript[0].toolExpanded || model.transcript[0].toolGroupOpen || model.transcript[1].toolExpanded || model.transcript[1].toolGroupOpen {
+		t.Fatalf("assistantDelta should collapse all tool details: %#v", model.transcript)
+	}
+}
+
+func TestAssistantDeltaGroupsPendingToolsEvenWithRunningTool(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 90
+	model.height = 24
+
+	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{ID: "call-1", Name: "Read", Input: []byte(`{"file_path":"a.go"}`)}))
+	model = next.(appModel)
+	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{ToolUseID: "call-1", Name: "Read", Content: "alpha"}))
+	model = next.(appModel)
+	next, _ = model.Update(toolCallMsg(ui.ToolCallEvent{ID: "call-2", Name: "Bash", Input: []byte(`{"command":"go test ./..."}`)}))
+	model = next.(appModel)
+
+	before := ansi.Strip(model.renderTranscriptContent())
+	if strings.Contains(before, "Tools  2 calls") {
+		t.Fatalf("running pending tools grouped too early:\n%s", before)
+	}
+
+	next, _ = model.Update(assistantDeltaMsg("partial answer\n"))
+	model = next.(appModel)
+	after := ansi.Strip(model.renderTranscriptContent())
+	if !strings.Contains(after, "▸ Tools  2 calls") {
+		t.Fatalf("assistantDelta should group even with running tool:\n%s", after)
+	}
+	if !strings.Contains(after, "partial answer") {
+		t.Fatalf("assistant delta missing after grouping:\n%s", after)
+	}
+
+	loc := model.transcriptEntryLocationsAt()[0]
+	y := 1 + model.currentLayout().headerHeight + loc.startRow - model.viewport.YOffset
+	model = mouseClickAt(model, 5, y)
+	if model.transcript[0].toolExpanded || model.transcript[1].toolGroupOpen {
+		t.Fatalf("running ready group should not open on click: %#v", model.transcript)
+	}
+}
+
+func TestPendingMutationAutoExpandsOnlyNewestAndAssistantCollapsesAll(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 100
+	model.height = 24
+
+	inputOne := json.RawMessage(`{"file_path":"a.go","old_string":"one","new_string":"two"}`)
+	inputTwo := json.RawMessage(`{"file_path":"b.go","old_string":"left","new_string":"right"}`)
+
+	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{
+		ID: "edit-1", Name: "Edit", Input: inputOne,
+		FileMutationKnown: true, IsFileMutation: true,
+		FileMutation: &ui.FileMutationSnapshot{Before: "one\n", BeforeExists: true},
+	}))
+	model = next.(appModel)
+	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{
+		ToolUseID: "edit-1", Name: "Edit", Content: "edited a.go",
+		FileMutationKnown: true, IsFileMutation: true,
+		FileMutation: &ui.FileMutationSnapshot{Before: "one\n", After: "two\n", BeforeExists: true, AfterExists: true},
+	}))
+	model = next.(appModel)
+	if !model.transcript[0].toolExpanded {
+		t.Fatalf("first pending mutation should auto-expand: %#v", model.transcript[0])
+	}
+
+	next, _ = model.Update(toolCallMsg(ui.ToolCallEvent{
+		ID: "edit-2", Name: "Edit", Input: inputTwo,
+		FileMutationKnown: true, IsFileMutation: true,
+		FileMutation: &ui.FileMutationSnapshot{Before: "left\n", BeforeExists: true},
+	}))
+	model = next.(appModel)
+	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{
+		ToolUseID: "edit-2", Name: "Edit", Content: "edited b.go",
+		FileMutationKnown: true, IsFileMutation: true,
+		FileMutation: &ui.FileMutationSnapshot{Before: "left\n", After: "right\n", BeforeExists: true, AfterExists: true},
+	}))
+	model = next.(appModel)
+	if model.transcript[0].toolExpanded || !model.transcript[1].toolExpanded {
+		t.Fatalf("only newest pending mutation should stay expanded: %#v", model.transcript)
+	}
+	pendingRendered := ansi.Strip(model.renderTranscriptContent())
+	if strings.Contains(pendingRendered, "one") || strings.Contains(pendingRendered, "two") {
+		t.Fatalf("older pending mutation diff should be collapsed:\n%s", pendingRendered)
+	}
+	for _, want := range []string{"left", "right"} {
+		if !strings.Contains(pendingRendered, want) {
+			t.Fatalf("latest pending mutation diff missing %q:\n%s", want, pendingRendered)
+		}
+	}
+
+	next, _ = model.Update(assistantDeltaMsg("done"))
+	model = next.(appModel)
+	if model.transcript[0].toolExpanded || model.transcript[1].toolExpanded || model.transcript[0].toolGroupPending || model.transcript[1].toolGroupPending {
+		t.Fatalf("assistantDelta should collapse and ready all mutations: %#v", model.transcript)
+	}
+	readyRendered := ansi.Strip(model.renderTranscriptContent())
+	if !strings.Contains(readyRendered, "▸ Tools  2 calls") {
+		t.Fatalf("assistantDelta should collapse mutations into ready group:\n%s", readyRendered)
+	}
+	for _, hidden := range []string{"one", "two", "left", "right"} {
+		if strings.Contains(readyRendered, hidden) {
+			t.Fatalf("ready group leaked diff detail %q:\n%s", hidden, readyRendered)
+		}
+	}
+}
+
+func TestPendingSingleToolMouseClickExpands(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 24
+
+	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{ID: "call-1", Name: "Read", Input: []byte(`{"file_path":"a.go"}`)}))
+	model = next.(appModel)
+	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{ToolUseID: "call-1", Name: "Read", Content: "full content"}))
+	model = next.(appModel)
+
+	loc := model.transcriptEntryLocationsAt()[0]
+	y := 1 + model.currentLayout().headerHeight + loc.startRow - model.viewport.YOffset
+	model = mouseClickAt(model, 5, y)
+
+	if !model.transcript[0].toolExpanded || model.transcript[0].toolGroupPending != true {
+		t.Fatalf("pending single tool click should open only that tool: %#v", model.transcript[0])
+	}
+	rendered := ansi.Strip(model.renderTranscriptContent())
+	if !strings.Contains(rendered, "full content") || strings.Contains(rendered, "Tools  1 calls") {
+		t.Fatalf("pending single tool click rendered unexpected content:\n%s", rendered)
+	}
+}
+
+func TestReadyGroupMixedStatusUsesNeutralOuterBorderAndErrorInnerRow(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
+
+	rendered := renderToolsGroup([]transcriptEntry{
+		{kind: entryTool, title: "tool", toolName: "Read", toolTarget: "a.go", toolStatus: "ok"},
+		{kind: entryTool, title: "tool", toolName: "Bash", toolTarget: "go test ./...", toolStatus: "error", toolResult: "failed"},
+	}, 90, time.Time{}, true, false)
+
+	lines := strings.Split(rendered, "\n")
+	headerPrefix := styleRenderPrefix(toolResultBorderStyle)
+	errorPrefix := styleRenderPrefix(toolErrorBorderStyle)
+	headerSeen := false
+	errorSeen := false
+	for _, line := range lines {
+		plainLine := ansi.Strip(line)
+		switch {
+		case strings.Contains(plainLine, "Tools  2 calls"):
+			headerSeen = true
+			if !strings.Contains(line, headerPrefix) || strings.Contains(line, errorPrefix) {
+				t.Fatalf("ready group header should use neutral/result border, got %q", line)
+			}
+		case strings.Contains(plainLine, "× Bash: go test ./...  出错"):
+			errorSeen = true
+			if !strings.Contains(line, errorPrefix) {
+				t.Fatalf("error tool row should carry error border styling, got %q", line)
+			}
+		}
+	}
+	if !headerSeen || !errorSeen {
+		t.Fatalf("mixed ready group rendering incomplete:\n%s", rendered)
+	}
+}
+
+func TestReadyGroupMouseHitAfterOpenDetailTargetsCorrectTool(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 100
+	model.height = 24
+	model.transcript = []transcriptEntry{
+		{
+			kind:             entryTool,
+			title:            "tool",
+			toolName:         "Read",
+			toolTarget:       "a.go",
+			toolStatus:       "ok",
+			toolResult:       "line-1\nline-2\nline-3",
+			toolExpanded:     true,
+			toolGroupOpen:    true,
+			toolGroupPending: false,
+		},
+		{
+			kind:             entryTool,
+			title:            "tool",
+			toolName:         "Bash",
+			toolTarget:       "go test ./...",
+			toolStatus:       "ok",
+			toolResult:       "ok",
+			toolExpanded:     false,
+			toolGroupOpen:    false,
+			toolGroupPending: false,
+		},
+	}
+	model.relayout()
+	model.refreshViewport()
+
+	lines := strings.Split(ansi.Strip(model.renderTranscriptContent()), "\n")
+	summaryRow := lineContaining(t, lines, "✓ Bash: go test ./...  完成")
+	y := 1 + model.currentLayout().headerHeight + summaryRow - model.viewport.YOffset
+	model = mouseClickAt(model, 5, y)
+
+	if !model.transcript[1].toolGroupOpen || !model.transcript[0].toolGroupOpen {
+		t.Fatalf("ready group hit-test opened wrong entry: %#v", model.transcript)
+	}
+	rendered := ansi.Strip(model.renderTranscriptContent())
+	if !strings.Contains(rendered, "line-3") || !strings.Contains(rendered, "ok") {
+		t.Fatalf("ready group detail rendering incomplete after hit-test:\n%s", rendered)
+	}
+}
+
+func TestTurnFinishedWithoutAssistantKeepsPendingToolsIndividual(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 24
+
+	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{ID: "call-1", Name: "Read", Input: []byte(`{"file_path":"a.go"}`)}))
+	model = next.(appModel)
+	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{ToolUseID: "call-1", Name: "Read", Content: "full content"}))
+	model = next.(appModel)
+	next, _ = model.Update(turnFinishedMsg{})
+	model = next.(appModel)
+
+	model.relayout()
+	model.refreshViewport()
+
+	rendered := ansi.Strip(model.renderTranscriptContent())
+	if strings.Contains(rendered, "Tools  1 calls") {
+		t.Fatalf("turn without assistant should keep pending tool itemized:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "✓ Read: a.go  完成") {
+		t.Fatalf("pending tool summary missing:\n%s", rendered)
 	}
 }
 
@@ -833,8 +1148,8 @@ func TestSessionRestoreFinalizesOrphanedRunningToolsAndExpands(t *testing.T) {
 	if orphanIdx < 0 || okIdx < 0 {
 		t.Fatalf("restored transcript missing tools: %#v", model.transcript)
 	}
-	if got := model.transcript[orphanIdx]; got.toolStatus != "error" || !got.toolExpanded || !got.isError {
-		t.Fatalf("orphan tool = %#v, want error + expanded", got)
+	if got := model.transcript[orphanIdx]; got.toolStatus != "error" || got.toolExpanded || !got.isError {
+		t.Fatalf("orphan tool = %#v, want collapsed ready error", got)
 	}
 	if got := model.transcript[okIdx]; got.toolStatus != "ok" {
 		t.Fatalf("completed tool = %#v, want ok preserved", got)
@@ -843,13 +1158,11 @@ func TestSessionRestoreFinalizesOrphanedRunningToolsAndExpands(t *testing.T) {
 	model.relayout()
 	model.refreshViewport()
 	rendered := ansi.Strip(model.renderTranscriptContent())
-	for _, want := range []string{"× Read: stuck.go", "✓ Bash: go test"} {
-		if !strings.Contains(rendered, want) {
-			t.Fatalf("restored group missing %q:\n%s", want, rendered)
-		}
+	if !strings.Contains(rendered, "▸ Tools  2 calls") {
+		t.Fatalf("restored tools should start as collapsed ready group:\n%s", rendered)
 	}
 
-	// 组内不再有 running：点击 header 可折叠、再点击可重新展开。
+	// 组内不再有 running：点击 header 展开组，再点击错误工具打开详情。
 	var loc transcriptEntryLocation
 	found := false
 	for _, candidate := range model.transcriptEntryLocationsAt() {
@@ -865,21 +1178,23 @@ func TestSessionRestoreFinalizesOrphanedRunningToolsAndExpands(t *testing.T) {
 	y := 1 + model.currentLayout().headerHeight + loc.startRow - model.viewport.YOffset
 
 	model = mouseClickAt(model, 5, y)
-	if model.transcript[orphanIdx].toolExpanded {
-		t.Fatalf("header click on expanded group did not collapse: %#v", model.transcript[orphanIdx])
-	}
-	collapsed := ansi.Strip(model.renderTranscriptContent())
-	if !strings.Contains(collapsed, "▸ Tools") {
-		t.Fatalf("group did not collapse:\n%s", collapsed)
-	}
-
-	model = mouseClickAt(model, 5, y)
 	if !model.transcript[orphanIdx].toolExpanded {
-		t.Fatalf("click on collapsed group did not expand: %#v", model.transcript[orphanIdx])
+		t.Fatalf("header click on collapsed ready group did not expand: %#v", model.transcript[orphanIdx])
 	}
 	expanded := ansi.Strip(model.renderTranscriptContent())
-	if !strings.Contains(expanded, "× Read: stuck.go") || !strings.Contains(expanded, "✓ Bash: go test") {
-		t.Fatalf("group did not re-expand:\n%s", expanded)
+	for _, want := range []string{"× Read: stuck.go", "✓ Bash: go test"} {
+		if !strings.Contains(expanded, want) {
+			t.Fatalf("expanded group missing %q:\n%s", want, expanded)
+		}
+	}
+
+	model = mouseClickAt(model, 5, y+1)
+	if !model.transcript[orphanIdx].toolGroupOpen {
+		t.Fatalf("restored error detail did not open: %#v", model.transcript[orphanIdx])
+	}
+	withDetail := ansi.Strip(model.renderTranscriptContent())
+	if !strings.Contains(withDetail, "interrupted: previous turn ended before completion") {
+		t.Fatalf("restored error detail missing:\n%s", withDetail)
 	}
 }
 
@@ -1012,10 +1327,28 @@ func TestHistoricalFileMutationRestoresExpandedDiffFromToolInput(t *testing.T) {
 		ToolResults: []message.ToolResult{{ToolUseID: "edit-history", Content: "edited a.go (1 replacement)"}},
 	}, time.Now(), "")
 	merged := mergeTranscriptToolEntries(append(callEntries, resultEntries...))
-	if len(merged) != 1 || !merged[0].toolExpanded {
-		t.Fatalf("restored mutation = %#v, want one expanded transaction", merged)
+	if len(merged) != 1 || merged[0].toolExpanded || merged[0].toolGroupPending {
+		t.Fatalf("restored mutation = %#v, want one collapsed ready transaction", merged)
 	}
-	rendered := ansi.Strip(renderTranscript(merged, 100, true))
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 100
+	model.height = 24
+	model.transcript = merged
+	model.relayout()
+	model.refreshViewport()
+
+	collapsed := ansi.Strip(model.renderTranscriptContent())
+	if !strings.Contains(collapsed, "▸ Tools  1 calls") {
+		t.Fatalf("historical mutation should start collapsed:\n%s", collapsed)
+	}
+
+	loc := model.transcriptEntryLocationsAt()[0]
+	y := 1 + model.currentLayout().headerHeight + loc.startRow - model.viewport.YOffset
+	model = mouseClickAt(model, 5, y)
+	model = mouseClickAt(model, 5, y+1)
+
+	rendered := ansi.Strip(model.renderTranscriptContent())
 	for _, want := range []string{"return 1", "return 2"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("restored mutation missing %q:\n%s", want, rendered)

@@ -39,6 +39,8 @@ type transcriptRenderCacheKey struct {
 	toolResult           string
 	toolResultLen        int
 	toolExpanded         bool
+	toolGroupPending     bool
+	toolGroupOpen        bool
 	toolFocused          bool
 	toolHovered          bool
 	toolResultOnly       bool
@@ -272,6 +274,7 @@ func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMes
 	if name == "" {
 		name = "tool"
 	}
+	segmentPending := appendedToolEntryStartsPendingSegment(m.transcript)
 	target := displayToolTarget(name, input, m.workspaceRoot)
 	if selectTarget, ok := selectToolCallTarget(name, input); ok {
 		target = selectTarget
@@ -287,6 +290,7 @@ func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMes
 		toolInput:         append(json.RawMessage(nil), input...),
 		fileMutationKnown: mutationKnown,
 		isFileMutation:    isMutation,
+		toolGroupPending:  segmentPending,
 		createdAt:         m.animationNow(),
 		toolStartedAt:     m.animationNow(),
 	})
@@ -350,7 +354,12 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 		if strings.EqualFold(name, "update_todo") && strings.EqualFold(status, "ok") && !isError {
 			entry.toolTarget = compactUpdateTodoResult(content)
 		}
-		entry.toolExpanded = isError || (effectiveKnown && effectiveMutation) || (!effectiveKnown && isFileMutationTool(name))
+		entry.toolExpanded = false
+		entry.toolGroupOpen = false
+		if toolSegmentIsPending(m.transcript, idx) && status == "ok" && toolEntryShowsMutationDetail(*entry, name, effectiveKnown, effectiveMutation) {
+			m.collapsePendingToolDetailsInCurrentTurn(idx)
+			entry.toolExpanded = true
+		}
 		entry.toolResultOnly = false
 		entry.toolFinishedAt = m.animationNow()
 		touchTranscriptEntry(entry)
@@ -362,20 +371,30 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 	if strings.EqualFold(name, "update_todo") && strings.EqualFold(status, "ok") && !isError {
 		target = compactUpdateTodoResult(content)
 	}
+	segmentPending := appendedToolEntryStartsPendingSegment(m.transcript)
 	m.addEntry(transcriptEntry{
-		kind:           entryTool,
-		title:          "tool",
-		body:           formatToolResultBody(name, status, ""),
-		isError:        isError,
-		toolUseID:      strings.TrimSpace(toolUseID),
-		toolName:       name,
-		toolStatus:     status,
-		toolTarget:     target,
-		toolResult:     content,
-		toolExpanded:   isError,
-		toolResultOnly: true,
-		createdAt:      m.animationNow(),
+		kind:             entryTool,
+		title:            "tool",
+		body:             formatToolResultBody(name, status, ""),
+		isError:          isError,
+		toolUseID:        strings.TrimSpace(toolUseID),
+		toolName:         name,
+		toolStatus:       status,
+		toolTarget:       target,
+		toolResult:       content,
+		toolExpanded:     false,
+		toolGroupPending: segmentPending,
+		toolResultOnly:   true,
+		createdAt:        m.animationNow(),
 	})
+	if status == "ok" {
+		if last := len(m.transcript) - 1; last >= 0 && toolSegmentIsPending(m.transcript, last) && toolEntryShowsMutationDetail(m.transcript[last], name, mutationKnown, isMutation) {
+			m.collapsePendingToolDetailsInCurrentTurn(last)
+			m.transcript[last].toolExpanded = true
+			touchTranscriptEntry(&m.transcript[last])
+			m.refreshViewport()
+		}
+	}
 }
 
 func (m *appModel) recordToolResultCitation(toolUseID, name, status, content string, isError bool) {
@@ -440,6 +459,103 @@ func toolCitationMatchesResult(running, result toolCitation) bool {
 		return running.toolUseID == result.toolUseID
 	}
 	return strings.EqualFold(running.name, result.name)
+}
+
+func toolEntryShowsMutationDetail(entry transcriptEntry, name string, mutationKnown, isMutation bool) bool {
+	effectiveKnown := mutationKnown || entry.fileMutationKnown
+	effectiveMutation := entry.isFileMutation
+	if mutationKnown {
+		effectiveMutation = isMutation
+	}
+	return (effectiveKnown && effectiveMutation) || (!effectiveKnown && isFileMutationTool(name))
+}
+
+func appendedToolEntryStartsPendingSegment(entries []transcriptEntry) bool {
+	if len(entries) == 0 {
+		return true
+	}
+	return !isToolTransaction(entries[len(entries)-1])
+}
+
+func (m *appModel) collapsePendingToolDetailsInCurrentTurn(skipIndex int) {
+	start, end := currentTurnTranscriptBounds(m.transcript)
+	for index := start; index <= end && index < len(m.transcript); {
+		if !isToolTransaction(m.transcript[index]) {
+			index++
+			continue
+		}
+		segmentStart, segmentEnd, ok := toolSegmentRange(m.transcript, index)
+		if !ok {
+			index++
+			continue
+		}
+		if !toolSegmentIsPending(m.transcript, segmentStart) {
+			index = segmentEnd + 1
+			continue
+		}
+		for segmentIndex := segmentStart; segmentIndex <= segmentEnd; segmentIndex++ {
+			if segmentIndex == skipIndex {
+				continue
+			}
+			entry := &m.transcript[segmentIndex]
+			if entry.toolExpanded || entry.toolGroupOpen {
+				entry.toolExpanded = false
+				entry.toolGroupOpen = false
+				touchTranscriptEntry(entry)
+			}
+		}
+		index = segmentEnd + 1
+	}
+}
+
+func (m *appModel) readyPendingToolSegmentsInCurrentTurn() bool {
+	start, end := currentTurnTranscriptBounds(m.transcript)
+	if start < 0 || end < start {
+		return false
+	}
+	changed := false
+	for index := start; index <= end && index < len(m.transcript); {
+		if !isToolTransaction(m.transcript[index]) {
+			index++
+			continue
+		}
+		segmentStart, segmentEnd, ok := toolSegmentRange(m.transcript, index)
+		if !ok {
+			index++
+			continue
+		}
+		if !toolSegmentIsPending(m.transcript, segmentStart) {
+			index = segmentEnd + 1
+			continue
+		}
+		for segmentIndex := segmentStart; segmentIndex <= segmentEnd; segmentIndex++ {
+			entry := &m.transcript[segmentIndex]
+			if !entry.toolGroupPending && !entry.toolExpanded && !entry.toolGroupOpen {
+				continue
+			}
+			entry.toolGroupPending = false
+			entry.toolExpanded = false
+			entry.toolGroupOpen = false
+			touchTranscriptEntry(entry)
+			changed = true
+		}
+		index = segmentEnd + 1
+	}
+	return changed
+}
+
+func currentTurnTranscriptBounds(entries []transcriptEntry) (int, int) {
+	if len(entries) == 0 {
+		return -1, -1
+	}
+	start := 0
+	for index := len(entries) - 1; index >= 0; index-- {
+		if entries[index].kind == entryUser {
+			start = index + 1
+			break
+		}
+	}
+	return start, len(entries) - 1
 }
 
 func (m appModel) lastAssistantCitationHostIndex() int {
@@ -570,7 +686,8 @@ func (m *appModel) markRunningToolsError(err error) {
 		entry.toolStatus = "error"
 		entry.isError = true
 		entry.toolResult = message
-		entry.toolExpanded = true
+		entry.toolExpanded = false
+		entry.toolGroupOpen = false
 		entry.toolFinishedAt = m.animationNow()
 		touchTranscriptEntry(entry)
 		changed = true
@@ -612,7 +729,7 @@ func (m *appModel) renderTranscriptContentAt(width int, showThinking bool, at ti
 		if !assistantEntryIsRenderable(entry) {
 			continue
 		}
-		if isToolTransaction(entry) {
+		if toolEntryUsesReadyGroup(m.transcript, idx) {
 			first, last := toolGroupRange(m.transcript, idx)
 			if first != idx {
 				continue
@@ -637,6 +754,7 @@ func (m *appModel) renderTranscriptContentAt(width int, showThinking bool, at ti
 			if groupExpanded {
 				key.toolExpanded = true
 			}
+			key.toolGroupPending = false
 			key.toolFocused = key.toolFocused || m.toolGroupFullResult
 			if m.transcriptRenderCache[idx].key == key {
 				appendTranscriptRenderedEntry(&renderedTranscript, m.transcriptRenderCache[idx].rendered, entryTool, previousKind, hasPrevious)
@@ -694,6 +812,8 @@ func transcriptRenderKey(entry transcriptEntry, width int, at time.Time) transcr
 		toolInput:            string(entry.toolInput),
 		toolResultLen:        len(entry.toolResult),
 		toolExpanded:         entry.toolExpanded,
+		toolGroupPending:     entry.toolGroupPending,
+		toolGroupOpen:        entry.toolGroupOpen,
 		toolFocused:          entry.toolFocused,
 		toolHovered:          entry.toolHovered,
 		toolResultOnly:       entry.toolResultOnly,
@@ -862,7 +982,7 @@ func renderTranscriptWithToolGroup(entries []transcriptEntry, width int, showThi
 		if !assistantEntryIsRenderable(entry) {
 			continue
 		}
-		if isToolTransaction(entry) {
+		if toolEntryUsesReadyGroup(entries, index) {
 			first, _ := toolGroupRange(entries, index)
 			if first == index {
 				groupEntries := toolEntriesForGroup(entries, index)
@@ -887,33 +1007,9 @@ func renderTranscriptWithToolGroup(entries []transcriptEntry, width int, showThi
 }
 
 func toolGroupRange(entries []transcriptEntry, start int) (int, int) {
-	if start < 0 || start >= len(entries) || !isToolTransaction(entries[start]) {
+	first, last, ok := toolSegmentRange(entries, start)
+	if !ok || toolSegmentIsPending(entries, start) {
 		return start, start
-	}
-
-	// Find the first tool in the current user turn.  Returning start here would
-	// make every tool look like a new group, so the same group would be rendered
-	// once for every call.
-	first := start
-	for index := start - 1; index >= 0 && entries[index].kind != entryUser; index-- {
-		if !isToolTransaction(entries[index]) {
-			break
-		}
-		first = index
-	}
-
-	// A group covers the contiguous tool transaction run within one user turn.
-	// Any non-tool entry (agent text, thinking, a system row…) ends the run so
-	// a later tool call renders as its own group instead of merging into the
-	// previous one. The second call must not be swallowed by the first group,
-	// otherwise the caller sees one big "Tools  N calls" box instead of the
-	// two groups the user expects around the interleaved agent reply.
-	last := start
-	for index := start + 1; index < len(entries) && entries[index].kind != entryUser; index++ {
-		if !isToolTransaction(entries[index]) {
-			break
-		}
-		last = index
 	}
 	return first, last
 }
@@ -923,15 +1019,12 @@ func toolGroupRange(entries []transcriptEntry, start int) (int, int) {
 // non-tool entry (agent text, thinking, etc.) so interleaved model replies
 // split one user turn into separate Tools groups.
 func toolEntriesForGroup(entries []transcriptEntry, start int) []transcriptEntry {
-	if start < 0 || start >= len(entries) {
+	first, last, ok := toolSegmentRange(entries, start)
+	if !ok || toolSegmentIsPending(entries, start) {
 		return nil
 	}
-	first := start
-	for first > 0 && entries[first-1].kind != entryUser && isToolTransaction(entries[first-1]) {
-		first--
-	}
-	tools := make([]transcriptEntry, 0)
-	for index := first; index < len(entries) && entries[index].kind != entryUser && isToolTransaction(entries[index]); index++ {
+	tools := make([]transcriptEntry, 0, last-first+1)
+	for index := first; index <= last; index++ {
 		tools = append(tools, entries[index])
 	}
 	return tools
@@ -969,26 +1062,70 @@ func toolGroupHasRunning(entries []transcriptEntry, first, last int) bool {
 	return false
 }
 
+// toolSegmentRange returns the raw contiguous tool segment containing index.
+// Segments stay within a single user turn and break on any non-tool entry.
+func toolSegmentRange(entries []transcriptEntry, index int) (int, int, bool) {
+	if index < 0 || index >= len(entries) || !isToolTransaction(entries[index]) {
+		return index, index, false
+	}
+	first := index
+	for first > 0 && entries[first-1].kind != entryUser && isToolTransaction(entries[first-1]) {
+		first--
+	}
+	last := index
+	for last+1 < len(entries) && entries[last+1].kind != entryUser && isToolTransaction(entries[last+1]) {
+		last++
+	}
+	return first, last, true
+}
+
+func toolSegmentIsPending(entries []transcriptEntry, index int) bool {
+	first, _, ok := toolSegmentRange(entries, index)
+	return ok && entries[first].toolGroupPending
+}
+
+func toolEntryUsesReadyGroup(entries []transcriptEntry, index int) bool {
+	first, _, ok := toolSegmentRange(entries, index)
+	return ok && !entries[first].toolGroupPending
+}
+
+func toolGroupBorderStyle(entries []transcriptEntry) lipgloss.Style {
+	for _, entry := range entries {
+		if toolEntryStatus(entry) == "running" {
+			return toolCallBorderStyle
+		}
+	}
+	return toolResultBorderStyle
+}
+
+func groupedToolBorderStyle(entry transcriptEntry) lipgloss.Style {
+	status := toolEntryStatus(entry)
+	borderStyle := toolResultBorderStyle
+	switch status {
+	case "running":
+		borderStyle = toolCallBorderStyle
+	case "error":
+		borderStyle = toolErrorBorderStyle
+	}
+	if entry.toolHovered && !entry.toolFocused {
+		borderStyle = borderStyle.
+			BorderStyle(lipgloss.Border{Left: "┃"}).
+			BorderLeft(true)
+	}
+	return borderStyle
+}
+
 func renderToolsGroup(entries []transcriptEntry, width int, at time.Time, expanded, fullResult bool) string {
 	if len(entries) == 0 {
 		return ""
 	}
 	status := "ok"
 	for _, entry := range entries {
-		if toolEntryStatus(entry) == "error" {
-			status = "error"
-			break
-		}
 		if toolEntryStatus(entry) == "running" {
 			status = "running"
 		}
 	}
-	style := toolResultBorderStyle
-	if status == "error" {
-		style = toolErrorBorderStyle
-	} else if status == "running" {
-		style = toolCallBorderStyle
-	}
+	style := toolGroupBorderStyle(entries)
 	marker := "▸"
 	if expanded || anyToolGroupOpen(entries) {
 		marker = "▾"
@@ -1016,27 +1153,33 @@ func renderToolsGroup(entries []transcriptEntry, width int, at time.Time, expand
 	lines := []string{toolHeaderStyle.Render(truncateDisplayWidth(label, innerWidth))}
 	if expanded {
 		for _, entry := range entries {
-			call := renderCompactToolSummary(entry, maxInt(1, innerWidth-4), at)
-			lines = append(lines, "  "+call)
-			// A tool's result detail is shown only when this particular tool is
-			// open (toolGroupOpen), independent of the other tools in the group.
-			if toolEntryStatus(entry) == "running" || !entry.toolGroupOpen {
-				continue
-			}
-			result := toolResultForDisplay(entry)
-			if result == "" {
-				result = "(empty result)"
-			}
-			resultLines := strings.Split(result, "\n")
-			if !(fullResult && entry.toolFocused) {
-				resultLines = limitRenderedDetailLines(resultLines, maxRenderedToolDetailLines)
-			}
-			for _, line := range strings.Split(renderToolDetailLines(resultLines, maxInt(1, innerWidth-6)), "\n") {
-				lines = append(lines, "    "+line)
-			}
+			lines = append(lines, renderGroupedToolEntry(entry, innerWidth, at, fullResult))
 		}
 	}
 	return style.Width(contentWidth).Render(strings.Join(lines, "\n"))
+}
+
+func renderGroupedToolEntry(entry transcriptEntry, width int, at time.Time, fullResult bool) string {
+	borderStyle := groupedToolBorderStyle(entry)
+	contentWidth := toolEntryContentWidth(width, borderStyle)
+	innerWidth := maxInt(1, contentWidth-borderStyle.GetHorizontalFrameSize())
+	summary := renderCompactToolSummary(entry, innerWidth, at)
+	if entry.toolFocused {
+		summary = toolFocusedStyle.Width(innerWidth).Render(summary)
+	}
+	if toolEntryStatus(entry) == "running" || !entry.toolGroupOpen {
+		return borderStyle.Width(contentWidth).Render(summary)
+	}
+	result := toolResultForDisplay(entry)
+	if result == "" {
+		result = "(empty result)"
+	}
+	resultLines := strings.Split(result, "\n")
+	if !(fullResult && entry.toolFocused) {
+		resultLines = limitRenderedDetailLines(resultLines, maxRenderedToolDetailLines)
+	}
+	detail := renderToolDetailLines(resultLines, maxInt(1, innerWidth-2))
+	return borderStyle.Width(contentWidth).Render(summary + "\n" + detail)
 }
 
 func toolResultForDisplay(entry transcriptEntry) string {
