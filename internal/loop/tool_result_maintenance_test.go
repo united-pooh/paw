@@ -168,6 +168,26 @@ func TestMaintainToolResultsUpgradesSnipToPruneWithoutRearchive(t *testing.T) {
 	}
 }
 
+func TestCloneMessageDeepCopiesProviderDataAndToolInputs(t *testing.T) {
+	original := message.Message{
+		Role:         message.RoleAssistant,
+		ProviderData: json.RawMessage(`{"transport":"openai-responses"}`),
+		ToolUses: []message.ToolCall{{
+			ID: "call_1", Name: "Read", Input: json.RawMessage(`{"file_path":"a.go"}`),
+		}},
+	}
+	cloned := cloneMessage(original)
+	cloned.ProviderData[2] = 'X'
+	cloned.ToolUses[0].Input[2] = 'X'
+
+	if string(original.ProviderData) != `{"transport":"openai-responses"}` {
+		t.Fatalf("original ProviderData mutated: %s", original.ProviderData)
+	}
+	if string(original.ToolUses[0].Input) != `{"file_path":"a.go"}` {
+		t.Fatalf("original ToolUses input mutated: %s", original.ToolUses[0].Input)
+	}
+}
+
 type maintenanceTestTool struct {
 	name     string
 	readOnly bool

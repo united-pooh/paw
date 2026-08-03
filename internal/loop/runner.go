@@ -313,6 +313,7 @@ func (runner *Runner) runTurnWithTiming(ctx context.Context, userInput message.M
 				runner.notifyContextMaintenance(maintenance)
 			}
 			runner.setHistoryIfNil(messages)
+			runner.syncContextUsageFromHistory(messages)
 			runner.setRecoveryIfNil(recovery)
 		}
 	}
@@ -401,6 +402,9 @@ func (runner *Runner) runTurnWithTiming(ctx context.Context, userInput message.M
 				runner.notifySystem("context-compaction", "context cleanup skipped: "+maintenanceErr.Error())
 			} else {
 				history = maintenance.history
+				if maintenance.estimatedTokensSaved > 0 {
+					runner.syncContextUsageFromHistory(history)
+				}
 				runner.notifyContextMaintenance(maintenance)
 			}
 		}
@@ -681,6 +685,28 @@ func (runner *Runner) setHistory(history []message.Message) {
 	runner.mu.Unlock()
 }
 
+// syncContextUsageFromHistory rebuilds the current context meter from the
+// model projection when no provider usage snapshot exists for that exact
+// projection (for example after session restore or compaction). Cache usage is
+// intentionally left at zero because it cannot be inferred from messages.
+func (runner *Runner) syncContextUsageFromHistory(history []message.Message) {
+	if runner == nil {
+		return
+	}
+	usage := model.Usage{}
+	known := len(history) > 0
+	if known {
+		messages := make([]message.Message, 0, len(history)+1)
+		messages = append(messages, buildSystemMessage(runner.buildSystemPrompt()))
+		messages = append(messages, history...)
+		usage = usageFromTotals(tokenUsageTotals{used: estimateMessageTokens(messages)})
+	}
+	runner.mu.Lock()
+	runner.usage = usage
+	runner.usageKnown = known
+	runner.mu.Unlock()
+}
+
 func (runner *Runner) setRecovery(recovery *session.RecoveryState) {
 	if runner == nil {
 		return
@@ -842,6 +868,7 @@ func (runner *Runner) LoadSession(ctx context.Context, sessionID string) (Sessio
 		return SessionLoadResult{}, fmt.Errorf("runner store is nil")
 	}
 	var result SessionLoadResult
+	var activeHistory []message.Message
 	if journal := runner.turnJournal(); journal != nil {
 		snapshot, err := journal.LoadSnapshot(ctx, sessionID)
 		if err != nil {
@@ -849,24 +876,24 @@ func (runner *Runner) LoadSession(ctx context.Context, sessionID string) (Sessio
 		}
 		result.Messages = append([]message.Message(nil), snapshot.Messages...)
 		result.Recovery = copyRecoveryState(snapshot.Recovery)
-		runner.setHistory(snapshot.ActiveHistory)
+		activeHistory = append([]message.Message(nil), snapshot.ActiveHistory...)
 	} else {
 		messages, err := runner.store.LoadResolvedHistory(ctx, sessionID)
 		if err != nil {
 			return SessionLoadResult{}, err
 		}
 		result.Messages = append([]message.Message(nil), messages...)
-		runner.setHistory(messages)
+		activeHistory = append([]message.Message(nil), messages...)
 	}
+	runner.setHistory(activeHistory)
 	runner.mu.Lock()
 	runner.sessionID = sessionID
-	runner.usage = model.Usage{}
-	runner.usageKnown = false
 	runner.sessionUsage = model.Usage{}
 	runner.sessionUsageKnown = false
 	runner.supplements = nil
 	runner.recovery = copyRecoveryState(result.Recovery)
 	runner.mu.Unlock()
+	runner.syncContextUsageFromHistory(activeHistory)
 	return result, nil
 }
 

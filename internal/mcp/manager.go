@@ -423,6 +423,9 @@ func validateUniqueTools(tools []ToolSpec) error {
 }
 
 func (m *Manager) replaceServerTools(serverName string, tools []ToolSpec) error {
+	if err := validateToolSpecs(tools); err != nil {
+		return fmt.Errorf("validate MCP tools for server %q: %w", serverName, err)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	next := make(map[string]ToolSpec, len(m.tools)+len(tools))

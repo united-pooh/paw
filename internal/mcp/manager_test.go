@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -181,6 +182,69 @@ func snapshotHasTool(snapshot Snapshot, name string) bool {
 	return false
 }
 
+func TestReplaceServerToolsRejectsIncompatibleSchemaAtomically(t *testing.T) {
+	manager := &Manager{
+		tools: map[string]ToolSpec{
+			"codegraph__old": {Name: "codegraph__old", Server: "codegraph", MCPName: "old", Kind: KindTool, InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		},
+		snapshot: Snapshot{
+			Version: 3,
+			Tools: []ToolSpec{
+				{Name: "codegraph__old", Server: "codegraph", MCPName: "old", Kind: KindTool, InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+			},
+		},
+	}
+	before := manager.Snapshot()
+
+	err := manager.replaceServerTools("codegraph", []ToolSpec{{
+		Name: "codegraph__bad", Server: "codegraph", MCPName: "bad", Kind: KindTool,
+		InputSchema: json.RawMessage(`{"type":"array"}`),
+	}})
+	if err == nil {
+		t.Fatal("replaceServerTools accepted incompatible schema")
+	}
+	if !strings.Contains(err.Error(), "codegraph__bad") || !strings.Contains(err.Error(), `type must be "object"`) {
+		t.Fatalf("error = %v, want tool name and reason", err)
+	}
+
+	after := manager.Snapshot()
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("snapshot changed on rejected refresh: before=%#v after=%#v", before, after)
+	}
+	if _, ok := manager.tools["codegraph__bad"]; ok {
+		t.Fatal("rejected tool leaked into manager.tools")
+	}
+	if len(manager.tools) != 1 {
+		t.Fatalf("manager.tools changed: %#v", manager.tools)
+	}
+}
+
+func TestManagerStartRejectsIncompatibleSchema(t *testing.T) {
+	manager, err := Start(context.Background(), Config{
+		Path: "/tmp/mcp.toml",
+		Servers: map[string]ServerConfig{
+			"codegraph": {
+				Name:    "codegraph",
+				Command: os.Args[0],
+				Args:    []string{"-test.run=TestMCPManagerHelper"},
+				WorkDir: t.TempDir(),
+				Enabled: true,
+				Env: map[string]string{
+					"GO_WANT_MCP_MANAGER_HELPER":    "1",
+					"GO_WANT_MCP_MANAGER_BAD_SCHEMA": "1",
+				},
+			},
+		},
+	})
+	if err == nil {
+		_ = manager.Close(context.Background())
+		t.Fatal("Start() accepted incompatible MCP tool schema")
+	}
+	if !strings.Contains(err.Error(), "codegraph__explore") || !strings.Contains(err.Error(), `type must be "object"`) {
+		t.Fatalf("Start() error = %v, want tool name and reason", err)
+	}
+}
+
 func TestMCPManagerHelper(t *testing.T) {
 	if os.Getenv("GO_WANT_MCP_MANAGER_HELPER") != "1" {
 		return
@@ -205,6 +269,9 @@ func TestMCPManagerHelper(t *testing.T) {
 }
 
 func managerHelperResult(method string, params json.RawMessage) (json.RawMessage, error) {
+	if method == "tools/list" && os.Getenv("GO_WANT_MCP_MANAGER_BAD_SCHEMA") == "1" {
+		return json.RawMessage(`{"tools":[{"name":"explore","description":"Explore","inputSchema":{"type":"array"}}]}`), nil
+	}
 	switch method {
 	case "initialize":
 		return json.RawMessage(`{"protocolVersion":"2025-06-18","capabilities":{"tools":{},"resources":{},"prompts":{}},"serverInfo":{"name":"helper","version":"1"}}`), nil

@@ -195,6 +195,9 @@ func (c *Client) RunMessage(ctx context.Context, messages []message.Message) (st
 	}
 
 	cfg := c.CurrentModelConfig()
+	if shouldUseResponsesAPI(cfg) {
+		return c.runResponsesMessage(ctx, cfg, messages)
+	}
 	apiMessages, err := buildOpenAIMessages(messages)
 	if err != nil {
 		return "", fmt.Errorf("构造 OpenAI 请求消息失败: %w", err)

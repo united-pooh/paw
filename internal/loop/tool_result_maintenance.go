@@ -346,8 +346,13 @@ func cloneMessages(history []message.Message) []message.Message {
 
 func cloneMessage(msg message.Message) message.Message {
 	copyMessage := msg
+	copyMessage.ProviderData = append(json.RawMessage(nil), msg.ProviderData...)
 	copyMessage.Parts = append([]message.ContentPart(nil), msg.Parts...)
-	copyMessage.ToolUses = append([]message.ToolCall(nil), msg.ToolUses...)
+	copyMessage.ToolUses = make([]message.ToolCall, len(msg.ToolUses))
+	for i, call := range msg.ToolUses {
+		copyMessage.ToolUses[i] = call
+		copyMessage.ToolUses[i].Input = append(json.RawMessage(nil), call.Input...)
+	}
 	copyMessage.ToolResults = append([]message.ToolResult(nil), msg.ToolResults...)
 	if msg.ToolUse != nil {
 		call := *msg.ToolUse

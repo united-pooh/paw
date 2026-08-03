@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -275,6 +276,52 @@ func TestListSessions_SkipsNonDirectoryEntries(t *testing.T) {
 	}
 	if len(summaries) != 1 {
 		t.Fatalf("ListSessions() = %d items, want 1 (stray file skipped)", len(summaries))
+	}
+}
+
+// TestLoadResolvedHistoryRestoresProviderDataAndIsolation verifies that
+// assistant provider data survives a JSONL round trip and that mutating the
+// restored slice does not alter the bytes on disk.
+func TestLoadResolvedHistoryRestoresProviderDataAndIsolation(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	provider := json.RawMessage(`{"transport":"openai-responses","version":1,"output_items":[{"type":"reasoning","id":"rs_1","encrypted_content":"cipher"},{"type":"function_call","id":"fc_1","call_id":"call_1","name":"Read","arguments":"{\"file_path\":\"README.md\"}"}]}`)
+	assistant := message.Message{
+		Role:         message.RoleAssistant,
+		Content:      "fallback",
+		ToolUse:      &message.ToolCall{ID: "call_1", Name: "Read", Input: json.RawMessage(`{"file_path":"README.md"}`)},
+		ProviderData: append(json.RawMessage(nil), provider...),
+	}
+	createTestSession(t, store, "provider-session", []message.Message{
+		{Role: message.RoleUser, Content: "read it"},
+		assistant,
+		{Role: message.RoleUser, ToolResult: &message.ToolResult{ToolUseID: "call_1", Content: "contents"}},
+	})
+
+	history, err := store.LoadResolvedHistory(ctx, "provider-session")
+	if err != nil {
+		t.Fatalf("LoadResolvedHistory() error = %v", err)
+	}
+	if len(history) != 3 {
+		t.Fatalf("history = %d messages, want 3", len(history))
+	}
+	restored := history[1]
+	if string(restored.ProviderData) != string(provider) {
+		t.Fatalf("restored ProviderData = %s, want %s", restored.ProviderData, provider)
+	}
+	if restored.ToolUse == nil || restored.ToolUse.ID != "call_1" || string(restored.ToolUse.Input) != `{"file_path":"README.md"}` {
+		t.Fatalf("restored ToolUse = %#v", restored.ToolUse)
+	}
+
+	// Mutating the restored slice must not change the durable bytes.
+	restored.ProviderData[0] = 'X'
+	history2, err := store.LoadResolvedHistory(ctx, "provider-session")
+	if err != nil {
+		t.Fatalf("second LoadResolvedHistory() error = %v", err)
+	}
+	if got := string(history2[1].ProviderData); got != string(provider) {
+		t.Fatalf("disk provider data corrupted by slice mutation: %s", got)
 	}
 }
 

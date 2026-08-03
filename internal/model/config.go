@@ -409,6 +409,7 @@ func fillConfigDefaults(cfg Config) Config {
 	cfg.Model = strings.TrimSpace(cfg.Model)
 	cfg.Models = normalizeModelNames(cfg.Models)
 	cfg.ModelContextLimitTokens = normalizeModelContextLimits(cfg.ModelContextLimitTokens)
+	applyTransportDefaults(&cfg)
 	if cfg.Model == "" && len(cfg.Models) > 0 {
 		cfg.Model = cfg.Models[0]
 	}
@@ -425,6 +426,28 @@ func fillConfigDefaults(cfg Config) Config {
 		cfg.Stream = true
 	}
 	return cfg
+}
+
+func applyTransportDefaults(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	transport := strings.ToLower(strings.TrimSpace(cfg.Transport))
+	path := strings.ToLower(strings.TrimSpace(cfg.APIPath))
+	if transport == "" {
+		switch {
+		case strings.Contains(path, "/chat/completions"):
+			cfg.Transport = "openai-compatible"
+		case strings.Contains(path, "/messages"):
+			cfg.Transport = "anthropic-compatible"
+		default:
+			cfg.Transport = "openai-responses"
+		}
+		transport = strings.ToLower(cfg.Transport)
+	}
+	if cfg.APIPath == "" && strings.Contains(transport, "response") {
+		cfg.APIPath = "/responses"
+	}
 }
 
 func configuredProfiles(persisted []persistedModelConfig, envValues map[string]string) ([]Profile, error) {
@@ -468,7 +491,7 @@ func configuredProfiles(persisted []persistedModelConfig, envValues map[string]s
 		if profile.ID == "" {
 			profile.ID = profile.Provider
 		}
-		if err := ValidateExtraRequestBodies(profile.Config()); err != nil {
+		if err := ValidateExtraRequestBodies(fillConfigDefaults(profile.Config())); err != nil {
 			return nil, err
 		}
 		profiles = append(profiles, profile)

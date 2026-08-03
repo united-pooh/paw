@@ -173,6 +173,10 @@ var openAIProtectedRequestFields = map[string]struct{}{
 	"model": {}, "messages": {}, "tools": {}, "stream": {}, "stream_options": {},
 }
 
+var responsesProtectedRequestFields = map[string]struct{}{
+	"model": {}, "input": {}, "tools": {}, "stream": {},
+}
+
 var anthropicProtectedRequestFields = map[string]struct{}{
 	"model": {}, "system": {}, "messages": {}, "tools": {}, "stream": {}, "stream_options": {},
 }
@@ -186,7 +190,9 @@ func ValidateExtraRequestBodies(cfg Config) error {
 		profileID = "default"
 	}
 	protected := openAIProtectedRequestFields
-	if isAnthropicTransport(cfg.Transport) {
+	if shouldUseResponsesAPI(cfg) {
+		protected = responsesProtectedRequestFields
+	} else if isAnthropicTransport(cfg.Transport) {
 		protected = anthropicProtectedRequestFields
 	}
 	if err := validateProtectedRequestFields(profileID, "extraBody", cfg.ExtraBody, protected); err != nil {

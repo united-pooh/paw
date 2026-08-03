@@ -207,6 +207,8 @@ func (c *Client) consumeAnthropicStream(ctx context.Context, resp *http.Response
 	scanner := newStreamScanner(resp.Body)
 	// 当前正在累积的原生 tool_use 块（nil 表示当前是文本内容）
 	var activeTool *activeAnthropicToolCall
+	// 本响应内已结束的所有原生 tool_use 块，message_stop 时整批原子验证后统一发送
+	var toolCalls []*activeAnthropicToolCall
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -251,18 +253,25 @@ func (c *Client) consumeAnthropicStream(ctx context.Context, resp *http.Response
 			continue
 		}
 
-		// 原生工具调用：content_block_stop → 发出完整工具调用
+		// 原生工具调用：content_block_stop → 暂存完整工具调用，message_stop 时整批发送
 		if chunk.Type == "content_block_stop" && activeTool != nil {
-			input := activeTool.input()
-			if !emitStreamEvent(ctx, events, StreamEvent{ToolCalls: []message.ToolCall{{
-				ID:    activeTool.id,
-				Name:  activeTool.name,
-				Input: input,
-			}}}) {
-				return
-			}
+			toolCalls = append(toolCalls, activeTool)
 			activeTool = nil
 			continue
+		}
+
+		// message_stop → 整批原子验证并一次性发送所有工具调用
+		if chunk.Type == "message_stop" {
+			if calls, err := resolveAnthropicToolCalls(toolCalls); err != nil {
+				_ = emitStreamEvent(ctx, events, StreamEvent{Err: err})
+				return
+			} else if len(calls) > 0 {
+				if !emitStreamEvent(ctx, events, StreamEvent{ToolCalls: calls}) {
+					return
+				}
+			}
+			_ = emitStreamEvent(ctx, events, StreamEvent{Done: true})
+			return
 		}
 
 		// 普通事件：文本、thinking、usage 等
@@ -275,45 +284,45 @@ func (c *Client) consumeAnthropicStream(ctx context.Context, resp *http.Response
 		_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("读取 Anthropic 流式响应失败: %w", err)})
 		return
 	}
+	// EOF 前未收到 message_stop：flush 积累的工具调用后发 Done
+	if calls, err := resolveAnthropicToolCalls(toolCalls); err != nil {
+		_ = emitStreamEvent(ctx, events, StreamEvent{Err: err})
+		return
+	} else if len(calls) > 0 {
+		if !emitStreamEvent(ctx, events, StreamEvent{ToolCalls: calls}) {
+			return
+		}
+	}
 	_ = emitStreamEvent(ctx, events, StreamEvent{Done: true})
 }
 
-func (t *activeAnthropicToolCall) input() json.RawMessage {
-	if t == nil {
-		return json.RawMessage(`{}`)
+// resolveAnthropicToolCalls 整批验证全部工具调用参数，任一非法则整体拒绝。
+func resolveAnthropicToolCalls(accumulated []*activeAnthropicToolCall) ([]message.ToolCall, error) {
+	if len(accumulated) == 0 {
+		return nil, nil
 	}
-	if t.sawDelta {
-		args := t.args.String()
-		if input, ok := normalizeAnthropicToolInput(json.RawMessage(args)); ok {
-			return input
+	calls := make([]message.ToolCall, 0, len(accumulated))
+	for _, t := range accumulated {
+		if t == nil || t.name == "" {
+			return nil, fmt.Errorf("Anthropic returned invalid tool call without name")
 		}
-		return json.RawMessage(`{}`)
+		input, err := t.input()
+		if err != nil {
+			return nil, err
+		}
+		calls = append(calls, message.ToolCall{ID: t.id, Name: t.name, Input: input})
 	}
-	if input, ok := normalizeAnthropicToolInput(t.initialInput); ok {
-		return input
-	}
-	return json.RawMessage(`{}`)
+	return calls, nil
 }
 
-func normalizeAnthropicToolInput(raw json.RawMessage) (json.RawMessage, bool) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return nil, false
+func (t *activeAnthropicToolCall) input() (json.RawMessage, error) {
+	if t == nil {
+		return nil, fmt.Errorf("Anthropic returned invalid JSON object arguments for tool %q", "")
 	}
-	if !json.Valid(trimmed) {
-		return nil, false
+	if t.sawDelta {
+		return decodeToolArguments("Anthropic", t.id, t.name, []byte(t.args.String()))
 	}
-	if len(trimmed) > 0 && trimmed[0] == '"' {
-		var nested string
-		if err := json.Unmarshal(trimmed, &nested); err != nil {
-			return nil, false
-		}
-		trimmed = bytes.TrimSpace([]byte(nested))
-		if len(trimmed) == 0 || !json.Valid(trimmed) {
-			return nil, false
-		}
-	}
-	return append(json.RawMessage(nil), trimmed...), true
+	return decodeToolArguments("Anthropic", t.id, t.name, t.initialInput)
 }
 
 func (c *Client) handleAnthropicStreamLine(ctx context.Context, line string, events chan<- StreamEvent) (done bool, err error) {

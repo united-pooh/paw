@@ -1598,6 +1598,32 @@ func TestContextStatsUsesActualUsageWhenKnown(t *testing.T) {
 	}
 }
 
+func TestLoadSessionRebuildsContextUsageFromActiveHistory(t *testing.T) {
+	history := []message.Message{
+		{Role: message.RoleUser, Content: "restore this conversation"},
+		{Role: message.RoleAssistant, Content: strings.Repeat("restored answer ", 20)},
+	}
+	store := &fakeStore{history: history}
+	runner := NewRunner(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), store, "old-session")
+	runner.usage = model.Usage{TotalTokens: 9999, PromptCacheHitTokens: 100}
+	runner.usageKnown = true
+
+	if _, err := runner.LoadSession(context.Background(), "restored-session"); err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+
+	want := estimateMessageTokens(append([]message.Message{
+		buildSystemMessage(runner.buildSystemPrompt()),
+	}, history...))
+	stats := runner.ContextStats(100000, "")
+	if stats.UsedTokens != want || stats.CacheTokens != 0 {
+		t.Fatalf("ContextStats() = %#v, want rebuilt usage %d/cache 0", stats, want)
+	}
+	if stats.SessionUsedTokens != 0 {
+		t.Fatalf("SessionUsedTokens = %d, want unknown cumulative usage reset to 0", stats.SessionUsedTokens)
+	}
+}
+
 func TestResetHistoryClearsContextUsage(t *testing.T) {
 	runner := NewRunner(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), nil, "")
 	runner.usage = model.Usage{PromptTokens: 100, CompletionTokens: 20, PromptCacheHitTokens: 10}

@@ -190,6 +190,41 @@ func TestRenderCompactionTranscriptUsesSnippedProjection(t *testing.T) {
 	}
 }
 
+func TestCompactContextSynchronizesCurrentContextUsage(t *testing.T) {
+	original := []message.Message{
+		{Role: message.RoleUser, Content: "migrate parser"},
+		{Role: message.RoleAssistant, Content: strings.Repeat("old investigation ", 100)},
+		{Role: message.RoleUser, Content: "preserve API names"},
+		{Role: message.RoleAssistant, Content: strings.Repeat("old implementation ", 100)},
+		{Role: message.RoleAssistant, Content: "recent answer"},
+		{Role: message.RoleUser, Content: "latest request"},
+	}
+	modelClient := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{
+		{Delta: "## Goal\nMigrate parser while preserving API names."},
+		{Done: true},
+	}}}}
+	runner := NewRunner(modelClient, &fakeUI{}, tool.NewRegistry(), nil, "manual-usage")
+	runner.setHistory(original)
+	runner.usage = model.Usage{TotalTokens: 9000, PromptCacheHitTokens: 4000}
+	runner.usageKnown = true
+
+	if _, err := runner.CompactContext(context.Background(), ""); err != nil {
+		t.Fatalf("CompactContext() error = %v", err)
+	}
+
+	compacted := runner.currentHistory()
+	want := estimateMessageTokens(append([]message.Message{
+		buildSystemMessage(runner.buildSystemPrompt()),
+	}, compacted...))
+	stats := runner.ContextStats(100000, "")
+	if stats.UsedTokens != want || stats.CacheTokens != 0 {
+		t.Fatalf("ContextStats() = %#v, want compacted usage %d/cache 0", stats, want)
+	}
+	if stats.UsedTokens >= 9000 {
+		t.Fatalf("UsedTokens = %d, want lower than pre-compaction usage", stats.UsedTokens)
+	}
+}
+
 func TestCompactContextUsesFocusAndOnlyRewritesProjection(t *testing.T) {
 	store, err := session.NewJSONLStore(t.TempDir())
 	if err != nil {

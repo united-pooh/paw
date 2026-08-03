@@ -132,6 +132,7 @@ func (runner *Runner) CompactContext(ctx context.Context, focus string) (Context
 		return ContextCompactionResult{BeforeMessages: len(history), AfterMessages: len(history)}, nil
 	}
 	runner.setHistory(compacted)
+	runner.syncContextUsageFromHistory(compacted)
 	return *result, nil
 }
 

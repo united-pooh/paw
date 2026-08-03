@@ -211,7 +211,7 @@ func TestStreamMessageEmitsAnthropicToolCallInputFromStartBlock(t *testing.T) {
 	}
 }
 
-func TestStreamMessageEmitsAnthropicToolCallInputFromStringStartBlock(t *testing.T) {
+func TestStreamMessageRejectsAnthropicToolCallInputFromStringStartBlock(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() { _ = r.Body.Close() }()
 		if r.URL.Path != "/v1/messages" {
@@ -223,8 +223,6 @@ func TestStreamMessageEmitsAnthropicToolCallInputFromStringStartBlock(t *testing
 		_, _ = fmt.Fprint(w, "data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_read\",\"name\":\"Read\",\"input\":\"{\\\"file_path\\\":\\\"go.mod\\\"}\"}}\n\n")
 		_, _ = fmt.Fprint(w, "event: content_block_stop\n")
 		_, _ = fmt.Fprint(w, "data: {\"type\":\"content_block_stop\"}\n\n")
-		_, _ = fmt.Fprint(w, "event: message_stop\n")
-		_, _ = fmt.Fprint(w, "data: {\"type\":\"message_stop\"}\n\n")
 	}))
 	defer server.Close()
 
@@ -244,15 +242,17 @@ func TestStreamMessageEmitsAnthropicToolCallInputFromStringStartBlock(t *testing
 		t.Fatalf("StreamMessage() error = %v", err)
 	}
 
-	var calls []message.ToolCall
+	var gotErr error
 	for ev := range events {
-		if ev.Err != nil {
-			t.Fatalf("stream error = %v", ev.Err)
+		if len(ev.ToolCalls) != 0 {
+			t.Fatalf("nested-string input emitted tool calls: %#v", ev.ToolCalls)
 		}
-		calls = append(calls, ev.ToolCalls...)
+		if ev.Err != nil {
+			gotErr = ev.Err
+		}
 	}
-	if len(calls) != 1 || string(calls[0].Input) != `{"file_path":"go.mod"}` {
-		t.Fatalf("tool calls = %#v, want string start-block input normalized", calls)
+	if gotErr == nil || !strings.Contains(gotErr.Error(), "invalid JSON object arguments") {
+		t.Fatalf("error = %v, want invalid arguments error", gotErr)
 	}
 }
 
@@ -923,5 +923,65 @@ func TestAnthropicExtraBodyRejectsProtectedFields(t *testing.T) {
 				t.Fatalf("ApplyModelConfig() error = %v, want protected-field error for %s", err, field)
 			}
 		})
+	}
+}
+
+func TestStreamMessageRejectsInvalidChatCompletionsArguments(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_bad","type":"function","function":{"name":"Read","arguments":"{\"file_path\":"}}]},"finish_reason":null}]}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Provider: "openai-gateway", Transport: "openai-compatible", APIBaseURL: server.URL,
+		APIPath: "/chat/completions", Model: "openai-model", Timeout: time.Second,
+	})
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "inspect"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+	var sawCalls, sawDone bool
+	var gotErr error
+	for event := range events {
+		sawCalls = sawCalls || len(event.ToolCalls) != 0
+		sawDone = sawDone || event.Done
+		if event.Err != nil {
+			gotErr = event.Err
+		}
+	}
+	if sawCalls {
+		t.Fatal("invalid Chat Completions arguments emitted ToolCalls")
+	}
+	if sawDone {
+		t.Fatal("invalid Chat Completions arguments emitted Done")
+	}
+	if gotErr == nil || !strings.Contains(gotErr.Error(), "invalid JSON object arguments") {
+		t.Fatalf("error = %v, want invalid arguments error", gotErr)
+	}
+}
+
+func TestNonStreamingMessageRejectsInvalidChatCompletionsArguments(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"tool_calls":[{"id":"call_bad","function":{"name":"Read","arguments":"[]"}}]}}]}`)
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Provider: "openai-gateway", Transport: "openai-compatible", APIBaseURL: server.URL,
+		APIPath: "/chat/completions", Model: "openai-model", Stream: false, streamSet: true, Timeout: time.Second,
+	})
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "inspect"}}, nil)
+	if err == nil {
+		for range events {
+		}
+		t.Fatal("StreamMessage() accepted invalid non-streaming Chat Completions arguments")
+	}
+	if !strings.Contains(err.Error(), "invalid JSON object arguments") {
+		t.Fatalf("error = %v, want invalid arguments error", err)
 	}
 }

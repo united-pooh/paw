@@ -19,12 +19,13 @@ import (
 // 2) Done=true：流结束
 // 3) Err 非空：流中出现错误
 type StreamEvent struct {
-	Delta     string
-	Thinking  string
-	ToolCalls []message.ToolCall
-	Done      bool
-	Err       error
-	Usage     *Usage
+	Delta        string
+	Thinking     string
+	ToolCalls    []message.ToolCall
+	ProviderData json.RawMessage
+	Done         bool
+	Err          error
+	Usage        *Usage
 }
 
 // chatCompletionsStreamResponse 只建模流式响应里当前需要的字段。
@@ -67,6 +68,12 @@ func (c *Client) StreamMessage(ctx context.Context, messages []message.Message, 
 	}
 
 	cfg := c.CurrentModelConfig()
+	if shouldUseResponsesAPI(cfg) {
+		if !cfg.Stream {
+			return c.nonStreamingResponsesMessage(ctx, cfg, messages, tools)
+		}
+		return c.streamResponsesMessage(ctx, cfg, messages, tools)
+	}
 	if !cfg.Stream {
 		return c.nonStreamingOpenAIMessage(ctx, cfg, messages, tools)
 	}
@@ -165,9 +172,10 @@ func (c *Client) nonStreamingOpenAIMessage(ctx context.Context, cfg Config, mess
 	if len(choice.ToolCalls) > 0 {
 		calls := make([]message.ToolCall, 0, len(choice.ToolCalls))
 		for _, call := range choice.ToolCalls {
-			input := json.RawMessage(`{}`)
-			if strings.TrimSpace(call.Function.Arguments) != "" && json.Valid([]byte(call.Function.Arguments)) {
-				input = json.RawMessage(call.Function.Arguments)
+			input, err := decodeToolArguments("Chat Completions", call.ID, call.Function.Name, []byte(call.Function.Arguments))
+			if err != nil {
+				close(events)
+				return nil, err
 			}
 			calls = append(calls, message.ToolCall{ID: call.ID, Name: call.Function.Name, Input: input})
 		}
@@ -337,7 +345,7 @@ type activeOpenAIToolCall struct {
 	args strings.Builder
 }
 
-func openAIToolCallsFromAccumulated(accumulated map[int]*activeOpenAIToolCall) []message.ToolCall {
+func openAIToolCallsFromAccumulated(accumulated map[int]*activeOpenAIToolCall) ([]message.ToolCall, error) {
 	calls := make([]message.ToolCall, 0, len(accumulated))
 	indexes := make([]int, 0, len(accumulated))
 	for index := range accumulated {
@@ -349,10 +357,9 @@ func openAIToolCallsFromAccumulated(accumulated map[int]*activeOpenAIToolCall) [
 		if call == nil || call.name == "" {
 			continue
 		}
-		args := call.args.String()
-		input := json.RawMessage(`{}`)
-		if len(args) > 0 && json.Valid([]byte(args)) {
-			input = json.RawMessage(args)
+		input, err := decodeToolArguments("Chat Completions", call.id, call.name, []byte(call.args.String()))
+		if err != nil {
+			return nil, err
 		}
 		calls = append(calls, message.ToolCall{
 			ID:    call.id,
@@ -360,7 +367,7 @@ func openAIToolCallsFromAccumulated(accumulated map[int]*activeOpenAIToolCall) [
 			Input: input,
 		})
 	}
-	return calls
+	return calls, nil
 }
 
 // consumeStream 负责把 SSE 文本行转换为 StreamEvent，并累积原生 tool_calls。
@@ -433,7 +440,12 @@ func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events 
 		// finish_reason：先 flush 工具调用，再发 Done
 		finishReason := chunk.Choices[0].FinishReason
 		if finishReason != nil && *finishReason != "" {
-			if calls := openAIToolCallsFromAccumulated(accumulated); len(calls) > 0 {
+			calls, err := openAIToolCallsFromAccumulated(accumulated)
+			if err != nil {
+				_ = emitStreamEvent(ctx, events, StreamEvent{Err: err})
+				return
+			}
+			if len(calls) > 0 {
 				if !emitStreamEvent(ctx, events, StreamEvent{ToolCalls: calls}) {
 					return
 				}
@@ -448,8 +460,13 @@ func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events 
 		return
 	}
 
-	// EOF 前未收到 finish_reason：flush 积累的工具调用后发 Done
-	if calls := openAIToolCallsFromAccumulated(accumulated); len(calls) > 0 {
+	// EOF 前未收到 finish_reason：仅在所有积累参数有效时发出工具调用。
+	calls, err := openAIToolCallsFromAccumulated(accumulated)
+	if err != nil {
+		_ = emitStreamEvent(ctx, events, StreamEvent{Err: err})
+		return
+	}
+	if len(calls) > 0 {
 		if !emitStreamEvent(ctx, events, StreamEvent{ToolCalls: calls}) {
 			return
 		}

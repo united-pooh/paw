@@ -1,0 +1,170 @@
+package model
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"paw/internal/message"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestStreamMessageRejectsInvalidAnthropicArguments(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, `data: {"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_bad","name":"Read","input":{}}}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"file_path\":"}}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"content_block_stop"}`+"\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Provider: "anthropic-gateway", Transport: "anthropic-compatible", APIBaseURL: server.URL,
+		APIPath: "/v1/messages", Model: "anthropic-model", Timeout: time.Second,
+	})
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "read"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+	var sawCalls, sawDone bool
+	var gotErr error
+	for event := range events {
+		sawCalls = sawCalls || len(event.ToolCalls) != 0
+		sawDone = sawDone || event.Done
+		if event.Err != nil {
+			gotErr = event.Err
+		}
+	}
+	if sawCalls {
+		t.Fatal("invalid Anthropic arguments emitted ToolCalls")
+	}
+	if sawDone {
+		t.Fatal("invalid Anthropic arguments emitted Done")
+	}
+	if gotErr == nil || !strings.Contains(gotErr.Error(), "invalid JSON object arguments") {
+		t.Fatalf("error = %v, want invalid arguments error", gotErr)
+	}
+}
+
+func TestStreamMessageAnthropicRejectsWholeBatchWhenAnyCallInvalid(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		w.Header().Set("Content-Type", "text/event-stream")
+		// 第一个工具调用合法
+		_, _ = fmt.Fprint(w, `data: {"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_ok","name":"Read","input":{}}}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"file_path\":\"go.mod\"}"}}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"content_block_stop"}`+"\n\n")
+		// 第二个工具调用非法（截断的 JSON）
+		_, _ = fmt.Fprint(w, `data: {"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_bad","name":"LS","input":{}}}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"content_block_stop"}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"message_stop"}`+"\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Provider: "anthropic-gateway", Transport: "anthropic-compatible", APIBaseURL: server.URL,
+		APIPath: "/v1/messages", Model: "anthropic-model", Timeout: time.Second,
+	})
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "read"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+	var sawCalls, sawDone bool
+	var gotErr error
+	for event := range events {
+		sawCalls = sawCalls || len(event.ToolCalls) != 0
+		sawDone = sawDone || event.Done
+		if event.Err != nil {
+			gotErr = event.Err
+		}
+	}
+	if sawCalls {
+		t.Fatal("mixed batch emitted ToolCalls for earlier valid call; want whole batch rejected")
+	}
+	if sawDone {
+		t.Fatal("mixed batch emitted Done; want error only")
+	}
+	if gotErr == nil || !strings.Contains(gotErr.Error(), "invalid JSON object arguments") {
+		t.Fatalf("error = %v, want invalid arguments error", gotErr)
+	}
+}
+
+func TestStreamMessageAnthropicEmitsWholeBatchAtMessageStop(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, `data: {"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_1","name":"Read","input":{}}}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"file_path\":\"a.go\"}"}}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"content_block_stop"}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_2","name":"LS","input":{}}}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"path\":\"src\"}"}}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"content_block_stop"}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"message_stop"}`+"\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Provider: "anthropic-gateway", Transport: "anthropic-compatible", APIBaseURL: server.URL,
+		APIPath: "/v1/messages", Model: "anthropic-model", Timeout: time.Second,
+	})
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "read"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+	var calls []message.ToolCall
+	var sawDone bool
+	for event := range events {
+		if event.Err != nil {
+			t.Fatalf("stream error = %v", event.Err)
+		}
+		calls = append(calls, event.ToolCalls...)
+		sawDone = sawDone || event.Done
+	}
+	if len(calls) != 2 {
+		t.Fatalf("tool calls = %#v, want both in one batch", calls)
+	}
+	if calls[0].ID != "toolu_1" || calls[0].Name != "Read" || string(calls[0].Input) != `{"file_path":"a.go"}` {
+		t.Fatalf("first call = %#v", calls[0])
+	}
+	if calls[1].ID != "toolu_2" || calls[1].Name != "LS" || string(calls[1].Input) != `{"path":"src"}` {
+		t.Fatalf("second call = %#v", calls[1])
+	}
+	if !sawDone {
+		t.Fatal("no Done emitted")
+	}
+}
+
+func TestStreamMessageRejectsNestedStringAnthropicArguments(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, `data: {"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_bad","name":"Read","input":"{\"file_path\":\"go.mod\"}"}}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"content_block_stop"}`+"\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Provider: "anthropic-gateway", Transport: "anthropic-compatible", APIBaseURL: server.URL,
+		APIPath: "/v1/messages", Model: "anthropic-model", Timeout: time.Second,
+	})
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "read"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+	var gotErr error
+	for event := range events {
+		if len(event.ToolCalls) != 0 {
+			t.Fatal("nested-string Anthropic arguments emitted ToolCalls")
+		}
+		if event.Err != nil {
+			gotErr = event.Err
+		}
+	}
+	if gotErr == nil {
+		t.Fatal("nested-string Anthropic arguments did not produce an error")
+	}
+}
