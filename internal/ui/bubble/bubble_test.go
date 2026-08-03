@@ -883,9 +883,11 @@ func TestRunningModelQueuesPlainText(t *testing.T) {
 	if len(runner.supplements) != 0 {
 		t.Fatalf("runner.supplements = %#v, want none", runner.supplements)
 	}
-	last := model.transcript[len(model.transcript)-2]
-	if last.title != "you (queued)" || last.body != "queued plain text" {
-		t.Fatalf("queued transcript = %#v", last)
+	if len(model.transcript) != 1 {
+		t.Fatalf("transcript len = %d, want 1 while queued input is pending: %#v", len(model.transcript), model.transcript)
+	}
+	if got := model.transcript[0]; got.kind != entryUser || got.body != "first" {
+		t.Fatalf("active turn transcript = %#v", got)
 	}
 	if got := model.input.Value(); got != "" {
 		t.Fatalf("input value = %q, want cleared", got)
@@ -917,9 +919,11 @@ func TestRunningModelEnterSubmitsSupplement(t *testing.T) {
 	if got := runner.supplements; len(got) != 0 {
 		t.Fatalf("runner.supplements = %#v, want no implicit supplement", got)
 	}
-	last := model.transcript[len(model.transcript)-2]
-	if last.title != "you (queued)" || last.body != "supplement this turn" {
-		t.Fatalf("last transcript = %#v", last)
+	if len(model.transcript) != 1 {
+		t.Fatalf("transcript len = %d, want 1 while queued input is pending: %#v", len(model.transcript), model.transcript)
+	}
+	if got := model.transcript[0]; got.kind != entryUser || got.body != "first" {
+		t.Fatalf("active turn transcript = %#v", got)
 	}
 	if got := model.input.Value(); got != "" {
 		t.Fatalf("input value = %q, want cleared", got)
@@ -2331,9 +2335,17 @@ func TestSyncSubagentCompletionStartsQueuedTurn(t *testing.T) {
 	if followCmd == nil {
 		t.Fatalf("sync subagent completion should start queued turn")
 	}
-	last := model.transcript[len(model.transcript)-1]
-	if last.title != "agent-7" || !strings.Contains(last.body, "done  depth 0") || !strings.Contains(last.body, "/tmp/agent-7.jsonl") {
-		t.Fatalf("subagent transcript = %#v", last)
+	var subagentEntry transcriptEntry
+	foundSubagent := false
+	for _, entry := range model.transcript {
+		if entry.title == "agent-7" {
+			subagentEntry = entry
+			foundSubagent = true
+			break
+		}
+	}
+	if !foundSubagent || !strings.Contains(subagentEntry.body, "done  depth 0") || !strings.Contains(subagentEntry.body, "/tmp/agent-7.jsonl") {
+		t.Fatalf("subagent transcript = %#v", model.transcript)
 	}
 
 	finished, ok := followCmd().(turnFinishedMsg)

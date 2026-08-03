@@ -1,203 +1,68 @@
 package tokentracer
 
 const dashboardHTML = `<!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Tracer</title>
+<title>令牌追踪</title>
 <style>
 :root {
-  --bg: #0b0f14;
-  --surface: #111820;
-  --surface-2: #151e28;
-  --surface-3: #1a2430;
-  --line: #26323f;
-  --line-strong: #3b4b5b;
-  --text: #e6edf3;
-  --muted: #99a7b6;
-  --soft: #667486;
-  --accent: #56d6be;
-  --input: #6ea8fe;
-  --cache: #45c7de;
-  --create: #d6a85f;
-  --output: #ef7f64;
-  --live: #56d6be;
-  --done: #8ea0b5;
-  --failed: #ff6b6b;
+  --bg:#f1eee6; --surface:#fbfaf5; --surface-2:#ece8de; --surface-3:#e4dfd3;
+  --line:#c9c3b7; --line-strong:#a9a297; --text:#202522; --muted:#737970; --soft:#92978e;
+  --accent:#2f7d70; --input:#708bb0; --cache:#5f958d; --create:#bf9452; --output:#ad6e57;
+  --live:#2f7d70; --done:#777f87; --failed:#c65349; --tool:#75618b;
 }
-* { box-sizing: border-box; }
-body {
-  margin: 0;
-  min-width: 1040px;
-  background: var(--bg);
-  color: var(--text);
-  font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 18px;
-  padding: 16px 22px 12px;
-  border-bottom: 1px solid var(--line);
-  background: #0d1218;
-}
-.brand { min-width: 0; display: flex; gap: 10px; align-items: center; }
-.mark {
-  width: 34px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid #347b70; background: #102520; color: var(--accent); font-weight: 900;
-}
-.title { font-size: 16px; font-weight: 900; }
-.pipe { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.status { display: flex; align-items: center; gap: 8px; justify-content: flex-end; color: var(--accent); }
-.status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 5px rgba(86,214,190,.12); }
-.status.failed { color: var(--failed); }
-.status.failed .status-dot { background: var(--failed); box-shadow: 0 0 0 5px rgba(255,107,107,.12); }
-.status.completed { color: var(--done); }
-.status.completed .status-dot { background: var(--done); box-shadow: 0 0 0 5px rgba(142,160,181,.12); }
-main { padding: 16px 22px 26px; }
-.summary {
-  display: grid;
-  grid-template-columns: 1.2fr repeat(5, minmax(110px, .5fr));
-  border: 1px solid var(--line);
-  background: var(--surface);
-}
-.stat { min-width: 0; padding: 11px 13px; border-right: 1px solid var(--line); }
-.stat:last-child { border-right: 0; }
-.k { color: var(--muted); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
-.v { margin-top: 7px; font-size: 20px; line-height: 1.1; font-weight: 900; overflow-wrap: anywhere; }
-.error-strip {
-  margin-top: 12px; padding: 9px 12px; border: 1px solid rgba(255,107,107,.34);
-  background: rgba(255,107,107,.08); color: #ffb4b4; display: none;
-}
-.layout { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 18px; margin-top: 18px; }
-.section-title { margin: 0 0 9px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; }
-.panel { border: 1px solid var(--line); background: var(--surface); min-width: 0; }
-.timeline-panel { overflow: hidden; }
-.time-axis {
-  display: grid; grid-template-columns: 216px minmax(0, 1fr);
-  border-bottom: 1px solid var(--line); background: var(--surface-2);
-}
-.axis-label { padding: 9px 12px; color: var(--muted); border-right: 1px solid var(--line); }
-.axis-track { position: relative; min-height: 34px; }
-.tick { position: absolute; top: 0; bottom: 0; width: 1px; background: #2a3947; }
-.tick span { position: absolute; top: 9px; left: 6px; color: var(--soft); white-space: nowrap; }
-.timeline-rows { max-height: 520px; overflow: auto; }
-.timeline-row {
-  display: grid; grid-template-columns: 216px minmax(0, 1fr);
-  min-height: 58px; border-bottom: 1px solid #202a35;
-}
-.timeline-row:last-child { border-bottom: 0; }
-.timeline-row.selected { background: rgba(86,214,190,.055); }
-.row-label {
-  padding: 9px 10px; border-right: 1px solid var(--line); overflow: hidden;
-}
-.row-kind { color: var(--soft); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
-.row-name { margin-top: 4px; font-size: 12px; font-weight: 900; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.row-meta { margin-top: 4px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.row-track {
-  position: relative; min-height: 58px; background:
-    linear-gradient(90deg, transparent calc(20% - 1px), rgba(255,255,255,.035) calc(20% - 1px), rgba(255,255,255,.035) 20%, transparent 20%),
-    linear-gradient(90deg, transparent calc(40% - 1px), rgba(255,255,255,.035) calc(40% - 1px), rgba(255,255,255,.035) 40%, transparent 40%),
-    linear-gradient(90deg, transparent calc(60% - 1px), rgba(255,255,255,.035) calc(60% - 1px), rgba(255,255,255,.035) 60%, transparent 60%),
-    linear-gradient(90deg, transparent calc(80% - 1px), rgba(255,255,255,.035) calc(80% - 1px), rgba(255,255,255,.035) 80%, transparent 80%);
-}
-.gantt-bar {
-  position: absolute; top: 13px; height: 28px; min-width: 4px;
-  border: 1px solid var(--line-strong); background: #1d2935; overflow: hidden; cursor: pointer;
-  box-shadow: 0 8px 22px rgba(0,0,0,.2);
-}
-.gantt-bar.stage { height: 20px; top: 18px; background: #202c38; border-color: #435468; }
-.gantt-bar.live { border-color: var(--live); box-shadow: 0 0 0 1px rgba(86,214,190,.18), 0 8px 22px rgba(0,0,0,.2); }
-.gantt-bar.failed { border-color: var(--failed); background: #2b1b20; }
-.bar-fill { position: absolute; inset: 0; opacity: .72; }
-.token-stack { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; display: flex; opacity: .82; }
-.token-seg.input { background: var(--input); }
-.token-seg.cache { background: var(--cache); }
-.token-seg.create { background: var(--create); }
-.token-seg.output { background: var(--output); }
-.bar-text {
-  position: absolute; left: 8px; right: 8px; top: 5px; color: #fff; font-weight: 900;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-shadow: 0 1px 4px #000;
-}
-.marker {
-  position: absolute; top: 8px; width: 2px; height: 42px; background: var(--soft); opacity: .85;
-}
-.marker.api_call { top: 16px; height: 22px; background: rgba(230,237,243,.45); }
-.marker.step { top: 11px; width: 7px; height: 7px; transform: rotate(45deg); background: var(--create); }
-.marker.failure { top: 7px; width: 9px; height: 42px; background: var(--failed); opacity: 1; }
-.marker.start { background: var(--live); }
-.marker.end { background: var(--done); }
-.bottom-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(300px, .8fr); gap: 18px; margin-top: 18px; }
-.dist { padding: 12px; }
-.dist-row { display: grid; grid-template-columns: 132px minmax(0, 1fr) 64px; gap: 10px; align-items: center; margin: 9px 0; }
-.dist-name { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dist-bar { height: 22px; border: 1px solid #25313d; background: #0d1218; display: flex; overflow: hidden; }
-.dist-value { text-align: right; color: var(--text); font-weight: 800; }
-.legend { display: flex; gap: 13px; flex-wrap: wrap; padding-top: 10px; color: var(--muted); }
-.swatch { display: inline-block; width: 10px; height: 10px; margin-right: 5px; vertical-align: -1px; }
-.inspector { padding: 12px; min-height: 247px; }
-.inspector h3 { margin: 0; font-size: 14px; }
-.kv { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 6px 10px; margin-top: 12px; }
-.kv div:nth-child(odd) { color: var(--muted); }
-.kv div:nth-child(even) { overflow-wrap: anywhere; }
-.event-list { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; color: var(--muted); }
-.event-item { padding: 4px 0; overflow-wrap: anywhere; }
-.event-item.error { color: var(--failed); }
-.event-note { padding-top: 6px; color: var(--soft); font-size: 11px; }
-.live-pulse { animation: pulse 1.3s ease-in-out infinite; }
-@keyframes pulse { 0%,100% { opacity: .82; } 50% { opacity: 1; } }
-@media (max-width: 980px) {
-  body { min-width: 0; }
-  header, .layout, .bottom-grid { grid-template-columns: 1fr; }
-  .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .stat { border-bottom: 1px solid var(--line); }
-  .time-axis, .timeline-row { grid-template-columns: 170px minmax(600px, 1fr); }
-}
+* { box-sizing:border-box; }
+body { margin:0; min-width:0; background:var(--bg); color:var(--text); font:12px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+header { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:18px; padding:13px 22px 10px; border-bottom:1px solid var(--line); background:linear-gradient(180deg,#f7f5ef,#efebe2); }
+.brand { min-width:0; display:flex; gap:9px; align-items:center; }.mark { width:31px;height:25px;display:inline-flex;align-items:center;justify-content:center;border:1px solid #78a69c;border-radius:6px;background:#e0eee8;color:var(--accent);font-weight:900;box-shadow:inset 0 1px #fff8; }.title{font-size:14px;font-weight:900;letter-spacing:.02em}.pipe{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.status{display:flex;align-items:center;gap:8px;justify-content:flex-end;color:var(--accent);text-transform:uppercase;font-size:10px;letter-spacing:.08em}.status-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px #2f7d7022}.status.failed{color:var(--failed)}.status.failed .status-dot{background:var(--failed);box-shadow:0 0 0 4px #c6534922}.status.completed{color:var(--done)}.status.completed .status-dot{background:var(--done);box-shadow:0 0 0 4px #777f8722}
+main{padding:13px 22px 22px}.summary{display:grid;grid-template-columns:1.15fr repeat(5,minmax(100px,.5fr));border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 5px 14px #504a3d12;overflow:hidden}.stat{min-width:0;padding:9px 12px;border-right:1px solid var(--line)}.stat:last-child{border-right:0}.k{color:var(--muted);font-size:9px;letter-spacing:.08em;text-transform:uppercase}.v{margin-top:5px;font-size:19px;line-height:1.05;font-weight:900;overflow-wrap:anywhere}.error-strip{margin-top:9px;padding:8px 11px;border:1px solid #c6534959;border-radius:6px;background:#f4dcd7;color:#8e3831;display:none}.layout{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:13px;margin-top:13px}.section-title{margin:0 0 6px;color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.12em}.panel{border:1px solid var(--line);border-radius:8px;background:var(--surface);min-width:0;box-shadow:0 6px 16px #504a3d0e;overflow:hidden}.timeline-panel{background:#24302b;border-color:#819087}.time-axis{display:grid;grid-template-columns:176px minmax(0,1fr);border-bottom:1px solid #435149;background:#2c3933}.axis-label{padding:7px 9px;color:#b5c0b6;border-right:1px solid #435149;font-size:9px}.axis-track{position:relative;min-height:27px}.tick{position:absolute;top:0;bottom:0;width:1px;background:#82908733}.tick span{position:absolute;top:7px;left:5px;color:#a3afa4;white-space:nowrap;font-size:8px}.timeline-rows{max-height:520px;overflow:auto}.timeline-row{display:grid;grid-template-columns:176px minmax(0,1fr);height:29px;border-bottom:1px solid #3a4841}.timeline-row:last-child{border-bottom:0}.timeline-row.selected{background:#f0c77814}.row-label{padding:6px 8px 0;border-right:1px solid #435149;overflow:hidden;color:#bdc8be}.row-kind{display:inline;color:#8d9b90;font-size:8px;text-transform:uppercase;letter-spacing:.05em}.row-name{display:inline;margin-left:5px;font-size:10px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.row-meta{display:none}.row-track{position:relative;min-height:29px;background:repeating-linear-gradient(90deg,transparent 0,transparent calc(10% - 1px),#82908718 calc(10% - 1px),#82908718 10%)}
+.gantt-bar{position:absolute;top:3px;height:22px;min-width:4px;border:1px solid #9aa99e;border-radius:4px;background:linear-gradient(180deg,#607b99,#506b8b);overflow:hidden;cursor:pointer;box-shadow:0 2px 5px #10151166,inset 0 1px #fff3}.gantt-bar.stage{top:4px;height:20px;background:linear-gradient(180deg,#548279,#416f67);border-color:#91bdb2}.gantt-bar.live{border-color:#e0bd68;box-shadow:0 0 0 2px #e0bd6830,0 2px 6px #10151188,inset 0 1px #fff3}.gantt-bar.failed{border-color:#e18478;background:linear-gradient(180deg,#a85a50,#873f3a)}.bar-fill{position:absolute;inset:0;opacity:.18;background:#fff}.token-stack{position:absolute;left:0;right:0;bottom:0;height:3px;display:flex;opacity:.9}.token-seg.input{background:var(--input)}.token-seg.cache{background:var(--cache)}.token-seg.create{background:var(--create)}.token-seg.output{background:var(--output)}.bar-text{position:absolute;left:7px;right:7px;top:4px;color:#fff;font-weight:900;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-shadow:0 1px 3px #183026}.marker{position:absolute;top:4px;width:1px;height:21px;background:#9aa99e;opacity:.8}.marker.api_call{background:#b6c2b8}.marker.step{top:9px;width:7px;height:7px;transform:rotate(45deg);background:#d2a356}.marker.failure{top:3px;width:3px;height:23px;background:#e18478;opacity:1}.marker.start{background:#86c6b2}.marker.end{background:#aab4b4}.bottom-grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(280px,.8fr);gap:13px;margin-top:13px}.dist{padding:10px}.dist-row{display:grid;grid-template-columns:110px minmax(0,1fr) 57px;gap:8px;align-items:center;margin:7px 0}.dist-name{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dist-bar{height:19px;border:1px solid var(--line);border-radius:4px;background:#e8e4da;display:flex;overflow:hidden}.dist-value{text-align:right;color:var(--text);font-weight:800}.legend{display:flex;gap:11px;flex-wrap:wrap;padding-top:8px;color:var(--muted);font-size:9px}.swatch{display:inline-block;width:9px;height:9px;margin-right:4px;vertical-align:-1px;border-radius:3px}.inspector{padding:10px;min-height:220px}.inspector h3{margin:0;font-size:13px}.kv{display:grid;grid-template-columns:74px minmax(0,1fr);gap:5px 8px;margin-top:10px}.kv div:nth-child(odd){color:var(--muted)}.kv div:nth-child(even){overflow-wrap:anywhere}.event-list{margin-top:10px;border-top:1px solid var(--line);padding-top:7px;color:var(--muted)}.event-item{padding:3px 0;overflow-wrap:anywhere}.event-item.error{color:var(--failed)}.event-note{padding-top:5px;color:var(--soft);font-size:10px}.live-pulse{animation:pulse 1.3s ease-in-out infinite}@keyframes pulse{0%,100%{opacity:.82}50%{opacity:1}}@media(max-width:980px){body{min-width:0}header,.layout,.bottom-grid{grid-template-columns:1fr}.summary{grid-template-columns:repeat(2,minmax(0,1fr))}.stat{border-bottom:1px solid var(--line)}.time-axis,.timeline-row{grid-template-columns:145px minmax(520px,1fr)}}
 </style>
 </head>
 <body>
 <header>
   <div class="brand">
     <span class="mark">TT</span>
-    <span class="title">Token Tracer</span>
+    <span class="title">令牌追踪</span>
     <span class="pipe" id="pipeline-name">Paw</span>
   </div>
-  <div class="status"><span class="status-dot"></span><span id="status-text">live</span></div>
+  <div class="status"><span class="status-dot"></span><span id="status-text">实时</span></div>
 </header>
 <main>
   <section class="summary">
-    <div class="stat"><div class="k">Run Window</div><div class="v" id="duration">0s</div></div>
-    <div class="stat"><div class="k">Calls</div><div class="v" id="calls">0</div></div>
-    <div class="stat"><div class="k">Context</div><div class="v" id="context">0</div></div>
-    <div class="stat"><div class="k">Cache Hit</div><div class="v" id="cache-hit">0%</div></div>
-    <div class="stat"><div class="k">Output</div><div class="v" id="output">0</div></div>
-    <div class="stat"><div class="k">Parallel</div><div class="v" id="parallel">0x</div></div>
+    <div class="stat"><div class="k">运行时长</div><div class="v" id="duration">0s</div></div>
+    <div class="stat"><div class="k">调用次数</div><div class="v" id="calls">0</div></div>
+    <div class="stat"><div class="k">上下文</div><div class="v" id="context">0</div></div>
+    <div class="stat"><div class="k">缓存命中</div><div class="v" id="cache-hit">0%</div></div>
+    <div class="stat"><div class="k">输出令牌</div><div class="v" id="output">0</div></div>
+    <div class="stat"><div class="k">并行度</div><div class="v" id="parallel">0x</div></div>
   </section>
   <div class="error-strip" id="error-strip"></div>
   <div class="layout">
     <section>
-      <h2 class="section-title">Execution Timeline</h2>
+      <h2 class="section-title">执行时间线</h2>
       <div class="panel timeline-panel">
         <div class="time-axis">
-          <div class="axis-label">stage / agent</div>
+          <div class="axis-label">阶段 / 代理</div>
           <div class="axis-track" id="axis"></div>
         </div>
         <div class="timeline-rows" id="timeline"></div>
       </div>
     </section>
     <aside>
-      <h2 class="section-title">Inspector</h2>
+      <h2 class="section-title">检查器</h2>
       <div class="panel inspector" id="inspector"></div>
     </aside>
   </div>
   <div class="bottom-grid">
     <section>
-      <h2 class="section-title">Token Distribution</h2>
+      <h2 class="section-title">令牌分布</h2>
       <div class="panel dist" id="distribution"></div>
     </section>
     <section>
-      <h2 class="section-title">Recent Runtime Events</h2>
+      <h2 class="section-title">最近运行事件</h2>
       <div class="panel inspector" id="events"></div>
     </section>
   </div>
@@ -283,11 +148,11 @@ function renderSummary() {
   const parallel = Math.max(0, Number(tl.max_concurrency || 0));
   const parallelEl = document.getElementById('parallel');
   parallelEl.textContent = parallel + 'x';
-  parallelEl.title = parallel > 1 ? dur(tl.overlap_ms) + ' overlapped' : 'no agent overlap in this run';
+  parallelEl.title = parallel > 1 ? dur(tl.overlap_ms) + ' 重叠' : '本次运行没有代理重叠';
   const error = tl.error || '';
   const strip = document.getElementById('error-strip');
   strip.style.display = error ? 'block' : 'none';
-  strip.textContent = error ? 'Error: ' + error : '';
+  strip.textContent = error ? '错误: ' + error : '';
 }
 function renderAxis() {
   const b = timeBounds();
@@ -300,44 +165,42 @@ function renderAxis() {
   }
   axis.innerHTML = html;
 }
+function displayKind(kind) {
+  return ({agent:'代理', stage:'阶段', session:'会话', tool:'工具', model:'模型'})[kind] || kind || '事件';
+}
+function displayStatus(status) {
+  return ({live:'实时', running:'运行中', completed:'已完成', failed:'失败', pending:'等待中'})[status] || status || '未知';
+}
 function renderTimeline() {
   const rows = visibleTimelineRows();
-  if (selectedRowID && !rows.some(r => r.id === selectedRowID)) {
-    selectedRowID = '';
-  }
+  if (selectedRowID && !rows.some(r => r.id === selectedRowID)) selectedRowID = '';
   if (!selectedRowID && rows.length) {
     const failed = rows.find(r => r.status === 'failed' && r.kind === 'agent');
     selectedRowID = (failed || rows.find(r => r.kind === 'agent') || rows[0]).id;
   }
   const html = rows.map(row => {
-    const left = leftOf(row.start_time);
-    const width = widthOf(row);
+    const left = leftOf(row.start_time), width = widthOf(row);
     const markers = (row.markers || []).map(m => {
-      const l = leftOf(m.time);
-      return '<span class="marker ' + esc(m.type) + '" style="left:' + l + '%" title="' + esc(m.label + (m.detail ? ': ' + m.detail : '')) + '"></span>';
+      const label = m.label + (m.detail ? ': ' + m.detail : '');
+      return '<span class="marker ' + esc(m.type) + '" style="left:' + leftOf(m.time) + '%" title="' + esc(label) + '"></span>';
     }).join('');
     const status = row.status || 'live';
     const liveClass = status === 'live' ? ' live-pulse' : '';
-    const cache = cachePct(row.usage);
+    const indent = row.kind === 'agent' ? '　' : row.kind === 'stage' ? '' : '　　';
     return '<div class="timeline-row ' + (row.id === selectedRowID ? 'selected' : '') + '" data-row="' + esc(row.id) + '">' +
-      '<div class="row-label"><div class="row-kind">' + esc(row.kind) + ' · ' + esc(status) + '</div><div class="row-name">' + esc(row.display_name || row.name) + '</div><div class="row-meta">' + esc(row.session_id ? row.session_id.slice(0, 10) : row.stage_id || '') + ' · ' + dur(row.duration_ms) + ' · ' + fmt(row.token_grand_total) + ' tok · cache ' + pct(cache) + '</div></div>' +
-      '<div class="row-track">' + markers + '<button class="gantt-bar ' + esc(row.kind) + ' ' + esc(status) + liveClass + '" style="left:' + left + '%;width:' + width + '%" data-row="' + esc(row.id) + '" title="' + esc(row.name + ' · ' + status) + '">' +
-      '<span class="bar-fill"></span><span class="bar-text">' + esc(row.name) + ' · ' + fmt(row.token_grand_total) + '</span><span class="token-stack">' + tokenSegments(row.usage) + '</span></button></div></div>';
+      '<div class="row-label"><span class="row-kind">' + displayKind(row.kind) + ' · ' + displayStatus(status) + '</span><span class="row-name">' + indent + esc(row.display_name || row.name) + '</span></div>' +
+      '<div class="row-track">' + markers + '<button class="gantt-bar ' + esc(row.kind) + ' ' + esc(status) + liveClass + '" style="left:' + left + '%;width:' + width + '%" data-row="' + esc(row.id) + '" title="' + esc(row.name + ' · ' + displayStatus(status)) + '">' +
+      '<span class="bar-fill"></span><span class="bar-text">' + esc(row.display_name || row.name) + ' · ' + fmt(row.token_grand_total) + ' 令牌</span><span class="token-stack">' + tokenSegments(row.usage) + '</span></button></div></div>';
   }).join('');
-  document.getElementById('timeline').innerHTML = html || '<div class="timeline-row"><div class="row-label"><div class="row-name">waiting</div><div class="row-meta">no timeline rows yet</div></div><div class="row-track"></div></div>';
-  document.querySelectorAll('[data-row]').forEach(el => {
-    el.addEventListener('click', ev => {
-      selectedRowID = ev.currentTarget.getAttribute('data-row');
-      render();
-    });
-  });
+  document.getElementById('timeline').innerHTML = html || '<div class="timeline-row"><div class="row-label"><span class="row-name">等待数据</span></div><div class="row-track"></div></div>';
+  document.querySelectorAll('[data-row]').forEach(el => el.addEventListener('click', ev => { selectedRowID = ev.currentTarget.getAttribute('data-row'); render(); }));
 }
 function renderDistribution() {
   const rows = ((((state || {}).timeline || {}).rows || []).filter(r => r.kind === 'agent' && r.token_grand_total > 0)).sort((a,b) => b.token_grand_total - a.token_grand_total);
   const max = Math.max(1, ...rows.map(r => r.token_grand_total));
   let html = rows.map(row => '<div class="dist-row"><div class="dist-name">' + esc(row.name) + '</div><div class="dist-bar" style="width:' + clampPct(row.token_grand_total / max * 100) + '%">' + tokenSegments(row.usage) + '</div><div class="dist-value">' + pct(row.token_share) + '</div></div>').join('');
-  html += '<div class="legend"><span><span class="swatch" style="background:var(--input)"></span>input</span><span><span class="swatch" style="background:var(--cache)"></span>cache</span><span><span class="swatch" style="background:var(--create)"></span>create</span><span><span class="swatch" style="background:var(--output)"></span>output</span></div>';
-  document.getElementById('distribution').innerHTML = html || '<div class="dist-name">waiting for model usage</div>';
+  html += '<div class="legend"><span><span class="swatch" style="background:var(--input)"></span>输入</span><span><span class="swatch" style="background:var(--cache)"></span>缓存</span><span><span class="swatch" style="background:var(--create)"></span>创建</span><span><span class="swatch" style="background:var(--output)"></span>输出</span></div>';
+  document.getElementById('distribution').innerHTML = html || '<div class="dist-name">等待模型用量</div>';
 }
 function selectedRow() {
   const rows = visibleTimelineRows();
@@ -347,23 +210,23 @@ function renderInspector() {
   const row = selectedRow();
   const box = document.getElementById('inspector');
   if (!row) {
-    box.innerHTML = '<h3>No row selected</h3><div class="event-list">Timeline data will appear after the first trace event.</div>';
+    box.innerHTML = '<h3>未选择行</h3><div class="event-list">首个追踪事件出现后将显示时间线数据。</div>';
     return;
   }
   const u = row.usage || {};
   const markers = (row.markers || []).slice(-8).reverse().map(m => '<div class="event-item">' + esc(new Date(ms(m.time)).toLocaleTimeString()) + ' · ' + esc(m.label) + (m.detail ? ' · ' + esc(m.detail) : '') + '</div>').join('');
   box.innerHTML = '<h3>' + esc(row.display_name || row.name) + '</h3><div class="kv">' +
-    '<div>Status</div><div>' + esc(row.status) + '</div>' +
-    '<div>Stage</div><div>' + esc(row.stage_name || row.stage_id) + '</div>' +
-    '<div>Role</div><div>' + esc(row.role || row.kind) + '</div>' +
-    '<div>Session</div><div>' + esc(row.session_id || '-') + '</div>' +
-    '<div>Duration</div><div>' + dur(row.duration_ms) + '</div>' +
-    '<div>Tokens</div><div>' + fmt(row.token_grand_total) + ' · ' + pct(row.token_share) + '</div>' +
-    '<div>Input</div><div>' + fmt(u.input) + '</div>' +
-    '<div>Cache</div><div>' + fmt(u.cache_read) + '</div>' +
-    '<div>Output</div><div>' + fmt(u.output) + '</div>' +
-    (row.error ? '<div>Error</div><div>' + esc(row.error) + '</div>' : '') +
-    '</div><div class="event-list">' + (markers || 'no markers') + '</div>';
+    '<div>状态</div><div>' + esc(row.status) + '</div>' +
+    '<div>阶段</div><div>' + esc(row.stage_name || row.stage_id) + '</div>' +
+    '<div>角色</div><div>' + esc(row.role || row.kind) + '</div>' +
+    '<div>会话</div><div>' + esc(row.session_id || '-') + '</div>' +
+    '<div>耗时</div><div>' + dur(row.duration_ms) + '</div>' +
+    '<div>令牌</div><div>' + fmt(row.token_grand_total) + ' · ' + pct(row.token_share) + '</div>' +
+    '<div>输入</div><div>' + fmt(u.input) + '</div>' +
+    '<div>缓存</div><div>' + fmt(u.cache_read) + '</div>' +
+    '<div>输出令牌</div><div>' + fmt(u.output) + '</div>' +
+    (row.error ? '<div>错误</div><div>' + esc(row.error) + '</div>' : '') +
+    '</div><div class="event-list">' + (markers || '暂无标记') + '</div>';
 }
 function renderEvents() {
   const compact = compactEvents(events);
@@ -375,7 +238,7 @@ function renderEvents() {
     return '<div class="event-item' + cls + '">' + esc(new Date(ms(e.timestamp)).toLocaleTimeString()) + ' · ' + esc(label) + (detail ? ' · ' + esc(detail) : '') + '</div>';
   }).join('');
   const note = compact.hidden ? '<div class="event-note">' + compact.hidden + ' duplicate/cleanup events hidden</div>' : '';
-  document.getElementById('events').innerHTML = html ? html + note : '<div class="event-item">waiting for events</div>';
+  document.getElementById('events').innerHTML = html ? html + note : '<div class="event-item">等待事件</div>';
 }
 function eventDetail(event) {
   const d = (event && event.data) || {};
@@ -383,8 +246,8 @@ function eventDetail(event) {
 }
 function eventLabel(event) {
   if (!event) return '';
-  if (event.type === 'streamma.run.failed') return 'root cause';
-  if (event.type === 'subagent_task_end') return 'subagent finished';
+  if (event.type === 'streamma.run.failed') return '根因';
+  if (event.type === 'subagent_task_end') return '子代理完成';
   return event.type;
 }
 function isWeakError(detail) {
@@ -466,7 +329,7 @@ source.addEventListener('token_tracer', ev => {
   scheduleRefresh();
 });
 source.onerror = () => {
-  document.getElementById('status-text').textContent = 'reconnecting';
+  document.getElementById('status-text').textContent = '重新连接中';
 };
 </script>
 </body>

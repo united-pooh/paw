@@ -179,7 +179,13 @@ func (m *appModel) startNextQueuedTurn() tea.Cmd {
 	m.resetStreamingBuffers()
 	m.toolGroupExpanded = false
 	m.toolGroupFullResult = false
-	m.activeTurnUserEntry = m.latestTurnUserEntry(draft.Text)
+	m.addEntry(transcriptEntry{
+		kind:        entryUser,
+		title:       "you",
+		body:        strings.TrimSpace(draft.Text),
+		inputTokens: cloneInputTokens(draft.Tokens),
+	})
+	m.activeTurnUserEntry = len(m.transcript) - 1
 	m.turnStartedAt = time.Now()
 	m.turnID = newTurnID(m.turnStartedAt)
 	m.syncRunningFlags()

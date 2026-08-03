@@ -20,16 +20,17 @@ const (
 // tuiLayout 是由终端尺寸和输入高度唯一决定的纯布局结果。
 // frame 的尺寸只随 WindowSizeMsg 改变，内容更新只能改变内部区域。
 type tuiLayout struct {
-	frameWidth       int
-	frameHeight      int
-	contentWidth     int
-	contentHeight    int
-	headerHeight     int
-	transcriptHeight int
-	statusHeight     int
-	worktreeHeight   int
-	inputHeight      int
-	queueHeight      int
+	frameWidth        int
+	frameHeight       int
+	contentWidth      int
+	contentHeight     int
+	headerHeight      int
+	transcriptHeight  int
+	statusHeight      int
+	worktreeHeight    int
+	inputHeight       int
+	queueHeight       int
+	queueInlineHeight int
 }
 
 func computeTUILayout(width, height, requestedInputHeight int) tuiLayout {
@@ -95,6 +96,7 @@ func (m appModel) currentLayout() tuiLayout {
 	}
 	layout := computeTUILayoutWithInputLimit(m.width, m.height, requestedInputHeight, inputLimit)
 	layout.queueHeight = minInt(queueHeight, maxInt(0, layout.inputHeight-1))
+	layout.queueInlineHeight = m.queueInlineSummaryHeight()
 	return layout
 }
 
@@ -135,6 +137,9 @@ func (m appModel) View() string {
 
 	inner := fitStyledRect(strings.Join(parts, "\n"), layout.contentWidth, layout.contentHeight)
 	view := renderHairlineFrame(inner, layout.frameWidth, layout.frameHeight)
+	if layout.queueInlineHeight > 0 {
+		view = renderQueueInlineBottomBorder(view, layout.frameWidth, m.queuePanelContent(layout.frameWidth))
+	}
 	view = paintStyledBackground(view, layout.frameWidth, layout.frameHeight, m.styles.Frame, m.theme.Colors.TerminalBackground)
 	m.updateTerminalCursorAnchor(layout)
 	return view

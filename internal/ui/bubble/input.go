@@ -296,7 +296,7 @@ func (m appModel) startChatTurn(line string) (appModel, tea.Cmd) {
 	return m, tea.Batch(workCmd, frameCmd)
 }
 
-// queueChatInput records a chat input for FIFO execution after the active turn.
+// queueChatInput stores a chat input for FIFO execution after the active turn.
 func (m appModel) queueChatInput(line string) appModel {
 	line = strings.TrimSpace(line)
 	if line == "" {
@@ -307,14 +307,7 @@ func (m appModel) queueChatInput(line string) appModel {
 		draft = inputDraft{Text: line}
 	}
 	m.rememberInputHistory(line)
-	if _, ok := m.chatQueue.EnqueueDraft(draft); ok {
-		m.addEntry(m.userTranscriptEntry("you (queued)", line))
-		m.addEntry(transcriptEntry{
-			kind:  entrySystem,
-			title: "queued",
-			body:  "queued for next turn",
-		})
-	}
+	m.chatQueue.EnqueueDraft(draft)
 	return m
 }
 

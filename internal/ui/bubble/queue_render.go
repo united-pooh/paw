@@ -11,16 +11,25 @@ func (m appModel) queuePanelHeight() int {
 	if m.chatQueue.Len() == 0 && m.queueMode != queueModeEditing {
 		return 0
 	}
+	// The compact summary is rendered in the input dock's bottom rule. Only the
+	// interactive queue views need a separate panel below the input.
 	switch m.queueMode {
 	case queueModeSelecting:
 		items := m.chatQueue.Items()
 		// header + up to four rows + hint; keep the input usable on short terminals.
-		return minInt(queuePanelMaxHeight, 2+len(items))
+		return minInt(queuePanelMaxHeight, 1+2+len(items))
 	case queueModeEditing:
-		return 1
+		return 1 + 1
 	default:
-		return 1
+		return 0
 	}
+}
+
+func (m appModel) queueInlineSummaryHeight() int {
+	if m.selectionDock != nil || m.queueMode != queueModeInactive || m.chatQueue.Len() == 0 {
+		return 0
+	}
+	return 1
 }
 
 func (m appModel) queuePanelContent(width int) string {
@@ -48,11 +57,15 @@ func (m appModel) queuePanelContent(width int) string {
 			prefix := "  "
 			style := queueItemStyle
 			if i == selected {
-				prefix = "› "
+				// Render the selection marker and a full-width highlighted row. The
+				// previous implementation styled only the visible text, which made
+				// the active item easy to miss against the queue panel.
+				prefix = "▸ "
 				style = queueSelectedStyle
 			}
 			line := prefix + fmt.Sprintf("%d · %s", i+1, queueItemText(items[i], maxInt(1, width-4)))
-			lines = append(lines, style.Render(truncateDisplayWidth(line, width)))
+			line = fitStyledCellLine(truncateDisplayWidth(line, width), width)
+			lines = append(lines, style.Render(line))
 		}
 		lines = append(lines, queueHintStyle.Render(truncateDisplayWidth("↑/↓ 选择 · i 编辑 · d 删除 · c 清空 · alt/command+k/j 调整 · esc 退出", width)))
 		return strings.Join(lines, "\n")
@@ -84,6 +97,30 @@ func (m appModel) renderQueuePanel(width, height int) string {
 		return ""
 	}
 	return fitStyledRect(m.queuePanelContent(width), width, height)
+}
+
+func renderQueueInlineBottomBorder(view string, width int, summary string) string {
+	if width <= 0 {
+		return ""
+	}
+	lines := strings.Split(summary, "\n")
+	if len(lines) > 0 {
+		summary = lines[0]
+	}
+	maxSummaryWidth := maxInt(1, width-2)
+	summary = truncateDisplayWidth(summary, maxSummaryWidth)
+	summaryWidth := terminalCellWidth(summary)
+	leftWidth := maxInt(1, (width-summaryWidth)/2)
+	if leftWidth+summaryWidth > width {
+		leftWidth = maxInt(0, width-summaryWidth)
+	}
+	line := strings.Repeat("─", leftWidth) + summary + strings.Repeat("─", maxInt(0, width-leftWidth-summaryWidth))
+	viewLines := strings.Split(view, "\n")
+	if len(viewLines) == 0 {
+		return fitStyledRect(line, width, 1)
+	}
+	viewLines[len(viewLines)-1] = fitStyledCellLine(line, width)
+	return strings.Join(viewLines, "\n")
 }
 
 var (

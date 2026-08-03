@@ -48,6 +48,40 @@ func TestRenderExpandedTodoCard(t *testing.T) {
 	}
 }
 
+func TestTodoStatusTagsAlignAcrossItems(t *testing.T) {
+	entry := transcriptEntry{
+		kind: entryTodo,
+		todoSnapshot: &todo.Snapshot{Items: []todo.Item{
+			{ID: "a", Content: "Short", Status: todo.StatusCompleted},
+			{ID: "b", Content: "A longer task description", Status: todo.StatusInProgress},
+			{ID: "c", Content: "Medium", Status: todo.StatusPending},
+		}},
+		todoExpanded: true,
+	}
+
+	plain := ansi.Strip(renderEntry(entry, 80))
+	positions := make([]int, 0, 3)
+	for _, label := range []string{"已完成", "进行中", "待处理"} {
+		lineFound := false
+		for _, line := range strings.Split(plain, "\n") {
+			if index := strings.Index(line, label); index >= 0 {
+				positions = append(positions, terminalCellWidth(line[:index]))
+				lineFound = true
+				break
+			}
+		}
+		if !lineFound {
+			t.Fatalf("render missing status label %q: %q", label, plain)
+		}
+	}
+	if positions[0] != positions[1] || positions[1] != positions[2] {
+		t.Fatalf("status tag positions = %v, want all equal; render = %q", positions, plain)
+	}
+	if !strings.Contains(plain, "A longer task description    进行中") {
+		t.Fatalf("status tag spacing missing four spaces from the longest task text: render = %q", plain)
+	}
+}
+
 func TestCompletedTodoItemUsesStrikethrough(t *testing.T) {
 	if !todoItemBodyStyle(todo.StatusCompleted).GetStrikethrough() {
 		t.Fatal("completed item style does not enable strikethrough")
