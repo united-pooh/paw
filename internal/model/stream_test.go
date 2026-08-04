@@ -812,7 +812,7 @@ func TestStreamMessageMergesExtraBodyIntoOpenAINonStreamingRequest(t *testing.T)
 }
 
 func TestOpenAIExtraBodyRejectsProtectedFields(t *testing.T) {
-	protected := []string{"model", "messages", "tools", "stream", "stream_options"}
+	protected := []string{"model", "messages", "stream", "stream_options"}
 	for _, field := range protected {
 		t.Run(field, func(t *testing.T) {
 			client := NewClient(Config{Provider: "openai-gateway", Transport: "openai-compatible", Model: "model-a", Models: []string{"model-a"}})

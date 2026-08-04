@@ -146,7 +146,7 @@ func TestValidateExtraRequestBodiesRejectsProtectedFields(t *testing.T) {
 		transport string
 		fields    []string
 	}{
-		{"openai-compatible", []string{"model", "messages", "tools", "stream", "stream_options"}},
+		{"openai-compatible", []string{"model", "messages", "stream", "stream_options"}},
 		{"anthropic", []string{"model", "system", "messages", "tools", "stream", "stream_options"}},
 	}
 	for _, tt := range tests {

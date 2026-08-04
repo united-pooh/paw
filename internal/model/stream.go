@@ -108,26 +108,12 @@ type nonStreamingChatResponse struct {
 }
 
 func (c *Client) nonStreamingOpenAIMessage(ctx context.Context, cfg Config, messages []message.Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
-	apiMessages, err := buildOpenAIMessages(messages)
+	adapter := SelectModelAdapter(cfg)
+	reqBody, err := adapter.BuildChatCompletionsRequest(cfg, messages, tools, false)
 	if err != nil {
-		return nil, fmt.Errorf("构造 OpenAI 请求消息失败: %w", err)
+		return nil, fmt.Errorf("构造 %s 请求失败: %w", adapter.Name(), err)
 	}
-	reqBody := ChatCompletionsRequest{
-		Model:    cfg.Model,
-		Messages: apiMessages,
-		Stream:   false,
-	}
-	for _, t := range tools {
-		reqBody.Tools = append(reqBody.Tools, openAITool{
-			Type: "function",
-			Function: openAIToolFunction{
-				Name:        t.Name,
-				Description: t.Description,
-				Parameters:  t.InputSchema,
-			},
-		})
-	}
-	bodyBytes, err := MarshalRequestBody(reqBody, EffectiveExtraRequestBody(cfg))
+	bodyBytes, err := MarshalRequestBody(reqBody, EffectiveChatCompletionsExtraRequestBody(cfg))
 	if err != nil {
 		return nil, fmt.Errorf("序列化请求体失败: %w", err)
 	}
@@ -191,30 +177,14 @@ func (c *Client) nonStreamingOpenAIMessage(ctx context.Context, cfg Config, mess
 }
 
 func (c *Client) streamOpenAIMessage(ctx context.Context, cfg Config, messages []message.Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
-	apiMessages, err := buildOpenAIMessages(messages)
+	adapter := SelectModelAdapter(cfg)
+	reqBody, err := adapter.BuildChatCompletionsRequest(cfg, messages, tools, true)
 	if err != nil {
-		return nil, fmt.Errorf("构造 OpenAI 请求消息失败: %w", err)
-	}
-	// 启用 stream=true，让服务端按 SSE 增量返回。
-	reqBody := ChatCompletionsRequest{
-		Model:         cfg.Model,
-		Messages:      apiMessages,
-		Stream:        true,
-		StreamOptions: &StreamOptions{IncludeUsage: true},
-	}
-	for _, t := range tools {
-		reqBody.Tools = append(reqBody.Tools, openAITool{
-			Type: "function",
-			Function: openAIToolFunction{
-				Name:        t.Name,
-				Description: t.Description,
-				Parameters:  t.InputSchema,
-			},
-		})
+		return nil, fmt.Errorf("构造 %s 请求失败: %w", adapter.Name(), err)
 	}
 
 	// 组装 JSON 请求体。
-	bodyBytes, err := MarshalRequestBody(reqBody, EffectiveExtraRequestBody(cfg))
+	bodyBytes, err := MarshalRequestBody(reqBody, EffectiveChatCompletionsExtraRequestBody(cfg))
 	if err != nil {
 		return nil, fmt.Errorf("序列化请求体失败: %w", err)
 	}

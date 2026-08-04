@@ -169,6 +169,24 @@ func EffectiveExtraRequestBody(cfg Config) RequestBody {
 	return MergeRequestBodies(cfg.ExtraBody, cfg.ModelExtraBody[strings.TrimSpace(cfg.Model)])
 }
 
+// FilterChatCompletionsExtraRequestBody removes fields that belong to the
+// adapter-generated tool request. ExtraBody may still provide ordinary model
+// parameters, but it cannot replace tools or strict function metadata.
+func FilterChatCompletionsExtraRequestBody(body RequestBody) RequestBody {
+	if body == nil {
+		return nil
+	}
+	filtered := CloneRequestBody(body)
+	for _, field := range []string{"tools", "tool_choice", "function", "strict", "parameters"} {
+		delete(filtered, field)
+	}
+	return filtered
+}
+
+func EffectiveChatCompletionsExtraRequestBody(cfg Config) RequestBody {
+	return FilterChatCompletionsExtraRequestBody(EffectiveExtraRequestBody(cfg))
+}
+
 var openAIProtectedRequestFields = map[string]struct{}{
 	"model": {}, "messages": {}, "tools": {}, "stream": {}, "stream_options": {},
 }
@@ -190,12 +208,15 @@ func ValidateExtraRequestBodies(cfg Config) error {
 		profileID = "default"
 	}
 	protected := openAIProtectedRequestFields
+	ignoreChatCompletionsToolFields := true
 	if shouldUseResponsesAPI(cfg) {
 		protected = responsesProtectedRequestFields
+		ignoreChatCompletionsToolFields = false
 	} else if isAnthropicTransport(cfg.Transport) {
 		protected = anthropicProtectedRequestFields
+		ignoreChatCompletionsToolFields = false
 	}
-	if err := validateProtectedRequestFields(profileID, "extraBody", cfg.ExtraBody, protected); err != nil {
+	if err := validateProtectedRequestFields(profileID, "extraBody", cfg.ExtraBody, protected, ignoreChatCompletionsToolFields); err != nil {
 		return err
 	}
 	knownModels := make(map[string]struct{})
@@ -210,20 +231,32 @@ func ValidateExtraRequestBodies(cfg Config) error {
 		if cfg.ModelExtraBody[modelName] == nil {
 			return fmt.Errorf("model profile %q: %s must be a JSON object", profileID, location)
 		}
-		if err := validateProtectedRequestFields(profileID, location, cfg.ModelExtraBody[modelName], protected); err != nil {
+		if err := validateProtectedRequestFields(profileID, location, cfg.ModelExtraBody[modelName], protected, ignoreChatCompletionsToolFields); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateProtectedRequestFields(profileID, location string, body RequestBody, protected map[string]struct{}) error {
+func validateProtectedRequestFields(profileID, location string, body RequestBody, protected map[string]struct{}, ignoreChatCompletionsToolFields bool) error {
 	for _, field := range sortedRequestBodyKeys(body) {
+		if ignoreChatCompletionsToolFields && isIgnoredChatCompletionsToolField(field) {
+			continue
+		}
 		if _, blocked := protected[field]; blocked {
 			return fmt.Errorf("model profile %q: %s contains protected field %q", profileID, location, field)
 		}
 	}
 	return nil
+}
+
+func isIgnoredChatCompletionsToolField(field string) bool {
+	switch field {
+	case "tools", "tool_choice", "function", "strict", "parameters":
+		return true
+	default:
+		return false
+	}
 }
 
 func sortedRequestBodyKeys(body RequestBody) []string {

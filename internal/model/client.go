@@ -198,20 +198,17 @@ func (c *Client) RunMessage(ctx context.Context, messages []message.Message) (st
 	if shouldUseResponsesAPI(cfg) {
 		return c.runResponsesMessage(ctx, cfg, messages)
 	}
-	apiMessages, err := buildOpenAIMessages(messages)
-	if err != nil {
-		return "", fmt.Errorf("构造 OpenAI 请求消息失败: %w", err)
-	}
 
-	reqBody := ChatCompletionsRequest{
-		Model:    cfg.Model,
-		Messages: apiMessages,
-	}
-
+	adapter := SelectModelAdapter(cfg)
 	if err := ValidateExtraRequestBodies(cfg); err != nil {
 		return "", fmt.Errorf("校验请求体配置失败: %w", err)
 	}
-	bodyBytes, err := MarshalRequestBody(reqBody, EffectiveExtraRequestBody(cfg))
+	reqBody, err := adapter.BuildChatCompletionsRequest(cfg, messages, nil, false)
+	if err != nil {
+		return "", fmt.Errorf("构造 %s 请求失败: %w", adapter.Name(), err)
+	}
+
+	bodyBytes, err := MarshalRequestBody(reqBody, EffectiveChatCompletionsExtraRequestBody(cfg))
 	if err != nil {
 		return "", fmt.Errorf("序列化请求体失败: %w", err)
 	}
