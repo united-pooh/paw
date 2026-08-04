@@ -45,7 +45,7 @@ type Snapshot struct {
 }
 
 type ServerStatus struct {
-	Name, Command, WorkDir, State, LastError string
+	Name, Command, WorkDir, State, LastError  string
 	PID, Tools, Resources, Templates, Prompts int
 }
 

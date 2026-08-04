@@ -68,5 +68,3 @@ func validateModelToolSchema(toolName string, schema json.RawMessage) error {
 	}
 	return nil
 }
-
-

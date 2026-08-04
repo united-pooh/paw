@@ -20,7 +20,7 @@ func TestToolSpecCloneCopiesSchema(t *testing.T) {
 func TestSnapshotCloneCopiesTools(t *testing.T) {
 	snapshot := Snapshot{
 		Version: 4,
-		Tools: []ToolSpec{{Name: "codegraph__explore", InputSchema: json.RawMessage(`{"type":"object"}`)}},
+		Tools:   []ToolSpec{{Name: "codegraph__explore", InputSchema: json.RawMessage(`{"type":"object"}`)}},
 	}
 	clone := snapshot.Clone()
 	clone.Tools[0].Name = "changed"

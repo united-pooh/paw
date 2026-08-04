@@ -230,7 +230,7 @@ func TestManagerStartRejectsIncompatibleSchema(t *testing.T) {
 				WorkDir: t.TempDir(),
 				Enabled: true,
 				Env: map[string]string{
-					"GO_WANT_MCP_MANAGER_HELPER":    "1",
+					"GO_WANT_MCP_MANAGER_HELPER":     "1",
 					"GO_WANT_MCP_MANAGER_BAD_SCHEMA": "1",
 				},
 			},
