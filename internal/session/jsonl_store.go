@@ -31,10 +31,42 @@ type Record struct {
 	CreatedAt  time.Time           `json:"created_at"`
 }
 
+// journalState 缓存单个 session 的追加序列状态，避免每次 append 都重新扫描
+// 整份 transcript.jsonl。nextSeq 是下一次 append 应使用的 sequence；size 是
+// 上次扫描时 transcript 文件的字节大小。进程重启后（或外部进程写入时）size
+// 不匹配会触发重新扫描，因此持久化语义保持不变。
+type journalState struct {
+	nextSeq int64
+	size    int64
+}
+
+// SyncPolicy 控制 transcript.jsonl 追加后的 f.Sync() 调用频率。
+type SyncPolicy int
+
+const (
+	// SyncPolicyAlways 每次追加后都同步文件（默认，可靠性优先）。这是唯一
+	// 保证任何一次 append 返回后记录已落盘的策略。
+	SyncPolicyAlways SyncPolicy = iota
+	// SyncPolicyInterval 按时间间隔批量同步；含 turn 完成/失败边界的批次仍
+	// 立即同步，因此已完成 turn 的持久性不弱于 always 模式，只有高频中间
+	// 增量（assistant delta、tool result）允许短暂停留在 page cache。
+	SyncPolicyInterval
+)
+
 type JSONLStore struct {
 	baseDir string
 	nowFn   func() time.Time
-	mu      sync.Mutex
+	// mu 只保护 session state 元数据（journal 缓存、sessionLocks 与 lastSync），
+	// 不再覆盖文件 I/O、JSON 编码和 f.Sync()。不同 session 的追加可以并行，
+	// 同一 session 的追加由 sessionLock 串行化，保证 sequence 连续。
+	mu           sync.Mutex
+	journal      map[string]journalState // sessionID -> 缓存状态（受 mu 保护）
+	sessionLocks map[string]*sync.Mutex  // sessionID -> 每 session 独立锁（受 mu 保护）
+	// syncPolicy/syncInterval 只能在并发使用前配置（构造或 SetSyncPolicy）。
+	syncPolicy   SyncPolicy
+	syncInterval time.Duration
+	lastSync     map[string]time.Time // sessionID -> 上次成功 sync 时刻（受 mu 保护）
+	syncFile     func(*os.File) error // 测试可替换；默认 (*os.File).Sync
 }
 
 var _ Store = (*JSONLStore)(nil)
@@ -47,7 +79,41 @@ func NewJSONLStore(baseDir string) (*JSONLStore, error) {
 	if strings.TrimSpace(baseDir) == "" {
 		return nil, fmt.Errorf("baseDir 不能为空")
 	}
-	return &JSONLStore{baseDir: baseDir, nowFn: time.Now}, nil
+	return &JSONLStore{
+		baseDir:      baseDir,
+		nowFn:        time.Now,
+		journal:      make(map[string]journalState),
+		sessionLocks: make(map[string]*sync.Mutex),
+		lastSync:     make(map[string]time.Time),
+		syncPolicy:   SyncPolicyAlways,
+		syncInterval: 5 * time.Second,
+		syncFile:     func(f *os.File) error { return f.Sync() },
+	}, nil
+}
+
+// SetSyncPolicy 切换持久化同步策略。仅在并发使用前调用（通常在构造后立即设置）。
+// interval 仅对 SyncPolicyInterval 生效，默认 5 秒。
+func (s *JSONLStore) SetSyncPolicy(policy SyncPolicy, interval time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.syncPolicy = policy
+	if interval > 0 {
+		s.syncInterval = interval
+	}
+}
+
+// sessionLock 返回 session 粒度的互斥锁。不同 session 并发追加时互不阻塞；
+// 同一 session 的追加（sequence 分配、文件写入、sync）保持串行。
+// 调用方持有返回的锁期间不得再获取 s.mu（锁顺序：sessionLock -> mu）。
+func (s *JSONLStore) sessionLock(sessionID string) *sync.Mutex {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if l, ok := s.sessionLocks[sessionID]; ok {
+		return l
+	}
+	l := &sync.Mutex{}
+	s.sessionLocks[sessionID] = l
+	return l
 }
 
 // NewJSONLStoreInCwd 以当前工作目录作为 baseDir 创建存储，
@@ -211,8 +277,9 @@ func (s *JSONLStore) appendRecords(ctx context.Context, sessionID string, record
 		return firstSeq, lastSeq, fmt.Errorf("sessionID 不能为空")
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	lock := s.sessionLock(sessionID)
+	lock.Lock()
+	defer lock.Unlock()
 
 	exists, err := s.Exists(ctx, sessionID)
 	if err != nil {
@@ -226,13 +293,9 @@ func (s *JSONLStore) appendRecords(ctx context.Context, sessionID string, record
 		return firstSeq, lastSeq, err
 	}
 
-	existing, err := s.readOwnRecords(ctx, sessionID)
+	nextSeq, err := s.journalNextSeq(ctx, sessionID)
 	if err != nil {
 		return firstSeq, lastSeq, err
-	}
-	nextSeq := int64(0)
-	if len(existing) > 0 {
-		nextSeq = existing[len(existing)-1].Seq + 1
 	}
 	firstSeq = nextSeq
 	lastSeq = nextSeq + int64(len(records)) - 1
@@ -259,13 +322,76 @@ func (s *JSONLStore) appendRecords(ctx context.Context, sessionID string, record
 		}
 		nextSeq++
 	}
-	if err := f.Sync(); err != nil {
+	// turnBoundary 为 true 时，即使处于 interval 策略也必须立即同步：
+	// 已完成/失败的 turn 是用户可感知的持久化边界，不能停留在 page cache。
+	turnBoundary := false
+	for i := range records {
+		if records[i].Kind == JournalTurnCompleted || records[i].Kind == JournalTurnFailed {
+			turnBoundary = true
+			break
+		}
+	}
+	if err := s.syncAfterAppend(f, sessionID, turnBoundary); err != nil {
 		return -1, -1, fmt.Errorf("同步 transcript 失败: %w", err)
+	}
+	// 用追加后的真实文件大小更新内存缓存，使下一次 append 无需重扫。
+	if fi, statErr := f.Stat(); statErr == nil {
+		s.journal[sessionID] = journalState{nextSeq: lastSeq + 1, size: fi.Size()}
 	}
 	if err := os.Chtimes(s.metaPath(sessionID), now, now); err != nil {
 		return -1, -1, fmt.Errorf("更新 session 最近使用时间失败: %w", err)
 	}
 	return firstSeq, lastSeq, nil
+}
+
+// syncAfterAppend 按策略同步文件。always 策略每次都同步；interval 策略在
+// 距离上次同步超过 syncInterval 或遇到 turn 完成/失败边界时同步。调用方
+// 必须已持有该 session 的 sessionLock，保证同一 session 的 lastSync 读取与
+// 更新不与其他追加交错。
+func (s *JSONLStore) syncAfterAppend(f *os.File, sessionID string, turnBoundary bool) error {
+	s.mu.Lock()
+	policy := s.syncPolicy
+	interval := s.syncInterval
+	last, ok := s.lastSync[sessionID]
+	s.mu.Unlock()
+
+	if policy == SyncPolicyAlways || turnBoundary || !ok || time.Since(last) >= interval {
+		if err := s.syncFile(f); err != nil {
+			return err
+		}
+		now := s.nowFn()
+		s.mu.Lock()
+		s.lastSync[sessionID] = now
+		s.mu.Unlock()
+	}
+	return nil
+}
+
+// journalNextSeq 返回会话下一次 append 应使用的 sequence。优先使用内存缓存；
+// 仅当 transcript 文件大小与上次观察一致时才命中缓存。任何大小不匹配
+// （进程重启、外部进程写入、首次 append）都会触发一次完整重扫，保证持久化
+// 语义与每次扫描时逐字节一致。
+func (s *JSONLStore) journalNextSeq(ctx context.Context, sessionID string) (int64, error) {
+	if cached, ok := s.journal[sessionID]; ok {
+		if fi, err := os.Stat(s.transcriptPath(sessionID)); err == nil && fi.Size() == cached.size {
+			return cached.nextSeq, nil
+		}
+		// 文件不存在或大小变化：继续走重扫路径。
+	}
+	existing, err := s.readOwnRecords(ctx, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	nextSeq := int64(0)
+	if len(existing) > 0 {
+		nextSeq = existing[len(existing)-1].Seq + 1
+	}
+	size := int64(0)
+	if fi, err := os.Stat(s.transcriptPath(sessionID)); err == nil {
+		size = fi.Size()
+	}
+	s.journal[sessionID] = journalState{nextSeq: nextSeq, size: size}
+	return nextSeq, nil
 }
 
 func (s *JSONLStore) BeginTurn(ctx context.Context, sessionID, turnID string, messages ...message.Message) error {
@@ -594,8 +720,9 @@ func (s *JSONLStore) AppendTurnMetadata(ctx context.Context, sessionID string, m
 	if strings.TrimSpace(sessionID) == "" {
 		return fmt.Errorf("sessionID 不能为空")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	lock := s.sessionLock(sessionID)
+	lock.Lock()
+	defer lock.Unlock()
 	exists, err := s.Exists(ctx, sessionID)
 	if err != nil {
 		return err

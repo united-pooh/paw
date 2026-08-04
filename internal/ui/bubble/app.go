@@ -177,17 +177,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyCursorAnimation()
 		m.updateContextMeterAnimation()
 		m.updateWaveAmp(time.Time(msg))
-		m.refreshActivityTasks()
-		m.refreshSubagentPreviewFromTasks()
-		m.refreshSubagentToolEntriesFromTasks()
+		m.refreshActivityFromTasks(time.Time(msg))
 		m.refreshRunningToolProgress(time.Time(msg))
-		if m.transcriptRefreshPending {
-			if m.viewport.AtBottom() {
-				m.refreshViewport()
-			} else {
-				m.refreshViewportPreservingOffset()
-			}
-		}
+		m.flushTranscriptRefreshIfDue(time.Time(msg))
 		var frameCmd tea.Cmd
 		if m.needsUIAnimationFrames(time.Time(msg)) {
 			frameCmd = m.scheduleUIAnimationFrame()

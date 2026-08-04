@@ -104,6 +104,44 @@ func (m *appModel) refreshActivityTasks() {
 	m.subagentPicker.selectedIndex = clampInt(m.subagentPicker.selectedIndex, 0, len(m.subagentPicker.tasks)-1)
 }
 
+// activityPollInterval 是 Activity 面板中 ListTasks 刷新的节流间隔。
+// 仅当面板可见且存在 running 任务时才需要高频刷新；其他场景低频轮询即可。
+const activityPollInterval = 500 * time.Millisecond
+
+// refreshActivityFromTasks 由 cursorFrameMsg 每帧驱动，按频率分级调用
+// ListTasks 相关刷新：高频（running 任务存在）时使用 500ms 节流，
+// 否则使用更保守的 2s 节流，避免每帧都跨进程读 task registry。
+func (m *appModel) refreshActivityFromTasks(now time.Time) bool {
+	if m == nil || m.subagentPicker == nil {
+		return false
+	}
+	interval := activityPollInterval
+	if !m.activityHasRunningTask() {
+		interval = 2 * time.Second
+	}
+	if m.lastActivityPollAt.IsZero() || now.Sub(m.lastActivityPollAt) >= interval {
+		m.lastActivityPollAt = now
+		m.refreshActivityTasks()
+		m.refreshSubagentPreviewFromTasks()
+		m.refreshSubagentToolEntriesFromTasks()
+		return true
+	}
+	return false
+}
+
+// activityHasRunningTask 报告当前 Activity 面板任务列表中是否有 running 任务。
+func (m *appModel) activityHasRunningTask() bool {
+	if m == nil || m.subagentPicker == nil {
+		return false
+	}
+	for _, task := range m.subagentPicker.tasks {
+		if string(task.Status) == "running" {
+			return true
+		}
+	}
+	return false
+}
+
 func (m appModel) previewSubagentTranscript(task subagent.TaskSnapshot) (tea.Model, tea.Cmd) {
 	sessionID := strings.TrimSpace(task.SessionID)
 	if sessionID == "" {

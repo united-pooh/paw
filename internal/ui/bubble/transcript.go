@@ -19,8 +19,10 @@ const maxRenderedToolDetailLines = 12
 const transcriptEntryGutter = "  "
 
 type transcriptRenderCacheEntry struct {
-	key      transcriptRenderCacheKey
-	rendered string
+	key               transcriptRenderCacheKey
+	rendered          string
+	renderable        bool
+	renderableVersion int
 }
 
 type transcriptRenderCacheKey struct {
@@ -82,17 +84,30 @@ func (m *appModel) ensureAssistantStreamEntry() {
 }
 
 // appendAssistantDelta 将经过流隔离器确认的稳定文本逐行追加到当前 assistant 消息。
+// 刷新策略按内容可见性分级：
+//   - 没有任何提交内容（纯未完成尾部，streamLineBuffer 已隐藏）时完全不刷新；
+//   - 包含完整行时立即刷新，保证用户看到整行输出不卡顿；
+//   - 只有未完成尾行时交给帧窗口合并（refreshViewportForStreaming），
+//     避免每个 token 都触发一次全量 transcript 重建。
 func (m *appModel) appendAssistantDelta(delta string) {
 	if delta == "" {
 		return
 	}
+	hasCompletedLine := false
 	for _, line := range strings.SplitAfter(delta, "\n") {
 		m.ensureAssistantStreamEntry()
 		m.transcript[m.activeAssistant].body += line
 		touchTranscriptEntry(&m.transcript[m.activeAssistant])
 		m.recordAssistantActivity(m.activeAssistant)
-		m.refreshViewport()
+		if strings.HasSuffix(line, "\n") {
+			hasCompletedLine = true
+		}
 	}
+	if hasCompletedLine {
+		m.refreshViewport()
+		return
+	}
+	m.refreshViewportForStreaming()
 }
 
 func (m *appModel) ensureThinkingStreamEntry() {
@@ -628,7 +643,29 @@ func (m *appModel) refreshViewportForStreaming() {
 		m.refreshViewport()
 		return
 	}
-	m.transcriptRefreshPending = true
+	if !m.transcriptRefreshPending {
+		m.transcriptRefreshPending = true
+		m.transcriptRefreshPendingAt = now
+	}
+}
+
+// flushTranscriptRefreshIfDue 由 cursorFrameMsg 帧驱动调用：pending 置位后至少
+// 等待一个流式刷新窗口再真正刷新，避免每个 cursor tick 都重建 transcript。
+func (m *appModel) flushTranscriptRefreshIfDue(now time.Time) {
+	if m == nil || !m.transcriptRefreshPending {
+		return
+	}
+	if m.transcriptRefreshPendingAt.IsZero() {
+		m.transcriptRefreshPending = false
+		return
+	}
+	if now.Sub(m.transcriptRefreshPendingAt) >= transcriptStreamingRefreshInterval {
+		if m.viewport.AtBottom() {
+			m.refreshViewport()
+		} else {
+			m.refreshViewportPreservingOffset()
+		}
+	}
 }
 
 func (m *appModel) markTranscriptRefreshed() {
@@ -636,6 +673,7 @@ func (m *appModel) markTranscriptRefreshed() {
 		return
 	}
 	m.transcriptRefreshPending = false
+	m.transcriptRefreshPendingAt = time.Time{}
 	m.lastTranscriptRefreshAt = time.Now()
 }
 
@@ -702,11 +740,44 @@ func (m *appModel) renderTranscriptContent() string {
 	content := m.renderTranscriptContentAt(maxInt(20, m.viewport.Width), m.showThinking, m.animationNow())
 	m.transcriptRenderedContent = content
 	m.transcriptContentCached = true
+	m.transcriptRenderSignature = transcriptRenderSignature(m.transcript, maxInt(20, m.viewport.Width), m.showThinking, m.toolGroupExpanded, m.toolGroupFullResult)
 	m.transcriptLineCache = nil
 	m.transcriptLineCacheReady = false
 	m.transcriptLocationCache = nil
 	m.transcriptLocationsReady = false
 	return content
+}
+
+// transcriptRenderSignature folds every input that can change the rendered
+// transcript into a cheap scalar. Per-entry body/tool/status fields are
+// captured through the version counter (touchTranscriptEntry bumps it on every
+// mutation); the remaining inputs are explicit parameters.
+func transcriptRenderSignature(entries []transcriptEntry, width int, showThinking, groupExpanded, fullResult bool) uint64 {
+	var h uint64 = 1469598103934665603 // FNV-1a offset
+	mix := func(v uint64) {
+		h ^= v
+		h *= 1099511628211
+	}
+	mix(uint64(width))
+	if showThinking {
+		mix(1)
+	} else {
+		mix(0)
+	}
+	if groupExpanded {
+		mix(2)
+	}
+	if fullResult {
+		mix(4)
+	}
+	for _, entry := range entries {
+		mix(uint64(entry.kind))
+		mix(uint64(entry.version))
+		mix(uint64(len(entry.body)))
+		mix(uint64(len(entry.toolResult)))
+		mix(uint64(len(entry.citations)))
+	}
+	return h
 }
 
 func (m *appModel) renderTranscriptContentAt(width int, showThinking bool, at time.Time) string {
@@ -718,6 +789,19 @@ func (m *appModel) renderTranscriptContentAt(width int, showThinking bool, at ti
 		next := make([]transcriptRenderCacheEntry, len(m.transcript))
 		copy(next, m.transcriptRenderCache)
 		m.transcriptRenderCache = next
+	}
+	// Strict revision cache: when nothing that affects the rendered transcript
+	// has changed since the last render, reuse the cached content verbatim and
+	// skip the per-entry key comparison and string assembly entirely. The
+	// signature folds every render input (width, visibility flags, group flags,
+	// and per-entry version + body/tool lens). Mutating paths bump entry
+	// versions via touchTranscriptEntry, so the sum of versions catches all
+	// content changes; the remaining inputs are captured explicitly.
+	if m.transcriptContentCached {
+		sig := transcriptRenderSignature(m.transcript, width, showThinking, m.toolGroupExpanded, m.toolGroupFullResult)
+		if sig == m.transcriptRenderSignature {
+			return m.transcriptRenderedContent
+		}
 	}
 	var renderedTranscript strings.Builder
 	hasPrevious := false

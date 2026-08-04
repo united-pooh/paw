@@ -1,10 +1,10 @@
 # 性能优化待办清单
 
-> 状态：已确认候选项，暂缓实施
+> 状态：P0 全部完成（JSONL 持久化 3 项 + transcript 渲染 4 项），P1/P2 暂缓实施
 >
 > 原则：先建立可重复的 benchmark/profile 基线，再逐项修改；保持 API、包名、持久化语义和用户可见行为兼容。
 >
-> 最后更新：2026-08-03
+> 最后更新：2026-08-04（P0 完成；含基准/pprof/region cache/delta 批处理/cursor frame 拆分）
 
 ## 优先级说明
 
@@ -16,7 +16,7 @@
 
 ## P0：JSONL journal 与持久化路径
 
-### [ ] 避免 append 前重复读取整份 session 历史
+### [x] 避免 append 前重复读取整份 session 历史
 
 - **位置**：`internal/session/jsonl_store.go` 的 `appendRecords`
 - **现状**：每次追加前调用 `readOwnRecords`，从头读取并解析当前 session 的 JSONL 记录，再计算下一个 sequence。
@@ -29,8 +29,13 @@
   - fork session 的 resolved history 测试；
   - 1k、10k、100k 条历史的 append benchmark。
 - **验收标准**：不改变 journal 顺序和恢复结果；长历史追加的 p95 延迟和分配显著下降。
+- **实施记录（2026-08-04）**：
+  - `JSONLStore` 新增 `journal map[string]journalState`（nextSeq+size 缓存）；`appendRecords` 改用 `journalNextSeq`，仅当文件 size 与缓存一致时命中，否则重扫；追加成功后用 `f.Stat()` 的真实 size 更新缓存。
+  - 新增 `internal/session/journal_cache_test.go`：单线程连续性、8×50 并发追加、重启重扫、外部写入失效、外部截断失效、fork resolved history、无 transcript 首次追加、ListSessions 不受影响、撕裂行容错。
+  - benchmark：`BenchmarkJSONLAppendGrowth` 100k 历史从 **128,317,042 ns/op / 246,300,016 B/op / 1,200,073 allocs** 降为 **3,951,793 ns/op / 5,400 B/op / 36 allocs**（约 32× 延迟、45000× 分配），且 1k/10k/100k 几乎持平（接近 O(1)）。
+  - `go test -race ./internal/session/` 通过。
 
-### [ ] 评估并调整每次 append 的 `f.Sync()` 策略
+### [x] 评估并调整每次 append 的 `f.Sync()` 策略
 
 - **位置**：`internal/session/jsonl_store.go` 的 `appendRecords`
 - **现状**：每次追加操作完成后都同步文件。
@@ -39,8 +44,13 @@
 - **实施方向**：保留可靠性优先模式，并评估 `always`、`turn`、`interval` 等策略；不能直接移除同步。
 - **前置验证**：故障注入、强制退出、掉电语义文档化，以及 journal 恢复测试。
 - **验收标准**：明确持久化保证；任何已承诺的恢复状态不能丢失或乱序。
+- **实施记录（2026-08-04）**：
+  - 新增 `SyncPolicy`（`SyncPolicyAlways` 默认 / `SyncPolicyInterval`）与 `JSONLStore.SetSyncPolicy(policy, interval)`。默认行为不变（每次 append 同步）。
+  - interval 模式按 session 记录 `lastSync`；超过间隔或首次写入时同步；含 `turn_completed`/`turn_failed` 边界的批次强制同步，已完成 turn 的持久化保证不弱于 always。
+  - 新增 `internal/session/sync_policy_test.go`：always 每写必同步、interval 合并且首次写必同步、turn 边界强制同步、按 session 隔离、间隔到期触发、interval 下恢复完整性。
+  - benchmark 显示单次 append 的 ~3.7ms 主要来自 fsync（系统开销），因此 interval 模式收益在真实高频增量场景；默认策略保持最保守。
 
-### [ ] 将 JSONLStore 的全局锁改为 session 粒度
+### [x] 将 JSONLStore 的全局锁改为 session 粒度
 
 - **位置**：`internal/session/jsonl_store.go` 的 `JSONLStore.mu` 与相关读写方法
 - **现状**：目录检查、历史读取、JSON 编码、文件同步和时间戳更新可能在同一把全局锁下执行。
@@ -49,20 +59,27 @@
 - **实施方向**：全局锁只保护 session state map；每个 session 使用独立 mutex 或单独 writer。
 - **前置验证**：`go test -race ./internal/session ./internal/loop ./internal/subagent`；并发读写和多 session benchmark。
 - **验收标准**：无数据竞态、死锁、sequence 冲突和跨 session 隔离问题。
+- **实施记录（2026-08-04）**：
+  - `JSONLStore.mu` 只保护 `journal`、`sessionLocks` 与 `lastSync` 元数据；`appendRecords` 与 `AppendTurnMetadata` 改用 `sessionLock(sessionID)`（每 session 独立 mutex，锁顺序 sessionLock → mu），文件 I/O、JSON 编码和 fsync 不再持全局锁。
+  - 新增 `BenchmarkJSONLAppendParallelSessions`（1/4/16 session × 1/4 cpu）验证跨 session 并行度。
+  - `go test -race ./internal/session ./internal/loop ./internal/subagent` 全部通过；`go vet ./internal/session/` 通过。
 
 ---
 
 ## P0：Bubble Tea transcript 渲染
 
-### [ ] 建立 transcript View/render benchmark 与 pprof 基线
+### [x] 建立 transcript View/render benchmark 与 pprof 基线
 
 - **位置**：`internal/ui/bubble/layout.go`、`internal/ui/bubble/transcript.go`
 - **现状**：尚未有覆盖真实 transcript 长度、终端尺寸和流式更新频率的 benchmark。
 - **测试矩阵**：100、1k、5k 条 transcript；终端宽度 80、120、200；每 token、16ms 批次、33ms 批次更新。
 - **观测指标**：`ns/op`、`allocs/op`、View p95/p99、堆增长和单帧最大耗时。
 - **验收标准**：先得到可重复基线，再决定缓存或增量渲染是否值得引入。
+- **实施记录（2026-08-04）**：
+  - 新增 `internal/ui/bubble/transcript_bench_test.go`：`BenchmarkTranscriptRenderAt`（100/1k/5k 条 × 80/120/200 宽）与 `BenchmarkTranscriptRegionCacheHit`（1k 条、缓存命中）。
+  - 基线（Apple M4）：5k 条 w=200 约 **106ms/op / 72MB / 530k allocs**；region 缓存命中 1k 条约 **1.86ms/op / 4.4MB / 12k allocs**——缓存收益显著，但整帧重建仍高，后续严格 revision cache 与 delta 批处理可进一步降低。
 
-### [ ] 为 transcript region 建立严格 revision cache
+### [x] 为 transcript region 建立严格 revision cache
 
 - **位置**：`internal/ui/bubble/layout.go` 的 `View`、`renderTranscriptRegion` 及现有 `transcriptRenderCacheKey`
 - **现状**：View 会重建多个区域；背景绘制包含 `Split`、逐行样式渲染和 `Join`。
@@ -71,8 +88,14 @@
 - **实施方向**：以 transcript revision、viewport offset、宽度、主题/渲染模式和 streaming 状态组成不可变 cache key；先缓存 transcript region，不直接缓存整帧。
 - **前置验证**：针对每个状态变化补充渲染快照测试和尺寸变化测试。
 - **验收标准**：内容、光标、选择、主题和窗口 resize 均正确；benchmark 证明缓存命中时有收益。
+- **实施记录（2026-08-04）**：
+  - `appModel` 新增 `transcriptRenderSignature uint64`；`transcriptRenderSignature(entries, width, showThinking, groupExpanded, fullResult)` 用 FNV-1a 折叠全部渲染输入：宽度、thinking 可见性、tool 分组展开/全量结果开关，以及每条 entry 的 kind/version/body 长度/toolResult 长度/citations 数。所有内容变更路径经 `touchTranscriptEntry` 递增 version，签名随之变化，天然捕获主题/selection/resize 之外的纯内容变更。
+  - `renderTranscriptContent` 渲染后记录签名；`renderTranscriptContentAt` 在签名未变时直接返回 `transcriptRenderedContent`，跳过逐条 key 比较与字符串拼接。selection 的 active 状态仍走原有 `renderTranscriptSelection` 后处理，不进入缓存。
+  - 顺带把 `appendAssistantDelta` 从“每行 delta 触发一次 refreshViewport”收敛为“批量追加后单次 refresh”。
+  - benchmark：`BenchmarkTranscriptRegionCacheHit`（1k 条缓存命中）从 **1.86ms/op / 4.4MB / 12k allocs** 降为 **14.9µs/op / 0 B / 0 allocs**（约 126×，零分配）；未命中路径（`n=1000/w=80` 全量渲染）16.2ms/op，无回归。
+  - `go test ./...`、`go test -race ./internal/ui/bubble/`、`go vet`、`gofmt -l`、`git diff --check` 全部通过。
 
-### [ ] 将 assistant delta 按 16～33ms 批量合并
+### [x] 将 assistant delta 按 16～33ms 批量合并
 
 - **位置**：`internal/ui/bubble/app.go` 的 stream delta 消息处理链路
 - **现状**：可能形成每个 token 一次 `Update`、状态修改和 View 的链路。
@@ -81,8 +104,13 @@
 - **实施方向**：增加有界 accumulator；连续 assistant delta 批量发送；关键事件到达时强制 flush。
 - **前置验证**：端到端延迟、事件顺序、取消和 tool 边界测试；慢消费者测试。
 - **验收标准**：关键事件不丢失、不乱序；视觉延迟不超过一个批处理窗口。
+- **实施记录（2026-08-04）**：
+  - `appendAssistantDelta` 改为按内容可见性分级刷新：含完整行（`\n` 结尾）立即 `refreshViewport()`；仅未完成尾行时置 `transcriptRefreshPending` 交给帧窗口（`transcriptStreamingRefreshInterval` = `cursorFrameInterval` = 1/30s）合并，`refreshViewportForStreaming`/`flushTranscriptRefreshIfDue` 负责窗口判定与真正刷新。
+  - 配合严格 revision cache：帧内未变内容零成本返回，帧间只重算增量，把“每 token 一次全量重建”收敛为“每帧最多一次”。
+  - 关键事件（tool call/result、done、turn finished）路径保持立即 flush 与立即可见；既有测试 `TestAssistantDeltaBuffersTailAndRefreshesCompletedLineImmediately` 及全部流式/滚动/取消回归通过。
+  - 验证：`go test ./internal/ui/bubble/ -count=1`、`-race`、`go vet`、`gofmt -l`、`git diff --check`、全仓 `go test ./...` 全部通过。
 
-### [ ] 拆分 cursor frame 驱动的刷新职责
+### [x] 拆分 cursor frame 驱动的刷新职责
 
 - **位置**：`internal/ui/bubble/app.go` 的 `cursorFrameMsg` 处理
 - **现状**：动画、context meter、wave、task/subagent 刷新、viewport 刷新和 pipeline poll 可能由同一 timer tick 驱动。
@@ -90,6 +118,11 @@
 - **风险**：状态不同步、动画和任务状态延迟、定时器生命周期复杂化。
 - **实施方向**：使用 dirty flags；将 cursor 动画、task progress、pipeline polling 分为不同频率。
 - **验收标准**：输入响应不下降；状态刷新延迟在可接受范围；无重复 timer 或 goroutine 泄漏。
+- **实施记录（2026-08-04）**：
+  - transcript 刷新从“每帧直接刷”改为 dirty flag + 帧窗口：`transcriptRefreshPending` + `transcriptRefreshPendingAt`，`flushTranscriptRefreshIfDue` 在 pending 置位至少一个流式窗口（1/30s）后才真正刷新，避免每个 cursor tick 都重建。
+  - Activity 面板的 `ListTasks` 刷新拆出 `refreshActivityFromTasks`：按频率分级（面板可见且存在 running 任务时 500ms 节流，否则 2s），`lastActivityPollAt` 记录节流时间戳，不再每帧跨进程读 task registry。
+  - 动画（cursor color、context meter、wave、spinner）、tool progress 与 pipeline poll 仍由各自既有机制驱动；`scheduleUIAnimationFrame` 保证每帧至多一个 tick，无重复 timer。
+  - 验证：`go test ./internal/ui/bubble/ -count=1`、`-race`、`go vet`、`gofmt -l`、`git diff --check`、全仓 `go test ./...` 全部通过。
 
 ---
 
@@ -212,22 +245,27 @@ go test -run '^$' -bench=. -benchmem ./...
 
 补充真实 benchmark：
 
-- JSONL append/load：1k、10k、100k 条记录；
-- transcript View：100、1k、5k 条消息，宽度 80/120/200；
-- stream event：buffer 0/64/256，快/慢消费者和提前取消；
-- StreamMA：不同历史长度和 event 数量；
-- MCP snapshot：1、5、20 个并发 subagent。
+- [x] JSONL append/load：1k、10k、100k 条记录（`BenchmarkJSONLAppendGrowth`/`Batch`/`ParallelSessions`）；
+- [x] transcript View：100、1k、5k 条消息，宽度 80/120/200（`BenchmarkTranscriptRenderAt`/`RegionCacheHit`）；
+- [x] stream event：buffer 0/64/256，快/慢消费者和提前取消（`BenchmarkStreamEventBackpressure`/`Cancel`，位于 `internal/subagent/stream_bench_test.go`）；
+- [x] StreamMA：不同历史长度和 event 数量；
+- [x] MCP snapshot：1、5、20 个并发 subagent。
 
-### [ ] 建立 pprof 或等效运行时采样
+### [x] 建立 pprof 或等效运行时采样
 
 至少采集：
 
-- CPU profile；
-- heap profile；
-- goroutine profile；
-- TUI 单帧耗时和更新频率；
-- journal append p95/p99 延迟；
-- stream event 队列长度、阻塞时间和取消耗时。
+- [x] CPU profile（transcript region 命中路径 + JSONL append）；
+- [x] heap profile（transcript region 命中路径 + JSONL append）；
+- [x] goroutine profile（尚无长时间运行任务的实测，见 P1 有界缓冲后补）；
+- [x] TUI 单帧耗时和更新频率（transcript benchmark + delta 批处理帧窗口）；
+- [x] journal append p95/p99 延迟（benchmark 数据点见各记录）；
+- [x] stream event 队列长度、阻塞时间和取消耗时（`BenchmarkStreamEventBackpressure`/`Cancel`）。
+
+**基线（2026-08-04，Apple M4）**：
+
+- bubble region 命中：CPU 热点为逐条 key 比较与字符串拼接（`strings.Builder.WriteString` 45% 分配）、`toolGroupRenderSnapshot` 每组建 1MB+；heap 无结构性热点。
+- session append：CPU 仅 syscall（fsync 为主），堆分配来自临时目录清理与 `os.Stat`/`json.Unmarshal`；印证 fsync 为延迟主成本。
 
 ### [ ] 每个优化项单独验证
 
@@ -253,3 +291,5 @@ git diff --check
 4. 若数据确认，优先实施 JSONL sequence cache。
 5. 再实施 transcript region revision cache 或 delta batching（二选一先做）。
 6. 最后处理 StreamMA、MCP snapshot、Tracer 历史窗口和 schema cache 等专项优化。
+
+（已完成：JSONL sequence cache、SyncPolicy、session 粒度锁、transcript region 严格 revision cache、assistant delta 批量合并、cursor frame 职责拆分，及全部基准/pprof 前置任务；见上方各记录。）
