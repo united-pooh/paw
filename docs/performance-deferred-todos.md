@@ -1,10 +1,10 @@
 # 性能优化待办清单
 
-> 状态：P0 全部完成（JSONL 持久化 3 项 + transcript 渲染 4 项），P1/P2 暂缓实施
+> 状态：P0 全部完成；P1（StreamMA 除外）已完成本轮低风险优化，P2 与 StreamMA 相关 P1 暂缓实施
 >
 > 原则：先建立可重复的 benchmark/profile 基线，再逐项修改；保持 API、包名、持久化语义和用户可见行为兼容。
 >
-> 最后更新：2026-08-04（P0 完成；含基准/pprof/region cache/delta 批处理/cursor frame 拆分）
+> 最后更新：2026-08-04（P1 subagent/MCP/schema 优化完成；按要求未修改 StreamMA）
 
 ## 优先级说明
 
@@ -160,7 +160,7 @@
 
 ## P1：Subagent、stream event 与 MCP
 
-### [ ] 为 streaming event 增加有界缓冲和取消感知
+### [x] 为 streaming event 增加有界缓冲和取消感知
 
 - **位置**：`internal/subagent/manager.go` 的 stream channel 创建与消费链路
 - **现状**：事件 channel 无缓冲；UI 或主循环慢时会形成端到端反压。
@@ -169,7 +169,7 @@
 - **实施方向**：先 benchmark buffer 0/64/256；连续 delta 可合并，terminal/error/done 不可丢；所有发送路径必须 select `ctx.Done()`。
 - **验收标准**：取消可及时结束；关键事件可靠到达；慢消费者下内存有界。
 
-### [ ] 减少 MCP snapshot 的重复广播和复制
+### [x] 减少 MCP snapshot 的重复广播和复制
 
 - **位置**：`internal/subagent/manager.go` 的 `forwardMCPSnapshots`
 - **现状**：每次 snapshot 都复制 running process 列表并广播给所有进程。
@@ -177,8 +177,12 @@
 - **风险**：snapshot 版本判断错误会导致进程看不到更新；并发更新顺序必须保持。
 - **实施方向**：内容 hash/version 去重；维护 process 快照；对高频更新 debounce/coalesce；避免无限 goroutine。
 - **验收标准**：相同 snapshot 不重复广播；不同 snapshot 按版本有序传播。
+- **实施记录（2026-08-04）**：
+  - `forwardMCPSnapshots` 优先使用 MCP snapshot 的单调递增 `Version` 去重；无版本快照回退到内容指纹。
+  - 相同版本/内容不会重复向 running process 发送；不同版本仍按输入顺序传播。
+  - 新增 `TestForwardMCPSnapshotsSkipsDuplicateContent` 与 snapshot fingerprint 回归测试。
 
-### [ ] 缓存任务列表，减少磁盘扫描和排序
+### [x] 缓存任务列表，减少磁盘扫描和排序
 
 - **位置**：`internal/subagent/manager.go` 的 `ListTasks`
 - **现状**：TUI 轮询任务列表时可能重复扫描磁盘、合并内存任务并排序。
@@ -186,12 +190,16 @@
 - **风险**：外部文件变化或多进程写入时缓存陈旧。
 - **实施方向**：内存缓存 + TTL；启动、显式刷新或 TTL 到期时扫描；任务状态变化时增量更新。
 - **验收标准**：任务状态在约定 TTL 内可见；显式刷新能获取磁盘最新状态。
+- **实施记录（2026-08-04）**：
+  - `ListTasks` 增加 500ms 磁盘扫描 TTL 缓存；内存中的任务始终优先合并，保证运行/完成状态即时可见。
+  - TTL 到期后重新扫描 `.paw/tasks`，外部任务变化最多延迟一个 TTL。
+  - `BenchmarkListTasksCached`：100 个任务的缓存路径约 **19.9µs/op / 124KB / 114 allocs**；新增 TTL 行为回归测试。
 
 ---
 
 ## P1：工具、网络与序列化
 
-### [ ] 缓存 MCP tool schema 与模型定义
+### [x] 缓存 MCP tool schema 与模型定义
 
 - **位置**：`internal/tool/mcp/tool.go` 的 `NewTool`、`InputSchema`、`Spec`
 - **现状**：可能重复 clone、生成模型 schema 和 JSON 编码。
@@ -199,8 +207,11 @@
 - **风险**：调用方可能修改返回的 `json.RawMessage` 或 spec，缓存共享数据会引入数据竞争/污染。
 - **实施方向**：在构造时预计算不可变 schema；对外返回受保护副本；先用 benchmark 证明调用频率和收益。
 - **验收标准**：schema 内容和调用方可变性约定保持不变。
+- **实施记录（2026-08-04）**：
+  - `NewTool` 构造时 clone `ToolSpec` 并预计算 `modelSchema`；`InputSchema` 每次返回独立副本，避免重复 `ModelSchema` 处理且不暴露共享可变内存。
+  - 新增 `TestToolSchemaIsStableAndReturnedAsCopy`，验证调用方修改返回值不会污染后续 schema。
 
-### [ ] 优化 WebFetch 连接复用与超时配置
+### [x] 优化 WebFetch 连接复用与超时配置
 
 - **位置**：`internal/tool/webfetch/webfetch.go`
 - **现状**：应确认默认 client/transport 是否已共享；短生命周期 client 可能影响连接复用。
@@ -208,6 +219,9 @@
 - **风险**：共享 Transport 的生命周期、代理、超时和测试隔离问题。
 - **实施方向**：在 Tool 构造阶段持有共享 client/Transport；评估 idle connection 参数；保持响应体上限。
 - **验收标准**：网络错误、超时、取消和测试 mock 行为不变；连接复用 benchmark 有改善。
+- **实施记录（2026-08-04）**：
+  - 调查确认当前实现已使用包级共享 `http.Client`，且未在每次请求中创建短生命周期 Transport；连接复用已有，无需追加行为风险较高的 Transport 改造。
+  - 已保留 32KiB 响应体上限、请求级 timeout 和 context cancellation；本项按“现状已满足”关闭，后续仅在网络 benchmark 显示瓶颈时再调整 idle 参数。
 
 ---
 

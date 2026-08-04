@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"paw/internal/loop"
@@ -77,6 +78,14 @@ type Manager struct {
 	mu      sync.RWMutex
 	tasks   map[string]TaskSnapshot
 	running map[string]Process
+
+	// diskTaskCache avoids rescanning the task registry on every status poll.
+	// In-memory tasks are always merged so running/completed transitions remain
+	// immediately visible; disk changes are observed at most one TTL later.
+	diskTaskCacheAt time.Time
+	diskTaskCache   []TaskSnapshot
+	lastMCPSnapshot uint64
+	mcpSnapshotSet  bool
 }
 
 type Request struct {
@@ -104,6 +113,11 @@ type Result struct {
 	ParentTaskID   string               `json:"parent_task_id,omitempty"`
 	Content        string               `json:"content,omitempty"`
 }
+
+const (
+	streamEventBufferSize = 64
+	taskListCacheTTL      = 500 * time.Millisecond
+)
 
 type Stream struct {
 	Events         <-chan model.StreamEvent
@@ -196,6 +210,9 @@ func (m *Manager) forwardMCPSnapshots(updates <-chan coremcp.Snapshot, stop func
 		defer stop()
 	}
 	for snapshot := range updates {
+		if m.snapshotAlreadyForwarded(snapshot) {
+			continue
+		}
 		m.mu.RLock()
 		processes := make([]Process, 0, len(m.running))
 		for _, process := range m.running {
@@ -208,6 +225,33 @@ func (m *Manager) forwardMCPSnapshots(updates <-chan coremcp.Snapshot, stop func
 			}
 		}
 	}
+}
+
+func (m *Manager) snapshotAlreadyForwarded(snapshot coremcp.Snapshot) bool {
+	// MCP Manager assigns monotonically increasing versions to capability
+	// snapshots. Prefer that stable identity: Snapshot.Clone normalizes empty
+	// schemas, so hashing the marshalled clone could treat equivalent snapshots
+	// as different values.
+	var fingerprint uint64
+	if snapshot.Version != 0 {
+		fingerprint = uint64(snapshot.Version)
+	} else {
+		data, err := json.Marshal(snapshot)
+		if err != nil {
+			return false
+		}
+		hash := fnv.New64a()
+		_, _ = hash.Write(data)
+		fingerprint = hash.Sum64()
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.mcpSnapshotSet && m.lastMCPSnapshot == fingerprint {
+		return true
+	}
+	m.lastMCPSnapshot = fingerprint
+	m.mcpSnapshotSet = true
+	return false
 }
 
 func (m *Manager) SetTokenTracer(tracer *tokentracer.Tracer) {
@@ -260,7 +304,7 @@ func (m *Manager) Stream(ctx context.Context, req Request) (Stream, error) {
 		return Stream{}, err
 	}
 
-	events := make(chan model.StreamEvent)
+	events := make(chan model.StreamEvent, streamEventBufferSize)
 	go m.runStreamingTask(ctx, task, events)
 
 	return Stream{
@@ -365,19 +409,28 @@ func (m *Manager) Status(id string) (TaskSnapshot, bool) {
 }
 
 func (m *Manager) ListTasks() []TaskSnapshot {
+	now := time.Now()
 	m.mu.RLock()
 	tasksByID := make(map[string]TaskSnapshot, len(m.tasks))
 	for _, task := range m.tasks {
 		tasksByID[task.ID] = task
 	}
+	diskTasks := append([]TaskSnapshot(nil), m.diskTaskCache...)
+	cacheFresh := !m.diskTaskCacheAt.IsZero() && now.Sub(m.diskTaskCacheAt) < taskListCacheTTL
 	m.mu.RUnlock()
 
-	diskTasks, err := m.registry.listTasks(context.Background())
-	if err == nil {
-		for _, task := range diskTasks {
-			if _, ok := tasksByID[task.ID]; !ok {
-				tasksByID[task.ID] = task
-			}
+	if !cacheFresh {
+		if loaded, err := m.registry.listTasks(context.Background()); err == nil {
+			diskTasks = loaded
+			m.mu.Lock()
+			m.diskTaskCache = append([]TaskSnapshot(nil), loaded...)
+			m.diskTaskCacheAt = now
+			m.mu.Unlock()
+		}
+	}
+	for _, task := range diskTasks {
+		if _, ok := tasksByID[task.ID]; !ok {
+			tasksByID[task.ID] = task
 		}
 	}
 
@@ -640,7 +693,7 @@ func (m *Manager) runStreamingTask(ctx context.Context, task TaskSnapshot, event
 		result.Error = err.Error()
 		result.ExitCode = 1
 		if !done {
-			_ = sendModelStreamEvent(context.Background(), events, model.StreamEvent{Err: err})
+			_ = sendModelStreamEvent(ctx, events, model.StreamEvent{Err: err})
 		}
 	}
 	m.finishTask(context.Background(), task.ID, result, err)
@@ -693,12 +746,19 @@ func (m *Manager) finishTask(ctx context.Context, taskID string, result WorkerRe
 	} else {
 		task.Status = TaskCompleted
 	}
+	m.mu.Unlock()
+
+	// Persist the terminal state before publishing it through the in-memory
+	// registry. Consumers that observe a completed task can then immediately
+	// read its output artifact without racing the writer goroutine.
+	_ = m.registry.saveOutput(ctx, taskID, result)
+	_ = m.registry.saveTask(ctx, task)
+
+	m.mu.Lock()
 	m.tasks[taskID] = task
 	delete(m.running, taskID)
 	m.mu.Unlock()
 
-	_ = m.registry.saveOutput(ctx, taskID, result)
-	_ = m.registry.saveTask(ctx, task)
 	m.submitTaskContext(task)
 	m.recordTaskFinished(task)
 	return task

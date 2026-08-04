@@ -10,12 +10,18 @@ import (
 // Tool adapts one model-facing MCP capability to Paw's normal tool
 // interface. The broker may be the main-process Manager or a subagent proxy.
 type Tool struct {
-	spec   coremcp.ToolSpec
-	broker coremcp.Broker
+	spec        coremcp.ToolSpec
+	modelSchema json.RawMessage
+	broker      coremcp.Broker
 }
 
 func NewTool(spec coremcp.ToolSpec, broker coremcp.Broker) *Tool {
-	return &Tool{spec: spec.Clone(), broker: broker}
+	cloned := spec.Clone()
+	return &Tool{
+		spec:        cloned,
+		modelSchema: append(json.RawMessage(nil), cloned.ModelSchema()...),
+		broker:      broker,
+	}
 }
 
 func NewTools(broker coremcp.Broker) []*Tool {
@@ -54,7 +60,7 @@ func (t *Tool) InputSchema() json.RawMessage {
 	if t == nil {
 		return nil
 	}
-	return t.spec.ModelSchema()
+	return append(json.RawMessage(nil), t.modelSchema...)
 }
 
 func (t *Tool) Namespace() string {
