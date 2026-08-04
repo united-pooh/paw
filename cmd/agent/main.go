@@ -119,10 +119,15 @@ func main() {
 
 func runSingleTurnMode(ctx context.Context, opts options) error {
 	output := headless.New(os.Stdout)
-	runner, sessionID, _, _, _, _, mcpManager, err := buildRunner(ctx, opts.sessionID, output, opts.allowOutsideRead)
+	todoBroker := todo.NewBroker()
+	defer todoBroker.Close()
+	runner, sessionID, _, _, _, _, mcpManager, err := buildRunner(ctx, opts.sessionID, output, opts.allowOutsideRead, func(registry *tool.Registry) error {
+		return registerMainAgentTools(registry, todoBroker)
+	})
 	if err != nil {
 		return err
 	}
+	runner.SetTodoBroker(todoBroker)
 	if mcpManager != nil {
 		defer func() { _ = mcpManager.Close(context.Background()) }()
 	}
@@ -152,6 +157,7 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	if err != nil {
 		return err
 	}
+	runner.SetTodoBroker(todoBroker)
 	if mcpManager != nil {
 		defer func() { _ = mcpManager.Close(context.Background()) }()
 	}

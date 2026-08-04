@@ -10,6 +10,7 @@ import (
 	"paw/internal/model"
 	"paw/internal/session"
 	"paw/internal/skill"
+	"paw/internal/todo"
 	"paw/internal/tokentracer"
 	"paw/internal/tool"
 	"paw/internal/ui"
@@ -102,6 +103,9 @@ type Runner struct {
 	traceAgentID           string
 	yoloModeHandler        func(bool)
 	nowFn                  func() time.Time
+	autoContinueConfig     AutoContinueConfig
+	todoBroker             *todo.Broker
+	lastProgressHash       string
 }
 
 type tokenUsageTotals struct {
@@ -171,6 +175,7 @@ func NewRunnerWithInstructionRoot(model ModelStreamer, output ui.UI, registry *t
 		compactionArchive:  archive,
 		streamMAEnabled:    true,
 		nowFn:              time.Now,
+		autoContinueConfig: DefaultAutoContinueConfig(),
 	}
 }
 
@@ -266,7 +271,22 @@ func (runner *Runner) runTurn(ctx context.Context, userInput message.Message) (T
 	return runner.runTurnWithTiming(ctx, userInput, nil)
 }
 
-func (runner *Runner) runTurnWithTiming(ctx context.Context, userInput message.Message, timing *TurnTiming) (execution TurnExecution, err error) {
+func (runner *Runner) runTurnWithTiming(ctx context.Context, userInput message.Message, timing *TurnTiming) (TurnExecution, error) {
+	if runner == nil {
+		return TurnExecution{}, fmt.Errorf("runner 未初始化")
+	}
+	config, broker := runner.autoContinueState()
+	if !config.Enabled || broker == nil {
+		return runner.runSingleTurnWithTiming(ctx, userInput, timing)
+	}
+
+	runner.mu.Lock()
+	runner.lastProgressHash = ""
+	runner.mu.Unlock()
+	return runner.runTask(ctx, userInput, timing)
+}
+
+func (runner *Runner) runSingleTurnWithTiming(ctx context.Context, userInput message.Message, timing *TurnTiming) (execution TurnExecution, err error) {
 	if err := runner.validate(); err != nil {
 		return execution, err
 	}
