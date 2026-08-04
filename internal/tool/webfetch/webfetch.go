@@ -19,6 +19,8 @@ const (
 	maxResponseBytes      = 32 * 1024
 )
 
+var defaultHTTPClient = &http.Client{}
+
 type Tool struct {
 	Client *http.Client
 }
@@ -85,7 +87,7 @@ func (t *Tool) Run(ctx context.Context, raw json.RawMessage) (string, error) {
 
 	client := t.Client
 	if client == nil {
-		client = &http.Client{Timeout: timeout}
+		client = defaultHTTPClient
 	}
 
 	resp, err := client.Do(req)
@@ -95,7 +97,7 @@ func (t *Tool) Run(ctx context.Context, raw json.RawMessage) (string, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	var body limitedBuffer
-	if _, err := io.Copy(&body, resp.Body); err != nil {
+	if _, err := io.Copy(&body, io.LimitReader(resp.Body, maxResponseBytes+1)); err != nil {
 		return "", err
 	}
 

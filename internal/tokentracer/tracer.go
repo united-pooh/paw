@@ -337,15 +337,20 @@ func (t *Tracer) Snapshot() Snapshot {
 		return Snapshot{}
 	}
 	t.mu.RLock()
-	defer t.mu.RUnlock()
 	pipeline := clonePipeline(t.pipeline)
 	events := append([]Event(nil), t.events...)
+	sessionID := t.sessionID
+	workspace := t.workspace
+	serverURL := t.serverURL
+	runID := t.pipeline.ID
+	t.mu.RUnlock()
+
 	return Snapshot{
 		Pipeline:  pipeline,
-		RunID:     t.pipeline.ID,
-		SessionID: t.sessionID,
-		Workspace: t.workspace,
-		ServerURL: t.serverURL,
+		RunID:     runID,
+		SessionID: sessionID,
+		Workspace: workspace,
+		ServerURL: serverURL,
 		Timeline:  buildTimeline(pipeline, events, time.Now().UTC()),
 		Events:    events,
 	}

@@ -367,6 +367,63 @@ func renderSubagentPreviewTranscript(preview *subagentTranscriptPreview, created
 	return decorateSubagentTranscript(preview.task, entries, createdAt)
 }
 
+func (m *appModel) refreshSubagentToolEntriesFromTasks() bool {
+	if m == nil || m.subagents == nil {
+		return false
+	}
+	tasks := m.subagents.ListTasks()
+	if len(tasks) == 0 {
+		return false
+	}
+	changed := false
+	for index := range m.transcript {
+		entry := &m.transcript[index]
+		if !isToolTransaction(*entry) || !isSubagentToolEntry(*entry) || strings.TrimSpace(entry.toolResult) == "" {
+			continue
+		}
+		var reference struct {
+			ID        string `json:"id"`
+			SessionID string `json:"session_id"`
+		}
+		if json.Unmarshal([]byte(entry.toolResult), &reference) != nil {
+			continue
+		}
+		for _, task := range tasks {
+			if reference.ID == "" || (task.ID != reference.ID && task.SessionID != reference.SessionID) {
+				continue
+			}
+			data, err := json.Marshal(task)
+			if err != nil {
+				break
+			}
+			status := "ok"
+			if task.Status == subagent.TaskRunning {
+				status = "running"
+			}
+			isError := strings.TrimSpace(task.Error) != "" || task.Status == subagent.TaskFailed
+			if isError {
+				status = "error"
+			}
+			if string(data) != entry.toolResult || entry.toolStatus != status || entry.isError != isError {
+				entry.toolResult = string(data)
+				entry.toolStatus = status
+				entry.isError = isError
+				entry.body = completeToolCallBody(entry.toolName, entry.body, status, entry.toolResult)
+				if status != "running" {
+					entry.toolFinishedAt = m.animationNow()
+				}
+				touchTranscriptEntry(entry)
+				changed = true
+			}
+			break
+		}
+	}
+	if changed {
+		m.transcriptRenderCache = nil
+		m.refreshViewport()
+	}
+	return changed
+}
 func (m *appModel) refreshSubagentPreviewFromTasks() bool {
 	if m == nil || m.subagentPreview == nil || m.subagents == nil {
 		return false

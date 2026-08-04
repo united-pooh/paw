@@ -18,6 +18,8 @@ type Timeline struct {
 	TokenTotal      Usage         `json:"token_total"`
 	TokenGrandTotal int           `json:"token_grand_total"`
 	Error           string        `json:"error,omitempty"`
+	CriticalPath    []string      `json:"critical_path,omitempty"`
+	BottleneckID    string        `json:"bottleneck_id,omitempty"`
 	Rows            []TimelineRow `json:"rows"`
 }
 
@@ -27,9 +29,12 @@ type TimelineRow struct {
 	StageID         string           `json:"stage_id,omitempty"`
 	StageName       string           `json:"stage_name,omitempty"`
 	AgentID         string           `json:"agent_id,omitempty"`
+	ParentID        string           `json:"parent_id,omitempty"`
 	Name            string           `json:"name"`
 	DisplayName     string           `json:"display_name,omitempty"`
 	Role            string           `json:"role,omitempty"`
+	Provider        string           `json:"provider,omitempty"`
+	Model           string           `json:"model,omitempty"`
 	SessionID       string           `json:"session_id,omitempty"`
 	InvocationIndex int              `json:"invocation_index,omitempty"`
 	StartTime       string           `json:"start_time"`
@@ -41,6 +46,8 @@ type TimelineRow struct {
 	TokenGrandTotal int              `json:"token_grand_total"`
 	TokenShare      float64          `json:"token_share"`
 	Calls           int              `json:"calls"`
+	Critical        bool             `json:"critical,omitempty"`
+	Bottleneck      bool             `json:"bottleneck,omitempty"`
 	Markers         []TimelineMarker `json:"markers,omitempty"`
 }
 
@@ -111,7 +118,14 @@ func (b *timelineBuilder) collectPipelineRows() {
 		row.Calls = stage.Calls
 		for _, agent := range stage.Agents {
 			if agent != nil {
-				b.agentNames[agentKey(stage.ID, agent.ID)] = agent.Name
+				key := agentKey(stage.ID, agent.ID)
+				b.agentNames[key] = agent.Name
+				if agentRow := b.rowForAgent(stage.ID, agent.ID); agentRow != nil {
+					agentRow.Provider = agent.Provider
+					agentRow.Model = agent.Model
+					agentRow.Calls = agent.Calls
+					agentRow.Usage = agent.Total.Normalized()
+				}
 			}
 		}
 	}
@@ -229,6 +243,8 @@ func (b *timelineBuilder) collectEventRows() {
 			}
 			row.Usage = row.Usage.Add(usage)
 			row.Calls++
+			row.Provider = firstNonEmpty(stringValue(data, "provider"), row.Provider)
+			row.Model = firstNonEmpty(stringValue(data, "model"), row.Model)
 			b.addMarker(row, eventTime, "api_call", "api", usageSummary(usage), "usage", &usage)
 		case "streamma.agent.step.committed":
 			row := b.findRow(stageID, agentID, sessionID, invocation)
@@ -401,6 +417,7 @@ func (b *timelineBuilder) timeline() Timeline {
 		end = start
 	}
 	maxConcurrency, overlapMS := agentConcurrency(rows)
+	criticalPath, bottleneckID := timelineSignals(rows)
 	return Timeline{
 		StartTime:       start.Format(time.RFC3339Nano),
 		EndTime:         end.Format(time.RFC3339Nano),
@@ -411,8 +428,35 @@ func (b *timelineBuilder) timeline() Timeline {
 		TokenTotal:      b.totalUsage.Normalized(),
 		TokenGrandTotal: b.grandTotal,
 		Error:           b.timelineError,
+		CriticalPath:    criticalPath,
+		BottleneckID:    bottleneckID,
 		Rows:            rows,
 	}
+}
+
+func timelineSignals(rows []TimelineRow) ([]string, string) {
+	var bottleneck *TimelineRow
+	for i := range rows {
+		row := &rows[i]
+		if row.Kind == "stage" || row.DurationMS <= 0 {
+			continue
+		}
+		if bottleneck == nil || row.DurationMS > bottleneck.DurationMS {
+			bottleneck = row
+		}
+	}
+	if bottleneck == nil {
+		return nil, ""
+	}
+	for i := range rows {
+		rows[i].Critical = rows[i].ID == bottleneck.ID || rows[i].ParentID == bottleneck.ParentID
+		rows[i].Bottleneck = rows[i].ID == bottleneck.ID
+	}
+	path := []string{bottleneck.ID}
+	if bottleneck.ParentID != "" {
+		path = append([]string{bottleneck.ParentID}, path...)
+	}
+	return path, bottleneck.ID
 }
 
 func (b *timelineBuilder) ensureRow(id, kind, stageID, agentID string, invocation int) *TimelineRow {
@@ -433,10 +477,14 @@ func (b *timelineBuilder) ensureRow(id, kind, stageID, agentID string, invocatio
 		StageID:         stageID,
 		StageName:       stageName,
 		AgentID:         agentID,
+		ParentID:        "",
 		Name:            name,
 		DisplayName:     name,
 		InvocationIndex: invocation,
 		Status:          "live",
+	}
+	if kind == "agent" && stageID != "" {
+		row.ParentID = stageRowID(stageID)
 	}
 	if agentName := b.agentNames[agentKey(stageID, agentID)]; agentName != "" && kind == "agent" {
 		row.DisplayName = agentName

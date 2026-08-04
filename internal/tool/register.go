@@ -12,6 +12,14 @@ import (
 type Registry struct {
 	mu    sync.RWMutex
 	tools map[string]Tool
+
+	generation       uint64
+	describeGen      uint64
+	describeCache    []string
+	briefGen         uint64
+	briefCache       []string
+	definitionsGen   uint64
+	definitionsCache []model.ToolDefinition
 }
 
 func NewRegistry() *Registry {
@@ -30,6 +38,7 @@ func (r *Registry) Register(tool Tool) {
 		r.tools = make(map[string]Tool)
 	}
 	r.tools[tool.Name()] = tool
+	r.generation++
 }
 
 // ReplaceNamespace atomically replaces tools belonging to one logical
@@ -72,6 +81,7 @@ func (r *Registry) ReplaceNamespace(namespace string, tools []Tool) error {
 	for _, registered := range tools {
 		r.tools[registered.Name()] = registered
 	}
+	r.generation++
 	return nil
 }
 
@@ -83,10 +93,15 @@ func (r *Registry) RemoveNamespace(namespace string) {
 	namespace = strings.TrimSpace(namespace)
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	changed := false
 	for name, registered := range r.tools {
 		if toolNamespace(registered) == namespace {
 			delete(r.tools, name)
+			changed = true
 		}
+	}
+	if changed {
+		r.generation++
 	}
 }
 
@@ -121,9 +136,14 @@ func (r *Registry) Describe() []string {
 	if r == nil {
 		return nil
 	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.describeGen == r.generation {
+		return append([]string(nil), r.describeCache...)
+	}
 	if len(r.tools) == 0 {
+		r.describeGen = r.generation
+		r.describeCache = nil
 		return nil
 	}
 
@@ -135,24 +155,31 @@ func (r *Registry) Describe() []string {
 
 	descriptions := make([]string, 0, len(r.tools))
 	for _, name := range names {
-		tool := r.tools[name]
-		description := tool.Name() + ": " + tool.Description()
-		schema := strings.TrimSpace(string(tool.InputSchema()))
+		registered := r.tools[name]
+		description := registered.Name() + ": " + registered.Description()
+		schema := strings.TrimSpace(string(registered.InputSchema()))
 		if schema != "" {
 			description += " input_schema=" + schema
 		}
 		descriptions = append(descriptions, description)
 	}
-	return descriptions
+	r.describeCache = descriptions
+	r.describeGen = r.generation
+	return append([]string(nil), descriptions...)
 }
 
 func (r *Registry) DescribeBrief() []string {
 	if r == nil {
 		return nil
 	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.briefGen == r.generation {
+		return append([]string(nil), r.briefCache...)
+	}
 	if len(r.tools) == 0 {
+		r.briefGen = r.generation
+		r.briefCache = nil
 		return nil
 	}
 
@@ -164,15 +191,17 @@ func (r *Registry) DescribeBrief() []string {
 
 	descriptions := make([]string, 0, len(r.tools))
 	for _, name := range names {
-		tool := r.tools[name]
-		description := strings.TrimSpace(tool.Description())
+		registered := r.tools[name]
+		description := strings.TrimSpace(registered.Description())
 		if description == "" {
-			descriptions = append(descriptions, tool.Name())
+			descriptions = append(descriptions, registered.Name())
 			continue
 		}
-		descriptions = append(descriptions, tool.Name()+": "+description)
+		descriptions = append(descriptions, registered.Name()+": "+description)
 	}
-	return descriptions
+	r.briefCache = descriptions
+	r.briefGen = r.generation
+	return append([]string(nil), descriptions...)
 }
 
 // Definitions 返回注册表中所有工具的 ToolDefinition 切片，用于原生工具调用请求。
@@ -180,11 +209,17 @@ func (r *Registry) Definitions() []model.ToolDefinition {
 	if r == nil {
 		return nil
 	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.definitionsGen == r.generation {
+		return cloneDefinitions(r.definitionsCache)
+	}
 	if len(r.tools) == 0 {
+		r.definitionsGen = r.generation
+		r.definitionsCache = nil
 		return nil
 	}
+
 	names := make([]string, 0, len(r.tools))
 	for name := range r.tools {
 		names = append(names, name)
@@ -193,18 +228,32 @@ func (r *Registry) Definitions() []model.ToolDefinition {
 
 	defs := make([]model.ToolDefinition, 0, len(names))
 	for _, name := range names {
-		t := r.tools[name]
-		schema := t.InputSchema()
+		registered := r.tools[name]
+		schema := registered.InputSchema()
 		if len(schema) == 0 {
 			schema = []byte(`{"type":"object","properties":{}}`)
 		}
 		defs = append(defs, model.ToolDefinition{
-			Name:        t.Name(),
-			Description: t.Description(),
-			InputSchema: schema,
+			Name:        registered.Name(),
+			Description: registered.Description(),
+			InputSchema: append([]byte(nil), schema...),
 		})
 	}
-	return defs
+	r.definitionsCache = defs
+	r.definitionsGen = r.generation
+	return cloneDefinitions(defs)
+}
+
+func cloneDefinitions(defs []model.ToolDefinition) []model.ToolDefinition {
+	if len(defs) == 0 {
+		return nil
+	}
+	out := make([]model.ToolDefinition, len(defs))
+	for i, definition := range defs {
+		out[i] = definition
+		out[i].InputSchema = append([]byte(nil), definition.InputSchema...)
+	}
+	return out
 }
 
 type namespacedTool interface {

@@ -5376,7 +5376,7 @@ func TestEscDoesNotQuitTUI(t *testing.T) {
 	}
 }
 
-// TestFilterByPrefix 验证大小写不敏感的前缀过滤。
+// TestFilterByPrefix 验证大小写不敏感的文件名过滤。
 func TestFilterByPrefix(t *testing.T) {
 	items := []string{"README.md", "readme.txt", "go.mod", "go.sum", "main.go"}
 	got := filterByPrefix(items, "read")
@@ -5387,6 +5387,45 @@ func TestFilterByPrefix(t *testing.T) {
 	all := filterByPrefix(items, "")
 	if len(all) != len(items) {
 		t.Errorf("filterByPrefix with empty prefix = %d items, want %d", len(all), len(items))
+	}
+}
+
+func TestFilterByPrefixMatchesExtensionAndSubstring(t *testing.T) {
+	items := []string{
+		"README.md",
+		"docs/guide.md",
+		"internal/ui/bubble/completion.go",
+		"internal/ui/bubble/bubble_test.go",
+		"scripts/testdata/fixture.txt",
+	}
+
+	for _, item := range []string{"README.md", "docs/guide.md"} {
+		if got := filterByPrefix(items, "md"); !containsString(got, item) {
+			t.Fatalf("filterByPrefix(md) = %#v, want %q", got, item)
+		}
+	}
+	if got := filterByPrefix(items, "md"); len(got) != 2 {
+		t.Fatalf("filterByPrefix(md) = %#v, want exactly the two .md files", got)
+	}
+
+	for _, item := range []string{"internal/ui/bubble/bubble_test.go", "scripts/testdata/fixture.txt"} {
+		if got := filterByPrefix(items, "test"); !containsString(got, item) {
+			t.Fatalf("filterByPrefix(test) = %#v, want %q", got, item)
+		}
+	}
+}
+
+func TestFilterByPrefixFallsBackToSubstringWhenNoExtensionMatches(t *testing.T) {
+	items := []string{"markdown.txt", "notes.md", "README"}
+	got := filterByPrefix(items, "mark")
+	want := []string{"markdown.txt"}
+	if !equalStrings(got, want) {
+		t.Fatalf("filterByPrefix(mark) = %#v, want %#v", got, want)
+	}
+
+	got = filterByPrefix(items, "xyz")
+	if len(got) != 0 {
+		t.Fatalf("filterByPrefix(xyz) = %#v, want no matches", got)
 	}
 }
 
