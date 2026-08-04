@@ -2137,6 +2137,34 @@ func TestRunTurnKeepsSupplementWhenModelCallFails(t *testing.T) {
 	}
 }
 
+func TestRunTurnSuppressesToolUseAfterVisibleText(t *testing.T) {
+	ui := &fakeUI{}
+	model := &fakeModel{rounds: []fakeRound{
+		{events: []model.StreamEvent{
+			{Delta: "Here is the requested operation:\n"},
+			{Delta: `{"type":"tool_use","id":"call-1","name":"Read","input":{"file_path":"go.mod"}}`},
+			{Done: true},
+		}},
+		{events: []model.StreamEvent{{Delta: "done"}, {Done: true}}},
+	}}
+	registry := tool.NewRegistry()
+	registry.Register(&fakeTool{name: "Read", output: "module paw"})
+	runner := NewRunner(model, ui, registry, nil, "")
+
+	if _, err := runner.RunTurn(context.Background(), "read go.mod"); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if len(ui.toolCalls) != 1 || ui.toolCalls[0].Name != "Read" {
+		t.Fatalf("ui.toolCalls = %#v, want one Read call", ui.toolCalls)
+	}
+	if len(ui.deltas) != 2 || ui.deltas[0] != "Here is the requested operation:\n" || ui.deltas[1] != "done" {
+		t.Fatalf("ui.deltas = %#v, want prose and final answer but no tool JSON", ui.deltas)
+	}
+	if strings.Contains(strings.Join(ui.deltas, ""), `"type":"tool_use"`) {
+		t.Fatalf("tool-use envelope leaked into assistant deltas: %#v", ui.deltas)
+	}
+}
+
 func TestRunTurnExecutesToolUseWrappedInMarkdownFence(t *testing.T) {
 	ui := &fakeUI{}
 	model := &fakeModel{

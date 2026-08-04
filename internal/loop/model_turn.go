@@ -423,6 +423,13 @@ func (runner *Runner) appendDelta(state *turnState, delta string) error {
 
 	switch state.outputMode {
 	case outputModeVisible:
+		// A model may switch from ordinary prose to a text-encoded tool call
+		// after the first visible delta. Do not forward that candidate to the UI;
+		// once a delta has been rendered it cannot be retracted from the transcript.
+		if looksLikeToolPayloadStart(delta) {
+			state.outputMode = outputModeSuppressed
+			return nil
+		}
 		return runner.writeDelta(state, delta)
 	case outputModeSuppressed:
 		return nil
@@ -441,6 +448,24 @@ func (runner *Runner) appendDelta(state *turnState, delta string) error {
 	pending := state.pending.String()
 	state.pending.Reset()
 	return runner.writeDelta(state, pending)
+}
+
+func looksLikeToolPayloadStart(delta string) bool {
+	trimmed := strings.TrimSpace(delta)
+	if trimmed == "" {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "{") ||
+		strings.HasPrefix(trimmed, "[") ||
+		strings.HasPrefix(trimmed, "```") {
+		return true
+	}
+
+	lower := strings.ToLower(trimmed)
+	return strings.HasPrefix(lower, "<invoke") ||
+		strings.HasPrefix(lower, "<tool_call") ||
+		strings.HasPrefix(lower, "<tool ") ||
+		strings.HasPrefix(lower, "<tool>")
 }
 
 func detectOutputMode(content string) outputMode {
