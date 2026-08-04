@@ -179,6 +179,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateWaveAmp(time.Time(msg))
 		m.refreshActivityTasks()
 		m.refreshSubagentPreviewFromTasks()
+		m.refreshSubagentToolEntriesFromTasks()
 		m.refreshRunningToolProgress(time.Time(msg))
 		if m.transcriptRefreshPending {
 			if m.viewport.AtBottom() {

@@ -337,17 +337,45 @@ func loadFilesInDirCmd(searchDir, filePrefix string, useDefault bool) tea.Cmd {
 	}
 }
 
-// filterByPrefix 筛选以 prefix 开头的条目（大小写不敏感）。
+// filterByPrefix 筛选文件补全条目（大小写不敏感）。
+//
+// 文件补全使用更适合文件名搜索的匹配规则：
+//   - 输入 "md" 时优先按扩展名匹配，例如 README.md；
+//   - 其他输入按文件名/目录名的任意位置匹配，例如 test 命中 my_test.go；
+//   - 目录仍然参与匹配，便于继续通过 Tab 浏览目录。
 func filterByPrefix(items []string, prefix string) []string {
 	if prefix == "" {
 		out := make([]string, len(items))
 		copy(out, items)
 		return out
 	}
-	lower := strings.ToLower(prefix)
-	var out []string
+
+	query := strings.ToLower(strings.TrimSpace(prefix))
+	if query == "" {
+		out := make([]string, len(items))
+		copy(out, items)
+		return out
+	}
+
+	// 对不含点号的短查询，优先把它视为扩展名；只有没有扩展名命中时，
+	// 才回退到通用子串匹配。这样输入 md 会优先展示 .md 文件，同时不会
+	// 让用户因为目录或文件名中没有以 md 开头而看不到候选。
+	extensionMatches := make([]string, 0, len(items))
+	if !strings.Contains(query, ".") {
+		for _, item := range items {
+			name := strings.TrimSuffix(item, "/")
+			if strings.EqualFold(filepath.Ext(name), "."+query) {
+				extensionMatches = append(extensionMatches, item)
+			}
+		}
+		if len(extensionMatches) > 0 {
+			return extensionMatches
+		}
+	}
+
+	out := make([]string, 0, len(items))
 	for _, item := range items {
-		if strings.HasPrefix(strings.ToLower(item), lower) {
+		if strings.Contains(strings.ToLower(item), query) {
 			out = append(out, item)
 		}
 	}

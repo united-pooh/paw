@@ -907,6 +907,52 @@ Design body line.`)
 	}
 }
 
+func TestRunTurnOnlyInjectsSkillBodyOnFirstToolRound(t *testing.T) {
+	root := t.TempDir()
+	writeLoopTestSkill(t, root, "investigation", `---
+description: Investigation workflow
+---
+SKILL_BODY_UNIQUE_MARKER
+Before work, emit an investigation checklist.`)
+	registry := tool.NewRegistry()
+	registry.Register(&fakeTool{name: "Read", output: "file contents"})
+	model := &fakeModel{rounds: []fakeRound{
+		{events: []model.StreamEvent{
+			{Delta: `{"type":"tool_use","id":"call-1","name":"Read","input":{"file_path":"README.md"}}`},
+			{Done: true},
+		}},
+		{events: []model.StreamEvent{{Delta: "finished"}, {Done: true}}},
+	}}
+	runner := NewRunner(model, &fakeUI{}, registry, nil, "")
+	runner.SetSkillRegistry(skill.NewRegistry([]string{root}))
+
+	if _, err := runner.RunTurn(context.Background(), "investigate [$investigation](/unused/path)"); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if len(model.calls) != 2 {
+		t.Fatalf("model calls = %d, want 2", len(model.calls))
+	}
+	firstPrompt := model.calls[0][0].Content
+	secondPrompt := model.calls[1][0].Content
+	if !strings.Contains(firstPrompt, "SKILL_BODY_UNIQUE_MARKER") {
+		t.Fatalf("first system prompt = %q, want full skill body", firstPrompt)
+	}
+	if strings.Contains(secondPrompt, "SKILL_BODY_UNIQUE_MARKER") {
+		t.Fatalf("second system prompt repeated full skill body: %q", secondPrompt)
+	}
+	for _, want := range []string{
+		"already active for this turn",
+		"do not restart the investigation plan",
+	} {
+		if !strings.Contains(secondPrompt, want) {
+			t.Fatalf("second system prompt = %q, want %q", secondPrompt, want)
+		}
+	}
+	if !strings.Contains(promptTextForTest(model.calls[1]), "file contents") {
+		t.Fatalf("second model call omitted structured tool result: %#v", model.calls[1])
+	}
+}
+
 func TestRunTurnStreamMAWorkersReceiveSkillContext(t *testing.T) {
 	root := t.TempDir()
 	writeLoopTestSkill(t, root, "design", "# Design\nStreamMA skill body.")

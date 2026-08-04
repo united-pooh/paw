@@ -1167,10 +1167,23 @@ func renderGroupedToolEntry(entry transcriptEntry, width int, at time.Time, full
 	if entry.toolFocused {
 		summary = toolFocusedStyle.Width(innerWidth).Render(summary)
 	}
-	if toolEntryStatus(entry) == "running" || !entry.toolGroupOpen {
+	if toolEntryStatus(entry) == "running" {
+		if !isSubagentToolEntry(entry) {
+			return borderStyle.Width(contentWidth).Render(summary)
+		}
+		detail := renderToolInputForDisplay(entry, maxInt(1, innerWidth-2))
+		if detail == "" {
+			return borderStyle.Width(contentWidth).Render(summary)
+		}
+		return borderStyle.Width(contentWidth).Render(summary + "\n" + detail)
+	}
+	if !entry.toolGroupOpen {
 		return borderStyle.Width(contentWidth).Render(summary)
 	}
 	result := toolResultForDisplay(entry)
+	if isSubagentToolEntry(entry) {
+		result = renderSubagentToolDetail(entry)
+	}
 	if result == "" {
 		result = "(empty result)"
 	}
@@ -1180,6 +1193,86 @@ func renderGroupedToolEntry(entry transcriptEntry, width int, at time.Time, full
 	}
 	detail := renderToolDetailLines(resultLines, maxInt(1, innerWidth-2))
 	return borderStyle.Width(contentWidth).Render(summary + "\n" + detail)
+}
+
+func renderToolInputForDisplay(entry transcriptEntry, width int) string {
+	if len(entry.toolInput) == 0 {
+		return ""
+	}
+	var input struct {
+		Prompt      string `json:"prompt"`
+		Description string `json:"description,omitempty"`
+		ContextMode string `json:"context_mode,omitempty"`
+		RunMode     string `json:"run_mode,omitempty"`
+	}
+	if json.Unmarshal(entry.toolInput, &input) == nil && strings.TrimSpace(input.Prompt) != "" {
+		lines := []string{"prompt: " + strings.TrimSpace(input.Prompt)}
+		if value := strings.TrimSpace(input.Description); value != "" {
+			lines = append(lines, "description: "+value)
+		}
+		if value := strings.TrimSpace(input.ContextMode); value != "" {
+			lines = append(lines, "context: "+value)
+		}
+		if value := strings.TrimSpace(input.RunMode); value != "" {
+			lines = append(lines, "mode: "+value)
+		}
+		return renderToolDetailLines(lines, width)
+	}
+	return renderToolDetailLines(strings.Split(strings.TrimSpace(string(entry.toolInput)), "\n"), width)
+}
+
+func isSubagentToolEntry(entry transcriptEntry) bool {
+	return strings.EqualFold(strings.TrimSpace(toolEntryDisplayName(entry)), "subagent")
+}
+
+func renderSubagentToolDetail(entry transcriptEntry) string {
+	var payload struct {
+		Status         string `json:"status"`
+		ID             string `json:"id"`
+		Name           string `json:"name"`
+		Prompt         string `json:"prompt"`
+		Description    string `json:"description"`
+		SessionID      string `json:"session_id"`
+		TranscriptPath string `json:"transcript_path"`
+		OutputPath     string `json:"output_path"`
+		Content        string `json:"content"`
+		Error          string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(entry.toolResult), &payload); err != nil {
+		return toolResultForDisplay(entry)
+	}
+	lines := make([]string, 0, 8)
+	if value := strings.TrimSpace(payload.Status); value != "" {
+		lines = append(lines, "status: "+value)
+	}
+	if value := strings.TrimSpace(payload.ID); value != "" {
+		lines = append(lines, "id: "+value)
+	}
+	if value := strings.TrimSpace(payload.Name); value != "" {
+		lines = append(lines, "agent: "+value)
+	}
+	if value := strings.TrimSpace(payload.Prompt); value != "" {
+		lines = append(lines, "prompt: "+value)
+	}
+	if value := strings.TrimSpace(payload.Description); value != "" {
+		lines = append(lines, "description: "+value)
+	}
+	if value := strings.TrimSpace(payload.SessionID); value != "" {
+		lines = append(lines, "session: "+value)
+	}
+	if value := strings.TrimSpace(payload.Content); value != "" {
+		lines = append(lines, "result: "+value)
+	}
+	if value := strings.TrimSpace(payload.Error); value != "" {
+		lines = append(lines, "error: "+value)
+	}
+	if value := strings.TrimSpace(payload.TranscriptPath); value != "" {
+		lines = append(lines, "transcript: "+value)
+	}
+	if value := strings.TrimSpace(payload.OutputPath); value != "" {
+		lines = append(lines, "output: "+value)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func toolResultForDisplay(entry transcriptEntry) string {

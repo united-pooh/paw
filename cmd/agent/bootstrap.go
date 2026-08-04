@@ -1,0 +1,182 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"paw/internal/loop"
+	coremcp "paw/internal/mcp"
+	"paw/internal/model"
+	"paw/internal/session"
+	"paw/internal/settings"
+	"paw/internal/subagent"
+	"paw/internal/tool"
+	toolmcp "paw/internal/tool/mcp"
+	uiiface "paw/internal/ui"
+)
+
+type subagentRuntimeContext struct {
+	depth           int
+	maxDepth        int
+	parentTaskID    string
+	mcpBroker       coremcp.Broker
+	disableMainTodo bool
+}
+
+type runnerToolConfigurator func(*tool.Registry) error
+
+func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI, allowOutsideRead bool, configurators ...runnerToolConfigurator) (*loop.Runner, string, *model.Client, *settings.Controller, *subagent.Manager, *session.JSONLStore, *coremcp.Manager, error) {
+	return buildRunnerWithSubagentContext(ctx, sessionIDFlag, output, allowOutsideRead, subagentRuntimeContext{}, configurators...)
+}
+
+func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, output uiiface.UI, allowOutsideRead bool, subCtx subagentRuntimeContext, configurators ...runnerToolConfigurator) (*loop.Runner, string, *model.Client, *settings.Controller, *subagent.Manager, *session.JSONLStore, *coremcp.Manager, error) {
+	cfg, err := model.LoadConfigFromEnv()
+	if err != nil {
+		return nil, "", nil, nil, nil, nil, nil, err
+	}
+
+	root, err := os.Getwd()
+	if err != nil {
+		return nil, "", nil, nil, nil, nil, nil, err
+	}
+
+	store, err := session.NewJSONLStoreInCwd()
+	if err != nil {
+		return nil, "", nil, nil, nil, nil, nil, fmt.Errorf("初始化 session store 失败: %w", err)
+	}
+
+	sessionID, err := resolveSessionID(ctx, store, sessionIDFlag, root)
+	if err != nil {
+		return nil, "", nil, nil, nil, nil, nil, err
+	}
+
+	client := model.NewClient(cfg)
+	settingsController, err := settings.NewDefaultController(nil)
+	if err != nil {
+		return nil, "", nil, nil, nil, nil, nil, err
+	}
+	var notifier subagent.Notifier
+	if n, ok := output.(subagent.Notifier); ok {
+		notifier = n
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return nil, "", nil, nil, nil, nil, nil, fmt.Errorf("resolve executable: %w", err)
+	}
+	broker := subCtx.mcpBroker
+	var mcpManager *coremcp.Manager
+	if broker == nil {
+		mcpConfig, err := coremcp.LoadConfig("", root)
+		if err != nil {
+			return nil, "", nil, nil, nil, nil, nil, err
+		}
+		mcpManager, err = coremcp.Start(ctx, mcpConfig)
+		if err != nil {
+			return nil, "", nil, nil, nil, nil, nil, err
+		}
+		broker = mcpManager
+	}
+	launcher := subagent.NewProcessLauncher(executable, root)
+	launcher.SetDangerousMode(allowOutsideRead)
+	launcher.SetMCPBroker(broker)
+	registry := tool.NewRegistry()
+	runner := loop.NewRunnerWithInstructionRoot(client, output, registry, store, sessionID, root)
+	if err := runner.SetContextMaintenanceConfig(settingsController.CurrentSettings().ContextMaintenance); err != nil {
+		if mcpManager != nil {
+			_ = mcpManager.Close(context.Background())
+		}
+		return nil, "", nil, nil, nil, nil, nil, fmt.Errorf("configure context maintenance: %w", err)
+	}
+	subagentManager := subagent.NewManager(subagent.Config{
+		Model:        client,
+		Store:        store,
+		Root:         root,
+		Settings:     settingsController,
+		Notifier:     notifier,
+		Context:      runner,
+		Launcher:     launcher,
+		Depth:        subCtx.depth,
+		MaxDepth:     subCtx.maxDepth,
+		ParentTaskID: subCtx.parentTaskID,
+		MCPBroker:    broker,
+	})
+	runner.SetStreamMASubagentRunner(streamMASubagentAdapter{
+		manager:         subagentManager,
+		parentSessionID: sessionID,
+	})
+	runner.SetSubagentTokensProvider(subagentManager)
+	if err := registerTools(registry, root, runner.SkillRoots(), subagentManager, sessionID, broker, allowOutsideRead); err != nil {
+		if mcpManager != nil {
+			_ = mcpManager.Close(context.Background())
+		}
+		return nil, "", nil, nil, nil, nil, nil, err
+	}
+	runner.SetYoloModeHandler(launcher.SetDangerousMode)
+	if !subCtx.disableMainTodo {
+		if err := registerMainAgentTools(registry, nil); err != nil {
+			if mcpManager != nil {
+				_ = mcpManager.Close(context.Background())
+			}
+			return nil, "", nil, nil, nil, nil, nil, err
+		}
+	}
+	for _, configure := range configurators {
+		if configure == nil {
+			continue
+		}
+		if err := configure(registry); err != nil {
+			if mcpManager != nil {
+				_ = mcpManager.Close(context.Background())
+			}
+			return nil, "", nil, nil, nil, nil, nil, err
+		}
+	}
+	if mcpManager != nil {
+		updates, stopUpdates := mcpManager.Subscribe()
+		go func() {
+			defer stopUpdates()
+			for snapshot := range updates {
+				adapted := toolmcp.NewSnapshotTools(snapshot, mcpManager)
+				tools := make([]tool.Tool, 0, len(adapted))
+				for _, item := range adapted {
+					tools = append(tools, item)
+				}
+				_ = registry.ReplaceNamespace("mcp", tools)
+			}
+		}()
+	}
+
+	return runner, sessionID, client, settingsController, subagentManager, store, mcpManager, nil
+}
+
+type streamMASubagentAdapter struct {
+	manager         *subagent.Manager
+	parentSessionID string
+}
+
+func (a streamMASubagentAdapter) StreamSubagent(ctx context.Context, req loop.StreamMASubagentRequest) (loop.StreamMASubagentStream, error) {
+	if a.manager == nil {
+		return loop.StreamMASubagentStream{}, fmt.Errorf("streamma subagent manager is nil")
+	}
+	stream, err := a.manager.Stream(ctx, subagent.Request{
+		SessionID:       req.SessionID,
+		ParentSessionID: a.parentSessionID,
+		Prompt:          req.Prompt,
+		SystemPrompt:    req.SystemPrompt,
+		Description:     req.Description,
+		ContextMode:     settings.ContextMode(req.ContextMode),
+		RunMode:         settings.RunModeSync,
+		DisableTools:    req.DisableTools,
+	})
+	if err != nil {
+		return loop.StreamMASubagentStream{}, err
+	}
+	return loop.StreamMASubagentStream{
+		Events:         stream.Events,
+		AgentName:      stream.AgentName,
+		AgentColor:     stream.AgentColor,
+		SessionID:      stream.SessionID,
+		TranscriptPath: stream.TranscriptPath,
+		OutputPath:     stream.OutputPath,
+	}, nil
+}

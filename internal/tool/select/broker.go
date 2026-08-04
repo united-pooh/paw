@@ -24,6 +24,7 @@ type Broker struct {
 	queue      []*pendingRequest
 	active     *pendingRequest
 	eventQueue []Event
+	eventHead  int
 	wake       chan struct{}
 	closed     bool
 }
@@ -75,10 +76,14 @@ func formatUint(n uint64) string {
 func (b *Broker) NextEvent(ctx context.Context) (Event, error) {
 	for {
 		b.mu.Lock()
-		if len(b.eventQueue) > 0 {
-			event := b.eventQueue[0]
-			b.eventQueue = b.eventQueue[1:]
-			if len(b.eventQueue) > 0 {
+		if b.eventHead < len(b.eventQueue) {
+			event := b.eventQueue[b.eventHead]
+			b.eventHead++
+			if b.eventHead == len(b.eventQueue) {
+				// Release references and reset the queue once fully consumed.
+				b.eventQueue = nil
+				b.eventHead = 0
+			} else {
 				b.signalLocked()
 			}
 			b.mu.Unlock()
