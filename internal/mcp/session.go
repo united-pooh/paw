@@ -228,5 +228,5 @@ func (b *tailBuffer) Write(data []byte) (int, error) {
 func (b *tailBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return string(append([]byte(nil), b.data...))
+	return redactSensitiveText(string(append([]byte(nil), b.data...)))
 }

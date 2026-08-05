@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -65,6 +66,20 @@ func TestProcessSessionReportsStderrTail(t *testing.T) {
 	}
 	if got := session.StderrTail(); got == "" {
 		t.Fatal("StderrTail() is empty")
+	}
+}
+
+func TestMCPDiagnosticsRedactAuthorizationAndBearerSecrets(t *testing.T) {
+	const secret = "jina_test_secret_123"
+	buffer := newTailBuffer(4096)
+	_, _ = buffer.Write([]byte("custom headers: { Authorization: 'Bearer " + secret + "' }\n"))
+	got := buffer.String()
+	if strings.Contains(got, secret) || !strings.Contains(got, "[REDACTED]") {
+		t.Fatalf("stderr was not redacted: %q", got)
+	}
+	diagnostic := truncateDiagnostic(`request failed Authorization="Bearer ` + secret + `"`)
+	if strings.Contains(diagnostic, secret) || !strings.Contains(diagnostic, "[REDACTED]") {
+		t.Fatalf("diagnostic was not redacted: %q", diagnostic)
 	}
 }
 

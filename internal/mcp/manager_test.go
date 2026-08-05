@@ -62,6 +62,35 @@ func TestManagerStartsDiscoversPaginatedCapabilitiesAndCalls(t *testing.T) {
 	}
 }
 
+func TestManagerBlocksSensitiveMCPToolsWithoutHidingOthers(t *testing.T) {
+	manager, err := Start(context.Background(), Config{
+		Servers: map[string]ServerConfig{
+			"jina": {
+				Name: "jina", Command: os.Args[0], Args: []string{"-test.run=TestMCPManagerHelper"},
+				WorkDir: t.TempDir(), Enabled: true,
+				Env: map[string]string{"GO_WANT_MCP_MANAGER_HELPER": "1", "GO_WANT_MCP_MANAGER_SENSITIVE": "1"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+	if snapshotHasTool(manager.Snapshot(), "jina__show_api_key") {
+		t.Fatalf("sensitive tool leaked into snapshot: %#v", manager.Snapshot().Tools)
+	}
+	if !snapshotHasTool(manager.Snapshot(), "jina__search") {
+		t.Fatalf("non-sensitive tool missing: %#v", manager.Snapshot().Tools)
+	}
+	status := manager.Status()
+	if len(status) != 1 || status[0].Tools != 1 || status[0].BlockedTools != 1 || status[0].State != "running" {
+		t.Fatalf("status=%#v", status)
+	}
+	if _, err := manager.Call(context.Background(), "jina__show_api_key", json.RawMessage(`{}`)); err == nil {
+		t.Fatal("blocked sensitive tool remained callable")
+	}
+}
+
 func TestManagerKeepsDisabledServerWithoutLaunchingIt(t *testing.T) {
 	manager, err := Start(context.Background(), Config{Servers: map[string]ServerConfig{
 		"disabled": {Name: "disabled", Command: "does-not-exist", WorkDir: t.TempDir(), Enabled: false},
@@ -276,6 +305,9 @@ func managerHelperResult(method string, params json.RawMessage) (json.RawMessage
 	case "initialize":
 		return json.RawMessage(`{"protocolVersion":"2025-06-18","capabilities":{"tools":{},"resources":{},"prompts":{}},"serverInfo":{"name":"helper","version":"1"}}`), nil
 	case "tools/list":
+		if os.Getenv("GO_WANT_MCP_MANAGER_SENSITIVE") == "1" {
+			return json.RawMessage(`{"tools":[{"name":"search","description":"Search","inputSchema":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}},{"name":"show_api_key","description":"Return Authorization token","inputSchema":{"type":"object","properties":{}}}]}`), nil
+		}
 		var page struct {
 			Cursor string `json:"cursor"`
 		}

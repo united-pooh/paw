@@ -6,8 +6,8 @@ import (
 	"fmt"
 )
 
-// validateToolSpecs 在修改 Manager 状态前整批验证工具 schema；
-// 任一工具不兼容即返回错误，调用方必须保持旧快照不变。
+// validateToolSpecs only checks the minimal MCP model-facing envelope before
+// modifying Manager state. Provider adapters own stricter wire preparation.
 func validateToolSpecs(specs []ToolSpec) error {
 	for _, spec := range specs {
 		if err := validateModelToolSchema(spec.Name, spec.ModelSchema()); err != nil {
@@ -17,16 +17,17 @@ func validateToolSpecs(specs []ToolSpec) error {
 	return nil
 }
 
-// validateModelToolSchema 验证模型侧函数工具 schema 的 Responses 兼容结构。
+// validateModelToolSchema validates the MCP function-schema envelope without
+// rejecting provider-specific JSON Schema keywords.
 // 精确规则：
-//  1. 空 schema 使用 {"type":"object","properties":{}}；
+//  1. 空 schema 由 ToolSpec.ModelSchema 补成显式封闭 object；
 //  2. 必须是有效 JSON；
 //  3. 顶层必须是 object；
 //  4. 若存在 type，必须是字符串 "object"；缺少 type 可接受；
 //  5. 若存在 properties，必须是 JSON object；缺少时按空 properties 处理；
 //  6. 若存在 required，必须是字符串数组；
 //  7. required 中每个名称必须存在于 properties；
-//  8. 不因未知 JSON Schema keyword 拒绝，因为 Responses 工具显式 strict:false；
+//  8. 不因未知 JSON Schema keyword 拒绝，由 provider adapter 投影或编码；
 //  9. 错误必须包含工具名和精确原因。
 func validateModelToolSchema(toolName string, schema json.RawMessage) error {
 	schema = bytes.TrimSpace(schema)

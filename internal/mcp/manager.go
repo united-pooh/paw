@@ -134,6 +134,7 @@ func Start(ctx context.Context, config Config) (*Manager, error) {
 		server.status.Resources = result.counts.resources
 		server.status.Templates = result.counts.templates
 		server.status.Prompts = result.counts.prompts
+		server.status.BlockedTools = result.counts.blockedTools
 	}
 	for _, name := range names {
 		server := m.servers[name]
@@ -189,7 +190,7 @@ type initializeResult struct {
 }
 
 type capabilityCounts struct {
-	tools, resources, templates, prompts int
+	tools, resources, templates, prompts, blockedTools int
 }
 
 type pagedTools struct {
@@ -229,13 +230,16 @@ func discoverCapabilities(ctx context.Context, serverName string, session RPCSes
 		}
 	}
 	for _, item := range listedTools {
+		if isSensitiveMCPToolName(item.Name) {
+			continue
+		}
 		name, err := namespacedCapabilityName(serverName, item.Name)
 		if err != nil {
 			return nil, capabilityCounts{}, err
 		}
 		schema := item.InputSchema
 		if len(schema) == 0 {
-			schema = json.RawMessage(`{"type":"object","properties":{}}`)
+			schema = json.RawMessage(`{"type":"object","properties":{},"required":[],"additionalProperties":false}`)
 		}
 		if !json.Valid(schema) {
 			return nil, capabilityCounts{}, fmt.Errorf("MCP tool %q has invalid input schema", item.Name)
@@ -274,12 +278,23 @@ func discoverCapabilities(ctx context.Context, serverName string, session RPCSes
 	if err := validateUniqueTools(tools); err != nil {
 		return nil, capabilityCounts{}, err
 	}
+	blockedTools := 0
+	for _, item := range listedTools {
+		if isSensitiveMCPToolName(item.Name) {
+			blockedTools++
+		}
+	}
 	return tools, capabilityCounts{
-		tools:     len(listedTools),
-		resources: len(resources),
-		templates: len(templates),
-		prompts:   len(prompts),
+		tools:        len(listedTools) - blockedTools,
+		resources:    len(resources),
+		templates:    len(templates),
+		prompts:      len(prompts),
+		blockedTools: blockedTools,
 	}, nil
+}
+
+func isSensitiveMCPToolName(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), "show_api_key")
 }
 
 func capabilityEnabled(capabilities map[string]any, name string) bool {
@@ -367,10 +382,10 @@ func callPage(ctx context.Context, session RPCSession, method, cursor string, re
 
 func virtualCapabilities(serverName string) []ToolSpec {
 	return []ToolSpec{
-		virtualTool(serverName, "list_resources", "List resources exposed by this MCP server.", KindListResources, "resources/list", `{"type":"object","properties":{}}`),
-		virtualTool(serverName, "list_resource_templates", "List resource templates exposed by this MCP server.", KindListTemplates, "resources/templates/list", `{"type":"object","properties":{}}`),
+		virtualTool(serverName, "list_resources", "List resources exposed by this MCP server.", KindListResources, "resources/list", `{"type":"object","properties":{},"required":[],"additionalProperties":false}`),
+		virtualTool(serverName, "list_resource_templates", "List resource templates exposed by this MCP server.", KindListTemplates, "resources/templates/list", `{"type":"object","properties":{},"required":[],"additionalProperties":false}`),
 		virtualTool(serverName, "read_resource", "Read a resource URI exposed by this MCP server.", KindReadResource, "resources/read", `{"type":"object","properties":{"uri":{"type":"string"}},"required":["uri"]}`),
-		virtualTool(serverName, "list_prompts", "List prompts exposed by this MCP server.", KindListPrompts, "prompts/list", `{"type":"object","properties":{}}`),
+		virtualTool(serverName, "list_prompts", "List prompts exposed by this MCP server.", KindListPrompts, "prompts/list", `{"type":"object","properties":{},"required":[],"additionalProperties":false}`),
 		virtualTool(serverName, "get_prompt", "Get a rendered prompt from this MCP server.", KindGetPrompt, "prompts/get", `{"type":"object","properties":{"name":{"type":"string"},"arguments":{"type":"object"}},"required":["name"]}`),
 	}
 }
@@ -522,6 +537,7 @@ func (m *Manager) refreshServer(name string) {
 	server.status.Resources = counts.resources
 	server.status.Templates = counts.templates
 	server.status.Prompts = counts.prompts
+	server.status.BlockedTools = counts.blockedTools
 	server.status.State = "running"
 	server.status.LastError = ""
 	m.mu.Unlock()
@@ -811,7 +827,7 @@ func formatProcessExit(err error, stderr string) string {
 
 func truncateDiagnostic(value string) string {
 	const max = 32 * 1024
-	value = strings.TrimSpace(value)
+	value = strings.TrimSpace(redactSensitiveText(value))
 	if len(value) <= max {
 		return value
 	}

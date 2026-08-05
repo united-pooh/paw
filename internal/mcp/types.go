@@ -47,6 +47,7 @@ type Snapshot struct {
 type ServerStatus struct {
 	Name, Command, WorkDir, State, LastError  string
 	PID, Tools, Resources, Templates, Prompts int
+	BlockedTools                              int
 }
 
 type Broker interface {
@@ -56,7 +57,7 @@ type Broker interface {
 
 func (s ToolSpec) ModelSchema() json.RawMessage {
 	if len(s.InputSchema) == 0 {
-		return json.RawMessage(`{"type":"object","properties":{}}`)
+		return json.RawMessage(`{"type":"object","properties":{},"required":[],"additionalProperties":false}`)
 	}
 	return append(json.RawMessage(nil), s.InputSchema...)
 }

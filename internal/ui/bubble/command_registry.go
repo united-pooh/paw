@@ -383,6 +383,9 @@ func (m *appModel) mcpStatusText() string {
 			line += fmt.Sprintf(" pid=%d", status.PID)
 		}
 		line += fmt.Sprintf(" tools=%d resources=%d templates=%d prompts=%d", status.Tools, status.Resources, status.Templates, status.Prompts)
+		if status.BlockedTools > 0 {
+			line += fmt.Sprintf(" blocked_tools=%d", status.BlockedTools)
+		}
 		if status.Command != "" {
 			line += " command=" + status.Command
 		}
