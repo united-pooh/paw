@@ -231,7 +231,7 @@ func (r *Registry) Definitions() []model.ToolDefinition {
 		registered := r.tools[name]
 		schema := registered.InputSchema()
 		if len(schema) == 0 {
-			schema = []byte(`{"type":"object","properties":{}}`)
+			schema = []byte(`{"type":"object","properties":{},"required":[],"additionalProperties":false}`)
 		}
 		defs = append(defs, model.ToolDefinition{
 			Name:        registered.Name(),

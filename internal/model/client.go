@@ -21,6 +21,10 @@ type Client struct {
 	httpClient *http.Client
 	mu         sync.RWMutex
 	cfg        Config
+
+	toolCacheMu  sync.Mutex
+	toolCacheKey string
+	toolCache    PreparedToolSet
 }
 
 // NewClient 创建模型客户端。
@@ -200,10 +204,14 @@ func (c *Client) RunMessage(ctx context.Context, messages []message.Message) (st
 	}
 
 	adapter := SelectModelAdapter(cfg)
+	prepared, err := c.prepareTools(adapter, nil)
+	if err != nil {
+		return "", fmt.Errorf("准备 %s 工具失败: %w", adapter.Name(), err)
+	}
 	if err := ValidateExtraRequestBodies(cfg); err != nil {
 		return "", fmt.Errorf("校验请求体配置失败: %w", err)
 	}
-	reqBody, err := adapter.BuildChatCompletionsRequest(cfg, messages, nil, false)
+	reqBody, err := adapter.BuildChatCompletionsRequest(cfg, messages, prepared, false)
 	if err != nil {
 		return "", fmt.Errorf("构造 %s 请求失败: %w", adapter.Name(), err)
 	}

@@ -49,9 +49,10 @@ type ImagePart struct {
 }
 
 type ToolCall struct {
-	ID    string          `json:"id"`
-	Name  string          `json:"name"`
-	Input json.RawMessage `json:"input"`
+	ID         string          `json:"id"`
+	Name       string          `json:"name"`
+	Input      json.RawMessage `json:"input"`
+	InputError string          `json:"input_error,omitempty"`
 }
 
 type ToolResult struct {

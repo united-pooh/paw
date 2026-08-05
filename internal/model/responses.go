@@ -104,8 +104,8 @@ type responsesContentPart struct {
 	ImageURL string `json:"image_url,omitempty"`
 }
 
-// responsesTool 显式序列化 strict:false（不使用 omitempty），确保向服务端
-// 声明工具参数不做 strict JSON Schema 校验，兼容宽松的 MCP schema。
+// responsesTool always serializes strict explicitly. Adapter preparation owns
+// the value and the wire schema, independently from the Responses transport.
 type responsesTool struct {
 	Type        string          `json:"type"`
 	Name        string          `json:"name"`
@@ -167,19 +167,19 @@ func shouldUseResponsesAPI(cfg Config) bool {
 	return strings.HasSuffix(path, "/responses")
 }
 
-func buildResponsesRequest(cfg Config, messages []message.Message, tools []ToolDefinition, stream bool) (responsesRequest, error) {
+func buildResponsesRequest(cfg Config, messages []message.Message, tools PreparedToolSet, stream bool) (responsesRequest, error) {
 	input, err := buildResponsesInput(messages)
 	if err != nil {
 		return responsesRequest{}, err
 	}
 	req := responsesRequest{Model: cfg.Model, Input: input, Stream: stream}
 	for _, tool := range tools {
-		parameters := tool.InputSchema
+		parameters := tool.Parameters
 		if len(parameters) == 0 {
-			parameters = json.RawMessage(`{"type":"object","properties":{}}`)
+			parameters = json.RawMessage(`{"type":"object","properties":{},"required":[],"additionalProperties":false}`)
 		}
 		req.Tools = append(req.Tools, responsesTool{
-			Type: "function", Name: tool.Name, Description: tool.Description, Parameters: parameters, Strict: false,
+			Type: "function", Name: tool.Name, Description: tool.Description, Parameters: parameters, Strict: tool.Strict,
 		})
 	}
 	return req, nil
@@ -346,7 +346,7 @@ func (c *Client) runResponsesMessage(ctx context.Context, cfg Config, messages [
 	return content, nil
 }
 
-func (c *Client) streamResponsesMessage(ctx context.Context, cfg Config, messages []message.Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
+func (c *Client) streamResponsesMessage(ctx context.Context, cfg Config, messages []message.Message, tools PreparedToolSet) (<-chan StreamEvent, error) {
 	reqBody, err := buildResponsesRequest(cfg, messages, tools, true)
 	if err != nil {
 		return nil, fmt.Errorf("构造 OpenAI Responses 请求失败: %w", err)
@@ -379,7 +379,7 @@ func (c *Client) streamResponsesMessage(ctx context.Context, cfg Config, message
 	return events, nil
 }
 
-func (c *Client) nonStreamingResponsesMessage(ctx context.Context, cfg Config, messages []message.Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
+func (c *Client) nonStreamingResponsesMessage(ctx context.Context, cfg Config, messages []message.Message, tools PreparedToolSet) (<-chan StreamEvent, error) {
 	reqBody, err := buildResponsesRequest(cfg, messages, tools, false)
 	if err != nil {
 		return nil, fmt.Errorf("构造 OpenAI Responses 请求失败: %w", err)
@@ -440,12 +440,12 @@ func (c *Client) nonStreamingResponsesMessage(ctx context.Context, cfg Config, m
 }
 
 // completedResponsesEvent 从权威完成快照生成最终事件：
-// 1. 验证 raw output items；
-// 2. 提取所有 message item 文本；
-// 3. 原子验证所有 function_call arguments；
-// 4. 任一调用非法时返回 error，不返回部分 calls；
-// 5. 编码 ProviderData；
-// 6. 返回 Done 事件。
+//  1. 验证 raw output items；
+//  2. 提取所有 message item 文本；流式调用仅在没有文本 delta 时回退使用；
+//  3. 提取所有 function_call arguments；非法参数记录在对应 ToolCall，
+//     由 Runner 生成可重试错误结果，不影响其他调用；
+//  5. 编码 ProviderData；
+//  6. 返回 Done 事件。
 func completedResponsesEvent(output []json.RawMessage, usage *Usage) (StreamEvent, error) {
 	if err := validateResponsesOutputItems(output); err != nil {
 		return StreamEvent{}, err
@@ -467,7 +467,7 @@ func completedResponsesEvent(output []json.RawMessage, usage *Usage) (StreamEven
 		case "function_call":
 			call, err := responseToolCall(view)
 			if err != nil {
-				return StreamEvent{}, err
+				call.InputError = fmt.Sprintf("Responses API 工具参数无法解析，可修正参数后重试: %v", err)
 			}
 			calls = append(calls, call)
 		}
@@ -492,7 +492,7 @@ func responseToolCall(view responsesOutputItemView) (message.ToolCall, error) {
 	}
 	input, err := decodeToolArguments("Responses API", id, view.Name, []byte(view.Arguments))
 	if err != nil {
-		return message.ToolCall{}, err
+		return message.ToolCall{ID: id, Name: view.Name, Input: json.RawMessage(`{}`)}, err
 	}
 	return message.ToolCall{ID: id, Name: view.Name, Input: input}, nil
 }
@@ -514,6 +514,7 @@ func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response
 	// Keep both the provider's raw item and argument deltas. Some gateways omit
 	// arguments from output_item.done or response.completed entirely.
 	active := make(map[int]*activeResponseToolCall)
+	sawOutputTextDelta := false
 	completed := false
 
 	for scanner.Scan() {
@@ -532,8 +533,11 @@ func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response
 		}
 		switch event.Type {
 		case "response.output_text.delta":
-			if event.Delta != "" && !emitStreamEvent(ctx, events, StreamEvent{Delta: event.Delta}) {
-				return
+			if event.Delta != "" {
+				if !emitStreamEvent(ctx, events, StreamEvent{Delta: event.Delta}) {
+					return
+				}
+				sawOutputTextDelta = true
 			}
 		case "response.output_item.added":
 			if len(event.Item) != 0 {
@@ -589,6 +593,9 @@ func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response
 			if err != nil {
 				_ = emitStreamEvent(ctx, events, StreamEvent{Err: err})
 				return
+			}
+			if sawOutputTextDelta {
+				finalEvent.Delta = ""
 			}
 			if !emitFinalResponsesEvent(ctx, events, finalEvent) {
 				return
@@ -663,9 +670,9 @@ func responseItemWithArguments(raw json.RawMessage, arguments string) json.RawMe
 	return encoded
 }
 
-// emitFinalResponsesEvent 把权威完成事件作为单个原子事件投递，保证
-// usage、delta、tool calls、provider data 与 Done 在同一事件上出现，
-// 与完成的响应快照一一对应。
+// emitFinalResponsesEvent 把权威完成事件作为单个原子事件投递。文本已通过
+// 流式 delta 投递时不再重放完成快照；usage、tool calls、provider data 与
+// Done 仍保持在同一完成事件上。
 func emitFinalResponsesEvent(ctx context.Context, events chan<- StreamEvent, ev StreamEvent) bool {
 	return emitStreamEvent(ctx, events, ev)
 }

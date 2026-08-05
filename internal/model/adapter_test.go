@@ -34,10 +34,15 @@ func TestSelectModelAdapter(t *testing.T) {
 func TestDeepSeekAdapterBuildsStrictToolsWithoutMutatingInput(t *testing.T) {
 	raw := json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}}}`)
 	before := append(json.RawMessage(nil), raw...)
-	req, err := (DeepSeekAdapter{}).BuildChatCompletionsRequest(
+	adapter := DeepSeekAdapter{}
+	prepared, err := adapter.PrepareTools([]ToolDefinition{{Name: "Search", Description: "search", InputSchema: raw}})
+	if err != nil {
+		t.Fatalf("PrepareTools() error = %v", err)
+	}
+	req, err := adapter.BuildChatCompletionsRequest(
 		Config{Model: "deepseek-chat"},
 		[]message.Message{{Role: message.RoleUser, Content: "hi"}},
-		[]ToolDefinition{{Name: "Search", Description: "search", InputSchema: raw}},
+		prepared,
 		true,
 	)
 	if err != nil {
@@ -85,9 +90,8 @@ func TestFilterChatCompletionsExtraRequestBody(t *testing.T) {
 }
 
 func TestDeepSeekAdapterIncludesToolNameInSchemaErrors(t *testing.T) {
-	_, err := (DeepSeekAdapter{}).BuildChatCompletionsRequest(
-		Config{Model: "deepseek-chat"}, nil,
-		[]ToolDefinition{{Name: "BadTool", InputSchema: json.RawMessage("[]")}}, false,
+	_, err := (DeepSeekAdapter{}).PrepareTools(
+		[]ToolDefinition{{Name: "BadTool", InputSchema: json.RawMessage("[]")}},
 	)
 	if err == nil || !strings.Contains(err.Error(), `工具 "BadTool"`) {
 		t.Fatalf("error = %v, want tool name", err)

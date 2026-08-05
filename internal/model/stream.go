@@ -16,7 +16,7 @@ import (
 // StreamEvent 表示一次流式输出事件。
 // 一个事件只表达一种状态：
 // 1) Delta 非空：收到一段增量文本
-// 2) Done=true：流结束
+// 2) Done=true：当前协议响应结束
 // 3) Err 非空：流中出现错误
 type StreamEvent struct {
 	Delta        string
@@ -24,9 +24,21 @@ type StreamEvent struct {
 	ToolCalls    []message.ToolCall
 	ProviderData json.RawMessage
 	Done         bool
+	FinishReason FinishReason
 	Err          error
 	Usage        *Usage
 }
+
+// FinishReason is the typed Chat Completions finish_reason value surfaced to
+// the runner. Non-Chat transports may continue to emit Done with the zero value.
+type FinishReason string
+
+const (
+	FinishReasonStop          FinishReason = "stop"
+	FinishReasonToolCalls     FinishReason = "tool_calls"
+	FinishReasonLength        FinishReason = "length"
+	FinishReasonContentFilter FinishReason = "content_filter"
+)
 
 // chatCompletionsStreamResponse 只建模流式响应里当前需要的字段。
 // 不需要的字段故意省略，避免上层依赖供应商完整响应结构。
@@ -68,14 +80,31 @@ func (c *Client) StreamMessage(ctx context.Context, messages []message.Message, 
 	}
 
 	cfg := c.CurrentModelConfig()
+	adapter := SelectModelAdapter(cfg)
+	prepared, err := c.prepareTools(adapter, tools)
+	if err != nil {
+		return nil, fmt.Errorf("准备 %s 工具失败: %w", adapter.Name(), err)
+	}
 	if shouldUseResponsesAPI(cfg) {
 		if !cfg.Stream {
-			return c.nonStreamingResponsesMessage(ctx, cfg, messages, tools)
+			events, err := c.nonStreamingResponsesMessage(ctx, cfg, messages, prepared)
+			if err != nil {
+				return nil, err
+			}
+			return adaptPreparedToolEvents(ctx, events, prepared), nil
 		}
-		return c.streamResponsesMessage(ctx, cfg, messages, tools)
+		events, err := c.streamResponsesMessage(ctx, cfg, messages, prepared)
+		if err != nil {
+			return nil, err
+		}
+		return adaptPreparedToolEvents(ctx, events, prepared), nil
 	}
 	if !cfg.Stream {
-		return c.nonStreamingOpenAIMessage(ctx, cfg, messages, tools)
+		events, err := c.nonStreamingOpenAIMessage(ctx, cfg, adapter, messages, prepared)
+		if err != nil {
+			return nil, err
+		}
+		return adaptPreparedToolEvents(ctx, events, prepared), nil
 	}
 	if shouldAttemptAnthropicStream(cfg) {
 		events, err := c.streamAnthropicMessage(ctx, cfg, messages, tools)
@@ -84,7 +113,11 @@ func (c *Client) StreamMessage(ctx context.Context, messages []message.Message, 
 		}
 	}
 
-	return c.streamOpenAIMessage(ctx, cfg, messages, tools)
+	events, err := c.streamOpenAIMessage(ctx, cfg, adapter, messages, prepared)
+	if err != nil {
+		return nil, err
+	}
+	return adaptPreparedToolEvents(ctx, events, prepared), nil
 }
 
 type nonStreamingChatResponse struct {
@@ -99,6 +132,7 @@ type nonStreamingChatResponse struct {
 				} `json:"function"`
 			} `json:"tool_calls,omitempty"`
 		} `json:"message"`
+		FinishReason *string `json:"finish_reason,omitempty"`
 	} `json:"choices"`
 	Usage *Usage `json:"usage,omitempty"`
 	Error *struct {
@@ -107,8 +141,7 @@ type nonStreamingChatResponse struct {
 	} `json:"error,omitempty"`
 }
 
-func (c *Client) nonStreamingOpenAIMessage(ctx context.Context, cfg Config, messages []message.Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
-	adapter := SelectModelAdapter(cfg)
+func (c *Client) nonStreamingOpenAIMessage(ctx context.Context, cfg Config, adapter ModelAdapter, messages []message.Message, tools PreparedToolSet) (<-chan StreamEvent, error) {
 	reqBody, err := adapter.BuildChatCompletionsRequest(cfg, messages, tools, false)
 	if err != nil {
 		return nil, fmt.Errorf("构造 %s 请求失败: %w", adapter.Name(), err)
@@ -147,7 +180,14 @@ func (c *Client) nonStreamingOpenAIMessage(ctx context.Context, cfg Config, mess
 		return nil, fmt.Errorf("模型接口未返回任何 choices")
 	}
 
+	finishReason, err := chatCompletionFinishReason(parsed.Choices[0].FinishReason, true)
+	if err != nil {
+		return nil, err
+	}
 	choice := parsed.Choices[0].Message
+	if finishReason == FinishReasonToolCalls && len(choice.ToolCalls) == 0 {
+		return nil, errChatCompletionToolCallsWithoutCalls()
+	}
 	events := make(chan StreamEvent, 4)
 	if parsed.Usage != nil {
 		events <- StreamEvent{Usage: parsed.Usage}
@@ -171,13 +211,12 @@ func (c *Client) nonStreamingOpenAIMessage(ctx context.Context, cfg Config, mess
 		close(events)
 		return nil, fmt.Errorf("模型接口返回了空内容")
 	}
-	events <- StreamEvent{Done: true}
+	events <- StreamEvent{Done: true, FinishReason: finishReason}
 	close(events)
 	return events, nil
 }
 
-func (c *Client) streamOpenAIMessage(ctx context.Context, cfg Config, messages []message.Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
-	adapter := SelectModelAdapter(cfg)
+func (c *Client) streamOpenAIMessage(ctx context.Context, cfg Config, adapter ModelAdapter, messages []message.Message, tools PreparedToolSet) (<-chan StreamEvent, error) {
 	reqBody, err := adapter.BuildChatCompletionsRequest(cfg, messages, tools, true)
 	if err != nil {
 		return nil, fmt.Errorf("构造 %s 请求失败: %w", adapter.Name(), err)
@@ -261,8 +300,7 @@ func (c *Client) handleStreamPayload(ctx context.Context, payload string, events
 		return false, nil
 	}
 	if payload == "[DONE]" {
-		_ = emitStreamEvent(ctx, events, StreamEvent{Done: true})
-		return true, nil
+		return true, fmt.Errorf("Chat Completions stream sent [DONE] before finish_reason")
 	}
 
 	chunk, err := decodeStreamChunk(payload)
@@ -301,7 +339,12 @@ func emitChunkEvents(ctx context.Context, chunk chatCompletionsStreamResponse, e
 
 	finishReason := chunk.Choices[0].FinishReason
 	if finishReason != nil && *finishReason != "" {
-		_ = emitStreamEvent(ctx, events, StreamEvent{Done: true})
+		reason, err := chatCompletionFinishReason(finishReason, false)
+		if err != nil {
+			_ = emitStreamEvent(ctx, events, StreamEvent{Err: err})
+			return true
+		}
+		_ = emitStreamEvent(ctx, events, StreamEvent{Done: true, FinishReason: reason})
 		return true
 	}
 
@@ -340,6 +383,28 @@ func openAIToolCallsFromAccumulated(accumulated map[int]*activeOpenAIToolCall) (
 	return calls, nil
 }
 
+func chatCompletionFinishReason(raw *string, allowMissing bool) (FinishReason, error) {
+	if raw == nil || strings.TrimSpace(*raw) == "" {
+		if allowMissing {
+			return FinishReasonStop, nil
+		}
+		return "", fmt.Errorf("Chat Completions stream ended before finish_reason")
+	}
+	reason := FinishReason(strings.TrimSpace(*raw))
+	switch reason {
+	case FinishReasonStop, FinishReasonToolCalls, FinishReasonLength:
+		return reason, nil
+	case FinishReasonContentFilter:
+		return "", fmt.Errorf("Chat Completions response stopped by content_filter")
+	default:
+		return "", fmt.Errorf("Chat Completions response returned unknown finish_reason %q", string(reason))
+	}
+}
+
+func errChatCompletionToolCallsWithoutCalls() error {
+	return fmt.Errorf("Chat Completions finish_reason tool_calls without tool calls")
+}
+
 // consumeStream 负责把 SSE 文本行转换为 StreamEvent，并累积原生 tool_calls。
 func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events chan<- StreamEvent) {
 	defer close(events)
@@ -350,6 +415,8 @@ func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events 
 	scanner := newStreamScanner(resp.Body)
 	// 按 index 累积 tool_calls，支持单次响应中多个工具调用
 	accumulated := map[int]*activeOpenAIToolCall{}
+	var finishReason FinishReason
+	finishSeen := false
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -357,8 +424,16 @@ func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events 
 			continue
 		}
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if payload == "" || payload == "[DONE]" {
-			break
+		if payload == "" {
+			continue
+		}
+		if payload == "[DONE]" {
+			if !finishSeen {
+				_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("Chat Completions stream sent [DONE] before finish_reason")})
+				return
+			}
+			_ = emitStreamEvent(ctx, events, StreamEvent{Done: true, FinishReason: finishReason})
+			return
 		}
 
 		chunk, err := decodeStreamChunk(payload)
@@ -372,7 +447,7 @@ func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events 
 		}
 
 		// 累积 delta.tool_calls
-		if len(chunk.Choices) > 0 {
+		if len(chunk.Choices) > 0 && !finishSeen {
 			for _, tc := range chunk.Choices[0].Delta.ToolCalls {
 				call, ok := accumulated[tc.Index]
 				if !ok {
@@ -401,27 +476,42 @@ func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events 
 		}
 
 		// 文本内容 delta
-		if delta := chunk.Choices[0].Delta.Content; delta != "" {
+		if delta := chunk.Choices[0].Delta.Content; delta != "" && !finishSeen {
 			if !emitStreamEvent(ctx, events, StreamEvent{Delta: delta}) {
 				return
 			}
 		}
 
-		// finish_reason：先 flush 工具调用，再发 Done
-		finishReason := chunk.Choices[0].FinishReason
-		if finishReason != nil && *finishReason != "" {
+		// finish_reason：先验证并 flush 工具调用，但继续读取可能存在的 usage-only 尾块。
+		rawFinishReason := chunk.Choices[0].FinishReason
+		if rawFinishReason != nil && *rawFinishReason != "" {
+			if finishSeen {
+				_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("Chat Completions stream returned duplicate finish_reason")})
+				return
+			}
+			reason, err := chatCompletionFinishReason(rawFinishReason, false)
+			if err != nil {
+				_ = emitStreamEvent(ctx, events, StreamEvent{Err: err})
+				return
+			}
 			calls, err := openAIToolCallsFromAccumulated(accumulated)
 			if err != nil {
 				_ = emitStreamEvent(ctx, events, StreamEvent{Err: err})
+				return
+			}
+			if reason == FinishReasonToolCalls && len(calls) == 0 {
+				_ = emitStreamEvent(ctx, events, StreamEvent{Err: errChatCompletionToolCallsWithoutCalls()})
 				return
 			}
 			if len(calls) > 0 {
 				if !emitStreamEvent(ctx, events, StreamEvent{ToolCalls: calls}) {
 					return
 				}
+				accumulated = map[int]*activeOpenAIToolCall{}
 			}
-			_ = emitStreamEvent(ctx, events, StreamEvent{Done: true})
-			return
+			finishReason = reason
+			finishSeen = true
+			continue
 		}
 	}
 
@@ -430,18 +520,11 @@ func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events 
 		return
 	}
 
-	// EOF 前未收到 finish_reason：仅在所有积累参数有效时发出工具调用。
-	calls, err := openAIToolCallsFromAccumulated(accumulated)
-	if err != nil {
-		_ = emitStreamEvent(ctx, events, StreamEvent{Err: err})
+	if !finishSeen {
+		_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("Chat Completions stream ended before finish_reason")})
 		return
 	}
-	if len(calls) > 0 {
-		if !emitStreamEvent(ctx, events, StreamEvent{ToolCalls: calls}) {
-			return
-		}
-	}
-	_ = emitStreamEvent(ctx, events, StreamEvent{Done: true})
+	_ = emitStreamEvent(ctx, events, StreamEvent{Done: true, FinishReason: finishReason})
 }
 
 // emitStreamEvent 在 ctx 取消时主动放弃发送，避免 goroutine 卡在 channel send 上，

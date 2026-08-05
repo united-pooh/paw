@@ -74,7 +74,7 @@ func TestStreamMessageUsesResponsesAPIAndParsesTextToolCallsAndUsage(t *testing.
 		_, _ = fmt.Fprint(w, "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":1,\"item_id\":\"fc_1\",\"delta\":\"{\\\"path\\\":\"}\n\n")
 		_, _ = fmt.Fprint(w, "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":1,\"item_id\":\"fc_1\",\"delta\":\"\\\".\\\"}\"}\n\n")
 		_, _ = fmt.Fprint(w, "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"type\":\"function_call\",\"id\":\"fc_1\",\"call_id\":\"call_ls\",\"name\":\"LS\",\"arguments\":\"{\\\"path\\\":\\\".\\\"}\"}}\n\n")
-		_, _ = fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":120,\"output_tokens\":8,\"total_tokens\":128,\"input_tokens_details\":{\"cached_tokens\":50}}}}\n\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"id\":\"msg_1\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello world\"}]},{\"type\":\"function_call\",\"id\":\"fc_1\",\"call_id\":\"call_ls\",\"name\":\"LS\",\"arguments\":\"{\\\"path\\\":\\\".\\\"}\"}],\"usage\":{\"input_tokens\":120,\"output_tokens\":8,\"total_tokens\":128,\"input_tokens_details\":{\"cached_tokens\":50}}}}\n\n")
 	}))
 	defer server.Close()
 
@@ -95,6 +95,7 @@ func TestStreamMessageUsesResponsesAPIAndParsesTextToolCallsAndUsage(t *testing.
 	var text strings.Builder
 	var calls []message.ToolCall
 	var usage *Usage
+	var providerData json.RawMessage
 	var done bool
 	for event := range events {
 		if event.Err != nil {
@@ -105,6 +106,9 @@ func TestStreamMessageUsesResponsesAPIAndParsesTextToolCallsAndUsage(t *testing.
 		if event.Usage != nil {
 			copy := *event.Usage
 			usage = &copy
+		}
+		if len(event.ProviderData) != 0 {
+			providerData = append(json.RawMessage(nil), event.ProviderData...)
 		}
 		done = done || event.Done
 	}
@@ -119,6 +123,49 @@ func TestStreamMessageUsesResponsesAPIAndParsesTextToolCallsAndUsage(t *testing.
 	}
 	if usage == nil || usage.ContextTokenCount() != 128 || usage.CacheHitTokens() != 50 {
 		t.Fatalf("usage = %#v", usage)
+	}
+	items, ok := decodeResponsesProviderData(providerData)
+	if !ok || len(items) != 2 {
+		t.Fatalf("provider data = %s, items=%d ok=%v", providerData, len(items), ok)
+	}
+}
+
+func TestStreamingResponsesFallsBackToCompletedTextWithoutDeltas(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.completed","response":{"output":[{"type":"message","id":"msg_snapshot","content":[{"type":"output_text","text":"snapshot only"}]}]}}`+"\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Transport: "openai-responses", APIBaseURL: server.URL, APIPath: "/responses",
+		Model: "gpt-test", Timeout: time.Second,
+	})
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "hello"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+
+	var text strings.Builder
+	var providerData json.RawMessage
+	var done bool
+	for event := range events {
+		if event.Err != nil {
+			t.Fatalf("event error = %v", event.Err)
+		}
+		text.WriteString(event.Delta)
+		if len(event.ProviderData) != 0 {
+			providerData = append(json.RawMessage(nil), event.ProviderData...)
+		}
+		done = done || event.Done
+	}
+	if text.String() != "snapshot only" || !done {
+		t.Fatalf("text=%q done=%v", text.String(), done)
+	}
+	items, ok := decodeResponsesProviderData(providerData)
+	if !ok || len(items) != 1 {
+		t.Fatalf("provider data = %s, items=%d ok=%v", providerData, len(items), ok)
 	}
 }
 
@@ -168,7 +215,7 @@ func TestResponsesExtraBodyProtectsInput(t *testing.T) {
 	}
 }
 
-func TestNonStreamingResponsesRejectsInvalidArguments(t *testing.T) {
+func TestNonStreamingResponsesSurfacesInvalidArgumentsAsRetryableToolCall(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		w.Header().Set("Content-Type", "application/json")
@@ -181,25 +228,17 @@ func TestNonStreamingResponsesRejectsInvalidArguments(t *testing.T) {
 		Stream: false, streamSet: true, Timeout: time.Second,
 	})
 	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "read"}}, nil)
-	if err == nil {
-		var sawCalls bool
-		var eventErr error
-		for event := range events {
-			sawCalls = sawCalls || len(event.ToolCalls) != 0
-			if event.Err != nil {
-				eventErr = event.Err
-			}
-		}
-		if sawCalls {
-			t.Fatal("invalid Responses arguments emitted ToolCalls")
-		}
-		if eventErr == nil {
-			t.Fatal("invalid Responses arguments produced neither request error nor event error")
-		}
-		err = eventErr
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "invalid JSON object arguments") {
-		t.Fatalf("error = %v, want invalid arguments error", err)
+	var calls []message.ToolCall
+	var done bool
+	for event := range events {
+		calls = append(calls, event.ToolCalls...)
+		done = done || event.Done
+	}
+	if len(calls) != 1 || !strings.Contains(calls[0].InputError, "invalid JSON object arguments") || !done {
+		t.Fatalf("calls=%#v done=%v", calls, done)
 	}
 }
 
@@ -455,7 +494,7 @@ func TestNonStreamingResponsesRejectsIncompleteStatus(t *testing.T) {
 	}
 }
 
-func TestStreamingResponsesRejectsInvalidArguments(t *testing.T) {
+func TestStreamingResponsesSurfacesInvalidArgumentsAsRetryableToolCall(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -471,23 +510,14 @@ func TestStreamingResponsesRejectsInvalidArguments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamMessage() error = %v", err)
 	}
-	var sawCalls, sawDone bool
-	var gotErr error
+	var calls []message.ToolCall
+	var sawDone bool
 	for event := range events {
-		sawCalls = sawCalls || len(event.ToolCalls) != 0
+		calls = append(calls, event.ToolCalls...)
 		sawDone = sawDone || event.Done
-		if event.Err != nil {
-			gotErr = event.Err
-		}
 	}
-	if sawCalls {
-		t.Fatal("invalid Responses arguments emitted ToolCalls")
-	}
-	if sawDone {
-		t.Fatal("invalid Responses arguments emitted Done")
-	}
-	if gotErr == nil || !strings.Contains(gotErr.Error(), "invalid JSON object arguments") {
-		t.Fatalf("error = %v, want invalid arguments error", gotErr)
+	if len(calls) != 1 || !strings.Contains(calls[0].InputError, "invalid JSON object arguments") || !sawDone {
+		t.Fatalf("calls=%#v done=%v", calls, sawDone)
 	}
 }
 

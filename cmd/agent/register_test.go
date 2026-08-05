@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"paw/internal/model"
 	"paw/internal/todo"
 	"paw/internal/tool"
 	toolfile "paw/internal/tool/file"
@@ -67,6 +68,41 @@ func TestRegisterToolsDoesNotAddSelect(t *testing.T) {
 	}
 	if _, ok := registry.Get("Select"); ok {
 		t.Fatal("base registry unexpectedly contains Select")
+	}
+}
+
+func TestAllBuiltinToolSchemasPrepareForDeepSeekStrict(t *testing.T) {
+	registry := tool.NewRegistry()
+	if err := registerTools(registry, t.TempDir(), nil, nil, "", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	selectBroker := selecttool.NewBroker()
+	defer selectBroker.Close()
+	if err := registerInteractiveTools(registry, selectBroker); err != nil {
+		t.Fatal(err)
+	}
+	if err := registerMainAgentTools(registry, nil); err != nil {
+		t.Fatal(err)
+	}
+	definitions := registry.Definitions()
+	before := make(map[string]string, len(definitions))
+	for _, definition := range definitions {
+		before[definition.Name] = string(definition.InputSchema)
+	}
+	prepared, err := (model.DeepSeekAdapter{}).PrepareTools(definitions)
+	if err != nil {
+		t.Fatalf("prepare all builtins: %v", err)
+	}
+	if len(prepared) != len(definitions) || len(prepared) == 0 {
+		t.Fatalf("prepared=%d definitions=%d", len(prepared), len(definitions))
+	}
+	for i, function := range prepared {
+		if !function.Strict || !json.Valid(function.Parameters) {
+			t.Fatalf("builtin %s strict=%v schema=%s", function.Name, function.Strict, function.Parameters)
+		}
+		if string(definitions[i].InputSchema) != before[definitions[i].Name] {
+			t.Fatalf("builtin %s original schema mutated", definitions[i].Name)
+		}
 	}
 }
 
