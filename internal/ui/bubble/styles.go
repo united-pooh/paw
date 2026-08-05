@@ -27,6 +27,8 @@ var (
 	labelSystemStyle             lipgloss.Style
 	labelErrorStyle              lipgloss.Style
 	bodyStyle                    lipgloss.Style
+	assistantMarkerStyle         lipgloss.Style
+	userTranscriptRowStyle       lipgloss.Style
 	thinkingBodyStyle            lipgloss.Style
 	markdownBoldStyle            lipgloss.Style
 	markdownHeadingStyle         lipgloss.Style
@@ -91,6 +93,11 @@ var (
 	todoExplanationStyle         lipgloss.Style
 	todoSummaryStyle             lipgloss.Style
 	selectedTranscriptLineStyle  lipgloss.Style
+	syntaxKeywordStyle           lipgloss.Style
+	syntaxStringStyle            lipgloss.Style
+	syntaxNumberStyle            lipgloss.Style
+	syntaxCommentStyle           lipgloss.Style
+	syntaxBracketStyles          []lipgloss.Style
 )
 
 func rebuildLegacyStyles() {
@@ -154,6 +161,13 @@ func rebuildLegacyStyles() {
 		Bold(true)
 	bodyStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorBody))
+	assistantMarkerStyle = lipgloss.NewStyle().
+		Foreground(colorManager.LipglossColor(colorLabelAssistant)).
+		Bold(true)
+	userTranscriptRowStyle = lipgloss.NewStyle().
+		Foreground(colorManager.LipglossColor(colorLabelUser)).
+		Background(colorManager.LipglossColor(colorWorktreeBackground)).
+		Bold(true)
 	thinkingBodyStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorMarkdownQuote)).
 		Italic(true)
@@ -341,7 +355,7 @@ func rebuildLegacyStyles() {
 		Foreground(colorManager.LipglossColor(colorWorktreeClean)).
 		Bold(true)
 	todoInProgressStyle = lipgloss.NewStyle().
-		Foreground(colorManager.LipglossColor(colorSignal)).
+		Foreground(colorManager.LipglossColor(colorContextUsed)).
 		Bold(true)
 	todoPendingStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorContextFree))
@@ -354,6 +368,22 @@ func rebuildLegacyStyles() {
 	selectedTranscriptLineStyle = lipgloss.NewStyle().
 		Background(colorManager.LipglossColor(colorSelectionBackground)).
 		Foreground(colorManager.LipglossColor(colorSelectionForeground))
+	syntaxKeywordStyle = lipgloss.NewStyle().
+		Foreground(colorManager.LipglossColor(colorSignal)).
+		Bold(true)
+	syntaxStringStyle = lipgloss.NewStyle().
+		Foreground(colorManager.LipglossColor(colorMarkdownCodeForeground))
+	syntaxNumberStyle = lipgloss.NewStyle().
+		Foreground(colorManager.LipglossColor(colorContextUsed))
+	syntaxCommentStyle = lipgloss.NewStyle().
+		Foreground(colorManager.LipglossColor(colorMarkdownQuote)).
+		Italic(true)
+	syntaxBracketStyles = []lipgloss.Style{
+		lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorLabelAssistant)),
+		lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorContextUsed)),
+		lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorLabelUser)),
+		lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorSignal)),
+	}
 }
 
 // 这些常量控制光标动画节奏、输入框高度、边框尺寸和主题色。
