@@ -11,24 +11,97 @@ import (
 	"strings"
 )
 
+const (
+	maxLengthContinuationRequests = 3
+	lengthContinuationInstruction = "从截断位置继续，不重复、不重启回答"
+	maxContinuationOverlapRunes   = 512
+)
+
 func (runner *Runner) runModelTurn(ctx context.Context, history []message.Message, turn *TurnState) (message.Message, error) {
 	var tools []model.ToolDefinition
 	if runner.registry != nil {
 		tools = runner.registry.Definitions()
 	}
-	modelMessages, err := runner.buildModelMessages(ctx, history, turn)
+	baseModelMessages, err := runner.buildModelMessages(ctx, history, turn)
 	if err != nil {
 		return message.Message{}, err
 	}
 	if turn != nil {
 		turn.PlanEmitted = true
 	}
-	events, err := runner.model.StreamMessage(ctx, modelMessages, tools)
-	if err != nil {
-		return message.Message{}, err
+
+	var state turnState
+	state.traceStageID, state.traceAgentID = runner.currentTraceIDs()
+
+	for attempt := 0; attempt < maxLengthContinuationRequests; attempt++ {
+		modelMessages := baseModelMessages
+		if attempt > 0 {
+			state.beginContinuationOverlap(state.content.String())
+			modelMessages = buildLengthContinuationMessages(baseModelMessages, state.content.String())
+		}
+		runner.beginUsageRequest(&state)
+		contentBefore := state.content.Len()
+		toolCallsBefore := len(state.toolCalls)
+		events, err := runner.model.StreamMessage(ctx, modelMessages, tools)
+		if err != nil {
+			return runner.failModelTurnWithPartial(&state, err)
+		}
+
+		finalizeOnDone := attempt == 0
+		msg, finishReason, err := runner.consumeStream(ctx, events, &state, finalizeOnDone)
+		if err != nil {
+			return msg, err
+		}
+		if attempt > 0 && len(state.toolCalls) > toolCallsBefore {
+			return runner.failModelTurnWithPartial(&state, fmt.Errorf("length 续写响应包含工具调用，已停止以避免执行不完整工具"))
+		}
+
+		switch finishReason {
+		case model.FinishReasonLength:
+			if state.content.Len() == contentBefore {
+				return runner.failModelTurnWithPartial(&state, fmt.Errorf("模型响应因 length 截断但没有返回可续写文本"))
+			}
+			if turnStateHasToolCalls(&state) {
+				return runner.failModelTurnWithPartial(&state, fmt.Errorf("模型响应因 length 截断且包含工具调用，已停止以避免执行不完整工具"))
+			}
+			if attempt == maxLengthContinuationRequests-1 {
+				return runner.failModelTurnWithPartial(&state, fmt.Errorf("模型响应连续 %d 次以 length 截断，已停止", maxLengthContinuationRequests))
+			}
+			continue
+		case model.FinishReasonToolCalls:
+			if attempt > 0 {
+				return runner.failModelTurnWithPartial(&state, fmt.Errorf("length 续写响应包含工具调用，已停止以避免执行不完整工具"))
+			}
+			return msg, nil
+		default:
+			if attempt > 0 {
+				if state.content.Len() == contentBefore {
+					return runner.failModelTurnWithPartial(&state, fmt.Errorf("length 续写响应没有返回新文本"))
+				}
+				if len(toolCallsFromMessage(msg)) > 0 {
+					return runner.failModelTurnWithPartial(&state, fmt.Errorf("length 续写响应包含工具调用，已停止以避免执行不完整工具"))
+				}
+				finalMsg, finalizeErr := runner.finalizeAssistantMessage(&state)
+				if finalizeErr != nil {
+					return runner.failModelTurnWithPartial(&state, finalizeErr)
+				}
+				return finalMsg, nil
+			}
+			return msg, nil
+		}
 	}
 
-	return runner.consumeStream(ctx, events)
+	return runner.failModelTurnWithPartial(&state, fmt.Errorf("模型响应连续 %d 次以 length 截断，已停止", maxLengthContinuationRequests))
+}
+
+func buildLengthContinuationMessages(base []message.Message, accumulated string) []message.Message {
+	messages := make([]message.Message, 0, len(base)+2)
+	messages = append(messages, base...)
+	messages = append(messages,
+		message.Message{Role: message.RoleAssistant, Content: accumulated},
+		message.Message{Role: message.RoleUser, Content: lengthContinuationInstruction},
+	)
+	return messages
 }
 
 func (runner *Runner) buildModelMessages(ctx context.Context, history []message.Message, turn *TurnState) ([]message.Message, error) {
@@ -160,10 +233,10 @@ func renderMessageForModel(msg message.Message) message.Message {
 		for _, call := range calls {
 			parts = append(parts, marshalJSON(toolUseEnvelope{Type: toolUseResponseType, ID: call.ID, Name: call.Name, Input: call.Input}))
 		}
-		return message.Message{
-			Role:    message.RoleAssistant,
-			Content: strings.Join(parts, "\n"),
-		}
+		rendered := buildAssistantToolCallMessage(calls)
+		rendered.Content = strings.Join(parts, "\n")
+		rendered.ProviderData = append(json.RawMessage(nil), msg.ProviderData...)
+		return rendered
 	case len(toolResultsFromMessage(msg)) > 0:
 		results := toolResultsFromMessage(msg)
 		parts := make([]string, 0, len(results))
@@ -174,15 +247,16 @@ func renderMessageForModel(msg message.Message) message.Message {
 		if len(results) > 1 {
 			label = "TOOL_RESULTS:\n"
 		}
-		return message.Message{
-			Role:    message.RoleUser,
-			Content: label + strings.Join(parts, "\n"),
-		}
+		rendered := buildToolResultsMessage(results)
+		rendered.Content = label + strings.Join(parts, "\n")
+		rendered.ProviderData = append(json.RawMessage(nil), msg.ProviderData...)
+		return rendered
 	default:
 		return message.Message{
-			Role:    msg.Role,
-			Content: msg.Content,
-			Parts:   append([]message.ContentPart(nil), msg.Parts...),
+			Role:         msg.Role,
+			Content:      msg.Content,
+			Parts:        append([]message.ContentPart(nil), msg.Parts...),
+			ProviderData: append(json.RawMessage(nil), msg.ProviderData...),
 		}
 	}
 }
@@ -195,55 +269,92 @@ func marshalJSON(v any) string {
 	return string(data)
 }
 
-func (runner *Runner) consumeStream(ctx context.Context, events <-chan model.StreamEvent) (message.Message, error) {
-	var state turnState
-	state.traceStageID, state.traceAgentID = runner.currentTraceIDs()
-
+func (runner *Runner) consumeStream(ctx context.Context, events <-chan model.StreamEvent, state *turnState, finalizeOnDone bool) (message.Message, model.FinishReason, error) {
 	for ev := range events {
-		msg, done, err := runner.handleEvent(&state, ev)
+		msg, finishReason, done, err := runner.handleEvent(state, ev, finalizeOnDone)
 		if err != nil {
-			return message.Message{}, err
+			return msg, "", err
 		}
 		if done {
-			return msg, nil
+			return msg, finishReason, nil
 		}
 	}
 
-	return runner.finishWithoutDone(ctx, state)
+	if err := runner.flushContinuationOverlap(state); err != nil {
+		return runner.partialAssistantMessage(state), "", err
+	}
+	msg, err := runner.finishWithoutDone(ctx, state)
+	return msg, "", err
 }
 
-func (runner *Runner) handleEvent(state *turnState, ev model.StreamEvent) (message.Message, bool, error) {
+func (runner *Runner) handleEvent(state *turnState, ev model.StreamEvent, finalizeOnDone bool) (message.Message, model.FinishReason, bool, error) {
 	if ev.Err != nil {
-		return message.Message{}, false, runner.failAfterPartialOutput(state.wroteOutput, ev.Err)
+		if err := runner.flushContinuationOverlap(state); err != nil {
+			return runner.partialAssistantMessage(state), "", false, err
+		}
+		msg, err := runner.failModelTurnWithPartial(state, ev.Err)
+		return msg, "", false, err
 	}
 	if ev.Usage != nil {
 		runner.recordUsageEvent(state, *ev.Usage)
 	}
 	if err := runner.appendThinking(ev.Thinking); err != nil {
-		return message.Message{}, false, err
+		msg, failErr := runner.failModelTurnWithPartial(state, err)
+		return msg, "", false, failErr
 	}
 
 	if err := runner.appendDelta(state, ev.Delta); err != nil {
-		return message.Message{}, false, err
+		return runner.partialAssistantMessage(state), "", false, err
+	}
+	if len(ev.ToolCalls) > 0 {
+		state.resetToolPayloadCandidate()
 	}
 	appendStreamToolCalls(state, ev.ToolCalls)
+	if len(ev.ProviderData) != 0 {
+		state.providerData = append(json.RawMessage(nil), ev.ProviderData...)
+	}
 
 	if !ev.Done {
-		return message.Message{}, false, nil
+		return message.Message{}, "", false, nil
+	}
+
+	if err := runner.flushContinuationOverlap(state); err != nil {
+		return runner.partialAssistantMessage(state), "", false, err
+	}
+
+	if ev.FinishReason == model.FinishReasonLength {
+		return message.Message{}, ev.FinishReason, true, nil
+	}
+
+	if !finalizeOnDone {
+		return runner.protocolAssistantMessage(state), ev.FinishReason, true, nil
 	}
 
 	msg, err := runner.finalizeAssistantMessage(state)
-	return msg, true, err
+	if err != nil {
+		msg, failErr := runner.failModelTurnWithPartial(state, err)
+		return msg, ev.FinishReason, false, failErr
+	}
+	return msg, ev.FinishReason, true, nil
+}
+
+func (runner *Runner) beginUsageRequest(state *turnState) {
+	state.requestUsage = model.Usage{}
+	state.requestUsageKnown = false
 }
 
 func (runner *Runner) recordUsageEvent(state *turnState, usage model.Usage) {
 	previousTrace := tokentracer.UsageFromModelUsage(state.usage)
-	previous := usageTotalsFromUsage(state.usage, state.usageKnown)
-	state.usage = mergeUsageSnapshot(state.usage, usage)
+	requestPrevious := usageTotalsFromUsage(state.requestUsage, state.requestUsageKnown)
+	state.requestUsage = mergeUsageSnapshot(state.requestUsage, usage)
+	state.requestUsageKnown = true
+	requestCurrent := usageTotalsFromUsage(state.requestUsage, true)
+	delta := requestCurrent.delta(requestPrevious)
+	currentTotals := usageTotalsFromUsage(state.usage, state.usageKnown).add(delta)
+	state.usage = usageFromTotals(currentTotals)
 	state.usageKnown = true
-	current := usageTotalsFromUsage(state.usage, true)
 	runner.setCurrentUsage(state.usage)
-	runner.addSessionUsage(current.delta(previous))
+	runner.addSessionUsage(delta)
 	runner.emitModelUsage(state.usage)
 	currentTrace := tokentracer.UsageFromModelUsage(state.usage)
 	runner.recordTraceUsage(state.traceStageID, state.traceAgentID, currentTrace.Delta(previousTrace), map[string]any{
@@ -418,8 +529,26 @@ func (runner *Runner) appendDelta(state *turnState, delta string) error {
 	if delta == "" {
 		return nil
 	}
+	if state.overlap.active {
+		state.overlap.buffer.WriteString(delta)
+		if continuationBufferRuneLen(&state.overlap) < state.overlap.maxRunes {
+			return nil
+		}
+		return runner.flushContinuationOverlap(state)
+	}
+
+	return runner.appendResolvedDelta(state, delta)
+}
+
+func (runner *Runner) appendResolvedDelta(state *turnState, delta string) error {
+	if delta == "" {
+		return nil
+	}
 
 	state.content.WriteString(delta)
+	if state.toolPayload.active {
+		return runner.appendToolPayloadCandidateDelta(state, delta)
+	}
 
 	switch state.outputMode {
 	case outputModeVisible:
@@ -427,8 +556,9 @@ func (runner *Runner) appendDelta(state *turnState, delta string) error {
 		// after the first visible delta. Do not forward that candidate to the UI;
 		// once a delta has been rendered it cannot be retracted from the transcript.
 		if looksLikeToolPayloadStart(delta) {
-			state.outputMode = outputModeSuppressed
-			return nil
+			state.toolPayload.active = true
+			state.toolPayload.buffer.WriteString(delta)
+			return runner.resolveToolPayloadCandidate(state, false)
 		}
 		return runner.writeDelta(state, delta)
 	case outputModeSuppressed:
@@ -448,6 +578,145 @@ func (runner *Runner) appendDelta(state *turnState, delta string) error {
 	pending := state.pending.String()
 	state.pending.Reset()
 	return runner.writeDelta(state, pending)
+}
+
+type toolPayloadCandidateDecision int
+
+const (
+	toolPayloadCandidatePending toolPayloadCandidateDecision = iota
+	toolPayloadCandidateFlush
+	toolPayloadCandidateSuppress
+)
+
+func (runner *Runner) appendToolPayloadCandidateDelta(state *turnState, delta string) error {
+	state.toolPayload.buffer.WriteString(delta)
+	return runner.resolveToolPayloadCandidate(state, false)
+}
+
+func (runner *Runner) resolveToolPayloadCandidate(state *turnState, final bool) error {
+	if state == nil || !state.toolPayload.active {
+		return nil
+	}
+
+	candidate := state.toolPayload.buffer.String()
+	switch classifyToolPayloadCandidate(candidate, final) {
+	case toolPayloadCandidatePending:
+		return nil
+	case toolPayloadCandidateSuppress:
+		state.resetToolPayloadCandidate()
+		state.outputMode = outputModeSuppressed
+		return nil
+	case toolPayloadCandidateFlush:
+		state.resetToolPayloadCandidate()
+		return runner.writeDelta(state, candidate)
+	default:
+		return nil
+	}
+}
+
+func classifyToolPayloadCandidate(candidate string, final bool) toolPayloadCandidateDecision {
+	trimmed := strings.TrimSpace(candidate)
+	if trimmed == "" {
+		if final {
+			return toolPayloadCandidateFlush
+		}
+		return toolPayloadCandidatePending
+	}
+
+	if len(extractToolUseEnvelopes(trimmed)) > 0 {
+		return toolPayloadCandidateSuppress
+	}
+
+	switch {
+	case strings.HasPrefix(trimmed, "```"):
+		if _, _, ok := extractFenceBodyAt(trimmed, 0); ok {
+			return toolPayloadCandidateFlush
+		}
+	case strings.HasPrefix(trimmed, "{"):
+		if _, _, ok := extractBalancedJSONObject(trimmed, 0); ok {
+			return toolPayloadCandidateFlush
+		}
+	case strings.HasPrefix(trimmed, "["):
+		if json.Valid([]byte(trimmed)) {
+			return toolPayloadCandidateFlush
+		}
+	case startsToolTagCandidate(trimmed):
+		if toolTagCandidateClosed(trimmed) {
+			return toolPayloadCandidateFlush
+		}
+	default:
+		return toolPayloadCandidateFlush
+	}
+
+	if final {
+		return toolPayloadCandidateFlush
+	}
+	return toolPayloadCandidatePending
+}
+
+func startsToolTagCandidate(trimmed string) bool {
+	lower := strings.ToLower(trimmed)
+	return strings.HasPrefix(lower, "<invoke") ||
+		strings.HasPrefix(lower, "<tool_call") ||
+		strings.HasPrefix(lower, "<tool ") ||
+		strings.HasPrefix(lower, "<tool>")
+}
+
+func toolTagCandidateClosed(trimmed string) bool {
+	lower := strings.ToLower(trimmed)
+	switch {
+	case strings.HasPrefix(lower, "<invoke"):
+		return strings.Contains(lower, "</invoke>")
+	case strings.HasPrefix(lower, "<tool_call"):
+		return strings.Contains(lower, "</tool_call>")
+	case strings.HasPrefix(lower, "<tool "):
+		return strings.Contains(lower, "</tool>")
+	case strings.HasPrefix(lower, "<tool>"):
+		return strings.Contains(lower, "</tool>")
+	default:
+		return false
+	}
+}
+
+func (state *turnState) resetToolPayloadCandidate() {
+	if state == nil {
+		return
+	}
+	state.toolPayload.active = false
+	state.toolPayload.buffer.Reset()
+}
+
+func (state *turnState) beginContinuationOverlap(existing string) {
+	state.overlap = continuationOverlapState{}
+	existingRunes := []rune(existing)
+	limit := minInt(maxContinuationOverlapRunes, len(existingRunes))
+	if limit <= 0 {
+		return
+	}
+	state.overlap.active = true
+	state.overlap.existing = string(existingRunes[len(existingRunes)-limit:])
+	state.overlap.maxRunes = limit
+}
+
+func continuationBufferRuneLen(overlap *continuationOverlapState) int {
+	if overlap == nil {
+		return 0
+	}
+	return len([]rune(overlap.buffer.String()))
+}
+
+func (runner *Runner) flushContinuationOverlap(state *turnState) error {
+	if state == nil || !state.overlap.active {
+		return nil
+	}
+	buffered := state.overlap.buffer.String()
+	existing := state.overlap.existing
+	state.overlap = continuationOverlapState{}
+	remaining := trimContinuationOverlap(existing, buffered)
+	if remaining == "" {
+		return nil
+	}
+	return runner.appendResolvedDelta(state, remaining)
 }
 
 func looksLikeToolPayloadStart(delta string) bool {
@@ -579,15 +848,21 @@ func (runner *Runner) writeDelta(state *turnState, delta string) error {
 	})
 
 	if err := runner.ui.OnAssistantDelta(delta); err != nil {
-		return runner.failAfterPartialOutput(state.wroteOutput, err)
+		return runner.failAfterPartialOutputForState(state, err)
 	}
+	state.visibleContent.WriteString(delta)
 	state.wroteOutput = true
 	return nil
 }
 
 func (runner *Runner) finalizeAssistantMessage(state *turnState) (message.Message, error) {
+	if err := runner.resolveToolPayloadCandidate(state, true); err != nil {
+		return message.Message{}, err
+	}
 	if len(state.toolCalls) > 0 {
-		return buildAssistantToolCallMessage(state.toolCalls), nil
+		msg := buildAssistantToolCallMessage(state.toolCalls)
+		msg.ProviderData = append(json.RawMessage(nil), state.providerData...)
+		return msg, nil
 	}
 
 	msg := parseAssistantMessage(state.content.String())
@@ -600,22 +875,21 @@ func (runner *Runner) finalizeAssistantMessage(state *turnState) (message.Messag
 			return message.Message{}, err
 		}
 	}
+	state.uiFinalized = true
 	if err := runner.ui.OnDone(); err != nil {
 		return message.Message{}, err
 	}
 
+	msg.ProviderData = append(json.RawMessage(nil), state.providerData...)
 	return msg, nil
 }
 
-func (runner *Runner) finishWithoutDone(ctx context.Context, state turnState) (message.Message, error) {
-	if state.wroteOutput {
-		_ = runner.ui.OnDone()
-	}
+func (runner *Runner) finishWithoutDone(ctx context.Context, state *turnState) (message.Message, error) {
 	if ctx.Err() != nil {
-		return message.Message{}, ctx.Err()
+		return runner.failModelTurnWithPartial(state, ctx.Err())
 	}
 
-	return message.Message{}, fmt.Errorf("模型流在未发送完成事件时结束")
+	return runner.failModelTurnWithPartial(state, fmt.Errorf("模型流在未发送完成事件时结束"))
 }
 
 func (runner *Runner) failAfterPartialOutput(wroteOutput bool, err error) error {
@@ -623,4 +897,72 @@ func (runner *Runner) failAfterPartialOutput(wroteOutput bool, err error) error 
 		_ = runner.ui.OnDone()
 	}
 	return err
+}
+
+func (runner *Runner) failModelTurnWithPartial(state *turnState, err error) (message.Message, error) {
+	if flushErr := runner.resolveToolPayloadCandidate(state, true); flushErr != nil {
+		err = flushErr
+	}
+	return runner.partialAssistantMessage(state), runner.failAfterPartialOutputForState(state, err)
+}
+
+func (runner *Runner) failAfterPartialOutputForState(state *turnState, err error) error {
+	if state == nil {
+		return err
+	}
+	if state.uiFinalized {
+		return err
+	}
+	if state.wroteOutput {
+		state.uiFinalized = true
+	}
+	return runner.failAfterPartialOutput(state.wroteOutput, err)
+}
+
+func (runner *Runner) partialAssistantMessage(state *turnState) message.Message {
+	if state == nil || strings.TrimSpace(state.visibleContent.String()) == "" {
+		return message.Message{}
+	}
+	return message.Message{Role: message.RoleAssistant, Content: state.visibleContent.String(), ProviderData: append(json.RawMessage(nil), state.providerData...)}
+}
+
+func (runner *Runner) protocolAssistantMessage(state *turnState) message.Message {
+	if state == nil {
+		return message.Message{}
+	}
+	if len(state.toolCalls) > 0 {
+		msg := buildAssistantToolCallMessage(state.toolCalls)
+		msg.ProviderData = append(json.RawMessage(nil), state.providerData...)
+		return msg
+	}
+	msg := parseAssistantMessage(state.content.String())
+	msg.ProviderData = append(json.RawMessage(nil), state.providerData...)
+	return msg
+}
+
+func turnStateHasToolCalls(state *turnState) bool {
+	if state == nil {
+		return false
+	}
+	if len(state.toolCalls) > 0 {
+		return true
+	}
+	msg := parseAssistantMessage(state.content.String())
+	return len(toolCallsFromMessage(msg)) > 0
+}
+
+func trimContinuationOverlap(existing, next string) string {
+	if existing == "" || next == "" {
+		return next
+	}
+	existingRunes := []rune(existing)
+	nextRunes := []rune(next)
+	limit := minInt(maxContinuationOverlapRunes, len(existingRunes))
+	limit = minInt(limit, len(nextRunes))
+	for n := limit; n > 0; n-- {
+		if string(existingRunes[len(existingRunes)-n:]) == string(nextRunes[:n]) {
+			return string(nextRunes[n:])
+		}
+	}
+	return next
 }

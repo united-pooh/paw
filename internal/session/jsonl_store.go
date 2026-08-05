@@ -72,6 +72,7 @@ type JSONLStore struct {
 var _ Store = (*JSONLStore)(nil)
 var _ TurnMetadataStore = (*JSONLStore)(nil)
 var _ TurnJournal = (*JSONLStore)(nil)
+var _ PartialAssistantJournal = (*JSONLStore)(nil)
 
 // NewJSONLStore 在指定目录下创建存储。
 // baseDir 是存放所有会话数据的根目录，通常传项目 cwd。
@@ -167,7 +168,7 @@ func (s *JSONLStore) Fork(ctx context.Context, request ForkRequest) (Meta, error
 		return Meta{}, fmt.Errorf("读取父会话元数据失败: %w", err)
 	}
 
-	parentHistory, err := s.LoadResolvedHistory(ctx, parentID)
+	parentRecords, err := s.LoadResolvedRecords(ctx, parentID)
 	if err != nil {
 		return Meta{}, fmt.Errorf("读取父会话历史失败: %w", err)
 	}
@@ -175,12 +176,12 @@ func (s *JSONLStore) Fork(ctx context.Context, request ForkRequest) (Meta, error
 	forkFromSeq := request.ForkFromSeq
 	switch {
 	case forkFromSeq == -1:
-		forkFromSeq = int64(len(parentHistory))
+		forkFromSeq = int64(len(parentRecords))
 	case forkFromSeq < -1:
 		return Meta{}, fmt.Errorf("ForkFromSeq 不能小于 -1: %d", forkFromSeq)
 	}
-	if forkFromSeq > int64(len(parentHistory)) {
-		return Meta{}, fmt.Errorf("ForkFromSeq 超出父会话长度: %d > %d", forkFromSeq, len(parentHistory))
+	if forkFromSeq > int64(len(parentRecords)) {
+		return Meta{}, fmt.Errorf("ForkFromSeq 超出父会话长度: %d > %d", forkFromSeq, len(parentRecords))
 	}
 
 	sessionID := request.SessionID
@@ -425,6 +426,19 @@ func (s *JSONLStore) AppendAssistantWithSequence(ctx context.Context, sessionID,
 	return lastSeq, err
 }
 
+func (s *JSONLStore) AppendPartialAssistant(ctx context.Context, sessionID, turnID string, msg message.Message) error {
+	if err := validateTurnArgs(sessionID, turnID); err != nil {
+		return err
+	}
+	msg.Role = message.RoleAssistant
+	_, _, err := s.appendRecords(ctx, sessionID, []Record{{
+		Kind:    JournalAssistantPartial,
+		TurnID:  strings.TrimSpace(turnID),
+		Message: msg,
+	}})
+	return err
+}
+
 func (s *JSONLStore) AppendToolResult(ctx context.Context, sessionID, turnID string, callIndex int, result message.ToolResult) error {
 	if err := validateTurnArgs(sessionID, turnID); err != nil {
 		return err
@@ -469,6 +483,9 @@ func (s *JSONLStore) LoadResolvedHistory(ctx context.Context, sessionID string) 
 	}
 	history := make([]message.Message, 0, len(records))
 	for _, record := range records {
+		if record.Kind == JournalAssistantPartial {
+			continue
+		}
 		history = append(history, record.Message)
 	}
 	return history, nil
@@ -535,6 +552,8 @@ func projectJournalRecords(records []Record) []Record {
 				record.Kind = JournalMessage
 			}
 			projected = append(projected, record)
+		case JournalAssistantPartial:
+			projected = append(projected, record)
 		case JournalToolResult:
 			if record.ToolResult == nil {
 				continue
@@ -559,10 +578,12 @@ func (s *JSONLStore) LoadSnapshot(ctx context.Context, sessionID string) (Sessio
 		return SessionSnapshot{}, err
 	}
 
-	messages, err := s.LoadResolvedHistory(ctx, sessionID)
+	displayRecords, err := s.LoadResolvedRecords(ctx, sessionID)
 	if err != nil {
 		return SessionSnapshot{}, err
 	}
+	messages := messagesFromRecords(displayRecords)
+	activeMessages := modelHistoryFromRecords(displayRecords)
 	ownRecords, err := s.readOwnRecords(ctx, sessionID)
 	if err != nil {
 		return SessionSnapshot{}, err
@@ -571,7 +592,7 @@ func (s *JSONLStore) LoadSnapshot(ctx context.Context, sessionID string) (Sessio
 	turnID, status, failure := latestTurnState(ownRecords)
 	snapshot := SessionSnapshot{
 		Messages:      append([]message.Message(nil), messages...),
-		ActiveHistory: append([]message.Message(nil), messages...),
+		ActiveHistory: append([]message.Message(nil), activeMessages...),
 	}
 	if turnID == "" || status == JournalTurnCompleted {
 		return snapshot, nil
@@ -587,14 +608,33 @@ func (s *JSONLStore) LoadSnapshot(ctx context.Context, sessionID string) (Sessio
 	}
 	entries := entriesForTurn(ownRecords, turnID)
 	safeOwn := safeTurnHistory(entries, recovery)
-	if len(entries) <= len(messages) {
-		prefixLen := len(messages) - len(entries)
-		active := append([]message.Message(nil), messages[:prefixLen]...)
+	if len(entries) <= len(activeMessages) {
+		prefixLen := len(activeMessages) - len(entries)
+		active := append([]message.Message(nil), activeMessages[:prefixLen]...)
 		active = append(active, safeOwn...)
 		snapshot.ActiveHistory = active
 	}
 	snapshot.Recovery = copyRecovery(recovery)
 	return snapshot, nil
+}
+
+func messagesFromRecords(records []Record) []message.Message {
+	messages := make([]message.Message, 0, len(records))
+	for _, record := range records {
+		messages = append(messages, record.Message)
+	}
+	return messages
+}
+
+func modelHistoryFromRecords(records []Record) []message.Message {
+	history := make([]message.Message, 0, len(records))
+	for _, record := range records {
+		if record.Kind == JournalAssistantPartial {
+			continue
+		}
+		history = append(history, record.Message)
+	}
+	return history
 }
 
 func latestTurnState(records []Record) (turnID string, status JournalKind, failure string) {

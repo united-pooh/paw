@@ -135,15 +135,34 @@ const (
 )
 
 type turnState struct {
-	content      strings.Builder
-	pending      strings.Builder
-	toolCalls    []message.ToolCall
-	wroteOutput  bool
-	outputMode   outputMode
-	usage        model.Usage
-	usageKnown   bool
-	traceStageID string
-	traceAgentID string
+	content           strings.Builder
+	visibleContent    strings.Builder
+	pending           strings.Builder
+	toolPayload       toolPayloadCandidateState
+	toolCalls         []message.ToolCall
+	providerData      json.RawMessage
+	wroteOutput       bool
+	outputMode        outputMode
+	usage             model.Usage
+	usageKnown        bool
+	requestUsage      model.Usage
+	requestUsageKnown bool
+	overlap           continuationOverlapState
+	uiFinalized       bool
+	traceStageID      string
+	traceAgentID      string
+}
+
+type toolPayloadCandidateState struct {
+	active bool
+	buffer strings.Builder
+}
+
+type continuationOverlapState struct {
+	active   bool
+	existing string
+	maxRunes int
+	buffer   strings.Builder
 }
 
 type toolUseEnvelope struct {

@@ -186,9 +186,12 @@ func (runner *Runner) runSingleTurnWithTiming(ctx context.Context, userInput mes
 			}
 		}
 
-		assistantMessage, err := runner.runModelTurn(ctx, history, turnState)
-		if err != nil {
-			return execution, err
+		assistantMessage, modelErr := runner.runModelTurn(ctx, history, turnState)
+		if modelErr != nil {
+			if persistErr := runner.persistPartialAssistant(context.WithoutCancel(ctx), journal, turnID, assistantMessage); persistErr != nil {
+				return execution, persistErr
+			}
+			return execution, modelErr
 		}
 		assistantSeq := int64(-1)
 		if journal != nil {

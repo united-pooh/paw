@@ -132,6 +132,93 @@ func TestLoadResolvedRecordsProjectsHistoryWithoutSidecar(t *testing.T) {
 	}
 }
 
+func TestPartialAssistantJournalVisibleButExcludedFromModelHistory(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	turnID := "turn-partial-text"
+	if err := store.BeginTurn(ctx, "s1", turnID, message.Message{Role: message.RoleUser, Content: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendPartialAssistant(ctx, "s1", turnID, message.Message{Role: message.RoleAssistant, Content: "partial answer"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FailTurn(ctx, "s1", turnID, errors.New("stream truncated")); err != nil {
+		t.Fatal(err)
+	}
+
+	records, err := store.LoadResolvedRecords(ctx, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 || records[1].Kind != JournalAssistantPartial || records[1].Message.Content != "partial answer" {
+		t.Fatalf("records=%#v, want visible partial assistant record", records)
+	}
+	history, err := store.LoadResolvedHistory(ctx, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || history[0].Content != "hello" {
+		t.Fatalf("history=%#v, want partial excluded", history)
+	}
+	snapshot, err := store.LoadSnapshot(ctx, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Messages) != 2 || snapshot.Messages[1].Content != "partial answer" {
+		t.Fatalf("snapshot messages=%#v, want visible partial", snapshot.Messages)
+	}
+	if len(snapshot.ActiveHistory) != 1 || snapshot.ActiveHistory[0].Content != "hello" {
+		t.Fatalf("active history=%#v, want partial excluded", snapshot.ActiveHistory)
+	}
+	if snapshot.Recovery == nil || snapshot.Recovery.Error != "stream truncated" {
+		t.Fatalf("recovery=%#v, want failed turn recovery", snapshot.Recovery)
+	}
+}
+
+func TestForkDefaultRetainsPartialDisplayRecordsButExcludesActiveHistory(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	turnID := "turn-parent"
+	if err := store.BeginTurn(ctx, "parent", turnID, message.Message{Role: message.RoleUser, Content: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendPartialAssistant(ctx, "parent", turnID, message.Message{Role: message.RoleAssistant, Content: "partial answer"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FailTurn(ctx, "parent", turnID, errors.New("stream truncated")); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := store.Fork(ctx, ForkRequest{SessionID: "child", ParentSessionID: "parent", ForkFromSeq: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.ForkFromSeq != 2 {
+		t.Fatalf("ForkFromSeq=%d, want full display record count 2", meta.ForkFromSeq)
+	}
+	records, err := store.LoadResolvedRecords(ctx, "child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 || records[1].Kind != JournalAssistantPartial || records[1].Message.Content != "partial answer" {
+		t.Fatalf("child records=%#v, want retained display partial", records)
+	}
+	history, err := store.LoadResolvedHistory(ctx, "child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || history[0].Content != "hello" {
+		t.Fatalf("child history=%#v, want partial excluded", history)
+	}
+	snapshot, err := store.LoadSnapshot(ctx, "child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Messages) != 2 || len(snapshot.ActiveHistory) != 1 || snapshot.ActiveHistory[0].Content != "hello" {
+		t.Fatalf("child snapshot=%#v, want display partial but active history without it", snapshot)
+	}
+}
+
 func TestTurnJournalPersistsFailedTurnAndBuildsSnapshot(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

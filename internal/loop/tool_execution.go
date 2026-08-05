@@ -8,6 +8,7 @@ import (
 	"paw/internal/message"
 	"paw/internal/tool"
 	"paw/internal/ui"
+	"strings"
 	"sync"
 )
 
@@ -31,6 +32,9 @@ func (runner *Runner) resolveToolCall(call message.ToolCall) resolvedToolCall {
 		return resolved
 	}
 	resolved.selectedTool = selected
+	if strings.TrimSpace(call.InputError) != "" {
+		resolved.resolveError = call.InputError
+	}
 	return resolved
 }
 
@@ -156,6 +160,9 @@ type fileMutationCapture struct {
 }
 
 func (runner *Runner) prepareFileMutation(resolved resolvedToolCall) *fileMutationCapture {
+	if resolved.resolveError != "" {
+		return nil
+	}
 	consumer, ok := runner.ui.(ui.FileMutationConsumer)
 	if !ok || !consumer.ConsumesFileMutations() || resolved.selectedTool == nil {
 		return nil
@@ -241,6 +248,9 @@ func (runner *Runner) emitToolResult(resolved resolvedToolCall, result message.T
 }
 
 func isToolCallConcurrencySafe(resolved resolvedToolCall) bool {
+	if resolved.resolveError != "" {
+		return false
+	}
 	safeTool, ok := resolved.selectedTool.(tool.ConcurrencySafeTool)
 	return ok && safeTool.IsConcurrencySafe(append(json.RawMessage(nil), resolved.call.Input...))
 }

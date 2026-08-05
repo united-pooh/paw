@@ -12,12 +12,13 @@ import (
 type JournalKind string
 
 const (
-	JournalMessage       JournalKind = "message"
-	JournalTurnStarted   JournalKind = "turn_started"
-	JournalAssistant     JournalKind = "assistant_message"
-	JournalToolResult    JournalKind = "tool_result"
-	JournalTurnCompleted JournalKind = "turn_completed"
-	JournalTurnFailed    JournalKind = "turn_failed"
+	JournalMessage          JournalKind = "message"
+	JournalTurnStarted      JournalKind = "turn_started"
+	JournalAssistant        JournalKind = "assistant_message"
+	JournalAssistantPartial JournalKind = "assistant_partial"
+	JournalToolResult       JournalKind = "tool_result"
+	JournalTurnCompleted    JournalKind = "turn_completed"
+	JournalTurnFailed       JournalKind = "turn_failed"
 )
 
 // RecoveryState describes the latest turn that was not completed normally.
@@ -54,6 +55,12 @@ type TurnJournal interface {
 	CompleteTurn(ctx context.Context, sessionID, turnID string) error
 	FailTurn(ctx context.Context, sessionID, turnID string, err error) error
 	LoadSnapshot(ctx context.Context, sessionID string) (SessionSnapshot, error)
+}
+
+// PartialAssistantJournal is an optional extension for stores that can retain
+// visible assistant text from a failed turn without adding it to model history.
+type PartialAssistantJournal interface {
+	AppendPartialAssistant(ctx context.Context, sessionID, turnID string, msg message.Message) error
 }
 
 func journalTurn(kind JournalKind, turnID string) Record {

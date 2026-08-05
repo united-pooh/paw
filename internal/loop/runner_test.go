@@ -124,6 +124,57 @@ func (u *fakeUI) systemEvents() []ui.SystemEvent {
 	return append([]ui.SystemEvent(nil), u.system...)
 }
 
+func TestRunnerPreservesResponsesProviderDataOnToolMessage(t *testing.T) {
+	runner := &Runner{ui: &fakeUI{}}
+	state := turnState{}
+	providerData := json.RawMessage(`{"transport":"openai-responses","version":1,"output_items":[{"type":"function_call","call_id":"call-1","name":"Read","arguments":"{}"}]}`)
+	_, _, done, err := runner.handleEvent(&state, model.StreamEvent{
+		ToolCalls:    []message.ToolCall{{ID: "call-1", Name: "Read", Input: json.RawMessage(`{}`)}},
+		ProviderData: providerData,
+		Done:         true,
+	}, true)
+	if err != nil || !done {
+		t.Fatalf("done=%v err=%v", done, err)
+	}
+	msg, err := runner.finalizeAssistantMessage(&state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(msg.ProviderData) != string(providerData) {
+		t.Fatalf("ProviderData=%s, want %s", msg.ProviderData, providerData)
+	}
+	rendered := renderMessageForModel(msg)
+	if string(rendered.ProviderData) != string(providerData) {
+		t.Fatalf("rendered ProviderData=%s, want %s", rendered.ProviderData, providerData)
+	}
+}
+
+func TestToolInputErrorDoesNotInvokeToolOrBlockOtherCalls(t *testing.T) {
+	bad := &fakeTool{name: "Bad", output: "must not run", safe: true}
+	good := &fakeTool{name: "Good", output: "ok", safe: true}
+	registry := tool.NewRegistry()
+	registry.Register(bad)
+	registry.Register(good)
+	runner := &Runner{ui: &fakeUI{}, registry: registry}
+	result, err := runner.runToolCalls(context.Background(), []message.ToolCall{
+		{ID: "bad-1", Name: "Bad", Input: json.RawMessage(`{}`), InputError: "tool arguments need retry"},
+		{ID: "good-1", Name: "Good", Input: json.RawMessage(`{"value":1}`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := toolResultsFromMessage(result)
+	if len(results) != 2 || !results[0].IsError || results[1].IsError {
+		t.Fatalf("results=%#v", results)
+	}
+	if bad.input != nil {
+		t.Fatalf("bad tool executed with %s", bad.input)
+	}
+	if string(good.input) != `{"value":1}` {
+		t.Fatalf("good tool input=%s", good.input)
+	}
+}
+
 type mutationCaptureUI struct {
 	calls   []ui.ToolCallEvent
 	results []ui.ToolResultEvent
@@ -1417,6 +1468,30 @@ func TestRunTurnFlushesOnStreamErrorAfterOutput(t *testing.T) {
 	}
 }
 
+func TestRunTurnFlushesSplitMarkdownFenceOnStreamError(t *testing.T) {
+	ui := &fakeUI{}
+	want := "answer:\n\n```go\nfunc pending() {\n"
+	model := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{
+		{Delta: "answer:\n\n"},
+		{Delta: "```"},
+		{Delta: "go\nfunc pending()"},
+		{Delta: " {\n"},
+		{Err: errors.New("boom")},
+	}}}}
+	runner := NewRunner(model, ui, tool.NewRegistry(), nil, "")
+
+	_, err := runner.RunTurn(context.Background(), "show partial code")
+	if err == nil || err.Error() != "boom" {
+		t.Fatalf("RunTurn() error = %v, want boom", err)
+	}
+	if got := strings.Join(ui.deltas, ""); got != want {
+		t.Fatalf("visible deltas lost split Markdown fence on error:\n got: %q\nwant: %q", got, want)
+	}
+	if ui.doneCount != 1 {
+		t.Fatalf("ui.doneCount = %d, want 1", ui.doneCount)
+	}
+}
+
 func TestRunTurnAllowsEmptyAssistantContent(t *testing.T) {
 	ui := &fakeUI{}
 	model := &fakeModel{
@@ -1797,7 +1872,7 @@ func TestRunTurnJournalRetainsToolHistoryAfterModelFailure(t *testing.T) {
 	}
 }
 
-func TestRunTurnJournalDoesNotPersistPartialAssistantOutput(t *testing.T) {
+func TestRunTurnJournalPersistsPartialAssistantForDisplayOnly(t *testing.T) {
 	store, err := session.NewJSONLStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -1810,12 +1885,47 @@ func TestRunTurnJournalDoesNotPersistPartialAssistantOutput(t *testing.T) {
 	if _, err := runner.RunTurn(context.Background(), "hello"); err == nil {
 		t.Fatal("RunTurn() error = nil, want stream failure")
 	}
+	records, err := store.LoadResolvedRecords(context.Background(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 || records[1].Kind != session.JournalAssistantPartial || records[1].Message.Content != "partial answer" {
+		t.Fatalf("records=%#v, want user plus display-only partial assistant", records)
+	}
 	history, err := store.LoadResolvedHistory(context.Background(), "session-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(history) != 1 || history[0].Content != "hello" {
-		t.Fatalf("history=%#v, want only user message", history)
+		t.Fatalf("history=%#v, want model-safe user-only history", history)
+	}
+	snapshot, err := store.LoadSnapshot(context.Background(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Messages) != 2 || snapshot.Messages[1].Content != "partial answer" {
+		t.Fatalf("snapshot messages=%#v, want visible partial", snapshot.Messages)
+	}
+	if len(snapshot.ActiveHistory) != 1 || snapshot.ActiveHistory[0].Content != "hello" {
+		t.Fatalf("active history=%#v, want partial excluded", snapshot.ActiveHistory)
+	}
+	if snapshot.Recovery == nil || !strings.Contains(snapshot.Recovery.Error, "502") {
+		t.Fatalf("recovery=%#v, want stream failure recovery", snapshot.Recovery)
+	}
+
+	recoveryModel := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{{Delta: "continued"}, {Done: true}}}}}
+	runner.model = recoveryModel
+	if _, err := runner.RunTurn(context.Background(), "next"); err != nil {
+		t.Fatalf("recovery RunTurn() error = %v", err)
+	}
+	if len(recoveryModel.calls) != 1 {
+		t.Fatalf("recovery model calls = %d, want 1", len(recoveryModel.calls))
+	}
+	if messagesContainContent(recoveryModel.calls[0], "partial answer") {
+		t.Fatalf("recovery call included partial assistant text: %#v", recoveryModel.calls[0])
+	}
+	if !messagesContainContent(recoveryModel.calls[0], "Paw recovery") {
+		t.Fatalf("recovery call missing recovery instruction: %#v", recoveryModel.calls[0])
 	}
 }
 
@@ -2134,6 +2244,91 @@ func TestRunTurnKeepsSupplementWhenModelCallFails(t *testing.T) {
 	}
 	if !messagesContainContent(nextModel.calls[0], "do not lose this") {
 		t.Fatalf("recovery messages = %#v, want retained supplement", nextModel.calls[0])
+	}
+}
+
+func TestRunTurnPreservesSplitMarkdownFenceAfterVisibleText(t *testing.T) {
+	ui := &fakeUI{}
+	want := "answer:\n\n```go\nif ready {\n\tcontinue\n}\n```\n"
+	model := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{
+		{Delta: "answer:\n\n"},
+		{Delta: "```"},
+		{Delta: "go"},
+		{Delta: "\n"},
+		{Delta: "if ready"},
+		{Delta: " {"},
+		{Delta: "\n\tcontinue\n"},
+		{Delta: "}"},
+		{Delta: "\n"},
+		{Delta: "```"},
+		{Delta: "\n"},
+		{Done: true},
+	}}}}
+	runner := NewRunner(model, ui, tool.NewRegistry(), nil, "")
+
+	msg, err := runner.RunTurn(context.Background(), "show code")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if msg.Content != want {
+		t.Fatalf("msg.Content = %q, want %q", msg.Content, want)
+	}
+	if got := strings.Join(ui.deltas, ""); got != want {
+		t.Fatalf("visible deltas reordered split Markdown fence:\n got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestRunTurnFlushesUnclosedSplitMarkdownFenceOnDone(t *testing.T) {
+	ui := &fakeUI{}
+	want := "answer:\n\n```go\nfunc pending() {\n"
+	model := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{
+		{Delta: "answer:\n\n"},
+		{Delta: "```"},
+		{Delta: "go\nfunc pending()"},
+		{Delta: " {\n"},
+		{Done: true},
+	}}}}
+	runner := NewRunner(model, ui, tool.NewRegistry(), nil, "")
+
+	msg, err := runner.RunTurn(context.Background(), "show partial code")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if msg.Content != want {
+		t.Fatalf("msg.Content = %q, want %q", msg.Content, want)
+	}
+	if got := strings.Join(ui.deltas, ""); got != want {
+		t.Fatalf("visible deltas lost unfinished Markdown fence:\n got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestRunTurnSuppressesSplitToolUseAfterVisibleText(t *testing.T) {
+	ui := &fakeUI{}
+	model := &fakeModel{rounds: []fakeRound{
+		{events: []model.StreamEvent{
+			{Delta: "Here is the requested operation:\n"},
+			{Delta: "{"},
+			{Delta: `"type":"tool_use",`},
+			{Delta: `"id":"call-1",`},
+			{Delta: `"name":"Read",`},
+			{Delta: `"input":{"file_path":"go.mod"}`},
+			{Delta: "}"},
+			{Done: true},
+		}},
+		{events: []model.StreamEvent{{Delta: "done"}, {Done: true}}},
+	}}
+	registry := tool.NewRegistry()
+	registry.Register(&fakeTool{name: "Read", output: "module paw"})
+	runner := NewRunner(model, ui, registry, nil, "")
+
+	if _, err := runner.RunTurn(context.Background(), "read go.mod"); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if len(ui.toolCalls) != 1 || ui.toolCalls[0].Name != "Read" {
+		t.Fatalf("ui.toolCalls = %#v, want one Read call", ui.toolCalls)
+	}
+	if got := strings.Join(ui.deltas, ""); got != "Here is the requested operation:\ndone" {
+		t.Fatalf("visible deltas = %q, want prose and final answer without split tool JSON", got)
 	}
 }
 

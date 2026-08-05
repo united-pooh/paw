@@ -107,6 +107,20 @@ func (runner *Runner) turnJournal() session.TurnJournal {
 	return journal
 }
 
+func (runner *Runner) persistPartialAssistant(ctx context.Context, journal session.TurnJournal, turnID string, msg message.Message) error {
+	if journal == nil || msg.Role != message.RoleAssistant || strings.TrimSpace(msg.Content) == "" {
+		return nil
+	}
+	partialJournal, ok := journal.(session.PartialAssistantJournal)
+	if !ok {
+		return nil
+	}
+	if err := partialJournal.AppendPartialAssistant(ctx, runner.sessionID, turnID, msg); err != nil {
+		return fmt.Errorf("保存 partial assistant turn 失败: %w", err)
+	}
+	return nil
+}
+
 func (runner *Runner) resolveTurnID(timing *TurnTiming) (string, error) {
 	if timing != nil && strings.TrimSpace(timing.TurnID) != "" {
 		return strings.TrimSpace(timing.TurnID), nil
