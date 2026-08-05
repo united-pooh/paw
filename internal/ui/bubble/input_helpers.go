@@ -23,16 +23,7 @@ func inputVisibleLineCount(input textarea.Model) int {
 }
 
 func wrappedInputLineCount(value string, width int) int {
-	width = maxInt(1, width)
-	if value == "" {
-		return 1
-	}
-	total := 0
-	for _, line := range strings.Split(value, "\n") {
-		lineWidth := terminalCellWidth(line)
-		total += maxInt(1, (lineWidth+width-1)/width)
-	}
-	return maxInt(1, total)
+	return inputWrappedVisualLineCount(value, width)
 }
 
 func logicalInputLineCount(value string) int {
@@ -49,16 +40,7 @@ func inputPasteFoldable(value string) bool {
 // inputWrappedVisualLineCount 计算 value 在指定宽度下 soft-wrap 后的可视行数
 // （含截断到 width 的单行，保证任何输入都不会让布局超过输入框高度）。
 func inputWrappedVisualLineCount(value string, width int) int {
-	width = maxInt(1, width)
-	if value == "" {
-		return 1
-	}
-	total := 0
-	for _, line := range strings.Split(value, "\n") {
-		lineWidth := terminalCellWidth(line)
-		total += maxInt(1, (lineWidth+width-1)/width)
-	}
-	return maxInt(1, total)
+	return maxInt(1, len(wrapStyledCellText(value, maxInt(1, width))))
 }
 
 // inputPasteFoldableWithWidth 按可视行数（宽度感知）判定是否可折叠：
@@ -74,32 +56,7 @@ func inputPasteFoldableWithWidth(value string, width int) bool {
 // visualRowLines 把 value 按 width 宽度切分为 soft-wrap 后的可视行（保留尾行
 // 原样，不截断），与 projectInput 的换行语义一致（按 grapheme cluster 换行）。
 func visualRowLines(value string, width int) []string {
-	width = maxInt(1, width)
-	if value == "" {
-		return []string{""}
-	}
-	var rows []string
-	for _, line := range strings.Split(value, "\n") {
-		cells := 0
-		var sb strings.Builder
-		for remaining := line; remaining != ""; {
-			cluster, _ := terminalFirstGraphemeCluster(remaining)
-			remaining = remaining[len(cluster):]
-			clusterWidth := terminalCellWidth(cluster)
-			if clusterWidth < 1 {
-				clusterWidth = 1
-			}
-			if cells > 0 && cells+clusterWidth > width {
-				rows = append(rows, sb.String())
-				sb.Reset()
-				cells = 0
-			}
-			sb.WriteString(cluster)
-			cells += clusterWidth
-		}
-		rows = append(rows, sb.String())
-	}
-	return rows
+	return wrapStyledCellText(value, maxInt(1, width))
 }
 
 // inputPasteFoldProjectionWithWidth 折叠投影：优先按逻辑行折叠（与旧行为一致）；

@@ -1523,8 +1523,8 @@ func TestToolDiffDetailLinesUseBackgroundColors(t *testing.T) {
 	if rowWidth != 40 {
 		t.Fatalf("diff row width = %d, want detail width 40", rowWidth)
 	}
-	deleted := lipgloss.NewStyle().Foreground(lipgloss.Color("224")).Background(lipgloss.Color("52")).Bold(true).Render(padDisplayWidth("1 - │ old", rowWidth))
-	added := lipgloss.NewStyle().Foreground(lipgloss.Color("194")).Background(lipgloss.Color("22")).Bold(true).Render(padDisplayWidth("1 + │ new", rowWidth))
+	deleted := lipgloss.NewStyle().Foreground(lipgloss.Color("224")).Background(lipgloss.Color("52")).Bold(true).Render(fitStyledCellLine("1 - │ old", rowWidth))
+	added := lipgloss.NewStyle().Foreground(lipgloss.Color("194")).Background(lipgloss.Color("22")).Bold(true).Render(fitStyledCellLine("1 + │ new", rowWidth))
 	for _, want := range []string{deleted, added} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered diff = %q, want colored line %q", rendered, want)
@@ -1614,8 +1614,8 @@ func TestUnifiedDiffLinesUseBackgroundColorsOnlyWithinHunk(t *testing.T) {
 	if !strings.Contains(rendered, contextLine) {
 		t.Fatalf("unified diff context line = %q, want detail style %q", rendered, contextLine)
 	}
-	deleted := lipgloss.NewStyle().Foreground(lipgloss.Color("224")).Background(lipgloss.Color("52")).Bold(true).Render(padDisplayWidth("-old", rowWidth))
-	added := lipgloss.NewStyle().Foreground(lipgloss.Color("194")).Background(lipgloss.Color("22")).Bold(true).Render(padDisplayWidth("+new", rowWidth))
+	deleted := lipgloss.NewStyle().Foreground(lipgloss.Color("224")).Background(lipgloss.Color("52")).Bold(true).Render(fitStyledCellLine("-old", rowWidth))
+	added := lipgloss.NewStyle().Foreground(lipgloss.Color("194")).Background(lipgloss.Color("22")).Bold(true).Render(fitStyledCellLine("+new", rowWidth))
 	for _, want := range []string{deleted, added} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("unified diff = %q, want colored line %q", rendered, want)
@@ -2930,7 +2930,7 @@ func TestTranscriptMouseDragSelectsAndCopiesAcrossScroll(t *testing.T) {
 	if model.selecting {
 		t.Fatalf("selecting = true, want false after release")
 	}
-	if !strings.Contains(copied, "line 00") || !strings.Contains(copied, "agent >") {
+	if !strings.Contains(copied, "line 00") || !strings.Contains(copied, "✦") {
 		t.Fatalf("copied selection = %q start=%+v end=%+v active=%v yOffset=%d viewportHeight=%d lines=%d", copied, model.selectionStart, model.selectionEnd, model.selectionActive, model.viewport.YOffset, model.viewport.Height, len(model.transcriptLineSnapshots()))
 	}
 }
@@ -2961,22 +2961,22 @@ func TestTranscriptMouseDragCopiesCharacterRange(t *testing.T) {
 	model.viewport.GotoTop()
 
 	next, _ := model.Update(tea.MouseMsg{
-		X:      5,
-		Y:      3,
+		X:      6,
+		Y:      2,
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
 	})
 	model = next.(appModel)
 	next, _ = model.Update(tea.MouseMsg{
-		X:      7,
-		Y:      3,
+		X:      8,
+		Y:      2,
 		Action: tea.MouseActionMotion,
 		Button: tea.MouseButtonLeft,
 	})
 	model = next.(appModel)
 	next, _ = model.Update(tea.MouseMsg{
-		X:      7,
-		Y:      3,
+		X:      8,
+		Y:      2,
 		Action: tea.MouseActionRelease,
 		Button: tea.MouseButtonLeft,
 	})
@@ -3089,8 +3089,8 @@ func TestSelectedTranscriptTextKeepsWideGraphemesWhole(t *testing.T) {
 	model.viewport.GotoTop()
 
 	model.selectionActive = true
-	model.selectionStart = selectionPoint{row: 1, col: 3}
-	model.selectionEnd = selectionPoint{row: 1, col: 6}
+	model.selectionStart = selectionPoint{row: 0, col: 4}
+	model.selectionEnd = selectionPoint{row: 0, col: 7}
 
 	if got := model.selectedTranscriptText(); got != "你🙂" {
 		t.Fatalf("selectedTranscriptText() = %q, want 你🙂", got)
@@ -3693,7 +3693,7 @@ func TestAssistantEntryRendersMarkdown(t *testing.T) {
 		body:  "## Title\n\n- one with `code`\n- **bold item**\n\n> quoted **bold quote**\n\n```go\nfmt.Println(\"hi\")\n```",
 	}, 80)
 
-	for _, want := range []string{"agent >", "Title", "•", "one", "code", "bold item", "│", "quoted", "bold quote", "go", "fmt.Println"} {
+	for _, want := range []string{"✦", "Title", "•", "one", "code", "bold item", "│", "quoted", "bold quote", "go", "fmt.Println"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered markdown = %q, want %q", rendered, want)
 		}
@@ -3939,24 +3939,39 @@ func TestTranscriptMouseClickOpensURL(t *testing.T) {
 	}
 }
 
-// TestMarkdownCodeBlockKeepsNestedMarkdownFencesInsideBlock 验证 markdown 代码块中的嵌套 fence 不会被错误拆出。
+// TestMarkdownCodeBlockKeepsNestedMarkdownFencesInsideBlock 验证 markdown 包装 fence 内的 Markdown 会正常渲染，嵌套代码 fence 不会泄漏为普通文本。
 func TestMarkdownCodeBlockKeepsNestedMarkdownFencesInsideBlock(t *testing.T) {
-	rendered := renderMarkdown("```markdown\n# 水獭的问候\n\n```go\nfunc hello() {\nfmt.Println(\"Hello!\")\n}\n```\n```", 80)
+	rendered := ansi.Strip(renderMarkdown("```markdown\n# 水獭的问候\n\n```go\nfunc hello() {\nfmt.Println(\"Hello!\")\n}\n```\n```", 80))
 
-	for _, want := range []string{"markdown", "# 水獭的问候", "```go", "func hello()", "fmt.Println", "```"} {
+	for _, want := range []string{"水獭的问候", "func hello()", "fmt.Println", "╭", "╰"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered markdown = %q, want %q", rendered, want)
 		}
 	}
-	if strings.Contains(ansi.Strip(rendered), "code markdown") || strings.Contains(ansi.Strip(rendered), "code go") {
-		t.Fatalf("rendered markdown = %q, should not render inner go fence", rendered)
+	if strings.Contains(rendered, "# 水獭的问候") || strings.Contains(rendered, "```go") {
+		t.Fatalf("rendered markdown = %q, wrapper or nested fence syntax leaked", rendered)
+	}
+}
+
+func TestMarkdownWrappedAnswerRendersHeadingsAndTaskLists(t *testing.T) {
+	input := "```markdown\n### 根因\n\n- [] 检查 schema\n- [ ] 检查兼容性\n- [x] 修复问题\n```"
+	rendered := ansi.Strip(renderMarkdown(input, 80))
+	for _, want := range []string{"根因", "○ 检查 schema", "○ 检查兼容性", "✓ 修复问题"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("wrapped markdown = %q, want %q", rendered, want)
+		}
+	}
+	for _, leaked := range []string{"### 根因", "- []", "- [ ]", "- [x]", "```markdown"} {
+		if strings.Contains(rendered, leaked) {
+			t.Fatalf("wrapped markdown = %q, syntax leaked: %q", rendered, leaked)
+		}
 	}
 }
 
 func TestMarkdownWrappingUsesTerminalGraphemeWidth(t *testing.T) {
 	const mixed = "中文 English 日本語 한국어 Русский العربية हिन्दी ภาษาไทย"
 	const width = 52
-	lines := wrapDisplayWidthLine(mixed, width)
+	lines := wrapStyledCellLine(mixed, width)
 	if len(lines) != 2 {
 		t.Fatalf("wrapped lines=%q, want one trailing line at width %d", lines, width)
 	}

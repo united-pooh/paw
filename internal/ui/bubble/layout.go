@@ -489,7 +489,7 @@ func (m appModel) renderInputContentWithHints(width, height int) string {
 		if terminalCellWidth(left)+terminalCellWidth(hint)+1 <= width {
 			line += strings.Repeat(" ", width-terminalCellWidth(left)-terminalCellWidth(hint)) + hint
 		} else {
-			line = truncateDisplayWidth(left, width)
+			line = truncateStyledCellLine(left, width)
 		}
 		return fitStyledRect(line, width, height)
 	}
@@ -544,7 +544,7 @@ func renderFoldedInputContent(input textarea.Model) string {
 		if len(lines) >= height {
 			break
 		}
-		lines = append(lines, padDisplayWidth(truncateDisplayWidth(line, width), width))
+		lines = append(lines, fitStyledCellLine(truncateStyledCellLine(line, width), width))
 	}
 	for len(lines) < height {
 		lines = append(lines, strings.Repeat(" ", width))

@@ -466,6 +466,29 @@ func TestTokenProjectionWrapsUnicodeWithoutExposingRawSyntax(t *testing.T) {
 	}
 }
 
+func TestTextareaAbsoluteCursorUsesRuneOffsetForWideCharacters(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.input.SetValue("中文abc")
+	setTextareaAbsoluteCursor(&model.input, len([]rune("中文")))
+	if got := textareaAbsoluteCursor(model.input); got != len([]rune("中文")) {
+		t.Fatalf("cursor offset = %d, want %d", got, len([]rune("中文")))
+	}
+
+	model.input.SetValue("😀abc")
+	setTextareaAbsoluteCursor(&model.input, len([]rune("😀")))
+	if got := textareaAbsoluteCursor(model.input); got != len([]rune("😀")) {
+		t.Fatalf("emoji cursor offset = %d, want %d", got, len([]rune("😀")))
+	}
+}
+
+func TestTextareaAbsoluteCursorUsesRuneOffsetAcrossLines(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.input.SetValue("前缀\n中文abc")
+	setTextareaAbsoluteCursor(&model.input, len([]rune("前缀\n中文")))
+	if got := textareaAbsoluteCursor(model.input); got != len([]rune("前缀\n中文")) {
+		t.Fatalf("multiline cursor offset = %d, want %d", got, len([]rune("前缀\n中文")))
+	}
+}
 func TestTokenProjectionUsesIndicConjunctCellWidth(t *testing.T) {
 	projection := projectInput("हिन्दी", nil, 0, 3, false)
 	if len(projection.lines) != 1 {

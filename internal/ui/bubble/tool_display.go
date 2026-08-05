@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
 	"paw/internal/todo"
 	filetool "paw/internal/tool/file"
 )
@@ -250,17 +249,17 @@ func renderToolStatusChipWithStyle(status, duration string, style lipgloss.Style
 func toolStatusChipWithinWidth(status, duration string, width int, style lipgloss.Style) string {
 	width = maxInt(1, width)
 	full := renderToolStatusChipWithStyle(status, duration, style)
-	if duration != "" && lipgloss.Width(full) <= width {
+	if duration != "" && terminalCellWidth(full) <= width {
 		return full
 	}
 	compact := renderToolStatusChipWithStyle(status, "", style)
-	if lipgloss.Width(compact) <= width {
+	if terminalCellWidth(compact) <= width {
 		return compact
 	}
 	withoutPadding := style.Padding(0, 0)
 	compact = renderToolStatusChipWithStyle(status, "", withoutPadding)
-	if lipgloss.Width(compact) <= width {
+	if terminalCellWidth(compact) <= width {
 		return compact
 	}
-	return ansi.Truncate(compact, width, "")
+	return truncateStyledCells(compact, width, "")
 }

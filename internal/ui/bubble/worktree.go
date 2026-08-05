@@ -159,7 +159,7 @@ func (m appModel) renderWorktreeChip(width int) string {
 		label += "  " + ref
 	}
 	labelBudget := maxInt(1, width-worktreeChipStyle.GetHorizontalPadding())
-	label = truncateDisplayWidth(label, labelBudget)
+	label = truncateStyledCellLine(label, labelBudget)
 	separator := ""
 	if ref != "" && strings.Contains(label, "  ") {
 		parts := strings.SplitN(label, "  ", 2)
@@ -176,7 +176,7 @@ func (m appModel) renderWorktreeChip(width int) string {
 		content += worktreeSeparatorStyle.Render(separator) + worktreeRefStyle(m.worktree.state).Render(ref)
 	}
 	chip := worktreeChipStyle.Render(content)
-	return truncateDisplayWidth(chip, width)
+	return truncateStyledCellLine(chip, width)
 }
 
 func (m appModel) renderWorktreeLine(width int) string {

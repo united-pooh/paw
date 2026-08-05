@@ -128,7 +128,7 @@ func (m appModel) todoPageBodyLines(width int) []string {
 	lines := []string{fitStyledCellLine(title+strings.Repeat(" ", gap)+todoCountStyle.Render(count), width)}
 	if snapshot.Explanation != "" {
 		lines = append(lines, "")
-		for _, line := range wrapDisplayWidthLine(snapshot.Explanation, maxInt(1, width-2)) {
+		for _, line := range wrapStyledCellLine(snapshot.Explanation, maxInt(1, width-2)) {
 			lines = append(lines, fitStyledCellLine("  "+todoExplanationStyle.Render(line), width))
 		}
 	}

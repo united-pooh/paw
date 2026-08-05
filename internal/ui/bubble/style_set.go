@@ -16,7 +16,7 @@ type StyleSet struct {
 	InputHint, InputPrompt, InputTokenCommand, InputTokenFile, InputTokenImage        lipgloss.Style
 	ContextCache, ContextUsed, ContextFree, ContextThinking                           lipgloss.Style
 	TerminalInputLabel, TerminalInputText                                             lipgloss.Style
-	Modal, ModalTitle, Selected, Unselected                                           lipgloss.Style
+	Modal, ModalTitle, Selected, SelectionFocused, Unselected                         lipgloss.Style
 	StatusRunning, StatusSuccess, StatusWarning, StatusError, StatusMuted             lipgloss.Style
 	Notice, NoticeHover                                                               lipgloss.Style
 }
@@ -64,6 +64,7 @@ func NewStyleSet(p theme.Palette) StyleSet {
 		Modal:                   lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(c.LipglossColor(colorWizardBorder)).Background(surface).Padding(0, 1),
 		ModalTitle:              lipgloss.NewStyle().Foreground(c.LipglossColor(colorWizardTitle)).Background(surface).Bold(true),
 		Selected:                lipgloss.NewStyle().Background(c.LipglossColor(colorSelectedProviderBg)).Foreground(c.LipglossColor(colorSelectedProviderFg)).Bold(true),
+		SelectionFocused:        lipgloss.NewStyle().Foreground(c.LipglossColor(colorSelectionForeground)).Bold(true),
 		Unselected:              lipgloss.NewStyle().Foreground(c.LipglossColor(colorUnselectedProvider)).Background(surface),
 		StatusRunning:           lipgloss.NewStyle().Foreground(c.LipglossColor(colorContextUsed)).Background(bg).Bold(true),
 		StatusSuccess:           lipgloss.NewStyle().Foreground(c.LipglossColor(colorWorktreeClean)).Background(bg),

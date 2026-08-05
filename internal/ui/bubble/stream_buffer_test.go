@@ -211,6 +211,71 @@ func TestAssistantStreamRendersMarkdownForEachStableLine(t *testing.T) {
 	}
 }
 
+func TestAssistantDoneKeepsAndShowsTrailingMarkdownCodeBlock(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 96
+	model.height = 30
+	model.relayout()
+
+	body := strings.Join([]string{
+		"已继续完成收尾。",
+		"",
+		"### 已确认修复",
+		"",
+		"- 用户提交的普通消息文字使用亮橙色 `#ffaf00`",
+		"- 带文件引用、skill 等 token 的消息保留自己的语义颜色",
+		"- Tool calls 统一使用两格外部 gutter",
+		"- Tool calls 左侧边框和正文列对齐",
+		"- Tool group 每行不会超过终端宽度",
+		"",
+		"### 新增回归测试",
+		"",
+		"新增了以下验证：",
+		"",
+		"- 普通用户消息包含亮橙色",
+		"- tokenized 用户消息的普通文字包含亮橙色",
+		"- Tool group 以两个空格开始",
+		"- Tool group 边框位于第 2 列",
+		"- Tool group 渲染宽度不超过终端宽度",
+		"",
+		"### 验证结果",
+		"",
+		"全部通过：",
+		"",
+		"```bash",
+		"go test ./internal/ui/bubble",
+		"go test ./...",
+		"git diff --check",
+		"```",
+		"",
+		"尾部确认文字。",
+	}, "\n")
+
+	// Split immediately before the final code block to exercise the hidden
+	// incomplete tail and the done-time Flush path seen in the TUI.
+	cut := strings.Index(body, "```bash")
+	next, _ := model.Update(assistantDeltaMsg(body[:cut]))
+	model = next.(appModel)
+	next, _ = model.Update(assistantDeltaMsg(body[cut:]))
+	model = next.(appModel)
+	next, _ = model.Update(doneMsg{})
+	model = next.(appModel)
+
+	entry := lastEntryOfKind(t, model.transcript, entryAssistant)
+	if entry.body != body {
+		t.Fatalf("assistant body lost trailing content:\n got: %q\nwant: %q", entry.body, body)
+	}
+	full := ansi.Strip(model.renderTranscriptContent())
+	if !strings.Contains(full, "git diff --check") || !strings.Contains(full, "尾部确认文字。") {
+		t.Fatalf("full transcript lost trailing content:\n%s", full)
+	}
+	view := ansi.Strip(model.viewport.View())
+	if !strings.Contains(view, "git diff --check") || !strings.Contains(view, "尾部确认文字。") {
+		t.Fatalf("viewport did not follow trailing content after done: offset=%d bottom=%v\n%s", model.viewport.YOffset, model.viewport.AtBottom(), view)
+	}
+}
+
 func TestAssistantStreamErrorFlushesPlainTailAndResets(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 

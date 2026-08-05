@@ -26,7 +26,7 @@ func newMessageNoticeText(count int, hovered bool, width int) string {
 		return full
 	}
 	compact := fmt.Sprintf("↓ %d 条消息", count)
-	return truncateDisplayWidth(compact, width)
+	return truncateStyledCellLine(compact, width)
 }
 
 func (m appModel) newMessageNoticeCanRender() bool {

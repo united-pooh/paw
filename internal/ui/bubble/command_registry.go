@@ -347,7 +347,7 @@ func (r *CommandRegistry) HelpText() string {
 			label += " (aliases: " + strings.Join(aliases, ", ") + ")"
 		}
 		rows = append(rows, helpRow{label: label, description: strings.TrimSpace(command.Description)})
-		labelWidth = max(labelWidth, len([]rune(label)))
+		labelWidth = max(labelWidth, terminalCellWidth(label))
 	}
 	if len(rows) == 0 {
 		return "No commands registered."
@@ -355,7 +355,7 @@ func (r *CommandRegistry) HelpText() string {
 
 	lines := []string{"Commands"}
 	for _, row := range rows {
-		padding := strings.Repeat(" ", labelWidth-len([]rune(row.label)))
+		padding := strings.Repeat(" ", labelWidth-terminalCellWidth(row.label))
 		lines = append(lines, "  "+row.label+padding+"  "+row.description)
 	}
 	lines = append(lines,

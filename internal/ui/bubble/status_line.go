@@ -100,7 +100,7 @@ func (m appModel) renderDockStatusLine(width int) string {
 	count := contextUsedStyle.Render(formatCompactTokenCount(used) + " / " + formatCompactTokenCount(limit))
 	mode := m.renderModeIndicator()
 	sepW := terminalCellWidth(statusSegmentSeparator)
-	left = truncateDisplayWidth(left, minInt(18, width))
+	left = truncateStyledCellLine(left, minInt(18, width))
 
 	worktree := ""
 	if width >= worktreeInlineMinimumWidth {
@@ -157,7 +157,7 @@ func (m appModel) renderDockStatusLine(width int) string {
 	if worktree != "" {
 		line += strings.Repeat(" ", worktreeGap) + worktree
 	}
-	return padOrTruncateToWidth(line, width)
+	return fitStyledCellLine(line, width)
 }
 
 // renderStatusLeftSegment 返回左段：工作中态显示 spinner + 状态词，空闲显示 ready。

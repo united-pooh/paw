@@ -118,7 +118,7 @@ func (m appModel) renderThemePickerBox() string {
 		if i == m.themePicker.selectedIdx {
 			style = m.styles.Selected
 		}
-		lines = append(lines, style.Render(truncateDisplayWidth(label, 74)))
+		lines = append(lines, style.Render(truncateStyledCellLine(label, 74)))
 	}
 	if m.themePicker.saveError != "" {
 		lines = append(lines, m.styles.LabelError.Render(m.themePicker.saveError))

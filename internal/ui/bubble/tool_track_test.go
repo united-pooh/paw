@@ -98,7 +98,7 @@ func TestToolTrackUsesSemanticEntrySpacing(t *testing.T) {
 	before := lineContaining(t, lines, "before")
 	firstTool := lineContaining(t, lines, "✓ Read: one.go  完成")
 	secondTool := lineContaining(t, lines, "◌ Read: two.go  运行中")
-	afterLabel := lineContainingAfter(t, lines, "agent >", secondTool+1)
+	afterLabel := lineContainingAfter(t, lines, "✦ after", secondTool+1)
 
 	if firstTool != before+1 {
 		t.Fatalf("assistant -> tool rows = %d -> %d, want adjacent\n%s", before, firstTool, strings.Join(lines, "\n"))

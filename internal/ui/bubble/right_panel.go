@@ -181,14 +181,14 @@ func (m appModel) renderSubagentsCardContentHeight(width, height int) string {
 		if maxLines == 1 {
 			return hdr
 		}
-		return hdr + "\n" + mutedStyle.Italic(true).Render(padDisplayWidth("none", width))
+		return hdr + "\n" + mutedStyle.Italic(true).Render(fitStyledCellLine("none", width))
 	}
 	tasks := m.subagentTasks()
 	if len(tasks) == 0 {
 		if maxLines == 1 {
 			return hdr
 		}
-		empty := mutedStyle.Italic(true).Render(padDisplayWidth("none", width))
+		empty := mutedStyle.Italic(true).Render(fitStyledCellLine("none", width))
 		return hdr + "\n" + empty
 	}
 
@@ -441,13 +441,13 @@ func pipelineStageGlyphAndStatus(status pipelinePhaseStatus) (string, string) {
 func renderSidebarRow(width int, left, right string, leftStyle, rightStyle lipgloss.Style) string {
 	width = maxInt(1, width)
 	if width <= 2 || strings.TrimSpace(right) == "" {
-		return leftStyle.Render(padDisplayWidth(truncateDisplayWidth(left, width), width))
+		return leftStyle.Render(fitStyledCellLine(truncateStyledCellLine(left, width), width))
 	}
-	right = truncateDisplayWidth(right, maxInt(1, width/2))
-	rightWidth := lipgloss.Width(right)
+	right = truncateStyledCellLine(right, maxInt(1, width/2))
+	rightWidth := terminalCellWidth(right)
 	leftMax := maxInt(1, width-rightWidth-1)
-	left = truncateDisplayWidth(left, leftMax)
-	gap := maxInt(0, width-lipgloss.Width(left)-rightWidth)
+	left = truncateStyledCellLine(left, leftMax)
+	gap := maxInt(0, width-terminalCellWidth(left)-rightWidth)
 	return leftStyle.Render(left) + strings.Repeat(" ", gap) + rightStyle.Render(right)
 }
 
@@ -457,35 +457,28 @@ func renderSubagentSidebarRow(width int, dot, name, right string, dotStyle, name
 	if width <= 2 || right == "" {
 		return renderSubagentSidebarLeft(width, dot, name, dotStyle, nameStyle)
 	}
-	right = truncateDisplayWidth(right, maxInt(1, width/2))
-	rightWidth := lipgloss.Width(right)
+	right = truncateStyledCellLine(right, maxInt(1, width/2))
+	rightWidth := terminalCellWidth(right)
 	leftMax := maxInt(1, width-rightWidth-1)
 	left := renderSubagentSidebarLeft(leftMax, dot, name, dotStyle, nameStyle)
-	gap := maxInt(0, width-lipgloss.Width(left)-rightWidth)
+	gap := maxInt(0, width-terminalCellWidth(left)-rightWidth)
 	return left + strings.Repeat(" ", gap) + rightStyle.Render(right)
 }
 
 func renderSubagentSidebarLeft(width int, dot, name string, dotStyle, nameStyle lipgloss.Style) string {
 	width = maxInt(1, width)
-	dot = truncateDisplayWidth(dot, width)
-	dotWidth := lipgloss.Width(dot)
+	dot = truncateStyledCellLine(dot, width)
+	dotWidth := terminalCellWidth(dot)
 	if width <= dotWidth+1 {
-		return dotStyle.Render(padDisplayWidth(dot, width))
+		return dotStyle.Render(fitStyledCellLine(dot, width))
 	}
 	nameWidth := maxInt(1, width-dotWidth-1)
-	name = truncateDisplayWidth(name, nameWidth)
+	name = truncateStyledCellLine(name, nameWidth)
 	left := dotStyle.Render(dot) + " " + nameStyle.Render(name)
-	if lipgloss.Width(left) >= width {
+	if terminalCellWidth(left) >= width {
 		return left
 	}
-	return left + strings.Repeat(" ", width-lipgloss.Width(left))
-}
-
-func padDisplayWidth(text string, width int) string {
-	if lipgloss.Width(text) >= width {
-		return text
-	}
-	return text + strings.Repeat(" ", width-lipgloss.Width(text))
+	return left + strings.Repeat(" ", width-terminalCellWidth(left))
 }
 
 func formatElapsedTime(d time.Duration) string {

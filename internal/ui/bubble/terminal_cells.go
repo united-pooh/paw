@@ -26,6 +26,88 @@ func terminalFirstGraphemeCluster(text string) (string, int) {
 	return cluster, width
 }
 
+// wrapStyledCellText wraps styled multi-line text without splitting terminal
+// control sequences or grapheme clusters. Explicit source newlines are kept as
+// line boundaries, including trailing blank lines.
+func wrapStyledCellText(text string, width int) []string {
+	lines := strings.Split(text, "\n")
+	wrapped := make([]string, 0, len(lines))
+	for _, line := range lines {
+		wrapped = append(wrapped, wrapStyledCellLine(line, width)...)
+	}
+	return wrapped
+}
+
+// wrapStyledCellLine wraps one rendered line at legal terminal-cell
+// boundaries. ANSI CSI/OSC sequences are zero-width atoms and are replayed as
+// complete sequences on every fragment that needs their style state.
+func wrapStyledCellLine(text string, width int) []string {
+	width = maxInt(1, width)
+	parsed := parseStyledCellLine(text)
+	safeText := renderStyledCellAtoms(parsed.atoms, 0, maxInt(1, parsed.width))
+	if parsed.width <= width {
+		return []string{safeText}
+	}
+
+	lines := make([]string, 0, (parsed.width+width-1)/width)
+	for left := 0; left < parsed.width; {
+		limit := minInt(parsed.width, left+width)
+		right := floorStyledCellBoundary(parsed.boundaries, limit)
+		if right <= left {
+			// The next grapheme is wider than the entire row (normally a
+			// two-cell glyph in a one-cell row). Preserve geometry without
+			// splitting the grapheme and advance to its next legal boundary.
+			next := ceilStyledCellBoundary(parsed.boundaries, left+1)
+			if next <= left {
+				break
+			}
+			lines = append(lines, "…")
+			left = next
+			continue
+		}
+		lines = append(lines, renderStyledCellAtoms(parsed.atoms, left, right))
+		left = right
+	}
+	if len(lines) == 0 {
+		return []string{""}
+	}
+	return lines
+}
+
+// truncateStyledCells truncates styled text to width cells and appends tail
+// when truncation is required. Both text and tail are sanitized through the
+// styled-cell parser, so incomplete terminal controls are never emitted.
+func truncateStyledCells(text string, width int, tail string) string {
+	if width <= 0 {
+		return ""
+	}
+	parsed := parseStyledCellLine(text)
+	safeText := renderStyledCellAtoms(parsed.atoms, 0, maxInt(1, parsed.width))
+	if parsed.width <= width {
+		return safeText
+	}
+
+	tailParsed := parseStyledCellLine(tail)
+	safeTail := renderStyledCellAtoms(tailParsed.atoms, 0, maxInt(1, tailParsed.width))
+	if tailParsed.width > width {
+		safeTail = truncateStyledCells(safeTail, width, "")
+		tailParsed = parseStyledCellLine(safeTail)
+	}
+	contentWidth := maxInt(0, width-tailParsed.width)
+	right := floorStyledCellBoundary(parsed.boundaries, contentWidth)
+	content := renderStyledCellAtoms(parsed.atoms, 0, right)
+	return content + safeTail
+}
+
+// truncateStyledCellLine is the standard UI truncation policy: keep the line
+// within its cell budget and show a one-cell ellipsis when content is omitted.
+func truncateStyledCellLine(text string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	return truncateStyledCells(text, width, "…")
+}
+
 // fitStyledCellLine truncates and pads one styled line to an exact terminal
 // cell width. It never splits a grapheme cluster.
 func fitStyledCellLine(line string, width int) string {
@@ -69,6 +151,7 @@ func parseStyledCellLine(line string) styledCellLine {
 	lastVisibleStart := -1
 	lastVisibleEnd := -1
 	pendingZeroWidth := make([]int, 0, 1)
+	var pendingControl strings.Builder
 
 	for len(line) > 0 {
 		var (
@@ -76,7 +159,7 @@ func parseStyledCellLine(line string) styledCellLine {
 			width    int
 			read     int
 			newState = state
-			control  = isTerminalControlByte(line[0])
+			control  = state != ansi.NormalState || isTerminalControlByte(line[0])
 		)
 		if control {
 			sequence, width, read, newState = ansi.GraphemeWidth.DecodeSequenceInString(line, state, nil)
@@ -94,7 +177,24 @@ func parseStyledCellLine(line string) styledCellLine {
 			newState = ansi.NormalState
 		}
 		line = line[read:]
+		if control && newState != ansi.NormalState {
+			pendingControl.WriteString(sequence)
+			state = newState
+			continue
+		}
+		if control && pendingControl.Len() > 0 {
+			pendingControl.WriteString(sequence)
+			sequence = pendingControl.String()
+			pendingControl.Reset()
+		}
 		state = newState
+		if control && !terminalControlSequenceComplete(sequence) {
+			// Some decoder paths report EOF-terminated OSC/CSI input as a
+			// syntactically finished zero-width sequence. Keep it pending so it
+			// is discarded at end of line instead of exposing its parameters.
+			pendingControl.WriteString(sequence)
+			continue
+		}
 
 		if width > 0 {
 			atom := styledCellAtom{
@@ -153,13 +253,43 @@ func isTerminalControlByte(first byte) bool {
 		first >= 0x80 && first <= 0x9f
 }
 
+func terminalControlSequenceComplete(sequence string) bool {
+	if sequence == "" {
+		return false
+	}
+	if strings.HasPrefix(sequence, "\x1b[") || sequence[0] == 0x9b {
+		last := sequence[len(sequence)-1]
+		return last >= 0x40 && last <= 0x7e
+	}
+	if strings.HasPrefix(sequence, "\x1b]") || sequence[0] == 0x9d {
+		return strings.HasSuffix(sequence, "\a") ||
+			strings.HasSuffix(sequence, "\x1b\\") ||
+			sequence[len(sequence)-1] == 0x9c
+	}
+	if strings.HasPrefix(sequence, "\x1bP") ||
+		strings.HasPrefix(sequence, "\x1bX") ||
+		strings.HasPrefix(sequence, "\x1b^") ||
+		strings.HasPrefix(sequence, "\x1b_") ||
+		sequence[0] == 0x90 || sequence[0] == 0x98 || sequence[0] == 0x9e || sequence[0] == 0x9f {
+		return strings.HasSuffix(sequence, "\x1b\\") || sequence[len(sequence)-1] == 0x9c
+	}
+	if sequence[0] == 0x1b {
+		return len(sequence) >= 2
+	}
+	return true
+}
+
 func renderStyledCellAtoms(atoms []styledCellAtom, left, right int) string {
 	var rendered strings.Builder
+	sgrActive := false
+	hyperlinkActive := false
 	for _, atom := range atoms {
 		if atom.control {
 			// Keeping controls in source order recreates the active SGR state at
 			// the start of the slice and restores it after the selected text.
 			rendered.WriteString(atom.text)
+			sgrActive = styledCellSGRActive(atom.text, sgrActive)
+			hyperlinkActive = styledCellHyperlinkActive(atom.text, hyperlinkActive)
 			continue
 		}
 		if atom.cellEnd > atom.cellStart {
@@ -178,7 +308,61 @@ func renderStyledCellAtoms(atoms []styledCellAtom, left, right int) string {
 			rendered.WriteString(atom.text)
 		}
 	}
+	if hyperlinkActive {
+		rendered.WriteString(ansi.ResetHyperlink())
+	}
+	if sgrActive {
+		rendered.WriteString(ansi.ResetStyle)
+	}
 	return rendered.String()
+}
+
+func styledCellSGRActive(sequence string, active bool) bool {
+	if !strings.HasSuffix(sequence, "m") {
+		return active
+	}
+	start := strings.Index(sequence, "[")
+	if start < 0 && len(sequence) > 0 && sequence[0] == 0x9b {
+		start = 0
+	}
+	if start < 0 || start+1 >= len(sequence) {
+		return active
+	}
+	parameters := sequence[start+1 : len(sequence)-1]
+	if parameters == "" {
+		return false
+	}
+	for _, parameter := range strings.Split(parameters, ";") {
+		if parameter == "" || parameter == "0" {
+			active = false
+			continue
+		}
+		active = true
+	}
+	return active
+}
+
+func styledCellHyperlinkActive(sequence string, active bool) bool {
+	payload := ""
+	switch {
+	case strings.HasPrefix(sequence, "\x1b]8;"):
+		payload = sequence[len("\x1b]8;"):]
+	case len(sequence) > 0 && sequence[0] == 0x9d && strings.HasPrefix(sequence[1:], "8;"):
+		payload = sequence[3:]
+	default:
+		return active
+	}
+	if end := strings.IndexByte(payload, '\a'); end >= 0 {
+		payload = payload[:end]
+	}
+	if end := strings.Index(payload, "\x1b\\"); end >= 0 {
+		payload = payload[:end]
+	}
+	separator := strings.IndexByte(payload, ';')
+	if separator < 0 {
+		return active
+	}
+	return payload[separator+1:] != ""
 }
 
 func ceilStyledCellBoundary(boundaries []int, cell int) int {

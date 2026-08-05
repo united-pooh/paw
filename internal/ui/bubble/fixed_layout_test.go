@@ -7,9 +7,13 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 	"paw/internal/settings"
 	"paw/internal/subagent"
+	"paw/internal/todo"
+	selecttool "paw/internal/tool/select"
 )
 
 func TestComputeTUILayoutKeepsOuterFrameStable(t *testing.T) {
@@ -64,6 +68,109 @@ func TestViewFrameInvariantAcrossContentAndOverlays(t *testing.T) {
 
 	model.openActivity(activityTabPipeline)
 	assertFixedFrame(t, model.View(), 80, 24)
+}
+
+func TestVisualGeometryFullViewUsesUnifiedCellPipeline(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
+
+	profiles := []struct {
+		name    string
+		profile termenv.Profile
+	}{
+		{name: "truecolor", profile: termenv.TrueColor},
+		{name: "no-color", profile: termenv.Ascii},
+	}
+	sizes := []struct {
+		width  int
+		height int
+	}{
+		{width: 40, height: 50},
+		{width: 80, height: 36},
+		{width: 100, height: 30},
+	}
+
+	for _, profile := range profiles {
+		t.Run(profile.name, func(t *testing.T) {
+			lipgloss.SetColorProfile(profile.profile)
+			for _, size := range sizes {
+				model := newTestModel(&fakeRunner{})
+				model.ready = true
+				model.width = size.width
+				model.height = size.height
+				model.transcript = []transcriptEntry{
+					{
+						kind: entryAssistant,
+						body: "| 文件 | 改动 |\n|---|---|\n" +
+							"| `responses.go` / `openai_compatible_adapter.go` / `deepseek_adapter.go` | 中文 👩‍💻 é हिन्दी العربية |\n\n" +
+							"```go\nfunc render() { fmt.Println(\"cell\") }\n```",
+						renderMode: transcriptRenderFormatted,
+					},
+					{
+						kind:          entryTool,
+						toolName:      "Write",
+						toolStatus:    "ok",
+						toolTarget:    "internal/ui/bubble/openai_compatible_adapter.go",
+						toolResult:    "@@ -1,2 +1,2 @@\n-old 中文背景\n+new 👨‍👩‍👧‍👦 background",
+						toolExpanded:  true,
+						toolGroupOpen: true,
+					},
+					{
+						kind: entryTodo,
+						todoSnapshot: &todo.Snapshot{
+							Explanation: "统一所有可视层的 cell 几何",
+							Items: []todo.Item{
+								{ID: "core", Content: "ANSI 与 grapheme 原子化", Status: todo.StatusCompleted},
+								{ID: "view", Content: "验证完整 View overlay", Status: todo.StatusInProgress},
+							},
+						},
+						todoExpanded: true,
+						todoLatest:   true,
+					},
+				}
+				model.relayout()
+				model.refreshViewport()
+				assertVisualGeometryView(t, model.View(), size.width, size.height)
+
+				model.selectionDock = newSelectionDock(selecttool.Request{
+					ID:     "visual-geometry",
+					Prompt: "选择包含中文、emoji 👩‍💻 与组合字符 é 的操作",
+					Mode:   selecttool.ModeMultiple,
+					Options: []selecttool.Option{
+						{ID: "logs", Label: "查看日志", Description: "保留 TrueColor 样式与完整 grapheme"},
+						{ID: "diff", Label: "检查 diff", Description: "竖边框保持同一 cell 列"},
+					},
+				})
+				model.relayout()
+				assertVisualGeometryView(t, model.View(), size.width, size.height)
+
+				model.selectionDock = nil
+				model.completion = &completion{kind: completionKindCommand, items: []string{"/model", "/tasks", "/pipeline"}}
+				model.relayout()
+				assertVisualGeometryView(t, model.View(), size.width, size.height)
+			}
+		})
+	}
+}
+
+func assertVisualGeometryView(t *testing.T, view string, width, height int) {
+	t.Helper()
+	for index, line := range strings.Split(view, "\n") {
+		assertTerminalSequencesComplete(t, line)
+		if got := terminalCellWidth(line); got != width {
+			t.Fatalf("line %d styled width=%d, want %d: raw=%q plain=%q", index, got, width, line, ansi.Strip(line))
+		}
+		plain := ansi.Strip(line)
+		if got := terminalCellWidth(plain); got != width {
+			t.Fatalf("line %d stripped width=%d, want %d: raw=%q plain=%q", index, got, width, line, plain)
+		}
+		for _, leaked := range []string{";52m", "48;2;", "38;5;"} {
+			if strings.Contains(plain, leaked) {
+				t.Fatalf("line %d leaked ANSI payload %q: %q", index, leaked, plain)
+			}
+		}
+	}
+	assertFixedFrame(t, view, width, height)
 }
 
 func TestMixedLanguageTranscriptKeepsRendererWidthWhileScrolling(t *testing.T) {

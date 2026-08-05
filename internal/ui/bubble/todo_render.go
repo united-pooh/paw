@@ -49,7 +49,7 @@ func renderTodoExpanded(snapshot todo.Snapshot, width int) string {
 	lines := []string{header}
 	if snapshot.Explanation != "" {
 		lines = append(lines, "")
-		for _, line := range wrapDisplayWidthLine(snapshot.Explanation, contentWidth) {
+		for _, line := range wrapStyledCellLine(snapshot.Explanation, contentWidth) {
 			lines = append(lines, fitStyledCellLine("  "+todoExplanationStyle.Render(line), width))
 		}
 	}
@@ -84,7 +84,9 @@ func renderTodoExpanded(snapshot todo.Snapshot, width int) string {
 func todoItemBodyStyle(status todo.Status) lipgloss.Style {
 	style := bodyStyle
 	if status == todo.StatusCompleted {
-		style = style.Copy().Strikethrough(true)
+		style = style.Copy().
+			Foreground(colorManager.LipglossColor(colorMarkdownQuote)).
+			Strikethrough(true)
 	}
 	return style
 }
@@ -115,7 +117,7 @@ func renderTodoItemWithBodyWidth(item todo.Item, width int, showStatusLabel bool
 	if fixedBodyWidth > 0 && showStatusLabel {
 		bodyWidth = maxInt(1, fixedBodyWidth)
 	}
-	wrapped := wrapDisplayWidthLine(item.Content, bodyWidth)
+	wrapped := wrapStyledCellLine(item.Content, bodyWidth)
 	lines := make([]string, 0, len(wrapped))
 	for i, line := range wrapped {
 		if i == 0 {

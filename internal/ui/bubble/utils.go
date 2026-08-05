@@ -496,17 +496,39 @@ func nonEmptyStrings(values ...string) []string {
 
 func shortTaskID(id string) string {
 	id = strings.TrimSpace(id)
-	if len([]rune(id)) <= 12 {
+	if terminalCellWidth(id) <= 12 {
 		return id
 	}
-	runes := []rune(id)
-	return string(runes[:10]) + "…"
+	return truncateStyledCells(id, 11, "…")
 }
 
 func sanitizeAssistantVisibleBody(body string) string {
-	body = stripToolUseFences(body)
-	body = stripEmbeddedToolUseJSON(body)
-	return strings.TrimSpace(body)
+	// Fenced JSON is ordinary assistant Markdown (often an example), so do not
+	// remove it here. Transport tool-use artifacts are filtered only from prose
+	// outside fenced blocks below.
+	return strings.TrimSpace(stripEmbeddedToolUseJSONOutsideFences(body))
+}
+
+// stripEmbeddedToolUseJSONOutsideFences removes transport artifacts from prose
+// while leaving fenced Markdown/code blocks byte-for-byte intact.
+func stripEmbeddedToolUseJSONOutsideFences(content string) string {
+	lines := strings.Split(content, "\n")
+	var out []string
+	inFence := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			out = append(out, line)
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			out = append(out, line)
+			continue
+		}
+		out = append(out, stripEmbeddedToolUseJSON(line))
+	}
+	return strings.Join(out, "\n")
 }
 
 func stripToolUseFences(content string) string {

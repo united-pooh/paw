@@ -64,22 +64,22 @@ func (m appModel) queuePanelContent(width int) string {
 				style = queueSelectedStyle
 			}
 			line := prefix + fmt.Sprintf("%d · %s", i+1, queueItemText(items[i], maxInt(1, width-4)))
-			line = fitStyledCellLine(truncateDisplayWidth(line, width), width)
+			line = fitStyledCellLine(truncateStyledCellLine(line, width), width)
 			lines = append(lines, style.Render(line))
 		}
-		lines = append(lines, queueHintStyle.Render(truncateDisplayWidth("↑/↓ 选择 · i 编辑 · d 删除 · c 清空 · alt/command+k/j 调整 · esc 退出", width)))
+		lines = append(lines, queueHintStyle.Render(truncateStyledCellLine("↑/↓ 选择 · i 编辑 · d 删除 · c 清空 · alt/command+k/j 调整 · esc 退出", width)))
 		return strings.Join(lines, "\n")
 	case queueModeEditing:
 		position := 1
 		if m.queueEdit != nil {
 			position = m.queueEdit.originalAt + 1
 		}
-		return queueEditStyle.Render(truncateDisplayWidth(fmt.Sprintf("✎ 编辑排队任务 #%d · Enter 保存到队尾 · Esc 取消", position), width))
+		return queueEditStyle.Render(truncateStyledCellLine(fmt.Sprintf("✎ 编辑排队任务 #%d · Enter 保存到队尾 · Esc 取消", position), width))
 	default:
 		if len(items) == 0 {
 			return ""
 		}
-		return queueSummaryStyle.Render(truncateDisplayWidth(fmt.Sprintf("⏳ %d 个任务排队中 · ↓ 查看", len(items)), width))
+		return queueSummaryStyle.Render(truncateStyledCellLine(fmt.Sprintf("⏳ %d 个任务排队中 · ↓ 查看", len(items)), width))
 	}
 }
 
@@ -89,7 +89,7 @@ func queueItemText(item queuedChatItem, width int) string {
 	if imageCount > 0 {
 		text = fmt.Sprintf("[image ×%d] %s", imageCount, text)
 	}
-	return truncateDisplayWidth(text, maxInt(1, width))
+	return truncateStyledCellLine(text, maxInt(1, width))
 }
 
 func (m appModel) renderQueuePanel(width, height int) string {
@@ -108,7 +108,7 @@ func renderQueueInlineBottomBorder(view string, width int, summary string) strin
 		summary = lines[0]
 	}
 	maxSummaryWidth := maxInt(1, width-2)
-	summary = truncateDisplayWidth(summary, maxSummaryWidth)
+	summary = truncateStyledCellLine(summary, maxSummaryWidth)
 	summaryWidth := terminalCellWidth(summary)
 	leftWidth := maxInt(1, (width-summaryWidth)/2)
 	if leftWidth+summaryWidth > width {

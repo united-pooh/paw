@@ -125,11 +125,11 @@ func (m appModel) thinkingLabel() string {
 
 func contextBarWidth(width int, usedLabel, freeLabel string) int {
 	width = maxInt(1, width)
-	barWidth := width - lipgloss.Width(usedLabel) - lipgloss.Width(freeLabel) - 2
+	barWidth := width - terminalCellWidth(usedLabel) - terminalCellWidth(freeLabel) - 2
 	if barWidth >= 8 {
 		return barWidth
 	}
-	return maxInt(contextMeterMinimumBarCells, width-lipgloss.Width(compactContextLabel(usedLabel))-lipgloss.Width(compactContextLabel(freeLabel))-2)
+	return maxInt(contextMeterMinimumBarCells, width-terminalCellWidth(compactContextLabel(usedLabel))-terminalCellWidth(compactContextLabel(freeLabel))-2)
 }
 
 func compactContextLabel(label string) string {
@@ -149,18 +149,18 @@ func compactContextLabel(label string) string {
 func renderContextMeterLine(width int, usedLabel, freeLabel string, used, cache, limit int, overlay string, pulse float64) string {
 	width = maxInt(1, width)
 	barWidth := contextBarWidth(width, usedLabel, freeLabel)
-	if barWidth+lipgloss.Width(usedLabel)+lipgloss.Width(freeLabel)+2 > width {
+	if barWidth+terminalCellWidth(usedLabel)+terminalCellWidth(freeLabel)+2 > width {
 		usedLabel = compactContextLabel(usedLabel)
 		freeLabel = compactContextLabel(freeLabel)
 	}
 	usedText := contextUsedStyle.Render(usedLabel)
 	freeText := contextFreeStyle.Render(freeLabel)
-	barWidth = maxInt(contextMeterMinimumBarCells, width-lipgloss.Width(usedLabel)-lipgloss.Width(freeLabel)-2)
-	barOffset := lipgloss.Width(usedLabel) + 1
+	barWidth = maxInt(contextMeterMinimumBarCells, width-terminalCellWidth(usedLabel)-terminalCellWidth(freeLabel)-2)
+	barOffset := terminalCellWidth(usedLabel) + 1
 	overlayStart := centeredOverlayStart(width, barOffset, barWidth, overlay)
 	bar := renderContextBarWithOverlayStart(used, cache, limit, barWidth, overlay, overlayStart, pulse)
 	line := usedText + " " + bar + " " + freeText
-	if visible := lipgloss.Width(line); visible < width {
+	if visible := terminalCellWidth(line); visible < width {
 		line += strings.Repeat(" ", width-visible)
 	}
 	return line
@@ -168,7 +168,7 @@ func renderContextMeterLine(width int, usedLabel, freeLabel string, used, cache,
 
 func renderContextBar(used, cache, limit, width int, overlay string) string {
 	overlayStart := -1
-	if overlayWidth := lipgloss.Width(overlay); overlayWidth > 0 && overlayWidth <= width {
+	if overlayWidth := terminalCellWidth(overlay); overlayWidth > 0 && overlayWidth <= width {
 		overlayStart = (width - overlayWidth) / 2
 	}
 	return renderContextBarWithOverlayStart(used, cache, limit, width, overlay, overlayStart, 0)
@@ -193,7 +193,7 @@ func renderContextBarWithOverlayStart(used, cache, limit, width int, overlay str
 			cells[i] = contextFreeStyle.Render("▱")
 		}
 	}
-	overlayWidth := lipgloss.Width(overlay)
+	overlayWidth := terminalCellWidth(overlay)
 	if overlayWidth > 0 && overlayStart >= 0 && overlayStart+overlayWidth <= width {
 		cells[overlayStart] = contextThinkingStyle.Render(overlay)
 		for i := 1; i < overlayWidth; i++ {
@@ -298,7 +298,7 @@ func easeOutBack(t float64) float64 {
 }
 
 func centeredOverlayStart(lineWidth, barOffset, barWidth int, overlay string) int {
-	overlayWidth := lipgloss.Width(overlay)
+	overlayWidth := terminalCellWidth(overlay)
 	if overlayWidth == 0 || overlayWidth > barWidth {
 		return -1
 	}
@@ -339,9 +339,9 @@ func (m appModel) renderContextCardContent(innerWidth int) string {
 	cacheLabel := "cache " + formatContextPercent(labelCache, labelUsed)
 	rawToken := formatCompactTokenCount(labelUsed) + contextDirectionArrow(m.isGenerating)
 	rawFree := formatContextFreeLabel(labelUsed, limit)
-	cacheVW := len([]rune(cacheLabel))
-	tokenVW := len([]rune(rawToken))
-	freeVW := len([]rune(rawFree))
+	cacheVW := terminalCellWidth(cacheLabel)
+	tokenVW := terminalCellWidth(rawToken)
+	freeVW := terminalCellWidth(rawFree)
 	gap := maxInt(1, innerWidth-cacheVW-1-tokenVW-freeVW)
 	topLine := contextCacheStyle.Render(cacheLabel) + " " + contextUsedStyle.Render(rawToken) + strings.Repeat(" ", gap) + contextFreeStyle.Render(rawFree)
 
@@ -367,7 +367,7 @@ func compactContextStatusLine(width int, options ...[]string) string {
 	}
 	for _, parts := range options {
 		visible := strings.Join(nonEmptyStrings(parts...), "  ")
-		if lipgloss.Width(visible) <= width {
+		if terminalCellWidth(visible) <= width {
 			return centeredContextStatusText(width, visible)
 		}
 	}
@@ -375,7 +375,7 @@ func compactContextStatusLine(width int, options ...[]string) string {
 		return centeredContextStatusText(width, "")
 	}
 	fallback := strings.Join(nonEmptyStrings(options[len(options)-1]...), " ")
-	return centeredContextStatusText(width, trimVisibleWidth(fallback, width))
+	return centeredContextStatusText(width, truncateStyledCells(fallback, width, ""))
 }
 
 func centeredContextStatusText(width int, visible string) string {
@@ -384,17 +384,6 @@ func centeredContextStatusText(width int, visible string) string {
 		Align(lipgloss.Center).
 		Foreground(colorManager.LipglossColor(colorContextFree)).
 		Render(visible)
-}
-
-func trimVisibleWidth(text string, width int) string {
-	if width <= 0 || lipgloss.Width(text) <= width {
-		return text
-	}
-	runes := []rune(text)
-	for lipgloss.Width(string(runes)) > width && len(runes) > 0 {
-		runes = runes[:len(runes)-1]
-	}
-	return string(runes)
 }
 
 func (m appModel) contextPercentStatusLine(width int, cachePct, freePct string) string {

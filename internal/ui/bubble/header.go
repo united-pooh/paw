@@ -4,7 +4,7 @@
 //   - headerSnapshot 是纯数据快照，由 collectHeaderData 从各 provider 收集；
 //   - renderHeader 是纯函数，只吃快照+宽度，按 cell 预算截断，不访问任何状态。
 //
-// 数据内容绝不破坏布局：每个字段有 cell 预算上限，超长用 truncateDisplayWidth
+// 数据内容绝不破坏布局：每个字段有 cell 预算上限，超长用 truncateStyledCellLine
 // 截断；终端过窄时按优先级（右→左）丢弃字段，最终输出严格等于 width 个 cell。
 package bubble
 
@@ -34,7 +34,7 @@ func renderHeader(s headerSnapshot, width int) string {
 
 	// 模型名是唯一的用户可控长字符串，给独立预算并截断。
 	modelBudget := clampInt(width/3, 6, 28)
-	model := truncateDisplayWidth(s.modelLabel, modelBudget)
+	model := truncateStyledCellLine(s.modelLabel, modelBudget)
 	status := strings.TrimSpace(s.statusLabel)
 	if status == "" {
 		status = "ready"
@@ -48,9 +48,9 @@ func renderHeader(s headerSnapshot, width int) string {
 		return left + strings.Repeat(" ", width-leftW-rightW) + clock
 	}
 	if width >= rightW {
-		return padOrTruncateToWidth(truncateDisplayWidth(left, maxInt(1, width-rightW))+clock, width)
+		return fitStyledCellLine(truncateStyledCellLine(left, maxInt(1, width-rightW))+clock, width)
 	}
-	return padOrTruncateToWidth(truncateDisplayWidth(left, width), width)
+	return fitStyledCellLine(truncateStyledCellLine(left, width), width)
 }
 
 // formatTurnTimer 把轮次耗时格式化为 header 用字符串。
@@ -64,18 +64,6 @@ func formatTurnTimer(startedAt, now time.Time) string {
 		return fmt.Sprintf("%ds", seconds)
 	}
 	return fmt.Sprintf("%dm%02ds", seconds/60, seconds%60)
-}
-
-// padOrTruncateToWidth 把 text 对齐到精确 width cell：不足右补空格，超宽截断。
-func padOrTruncateToWidth(text string, width int) string {
-	w := terminalCellWidth(text)
-	if w == width {
-		return text
-	}
-	if w < width {
-		return text + strings.Repeat(" ", width-w)
-	}
-	return truncateDisplayWidth(text, width)
 }
 
 // collectHeaderData 从现有 provider 读出 header 数据快照。这是 UI 与数据源的
