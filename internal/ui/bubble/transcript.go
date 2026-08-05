@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
 	"paw/internal/session"
 	"paw/internal/ui"
 )
@@ -1232,15 +1231,19 @@ func renderToolsGroup(entries []transcriptEntry, width int, at time.Time, expand
 		duration = formatToolDuration(started, at)
 	}
 	label := fmt.Sprintf("%s Tools  %d calls  %s", marker, len(entries), duration)
-	contentWidth := toolEntryContentWidth(width, style)
+	// Tool groups share the same two-cell external gutter as user and assistant
+	// entries. Keep the border itself aligned with the message body column.
+	groupWidth := transcriptBodyWidth(width)
+	contentWidth := toolEntryContentWidth(groupWidth, style)
 	innerWidth := maxInt(1, contentWidth-style.GetHorizontalFrameSize())
-	lines := []string{toolHeaderStyle.Render(truncateDisplayWidth(label, innerWidth))}
+	lines := []string{toolHeaderStyle.Render(truncateStyledCellLine(label, innerWidth))}
 	if expanded {
 		for _, entry := range entries {
 			lines = append(lines, renderGroupedToolEntry(entry, innerWidth, at, fullResult))
 		}
 	}
-	return style.Width(contentWidth).Render(strings.Join(lines, "\n"))
+	group := style.Width(contentWidth).Render(strings.Join(lines, "\n"))
+	return indentLines(group, transcriptEntryGutter)
 }
 
 func renderGroupedToolEntry(entry transcriptEntry, width int, at time.Time, fullResult bool) string {
@@ -1275,7 +1278,7 @@ func renderGroupedToolEntry(entry transcriptEntry, width int, at time.Time, full
 	if !(fullResult && entry.toolFocused) {
 		resultLines = limitRenderedDetailLines(resultLines, maxRenderedToolDetailLines)
 	}
-	detail := renderToolDetailLines(resultLines, maxInt(1, innerWidth-2))
+	detail := renderToolDetailLinesWithHint(resultLines, maxInt(1, innerWidth-2), entry.toolTarget)
 	return borderStyle.Width(contentWidth).Render(summary + "\n" + detail)
 }
 
@@ -1407,14 +1410,6 @@ func renderEntryAt(entry transcriptEntry, width int, at time.Time) string {
 		}
 		return indentLines(renderTodoEntry(entry, transcriptBodyWidth(width)), transcriptEntryGutter)
 	}
-	title := displayEntryTitle(entry)
-	color := sanitizeTerminalText(entry.color)
-	var label string
-	if color != "" {
-		label = lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true).Render(title)
-	} else {
-		label = labelStyle(entry.kind).Render(title)
-	}
 	bodyWidth := transcriptBodyWidth(width)
 	body := renderEntryBodyAt(entry, bodyWidth, at)
 	if entry.kind == entryAssistant && entry.turnMetadata != nil {
@@ -1432,6 +1427,27 @@ func renderEntryAt(entry transcriptEntry, width int, at time.Time) string {
 		return indentLines(body, transcriptEntryGutter)
 	}
 	if body == "" {
+		return ""
+	}
+	if entry.kind == entryUser {
+		// 用户消息与 assistant 共用两列外部 gutter：assistant 首行显示 ✦，
+		// 用户消息保留空 gutter，正文从同一列开始，避免两类消息视觉错位。
+		return userTranscriptRowStyle.Width(width).Render(indentLines(body, transcriptEntryGutter))
+	}
+	if entry.kind == entryAssistant {
+		// ✦ 位于 transcript 左侧外部 gutter。首行用 marker 占据 gutter，
+		// 后续行用等宽空格延续同一正文列，避免模型回答失去原有缩进。
+		return indentAssistantGutter(body)
+	}
+	title := displayEntryTitle(entry)
+	color := sanitizeTerminalText(entry.color)
+	var label string
+	if color != "" {
+		label = lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true).Render(title)
+	} else {
+		label = labelStyle(entry.kind).Render(title)
+	}
+	if body == "" {
 		return transcriptEntryGutter + label
 	}
 	return indentLines(label+"\n"+body, transcriptEntryGutter)
@@ -1439,10 +1455,8 @@ func renderEntryAt(entry transcriptEntry, width int, at time.Time) string {
 
 func displayEntryTitle(entry transcriptEntry) string {
 	switch entry.kind {
-	case entryUser:
-		return "you >"
-	case entryAssistant:
-		return "agent >"
+	case entryUser, entryAssistant:
+		return ""
 	case entryThinking:
 		return "thinking >"
 	default:
@@ -1451,7 +1465,7 @@ func displayEntryTitle(entry transcriptEntry) string {
 }
 
 func transcriptBodyWidth(width int) int {
-	return maxInt(1, width-lipgloss.Width(transcriptEntryGutter))
+	return maxInt(1, width-terminalCellWidth(transcriptEntryGutter))
 }
 
 func (m appModel) hasRenderableTranscript() bool {
@@ -1497,6 +1511,12 @@ func renderEntryBodyAt(entry transcriptEntry, width int, at time.Time) string {
 	}
 	if entry.kind == entryUser && len(entry.inputTokens) > 0 {
 		return renderTokenizedTranscriptBody(body, entry.inputTokens, width)
+	}
+	if entry.kind == entryUser {
+		// Apply the user foreground at the innermost text layer. The outer row
+		// style supplies background and width, but cannot override an ANSI
+		// foreground already emitted by a nested style.
+		return userTranscriptRowStyle.UnsetBackground().Width(width).Render(body)
 	}
 	if entry.kind != entryUser {
 		body = renderTerminalLinks(body)
@@ -1613,7 +1633,7 @@ func renderToolTransactionEntry(entry transcriptEntry, width int, at time.Time) 
 	}
 	detailLines := strings.Split(result, "\n")
 	detailWidth := maxInt(1, innerWidth-2)
-	detail := renderToolDetailLines(detailLines, detailWidth)
+	detail := renderToolDetailLinesWithHint(detailLines, detailWidth, entry.toolTarget)
 	return borderStyle.Width(contentWidth).Render(summary + "\n" + detail)
 }
 
@@ -1660,30 +1680,30 @@ func renderCompactToolSummary(entry transcriptEntry, width int, at time.Time) st
 		statusStyle = statusStyle.Underline(true)
 	}
 	statusSeparator := "  "
-	statusAvailable := width - lipgloss.Width(focusPrefix) - lipgloss.Width(iconText) - lipgloss.Width(statusSeparator)
-	if statusAvailable < lipgloss.Width(toolStatusLabel(status)) {
+	statusAvailable := width - terminalCellWidth(focusPrefix) - terminalCellWidth(iconText) - terminalCellWidth(statusSeparator)
+	if statusAvailable < terminalCellWidth(toolStatusLabel(status)) {
 		iconText = icon
 		statusSeparator = "  "
-		statusAvailable = width - lipgloss.Width(focusPrefix) - lipgloss.Width(iconText) - lipgloss.Width(statusSeparator)
+		statusAvailable = width - terminalCellWidth(focusPrefix) - terminalCellWidth(iconText) - terminalCellWidth(statusSeparator)
 	}
 	statusChip := toolStatusChipWithinWidth(status, duration, maxInt(1, statusAvailable), statusStyle)
 
-	nameWidth := lipgloss.Width(name)
-	fixedWithoutTarget := lipgloss.Width(focusPrefix) + lipgloss.Width(iconText) + lipgloss.Width(statusSeparator) + lipgloss.Width(statusChip)
+	nameWidth := terminalCellWidth(name)
+	fixedWithoutTarget := terminalCellWidth(focusPrefix) + terminalCellWidth(iconText) + terminalCellWidth(statusSeparator) + terminalCellWidth(statusChip)
 	if fixedWithoutTarget+nameWidth > width {
 		nameBudget := width - fixedWithoutTarget
 		if nameBudget >= 1 {
-			name = truncateDisplayWidth(name, nameBudget)
+			name = truncateStyledCellLine(name, nameBudget)
 		} else {
 			name = ""
 		}
-		nameWidth = lipgloss.Width(name)
+		nameWidth = terminalCellWidth(name)
 	}
 	targetText := ""
 	if target != "" {
 		targetBudget := width - fixedWithoutTarget - nameWidth - 1
 		if targetBudget >= 1 {
-			targetText = truncateDisplayWidth(target, targetBudget)
+			targetText = truncateStyledCellLine(target, targetBudget)
 		}
 	}
 
@@ -1700,7 +1720,7 @@ func renderCompactToolSummary(entry transcriptEntry, width int, at time.Time) st
 	}
 	line.WriteString(statusSeparator)
 	line.WriteString(statusChip)
-	return truncateStyledDisplayWidth(line.String(), width)
+	return truncateStyledCells(line.String(), width, "")
 }
 
 func formatRunningToolElapsed(startedAt, at time.Time) string {
@@ -1773,13 +1793,6 @@ func trimDurationTrailingZeros(value string) string {
 	value = strings.TrimRight(value, "0")
 	value = strings.TrimRight(value, ".")
 	return value
-}
-
-func truncateStyledDisplayWidth(text string, width int) string {
-	if lipgloss.Width(text) <= width {
-		return text
-	}
-	return ansi.Truncate(text, maxInt(1, width), "")
 }
 
 func renderAssistantBodyWithCitations(body string, width int, citations []toolCitation) string {
@@ -1870,12 +1883,12 @@ func renderToolCitationQuoteLine(cite toolCitation, width int) string {
 	key := toolCitationKeyStyle.Render("[" + name + "]")
 	status := toolCitationStatusStyle(cite).Render(toolCitationStatusText(cite))
 	target := strings.TrimSpace(sanitizeTerminalText(cite.target))
-	lineWidth := lipgloss.Width("["+name+"] ") + lipgloss.Width(toolCitationStatusText(cite))
+	lineWidth := terminalCellWidth("["+name+"] ") + terminalCellWidth(toolCitationStatusText(cite))
 	if target == "" {
 		return key + " " + status
 	}
-	targetWidth := maxInt(1, width-lineWidth-lipgloss.Width("  "))
-	return key + "  " + status + toolCitationStyle.Render("  "+truncateDisplayWidth(target, targetWidth))
+	targetWidth := maxInt(1, width-lineWidth-terminalCellWidth("  "))
+	return key + "  " + status + toolCitationStyle.Render("  "+truncateStyledCellLine(target, targetWidth))
 }
 
 func toolCitationStatusText(cite toolCitation) string {
@@ -1952,8 +1965,28 @@ func limitRenderedDetailLines(lines []string, maxLines int) []string {
 }
 
 func renderToolDetailLines(lines []string, width int) string {
+	return renderToolDetailLinesWithHint(lines, width, "")
+}
+
+func omitLeadingToolTargetLine(lines []string, hint string) []string {
+	if len(lines) == 0 || strings.TrimSpace(hint) == "" {
+		return lines
+	}
+	target := strings.TrimSpace(sanitizeTerminalText(hint))
+	if target == "" || isNumberedDiffLine(lines[0]) || strings.TrimSpace(lines[0]) != target {
+		return lines
+	}
+	return lines[1:]
+}
+
+func renderToolDetailLinesWithHint(lines []string, width int, hint string) string {
+	lines = omitLeadingToolTargetLine(lines, hint)
 	containsUnifiedDiffHunk := hasUnifiedDiffHunk(lines)
 	diffRowWidth := diffDetailRowsWidth(lines, width)
+	language := syntaxLanguageFromText(strings.Join(lines, "\n"), hint)
+	if language == "" {
+		language = syntaxLanguageFromLines(lines)
+	}
 	rendered := make([]string, 0, len(lines))
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -1993,12 +2026,12 @@ func renderToolDetailLines(lines []string, width int) string {
 			renderedLine = "  " + strings.TrimRight(strings.TrimPrefix(line, " "), " \t\r")
 		}
 		if isDiffLine || isNumberedDiffLine(line) {
-			renderedLine = padDisplayWidth(truncateDisplayWidth(renderedLine, diffRowWidth), diffRowWidth)
-			rendered = append(rendered, style.Render(renderedLine))
+			renderedLine = fitStyledCellLine(truncateStyledCellLine(renderedLine, diffRowWidth), diffRowWidth)
+			rendered = append(rendered, style.Render(highlightToolDetailLineWithBase(renderedLine, language, style)))
 			continue
 		}
-		renderedLine = truncateDisplayWidth(renderedLine, width)
-		rendered = append(rendered, style.Width(width).Render(renderedLine))
+		renderedLine = truncateStyledCellLine(renderedLine, width)
+		rendered = append(rendered, style.Width(width).Render(highlightToolDetailLineWithBase(renderedLine, language, style)))
 	}
 	return strings.Join(rendered, "\n")
 }
@@ -2110,6 +2143,21 @@ func (m appModel) turnsCount() int {
 		}
 	}
 	return n
+}
+
+// indentAssistantGutter 将 assistant 的首行 marker 放在外部 gutter，并让后续
+// 行使用等宽 gutter 延续正文列。marker 和分隔空格共占两列，正文不会因为
+// 去掉 agent 标签而左移；body 内部的 ANSI/Markdown 样式保持不变。
+func indentAssistantGutter(body string) string {
+	lines := strings.Split(body, "\n")
+	if len(lines) == 0 {
+		return ""
+	}
+	lines[0] = assistantMarkerStyle.Render("✦") + " " + lines[0]
+	for i := 1; i < len(lines); i++ {
+		lines[i] = transcriptEntryGutter + lines[i]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // indentLines 给多行文本逐行添加固定前缀。

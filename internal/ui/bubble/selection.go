@@ -14,9 +14,10 @@ var writeClipboard = clipboard.WriteAll
 
 // transcriptLineSnapshot 保存一行 transcript 的样式文本、纯文本和显示宽度。
 type transcriptLineSnapshot struct {
-	styled string
-	plain  string
-	width  int
+	styled          string
+	plain           string
+	width           int
+	assistantMarker bool
 }
 
 // handleTranscriptMouse 处理 transcript 面板中的鼠标拖拽选择事件。
@@ -57,6 +58,9 @@ func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.C
 		}
 		m.scrollTranscriptSelectionAtEdge(msg.Y)
 		if point, ok := m.transcriptPointForMouse(msg.X, msg.Y); ok {
+			if point != m.selectionStart {
+				point.col++
+			}
 			m.selectionEnd = point
 			if point != m.selectionStart {
 				m.selectionActive = true
@@ -69,6 +73,9 @@ func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.C
 			return m, false, nil
 		}
 		if point, ok := m.transcriptPointForMouse(msg.X, msg.Y); ok {
+			if point != m.selectionStart {
+				point.col++
+			}
 			m.selectionEnd = point
 			if point != m.selectionStart {
 				m.selectionActive = true
@@ -165,7 +172,10 @@ func (m appModel) transcriptPointForMouse(x, y int) (selectionPoint, bool) {
 	} else {
 		col = 0
 	}
-	return selectionPoint{row: line, col: maxInt(0, col)}, true
+	// Bubble Tea 的鼠标 X 表示当前 cell 的右边界；转换为 transcript
+	// 的字符索引时回到该 cell 的左侧。选择结束点仍按 inclusive 语义处理。
+	col = maxInt(0, col-1)
+	return selectionPoint{row: line, col: col}, true
 }
 
 func (m appModel) toolHoverIndexAtMouse(x, y int) int {
@@ -256,7 +266,21 @@ func (m *appModel) transcriptHyperlinkAtPoint(point selectionPoint) string {
 		m.transcriptRenderedContent = content
 		m.transcriptContentCached = true
 	}
-	return terminalHyperlinkAtPoint(content, point)
+	return terminalHyperlinkAtPoint(content, normalizeTranscriptHyperlinkPoint(content, point))
+}
+
+// normalizeTranscriptHyperlinkPoint 将外部 assistant marker 的逻辑坐标
+// 映射回实际渲染文本坐标。选择快照把 marker 视为 gutter，不计入正文；
+// OSC 8 命中检测则遍历包含 marker 的原始渲染文本。
+func normalizeTranscriptHyperlinkPoint(content string, point selectionPoint) selectionPoint {
+	if point.row < 0 || point.col < 0 {
+		return point
+	}
+	lines := strings.Split(content, "\n")
+	if point.row < len(lines) && strings.HasPrefix(ansi.Strip(lines[point.row]), "✦ ") {
+		point.col++
+	}
+	return point
 }
 
 // terminalHyperlinkAtPoint 返回渲染文本指定单元格上的 OSC 8 URL。
@@ -345,10 +369,20 @@ func buildTranscriptLineSnapshots(content string) []transcriptLineSnapshot {
 	lines := make([]transcriptLineSnapshot, 0, len(rawLines))
 	for _, line := range rawLines {
 		plain := ansi.Strip(line)
+		assistantMarker := strings.HasPrefix(plain, "✦ ")
+		// The assistant marker is a visual gutter decoration, not transcript
+		// body content. Keep the logical two-cell gutter for hit testing while
+		// retaining metadata so copying a selection that starts in the gutter
+		// can preserve the visible marker.
+		if assistantMarker {
+			plain = transcriptEntryGutter + strings.TrimPrefix(plain, "✦ ")
+			line = plain
+		}
 		lines = append(lines, transcriptLineSnapshot{
-			styled: line,
-			plain:  plain,
-			width:  terminalCellWidth(plain),
+			styled:          line,
+			plain:           plain,
+			width:           terminalCellWidth(plain),
+			assistantMarker: assistantMarker,
 		})
 	}
 	return lines
@@ -368,7 +402,14 @@ func (m appModel) selectedTranscriptText() string {
 			selected = append(selected, "")
 			continue
 		}
-		selected = append(selected, slicePlainCells(lines[row].plain, left, right))
+		text := slicePlainCells(lines[row].plain, left, right)
+		if row == start.row && lines[row].assistantMarker && left == 0 {
+			// ✦ 是 transcript 外部 gutter 的视觉标记，不属于正文快照；
+			// 选区从 gutter 开始时，复制内容仍保留该标记，避免用户看到的
+			// 首行与剪贴板内容不一致。
+			text = "✦ " + strings.TrimPrefix(text, transcriptEntryGutter)
+		}
+		selected = append(selected, text)
 	}
 	return strings.TrimRight(strings.Join(selected, "\n"), "\n")
 }
@@ -441,7 +482,7 @@ func selectionCellsForLine(line transcriptLineSnapshot, row int, start, end sele
 		left = start.col
 	}
 	if row == end.row {
-		right = end.col + 1
+		right = end.col
 	}
 	return snapCellRangeToGraphemes(line.plain, line.width, left, right)
 }

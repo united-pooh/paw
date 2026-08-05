@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Transcript marker mockup</title>
+<style>
+:root{--bg:#202638;--panel:#252c41;--text:#d8dcff;--muted:#78819d;--user:#74d7ff;--agent:#82aaff;--tool:#91c7ff;--line:#58627e}
+*{box-sizing:border-box}body{margin:0;padding:32px;background:var(--bg);color:var(--text);font:600 18px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}h1{font-size:28px;margin:0 0 24px;color:#9bd6bd}.grid{display:grid;gap:22px;max-width:1100px}.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 22px}.title{color:#9bd6bd;font-size:22px;margin-bottom:12px}.transcript{position:relative;padding:16px 18px 20px 76px;border-left:1px dashed #78819d}.row{min-height:36px;white-space:pre-wrap}.user{color:var(--user)}.agent{color:var(--text)}.agent:before{content:'✦';position:absolute;left:26px;color:var(--agent);font-size:22px}.agent-label{color:var(--agent)}.tool{color:var(--tool);margin-top:6px}.note{color:var(--muted);font-size:14px;margin-top:10px}.comparison{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:24px}.bad,.good{padding:14px;border-radius:8px;border:1px solid var(--line)}.bad{color:#d69aa8}.good{color:#9bd6bd}.key{font-size:14px;color:var(--muted);margin-top:22px}
+</style>
+</head>
+<body>
+<h1>Transcript 视觉伴侣：用户 / Agent 对齐方案</h1>
+<div class="grid">
+<section class="card"><div class="title">推荐方案：✦ 在外侧 gutter，内容列保持统一</div><div class="transcript">
+<div class="row user">you &gt;  请解释这个错误</div>
+<div class="row agent"><span class="agent-label">agent &gt; </span>这是模型的回答内容</div>
+<div class="row agent">          第二行回答继续保持缩进</div>
+<div class="row tool">          [工具调用]  running</div>
+</div><div class="note">✦ 位于左边框外侧，不占用内容宽度；agent 文本与 user 文本共用同一内容起始列。</div></section>
+<section class="card"><div class="title">方案 B：只保留 ✦，不显示 agent &gt;</div><div class="transcript">
+<div class="row user">you &gt;  请解释这个错误</div>
+<div class="row agent">这是模型的回答内容</div>
+<div class="row agent">          第二行回答继续保持缩进</div>
+<div class="row tool">          [工具调用]  running</div>
+</div><div class="note">更简洁，但在纯文本复制或无颜色终端中辨识度较弱。</div></section>
+<section class="card"><div class="title">方案 C：✦ + agent 标签，仅作为语义辅助</div><div class="transcript">
+<div class="row user">you &gt;  请解释这个错误</div>
+<div class="row agent"><span class="agent-label">agent &gt; </span>这是模型的回答内容</div>
+<div class="row agent">          第二行回答继续保持缩进</div>
+<div class="row tool">          ···········  running</div>
+</div><div class="note">最兼容现有布局，但视觉改动最小。</div></section>
+</div>
+<div class="comparison"><div class="bad">当前问题：✦ 替换了原有首列缩进，模型回答和用户消息难区分。</div><div class="good">修复目标：保留内容起始列；✦ 独立绘制在 transcript 左边框外。</div></div>
+<div class="key">实现重点：markerWidth 不计入正文宽度；agent 首行与续行使用同一 contentX；user / agent 均保留原有左缩进。</div>
+</body></html>

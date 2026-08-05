@@ -235,6 +235,9 @@ func textareaAbsoluteCursor(input textarea.Model) int {
 		offset += len([]rune(valueLines[i])) + 1
 	}
 	info := input.LineInfo()
+	// StartColumn and ColumnOffset are rune offsets into the logical textarea
+	// line. CharOffset is a display-cell width and must not be used for token
+	// ranges or edit positions.
 	return offset + info.StartColumn + info.ColumnOffset
 }
 
@@ -598,7 +601,7 @@ func projectInput(raw string, tokens []inputToken, cursor, width int, folded boo
 				if inRange {
 					if !markerAdded {
 						marker := inputProjectionLine{logicalLine: start}
-						text := truncateDisplayWidth(
+						text := truncateStyledCellLine(
 							formatInputFoldMarker(hidden),
 							width,
 						)
@@ -709,8 +712,12 @@ func renderProjectedTextLine(line inputProjectionLine, baseStyle lipgloss.Style)
 func renderTokenizedTranscriptBody(raw string, tokens []inputToken, width int) string {
 	projection := projectInput(raw, tokens, -1, width, false)
 	lines := make([]string, 0, len(projection.lines))
+	// Ordinary atoms must carry the user foreground themselves. renderEntryAt's
+	// outer style cannot override the bodyStyle ANSI foreground previously
+	// emitted here. Semantic token atoms retain their dedicated colors.
+	baseStyle := userTranscriptRowStyle.UnsetBackground()
 	for _, line := range projection.lines {
-		lines = append(lines, renderProjectedTextLine(line, bodyStyle))
+		lines = append(lines, renderProjectedTextLine(line, baseStyle))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -760,11 +767,11 @@ func (m appModel) renderTokenInputContent() string {
 			}
 		}
 		lineWidth := maxInt(1, line.width)
-		rendered = append(rendered, padDisplayWidth(out.String(), lineWidth))
+		rendered = append(rendered, fitStyledCellLine(out.String(), lineWidth))
 		if cursorLine {
 			// 恢复 textarea 自带的当前行高亮（CursorLine 背景），使多行/token
 			// 渲染与单行 chat 渲染保持一致的当前行视觉。
-			rendered[len(rendered)-1] = m.input.FocusedStyle.CursorLine.Render(padDisplayWidth(rendered[len(rendered)-1], lineWidth))
+			rendered[len(rendered)-1] = m.input.FocusedStyle.CursorLine.Render(fitStyledCellLine(rendered[len(rendered)-1], lineWidth))
 		}
 	}
 	for len(rendered) < height {

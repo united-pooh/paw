@@ -199,6 +199,13 @@ func transcriptEntriesFromRecords(records []session.Record, metadata []session.T
 		todoTracker.observeCalls(record)
 		todoTracker.foldForAssistant(record, entries)
 		recordEntries := transcriptEntriesFromMessage(record.Message, createdAt, workspaceRoot)
+		if record.Kind == session.JournalAssistantPartial {
+			for index := range recordEntries {
+				if recordEntries[index].kind == entryAssistant {
+					recordEntries[index].renderMode = transcriptRenderPlain
+				}
+			}
+		}
 		if item, ok := metadataByRecordIndex[recordIndex]; ok {
 			for index := len(recordEntries) - 1; index >= 0; index-- {
 				if recordEntries[index].kind == entryAssistant {
@@ -298,7 +305,7 @@ func formatSessionLabel(item sessionSummaryItem) string {
 	size := formatFileSize(item.transcriptSize)
 	msg := strings.Join(strings.Fields(sanitizeTerminalText(item.firstMessage)), " ")
 	if msg != "" {
-		return fmt.Sprintf("%s  %s  %s", lastUsedAt, size, truncateDisplayWidth(msg, 80))
+		return fmt.Sprintf("%s  %s  %s", lastUsedAt, size, truncateStyledCellLine(msg, 80))
 	}
 	return fmt.Sprintf("%s  %s  (empty)", lastUsedAt, size)
 }
