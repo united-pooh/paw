@@ -23,6 +23,7 @@ func renderMarkdown(markdown string, width int) string {
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
 		trimmed := strings.TrimSpace(line)
+		leading := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
 		if trimmed == "" {
 			parts = append(parts, "")
 			continue
@@ -40,24 +41,51 @@ func renderMarkdown(markdown string, width int) string {
 			parts = append(parts, renderMarkdownTable(tableLines, width))
 			continue
 		}
+		if isMarkdownThematicBreak(trimmed) {
+			parts = append(parts, markdownRuleStyle.Render(strings.Repeat("─", width)))
+			continue
+		}
 		if level, text, ok := markdownHeading(trimmed); ok {
-			parts = append(parts, renderMarkdownHeading(level, text, width))
+			parts = append(parts, leading+renderMarkdownHeading(level, text, width))
 			continue
 		}
 		if text, ok := strings.CutPrefix(trimmed, ">"); ok {
-			parts = append(parts, markdownQuoteStyle.Width(maxInt(1, width-2)).Render(renderInlineMarkdown(strings.TrimSpace(text))))
+			parts = append(parts, leading+markdownQuoteStyle.Width(maxInt(1, width-2)).Render(renderInlineMarkdown(strings.TrimSpace(text))))
 			continue
 		}
 		if marker, text, ok := markdownListItem(trimmed); ok {
 			body := renderInlineMarkdown(text)
-			parts = append(parts, markdownBulletStyle.Render(marker)+" "+bodyStyle.Width(maxInt(1, width-lipgloss.Width(marker)-1)).Render(body))
+			parts = append(parts, leading+markdownBulletStyle.Render(marker)+" "+bodyStyle.Width(maxInt(1, width-terminalCellWidth(marker)-1)).Render(body))
 			continue
 		}
 
-		parts = append(parts, bodyStyle.Width(width).Render(renderInlineMarkdown(trimmed)))
+		parts = append(parts, bodyStyle.Width(width).Render(leading+renderInlineMarkdown(strings.TrimRight(line, " \t"))))
 	}
 
-	return compactBlankLines(strings.TrimRight(strings.Join(parts, "\n"), "\n"))
+	return strings.TrimRight(strings.Join(parts, "\n"), "\n")
+}
+
+// isMarkdownThematicBreak recognizes CommonMark-style horizontal rules. The
+// lightweight renderer intentionally treats a marker-only line as a divider
+// even after ordinary text instead of implementing Setext headings.
+func isMarkdownThematicBreak(line string) bool {
+	marker := rune(0)
+	count := 0
+	for _, current := range strings.TrimSpace(line) {
+		if unicode.IsSpace(current) {
+			continue
+		}
+		if current != '-' && current != '*' && current != '_' {
+			return false
+		}
+		if marker == 0 {
+			marker = current
+		} else if current != marker {
+			return false
+		}
+		count++
+	}
+	return count >= 3
 }
 
 // fencedCodeStart 判断一行是否开启 fenced code block，并返回语言标签。
@@ -67,6 +95,12 @@ func fencedCodeStart(line string) (string, bool) {
 		return "", false
 	}
 	return strings.TrimSpace(lang), true
+}
+
+// isFencedCodeClose 只把没有语言标签的 fence 当作结束标记。
+// 这样代码示例中的 ```json / ```go 不会意外关闭外层代码块。
+func isFencedCodeClose(line string) bool {
+	return strings.TrimSpace(line) == "```"
 }
 
 // collectFencedCodeLines 收集代码块内容，并对 markdown 代码块中的嵌套 fence 做特殊处理。
@@ -81,7 +115,11 @@ func collectFencedCodeLines(lines []string, start int, lang string) ([]string, i
 		trimmed := strings.TrimSpace(lines[i])
 		if strings.HasPrefix(trimmed, "```") {
 			if !trackNested {
-				return codeLines, i
+				if isFencedCodeClose(trimmed) {
+					return codeLines, i
+				}
+				codeLines = append(codeLines, lines[i])
+				continue
 			}
 			innerLang := strings.TrimSpace(strings.TrimPrefix(trimmed, "```"))
 			if innerLang == "" {
@@ -115,6 +153,13 @@ func renderCodeBlock(lang, code string, width int) string {
 	if body == "" {
 		body = " "
 	}
+	// Models sometimes wrap a complete Markdown answer in ```markdown. Treat
+	// that wrapper as a transport/presentation fence and render the contained
+	// Markdown normally; otherwise headings and task lists leak their syntax
+	// markers into the terminal (for example: "### 根因" and "- [ ] ...").
+	if isMarkdownFenceLanguage(label) {
+		return renderMarkdown(body, width)
+	}
 	return renderCodeBlockPanel(body, width, label)
 }
 
@@ -122,15 +167,15 @@ func renderCodeBlockPanel(code string, width int, label string) string {
 	width = maxInt(1, width)
 	blockWidth := markdownCodeBlockWidth(code, label, width)
 	if blockWidth < 6 {
-		lines := limitRenderedCodeBlockLines(strings.Split(wrapDisplayWidthLines(code, width), "\n"), maxRenderedCodeBlockLines)
+		lines := limitRenderedCodeBlockLines(wrapStyledCellText(code, width), maxRenderedCodeBlockLines)
 		return markdownCodeBlockStyle.Render(strings.Join(lines, "\n"))
 	}
 	textWidth := maxInt(1, blockWidth-4)
-	lines := limitRenderedCodeBlockLines(strings.Split(wrapDisplayWidthLines(code, textWidth), "\n"), maxRenderedCodeBlockLines)
+	lines := limitRenderedCodeBlockLines(wrapStyledCellText(code, textWidth), maxRenderedCodeBlockLines)
 	rendered := make([]string, 0, len(lines)+2)
 	rendered = append(rendered, renderCodeBlockTopBorder(label, blockWidth))
 	for _, line := range lines {
-		body := " " + markdownCodeBlockStyle.Render(padDisplayWidth(line, textWidth)) + " "
+		body := " " + markdownCodeBlockStyle.Render(fitStyledCellLine(line, textWidth)) + " "
 		rendered = append(rendered,
 			markdownCodeBlockBorderStyle.Render("│")+body+markdownCodeBlockBorderStyle.Render("│"),
 		)
@@ -152,8 +197,13 @@ func limitRenderedCodeBlockLines(lines []string, maxLines int) []string {
 func markdownCodeBlockWidth(code, label string, width int) int {
 	maxWidth := maxInt(6, width-4)
 	widest := 1
-	for _, line := range strings.Split(code, "\n") {
+	sourceLines := strings.Split(code, "\n")
+	for _, line := range sourceLines {
 		widest = maxInt(widest, terminalCellWidth(line))
+	}
+	if len(sourceLines) > maxRenderedCodeBlockLines {
+		hiddenSummary := "... " + strconv.Itoa(len(sourceLines)-maxRenderedCodeBlockLines) + " more lines hidden"
+		widest = maxInt(widest, terminalCellWidth(hiddenSummary))
 	}
 	required := maxInt(6, widest+4)
 	if label != "" {
@@ -168,7 +218,7 @@ func renderCodeBlockTopBorder(label string, width int) string {
 		return renderCodeBlockBorderLine("╭", "─", "╮", width)
 	}
 
-	label = truncateDisplayWidth(label, width-6)
+	label = truncateStyledCellLine(label, width-6)
 	if label == "" {
 		return renderCodeBlockBorderLine("╭", "─", "╮", width)
 	}
@@ -296,11 +346,13 @@ func isMarkdownTableSeparatorRune(r rune) bool {
 	}
 }
 
+// markdownTableMaxColumnsForWidth 返回当前宽度下最多可渲染的表格列数。
+// 每列至少需要一个内容格和左右两个内边距（共 3 格），列间及两端还各有一条竖线
+// （n 列共 n+1 条），所以 n 列的最小总宽度是 3n+(n+1)=4n+1，列数上限为 (width-1)/4。
+// 超过上限的列会被丢弃，保证表格总宽不会超过终端宽度。
 func markdownTableMaxColumnsForWidth(width int) int {
 	width = maxInt(1, width)
-	// 每列至少需要一个内容格、左右两个内边距，列间还需要一条竖线；
-	// 外框再占一格，所以 n 列的最小宽度是 3n+1。
-	return maxInt(1, (width-1)/3)
+	return maxInt(1, (width-1)/4)
 }
 
 // markdownTableColumnCount 返回表格中需要渲染的最大列数。
@@ -327,20 +379,32 @@ func normalizeMarkdownTableRows(rows [][]string, columnCount int) {
 // markdownTableColumnWidths 根据内容和最大宽度计算每列展示宽度。
 func markdownTableColumnWidths(rows [][]string, columnCount, maxWidth int) []int {
 	widths := make([]int, columnCount)
+	minWidths := make([]int, columnCount)
+	for i := range minWidths {
+		minWidths[i] = 1
+	}
 	for _, row := range rows {
 		for i, cell := range row {
 			widths[i] = maxInt(widths[i], terminalCellWidth(renderInlineMarkdown(cell)))
+			if minWidths[i] < 2 && markdownTextHasWideChar(cell) {
+				minWidths[i] = 2
+			}
 		}
 	}
 	available := maxInt(columnCount, maxWidth-columnCount*3-1)
+	// 先削减到可读下限：含宽字符（CJK/emoji）的列保底 2 格，
+	// 避免中文内容在 1 格列里整体退化成省略号。
 	for markdownTableTotalWidth(widths) > available {
-		widest := 0
-		for i := range widths {
-			if widths[i] > widths[widest] {
-				widest = i
-			}
+		widest := widestReducibleColumn(widths, minWidths)
+		if widest < 0 {
+			break
 		}
-		if widths[widest] <= 1 {
+		widths[widest]--
+	}
+	// 宽字符列过多导致仍超宽时，允许继续削减到 1 格，优先保证表格总宽不超过终端。
+	for markdownTableTotalWidth(widths) > available {
+		widest := widestReducibleColumn(widths, nil)
+		if widest < 0 {
 			break
 		}
 		widths[widest]--
@@ -349,6 +413,31 @@ func markdownTableColumnWidths(rows [][]string, columnCount, maxWidth int) []int
 		widths[i] = maxInt(1, widths[i])
 	}
 	return widths
+}
+
+// widestReducibleColumn 返回宽度大于下限的最宽列；mins 为 nil 时下限统一为 1。
+func widestReducibleColumn(widths, mins []int) int {
+	widest := -1
+	for i := range widths {
+		floor := 1
+		if mins != nil {
+			floor = mins[i]
+		}
+		if widths[i] > floor && (widest < 0 || widths[i] > widths[widest]) {
+			widest = i
+		}
+	}
+	return widest
+}
+
+// markdownTextHasWideChar 报告文本中是否包含显示宽度大于 1 的字符（如 CJK、emoji）。
+func markdownTextHasWideChar(text string) bool {
+	for _, r := range text {
+		if terminalCellWidth(string(r)) > 1 {
+			return true
+		}
+	}
+	return false
 }
 
 // markdownTableTotalWidth 计算所有列宽之和，不包含列间分隔符。
@@ -401,7 +490,7 @@ func renderMarkdownTableRowLines(row []string, widths []int, header bool, alignm
 		if i < len(row) {
 			cell = renderInlineMarkdown(row[i])
 		}
-		wrapped[i] = strings.Split(wrapDisplayWidthLines(cell, width), "\n")
+		wrapped[i] = wrapStyledCellText(cell, width)
 		if len(wrapped[i]) > lineCount {
 			lineCount = len(wrapped[i])
 		}
@@ -419,6 +508,10 @@ func renderMarkdownTableRowLines(row []string, widths []int, header bool, alignm
 			alignment := markdownTableAlignLeft
 			if i < len(alignments) {
 				alignment = alignments[i]
+			}
+			if header {
+				// 表头列名统一居中，不跟随 Markdown 声明的对齐方式。
+				alignment = markdownTableAlignCenter
 			}
 			padded := padMarkdownTableCell(cell, width, alignment)
 			if header {
@@ -467,61 +560,6 @@ func renderMarkdownTableBorder(left, junction, right string, widths []int) strin
 	return rendered.String()
 }
 
-// truncateDisplayWidth 按终端显示宽度截断文本，并在末尾添加省略号。
-func truncateDisplayWidth(text string, width int) string {
-	width = maxInt(1, width)
-	if terminalCellWidth(text) <= width {
-		return text
-	}
-	return ansi.Truncate(text, width, "…")
-}
-
-func wrapDisplayWidthLines(text string, width int) string {
-	lines := strings.Split(text, "\n")
-	wrapped := make([]string, 0, len(lines))
-	for _, line := range lines {
-		wrapped = append(wrapped, wrapDisplayWidthLine(line, width)...)
-	}
-	return strings.Join(wrapped, "\n")
-}
-
-func wrapDisplayWidthLine(text string, width int) []string {
-	width = maxInt(1, width)
-	if text == "" {
-		return []string{""}
-	}
-	if terminalCellWidth(text) <= width {
-		return []string{text}
-	}
-
-	var lines []string
-	var chunk strings.Builder
-	chunkWidth := 0
-	for remaining := text; remaining != ""; {
-		cluster, clusterWidth := terminalFirstGraphemeCluster(remaining)
-		remaining = remaining[len(cluster):]
-		if clusterWidth <= 0 {
-			chunk.WriteString(cluster)
-			continue
-		}
-		if chunkWidth > 0 && chunkWidth+clusterWidth > width {
-			lines = append(lines, chunk.String())
-			chunk.Reset()
-			chunkWidth = 0
-		}
-		if clusterWidth > width {
-			lines = append(lines, truncateDisplayWidth(cluster, width))
-			continue
-		}
-		chunk.WriteString(cluster)
-		chunkWidth += clusterWidth
-	}
-	if chunk.Len() > 0 || len(lines) == 0 {
-		lines = append(lines, chunk.String())
-	}
-	return lines
-}
-
 // markdownHeading 解析 Markdown 标题等级和标题文本。
 func markdownHeading(line string) (int, string, bool) {
 	level := 0
@@ -544,11 +582,11 @@ func renderMarkdownHeading(level int, text string, width int) string {
 	return markdownHeadingStyle.Render(text)
 }
 
-// markdownListItem 解析无序和有序列表项，并统一转换为终端 bullet。
+// markdownListItem 解析无序、有序和任务列表项，并统一转换为终端 bullet。
 func markdownListItem(line string) (string, string, bool) {
 	for _, prefix := range []string{"- ", "* "} {
 		if text, ok := strings.CutPrefix(line, prefix); ok {
-			return "•", strings.TrimSpace(text), true
+			return markdownTaskMarker(text)
 		}
 	}
 	dot := strings.Index(line, ". ")
@@ -560,7 +598,25 @@ func markdownListItem(line string) (string, string, bool) {
 			return "", "", false
 		}
 	}
-	return "•", strings.TrimSpace(line[dot+2:]), true
+	return markdownTaskMarker(line[dot+2:])
+}
+
+// markdownTaskMarker 将 Markdown task-list 的方括号转换为终端可读的状态符号，
+// 避免把 [ ]/[x] 当成普通正文渲染成截图中的“• ]”。
+func markdownTaskMarker(text string) (string, string, bool) {
+	text = strings.TrimSpace(text)
+	if strings.HasPrefix(text, "[]") {
+		return "○", strings.TrimSpace(text[2:]), true
+	}
+	if len(text) >= 3 && text[0] == '[' && text[2] == ']' {
+		switch text[1] {
+		case ' ', '-':
+			return "○", strings.TrimSpace(text[3:]), true
+		case 'x', 'X':
+			return "✓", strings.TrimSpace(text[3:]), true
+		}
+	}
+	return "•", text, true
 }
 
 // renderInlineMarkdown 渲染行内 Markdown，反引号代码片段优先于粗体解析。
