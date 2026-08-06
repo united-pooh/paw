@@ -3153,7 +3153,7 @@ func TestTranscriptMouseDragSelectsAndCopiesAcrossScroll(t *testing.T) {
 	bottomY := 1 + model.currentLayout().headerHeight + maxInt(0, model.viewport.Height-1)
 
 	next, _ := model.Update(tea.MouseMsg{
-		X:      2,
+		X:      1,
 		Y:      topY,
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
@@ -3164,7 +3164,7 @@ func TestTranscriptMouseDragSelectsAndCopiesAcrossScroll(t *testing.T) {
 	}
 
 	next, _ = model.Update(tea.MouseMsg{
-		X:      2,
+		X:      1,
 		Y:      bottomY,
 		Action: tea.MouseActionMotion,
 		Button: tea.MouseButtonLeft,
@@ -3175,7 +3175,7 @@ func TestTranscriptMouseDragSelectsAndCopiesAcrossScroll(t *testing.T) {
 	}
 
 	next, _ = model.Update(tea.MouseMsg{
-		X:      2,
+		X:      1,
 		Y:      bottomY,
 		Action: tea.MouseActionRelease,
 		Button: tea.MouseButtonLeft,
@@ -3215,21 +3215,21 @@ func TestTranscriptMouseDragCopiesCharacterRange(t *testing.T) {
 	model.viewport.GotoTop()
 
 	next, _ := model.Update(tea.MouseMsg{
-		X:      6,
+		X:      5,
 		Y:      2,
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
 	})
 	model = next.(appModel)
 	next, _ = model.Update(tea.MouseMsg{
-		X:      8,
+		X:      7,
 		Y:      2,
 		Action: tea.MouseActionMotion,
 		Button: tea.MouseButtonLeft,
 	})
 	model = next.(appModel)
 	next, _ = model.Update(tea.MouseMsg{
-		X:      8,
+		X:      7,
 		Y:      2,
 		Action: tea.MouseActionRelease,
 		Button: tea.MouseButtonLeft,
@@ -3238,6 +3238,98 @@ func TestTranscriptMouseDragCopiesCharacterRange(t *testing.T) {
 
 	if copied != "llo" {
 		t.Fatalf("copied selection = %q, want llo with the frameless transcript origin", copied)
+	}
+}
+
+// TestTranscriptMouseDragSelectsExactCells 验证拖选按下点即选中点：点击哪个
+// 字符就从哪个字符开始，不会多选左侧一个字符；中文宽字符按 grapheme 完整
+// 选中，不会少选半个字符。回归：transcriptPointForMouse 曾把坐标左移一格，
+// 导致拖选总是多带按下点左边一个字符（中英文都受影响）。
+func TestTranscriptMouseDragSelectsExactCells(t *testing.T) {
+	run := func(t *testing.T, body, want string, pressX, motionX int) {
+		t.Helper()
+		var copied string
+		oldWriteClipboard := writeClipboard
+		writeClipboard = func(text string) error {
+			copied = text
+			return nil
+		}
+		defer func() {
+			writeClipboard = oldWriteClipboard
+		}()
+
+		model := newTestModel(&fakeRunner{})
+		model.ready = true
+		model.width = 80
+		model.height = 12
+		model.relayout()
+		model.transcript = []transcriptEntry{{
+			kind:  entryAssistant,
+			title: "assistant",
+			body:  body,
+		}}
+		model.refreshViewport()
+		model.viewport.GotoTop()
+
+		next, _ := model.Update(tea.MouseMsg{X: pressX, Y: 2, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+		model = next.(appModel)
+		next, _ = model.Update(tea.MouseMsg{X: motionX, Y: 2, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+		model = next.(appModel)
+		next, _ = model.Update(tea.MouseMsg{X: motionX, Y: 2, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
+		model = next.(appModel)
+
+		if copied != want {
+			t.Fatalf("copied selection = %q, want %q", copied, want)
+		}
+	}
+
+	// 英文：点击 'c'（cell 4）拖到 'e'（cell 6），恰好选中 cde，不多选 'b'。
+	run(t, "abcde", "cde", mainContentPadding+4, mainContentPadding+6)
+	// 中文：点击 '好'（cell 4-5）拖到 '世'（cell 6-7），完整选中 好世，
+	// 不多选 '你'、不切开宽字符。
+	run(t, "你好世界", "好世", mainContentPadding+5, mainContentPadding+7)
+}
+
+// TestTranscriptDragSelectsThroughLineEnd 验证拖到行尾时最后一个字符能被
+// 选中（不会因为列坐标 clamp 到 width-1 再左移而少选行尾一个符号宽度）。
+func TestTranscriptDragSelectsThroughLineEnd(t *testing.T) {
+	oldWriteClipboard := writeClipboard
+	var copied string
+	writeClipboard = func(text string) error {
+		copied = text
+		return nil
+	}
+	defer func() {
+		writeClipboard = oldWriteClipboard
+	}()
+
+	const body = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" // 74 chars
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 12
+	model.relayout()
+	model.transcript = []transcriptEntry{{
+		kind:  entryAssistant,
+		title: "assistant",
+		body:  body,
+	}}
+	model.refreshViewport()
+	model.viewport.GotoTop()
+
+	// 从第一个 'x'（cell 2）拖到视口最右列（行尾）。
+	pressX := mainContentPadding + 2
+	endX := mainContentPadding + model.viewport.Width - 1
+
+	next, _ := model.Update(tea.MouseMsg{X: pressX, Y: 2, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	model = next.(appModel)
+	next, _ = model.Update(tea.MouseMsg{X: endX, Y: 2, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	model = next.(appModel)
+	next, _ = model.Update(tea.MouseMsg{X: endX, Y: 2, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
+	model = next.(appModel)
+
+	if got := strings.Count(copied, "x"); got != len(body) {
+		t.Fatalf("drag to line end copied %d x's, want %d (selection=%q)", got, len(body), copied)
 	}
 }
 
@@ -3677,11 +3769,11 @@ func TestTranscriptDragWritesOSC52Clipboard(t *testing.T) {
 	model.refreshViewport()
 	model.viewport.GotoTop()
 
-	next, _ := model.Update(tea.MouseMsg{X: 6, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	next, _ := model.Update(tea.MouseMsg{X: 5, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
 	model = next.(appModel)
-	next, _ = model.Update(tea.MouseMsg{X: 8, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
+	next, _ = model.Update(tea.MouseMsg{X: 7, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
 	model = next.(appModel)
-	next, _ = model.Update(tea.MouseMsg{X: 8, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
+	next, _ = model.Update(tea.MouseMsg{X: 7, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
 	model = next.(appModel)
 
 	if oscText != "llo" {
@@ -3723,11 +3815,11 @@ func TestTranscriptDragShowsCopyToast(t *testing.T) {
 	model.refreshViewport()
 	model.viewport.GotoTop()
 
-	next, _ := model.Update(tea.MouseMsg{X: 6, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	next, _ := model.Update(tea.MouseMsg{X: 5, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
 	model = next.(appModel)
-	next, _ = model.Update(tea.MouseMsg{X: 8, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
+	next, _ = model.Update(tea.MouseMsg{X: 7, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
 	model = next.(appModel)
-	next, cmd := model.Update(tea.MouseMsg{X: 8, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
+	next, cmd := model.Update(tea.MouseMsg{X: 7, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
 	model = next.(appModel)
 
 	if got := model.renderStatusLeftSegment(); !strings.Contains(ansi.Strip(got), "已复制 3 字符") {

@@ -36,7 +36,7 @@ var doubleClickInterval = 400 * time.Millisecond
 
 // clickSlopCells 是单击判定容差：按下与抬起（或按下期间的 motion）坐标差
 // 不超过 1 格时仍视为单击。终端坐标按 cell 量化（transcriptContentColumn
-// 是 x-padding-1），真实鼠标的 1px 抖动/漂移足以跨过 cell 边界，若按严格
+// 是 x-padding），真实鼠标的 1px 抖动/漂移足以跨过 cell 边界，若按严格
 // 相等判定，一次普通单击就会被误判为拖拽：触发复制、重置双击计数。
 const clickSlopCells = 1
 
@@ -452,6 +452,10 @@ func (m appModel) isInputDockMouse(msg tea.MouseMsg) bool {
 }
 
 // transcriptPointForMouse 将鼠标屏幕坐标转换为 transcript 内容中的全局显示单元格坐标。
+// Bubble Tea 的鼠标 X 是鼠标所在的 cell 坐标（0 基），直接作为 transcript 的
+// 字符索引：点击哪个字符，选区就从哪个字符开始（不再左移一格，避免拖选时
+// 多选按下点左侧一个字符/空格）。col 允许等于行宽（行尾后一格的虚拟 cell），
+// 保证拖到行尾时最后一个字符（无论中文/英文）能被选中。
 func (m appModel) transcriptPointForMouse(x, y int) (selectionPoint, bool) {
 	row, ok := m.transcriptContentRow(y)
 	if !ok {
@@ -468,13 +472,11 @@ func (m appModel) transcriptPointForMouse(x, y int) (selectionPoint, bool) {
 	line := m.viewport.YOffset + row
 	line = minInt(len(lines)-1, maxInt(0, line))
 	if width := lines[line].width; width > 0 {
-		col = minInt(col, width-1)
+		col = minInt(col, width)
 	} else {
 		col = 0
 	}
-	// Bubble Tea 的鼠标 X 表示当前 cell 的右边界；转换为 transcript
-	// 的字符索引时回到该 cell 的左侧。选择结束点仍按 inclusive 语义处理。
-	col = maxInt(0, col-1)
+	// 选择结束点仍按 inclusive 语义处理（motion/release 时 +1 转排他）。
 	return selectionPoint{row: line, col: col}, true
 }
 
