@@ -778,3 +778,64 @@ func TestCursorLineTextKeepsInputForeground(t *testing.T) {
 		t.Fatalf("terminal mode must not use body foreground %q:\n%q", bodyFG, terminalRendered)
 	}
 }
+
+// TestProjectedVerticalMoveKeepsVisualColumn 回归测试（用户场景：第一行全
+// 字母、第二行全中文）：中文字符占 2 列，相同 rune 偏移在不同行对应不同
+// 显示列。跨行移动必须保持显示列而非 rune 偏移，否则光标会在上下行之间
+// 跳列。
+func TestProjectedVerticalMoveKeepsVisualColumn(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.input.SetValue("abcdefghij\n中文测试中文")
+	model.input.SetWidth(20)
+
+	// 光标在中文行 rune 偏移 4（"中文"后，显示列 8）。
+	setTextareaAbsoluteCursor(&model.input, len("abcdefghij\n")+4)
+	p := model.inputTokenProjection()
+	if p.cursorColumn != 8 {
+		t.Fatalf("cursorColumn = %d, want 8", p.cursorColumn)
+	}
+	target, ok := projectedVerticalMoveTarget(p, textareaAbsoluteCursor(model.input), -1)
+	if !ok {
+		t.Fatal("up move rejected")
+	}
+	if want := 8; target != want {
+		t.Fatalf("up target = %d, want %d (visual column 8 in latin row)", target, want)
+	}
+
+	// 反向：英文行 rune 偏移 2（显示列 2）→ 中文行保持列 2（"中"后，rune 1）。
+	setTextareaAbsoluteCursor(&model.input, 2)
+	p = model.inputTokenProjection()
+	target, ok = projectedVerticalMoveTarget(p, 2, 1)
+	if !ok {
+		t.Fatal("down move rejected")
+	}
+	if want := len("abcdefghij\n") + 1; target != want {
+		t.Fatalf("down target = %d, want %d (visual column 2 in CJK row)", target, want)
+	}
+}
+
+// TestProjectedRowOffsetAtColumnWideCharBoundary 验证列到 rune 偏移的映射：
+// 列落在宽字符中间时取该字符之后（与 textarea lastCharOffset 语义一致），
+// 空行与超出行宽时落在行首/行尾。
+func TestProjectedRowOffsetAtColumnWideCharBoundary(t *testing.T) {
+	line := inputProjectionLine{start: 10}
+	for i, ch := range []string{"中", "文", "测"} {
+		line.atoms = append(line.atoms, inputProjectionAtom{text: ch, width: 2, start: 10 + i})
+	}
+	if got := projectedRowOffsetAtColumn(line, 3); got != 12 {
+		t.Fatalf("col 3 offset = %d, want 12 (after 文)", got)
+	}
+	if got := projectedRowOffsetAtColumn(line, 4); got != 12 {
+		t.Fatalf("col 4 offset = %d, want 12", got)
+	}
+	if got := projectedRowOffsetAtColumn(line, 0); got != 10 {
+		t.Fatalf("col 0 offset = %d, want 10", got)
+	}
+	if got := projectedRowOffsetAtColumn(line, 100); got != 13 {
+		t.Fatalf("col 100 offset = %d, want 13 (line end)", got)
+	}
+	empty := inputProjectionLine{start: 7}
+	if got := projectedRowOffsetAtColumn(empty, 5); got != 7 {
+		t.Fatalf("empty line offset = %d, want 7", got)
+	}
+}

@@ -688,23 +688,33 @@ func formatInputFoldMarker(hidden int) string {
 	return fmt.Sprintf(inputPasteFoldMarkerLine, hidden)
 }
 
-// projectedLineRuneEnd 返回投影行内文本的 rune 末端（不含 cursor/折叠 marker）。
-// 空行的 end 与 start 相同。
-func projectedLineRuneEnd(line inputProjectionLine) int {
-	end := line.start
+// projectedRowOffsetAtColumn 返回投影行内显示列 col 对应的绝对 rune 偏移。
+// 语义与 textarea 的 lastCharOffset 一致：光标停在不超过 col 的字符边界；
+// 若 col 落在宽字符中间，取该字符之后（列向上取整到字符边界）。空行返回
+// 行首。
+func projectedRowOffsetAtColumn(line inputProjectionLine, col int) int {
+	if col <= 0 {
+		return line.start
+	}
+	offset := line.start
+	cell := 0
 	for _, atom := range line.atoms {
 		if atom.text == "" || atom.cursor {
 			continue
 		}
-		end = maxInt(end, atom.start+len([]rune(atom.text)))
+		cell += atom.width
+		offset = atom.start + len([]rune(atom.text))
+		if cell >= col {
+			break
+		}
 	}
-	return end
+	return offset
 }
 
 // projectedVerticalMoveTarget 把光标在投影网格中向 direction（±1）移动一行，
-// 返回目标绝对 rune 偏移。soft-wrap 行之间保持行内 rune 偏移；跨逻辑行时
-// 落在目标行内（可能为行首）。光标已在投影边缘或目标行是折叠占位行时
-// 返回 moved=false。
+// 返回目标绝对 rune 偏移。跨行移动保持显示列而非 rune 偏移：中英文混排时
+// 相同 rune 偏移对应的显示列不同（中文 2 列、英文 1 列），按 rune 偏移移动
+// 会在上下行之间跳列。光标已在投影边缘时返回 moved=false。
 func projectedVerticalMoveTarget(projection inputProjection, absoluteCursor, direction int) (int, bool) {
 	if direction == 0 || len(projection.lines) == 0 {
 		return absoluteCursor, false
@@ -713,19 +723,8 @@ func projectedVerticalMoveTarget(projection inputProjection, absoluteCursor, dir
 	if targetRow < 0 || targetRow >= len(projection.lines) {
 		return absoluteCursor, false
 	}
-	current := projection.lines[projection.cursorRow]
 	target := projection.lines[targetRow]
-	relative := absoluteCursor - current.start
-	if relative < 0 {
-		relative = 0
-	}
-	targetEnd := projectedLineRuneEnd(target)
-	if targetEnd <= target.start && len(target.atoms) == 0 {
-		// 空目标行：光标落在该逻辑行首（空行没有可停留的文本）。
-		return target.start, true
-	}
-	targetOffset := target.start + minInt(relative, targetEnd-target.start)
-	return targetOffset, true
+	return projectedRowOffsetAtColumn(target, projection.cursorColumn), true
 }
 
 func (m appModel) inputTokenProjection() inputProjection {
