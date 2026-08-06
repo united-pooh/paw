@@ -77,6 +77,53 @@ func (m *appModel) applyModelConfigFromCommand(cfg model.Config) {
 	})
 }
 
+// handleSettingCommand 处理 /setting 指令：
+//
+//	/setting                 → 打开持久化设置向导（写入 ~/.paw/settings.json）
+//	/setting translate on|off → 运行期动态开关，只改内存、不写配置文件
+//
+// 动态开关立即生效，重启后失效；需要持久化请用 /setting 向导。
+func (m *appModel) handleSettingCommand(invocation string) tea.Cmd {
+	args := commandArgs(invocation)
+	if args == "" {
+		m.settingWizard = newSettingWizard(m.currentSettings())
+		m.pending = nil
+		return nil
+	}
+	fields := strings.Fields(args)
+	if len(fields) == 2 && fields[0] == "translate" {
+		var enabled bool
+		switch fields[1] {
+		case "on":
+			enabled = true
+		case "off":
+			enabled = false
+		default:
+			m.addEntry(transcriptEntry{kind: entryError, title: "setting", body: fmt.Sprintf("unknown translate value: %s (usage: /setting translate on|off)", fields[1])})
+			return nil
+		}
+		cfg := m.currentSettings()
+		cfg.UI.TranslateOnDoubleClick = enabled
+		if m.settingsConfig == nil {
+			m.addEntry(transcriptEntry{kind: entryError, title: "setting", body: "settings controller is unavailable"})
+			return nil
+		}
+		m.settingsConfig.UpdateRuntime(cfg)
+		state := "off"
+		if enabled {
+			state = "on"
+		}
+		m.addEntry(transcriptEntry{
+			kind:  entrySystem,
+			title: "setting",
+			body:  fmt.Sprintf("translate_on_double_click=%s (session only, not written to disk; /setting wizard persists it)", state),
+		})
+		return nil
+	}
+	m.addEntry(transcriptEntry{kind: entryError, title: "setting", body: "usage: /setting [translate on|off]"})
+	return nil
+}
+
 func (m *appModel) handleExportCommand(invocation string) {
 	path, err := m.exportPath(commandArgs(invocation))
 	if err != nil {

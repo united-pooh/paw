@@ -135,6 +135,12 @@ func (c *fakeSettingsController) SaveSettings(cfg settings.Config) error {
 	return nil
 }
 
+// UpdateRuntime 只改内存、不落盘：与真实 Controller 行为一致，saved 保持
+// 为空可用于断言「动态开关未写配置文件」。
+func (c *fakeSettingsController) UpdateRuntime(cfg settings.Config) {
+	c.current = cfg
+}
+
 type fakeSubagentController struct {
 	runResult      subagent.Result
 	runErr         error
@@ -426,7 +432,7 @@ func TestHelpComesFromCommandRegistry(t *testing.T) {
 		"/export [filename]",
 		"export the current conversation",
 		"/setting",
-		"open settings wizard",
+		"settings: wizard, or runtime toggle (translate on|off)",
 		"/subagent [--fork|--empty] [--background|--sync] <prompt>",
 		"launch a subagent",
 		"/streamma <prompt>",
@@ -809,6 +815,144 @@ func TestSettingCommandPersistsWizardSelections(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("settings summary = %q, want %q", body, want)
 		}
+	}
+}
+
+// TestSettingCommandTranslateRuntimeToggle 验证 /setting translate on|off 是
+// 运行期动态开关：只更新内存配置（currentSettings 立即生效）、不写配置文件
+// （controller.saved 保持为空），并给出用法反馈。
+func TestSettingCommandTranslateRuntimeToggle(t *testing.T) {
+	settingsController := &fakeSettingsController{current: settings.DefaultConfig()}
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, settingsController, nil, nil, newTerminalCursorAnchor())
+
+	if model.currentSettings().UI.TranslateOnDoubleClick {
+		t.Fatal("default translate setting should be off")
+	}
+
+	handled, cmd := model.handleCommand("/setting translate on")
+	if !handled || cmd != nil {
+		t.Fatalf("/setting translate on handled/cmd = %v/%v", handled, cmd)
+	}
+	if !model.currentSettings().UI.TranslateOnDoubleClick {
+		t.Fatal("/setting translate on did not enable the runtime setting")
+	}
+	if model.settingWizard != nil {
+		t.Fatal("/setting translate on must not open the wizard")
+	}
+	if len(settingsController.saved) != 0 {
+		t.Fatalf("runtime toggle wrote to disk: saved = %#v", settingsController.saved)
+	}
+	last := model.transcript[len(model.transcript)-1]
+	if last.kind != entrySystem || last.title != "setting" || !strings.Contains(last.body, "translate_on_double_click=on") {
+		t.Fatalf("feedback entry = %#v, want translate_on_double_click=on system entry", last)
+	}
+
+	handled, _ = model.handleCommand("/setting translate off")
+	if !handled {
+		t.Fatal("/setting translate off not handled")
+	}
+	if model.currentSettings().UI.TranslateOnDoubleClick {
+		t.Fatal("/setting translate off did not disable the runtime setting")
+	}
+	if len(settingsController.saved) != 0 {
+		t.Fatalf("runtime toggle wrote to disk: saved = %#v", settingsController.saved)
+	}
+
+	// 非法参数：给出用法提示且不改变当前设置。
+	handled, _ = model.handleCommand("/setting translate bogus")
+	if !handled {
+		t.Fatal("/setting translate bogus not handled")
+	}
+	if model.currentSettings().UI.TranslateOnDoubleClick {
+		t.Fatal("invalid translate value changed the runtime setting")
+	}
+	if last := model.transcript[len(model.transcript)-1]; last.kind != entryError || !strings.Contains(last.body, "usage: /setting translate on|off") {
+		t.Fatalf("invalid value feedback = %#v, want usage error", last)
+	}
+	if len(settingsController.saved) != 0 {
+		t.Fatalf("runtime toggle wrote to disk: saved = %#v", settingsController.saved)
+	}
+
+	// 无参数仍打开持久化向导（回归）。
+	handled, _ = model.handleCommand("/setting")
+	if !handled || model.settingWizard == nil {
+		t.Fatalf("/setting should open the wizard (handled=%v wizard=%v)", handled, model.settingWizard)
+	}
+}
+
+// TestSettingCommandTranslateRuntimeAffectsDoubleClick 验证动态开关开启后
+// 双击立即触发翻译（完整链路），关闭后双击只选词。
+func TestSettingCommandTranslateRuntimeAffectsDoubleClick(t *testing.T) {
+	oldRun := runTranslateRequest
+	var gotWord string
+	runTranslateRequest = func(ctx context.Context, cfg modelcfg.Config, systemPrompt, word string) (string, error) {
+		gotWord = word
+		return `{"word":"world","phonetic":"/wɜːld/","pos":"n.","translation":"世界"}`, nil
+	}
+	defer func() {
+		runTranslateRequest = oldRun
+	}()
+
+	oldInterval := doubleClickInterval
+	doubleClickInterval = time.Hour
+	defer func() {
+		doubleClickInterval = oldInterval
+	}()
+
+	settingsController := &fakeSettingsController{current: settings.DefaultConfig()}
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, settingsController, nil, nil, newTerminalCursorAnchor())
+	model.ready = true
+	model.width = 80
+	model.height = 12
+	model.relayout()
+	model.transcript = []transcriptEntry{{
+		kind:  entryAssistant,
+		title: "assistant",
+		body:  "hello world",
+	}}
+	model.refreshViewport()
+	model.viewport.GotoTop()
+
+	// 关闭时双击：只选词，不发请求。
+	model, cmd := doubleClickWord(model, "world")
+	if cmd != nil || model.translatePanel != nil {
+		t.Fatalf("translate disabled: cmd=%v panel=%+v, want no request", cmd, model.translatePanel)
+	}
+
+	// /setting translate on 动态开启（不落盘）。
+	handled, _ := model.handleCommand("/setting translate on")
+	if !handled {
+		t.Fatal("/setting translate on not handled")
+	}
+	if len(settingsController.saved) != 0 {
+		t.Fatalf("runtime toggle wrote to disk: saved = %#v", settingsController.saved)
+	}
+
+	// 模拟两次双击之间的真实间隔（重置点击跟踪），否则紧挨着的第二次
+	// 按下会被判定为「三击」而行选择，不会触发翻译。
+	model.lastClickAt = time.Time{}
+	model.lastClickPoint = selectionPoint{}
+
+	// 开启后双击同一词：立即发起翻译请求并弹出 loading 面板。
+	model, cmd = doubleClickWord(model, "world")
+	if cmd == nil {
+		t.Fatal("double-click after runtime enable returned no request command")
+	}
+	if model.translatePanel == nil || model.translatePanel.state != translatePanelLoading {
+		t.Fatalf("translate panel = %+v, want loading", model.translatePanel)
+	}
+	msg := cmd()
+	result, ok := msg.(translateResultMsg)
+	if !ok {
+		t.Fatalf("cmd() = %#v, want translateResultMsg", msg)
+	}
+	if gotWord != "world" {
+		t.Fatalf("request word = %q, want world", gotWord)
+	}
+	next, _ := model.Update(result)
+	model = next.(appModel)
+	if model.translatePanel == nil || model.translatePanel.state != translatePanelDone || model.translatePanel.translation != "世界" {
+		t.Fatalf("translate panel after result = %+v, want done with 世界", model.translatePanel)
 	}
 }
 

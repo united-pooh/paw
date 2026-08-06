@@ -207,7 +207,7 @@ enabled = true
 - `/help`
 - `/model [status|<profile>|<model>]`
 - `/export [filename]`
-- `/setting`
+- `/setting [translate on|off]`
 - `/theme`
 - `/sessions`
 - `/subagent [--fork|--empty] [--background|--sync] <prompt>`
@@ -226,7 +226,7 @@ enabled = true
 当前行为:
 - `/model` 无参数时打开 profile → model 二级向导；profile 和模型列表全部来自全局 `~/.paw/config.json`；没有活动 profile/model 时默认使用配置中第一个 profile 的第一个模型；`status` 输出当前配置和可用模型；输入已配置的 profile ID、provider、名称或模型名即可切换并持久化活动选择
 - `/export` 默认导出到 `.paw/exports/conversation-YYYY-MM-DD-HHMMSS.txt`，也支持工作区内显式路径；导出文件权限为 `0600`
-- `/setting` 通过向导保存默认 subagent context/run mode，以及 context meter 的位置和 token limit
+- `/setting` 无参数时打开向导，保存默认 subagent context/run mode、context meter 位置和 token limit（写入 `~/.paw/settings.json`）；`/setting translate on|off` 是运行期动态开关：只改内存、立即生效、**不写配置文件**，重启后恢复为磁盘配置（默认 off），反馈会注明「session only」
 - `/theme` 打开内置主题选择器；↑/↓、j/k、Home/End 会实时预览，Enter 保存到 `~/.paw/settings.json`，Esc 恢复打开前的主题且不写盘
 - `/sessions` 列出所有历史会话（ID 前缀、日期、文件大小、首条消息），选中条目后直接恢复该会话
 - `/subagent` 支持 `empty` 与 `fork` 两种上下文模式，以及 `sync` 与 `background` 两种运行模式；后台任务完成后会发 UI 系统通知，并把截断后的结果作为补充上下文注入后续模型轮次（完整结果仍在任务 output/transcript 路径中）
@@ -277,7 +277,7 @@ context meter 左侧显示紧凑 token 与比例，例如 `260k↑ 2.05k↓ 25%(
 - 单击不复制、不创建选区：链接、todo 和工具行等可点击位置在双击判定窗口（400ms，对齐 macOS/Ghostty 系统双击节奏）结束后触发动作，避免「单击已生效、双击又选中」互相冲突。
 - 按下与抬起相差 1 格以内的抖动/漂移仍按单击处理（不复制、不打断双击计数），避免真实鼠标的 1px 抖动把单击误判成拖拽、把双击判成两次单击。
 - 16 色及以下终端自动把选区降级为反色渲染，与终端原生选区观感一致。
-- **翻译选中词**（`/setting` 中开启 `ui.translate_on_double_click=on`）：双击英文词弹出面板显示 IPA 音标、词性与中文释义；双击中文词显示英文翻译。翻译通过一次独立的单会话请求完成（不进 transcript、不占上下文），应用层用正则自动判定中英文方向；Esc 关闭面板，选区保留。
+- **翻译选中词**（`/setting translate on` 动态开启，或 `/setting` 向导里选 `ui.translate_on_double_click=on` 持久化）：双击英文词弹出面板显示 IPA 音标、词性与中文释义；双击中文词显示英文翻译。翻译通过一次独立的单会话请求完成（不进 transcript、不占上下文），应用层用正则自动判定中英文方向；Esc 关闭面板，选区保留。
 
 应用内选区与终端原生选择并存：paw 启用鼠标捕获后，普通拖拽是应用内选区；按住下方表格中的修饰键拖拽，终端会接管并做原生选择（用于复制到终端自己的剪贴板、跨应用选词等）：
 

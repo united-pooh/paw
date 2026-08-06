@@ -95,12 +95,11 @@ func NewCommandRegistry() *CommandRegistry {
 	})
 	registry.Register(Command{
 		Name:              "/setting",
-		Description:       "open settings wizard",
+		Description:       "settings: wizard, or runtime toggle (translate on|off)",
+		ArgumentHint:      "[translate on|off]",
 		AllowWhileRunning: false,
 		Handler: func(m *appModel, invocation string) tea.Cmd {
-			m.settingWizard = newSettingWizard(m.currentSettings())
-			m.pending = nil
-			return nil
+			return m.handleSettingCommand(invocation)
 		},
 	})
 	registry.Register(Command{

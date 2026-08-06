@@ -248,3 +248,15 @@ func (c *Controller) SaveSettings(cfg Config) error {
 	c.mu.Unlock()
 	return nil
 }
+
+// UpdateRuntime 只更新运行期内存配置，不写配置文件（/setting 指令的动态
+// 开关，如 translate on/off 使用）；重启后失效，需要持久化请走 /setting
+// 向导（SaveSettings）。
+func (c *Controller) UpdateRuntime(cfg Config) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.cfg = Normalize(cfg)
+	c.mu.Unlock()
+}

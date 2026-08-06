@@ -85,6 +85,8 @@ type ModelConfigSaver interface {
 type SettingsController interface {
 	CurrentSettings() settings.Config
 	SaveSettings(settings.Config) error
+	// UpdateRuntime 只更新内存配置、不写配置文件（/setting 指令的动态开关）。
+	UpdateRuntime(settings.Config)
 }
 
 // SubagentController 描述 TUI 手动启动和查看 subagent 所需的能力。
