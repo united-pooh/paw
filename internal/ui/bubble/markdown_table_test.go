@@ -211,3 +211,73 @@ func TestMarkdownTableStyledLongCellsKeepANSIAndBordersIntact(t *testing.T) {
 		}
 	}
 }
+
+// styleForegroundSGR 返回样式渲染单字符时发出的 24 位前景 SGR 序列，
+// 用于断言某段文本确实携带指定前景色而不是回退终端默认。测试环境默认
+// 无颜色 profile，先强制 TrueColor 再渲染。
+func styleForegroundSGR(t *testing.T, style lipgloss.Style) string {
+	t.Helper()
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
+	rendered := style.Render("x")
+	// SGR 可能带 Bold 等前缀（如 \x1b[1;38;2;...m），从参数段向前找转义起点。
+	// 返回值不含结尾 'm'：lipgloss 会把前景与背景合并成一条 SGR（如
+	// \x1b[38;2;201;194;183;48;2;...m），去掉 'm' 后参数段前缀仍可匹配。
+	index := strings.Index(rendered, "38;2;")
+	if index < 0 {
+		t.Fatalf("style %#v renders without 24-bit foreground: %q", style, rendered)
+	}
+	escStart := strings.LastIndex(rendered[:index], "\x1b[")
+	if escStart < 0 {
+		t.Fatalf("style %#v foreground SGR has no escape start: %q", style, rendered)
+	}
+	end := strings.IndexByte(rendered[index+len("38;2;"):], 'm')
+	if end < 0 {
+		t.Fatalf("style %#v foreground SGR incomplete: %q", style, rendered)
+	}
+	return rendered[escStart : index+len("38;2;")+end]
+}
+
+// TestMarkdownTableCellsCarryBodyForeground 回归测试：普通单元格此前只拼接
+// renderInlineMarkdown 的裸文本（纯文本段无 SGR），回退为终端默认前景色，
+// 与正文颜色不一致。现在每个非表头单元格必须自带正文前景色，同时行内代码
+// 片段仍保留自己的前景/背景。
+func TestMarkdownTableCellsCarryBodyForeground(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	previousCodeStyle := markdownCodeStyle
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	markdownCodeStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("245")).
+		Background(lipgloss.Color("#1f2334")).
+		Padding(0, 1)
+	t.Cleanup(func() {
+		markdownCodeStyle = previousCodeStyle
+		lipgloss.SetColorProfile(previousProfile)
+	})
+
+	rendered := renderMarkdown("| a | b |\n|---|---|\n| x | `y` |\n", 40)
+	lines := strings.Split(rendered, "\n")
+	// 渲染顺序：┌ 顶边、表头行、├ 分隔、数据行、└ 底边。
+	if len(lines) < 5 {
+		t.Fatalf("table rows = %d, want at least 5:\n%q", len(lines), rendered)
+	}
+	bodyFG := styleForegroundSGR(t, bodyStyle)
+	headingFG := styleForegroundSGR(t, markdownHeadingStyle)
+	codeSegment := markdownCodeStyle.Render("y")
+
+	dataLine := lines[3]
+	if !strings.Contains(dataLine, bodyFG) {
+		t.Fatalf("data row missing body foreground %q:\n%q", bodyFG, dataLine)
+	}
+	if !strings.Contains(dataLine, codeSegment) {
+		t.Fatalf("data row inline code lost its own style:\n%q", dataLine)
+	}
+	if strings.Contains(dataLine, headingFG) {
+		t.Fatalf("data row must not use heading foreground %q:\n%q", headingFG, dataLine)
+	}
+	headerLine := lines[1]
+	if !strings.Contains(headerLine, headingFG) {
+		t.Fatalf("header row missing heading foreground %q:\n%q", headingFG, headerLine)
+	}
+}

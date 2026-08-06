@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 
 	"paw/internal/skill"
 )
@@ -737,5 +738,43 @@ func TestProjectedVerticalMoveEmptyLine(t *testing.T) {
 	setTextareaAbsoluteCursor(&model.input, target)
 	if got := model.input.Line(); got != 1 {
 		t.Fatalf("expected empty logical line, got line %d", got)
+	}
+}
+
+// TestCursorLineTextKeepsInputForeground 回归测试：光标行此前用 textarea 的
+// CursorLine 样式渲染（只有背景、没有前景），文字回退为终端默认前景色，
+// 与相邻行的正文色不一致。现在光标行文本段与光标块必须携带普通行一致的
+// 前景 SGR（chat = body 色，terminal = 输入终端色）。
+func TestCursorLineTextKeepsInputForeground(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
+
+	model := newTestModel(&fakeRunner{})
+	model.input.SetValue("第一行\n第二行")
+	model.input.CursorEnd()
+	model.input.SetWidth(40)
+	rendered := model.renderInputContent()
+	bodyFG := styleForegroundSGR(t, bodyStyle)
+	if !strings.Contains(rendered, bodyFG) {
+		t.Fatalf("cursor line missing body foreground %q:\n%q", bodyFG, rendered)
+	}
+	firstLine := strings.Split(rendered, "\n")[0]
+	if !strings.Contains(firstLine, bodyFG) {
+		t.Fatalf("non-cursor line missing body foreground %q:\n%q", bodyFG, firstLine)
+	}
+
+	terminalModel := newTestModel(&fakeRunner{})
+	terminalModel.terminalMode = true
+	terminalModel.input.SetValue("第一行\n第二行")
+	terminalModel.input.CursorEnd()
+	terminalModel.input.SetWidth(40)
+	terminalRendered := terminalModel.renderInputContent()
+	terminalFG := styleForegroundSGR(t, terminalInputTextStyle)
+	if !strings.Contains(terminalRendered, terminalFG) {
+		t.Fatalf("terminal cursor line missing input terminal foreground %q:\n%q", terminalFG, terminalRendered)
+	}
+	if strings.Contains(terminalRendered, bodyFG) {
+		t.Fatalf("terminal mode must not use body foreground %q:\n%q", bodyFG, terminalRendered)
 	}
 }

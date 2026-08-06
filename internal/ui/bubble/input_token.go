@@ -837,14 +837,23 @@ func (m appModel) renderTokenInputContent() string {
 // renderProjectedCursorLine 渲染光标所在投影行。与 textarea 行为一致：文本
 // 段与光标块各自成段（文本段背景由 CursorLine 提供，光标块按覆盖内容着色，
 // 真实光标可见性由终端光标锚定负责）。
+//
+// 文本段与光标块必须沿用普通行的前景色（chat = body 色，terminal = 输入
+// 色）：textarea 的 CursorLine 样式只有背景没有前景，直接用它渲染会让光标
+// 行文字回退为终端默认前景色，与相邻行颜色不一致。
 func (m appModel) renderProjectedCursorLine(line inputProjectionLine, rowWidth int) string {
+	lineStyle := bodyStyle
+	if m.isTerminalInputActive() || m.runningTerminal {
+		lineStyle = terminalInputTextStyle
+	}
+	cursorLineStyle := lineStyle.Background(m.input.FocusedStyle.CursorLine.GetBackground())
 	var out strings.Builder
 	var text strings.Builder
 	flushText := func() {
 		if text.Len() == 0 {
 			return
 		}
-		out.WriteString(m.input.FocusedStyle.CursorLine.Render(text.String()))
+		out.WriteString(cursorLineStyle.Render(text.String()))
 		text.Reset()
 	}
 	for atomIndex := 0; atomIndex < len(line.atoms); atomIndex++ {
@@ -853,7 +862,7 @@ func (m appModel) renderProjectedCursorLine(line inputProjectionLine, rowWidth i
 			flushText()
 			if m.input.Focused() {
 				char := " "
-				charStyle := m.input.FocusedStyle.CursorLine
+				charStyle := cursorLineStyle
 				if atomIndex+1 < len(line.atoms) {
 					next := line.atoms[atomIndex+1]
 					char = next.text
@@ -883,7 +892,7 @@ func (m appModel) renderProjectedCursorLine(line inputProjectionLine, rowWidth i
 	}
 	flushText()
 	if width := terminalCellWidth(out.String()); width < rowWidth {
-		out.WriteString(m.input.FocusedStyle.CursorLine.Render(strings.Repeat(" ", rowWidth-width)))
+		out.WriteString(cursorLineStyle.Render(strings.Repeat(" ", rowWidth-width)))
 	} else if width > rowWidth {
 		return cutStyledCellsExact(out.String(), 0, rowWidth)
 	}

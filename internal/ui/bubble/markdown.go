@@ -516,6 +516,11 @@ func renderMarkdownTableRowLines(row []string, widths []int, header bool, alignm
 			padded := padMarkdownTableCell(cell, width, alignment)
 			if header {
 				padded = markdownHeadingStyle.Render(padded)
+			} else {
+				// 普通单元格必须自带正文前景色：renderInlineMarkdown 的纯文本
+				// 段不带 SGR，若没有这层包裹会回退为终端默认前景色，与正文
+				// 及其他元素颜色不一致。
+				padded = bodyStyle.Render(padded)
 			}
 			rendered.WriteString(" ")
 			rendered.WriteString(padded)

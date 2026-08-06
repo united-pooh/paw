@@ -2293,7 +2293,9 @@ func TestTextareaInputUsesThemeBackground(t *testing.T) {
 // style pointer belongs to the model copy. Focusing the temporary textarea
 // before assigning it into appModel leaves that pointer attached to the old
 // copy, so the first typed row keeps the library's default ANSI-black
-// CursorLine background instead of the selected theme.
+// CursorLine background instead of the selected theme. The cursor line must
+// also carry the body foreground (regression: it used to have background only,
+// falling back to the terminal default foreground color).
 func TestFirstTypedLineUsesThemeBackground(t *testing.T) {
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
@@ -2305,14 +2307,35 @@ func TestFirstTypedLineUsesThemeBackground(t *testing.T) {
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 	model = next.(appModel)
 	rendered := model.renderInputContent()
-	want := lipgloss.NewStyle().Background(model.styles.Colors.LipglossColor(colorTerminalBackground)).Render("x")
 
-	if !strings.Contains(rendered, want) {
-		t.Fatalf("first input render = %q, want themed cell %q", rendered, want)
+	wantBG := sgrParamSegment(t, lipgloss.NewStyle().
+		Background(model.styles.Colors.LipglossColor(colorTerminalBackground)).Render("x"), "48;2;")
+	if !strings.Contains(rendered, wantBG) {
+		t.Fatalf("first input render = %q, want themed background %q", rendered, wantBG)
+	}
+	wantFG := sgrParamSegment(t, bodyStyle.Render("x"), "38;2;")
+	if !strings.Contains(rendered, wantFG) {
+		t.Fatalf("first input render = %q, want body foreground %q", rendered, wantFG)
 	}
 	if strings.Contains(rendered, "\x1b[40m") {
 		t.Fatalf("first input render retained textarea default ANSI-black background: %q", rendered)
 	}
+}
+
+// sgrParamSegment 提取 SGR 参数段（如 "38;2;201;194;183"），
+// 到下一个 ';' 或 'm' 为止，用于匹配 lipgloss 合并后的 SGR 输出。
+func sgrParamSegment(t *testing.T, text, prefix string) string {
+	t.Helper()
+	index := strings.Index(text, prefix)
+	if index < 0 {
+		t.Fatalf("missing %q in %q", prefix, text)
+	}
+	rest := text[index+len(prefix):]
+	end := strings.IndexAny(rest, "m;")
+	if end < 0 {
+		t.Fatalf("unterminated %q in %q", prefix, text)
+	}
+	return prefix + rest[:end]
 }
 
 // TestBangValuePreviewsTerminalPanel 验证输入 ! 时会预览终端模式面板样式。
