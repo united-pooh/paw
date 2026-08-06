@@ -284,10 +284,88 @@ func (m *appModel) recordToolCallCitation(toolUseID, name string, input json.Raw
 	m.refreshViewport()
 }
 
+// isSubagentWaitTool 报告工具名是否为 SubagentWait。SubagentWait 在 TUI 中
+// 不渲染为工具调用块：运行期间显示一行 "子智能体 <名字> 正在运行 Ns"，
+// 工具完成后该行直接消失（错误时改为错误行），不进入 Tools 折叠组。
+func isSubagentWaitTool(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), "SubagentWait")
+}
+
+// parseSubagentWaitTaskIDs 从 SubagentWait 的 input JSON 中解析 task_ids。
+func parseSubagentWaitTaskIDs(input json.RawMessage) []string {
+	if len(input) == 0 {
+		return nil
+	}
+	var payload struct {
+		TaskIDs []string `json:"task_ids"`
+	}
+	if err := json.Unmarshal(input, &payload); err != nil {
+		return nil
+	}
+	ids := make([]string, 0, len(payload.TaskIDs))
+	for _, id := range payload.TaskIDs {
+		if id = strings.TrimSpace(id); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// subagentWaitNames 通过 subagent controller 查询 task_ids 对应的子智能体名字。
+// 只返回能匹配到名字的任务；找不到名字时显示兜底文案 "子智能体"。
+func (m *appModel) subagentWaitNames(ids []string) []string {
+	if len(ids) == 0 || m.subagents == nil {
+		return nil
+	}
+	byID := make(map[string]string, len(ids))
+	for _, task := range m.subagents.ListTasks() {
+		if name := strings.TrimSpace(task.Name); name != "" {
+			byID[task.ID] = name
+		}
+	}
+	seen := make(map[string]bool, len(ids))
+	names := make([]string, 0, len(ids))
+	for _, id := range ids {
+		name, ok := byID[id]
+		if !ok || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	return names
+}
+
+// subagentWaitRunningBody 生成 SubagentWait 状态行的正文，如
+// "子智能体 高松灯 正在运行 13s"。
+func subagentWaitRunningBody(names []string, elapsed int64) string {
+	label := "子智能体"
+	if len(names) > 0 {
+		label += " " + strings.Join(names, "、")
+	}
+	return label + " 正在运行 " + formatWholeSeconds(int(elapsed))
+}
+
 func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMessage, mutationKnown, isMutation bool, mutation *ui.FileMutationSnapshot) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = "tool"
+	}
+	if isSubagentWaitTool(name) {
+		names := m.subagentWaitNames(parseSubagentWaitTaskIDs(input))
+		m.addEntry(transcriptEntry{
+			kind:                entrySystem,
+			title:               "",
+			body:                subagentWaitRunningBody(names, 0),
+			toolUseID:           strings.TrimSpace(toolUseID),
+			toolName:            name,
+			toolStatus:          "running",
+			subagentWaitRunning: true,
+			subagentWaitNames:   names,
+			createdAt:           m.animationNow(),
+			toolStartedAt:       m.animationNow(),
+		})
+		return
 	}
 	segmentPending := appendedToolEntryStartsPendingSegment(m.transcript)
 	target := displayToolTarget(name, input, m.workspaceRoot)
@@ -318,6 +396,25 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = "tool"
+	}
+	if isSubagentWaitTool(name) {
+		if m.removeSubagentWaitEntry(strings.TrimSpace(toolUseID), name) {
+			m.lastToolProgressSecond = -1
+			if isError {
+				body := strings.TrimSpace(content)
+				if body == "" {
+					body = "子智能体等待失败"
+				}
+				m.addEntry(transcriptEntry{
+					kind:  entryError,
+					title: "subagent",
+					body:  body,
+				})
+			} else {
+				m.refreshViewport()
+			}
+		}
+		return
 	}
 	status = strings.TrimSpace(status)
 	if status == "" {
@@ -464,6 +561,28 @@ func toolEntryMatchesResult(entry transcriptEntry, result toolEntryResult) bool 
 		return entry.toolUseID == result.toolUseID
 	}
 	return strings.EqualFold(entry.toolName, result.name)
+}
+
+// removeSubagentWaitEntry 从 transcript 中移除匹配的 SubagentWait 状态行，
+// 使等待结束（成功或失败）后该行直接消失而不折叠为工具块。
+func (m *appModel) removeSubagentWaitEntry(toolUseID, name string) bool {
+	for index := len(m.transcript) - 1; index >= 0; index-- {
+		entry := &m.transcript[index]
+		if !entry.subagentWaitRunning {
+			continue
+		}
+		if toolUseID != "" && entry.toolUseID != "" {
+			if entry.toolUseID != toolUseID {
+				continue
+			}
+		} else if !strings.EqualFold(entry.toolName, name) {
+			continue
+		}
+		m.transcript = append(m.transcript[:index], m.transcript[index+1:]...)
+		m.transcriptRenderCache = nil
+		return true
+	}
+	return false
 }
 
 func toolCitationMatchesResult(running, result toolCitation) bool {
@@ -682,13 +801,24 @@ func (m *appModel) refreshRunningToolProgress(now time.Time) {
 		return
 	}
 	maxElapsed := int64(-1)
-	for _, entry := range m.transcript {
-		if !isToolTransaction(entry) || toolEntryStatus(entry) != "running" {
-			continue
-		}
-		elapsed := toolElapsedSeconds(entry, now)
-		if elapsed > maxElapsed {
-			maxElapsed = elapsed
+	for index := range m.transcript {
+		entry := &m.transcript[index]
+		switch {
+		case entry.subagentWaitRunning:
+			elapsed := toolElapsedSeconds(*entry, now)
+			if elapsed > maxElapsed {
+				maxElapsed = elapsed
+			}
+			body := subagentWaitRunningBody(entry.subagentWaitNames, elapsed)
+			if entry.body != body {
+				entry.body = body
+				touchTranscriptEntry(entry)
+			}
+		case isToolTransaction(*entry) && toolEntryStatus(*entry) == "running":
+			elapsed := toolElapsedSeconds(*entry, now)
+			if elapsed > maxElapsed {
+				maxElapsed = elapsed
+			}
 		}
 	}
 	if maxElapsed < 0 {
@@ -715,8 +845,16 @@ func (m *appModel) markRunningToolsError(err error) {
 		message = err.Error()
 	}
 	changed := false
-	for index := range m.transcript {
+	for index := len(m.transcript) - 1; index >= 0; index-- {
 		entry := &m.transcript[index]
+		if entry.subagentWaitRunning {
+			// turn 意外失败时 SubagentWait 不会再收到结果：直接移除状态行，
+			// 由后续 entryError 呈现失败原因，不保留悬挂的工具块。
+			m.transcript = append(m.transcript[:index], m.transcript[index+1:]...)
+			m.transcriptRenderCache = nil
+			changed = true
+			continue
+		}
 		if !isToolTransaction(*entry) || toolEntryStatus(*entry) != "running" {
 			continue
 		}
@@ -1404,6 +1542,15 @@ func renderEntryAt(entry transcriptEntry, width int, at time.Time) string {
 			return fitStyledCellLine(renderTodoEntry(entry, width), width)
 		}
 		return indentLines(renderTodoEntry(entry, transcriptBodyWidth(width)), transcriptEntryGutter)
+	}
+	// SubagentWait 状态行：渲染为单行状态文字（如
+	// "子智能体 高松灯 正在运行 13s"），没有工具块边框、不可折叠。
+	if entry.subagentWaitRunning {
+		body := sanitizeTerminalText(entry.body)
+		if strings.TrimSpace(body) == "" {
+			return ""
+		}
+		return indentLines(subagentWaitStyle.Render(body), transcriptEntryGutter)
 	}
 	bodyWidth := transcriptBodyWidth(width)
 	// 结构化 <task> 完成块：整块渲染为状态色框线卡片，不显示 "subagent" 标签

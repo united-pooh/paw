@@ -340,6 +340,105 @@ func TestBuildResponsesInputFallsBackForLegacyAssistant(t *testing.T) {
 	}
 }
 
+func TestBuildResponsesInputPreservesEmptyFunctionCallOutput(t *testing.T) {
+	items, err := buildResponsesInput([]message.Message{{
+		Role:       message.RoleUser,
+		ToolResult: &message.ToolResult{ToolUseID: "call_empty", Content: ""},
+	}})
+	if err != nil {
+		t.Fatalf("buildResponsesInput() error = %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %#v, want one function_call_output", items)
+	}
+
+	var output map[string]any
+	if err := json.Unmarshal(items[0], &output); err != nil {
+		t.Fatalf("decode output item: %v", err)
+	}
+	got, ok := output["output"]
+	if !ok || got != "" {
+		t.Fatalf("output = %#v, present=%v, want explicit empty string", got, ok)
+	}
+}
+
+func TestBuildResponsesInputOmitsOutputFromOtherItemTypes(t *testing.T) {
+	items, err := buildResponsesInput([]message.Message{
+		{Role: message.RoleUser, Content: "hello"},
+		{
+			Role:    message.RoleAssistant,
+			ToolUse: &message.ToolCall{ID: "call_1", Name: "Read", Input: json.RawMessage(`{"file_path":"README.md"}`)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildResponsesInput() error = %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("items = %#v, want message and function_call", items)
+	}
+	for i, item := range items {
+		var decoded map[string]any
+		if err := json.Unmarshal(item, &decoded); err != nil {
+			t.Fatalf("decode item %d: %v", i, err)
+		}
+		if output, ok := decoded["output"]; ok {
+			t.Fatalf("item %d output = %#v, want field omitted: %s", i, output, item)
+		}
+	}
+}
+
+func TestResponsesRejectsFunctionCallOutputWithoutCallIDBeforeHTTP(t *testing.T) {
+	requested := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = true
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Transport: "openai-responses", APIBaseURL: server.URL, APIPath: "/responses",
+		Model: "gpt-test", Timeout: time.Second,
+	})
+	_, err := client.StreamMessage(context.Background(), []message.Message{{
+		Role:       message.RoleUser,
+		ToolResult: &message.ToolResult{Content: "result"},
+	}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "call_id") {
+		t.Fatalf("StreamMessage() error = %v, want missing call_id", err)
+	}
+	if requested {
+		t.Fatal("invalid function_call_output reached HTTP server")
+	}
+}
+
+func TestResponsesRejectsFunctionCallOutputWithoutOutputBeforeHTTP(t *testing.T) {
+	requested := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = true
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Transport: "openai-responses", APIBaseURL: server.URL, APIPath: "/responses",
+		Model: "gpt-test", Timeout: time.Second,
+	})
+	_, err := client.StreamMessage(context.Background(), []message.Message{{
+		Role: message.RoleAssistant,
+		ProviderData: json.RawMessage(`{
+			"transport":"openai-responses",
+			"version":1,
+			"output_items":[{"type":"function_call_output","call_id":"call_1"}]
+		}`),
+	}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "output") {
+		t.Fatalf("StreamMessage() error = %v, want missing output", err)
+	}
+	if requested {
+		t.Fatal("invalid function_call_output reached HTTP server")
+	}
+}
+
 func TestBuildResponsesInputFallsBackForDamagedProviderData(t *testing.T) {
 	assistant := message.Message{
 		Role:         message.RoleAssistant,

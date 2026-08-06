@@ -95,7 +95,12 @@ type responsesItem struct {
 	CallID    string `json:"call_id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
-	Output    string `json:"output,omitempty"`
+}
+
+type responsesFunctionCallOutputItem struct {
+	Type   string `json:"type"`
+	CallID string `json:"call_id"`
+	Output string `json:"output"`
 }
 
 type responsesContentPart struct {
@@ -172,6 +177,9 @@ func buildResponsesRequest(cfg Config, messages []message.Message, tools Prepare
 	if err != nil {
 		return responsesRequest{}, err
 	}
+	if err := validateResponsesInputItems(input); err != nil {
+		return responsesRequest{}, err
+	}
 	req := responsesRequest{Model: cfg.Model, Input: input, Stream: stream}
 	for _, tool := range tools {
 		parameters := tool.Parameters
@@ -183,6 +191,39 @@ func buildResponsesRequest(cfg Config, messages []message.Message, tools Prepare
 		})
 	}
 	return req, nil
+}
+
+func validateResponsesInputItems(items []json.RawMessage) error {
+	for i, raw := range items {
+		var view struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(raw, &view); err != nil {
+			return fmt.Errorf("Responses input item %d 不是有效 JSON: %w", i, err)
+		}
+		if view.Type != "function_call_output" {
+			continue
+		}
+
+		var item map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &item); err != nil {
+			return fmt.Errorf("Responses function_call_output item %d 不是有效 JSON object: %w", i, err)
+		}
+		var callID string
+		callIDRaw, ok := item["call_id"]
+		if !ok || json.Unmarshal(callIDRaw, &callID) != nil || strings.TrimSpace(callID) == "" {
+			return fmt.Errorf("Responses function_call_output item %d 缺少非空 call_id", i)
+		}
+		outputRaw, ok := item["output"]
+		if !ok {
+			return fmt.Errorf("Responses function_call_output item %d 缺少 output", i)
+		}
+		var output string
+		if err := json.Unmarshal(outputRaw, &output); err != nil {
+			return fmt.Errorf("Responses function_call_output item %d 的 output 必须是字符串", i)
+		}
+	}
+	return nil
 }
 
 func buildResponsesInput(messages []message.Message) ([]json.RawMessage, error) {
@@ -227,7 +268,7 @@ func buildResponsesInput(messages []message.Message) ([]json.RawMessage, error) 
 			items = append(items, item)
 		}
 		for _, result := range results {
-			item, err := json.Marshal(responsesItem{
+			item, err := json.Marshal(responsesFunctionCallOutputItem{
 				Type: "function_call_output", CallID: result.ToolUseID, Output: result.Content,
 			})
 			if err != nil {
@@ -311,11 +352,11 @@ func (c *Client) runResponsesMessage(ctx context.Context, cfg Config, messages [
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", newProviderHTTPErrorWithReadError(resp.StatusCode, resp.Header, data, err, "模型接口")
+	}
 	if err != nil {
 		return "", fmt.Errorf("读取响应体失败: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("模型接口返回异常状态 %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
 	}
 	var parsed responsesAPIResponse
 	if err := json.Unmarshal(data, &parsed); err != nil {
@@ -367,12 +408,7 @@ func (c *Client) streamResponsesMessage(ctx context.Context, cfg Config, message
 		return nil, fmt.Errorf("调用模型接口失败: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, readErr := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-		if readErr != nil {
-			return nil, fmt.Errorf("模型接口返回异常状态 %d，且读取错误响应失败: %w", resp.StatusCode, readErr)
-		}
-		return nil, fmt.Errorf("模型接口返回异常状态 %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		return nil, providerHTTPErrorFromResponse(resp, "模型接口")
 	}
 	events := make(chan StreamEvent)
 	go c.consumeResponsesStream(ctx, resp, events)
@@ -401,11 +437,11 @@ func (c *Client) nonStreamingResponsesMessage(ctx context.Context, cfg Config, m
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, newProviderHTTPErrorWithReadError(resp.StatusCode, resp.Header, data, err, "模型接口")
+	}
 	if err != nil {
 		return nil, fmt.Errorf("读取响应体失败: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("模型接口返回异常状态 %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
 	}
 	var parsed responsesAPIResponse
 	if err := json.Unmarshal(data, &parsed); err != nil {

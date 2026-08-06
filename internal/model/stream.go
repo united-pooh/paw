@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -111,6 +112,10 @@ func (c *Client) StreamMessage(ctx context.Context, messages []message.Message, 
 		if err == nil {
 			return events, nil
 		}
+		var providerErr *ProviderHTTPError
+		if errors.As(err, &providerErr) && providerErr.StatusCode != http.StatusNotFound && providerErr.StatusCode != http.StatusMethodNotAllowed {
+			return nil, err
+		}
 	}
 
 	events, err := c.streamOpenAIMessage(ctx, cfg, adapter, messages, prepared)
@@ -163,11 +168,11 @@ func (c *Client) nonStreamingOpenAIMessage(ctx context.Context, cfg Config, adap
 	}
 	defer resp.Body.Close()
 	respBytes, err := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, newProviderHTTPErrorWithReadError(resp.StatusCode, resp.Header, respBytes, err, "模型接口")
+	}
 	if err != nil {
 		return nil, fmt.Errorf("读取响应体失败: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("模型接口返回异常状态 %d: %s", resp.StatusCode, strings.TrimSpace(string(respBytes)))
 	}
 	var parsed nonStreamingChatResponse
 	if err := json.Unmarshal(respBytes, &parsed); err != nil {
@@ -250,12 +255,7 @@ func (c *Client) streamOpenAIMessage(ctx context.Context, cfg Config, adapter Mo
 
 	// SSE 流建立失败（非 2xx）时，读取错误体后返回。
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBytes, readErr := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-		if readErr != nil {
-			return nil, fmt.Errorf("模型接口返回异常状态 %d，且读取错误响应失败: %w", resp.StatusCode, readErr)
-		}
-		return nil, fmt.Errorf("模型接口返回异常状态 %d: %s", resp.StatusCode, strings.TrimSpace(string(respBytes)))
+		return nil, providerHTTPErrorFromResponse(resp, "模型接口")
 	}
 
 	// 这里开始转入异步消费：

@@ -104,12 +104,7 @@ func (c *Client) streamAnthropicMessage(ctx context.Context, cfg Config, message
 		return nil, fmt.Errorf("调用 Anthropic 流式接口失败: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBytes, readErr := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-		if readErr != nil {
-			return nil, fmt.Errorf("Anthropic 流式接口返回异常状态 %d，且读取错误响应失败: %w", resp.StatusCode, readErr)
-		}
-		return nil, fmt.Errorf("Anthropic 流式接口返回异常状态 %d: %s", resp.StatusCode, strings.TrimSpace(string(respBytes)))
+		return nil, providerHTTPErrorFromResponse(resp, "Anthropic 流式接口")
 	}
 
 	events := make(chan StreamEvent)

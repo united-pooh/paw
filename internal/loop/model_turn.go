@@ -26,9 +26,6 @@ func (runner *Runner) runModelTurn(ctx context.Context, history []message.Messag
 	if err != nil {
 		return message.Message{}, err
 	}
-	if turn != nil {
-		turn.PlanEmitted = true
-	}
 
 	var state turnState
 	state.traceStageID, state.traceAgentID = runner.currentTraceIDs()
@@ -45,6 +42,9 @@ func (runner *Runner) runModelTurn(ctx context.Context, history []message.Messag
 		events, err := runner.model.StreamMessage(ctx, modelMessages, tools)
 		if err != nil {
 			return runner.failModelTurnWithPartial(&state, err)
+		}
+		if turn != nil {
+			turn.PlanEmitted = true
 		}
 
 		finalizeOnDone := attempt == 0
@@ -271,6 +271,7 @@ func marshalJSON(v any) string {
 
 func (runner *Runner) consumeStream(ctx context.Context, events <-chan model.StreamEvent, state *turnState, finalizeOnDone bool) (message.Message, model.FinishReason, error) {
 	for ev := range events {
+		state.streamEstablished = true
 		msg, finishReason, done, err := runner.handleEvent(state, ev, finalizeOnDone)
 		if err != nil {
 			return msg, "", err
@@ -920,10 +921,18 @@ func (runner *Runner) failAfterPartialOutputForState(state *turnState, err error
 }
 
 func (runner *Runner) partialAssistantMessage(state *turnState) message.Message {
-	if state == nil || strings.TrimSpace(state.visibleContent.String()) == "" {
+	if state == nil {
 		return message.Message{}
 	}
-	return message.Message{Role: message.RoleAssistant, Content: state.visibleContent.String(), ProviderData: append(json.RawMessage(nil), state.providerData...)}
+	content := state.visibleContent.String()
+	if !state.streamEstablished && content == "" && len(state.toolCalls) == 0 && len(state.providerData) == 0 {
+		return message.Message{}
+	}
+	msg := buildAssistantToolCallMessage(state.toolCalls)
+	msg.Role = message.RoleAssistant
+	msg.Content = content
+	msg.ProviderData = append(json.RawMessage(nil), state.providerData...)
+	return msg
 }
 
 func (runner *Runner) protocolAssistantMessage(state *turnState) message.Message {

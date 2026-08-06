@@ -78,9 +78,14 @@ type transcriptEntry struct {
 	todoCompletedFold     bool
 	todoCleared           bool
 	citations             []toolCitation
-	createdAt             time.Time
-	toolStartedAt         time.Time
-	toolFinishedAt        time.Time
+	// subagentWaitRunning 标记一条 SubagentWait 状态行：运行中显示
+	// "子智能体 <名字> 正在运行 Ns"，工具完成/失败后整行从 transcript 移除，
+	// 不渲染为可折叠的 Tools 调用块。
+	subagentWaitRunning bool
+	subagentWaitNames   []string
+	createdAt           time.Time
+	toolStartedAt       time.Time
+	toolFinishedAt      time.Time
 	turnMetadata          *session.TurnMetadata
 	version               int
 	renderMode            transcriptRenderMode

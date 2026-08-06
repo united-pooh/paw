@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"paw/internal/message"
+	"paw/internal/model"
 	"paw/internal/session"
 )
 
@@ -186,7 +187,26 @@ func (runner *Runner) runSingleTurnWithTiming(ctx context.Context, userInput mes
 			}
 		}
 
-		assistantMessage, modelErr := runner.runModelTurn(ctx, history, turnState)
+		var assistantMessage message.Message
+		var modelErr error
+		for recoveryAttempt := 0; ; recoveryAttempt++ {
+			assistantMessage, modelErr = runner.runModelTurn(ctx, history, turnState)
+			if modelErr == nil || recoveryAttempt > 0 || assistantMessageHasPartialStream(assistantMessage) || !model.IsContextOverflowError(modelErr) {
+				break
+			}
+
+			var compaction *ContextCompactionResult
+			history, compaction, modelErr = runner.recoverContextLimit(ctx, history, modelErr, round > 0)
+			if modelErr != nil {
+				break
+			}
+			runner.notifySystem("context-recovery", fmt.Sprintf(
+				"provider context limit reached; compacted %d messages (%d → %d) and retrying the current model round",
+				compaction.FoldedMessages,
+				compaction.BeforeMessages,
+				compaction.AfterMessages,
+			))
+		}
 		if modelErr != nil {
 			if persistErr := runner.persistPartialAssistant(context.WithoutCancel(ctx), journal, turnID, assistantMessage); persistErr != nil {
 				return execution, persistErr
@@ -240,4 +260,8 @@ func (runner *Runner) runSingleTurnWithTiming(ctx context.Context, userInput mes
 	}
 
 	return execution, fmt.Errorf("tool loop exceeded max rounds: %d", maxToolRounds)
+}
+
+func assistantMessageHasPartialStream(msg message.Message) bool {
+	return msg.Role == message.RoleAssistant || msg.Content != "" || len(toolCallsFromMessage(msg)) > 0 || len(msg.ProviderData) > 0
 }

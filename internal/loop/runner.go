@@ -137,6 +137,7 @@ const (
 type turnState struct {
 	content           strings.Builder
 	visibleContent    strings.Builder
+	streamEstablished bool
 	pending           strings.Builder
 	toolPayload       toolPayloadCandidateState
 	toolCalls         []message.ToolCall

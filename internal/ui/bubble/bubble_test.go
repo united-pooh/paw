@@ -1412,6 +1412,124 @@ func TestToolResultEntryMatchesByToolUseID(t *testing.T) {
 	}
 }
 
+// TestSubagentWaitRendersRunningLineAndDisappears 验证 SubagentWait 以
+// "子智能体 <名字> 正在运行 Ns" 状态行展示：运行中每秒刷新秒数，工具完成后
+// 整行直接消失，不留下可折叠的 Tools 调用块。
+func TestSubagentWaitRendersRunningLineAndDisappears(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.subagents = &fakeSubagentController{tasks: []subagent.TaskSnapshot{
+		{ID: "task-light", Name: "高松灯", Status: subagent.TaskRunning},
+	}}
+	model.transcript = []transcriptEntry{{kind: entryUser, title: "you", body: "wait"}}
+
+	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{ID: "wait_1", Name: "SubagentWait", Input: []byte(`{"task_ids":["task-light"],"timeout_ms":600000}`)}))
+	model = next.(appModel)
+
+	last := model.transcript[len(model.transcript)-1]
+	if !last.subagentWaitRunning || last.toolUseID != "wait_1" {
+		t.Fatalf("last transcript entry = %#v, want SubagentWait status line", last)
+	}
+	if got := last.body; got != "子智能体 高松灯 正在运行 0s" {
+		t.Fatalf("status line body = %q, want 子智能体 高松灯 正在运行 0s", got)
+	}
+
+	running := renderTranscript(model.transcript, 80, model.showThinking)
+	for _, want := range []string{"子智能体 高松灯 正在运行 0s"} {
+		if !strings.Contains(running, want) {
+			t.Fatalf("running transcript = %q, want %q", running, want)
+		}
+	}
+	for _, hidden := range []string{"SubagentWait", "Tools", "task_ids", "task-light", "◌", "运行中"} {
+		if strings.Contains(running, hidden) {
+			t.Fatalf("running transcript = %q, should not render tool block content %q", running, hidden)
+		}
+	}
+
+	// 秒数随帧刷新：13 秒后状态行更新。
+	started := model.transcript[len(model.transcript)-1].toolStartedAt
+	model.refreshRunningToolProgress(started.Add(13 * time.Second))
+	last = model.transcript[len(model.transcript)-1]
+	if got := last.body; got != "子智能体 高松灯 正在运行 13s" {
+		t.Fatalf("status line body after refresh = %q, want 子智能体 高松灯 正在运行 13s", got)
+	}
+
+	// 完成：状态行消失，不折叠为工具块。
+	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{ToolUseID: "wait_1", Name: "SubagentWait", Content: `{"task_ids":["task-light"],"status":"completed"}`}))
+	model = next.(appModel)
+
+	for _, entry := range model.transcript {
+		if entry.subagentWaitRunning {
+			t.Fatalf("SubagentWait status line survived completion: %#v", entry)
+		}
+	}
+	done := renderTranscript(model.transcript, 80, model.showThinking)
+	for _, hidden := range []string{"SubagentWait", "正在运行", "Tools", "task-light"} {
+		if strings.Contains(done, hidden) {
+			t.Fatalf("done transcript = %q, should not contain %q", done, hidden)
+		}
+	}
+	if !strings.Contains(done, "wait") {
+		t.Fatalf("done transcript = %q, want user message preserved", done)
+	}
+}
+
+// TestSubagentWaitErrorReplacesLineWithErrorEntry 验证 SubagentWait 失败时
+// 状态行消失并转为错误行，而不是折叠成工具调用块。
+func TestSubagentWaitErrorReplacesLineWithErrorEntry(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.subagents = &fakeSubagentController{tasks: []subagent.TaskSnapshot{
+		{ID: "task-1", Name: "弦卷心", Status: subagent.TaskRunning},
+	}}
+
+	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{ID: "wait_1", Name: "SubagentWait", Input: []byte(`{"task_ids":["task-1"]}`)}))
+	model = next.(appModel)
+
+	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{ToolUseID: "wait_1", Name: "SubagentWait", Content: "timed out after 60s", IsError: true}))
+	model = next.(appModel)
+
+	last := model.transcript[len(model.transcript)-1]
+	if last.kind != entryError || last.title != "subagent" || !strings.Contains(last.body, "timed out after 60s") {
+		t.Fatalf("last transcript entry = %#v, want subagent error entry", last)
+	}
+	rendered := renderTranscript(model.transcript, 80, model.showThinking)
+	if strings.Contains(rendered, "正在运行") || strings.Contains(rendered, "Tools") {
+		t.Fatalf("error transcript = %q, should not keep status line or tool block", rendered)
+	}
+	if !strings.Contains(rendered, "timed out after 60s") {
+		t.Fatalf("error transcript = %q, want visible error", rendered)
+	}
+}
+
+// TestMarkRunningToolsErrorRemovesSubagentWaitLine 验证 turn 失败时悬挂的
+// SubagentWait 状态行被移除。
+func TestMarkRunningToolsErrorRemovesSubagentWaitLine(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.transcript = []transcriptEntry{
+		{kind: entryUser, title: "you", body: "wait"},
+		{
+			kind:                entrySystem,
+			title:               "",
+			body:                "子智能体 高松灯 正在运行 5s",
+			subagentWaitRunning: true,
+			subagentWaitNames:   []string{"高松灯"},
+			toolUseID:           "wait_1",
+			toolName:            "SubagentWait",
+			toolStatus:          "running",
+			toolStartedAt:       time.Now().Add(-5 * time.Second),
+		},
+	}
+	model.markRunningToolsError(errors.New("stream error"))
+
+	for _, entry := range model.transcript {
+		if entry.subagentWaitRunning {
+			t.Fatalf("SubagentWait status line survived turn failure: %#v", entry)
+		}
+	}
+	if got := model.transcript[len(model.transcript)-1]; got.kind != entryUser {
+		t.Fatalf("last transcript entry = %#v, want original user message", got)
+	}
+}
+
 func TestToolCallWithoutAssistantTextRendersRunningEntry(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 

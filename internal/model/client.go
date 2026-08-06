@@ -245,12 +245,11 @@ func (c *Client) RunMessage(ctx context.Context, messages []message.Message) (st
 	}(resp.Body)
 
 	respBytes, err := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", newProviderHTTPErrorWithReadError(resp.StatusCode, resp.Header, respBytes, err, "模型接口")
+	}
 	if err != nil {
 		return "", fmt.Errorf("读取响应体失败: %w", err)
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("模型接口返回异常状态 %d: %s", resp.StatusCode, strings.TrimSpace(string(respBytes)))
 	}
 
 	var parsed ChatCompletionsResponse

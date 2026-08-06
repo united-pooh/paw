@@ -137,12 +137,19 @@ func (runner *Runner) CompactContext(ctx context.Context, focus string) (Context
 }
 
 func (runner *Runner) compactHistory(ctx context.Context, history []message.Message, focus string, force bool) ([]message.Message, *ContextCompactionResult, error) {
+	return runner.compactHistoryWithProtectedTail(ctx, history, focus, force, -1)
+}
+
+func (runner *Runner) compactHistoryWithProtectedTail(ctx context.Context, history []message.Message, focus string, force bool, protectedTail int) ([]message.Message, *ContextCompactionResult, error) {
 	limit := runner.contextLimit()
 	head, tail := planHistoryCompaction(history, limit)
 	minimum := minimumCompactMessages
 	if force {
 		minimum = 1
 		head, tail = planManualHistoryCompaction(history, limit)
+	}
+	if protectedTail >= head && protectedTail < tail {
+		tail = protectedTail
 	}
 	if tail-head < minimum {
 		return history, nil, nil
@@ -221,6 +228,19 @@ func planManualHistoryCompaction(history []message.Message, limit int) (head, ta
 		tail--
 	}
 	return head, tail
+}
+
+func latestToolCallGroupStart(history []message.Message, head int) int {
+	for resultIndex := len(history) - 1; resultIndex >= head; resultIndex-- {
+		results := toolResultsFromMessage(history[resultIndex])
+		if len(results) == 0 {
+			continue
+		}
+		if callIndex := assistantCallIndexForResults(history, head, resultIndex, results); callIndex >= head {
+			return callIndex
+		}
+	}
+	return len(history)
 }
 
 func planHistoryCompaction(history []message.Message, limit int) (head, tail int) {
