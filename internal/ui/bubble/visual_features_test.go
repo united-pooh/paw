@@ -130,9 +130,9 @@ func TestTokenizedUserTranscriptOrdinaryTextUsesBrightOrangeForeground(t *testin
 }
 
 // TestToolGroupUsesTranscriptGutterAndStaysWithinWidth 验证 Tools 组折叠头行
-// 使用 transcript gutter 且不再渲染外层边框：header 文本用等宽空格对齐
-// 展开后工具条目的内容列（gutter + border + padding），避免展开工具详情后
-// 出现组边框与条目边框两条竖线。
+// 使用 transcript gutter 且不再渲染外层边框：header 与 user/assistant 条目
+// 同列（只缩进 gutter），展开的工具条目靠自己的边框在 header 右侧缩进，
+// 避免展开工具详情后出现组边框与条目边框两条竖线。
 func TestToolGroupUsesTranscriptGutterAndStaysWithinWidth(t *testing.T) {
 	const width = 48
 	rendered := ansi.Strip(renderToolsGroup([]transcriptEntry{{
@@ -148,9 +148,7 @@ func TestToolGroupUsesTranscriptGutterAndStaysWithinWidth(t *testing.T) {
 	if strings.Contains(lines[0], "│") {
 		t.Fatalf("tool group header carries an outer border rail: %q", lines[0])
 	}
-	wantTextColumn := terminalCellWidth(transcriptEntryGutter) +
-		toolResultBorderStyle.GetHorizontalFrameSize() +
-		toolResultBorderStyle.GetHorizontalPadding()
+	wantTextColumn := terminalCellWidth(transcriptEntryGutter)
 	if textColumn := strings.Index(lines[0], "▸"); textColumn != wantTextColumn {
 		t.Fatalf("tool group header text column = %d, want %d: %q", textColumn, wantTextColumn, lines[0])
 	}
