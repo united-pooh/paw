@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"paw/internal/skill"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -302,26 +303,13 @@ func (m *appModel) syncCommandCompletion() {
 // 异步文件加载
 // ──────────────────────────────────────────────────────────────────────────────
 
-// loadFilesInDirCmd 异步列出 searchDir 目录下的条目，用 filePrefix 过滤。
+// loadFilesInDirCmd 异步递归列出 searchDir 目录树下的条目，用 filePrefix 过滤。
 // useDefault=true 时最多返回前 5 条。
 func loadFilesInDirCmd(searchDir, filePrefix string, useDefault bool) tea.Cmd {
 	return func() tea.Msg {
-		entries, err := os.ReadDir(searchDir)
+		all, err := listFilesRecursive(searchDir)
 		if err != nil {
 			return fileCompletionLoadedMsg{searchDir: searchDir}
-		}
-
-		var all []string
-		for _, e := range entries {
-			name := e.Name()
-			if strings.HasPrefix(name, ".") {
-				continue
-			}
-			if e.IsDir() {
-				all = append(all, name+"/")
-			} else {
-				all = append(all, name)
-			}
 		}
 
 		filtered := filterByPrefix(all, filePrefix)
@@ -335,6 +323,102 @@ func loadFilesInDirCmd(searchDir, filePrefix string, useDefault bool) tea.Cmd {
 			filtered:  filtered,
 		}
 	}
+}
+
+// maxFileCompletionEntries 限制文件补全收集的条目总数，避免在 ~ 或 / 等
+// 大型目录树下递归出海量结果拖慢每次击键时的过滤。
+const maxFileCompletionEntries = 2000
+
+// maxCompletionDepth 限制递归搜索的目录深度（searchDir 自身为 0 层）。
+// 深度限制与 BFS 遍历配合，保证大 scope（如 @~）的遍历开销可控：
+// 超过该深度的子树不再进入，但目录条目本身（≤ 该深度）仍会列出，
+// 用户可先 Tab 进入深层目录后再继续搜索。
+const maxCompletionDepth = 8
+
+// completionSkipDirs 是递归遍历时整棵跳过的目录名。
+// 隐藏目录（.git、.paw 等）另行按 . 前缀跳过；这里处理的是名字不以点开头
+// 但体积巨大且几乎不是搜索目标的家目录/系统噪音目录，避免 @~、@/ 的
+// 遍历被它们耗尽条目配额。
+var completionSkipDirs = map[string]bool{
+	"node_modules": true, // 依赖目录
+	"Library":      true, // macOS ~/Library、/Library
+	"AppData":      true, // Windows %USERPROFILE%\AppData
+	"System":       true, // macOS /System
+}
+
+// skipCompletionDir 判断递归遍历时是否应整棵跳过名为 name 的目录。
+func skipCompletionDir(name string) bool {
+	return completionSkipDirs[name]
+}
+
+// listFilesRecursive 递归列出 searchDir 目录树下的全部条目（不含 searchDir 本身）。
+// 条目为相对 searchDir 的路径，目录以 / 结尾；隐藏条目、completionSkipDirs
+// 中的目录以及超过 maxCompletionDepth 的子树被跳过。
+//
+// 遍历采用逐层（BFS）方式：先收集完整的第 1 层，再第 2 层，依此类推，
+// 达到 maxFileCompletionEntries 条后停止。相比深度优先遍历，BFS 保证浅层
+// 目录优先占满配额——即使某个深层大目录（如 ~/Pictures）文件极多，也不会
+// 挤掉其他浅层目录的条目，@~/proj 这类搜索总能命中 ~/Projects/ 本身。
+//
+// 返回的列表按嵌套深度升序排列，深度相同时保持字典序遍历顺序——因此当
+// 多个路径下存在同名文件时，嵌套最浅的排在前面。
+func listFilesRecursive(searchDir string) ([]string, error) {
+	var all []string
+	type pending struct {
+		dir   string
+		depth int
+	}
+	queue := []pending{{dir: searchDir, depth: 0}}
+	for len(queue) > 0 && len(all) < maxFileCompletionEntries {
+		cur := queue[0]
+		queue = queue[1:]
+
+		entries, err := os.ReadDir(cur.dir)
+		if err != nil {
+			continue // 无法读取的目录（如权限不足）整棵跳过
+		}
+		for _, e := range entries {
+			if len(all) >= maxFileCompletionEntries {
+				break
+			}
+			name := e.Name()
+			if strings.HasPrefix(name, ".") {
+				continue // 隐藏条目
+			}
+			child := filepath.Join(cur.dir, name)
+			if e.IsDir() {
+				if skipCompletionDir(name) || cur.depth+1 > maxCompletionDepth {
+					continue
+				}
+				queue = append(queue, pending{dir: child, depth: cur.depth + 1})
+			}
+			rel, err := filepath.Rel(searchDir, child)
+			if err != nil {
+				continue
+			}
+			if e.IsDir() {
+				all = append(all, filepath.ToSlash(rel)+"/")
+			} else {
+				all = append(all, filepath.ToSlash(rel))
+			}
+		}
+	}
+	sortEntriesByDepth(all)
+	return all, nil
+}
+
+// sortEntriesByDepth 按嵌套深度升序稳定排序；深度相同时保持原有的
+// 字典序遍历顺序，因此同名条目中浅层（深度小）的排在前面。
+func sortEntriesByDepth(items []string) {
+	sort.SliceStable(items, func(i, j int) bool {
+		return entryDepth(items[i]) < entryDepth(items[j])
+	})
+}
+
+// entryDepth 返回条目相对路径的嵌套深度（按 / 分段数；目录的尾部斜杠
+// 本身就是一个分段，因此 docs/ 与 docs/test.md 同为深度 1）。
+func entryDepth(p string) int {
+	return strings.Count(p, "/")
 }
 
 // filterByPrefix 筛选文件补全条目（大小写不敏感）。

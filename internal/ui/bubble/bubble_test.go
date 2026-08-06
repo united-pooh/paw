@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -5566,6 +5567,117 @@ func TestFilterByPrefixFallsBackToSubstringWhenNoExtensionMatches(t *testing.T) 
 	got = filterByPrefix(items, "xyz")
 	if len(got) != 0 {
 		t.Fatalf("filterByPrefix(xyz) = %#v, want no matches", got)
+	}
+}
+
+// makeCompletionFixture 构造一个递归搜索测试目录树，返回其根路径。
+// 结构：
+//
+//	root/
+//	  test.md
+//	  docs/
+//	    guide.md
+//	    test.md
+//	    a/
+//	      test.md
+//	      b/
+//	        test.md
+//	    node_modules/
+//	      pkg/index.js
+//	  .hidden/
+//	    hidden.txt
+func makeCompletionFixture(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	dirs := []string{
+		"docs",
+		"docs/a",
+		"docs/a/b",
+		"docs/node_modules/pkg",
+		".hidden",
+	}
+	for _, d := range dirs {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	files := []string{
+		"test.md",
+		"docs/guide.md",
+		"docs/test.md",
+		"docs/a/test.md",
+		"docs/a/b/test.md",
+		"docs/node_modules/pkg/index.js",
+		".hidden/hidden.txt",
+	}
+	for _, f := range files {
+		if err := os.WriteFile(filepath.Join(root, f), []byte("x"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", f, err)
+		}
+	}
+	return root
+}
+
+// TestListFilesRecursiveCollectsNestedAndSkipsNoise 验证递归收集：
+// 条目为相对路径、目录带 / 结尾、隐藏目录与 node_modules 被整棵跳过。
+func TestListFilesRecursiveCollectsNestedAndSkipsNoise(t *testing.T) {
+	root := makeCompletionFixture(t)
+	got, err := listFilesRecursive(root)
+	if err != nil {
+		t.Fatalf("listFilesRecursive: %v", err)
+	}
+	want := []string{
+		"test.md",
+		"docs/",
+		"docs/guide.md",
+		"docs/test.md",
+		"docs/a/",
+		"docs/a/test.md",
+		"docs/a/b/",
+		"docs/a/b/test.md",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("listFilesRecursive = %#v, want %#v", got, want)
+	}
+}
+
+// TestListFilesRecursiveSameNameShallowFirst 验证同名文件按嵌套深度排序：
+// 深度最少的排在最上面，深度最大的排在最下面。
+func TestListFilesRecursiveSameNameShallowFirst(t *testing.T) {
+	root := makeCompletionFixture(t)
+	got, err := listFilesRecursive(root)
+	if err != nil {
+		t.Fatalf("listFilesRecursive: %v", err)
+	}
+	var testFiles []string
+	for _, item := range got {
+		if item == "test.md" || strings.HasSuffix(item, "/test.md") {
+			testFiles = append(testFiles, item)
+		}
+	}
+	want := []string{"test.md", "docs/test.md", "docs/a/test.md", "docs/a/b/test.md"}
+	if !slices.Equal(testFiles, want) {
+		t.Fatalf("same-name test.md order = %#v, want shallow-first %#v", testFiles, want)
+	}
+}
+
+// TestLoadFilesInDirCmdRecursiveFiltered 验证异步加载命令返回的过滤结果
+// 覆盖多层目录，且同名文件浅层优先。
+func TestLoadFilesInDirCmdRecursiveFiltered(t *testing.T) {
+	root := makeCompletionFixture(t)
+	msg := loadFilesInDirCmd(root, "test", false)().(fileCompletionLoadedMsg)
+	if msg.searchDir != root {
+		t.Fatalf("msg.searchDir = %q, want %q", msg.searchDir, root)
+	}
+	want := []string{"test.md", "docs/test.md", "docs/a/test.md", "docs/a/b/test.md"}
+	if !slices.Equal(msg.filtered, want) {
+		t.Fatalf("filtered = %#v, want %#v", msg.filtered, want)
+	}
+	// 扩展名优先匹配在递归路径上仍然成立
+	msg2 := loadFilesInDirCmd(root, "md", false)().(fileCompletionLoadedMsg)
+	want2 := []string{"test.md", "docs/guide.md", "docs/test.md", "docs/a/test.md", "docs/a/b/test.md"}
+	if !slices.Equal(msg2.filtered, want2) {
+		t.Fatalf("filtered(md) = %#v, want %#v", msg2.filtered, want2)
 	}
 }
 
