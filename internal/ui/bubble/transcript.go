@@ -1371,18 +1371,23 @@ func renderToolsGroup(entries []transcriptEntry, width int, at time.Time, expand
 	}
 	label := fmt.Sprintf("%s Tools  %d calls  %s", marker, len(entries), duration)
 	// Tool groups share the same two-cell external gutter as user and assistant
-	// entries. Keep the border itself aligned with the message body column.
+	// entries. The group itself carries no outer border: expanding the group and
+	// then a tool detail would otherwise stack the group rail outside the tool's
+	// own rail into two green lines. Only the individual tool entries keep their
+	// border rail; the header uses equal-width spaces in place of border and
+	// padding so its text stays aligned with the entry content column.
 	groupWidth := transcriptBodyWidth(width)
 	contentWidth := toolEntryContentWidth(groupWidth, style)
 	innerWidth := maxInt(1, contentWidth-style.GetHorizontalFrameSize())
-	lines := []string{toolHeaderStyle.Render(truncateStyledCellLine(label, innerWidth))}
+	header := toolHeaderStyle.Render(truncateStyledCellLine(label, innerWidth))
+	headerGutter := transcriptEntryGutter + strings.Repeat(" ", style.GetHorizontalFrameSize()+style.GetHorizontalPadding())
+	lines := []string{indentLines(header, headerGutter)}
 	if expanded {
 		for _, entry := range entries {
-			lines = append(lines, renderGroupedToolEntry(entry, innerWidth, at, fullResult))
+			lines = append(lines, indentLines(renderGroupedToolEntry(entry, innerWidth, at, fullResult), transcriptEntryGutter))
 		}
 	}
-	group := style.Width(contentWidth).Render(strings.Join(lines, "\n"))
-	return indentLines(group, transcriptEntryGutter)
+	return strings.Join(lines, "\n")
 }
 
 func renderGroupedToolEntry(entry transcriptEntry, width int, at time.Time, fullResult bool) string {

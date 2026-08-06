@@ -989,7 +989,10 @@ func TestPendingSingleToolMouseClickExpands(t *testing.T) {
 	}
 }
 
-func TestReadyGroupMixedStatusUsesNeutralOuterBorderAndErrorInnerRow(t *testing.T) {
+// TestReadyGroupMixedStatusKeepsHeaderBorderlessAndErrorInnerRow 验证 ready 组
+// 展开时 header 行不带外层边框（避免与工具条目自己的边框叠成两条竖线），
+// 错误工具行仍携带错误色边框。
+func TestReadyGroupMixedStatusKeepsHeaderBorderlessAndErrorInnerRow(t *testing.T) {
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
@@ -1000,7 +1003,6 @@ func TestReadyGroupMixedStatusUsesNeutralOuterBorderAndErrorInnerRow(t *testing.
 	}, 90, time.Time{}, true, false)
 
 	lines := strings.Split(rendered, "\n")
-	headerPrefix := styleRenderPrefix(toolResultBorderStyle)
 	errorPrefix := styleRenderPrefix(toolErrorBorderStyle)
 	headerSeen := false
 	errorSeen := false
@@ -1009,8 +1011,8 @@ func TestReadyGroupMixedStatusUsesNeutralOuterBorderAndErrorInnerRow(t *testing.
 		switch {
 		case strings.Contains(plainLine, "Tools  2 calls"):
 			headerSeen = true
-			if !strings.Contains(line, headerPrefix) || strings.Contains(line, errorPrefix) {
-				t.Fatalf("ready group header should use neutral/result border, got %q", line)
+			if strings.Contains(line, "│") || strings.Contains(line, errorPrefix) {
+				t.Fatalf("ready group header should be borderless, got %q", line)
 			}
 		case strings.Contains(plainLine, "× Bash: go test ./...  出错"):
 			errorSeen = true
