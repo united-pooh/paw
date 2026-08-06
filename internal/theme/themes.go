@@ -22,9 +22,9 @@ func palette(bg, surface, fg, muted, primary, secondary, cyan, green, yellow, re
 
 var builtIns = []Theme{
 	{ID: Default, Name: "Default", Mode: ModeDark, Colors: palette("#292c33", "#182830", "#c9c2b7", "#8e98a8", "#76d5e8", "#ff5ac8", "#76d5e8", "#a9c8b5", "#e5b66e", "#ef7d7d", "#0f2e1d", "#2e0f15")},
-	{ID: TokyoNight, Name: "Tokyo Night", Mode: ModeDark, Colors: palette("#1a1b26", "#24283b", "#c0caf5", "#565f89", "#7aa2f7", "#bb9af7", "#7dcfff", "#9ece6a", "#e0af68", "#f7768e", "#14302a", "#2e1420")},
-	{ID: TokyoNightStorm, Name: "Tokyo Night Storm", Mode: ModeDark, Colors: palette("#24283b", "#1f2335", "#c0caf5", "#737aa2", "#7aa2f7", "#bb9af7", "#7dcfff", "#9ece6a", "#e0af68", "#f7768e", "#14302a", "#2e1420")},
-	{ID: TokyoNightLight, Name: "Tokyo Night Light", Mode: ModeLight, Colors: palette("#d5d6db", "#cbccd1", "#343b58", "#6172b0", "#34548a", "#5a4a78", "#0f4b6e", "#485e30", "#8f5e15", "#8c4351", "#d8e8d0", "#f0d8d8")},
+	{ID: TokyoNight, Name: "Tokyo Night", Mode: ModeDark, Colors: palette("#1a1b26", "#24283b", "#c0caf5", "#565f89", "#7aa2f7", "#bb9af7", "#7dcfff", "#9ece6a", "#3b4261", "#f7768e", "#14302a", "#2e1420")},
+	{ID: TokyoNightStorm, Name: "Tokyo Night Storm", Mode: ModeDark, Colors: palette("#24283b", "#1f2335", "#c0caf5", "#737aa2", "#7aa2f7", "#bb9af7", "#7dcfff", "#9ece6a", "#3b4261", "#f7768e", "#14302a", "#2e1420")},
+	{ID: TokyoNightLight, Name: "Tokyo Night Light", Mode: ModeLight, Colors: palette("#d5d6db", "#cbccd1", "#343b58", "#6172b0", "#34548a", "#5a4a78", "#0f4b6e", "#485e30", "#c6cbe3", "#8c4351", "#d8e8d0", "#f0d8d8")},
 	{ID: CatppuccinMocha, Name: "Catppuccin Mocha", Mode: ModeDark, Colors: palette("#1e1e2e", "#313244", "#cdd6f4", "#6c7086", "#89b4fa", "#cba6f7", "#89dceb", "#a6e3a1", "#f9e2af", "#f38ba8", "#1e3a2c", "#3a1e28")},
 	{ID: Dracula, Name: "Dracula", Mode: ModeDark, Colors: palette("#282a36", "#44475a", "#f8f8f2", "#6272a4", "#8be9fd", "#bd93f9", "#8be9fd", "#50fa7b", "#f1fa8c", "#ff5555", "#12381f", "#38121a")},
 	{ID: GruvboxDark, Name: "Gruvbox Dark", Mode: ModeDark, Colors: palette("#282828", "#3c3836", "#ebdbb2", "#928374", "#83a598", "#d3869b", "#8ec07c", "#b8bb26", "#fabd2f", "#fb4934", "#2b3a1e", "#3a1e1e")},

@@ -1834,9 +1834,12 @@ func renderEntryBodyAt(entry transcriptEntry, width int, at time.Time) string {
 	body = strings.TrimRight(body, "\n")
 	if entry.kind == entryAssistant {
 		body = sanitizeAssistantVisibleBody(body)
-		if entry.renderMode != transcriptRenderFormatted {
-			return bodyStyle.Width(width).Render(renderTerminalLinks(body))
-		}
+		// Assistant output is Markdown regardless of whether it is still
+		// streaming, was restored as a partial turn, or completed normally.
+		// The old plain branch bypassed renderMarkdown entirely, leaving
+		// **bold**, *italic*, and ==highlight== visible as unstyled text.
+		// Unclosed markers remain literal in renderInlineMarkdown, so using the
+		// formatted path during streaming is safe and preserves partial output.
 		return renderAssistantBodyWithCitations(body, width, entry.citations)
 	}
 	if body == "" {
