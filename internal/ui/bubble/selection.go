@@ -11,6 +11,7 @@ import (
 
 	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -644,12 +645,12 @@ func buildTranscriptLineSnapshots(content string) []transcriptLineSnapshot {
 		plain := ansi.Strip(line)
 		assistantMarker := strings.HasPrefix(plain, "✦ ")
 		// The assistant marker is a visual gutter decoration, not transcript
-		// body content. Keep the logical two-cell gutter for hit testing while
-		// retaining metadata so copying a selection that starts in the gutter
-		// can preserve the visible marker.
+		// body content. Keep the logical two-cell gutter in plain text for
+		// hit testing while retaining the original styled line (marker +
+		// markdown rich styling) for rendering, so selections do not strip
+		// bold/code/link styles from the first line of assistant messages.
 		if assistantMarker {
 			plain = transcriptEntryGutter + strings.TrimPrefix(plain, "✦ ")
-			line = plain
 		}
 		lines = append(lines, transcriptLineSnapshot{
 			styled:          line,
@@ -819,5 +820,98 @@ func renderSelectedLineFragment(line string, left, right int) string {
 	if selected == "" {
 		return line
 	}
-	return prefix + selectedTranscriptLineStyle.Render(selected) + suffix
+	return prefix + applySelectionStyle(selected) + suffix
+}
+
+// selectionSGRPrefixes 返回当前选区样式的前缀 SGR 序列：full 为完整样式
+// （背景 + 前景；16 色回退为反色 \x1b[7m），bgOnly 为仅背景部分（反色
+// 模式为空字符串，背景由反色机制承担）。
+func selectionSGRPrefixes() (full, bgOnly string) {
+	full = sgrPrefixOf(selectedTranscriptLineStyle.Render(" "))
+	bgOnly = sgrPrefixOf(lipgloss.NewStyle().
+		Background(selectedTranscriptLineStyle.GetBackground()).
+		Render(" "))
+	return full, bgOnly
+}
+
+// sgrPrefixOf 提取 lipgloss Render 输出的前导 SGR 序列。lipgloss 的 Render
+// 结果形如 "\x1b[<sgr>m \x1b[0m"，需要先去掉尾部的 reset，再去掉内容空格。
+func sgrPrefixOf(rendered string) string {
+	trimmed := strings.TrimSuffix(rendered, "\x1b[0m")
+	trimmed = strings.TrimSuffix(trimmed, " ")
+	return trimmed
+}
+
+// applySelectionStyle 将选区样式叠加到（可能含 markdown 富文本的）选中片段：
+// 选区 SGR 置于片段开头；markdown 样式内部的每个 SGR reset 都会清掉选区
+// 背景，因此每遇到 reset 就重新断言完整选区样式；markdown 自带的背景色
+// （如行内代码）则在其后重新断言选区背景，保证选中区域底色连续统一，
+// 同时保留 markdown 的前景颜色与加粗/斜体等属性。
+func applySelectionStyle(fragment string) string {
+	fullSGR, bgSGR := selectionSGRPrefixes()
+	if fullSGR == "" {
+		return fragment
+	}
+	parsed := parseStyledCellLine(fragment)
+	var b strings.Builder
+	b.Grow(len(fragment) + 16)
+	b.WriteString(fullSGR)
+	for index, atom := range parsed.atoms {
+		if !atom.control {
+			b.WriteString(atom.text)
+			continue
+		}
+		b.WriteString(atom.text)
+		last := index == len(parsed.atoms)-1
+		switch {
+		case sgrResetsState(atom.text):
+			if !last {
+				b.WriteString(fullSGR)
+			}
+		case bgSGR != "" && sgrSetsBackground(atom.text):
+			b.WriteString(bgSGR)
+		}
+	}
+	b.WriteString(ansi.ResetStyle)
+	return b.String()
+}
+
+// sgrResetsState 报告 SGR 序列是否重置全部样式（空参数或含 0 参数）。
+// 非 SGR 控制序列（如 OSC 8 超链接）返回 false，原样保留。
+func sgrResetsState(sequence string) bool {
+	params := sgrParams(sequence)
+	if params == nil {
+		return false
+	}
+	if len(params) == 0 {
+		return true
+	}
+	for _, param := range params {
+		if param == "" || param == "0" {
+			return true
+		}
+	}
+	return false
+}
+
+// sgrSetsBackground 报告 SGR 序列是否设置背景色（48 或 49 参数）。
+func sgrSetsBackground(sequence string) bool {
+	for _, param := range sgrParams(sequence) {
+		if param == "48" || param == "49" {
+			return true
+		}
+	}
+	return false
+}
+
+// sgrParams 提取 \x1b[...m 的参数列表；非 SGR 控制序列返回 nil。
+func sgrParams(sequence string) []string {
+	if !strings.HasPrefix(sequence, "\x1b[") || !strings.HasSuffix(sequence, "m") {
+		return nil
+	}
+	raw := sequence[2 : len(sequence)-1]
+	if raw == "" {
+		return []string{}
+	}
+	return strings.Split(raw, ";")
 }
