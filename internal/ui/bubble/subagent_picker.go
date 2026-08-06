@@ -438,7 +438,7 @@ func (m *appModel) refreshSubagentToolEntriesFromTasks() bool {
 			if task.Status == subagent.TaskRunning {
 				status = "running"
 			}
-			isError := strings.TrimSpace(task.Error) != "" || task.Status == subagent.TaskFailed
+			isError := strings.TrimSpace(task.Error) != "" || task.Status == subagent.TaskFailed || task.Status == subagent.TaskInterrupted
 			if isError {
 				status = "error"
 			}

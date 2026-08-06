@@ -141,6 +141,10 @@ const (
 	TaskCompleted TaskStatus = "completed"
 	TaskFailed    TaskStatus = "failed"
 	TaskStopped   TaskStatus = "stopped"
+	// TaskInterrupted 是孤儿回收产生的终态：任务曾以 running 写盘，但宿主
+	// 进程退出后其 worker 进程已不存在（异常退出路径不会执行 finishTask）。
+	// 语义区别于 TaskFailed（任务自身出错）与 TaskStopped（用户主动停止）。
+	TaskInterrupted TaskStatus = "interrupted"
 	// TaskNotFound 标记 SubagentWait/SubagentStatus 中请求了未知任务 id。
 	// 它不参与终态判断，仅用于宽容地告知调用方该 id 不存在。
 	TaskNotFound TaskStatus = "not_found"
@@ -257,7 +261,59 @@ func NewManager(cfg Config) *Manager {
 		updates, stopUpdates := subscriber.Subscribe()
 		go m.forwardMCPSnapshots(updates, stopUpdates)
 	}
+	// 孤儿回收：上一实例异常退出后磁盘上残留 running 的任务（进程已死）
+	// 立即转为 interrupted 终态，避免任务卡/活动面板/RunningTasks 把它们
+	// 当作运行中，也避免 SubagentWait 对僵尸 id 一直等到超时。
+	m.reconcileOrphanedTasks(context.Background())
 	return m
+}
+
+// reconcileOrphanedTasks 把磁盘上 status=running 但 worker 进程已不存在的
+// 任务标记为 TaskInterrupted 并写盘。本实例内存中的任务（m.tasks）不受影响；
+// PID 存活检查保证多实例场景下不会误杀其他实例仍在运行的任务。
+// 回收是尽力而为的：任何磁盘/进程检查失败都跳过，不影响 Manager 启动。
+func (m *Manager) reconcileOrphanedTasks(ctx context.Context) {
+	if m == nil || m.registry.root == "" {
+		return
+	}
+	diskTasks, err := m.registry.listTasks(ctx)
+	if err != nil {
+		return
+	}
+	m.mu.RLock()
+	inMemory := make(map[string]bool, len(m.tasks))
+	for id := range m.tasks {
+		inMemory[id] = true
+	}
+	m.mu.RUnlock()
+
+	now := time.Now().UTC()
+	reconciled := false
+	for _, task := range diskTasks {
+		if task.Status != TaskRunning || inMemory[task.ID] {
+			continue
+		}
+		// 有存活 PID（可能是其他 paw 实例正在运行的任务）→ 保持 running。
+		if task.PID > 0 && processAlive(task.PID) {
+			continue
+		}
+		task.Status = TaskInterrupted
+		task.FinishedAt = &now
+		exitCode := -1
+		task.ExitCode = &exitCode
+		task.Error = "interrupted: worker process exited unexpectedly"
+		if err := m.registry.saveTask(ctx, task); err != nil {
+			continue
+		}
+		reconciled = true
+	}
+	if !reconciled {
+		return
+	}
+	m.mu.Lock()
+	m.diskTaskCache = nil
+	m.diskTaskCacheAt = time.Time{}
+	m.mu.Unlock()
 }
 
 func (m *Manager) forwardMCPSnapshots(updates <-chan coremcp.Snapshot, stop func()) {
@@ -583,7 +639,7 @@ func (m *Manager) WaitAny(ctx context.Context, ids []string, timeout time.Durati
 
 func isTerminalStatus(status TaskStatus) bool {
 	switch status {
-	case TaskCompleted, TaskFailed, TaskStopped:
+	case TaskCompleted, TaskFailed, TaskStopped, TaskInterrupted:
 		return true
 	default:
 		return false
@@ -1225,7 +1281,7 @@ func (m *Manager) submitTaskContext(task TaskSnapshot) {
 // 该块注入父会话上下文（模型侧可见原始 XML），同时被 TUI 识别为框线块。
 func renderTaskCompletionBlock(task TaskSnapshot) string {
 	state := string(task.Status)
-	if state != string(TaskCompleted) && state != string(TaskFailed) && state != string(TaskStopped) {
+	if state != string(TaskCompleted) && state != string(TaskFailed) && state != string(TaskStopped) && state != string(TaskInterrupted) {
 		state = string(TaskCompleted)
 	}
 	var attrs strings.Builder

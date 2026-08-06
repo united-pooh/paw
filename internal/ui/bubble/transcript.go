@@ -1573,7 +1573,7 @@ func renderTaskCompletionCard(body string, width int) string {
 		return bodyStyle.Width(width).Render(sanitizeTerminalText(body))
 	}
 	state := info.State
-	if state != "completed" && state != "failed" && state != "stopped" {
+	if state != "completed" && state != "failed" && state != "stopped" && state != "interrupted" {
 		state = "completed"
 	}
 	borderColor := colorManager.LipglossColor(colorWorktreeClean)
@@ -1588,6 +1588,10 @@ func renderTaskCompletionCard(body string, width int) string {
 		borderColor = colorManager.LipglossColor(colorContextCache)
 		marker = "■"
 		stateText = "已停止"
+	case "interrupted":
+		borderColor = colorManager.LipglossColor(colorWorktreeDirty)
+		marker = "!"
+		stateText = "已中断"
 	}
 	name := strings.TrimSpace(info.Name)
 	if name == "" {

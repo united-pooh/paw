@@ -82,6 +82,7 @@ func TestRenderTaskCompletionCardStates(t *testing.T) {
 		{"completed", "✓", "完成"},
 		{"failed", "✗", "失败"},
 		{"stopped", "■", "已停止"},
+		{"interrupted", "!", "已中断"},
 		{"unknown-state", "✓", "完成"},
 	}
 	for _, tc := range cases {

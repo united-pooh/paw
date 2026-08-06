@@ -1408,3 +1408,167 @@ func TestSubagentFramedWorkerHelperProcess(t *testing.T) {
 	}))
 	os.Exit(0)
 }
+
+func newStoreWithManager(t *testing.T, root string) (*Manager, *session.JSONLStore) {
+	t.Helper()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	manager := NewManager(Config{
+		Store:    store,
+		Root:     root,
+		Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+	})
+	return manager, store
+}
+
+func TestReconcileOrphansMarksDeadPIDInterrupted(t *testing.T) {
+	root := t.TempDir()
+	registry := newTaskRegistry(root)
+	now := time.Now().UTC()
+
+	orphan := TaskSnapshot{
+		ID:        "orphan-1",
+		SessionID: "orphan-1",
+		Status:    TaskRunning,
+		PID:       999999, // 几乎不可能存在的 pid
+		StartedAt: now,
+	}
+	if err := registry.saveTask(context.Background(), orphan); err != nil {
+		t.Fatalf("saveTask(orphan) error = %v", err)
+	}
+	finished := TaskSnapshot{
+		ID:         "done-1",
+		SessionID:  "done-1",
+		Status:     TaskCompleted,
+		PID:        999998,
+		StartedAt:  now.Add(-time.Minute),
+		FinishedAt: &now,
+	}
+	if err := registry.saveTask(context.Background(), finished); err != nil {
+		t.Fatalf("saveTask(finished) error = %v", err)
+	}
+
+	manager, _ := newStoreWithManager(t, root)
+
+	task, ok := manager.Status("orphan-1")
+	if !ok {
+		t.Fatalf("Status(orphan-1) = false, want true")
+	}
+	if task.Status != TaskInterrupted {
+		t.Fatalf("orphan status = %s, want interrupted", task.Status)
+	}
+	if task.FinishedAt == nil || task.Error == "" {
+		t.Fatalf("orphan task = %#v, want finished_at and error set", task)
+	}
+	if !isTerminalStatus(task.Status) {
+		t.Fatalf("interrupted must be a terminal status")
+	}
+
+	// 终态任务不受孤儿回收影响。
+	if task, ok := manager.Status("done-1"); !ok || task.Status != TaskCompleted {
+		t.Fatalf("done-1 = %#v / %v, want completed", task, ok)
+	}
+
+	// RunningTasks 不再包含孤儿。
+	for _, task := range manager.RunningTasks() {
+		if task.ID == "orphan-1" {
+			t.Fatalf("RunningTasks() includes orphan %#v", task)
+		}
+	}
+}
+
+func TestReconcileOrphansKeepsLivePIDRunning(t *testing.T) {
+	root := t.TempDir()
+	registry := newTaskRegistry(root)
+	live := TaskSnapshot{
+		ID:        "live-1",
+		SessionID: "live-1",
+		Status:    TaskRunning,
+		PID:       os.Getpid(), // 本进程存活 → 可能是其他实例正在运行的任务
+		StartedAt: time.Now().UTC(),
+	}
+	if err := registry.saveTask(context.Background(), live); err != nil {
+		t.Fatalf("saveTask(live) error = %v", err)
+	}
+
+	manager, _ := newStoreWithManager(t, root)
+
+	task, ok := manager.Status("live-1")
+	if !ok {
+		t.Fatalf("Status(live-1) = false, want true")
+	}
+	if task.Status != TaskRunning {
+		t.Fatalf("live task status = %s, want running (must not be reaped)", task.Status)
+	}
+}
+
+func TestReconcileOrphansSkipsInMemoryTasks(t *testing.T) {
+	root := t.TempDir()
+	registry := newTaskRegistry(root)
+	manager, _ := newStoreWithManager(t, root)
+
+	// 先于内存任务存在的磁盘 running 任务（死 pid）。
+	diskOnly := TaskSnapshot{
+		ID:        "disk-only",
+		SessionID: "disk-only",
+		Status:    TaskRunning,
+		PID:       999997,
+		StartedAt: time.Now().UTC(),
+	}
+	if err := registry.saveTask(context.Background(), diskOnly); err != nil {
+		t.Fatalf("saveTask(diskOnly) error = %v", err)
+	}
+	// 本实例真实运行的任务（死 pid 也无关：内存任务必须被跳过）。
+	inMemory := TaskSnapshot{
+		ID:        "in-memory",
+		SessionID: "in-memory",
+		Status:    TaskRunning,
+		PID:       999996,
+		StartedAt: time.Now().UTC(),
+	}
+	manager.mu.Lock()
+	manager.tasks[inMemory.ID] = inMemory
+	manager.mu.Unlock()
+
+	manager.reconcileOrphanedTasks(context.Background())
+
+	if task, ok := manager.Status("in-memory"); !ok || task.Status != TaskRunning {
+		t.Fatalf("in-memory task = %#v / %v, want running", task, ok)
+	}
+	if task, ok := manager.Status("disk-only"); !ok || task.Status != TaskInterrupted {
+		t.Fatalf("disk-only task = %#v / %v, want interrupted", task, ok)
+	}
+}
+
+func TestWaitAnyInterruptedTaskReturnsImmediately(t *testing.T) {
+	root := t.TempDir()
+	registry := newTaskRegistry(root)
+	interrupted := TaskSnapshot{
+		ID:        "interrupted-1",
+		SessionID: "interrupted-1",
+		Status:    TaskInterrupted,
+		StartedAt: time.Now().UTC().Add(-time.Hour),
+	}
+	if err := registry.saveTask(context.Background(), interrupted); err != nil {
+		t.Fatalf("saveTask(interrupted) error = %v", err)
+	}
+
+	manager, _ := newStoreWithManager(t, root)
+
+	start := time.Now()
+	result, err := manager.WaitAny(context.Background(), []string{"interrupted-1"}, time.Hour)
+	if err != nil {
+		t.Fatalf("WaitAny() error = %v", err)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatalf("WaitAny() took %v, want immediate return for terminal task", time.Since(start))
+	}
+	if result.TimedOut {
+		t.Fatalf("WaitAny() timed out, want immediate terminal result")
+	}
+	if len(result.Tasks) != 1 || result.Tasks[0].Status != TaskInterrupted {
+		t.Fatalf("WaitAny() tasks = %#v, want interrupted", result.Tasks)
+	}
+}
