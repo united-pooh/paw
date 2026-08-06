@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -409,30 +408,18 @@ func (m appModel) inputEmbeddedTitleHeight() int {
 }
 
 func (m appModel) visibleInputCursorRow() int {
-	if len(m.inputTokens) > 0 {
-		projection := m.inputTokenProjection()
-		height := maxInt(1, m.input.Height())
-		start := 0
-		if len(projection.lines) > height && projection.cursorRow >= height {
-			start = projection.cursorRow - height + 1
-		}
-		start = clampInt(start, 0, maxInt(0, len(projection.lines)-height))
-		return clampInt(projection.cursorRow-start, 0, height-1)
+	projection := m.inputTokenProjection()
+	height := maxInt(1, m.input.Height())
+	start := 0
+	if len(projection.lines) > height && projection.cursorRow >= height {
+		start = projection.cursorRow - height + 1
 	}
-	if m.shouldRenderFoldedInput() {
-		return foldedInputCursorRow(m.input)
-	}
-	return visibleTextareaCursorRow(m.input)
+	start = clampInt(start, 0, maxInt(0, len(projection.lines)-height))
+	return clampInt(projection.cursorRow-start, 0, height-1)
 }
 
 func (m appModel) visibleInputCursorColumn() int {
-	if len(m.inputTokens) > 0 {
-		return maxInt(0, m.inputTokenProjection().cursorColumn)
-	}
-	if m.shouldRenderFoldedInput() {
-		return minInt(maxInt(0, m.input.LineInfo().CharOffset), maxInt(0, m.input.Width()-1))
-	}
-	return visibleTextareaCursorColumn(m.input)
+	return maxInt(0, m.inputTokenProjection().cursorColumn)
 }
 
 func visibleTextareaCursorRow(input textarea.Model) int {
@@ -502,19 +489,12 @@ func (m appModel) renderInputContentWithHints(width, height int) string {
 	return fitStyledRect(m.renderInputContent(), width, height)
 }
 
+// renderInputContent 渲染输入框内容。渲染、高度和光标位置统一走字符级投影
+// 管线（renderTokenInputContent），textarea 仅作为文本与光标数据模型；折叠、
+// token 样式、光标字符都由同一套投影处理，chat 与 multiline 不再有两条
+// 渲染路径。
 func (m appModel) renderInputContent() string {
-	if len(m.inputTokens) > 0 {
-		return m.renderTokenInputContent()
-	}
-	input := m.input
-	input.Cursor.SetMode(cursor.CursorHide)
-	if m.isTerminalInputActive() || m.runningTerminal {
-		applyTextareaTerminalStyle(&input)
-	}
-	if m.shouldRenderFoldedInput() {
-		return renderFoldedInputContent(input)
-	}
-	return input.View()
+	return m.renderTokenInputContent()
 }
 
 // applyTextareaTerminalStyle 显式覆盖 textarea 自己的子样式，避免灰色 Placeholder
@@ -534,53 +514,6 @@ func (m appModel) shouldRenderFoldedInput() bool {
 	return m.inputPasteFoldActive &&
 		inputPasteFoldableWithWidth(m.input.Value(), m.input.Width()) &&
 		!inputCursorInPasteFoldHiddenRangeWithWidth(m.input, m.input.Width())
-}
-
-func renderFoldedInputContent(input textarea.Model) string {
-	input.Cursor.SetMode(cursor.CursorHide)
-	width := maxInt(1, input.Width())
-	value := input.Value()
-	projected, _, ok := inputPasteFoldProjectionWithWidth(value, width)
-	if !ok {
-		return input.View()
-	}
-	height := maxInt(1, input.Height())
-	lines := make([]string, 0, height)
-	for _, line := range projected {
-		if len(lines) >= height {
-			break
-		}
-		lines = append(lines, fitStyledCellLine(truncateStyledCellLine(line, width), width))
-	}
-	for len(lines) < height {
-		lines = append(lines, strings.Repeat(" ", width))
-	}
-	return strings.Join(lines, "\n")
-}
-
-func foldedInputCursorRow(input textarea.Model) int {
-	value := input.Value()
-	width := maxInt(1, input.Width())
-	start, end, ok := inputPasteFoldHiddenRangeWithWidth(value, width)
-	if !ok {
-		return visibleTextareaCursorRow(input)
-	}
-	if inputPasteFoldable(value) {
-		line := input.Line()
-		if line < start {
-			return minInt(maxInt(0, line), maxInt(0, input.Height()-1))
-		}
-		row := start + 1 + (line - end)
-		return minInt(maxInt(0, row), maxInt(0, input.Height()-1))
-	}
-	// 单条长行折叠：光标位于可视行 RowOffset，落在隐藏区间之前直接返回；
-	// 之后映射为 marker 行 + 尾部偏移。
-	rowOffset := input.LineInfo().RowOffset
-	if rowOffset < start {
-		return minInt(maxInt(0, rowOffset), maxInt(0, input.Height()-1))
-	}
-	row := start + 1 + (rowOffset - end)
-	return minInt(maxInt(0, row), maxInt(0, input.Height()-1))
 }
 
 // renderTranscriptBox 保留给测试和旧调用点，实际 transcript 不再拥有独立外框。
@@ -632,10 +565,15 @@ func (m *appModel) relayout() {
 }
 
 func (m appModel) tokenAwareInputVisibleLineCount() int {
-	if len(m.inputTokens) == 0 {
-		return inputVisibleLineCount(m.input)
-	}
-	projection := m.inputTokenProjection()
+	// 高度基于未折叠投影行数：折叠只是显示层，行数上限始终受
+	// inputMaxVisibleLines 保护。
+	projection := projectInput(
+		m.input.Value(),
+		m.inputTokens,
+		textareaAbsoluteCursor(m.input),
+		m.input.Width(),
+		false,
+	)
 	return minInt(inputMaxVisibleLines, maxInt(inputMinVisibleLines, len(projection.lines)))
 }
 

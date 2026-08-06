@@ -16,16 +16,6 @@ const (
 	inputPasteFoldMarkerLine = "... %d lines folded ..."
 )
 
-// inputVisibleLineCount 计算 textarea 当前需要展示的可视行数。
-func inputVisibleLineCount(input textarea.Model) int {
-	lineCount := wrappedInputLineCount(input.Value(), input.Width())
-	return minInt(inputMaxVisibleLines, maxInt(inputMinVisibleLines, lineCount))
-}
-
-func wrappedInputLineCount(value string, width int) int {
-	return inputWrappedVisualLineCount(value, width)
-}
-
 func logicalInputLineCount(value string) int {
 	if value == "" {
 		return 1

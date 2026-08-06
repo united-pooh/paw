@@ -192,17 +192,23 @@ func (m *appModel) syncInputMode() {
 	m.terminalPreview = hasBangPrefix(m.input.Value())
 }
 
-// handleInputVerticalNavigation 让上下键先在多行文本内移动，抵达边界后再切换历史输入。
+// handleInputVerticalNavigation 让上下键先在输入文本内移动（按投影 soft-wrap
+// 行网格），抵达边界后再切换历史输入。
 func (m appModel) handleInputVerticalNavigation(direction int) (tea.Model, tea.Cmd) {
 	if m.isTerminalWorkRunning() {
 		return m, nil
 	}
 
 	if direction < 0 {
-		if canMoveTextareaUp(m.input) {
-			return m.updateInputWithKey(tea.KeyMsg{Type: tea.KeyUp})
+		if m.inputCursorCanMove(-1) {
+			m.moveInputCursorBy(-1)
+			m.inputSource = inputSourceFresh
+			m.syncInputMode()
+			m.relayout()
+			m.applyCursorAnimation()
+			return m, nil
 		}
-		if !textareaCursorAtStart(m.input) {
+		if !m.inputCursorAtStart() {
 			m.input.CursorStart()
 			m.syncInputMode()
 			m.applyCursorAnimation()
@@ -211,10 +217,15 @@ func (m appModel) handleInputVerticalNavigation(direction int) (tea.Model, tea.C
 		return m.handleHistoryNavigation(-1)
 	}
 
-	if canMoveTextareaDown(m.input) {
-		return m.updateInputWithKey(tea.KeyMsg{Type: tea.KeyDown})
+	if m.inputCursorCanMove(1) {
+		m.moveInputCursorBy(1)
+		m.inputSource = inputSourceFresh
+		m.syncInputMode()
+		m.relayout()
+		m.applyCursorAnimation()
+		return m, nil
 	}
-	if !textareaCursorAtEnd(m.input) {
+	if !m.inputCursorAtEnd() {
 		m.input.CursorEnd()
 		m.historyDownLock = false
 		m.syncInputMode()
@@ -340,6 +351,56 @@ func (m *appModel) syncInputPasteFoldState(msg tea.Msg, beforeValue string, text
 	if textChanged && inputTextMutationLooksLikeMultilinePaste(msg, beforeValue, value) {
 		m.inputPasteFoldActive = true
 	}
+}
+
+// inputCursorCanMove 判断光标能否在输入投影网格中向 direction 方向移动一行。
+// 折叠显示中退回 textarea 自身网格：折叠行是占位符，光标移动会自然展开。
+func (m appModel) inputCursorCanMove(direction int) bool {
+	if m.shouldRenderFoldedInput() {
+		if direction < 0 {
+			return canMoveTextareaUp(m.input)
+		}
+		return canMoveTextareaDown(m.input)
+	}
+	projection := m.inputTokenProjection()
+	target := projection.cursorRow + direction
+	return target >= 0 && target < len(projection.lines)
+}
+
+// moveInputCursorBy 按输入投影网格把光标垂直移动一行。soft-wrap 行间保持
+// 行内 rune 偏移，跨逻辑行时落在目标行内；折叠显示或投影移动不可用时退回
+// textarea 自身网格。
+func (m *appModel) moveInputCursorBy(direction int) {
+	if direction == 0 {
+		return
+	}
+	if m.shouldRenderFoldedInput() {
+		if direction < 0 {
+			m.input.CursorUp()
+		} else {
+			m.input.CursorDown()
+		}
+		return
+	}
+	projection := m.inputTokenProjection()
+	target, ok := projectedVerticalMoveTarget(projection, textareaAbsoluteCursor(m.input), direction)
+	if ok {
+		setTextareaAbsoluteCursor(&m.input, target)
+		return
+	}
+	if direction < 0 {
+		m.input.CursorUp()
+	} else {
+		m.input.CursorDown()
+	}
+}
+
+// inputCursorAtStart 判断光标是否位于输入开头（投影网格语义）。
+func (m appModel) inputCursorAtStart() bool {
+	if m.shouldRenderFoldedInput() {
+		return textareaCursorAtStart(m.input)
+	}
+	return textareaAbsoluteCursor(m.input) == 0
 }
 
 // canMoveTextareaUp 判断 textarea 光标是否还能向上移动到上一行或上方可视行。

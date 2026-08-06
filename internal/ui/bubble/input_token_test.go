@@ -624,3 +624,118 @@ func TestTokenStylesRemainBoldWithoutBackground(t *testing.T) {
 		t.Fatal("token styles must not use background blocks")
 	}
 }
+
+func TestProjectedVerticalMoveAcrossSoftWrapLines(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.input.SetValue("abcd中文efgh中文ijkl")
+	model.input.SetWidth(10)
+	model.input.CursorEnd()
+
+	// 投影：宽度 10，含宽字符，soft-wrap 为多行。
+	p := model.inputTokenProjection()
+	if len(p.lines) < 3 {
+		t.Fatalf("expected multi-line projection, got %d lines", len(p.lines))
+	}
+	abs := textareaAbsoluteCursor(model.input)
+
+	target, ok := projectedVerticalMoveTarget(p, abs, -1)
+	if !ok {
+		t.Fatalf("up move rejected at cursorRow=%d", p.cursorRow)
+	}
+	if target >= abs {
+		t.Fatalf("up move did not go backwards: abs=%d target=%d", abs, target)
+	}
+	setTextareaAbsoluteCursor(&model.input, target)
+
+	// 再向上移动应继续后退，且不越界。
+	abs = textareaAbsoluteCursor(model.input)
+	p = model.inputTokenProjection()
+	target, ok = projectedVerticalMoveTarget(p, abs, -1)
+	if !ok || target >= abs {
+		t.Fatalf("second up move invalid: abs=%d target=%d ok=%v", abs, target, ok)
+	}
+
+	// 一路向上应能到达输入开头（rune 0）。
+	for i := 0; i < len(p.lines)+2; i++ {
+		abs = textareaAbsoluteCursor(model.input)
+		p = model.inputTokenProjection()
+		if p.cursorRow == 0 {
+			break
+		}
+		target, ok = projectedVerticalMoveTarget(p, abs, -1)
+		if !ok {
+			t.Fatalf("up move rejected before reaching top: cursorRow=%d", p.cursorRow)
+		}
+		setTextareaAbsoluteCursor(&model.input, target)
+	}
+	if got := textareaAbsoluteCursor(model.input); got != 0 {
+		t.Fatalf("cursor did not reach input start after repeated up moves: abs=%d", got)
+	}
+}
+
+func TestProjectedVerticalMoveAcrossLogicalLines(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.input.SetValue("first\nsecond\nthird")
+	model.input.SetWidth(40)
+	model.input.CursorEnd()
+
+	abs := textareaAbsoluteCursor(model.input)
+	if abs != len([]rune("first\nsecond\nthird")) {
+		t.Fatalf("cursor not at end: %d", abs)
+	}
+
+	// 向上两次应到达第一逻辑行（rune 5 之前）。
+	for i := 0; i < 2; i++ {
+		p := model.inputTokenProjection()
+		target, ok := projectedVerticalMoveTarget(p, textareaAbsoluteCursor(model.input), -1)
+		if !ok {
+			t.Fatalf("up move %d rejected", i+1)
+		}
+		setTextareaAbsoluteCursor(&model.input, target)
+	}
+	if got := model.input.Line(); got != 0 {
+		t.Fatalf("expected first logical line after two up moves, got line %d", got)
+	}
+}
+
+func TestProjectedVerticalMoveBoundaries(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.input.SetValue("single")
+	model.input.SetWidth(40)
+	model.input.CursorStart()
+
+	p := model.inputTokenProjection()
+	if _, ok := projectedVerticalMoveTarget(p, 0, -1); ok {
+		t.Fatal("up move at top should be rejected")
+	}
+	if p.cursorRow != 0 {
+		t.Fatalf("cursorRow = %d, want 0", p.cursorRow)
+	}
+
+	model.input.CursorEnd()
+	p = model.inputTokenProjection()
+	if _, ok := projectedVerticalMoveTarget(p, textareaAbsoluteCursor(model.input), 1); ok {
+		t.Fatal("down move at bottom should be rejected")
+	}
+}
+
+func TestProjectedVerticalMoveEmptyLine(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.input.SetValue("top\n\nbottom")
+	model.input.SetWidth(40)
+	model.input.CursorEnd()
+
+	// 从末行向上移动一次应进入空行（rune 4 处）。
+	p := model.inputTokenProjection()
+	target, ok := projectedVerticalMoveTarget(p, textareaAbsoluteCursor(model.input), -1)
+	if !ok {
+		t.Fatalf("up move rejected: cursorRow=%d lines=%d", p.cursorRow, len(p.lines))
+	}
+	if target != 4 {
+		t.Fatalf("target = %d, want 4 (empty line start)", target)
+	}
+	setTextareaAbsoluteCursor(&model.input, target)
+	if got := model.input.Line(); got != 1 {
+		t.Fatalf("expected empty logical line, got line %d", got)
+	}
+}

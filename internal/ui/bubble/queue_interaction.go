@@ -71,7 +71,10 @@ func (m *appModel) normalizeQueueSelection() {
 }
 
 func (m appModel) inputCursorAtEnd() bool {
-	return textareaCursorAtEnd(m.input)
+	if m.shouldRenderFoldedInput() {
+		return textareaCursorAtEnd(m.input)
+	}
+	return textareaAbsoluteCursor(m.input) == len([]rune(m.input.Value()))
 }
 
 func (m appModel) canEnterQueueSelection() bool {

@@ -42,24 +42,32 @@ type inputDraft struct {
 	Tokens []inputToken
 }
 
+// inputProjectionAtom 是投影行中的一个原子。start 记录该原子在输入文本
+// rune 序列中的起始偏移（cursor 原子即光标偏移），供投影网格垂直移动把
+// 光标映射回 textarea 的 rune 坐标。
 type inputProjectionAtom struct {
 	text   string
 	kind   inputTokenKind
 	token  bool
 	cursor bool
 	width  int
+	start  int
 }
 
+// inputProjectionLine 是投影的一行。start 记录该行首个原子在输入文本 rune
+// 序列中的起始偏移（空行取逻辑行首），是 soft-wrap 行间移动的映射锚点。
 type inputProjectionLine struct {
 	atoms       []inputProjectionAtom
 	width       int
 	logicalLine int
+	start       int
 }
 
 type inputProjection struct {
-	lines        []inputProjectionLine
-	cursorRow    int
-	cursorColumn int
+	lines         []inputProjectionLine
+	cursorRow     int
+	cursorColumn  int
+	cursorAbsolute int
 }
 
 func cloneInputTokens(tokens []inputToken) []inputToken {
@@ -494,7 +502,7 @@ func projectInput(raw string, tokens []inputToken, cursor, width int, folded boo
 	if hasCursor {
 		cursor = clampInt(cursor, 0, len(rawRunes))
 	}
-	lines := []inputProjectionLine{{logicalLine: 0}}
+	lines := []inputProjectionLine{{logicalLine: 0, start: 0}}
 	row := 0
 	column := 0
 	logicalLine := 0
@@ -504,36 +512,38 @@ func projectInput(raw string, tokens []inputToken, cursor, width int, folded boo
 		if cursorSet {
 			return
 		}
-		lines[row].atoms = append(lines[row].atoms, inputProjectionAtom{cursor: true})
+		lines[row].atoms = append(lines[row].atoms, inputProjectionAtom{cursor: true, start: cursor})
 		cursorSet = true
 	}
-	newVisualLine := func(nextLogical int) {
-		lines = append(lines, inputProjectionLine{logicalLine: nextLogical})
+	newVisualLine := func(nextLogical, start int) {
+		lines = append(lines, inputProjectionLine{logicalLine: nextLogical, start: start})
 		row++
 		column = 0
 	}
-	appendCluster := func(cluster string, kind inputTokenKind, token bool) {
+	appendCluster := func(cluster string, kind inputTokenKind, token bool, start int) {
 		clusterWidth := terminalCellWidth(cluster)
 		if clusterWidth < 1 {
 			clusterWidth = 1
 		}
 		if column > 0 && column+clusterWidth > width {
-			newVisualLine(logicalLine)
+			newVisualLine(logicalLine, start)
 		}
 		lines[row].atoms = append(lines[row].atoms, inputProjectionAtom{
 			text:  cluster,
 			kind:  kind,
 			token: token,
 			width: clusterWidth,
+			start: start,
 		})
 		column += clusterWidth
 		lines[row].width = column
 	}
-	appendText := func(text string, kind inputTokenKind, token bool) {
+	appendText := func(text string, kind inputTokenKind, token bool, start int) {
 		for remaining := text; remaining != ""; {
 			cluster, _ := terminalFirstGraphemeCluster(remaining)
 			remaining = remaining[len(cluster):]
-			appendCluster(cluster, kind, token)
+			appendCluster(cluster, kind, token, start)
+			start += len([]rune(cluster))
 		}
 	}
 
@@ -544,7 +554,7 @@ func projectInput(raw string, tokens []inputToken, cursor, width int, folded boo
 		}
 		if tokenIndex < len(tokens) && tokens[tokenIndex].Start == i {
 			token := tokens[tokenIndex]
-			appendText(token.Label, token.Kind, true)
+			appendText(token.Label, token.Kind, true, i)
 			i = token.End
 			tokenIndex++
 			if hasCursor && cursor > token.Start && cursor < token.End {
@@ -555,7 +565,7 @@ func projectInput(raw string, tokens []inputToken, cursor, width int, folded boo
 		if rawRunes[i] == '\n' {
 			i++
 			logicalLine++
-			newVisualLine(logicalLine)
+			newVisualLine(logicalLine, i)
 			continue
 		}
 		cluster, _ := terminalFirstGraphemeCluster(string(rawRunes[i:]))
@@ -571,7 +581,7 @@ func projectInput(raw string, tokens []inputToken, cursor, width int, folded boo
 				markCursor()
 			}
 		}
-		appendCluster(cluster, inputTokenCommand, false)
+		appendCluster(cluster, inputTokenCommand, false, i)
 		i += clusterRunes
 	}
 	if hasCursor && cursor == len(rawRunes) {
@@ -600,13 +610,13 @@ func projectInput(raw string, tokens []inputToken, cursor, width int, folded boo
 				}
 				if inRange {
 					if !markerAdded {
-						marker := inputProjectionLine{logicalLine: start}
+						marker := inputProjectionLine{logicalLine: start, start: line.start}
 						text := truncateStyledCellLine(
 							formatInputFoldMarker(hidden),
 							width,
 						)
 						markerWidth := terminalCellWidth(text)
-						marker.atoms = []inputProjectionAtom{{text: text, width: markerWidth}}
+						marker.atoms = []inputProjectionAtom{{text: text, width: markerWidth, start: line.start}}
 						marker.width = markerWidth
 						filtered = append(filtered, marker)
 						markerAdded = true
@@ -619,7 +629,10 @@ func projectInput(raw string, tokens []inputToken, cursor, width int, folded boo
 		}
 	}
 
-	projection := inputProjection{lines: lines}
+	projection := inputProjection{lines: lines, cursorAbsolute: -1}
+	if hasCursor {
+		projection.cursorAbsolute = cursor
+	}
 	for lineIndex := range projection.lines {
 		cell := 0
 		for atomIndex := range projection.lines[lineIndex].atoms {
@@ -651,6 +664,7 @@ func normalizeProjectedCursorWrap(lines []inputProjectionLine, width int) []inpu
 			if !moveToNext {
 				return lines
 			}
+			cursorStart := atom.start
 			lines[lineIndex].atoms = append(
 				lines[lineIndex].atoms[:atomIndex],
 				lines[lineIndex].atoms[atomIndex+1:]...,
@@ -658,10 +672,10 @@ func normalizeProjectedCursorWrap(lines []inputProjectionLine, width int) []inpu
 			if lineIndex+1 >= len(lines) || lines[lineIndex+1].logicalLine != lines[lineIndex].logicalLine {
 				lines = append(lines, inputProjectionLine{})
 				copy(lines[lineIndex+2:], lines[lineIndex+1:])
-				lines[lineIndex+1] = inputProjectionLine{logicalLine: lines[lineIndex].logicalLine}
+				lines[lineIndex+1] = inputProjectionLine{logicalLine: lines[lineIndex].logicalLine, start: cursorStart}
 			}
 			lines[lineIndex+1].atoms = append(
-				[]inputProjectionAtom{{cursor: true}},
+				[]inputProjectionAtom{{cursor: true, start: cursorStart}},
 				lines[lineIndex+1].atoms...,
 			)
 			return lines
@@ -672,6 +686,46 @@ func normalizeProjectedCursorWrap(lines []inputProjectionLine, width int) []inpu
 
 func formatInputFoldMarker(hidden int) string {
 	return fmt.Sprintf(inputPasteFoldMarkerLine, hidden)
+}
+
+// projectedLineRuneEnd 返回投影行内文本的 rune 末端（不含 cursor/折叠 marker）。
+// 空行的 end 与 start 相同。
+func projectedLineRuneEnd(line inputProjectionLine) int {
+	end := line.start
+	for _, atom := range line.atoms {
+		if atom.text == "" || atom.cursor {
+			continue
+		}
+		end = maxInt(end, atom.start+len([]rune(atom.text)))
+	}
+	return end
+}
+
+// projectedVerticalMoveTarget 把光标在投影网格中向 direction（±1）移动一行，
+// 返回目标绝对 rune 偏移。soft-wrap 行之间保持行内 rune 偏移；跨逻辑行时
+// 落在目标行内（可能为行首）。光标已在投影边缘或目标行是折叠占位行时
+// 返回 moved=false。
+func projectedVerticalMoveTarget(projection inputProjection, absoluteCursor, direction int) (int, bool) {
+	if direction == 0 || len(projection.lines) == 0 {
+		return absoluteCursor, false
+	}
+	targetRow := projection.cursorRow + direction
+	if targetRow < 0 || targetRow >= len(projection.lines) {
+		return absoluteCursor, false
+	}
+	current := projection.lines[projection.cursorRow]
+	target := projection.lines[targetRow]
+	relative := absoluteCursor - current.start
+	if relative < 0 {
+		relative = 0
+	}
+	targetEnd := projectedLineRuneEnd(target)
+	if targetEnd <= target.start && len(target.atoms) == 0 {
+		// 空目标行：光标落在该逻辑行首（空行没有可停留的文本）。
+		return target.start, true
+	}
+	targetOffset := target.start + minInt(relative, targetEnd-target.start)
+	return targetOffset, true
 }
 
 func (m appModel) inputTokenProjection() inputProjection {
@@ -725,6 +779,26 @@ func renderTokenizedTranscriptBody(raw string, tokens []inputToken, width int) s
 func (m appModel) renderTokenInputContent() string {
 	projection := m.inputTokenProjection()
 	height := maxInt(1, m.input.Height())
+	rowWidth := maxInt(1, m.input.Width())
+
+	if m.input.Value() == "" {
+		placeholderText := m.input.Placeholder
+		placeholderStyle := m.input.FocusedStyle.Placeholder
+		if m.isTerminalInputActive() || m.runningTerminal {
+			placeholderText = "$"
+			placeholderStyle = terminalInputLabelStyle
+		}
+		if placeholderText != "" {
+			line := fitStyledCellLine(placeholderStyle.Render(placeholderText), rowWidth)
+			rendered := make([]string, 0, height)
+			rendered = append(rendered, m.input.FocusedStyle.CursorLine.Render(line))
+			for len(rendered) < height {
+				rendered = append(rendered, "")
+			}
+			return strings.Join(rendered, "\n")
+		}
+	}
+
 	start := 0
 	if len(projection.lines) > height && projection.cursorRow >= height {
 		start = projection.cursorRow - height + 1
@@ -733,51 +807,98 @@ func (m appModel) renderTokenInputContent() string {
 	end := minInt(len(projection.lines), start+height)
 	rendered := make([]string, 0, height)
 	for row, line := range projection.lines[start:end] {
+		if row == projection.cursorRow-start {
+			rendered = append(rendered, m.renderProjectedCursorLine(line, rowWidth))
+			continue
+		}
+		style := bodyStyle
+		if m.isTerminalInputActive() || m.runningTerminal {
+			style = terminalInputTextStyle
+		}
 		var out strings.Builder
-		cursorLine := row == projection.cursorRow-start
-		for atomIndex := 0; atomIndex < len(line.atoms); atomIndex++ {
-			atom := line.atoms[atomIndex]
-			style := bodyStyle
-			if m.isTerminalInputActive() || m.runningTerminal {
-				style = terminalInputTextStyle
+		for _, atom := range line.atoms {
+			if atom.text == "" {
+				continue
 			}
+			atomStyle := style
 			if atom.token {
-				style = inputTokenStyleFor(atom.kind)
+				atomStyle = inputTokenStyleFor(atom.kind)
 			}
-			if atom.cursor && m.input.Focused() {
+			out.WriteString(atomStyle.Render(atom.text))
+		}
+		rendered = append(rendered, padProjectedCellLine(out.String(), rowWidth, style))
+	}
+	for len(rendered) < height {
+		rendered = append(rendered, "")
+	}
+	return strings.Join(rendered, "\n")
+}
+
+// renderProjectedCursorLine 渲染光标所在投影行。与 textarea 行为一致：文本
+// 段与光标块各自成段（文本段背景由 CursorLine 提供，光标块按覆盖内容着色，
+// 真实光标可见性由终端光标锚定负责）。
+func (m appModel) renderProjectedCursorLine(line inputProjectionLine, rowWidth int) string {
+	var out strings.Builder
+	var text strings.Builder
+	flushText := func() {
+		if text.Len() == 0 {
+			return
+		}
+		out.WriteString(m.input.FocusedStyle.CursorLine.Render(text.String()))
+		text.Reset()
+	}
+	for atomIndex := 0; atomIndex < len(line.atoms); atomIndex++ {
+		atom := line.atoms[atomIndex]
+		if atom.cursor {
+			flushText()
+			if m.input.Focused() {
 				char := " "
+				charStyle := m.input.FocusedStyle.CursorLine
 				if atomIndex+1 < len(line.atoms) {
 					next := line.atoms[atomIndex+1]
 					char = next.text
 					if next.token {
-						style = inputTokenStyleFor(next.kind)
+						charStyle = inputTokenStyleFor(next.kind)
 					}
 					atomIndex++
 				}
 				cursorModel := m.input.Cursor
 				cursorModel.SetMode(cursor.CursorHide)
 				cursorModel.SetChar(char)
-				cursorModel.TextStyle = style
-				cursorModel.Style = style
+				cursorModel.TextStyle = charStyle
+				cursorModel.Style = charStyle
 				out.WriteString(cursorModel.View())
-				continue
 			}
-			if atom.text != "" {
-				out.WriteString(style.Render(atom.text))
-			}
+			continue
 		}
-		lineWidth := maxInt(1, line.width)
-		rendered = append(rendered, fitStyledCellLine(out.String(), lineWidth))
-		if cursorLine {
-			// 恢复 textarea 自带的当前行高亮（CursorLine 背景），使多行/token
-			// 渲染与单行 chat 渲染保持一致的当前行视觉。
-			rendered[len(rendered)-1] = m.input.FocusedStyle.CursorLine.Render(fitStyledCellLine(rendered[len(rendered)-1], lineWidth))
+		if atom.text == "" {
+			continue
 		}
+		if atom.token {
+			flushText()
+			out.WriteString(inputTokenStyleFor(atom.kind).Render(atom.text))
+			continue
+		}
+		text.WriteString(atom.text)
 	}
-	for len(rendered) < height {
-		rendered = append(rendered, "")
+	flushText()
+	if width := terminalCellWidth(out.String()); width < rowWidth {
+		out.WriteString(m.input.FocusedStyle.CursorLine.Render(strings.Repeat(" ", rowWidth-width)))
+	} else if width > rowWidth {
+		return cutStyledCellsExact(out.String(), 0, rowWidth)
 	}
-	return strings.Join(rendered, "\n")
+	return out.String()
+}
+
+// padProjectedCellLine 截断或补齐投影行到 rowWidth，padding 使用给定样式以
+// 保持行尾背景与 textarea 一致。
+func padProjectedCellLine(line string, rowWidth int, style lipgloss.Style) string {
+	if width := terminalCellWidth(line); width < rowWidth {
+		return line + style.Render(strings.Repeat(" ", rowWidth-width))
+	} else if width > rowWidth {
+		return cutStyledCellsExact(line, 0, rowWidth)
+	}
+	return line
 }
 
 func inputDraftEqual(a, b inputDraft) bool {
