@@ -624,41 +624,64 @@ func markdownTaskMarker(text string) (string, string, bool) {
 	return "•", text, true
 }
 
-// renderInlineMarkdown 渲染行内 Markdown，反引号代码片段优先于粗体解析。
+// renderInlineMarkdown 渲染行内 Markdown。代码、粗体、斜体和高亮标记
+// 在本地被消费后再输出 ANSI 样式，未闭合标记则原样保留，避免模型输出
+// 不完整时吞掉后续文本。
 func renderInlineMarkdown(line string) string {
 	var rendered strings.Builder
 	for line != "" {
-		codeStart := strings.Index(line, "`")
-		boldStart := strings.Index(line, "**")
-		switch {
-		case codeStart == -1 && boldStart == -1:
+		start, marker, _, ok := nextInlineMarkdownSpan(line)
+		if !ok {
 			rendered.WriteString(renderTerminalLinks(line))
-			return rendered.String()
-		case codeStart != -1 && (boldStart == -1 || codeStart < boldStart):
-			rendered.WriteString(renderTerminalLinks(line[:codeStart]))
-			line = line[codeStart+1:]
-			end := strings.Index(line, "`")
-			if end == -1 {
-				rendered.WriteString("`")
-				rendered.WriteString(renderTerminalLinks(line))
-				return rendered.String()
-			}
-			rendered.WriteString(markdownCodeStyle.Render(line[:end]))
-			line = line[end+1:]
-		default:
-			rendered.WriteString(renderTerminalLinks(line[:boldStart]))
-			line = line[boldStart+2:]
-			end := strings.Index(line, "**")
-			if end <= 0 {
-				rendered.WriteString("**")
-				rendered.WriteString(renderTerminalLinks(line))
-				return rendered.String()
-			}
-			rendered.WriteString(renderTerminalLinksWithStyle(line[:end], markdownBoldStyle))
-			line = line[end+2:]
+			break
 		}
+		rest := line[start+len(marker):]
+		end := strings.Index(rest, marker)
+		if end < 0 || end == 0 {
+			// 未闭合或空标记不能消费后续内容：整段交回链接渲染器。
+			// 这也避免 URL 中的下划线（如 Function_(mathematics)）被
+			// 误判为 Markdown 斜体起始标记。
+			rendered.WriteString(renderTerminalLinks(line))
+			break
+		}
+		rendered.WriteString(renderTerminalLinks(line[:start]))
+		content := rest[:end]
+		switch marker {
+		case "`":
+			rendered.WriteString(markdownCodeStyle.Render(content))
+		case "**", "__":
+			rendered.WriteString(renderTerminalLinksWithStyle(content, markdownBoldStyle))
+		case "==":
+			rendered.WriteString(renderTerminalLinksWithStyle(content, markdownHighlightStyle))
+		case "*", "_":
+			rendered.WriteString(renderTerminalLinksWithStyle(content, markdownItalicStyle))
+		}
+		line = rest[end+len(marker):]
 	}
 	return rendered.String()
+}
+
+// nextInlineMarkdownSpan 返回最靠前且可识别的行内标记。双字符标记优先，
+// 避免 ** 被误识别为两个斜体标记；代码优先于其它格式。
+func nextInlineMarkdownSpan(line string) (int, string, lipgloss.Style, bool) {
+	markers := []string{"`", "**", "__", "==", "*", "_"}
+	best := -1
+	bestMarker := ""
+	for _, marker := range markers {
+		index := strings.Index(line, marker)
+		if index < 0 || (marker == "*" && index+1 < len(line) && line[index+1] == '*') ||
+			(marker == "_" && index+1 < len(line) && line[index+1] == '_') {
+			continue
+		}
+		if best < 0 || index < best || (index == best && len(marker) > len(bestMarker)) {
+			best = index
+			bestMarker = marker
+		}
+	}
+	if best < 0 {
+		return 0, "", lipgloss.Style{}, false
+	}
+	return best, bestMarker, lipgloss.Style{}, true
 }
 
 // renderTerminalLinks 将裸 http(s) URL 和 Markdown 链接转换为 OSC 8 终端超链接。

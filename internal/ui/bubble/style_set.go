@@ -7,18 +7,18 @@ import (
 
 // StyleSet contains the theme-derived styles owned by one appModel.
 type StyleSet struct {
-	Colors                                                                            ColorManager
-	Frame, Header, Body, ToolDetail                                                   lipgloss.Style
-	LabelUser, LabelAssistant, LabelThinking, LabelTool, LabelSystem, LabelError      lipgloss.Style
-	MarkdownHeading, MarkdownRule, MarkdownBullet, MarkdownCode, MarkdownLink         lipgloss.Style
-	MarkdownCodeBlock, MarkdownCodeBlockBorder, MarkdownCodeBlockLabel, MarkdownQuote lipgloss.Style
-	TranscriptContent, InputDock, InputDockMultiline, InputDockTerminal               lipgloss.Style
-	InputHint, InputPrompt, InputTokenCommand, InputTokenFile, InputTokenImage        lipgloss.Style
-	ContextCache, ContextUsed, ContextFree, ContextThinking                           lipgloss.Style
-	TerminalInputLabel, TerminalInputText                                             lipgloss.Style
-	Modal, ModalTitle, Selected, SelectionFocused, Unselected                         lipgloss.Style
-	StatusRunning, StatusSuccess, StatusWarning, StatusError, StatusMuted             lipgloss.Style
-	Notice, NoticeHover                                                               lipgloss.Style
+	Colors                                                                                                                     ColorManager
+	Frame, Header, Body, ToolDetail                                                                                            lipgloss.Style
+	LabelUser, LabelAssistant, LabelThinking, LabelTool, LabelSystem, LabelError                                               lipgloss.Style
+	MarkdownHeading, MarkdownRule, MarkdownBullet, MarkdownBold, MarkdownItalic, MarkdownHighlight, MarkdownCode, MarkdownLink lipgloss.Style
+	MarkdownCodeBlock, MarkdownCodeBlockBorder, MarkdownCodeBlockLabel, MarkdownQuote                                          lipgloss.Style
+	TranscriptContent, InputDock, InputDockMultiline, InputDockTerminal                                                        lipgloss.Style
+	InputHint, InputPrompt, InputTokenCommand, InputTokenFile, InputTokenImage                                                 lipgloss.Style
+	ContextCache, ContextUsed, ContextFree, ContextThinking                                                                    lipgloss.Style
+	TerminalInputLabel, TerminalInputText                                                                                      lipgloss.Style
+	Modal, ModalTitle, Selected, SelectionFocused, Unselected                                                                  lipgloss.Style
+	StatusRunning, StatusSuccess, StatusWarning, StatusError, StatusMuted                                                      lipgloss.Style
+	Notice, NoticeHover                                                                                                        lipgloss.Style
 }
 
 func NewStyleSet(p theme.Palette) StyleSet {
@@ -38,6 +38,9 @@ func NewStyleSet(p theme.Palette) StyleSet {
 		LabelSystem:             lipgloss.NewStyle().Foreground(c.LipglossColor(colorLabelSystem)).Bold(true),
 		LabelError:              lipgloss.NewStyle().Foreground(c.LipglossColor(colorLabelError)).Bold(true),
 		MarkdownHeading:         lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownHeading)).Bold(true),
+		MarkdownBold:            lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownBold)).Bold(true),
+		MarkdownItalic:          lipgloss.NewStyle().Foreground(c.LipglossColor(colorBody)).Italic(true),
+		MarkdownHighlight:       lipgloss.NewStyle().Foreground(c.LipglossColor(colorBody)).Background(c.LipglossColor(colorMarkdownHighlight)),
 		MarkdownRule:            lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownRule)),
 		MarkdownBullet:          lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownBullet)).Bold(true),
 		MarkdownCode:            lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownCodeForeground)).Background(c.LipglossColor(colorMarkdownCodeBackground)).Padding(0, 1),

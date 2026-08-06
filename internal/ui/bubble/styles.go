@@ -32,6 +32,8 @@ var (
 	userTranscriptRowStyle       lipgloss.Style
 	thinkingBodyStyle            lipgloss.Style
 	markdownBoldStyle            lipgloss.Style
+	markdownItalicStyle          lipgloss.Style
+	markdownHighlightStyle       lipgloss.Style
 	markdownHeadingStyle         lipgloss.Style
 	markdownRuleStyle            lipgloss.Style
 	markdownBulletStyle          lipgloss.Style
@@ -177,8 +179,14 @@ func rebuildLegacyStyles() {
 		Foreground(colorManager.LipglossColor(colorMarkdownQuote)).
 		Italic(true)
 	markdownBoldStyle = lipgloss.NewStyle().
-		Foreground(colorManager.LipglossColor(colorBody)).
+		Foreground(colorManager.LipglossColor(colorMarkdownBold)).
 		Bold(true)
+	markdownItalicStyle = lipgloss.NewStyle().
+		Foreground(colorManager.LipglossColor(colorBody)).
+		Italic(true)
+	markdownHighlightStyle = lipgloss.NewStyle().
+		Foreground(colorManager.LipglossColor(colorBody)).
+		Background(colorManager.LipglossColor(colorMarkdownHighlight))
 	markdownHeadingStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorMarkdownHeading)).
 		Bold(true)

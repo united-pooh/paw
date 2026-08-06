@@ -6,6 +6,7 @@ func palette(bg, surface, fg, muted, primary, secondary, cyan, green, yellow, re
 		LabelUser: "#ffaf00", LabelAssistant: fg, LabelTool: green, LabelResult: green, LabelSystem: muted, LabelError: red,
 		Body: fg, ToolDetailBackground: surface,
 		MarkdownHeading: primary, MarkdownRule: muted, MarkdownBullet: cyan,
+		MarkdownBold: primary, MarkdownHighlight: yellow,
 		MarkdownCodeForeground: fg, MarkdownCodeBackground: surface, MarkdownCodeBorder: primary,
 		MarkdownLink: cyan, MarkdownQuote: muted, MarkdownQuoteBorder: muted,
 		PanelBorder: muted, InputFocusedBorder: cyan, InputWaitingBorder: muted, InputMultilineBorder: yellow,
@@ -38,6 +39,8 @@ func init() {
 	p.MarkdownHeading = "#ffffaf"
 	p.MarkdownRule = "#808080"
 	p.MarkdownBullet = "#5fd7d7"
+	p.MarkdownBold = "#ffffaf"
+	p.MarkdownHighlight = "#5f5fd7"
 	p.MarkdownCodeForeground = "#ffffd7"
 	p.MarkdownCodeBackground = "#303030"
 	p.MarkdownCodeBorder = "#5f5fd7"
