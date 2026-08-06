@@ -810,6 +810,16 @@ func (m *appModel) refreshRunningToolProgress(now time.Time) {
 		return
 	}
 	m.lastToolProgressSecond = maxElapsed
+	// running tool 的 elapsed 是时间相关渲染输入，而严格 revision cache 的
+	// 签名只折叠 entry 版本与 body 长度，不含时间；不 touch 的话每秒的
+	// refreshViewport 都会命中缓存，计时永远冻结。这里让所有仍在运行的
+	// 工具条目版本递增，使缓存失效后重渲染刷新计时。
+	for index := range m.transcript {
+		entry := &m.transcript[index]
+		if entry.subagentWaitRunning || (isToolTransaction(*entry) && toolEntryStatus(*entry) == "running") {
+			touchTranscriptEntry(entry)
+		}
+	}
 	if m.viewport.AtBottom() {
 		m.refreshViewport()
 	} else {
