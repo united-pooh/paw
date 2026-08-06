@@ -49,3 +49,25 @@ func TestRenderInlineMarkdownKeepsUnclosedEmphasisLiteral(t *testing.T) {
 		}
 	}
 }
+
+func TestTranscriptAssistantBodyRendersInlineMarkdown(t *testing.T) {
+	input := "**bold** ==highlight== `inline code`"
+	output := renderAssistantBodyWithCitations(input, 80, nil)
+	visible := strings.TrimSpace(ansi.Strip(output))
+	wantVisible := "bold highlight  inline code"
+	if visible != wantVisible {
+		t.Fatalf("transcript visible text = %q, want %q", visible, wantVisible)
+	}
+	if strings.Contains(visible, "**") || strings.Contains(visible, "==") {
+		t.Fatalf("transcript retained Markdown markers: %q", visible)
+	}
+	if !strings.Contains(output, markdownBoldStyle.Render("bold")) {
+		t.Fatalf("transcript did not use the bold style: %q", output)
+	}
+	if !strings.Contains(output, markdownHighlightStyle.Render("highlight")) {
+		t.Fatalf("transcript did not use the highlight style: %q", output)
+	}
+	if !strings.Contains(output, markdownCodeStyle.Render("inline code")) {
+		t.Fatalf("transcript did not use the inline code style: %q", output)
+	}
+}
