@@ -1,6 +1,35 @@
 package theme
 
-import "strings"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+// blendHex 在 from 与 to 两个 sRGB hex 颜色之间按 amount（0..1）线性插值。
+// 用于从主题的正文背景/前景自动推导选区背景：模拟“半透明覆盖层”的浮起效果，
+// 保证任何新增主题的选区色都自动满足与正文的区分度，无需人工选色。
+func blendHex(from, to string, amount float64) string {
+	fr, fg, fb := parseHexColor(from)
+	tr, tg, tb := parseHexColor(to)
+	return fmt.Sprintf("#%02x%02x%02x", lerpInt(fr, tr, amount), lerpInt(fg, tg, amount), lerpInt(fb, tb, amount))
+}
+
+func parseHexColor(color string) (int, int, int) {
+	color = strings.TrimPrefix(color, "#")
+	if len(color) != 6 {
+		return 0, 0, 0
+	}
+	r, e1 := strconv.ParseInt(color[0:2], 16, 0)
+	g, e2 := strconv.ParseInt(color[2:4], 16, 0)
+	b, e3 := strconv.ParseInt(color[4:6], 16, 0)
+	if e1 != nil || e2 != nil || e3 != nil {
+		return 0, 0, 0
+	}
+	return int(r), int(g), int(b)
+}
+
+func lerpInt(from, to int, amount float64) int { return from + int(float64(to-from)*amount+0.5) }
 
 type ThemeID string
 type ThemeMode string

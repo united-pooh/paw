@@ -97,6 +97,26 @@ type selectionPoint struct {
 	col int
 }
 
+// selectionMode 表示鼠标拖拽选区时使用的吸附模式。
+type selectionMode int
+
+const (
+	// selectionModeChar 按单个字符扩展选区（默认拖拽）。
+	selectionModeChar selectionMode = iota
+	// selectionModeWord 按词边界扩展选区（双击起点）。
+	selectionModeWord
+	// selectionModeLine 按整行扩展选区（三击起点）。
+	selectionModeLine
+)
+
+// transcriptClickActionMsg 在双击判定窗口结束后派发延迟的单击动作
+// （链接 / todo / 工具行展开）。双击窗口内到达第二次按下时，seq 失配使
+// 消息被丢弃，避免「单击已生效、双击又选中」互相冲突。
+type transcriptClickActionMsg struct {
+	seq   uint64
+	point selectionPoint
+}
+
 // assistantDeltaMsg 表示模型流式输出的一段文本增量。
 type assistantDeltaMsg string
 
@@ -382,6 +402,14 @@ type appModel struct {
 	selectionActive            bool
 	selectionStart             selectionPoint
 	selectionEnd               selectionPoint
+	selectionMode              selectionMode
+	selectionAnchor            selectionPoint
+	selectionMoved             bool
+	clickCount                 int
+	lastClickAt                time.Time
+	lastClickPoint             selectionPoint
+	clickActionSeq             uint64
+	clickActionPending         bool
 	cursorFrameAt              time.Time
 	uiAnimationFrameScheduled  bool
 	turnStartedAt              time.Time

@@ -2,7 +2,11 @@
 package bubble
 
 import (
+	"os"
 	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
@@ -11,6 +15,28 @@ import (
 
 // writeClipboard 写入系统剪贴板；测试中可以替换。
 var writeClipboard = clipboard.WriteAll
+
+// writeClipboardOSC52 通过 OSC 52 序列把文本写入终端剪贴板（覆盖 SSH/远程
+// 以及不依赖 OS 剪贴板权限的场景），以 tea.Cmd 形式在渲染帧外输出；测试中可以替换。
+var writeClipboardOSC52 = func(text string) tea.Cmd {
+	return func() tea.Msg {
+		_, _ = os.Stdout.WriteString(ansi.SetSystemClipboard(text))
+		return nil
+	}
+}
+
+// doubleClickInterval 是双击/三击判定窗口：两次左键按下间隔不超过该值且
+// 位置基本重合时，依次进入选词 / 选行模式。单击动作（链接、todo、工具行）
+// 也会延迟到该窗口结束后再执行，避免与双击冲突。
+var doubleClickInterval = 250 * time.Millisecond
+
+// scheduleClickAction 在双击窗口结束后派发一次延迟的单击动作；测试中可
+// 替换为立即派发，避免 tea.Tick 的真实计时拖慢测试。
+var scheduleClickAction = func(seq uint64, point selectionPoint) tea.Cmd {
+	return tea.Tick(doubleClickInterval, func(time.Time) tea.Msg {
+		return transcriptClickActionMsg{seq: seq, point: point}
+	})
+}
 
 // transcriptLineSnapshot 保存一行 transcript 的样式文本、纯文本和显示宽度。
 type transcriptLineSnapshot struct {
@@ -21,6 +47,13 @@ type transcriptLineSnapshot struct {
 }
 
 // handleTranscriptMouse 处理 transcript 面板中的鼠标拖拽选择事件。
+// 交互模型：
+//   - 单击：按下即开始选区跟踪；释放时若无位移，动作（链接 / todo / 工具行）
+//     延迟到双击窗口结束后执行，保证双击/三击优先判定。
+//   - 双击：按下瞬间建立「词」选区（wordBoundsAt 吸附），释放不复制。
+//   - 三击：按下瞬间建立「行」选区，释放不复制。
+//   - 拖拽（含从双击/三击继续拖动）：按当前模式（字符/词/行）扩展选区，
+//     释放时写入本地剪贴板并追加 OSC 52 双写。
 func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.Cmd) {
 	if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown ||
 		msg.Button == tea.MouseButtonWheelLeft || msg.Button == tea.MouseButtonWheelRight {
@@ -36,11 +69,29 @@ func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.C
 		if !ok {
 			return m, false, nil
 		}
+		now := time.Now()
 		hadSelection := m.selectionActive
 		m.selecting = true
-		m.selectionActive = false
-		m.selectionStart = point
-		m.selectionEnd = point
+		m.selectionMoved = false
+		m.selectionAnchor = point
+		if now.Sub(m.lastClickAt) <= doubleClickInterval && sameClickPoint(m.lastClickPoint, point) {
+			m.clickCount++
+		} else {
+			m.clickCount = 1
+		}
+		m.lastClickAt = now
+		m.lastClickPoint = point
+		switch m.clickCount {
+		case 2:
+			m.startWordSelection(point)
+		case 3:
+			m.startLineSelection(point)
+		default:
+			m.selectionMode = selectionModeChar
+			m.selectionActive = false
+			m.selectionStart = point
+			m.selectionEnd = point
+		}
 		hoverIndex, _ := m.toolIndexAtTranscriptRow(point.row)
 		hoverChanged := m.setToolHover(hoverIndex)
 		if hadSelection || hoverChanged {
@@ -58,12 +109,23 @@ func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.C
 		}
 		m.scrollTranscriptSelectionAtEdge(msg.Y)
 		if point, ok := m.transcriptPointForMouse(msg.X, msg.Y); ok {
-			if point != m.selectionStart {
-				point.col++
+			if point != m.selectionAnchor {
+				// 真实拖动打断单击/双击计数，避免拖拽起始按下被计入下一次双击。
+				m.clickCount = 0
+				m.lastClickAt = time.Time{}
 			}
-			m.selectionEnd = point
-			if point != m.selectionStart {
-				m.selectionActive = true
+			switch m.selectionMode {
+			case selectionModeWord:
+				m.extendWordSelection(point)
+			case selectionModeLine:
+				m.extendLineSelection(point)
+			default:
+				if point != m.selectionAnchor {
+					point.col++
+					m.selectionEnd = point
+					m.selectionActive = true
+					m.selectionMoved = true
+				}
 			}
 		}
 		m.refreshViewport()
@@ -72,44 +134,221 @@ func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.C
 		if !m.selecting {
 			return m, false, nil
 		}
-		if point, ok := m.transcriptPointForMouse(msg.X, msg.Y); ok {
-			if point != m.selectionStart {
+		m.selecting = false
+		if m.selectionMode == selectionModeChar {
+			// 保留原行为：以释放点为准再修正一次选区终点。
+			if point, ok := m.transcriptPointForMouse(msg.X, msg.Y); ok && point != m.selectionAnchor {
 				point.col++
-			}
-			m.selectionEnd = point
-			if point != m.selectionStart {
+				m.selectionEnd = point
 				m.selectionActive = true
+				m.selectionMoved = true
 			}
 		}
-		m.selecting = false
-		if m.selectionActive {
+		if m.selectionActive && m.selectionMoved {
+			// 拖拽释放：复制（本地剪贴板 + OSC 52 双写），选区保留到下一次点击。
+			m.resetClickTracking()
 			if text := m.selectedTranscriptText(); text != "" {
 				_ = writeClipboard(text)
+				m.refreshViewport()
+				return m, true, writeClipboardOSC52(text)
 			}
 			m.refreshViewport()
-		} else {
-			if target := m.transcriptHyperlinkAtPoint(m.selectionStart); target != "" {
-				m.refreshViewportPreservingOffset()
-				return m, true, openTerminalURLCmd(target)
-			}
-			if m.toggleTodoAtTranscriptRow(m.selectionStart.row) {
-				return m, true, nil
-			}
-			if index, header, ok := m.toolHitAtTranscriptRow(m.selectionStart.row); ok {
-				if m.toolInspectActive {
-					m.selectInspectedTool(index)
-				}
-				if !m.toggleToolExpansion(index, header) {
-					m.refreshViewportPreservingOffset()
-				}
-			} else {
-				m.refreshViewportPreservingOffset()
-			}
+			return m, true, nil
+		}
+		// 单击（未拖动）：动作延迟到双击窗口结束后执行；双击/三击的选区已在
+		// 按下时建立，释放不做额外动作。
+		if m.clickCount <= 1 {
+			m.clickActionPending = true
+			m.clickActionSeq++
+			seq := m.clickActionSeq
+			point := m.selectionAnchor
+			return m, true, scheduleClickAction(seq, point)
 		}
 		return m, true, nil
 	default:
 		return m, false, nil
 	}
+}
+
+// performTranscriptClick 执行单击位置的“可点击位置”动作（链接 / todo / 工具行）。
+// 由延迟消息触发；双击窗口内到达第二次按下时，seq 失配使消息被丢弃。
+func (m appModel) performTranscriptClick(point selectionPoint) (appModel, bool, tea.Cmd) {
+	if target := m.transcriptHyperlinkAtPoint(point); target != "" {
+		m.refreshViewportPreservingOffset()
+		return m, true, openTerminalURLCmd(target)
+	}
+	if m.toggleTodoAtTranscriptRow(point.row) {
+		return m, true, nil
+	}
+	if index, header, ok := m.toolHitAtTranscriptRow(point.row); ok {
+		if m.toolInspectActive {
+			m.selectInspectedTool(index)
+		}
+		if !m.toggleToolExpansion(index, header) {
+			m.refreshViewportPreservingOffset()
+		}
+		return m, true, nil
+	}
+	return m, false, nil
+}
+
+// resetClickTracking 在拖拽释放后清空单击/双击计数，使后续点击总是重新计数。
+func (m *appModel) resetClickTracking() {
+	m.clickCount = 0
+	m.lastClickAt = time.Time{}
+	m.clickActionPending = false
+}
+
+// sameClickPoint 判断两次按下是否落在同一个可点击位置（同行、允许 1 列抖动）。
+func sameClickPoint(a, b selectionPoint) bool {
+	colDelta := a.col - b.col
+	if colDelta < 0 {
+		colDelta = -colDelta
+	}
+	return a.row == b.row && colDelta <= 1
+}
+
+// startWordSelection 在双击按下时建立词选区：选中 point 所在行的完整“词”。
+// 若点击处没有词（纯空白/标点），回退为字符模式。
+func (m *appModel) startWordSelection(point selectionPoint) {
+	lines := m.transcriptLineSnapshots()
+	if point.row < 0 || point.row >= len(lines) {
+		m.selectionMode = selectionModeChar
+		m.selectionStart = point
+		m.selectionEnd = point
+		m.selectionActive = false
+		return
+	}
+	left, right := wordBoundsAt(lines[point.row].plain, point.col)
+	if right <= left {
+		m.selectionMode = selectionModeChar
+		m.selectionStart = point
+		m.selectionEnd = point
+		m.selectionActive = false
+		return
+	}
+	m.selectionMode = selectionModeWord
+	m.selectionStart = selectionPoint{row: point.row, col: left}
+	m.selectionEnd = selectionPoint{row: point.row, col: right}
+	m.selectionActive = true
+}
+
+// startLineSelection 在三击按下时建立整行选区。
+func (m *appModel) startLineSelection(point selectionPoint) {
+	lines := m.transcriptLineSnapshots()
+	width := 0
+	if point.row >= 0 && point.row < len(lines) {
+		width = lines[point.row].width
+	}
+	m.selectionMode = selectionModeLine
+	m.selectionStart = selectionPoint{row: point.row, col: 0}
+	m.selectionEnd = selectionPoint{row: point.row, col: width}
+	m.selectionActive = true
+}
+
+// extendWordSelection 按词边界扩展从双击按下点开始的选区：锚点词始终完整
+// 包含，拖过词边界时把端点吸附到所在词的完整边界。
+func (m *appModel) extendWordSelection(point selectionPoint) {
+	lines := m.transcriptLineSnapshots()
+	anchor := m.selectionAnchor
+	aLeft, aRight := 0, 0
+	if anchor.row >= 0 && anchor.row < len(lines) {
+		aLeft, aRight = wordBoundsAt(lines[anchor.row].plain, anchor.col)
+	}
+	cLeft, cRight := 0, 0
+	if point.row >= 0 && point.row < len(lines) {
+		cLeft, cRight = wordBoundsAt(lines[point.row].plain, point.col)
+	}
+	if aRight <= aLeft || cRight <= cLeft {
+		return
+	}
+	var start, end selectionPoint
+	if compareSelectionPoints(point, anchor) >= 0 {
+		start = selectionPoint{row: anchor.row, col: aLeft}
+		end = selectionPoint{row: point.row, col: cRight}
+	} else {
+		start = selectionPoint{row: point.row, col: cLeft}
+		end = selectionPoint{row: anchor.row, col: aRight}
+	}
+	if start != m.selectionStart || end != m.selectionEnd {
+		m.selectionMoved = true
+		m.selectionStart = start
+		m.selectionEnd = end
+	}
+	m.selectionActive = true
+}
+
+// extendLineSelection 按整行扩展从三击按下点开始的选区。
+func (m *appModel) extendLineSelection(point selectionPoint) {
+	lines := m.transcriptLineSnapshots()
+	anchor := m.selectionAnchor
+	width := func(row int) int {
+		if row >= 0 && row < len(lines) {
+			return lines[row].width
+		}
+		return 0
+	}
+	var start, end selectionPoint
+	if point.row >= anchor.row {
+		start = selectionPoint{row: anchor.row, col: 0}
+		end = selectionPoint{row: point.row, col: width(point.row)}
+	} else {
+		start = selectionPoint{row: point.row, col: 0}
+		end = selectionPoint{row: anchor.row, col: width(anchor.row)}
+	}
+	if start != m.selectionStart || end != m.selectionEnd {
+		m.selectionMoved = true
+		m.selectionStart = start
+		m.selectionEnd = end
+	}
+	m.selectionActive = true
+}
+
+// wordBoundsAt 返回 plain 文本中指定显示单元格所在“词”的显示单元格区间
+// [left, right)。词 = 连续的 non-separator grapheme 序列；分隔符为空白、
+// Unicode 标点与符号（中文/英文单词都按整体选中，标点单独断开）。
+// 若单元格落在分隔符上，取左侧最近的词；没有则取第一个词。
+func wordBoundsAt(plain string, cell int) (int, int) {
+	type wordRun struct{ left, right int }
+	var words []wordRun
+	current := -1
+	cellPos := 0
+	for remaining := plain; remaining != ""; {
+		cluster, clusterWidth := terminalFirstGraphemeCluster(remaining)
+		remaining = remaining[len(cluster):]
+		graphemeWidth := maxInt(1, clusterWidth)
+		if isWordSeparator(cluster) {
+			current = -1
+		} else {
+			if current < 0 {
+				words = append(words, wordRun{left: cellPos})
+				current = len(words) - 1
+			}
+			words[current].right = cellPos + graphemeWidth
+		}
+		cellPos += graphemeWidth
+	}
+	for _, word := range words {
+		if cell >= word.left && cell < word.right {
+			return word.left, word.right
+		}
+	}
+	for i := len(words) - 1; i >= 0; i-- {
+		if words[i].right <= cell {
+			return words[i].left, words[i].right
+		}
+	}
+	if len(words) > 0 {
+		return words[0].left, words[0].right
+	}
+	return 0, 0
+}
+
+// isWordSeparator 判断一个 grapheme cluster 是否为词边界分隔符
+// （空白、标点、符号；emoji 与组合字符按符号处理，不并入单词）。
+func isWordSeparator(cluster string) bool {
+	r, _ := utf8.DecodeRuneInString(cluster)
+	return unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r)
 }
 
 func isMouseWheel(msg tea.MouseMsg) bool {

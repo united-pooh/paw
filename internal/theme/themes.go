@@ -12,7 +12,12 @@ func palette(bg, surface, fg, muted, primary, secondary, cyan, green, yellow, re
 		PanelBorder: muted, InputFocusedBorder: cyan, InputWaitingBorder: muted, InputMultilineBorder: yellow,
 		InputTerminal: secondary, InputTokenCommand: secondary, InputTokenFile: green,
 		SelectedProviderBG: primary, SelectedProviderFG: bg, UnselectedProvider: muted,
-		WizardTitle: primary, WizardBorder: primary, SelectionBackground: surface, SelectionForeground: fg,
+		WizardTitle: primary, WizardBorder: primary,
+		// 选区背景 = 正文背景与前景按 30% 混合：深色主题下同时满足
+		// “选区文字 ≥4.5:1”与“选区 vs 正文 ≥2:1”双对比度约束，且与
+		// markdown 高亮 / diff 背景等语义色不冲突（见 docs/mouse-selection-research.md §4）。
+		// 浅色主题（TokyoNightLight）与 Default 在 init() 中用手工特例覆盖。
+		SelectionBackground: blendHex(bg, fg, 0.30), SelectionForeground: fg,
 		ContextCache: yellow, ContextUsed: cyan, ContextFree: muted, Signal: primary,
 		WorktreeBackground: surface, WorktreeBorder: muted, WorktreeClean: green, WorktreeDirty: yellow, WorktreeConflict: red,
 		CursorNormalBright: green, CursorTerminalBright: secondary,
@@ -53,7 +58,9 @@ func init() {
 	p.UnselectedProvider = "#8a8a8a"
 	p.WizardTitle = "#ffffaf"
 	p.WizardBorder = "#5f5fd7"
-	p.SelectionBackground = "#3a3a3a"
+	// Default 主题文字对比本身较弱，30% 混合时选区文字只有 3.96:1（低于 AA），
+	// 因此用 25% 混合：#515254，文字 4.43:1、与正文 1.79:1。
+	p.SelectionBackground = blendHex("#292c33", "#c9c2b7", 0.25)
 	p.SelectionForeground = "#eeeeee"
 	p.ContextCache = "#ffaf00"
 }

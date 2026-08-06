@@ -573,6 +573,12 @@ func TestToolInspectModePreservesInputAndNavigatesTransactions(t *testing.T) {
 }
 
 func TestToolTrackMouseClickTogglesButDragSelects(t *testing.T) {
+	// 同一行快速连点三次（展开/收起/再展开）会被双击判定误认为选词/选行；
+	// 测试里把双击窗口置零，禁用双击判定。
+	oldInterval := doubleClickInterval
+	doubleClickInterval = 0
+	t.Cleanup(func() { doubleClickInterval = oldInterval })
+
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
 	model.width = 80
@@ -592,10 +598,7 @@ func TestToolTrackMouseClickTogglesButDragSelects(t *testing.T) {
 	x := 5
 
 	click := func(row int) {
-		next, _ := model.Update(tea.MouseMsg{X: x, Y: row, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
-		model = next.(appModel)
-		next, _ = model.Update(tea.MouseMsg{X: x, Y: row, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
-		model = next.(appModel)
+		model = mouseClickAt(model, x, row)
 	}
 
 	// A collapsed group is a single header row; clicking it expands the group
@@ -661,12 +664,27 @@ func TestToolTrackMouseClickTogglesButDragSelects(t *testing.T) {
 	}
 }
 
-// mouseClickAt 在指定屏幕坐标发送一次左键单击（press + release）。
+// init 把延迟的单击动作替换为立即派发：单击（链接 / todo / 工具行）动作在
+// 生产中要等双击窗口（250ms）结束后才执行，测试里直接派发以避免计时阻塞。
+func init() {
+	scheduleClickAction = func(seq uint64, point selectionPoint) tea.Cmd {
+		return func() tea.Msg { return transcriptClickActionMsg{seq: seq, point: point} }
+	}
+}
+
+// mouseClickAt 在指定屏幕坐标发送一次左键单击（press + release），并立即
+// 消费延迟到双击窗口之后的单击动作，保证测试内点击副作用同步可见。
 func mouseClickAt(model appModel, x, y int) appModel {
-	next, _ := model.Update(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	next, cmd := model.Update(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
 	model = next.(appModel)
-	next, _ = model.Update(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
+	next, cmd = model.Update(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
 	model = next.(appModel)
+	if cmd != nil {
+		if msg := cmd(); msg != nil {
+			next, _ = model.Update(msg)
+			model = next.(appModel)
+		}
+	}
 	return model
 }
 

@@ -3327,6 +3327,284 @@ func TestTranscriptMouseClickPreservesScrollOffset(t *testing.T) {
 	}
 }
 
+// TestTranscriptDoubleClickSelectsWord 验证双击在按下瞬间建立词选区（按词边界
+// 吸附、不切开中文/emoji），且双击不覆盖剪贴板。
+func TestTranscriptDoubleClickSelectsWord(t *testing.T) {
+	oldWriteClipboard := writeClipboard
+	var copied string
+	writeClipboard = func(text string) error {
+		copied = text
+		return nil
+	}
+	defer func() {
+		writeClipboard = oldWriteClipboard
+	}()
+
+	oldInterval := doubleClickInterval
+	doubleClickInterval = time.Hour // 任意两次按下都落在双击窗口内
+	defer func() {
+		doubleClickInterval = oldInterval
+	}()
+
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 12
+	model.relayout()
+	model.transcript = []transcriptEntry{{
+		kind:  entryAssistant,
+		title: "assistant",
+		body:  "hello world",
+	}}
+	model.refreshViewport()
+	model.viewport.GotoTop()
+
+	lines := model.transcriptLineSnapshots()
+	offset := strings.Index(lines[0].plain, "world")
+	if offset < 0 {
+		t.Fatalf("snapshot plain = %q, want world", lines[0].plain)
+	}
+	x := mainContentPadding + offset + 3 // 点击 "world" 内部（col = offset+2）
+	y := model.transcriptScreenTop()
+
+	press := tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}
+	release := tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease}
+	next, _ := model.Update(press)
+	model = next.(appModel)
+	next, _ = model.Update(release) // 第一次单击：动作被延迟，这里丢弃
+	model = next.(appModel)
+	next, _ = model.Update(press) // 双击：建立词选区
+	model = next.(appModel)
+	if !model.selectionActive || model.selectionMode != selectionModeWord {
+		t.Fatalf("double-click state = active:%v mode:%v", model.selectionActive, model.selectionMode)
+	}
+	next, _ = model.Update(release)
+	model = next.(appModel)
+	if got := model.selectedTranscriptText(); got != "world" {
+		t.Fatalf("double-click selected %q, want world", got)
+	}
+	if copied != "" {
+		t.Fatalf("double-click without drag must not copy, clipboard = %q", copied)
+	}
+}
+
+// TestTranscriptDoubleClickDragExtendsByWord 验证双击选词后继续拖拽会按词边界
+// 扩展选区，释放时复制完整词序列。
+func TestTranscriptDoubleClickDragExtendsByWord(t *testing.T) {
+	oldWriteClipboard := writeClipboard
+	var copied string
+	writeClipboard = func(text string) error {
+		copied = text
+		return nil
+	}
+	defer func() {
+		writeClipboard = oldWriteClipboard
+	}()
+
+	oldInterval := doubleClickInterval
+	doubleClickInterval = time.Hour
+	defer func() {
+		doubleClickInterval = oldInterval
+	}()
+
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 12
+	model.relayout()
+	model.transcript = []transcriptEntry{{
+		kind:  entryAssistant,
+		title: "assistant",
+		body:  "hello world foo",
+	}}
+	model.refreshViewport()
+	model.viewport.GotoTop()
+
+	lines := model.transcriptLineSnapshots()
+	worldOffset := strings.Index(lines[0].plain, "world")
+	fooOffset := strings.Index(lines[0].plain, "foo")
+	if worldOffset < 0 || fooOffset < 0 {
+		t.Fatalf("snapshot plain = %q, want world and foo", lines[0].plain)
+	}
+	y := model.transcriptScreenTop()
+	press := tea.MouseMsg{X: mainContentPadding + worldOffset + 3, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}
+	release := tea.MouseMsg{X: mainContentPadding + worldOffset + 3, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease}
+	next, _ := model.Update(press)
+	model = next.(appModel)
+	next, _ = model.Update(release)
+	model = next.(appModel)
+	next, _ = model.Update(press) // 双击 "world"
+	model = next.(appModel)
+	next, _ = model.Update(tea.MouseMsg{
+		X:      mainContentPadding + fooOffset + 3,
+		Y:      y,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionMotion,
+	})
+	model = next.(appModel)
+	next, _ = model.Update(tea.MouseMsg{
+		X:      mainContentPadding + fooOffset + 3,
+		Y:      y,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionRelease,
+	})
+	model = next.(appModel)
+
+	if copied != "world foo" {
+		t.Fatalf("word drag copied %q, want world foo", copied)
+	}
+	if !model.selectionActive {
+		t.Fatal("word drag selection did not stay active")
+	}
+}
+
+// TestTranscriptTripleClickSelectsLine 验证三击建立整行选区，释放不复制。
+func TestTranscriptTripleClickSelectsLine(t *testing.T) {
+	oldWriteClipboard := writeClipboard
+	var copied string
+	writeClipboard = func(text string) error {
+		copied = text
+		return nil
+	}
+	defer func() {
+		writeClipboard = oldWriteClipboard
+	}()
+
+	oldInterval := doubleClickInterval
+	doubleClickInterval = time.Hour
+	defer func() {
+		doubleClickInterval = oldInterval
+	}()
+
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 12
+	model.relayout()
+	model.transcript = []transcriptEntry{{
+		kind:  entryUser,
+		title: "you",
+		body:  "alpha beta",
+	}}
+	model.refreshViewport()
+	model.viewport.GotoTop()
+
+	x := mainContentPadding + 3
+	y := model.transcriptScreenTop()
+	press := tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}
+	release := tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease}
+	for i := 0; i < 3; i++ {
+		next, _ := model.Update(press)
+		model = next.(appModel)
+		next, _ = model.Update(release)
+		model = next.(appModel)
+	}
+
+	if !model.selectionActive || model.selectionMode != selectionModeLine {
+		t.Fatalf("triple-click state = active:%v mode:%v", model.selectionActive, model.selectionMode)
+	}
+	lines := model.transcriptLineSnapshots()
+	if model.selectionStart != (selectionPoint{row: 0, col: 0}) || model.selectionEnd != (selectionPoint{row: 0, col: lines[0].width}) {
+		t.Fatalf("line selection = %+v..%+v, want full line 0..%d", model.selectionStart, model.selectionEnd, lines[0].width)
+	}
+	if got := model.selectedTranscriptText(); !strings.Contains(got, "alpha beta") {
+		t.Fatalf("triple-click selected %q, want line content", got)
+	}
+	if copied != "" {
+		t.Fatalf("triple-click without drag must not copy, clipboard = %q", copied)
+	}
+}
+
+// TestTranscriptDragWritesOSC52Clipboard 验证拖拽释放时除本地剪贴板外还会
+// 通过 OSC 52 双写终端剪贴板（SSH/远程场景）。
+func TestTranscriptDragWritesOSC52Clipboard(t *testing.T) {
+	oldWriteClipboard := writeClipboard
+	writeClipboard = func(text string) error { return nil }
+	defer func() {
+		writeClipboard = oldWriteClipboard
+	}()
+
+	oldOSC52 := writeClipboardOSC52
+	var oscText string
+	writeClipboardOSC52 = func(text string) tea.Cmd {
+		oscText = text
+		return nil
+	}
+	defer func() {
+		writeClipboardOSC52 = oldOSC52
+	}()
+
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 12
+	model.relayout()
+	model.transcript = []transcriptEntry{{
+		kind:  entryAssistant,
+		title: "assistant",
+		body:  "hello",
+	}}
+	model.refreshViewport()
+	model.viewport.GotoTop()
+
+	next, _ := model.Update(tea.MouseMsg{X: 6, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	model = next.(appModel)
+	next, _ = model.Update(tea.MouseMsg{X: 8, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
+	model = next.(appModel)
+	next, _ = model.Update(tea.MouseMsg{X: 8, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
+	model = next.(appModel)
+
+	if oscText != "llo" {
+		t.Fatalf("OSC 52 clipboard = %q, want llo", oscText)
+	}
+}
+
+// TestSelectionStyleFallsBackToReverseIn16Color 验证 16 色及以下终端里选区
+// 样式降级为反色渲染，与终端原生选区观感一致。
+func TestSelectionStyleFallsBackToReverseIn16Color(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(previousProfile)
+		rebuildLegacyStyles()
+	})
+	rebuildLegacyStyles()
+
+	if !selectedTranscriptLineStyle.GetReverse() {
+		t.Fatalf("16-color selection style = %#v, want reverse video", selectedTranscriptLineStyle)
+	}
+	if _, hasBackground := selectedTranscriptLineStyle.GetBackground().(lipgloss.NoColor); !hasBackground {
+		t.Fatalf("16-color selection background = %#v, want none", selectedTranscriptLineStyle.GetBackground())
+	}
+	if !toolFocusedStyle.GetReverse() || !toolFocusedStyle.GetBold() {
+		t.Fatalf("16-color focused tool style = %#v, want reverse + bold", toolFocusedStyle)
+	}
+}
+
+// TestSelectionStyleUsesThemeColorsInTrueColor 验证真彩色终端里选区样式使用
+// 主题的 selection.background / selection.foreground，且不启用反色。
+func TestSelectionStyleUsesThemeColorsInTrueColor(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(previousProfile)
+		rebuildLegacyStyles()
+	})
+	rebuildLegacyStyles()
+
+	wantBG := colorManager.LipglossColor(colorSelectionBackground)
+	wantFG := colorManager.LipglossColor(colorSelectionForeground)
+	if got := selectedTranscriptLineStyle.GetBackground(); got != wantBG {
+		t.Fatalf("selection background = %#v, want %#v", got, wantBG)
+	}
+	if got := selectedTranscriptLineStyle.GetForeground(); got != wantFG {
+		t.Fatalf("selection foreground = %#v, want %#v", got, wantFG)
+	}
+	if selectedTranscriptLineStyle.GetReverse() {
+		t.Fatal("true-color selection style must not use reverse video")
+	}
+}
+
 // TestSelectedTranscriptTextKeepsWideGraphemesWhole 验证宽字符和 emoji 不会被半个字符复制。
 func TestSelectedTranscriptTextKeepsWideGraphemesWhole(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
@@ -4181,7 +4459,13 @@ func TestTranscriptMouseClickOpensURL(t *testing.T) {
 	model = next.(appModel)
 
 	if cmd == nil {
-		t.Fatal("URL click returned no open command")
+		t.Fatal("URL click returned no deferred command")
+	}
+	// 单击动作延迟到双击窗口之后（测试里立即派发），处理后才产生打开命令。
+	next, cmd = model.Update(cmd())
+	model = next.(appModel)
+	if cmd == nil {
+		t.Fatal("deferred URL click returned no open command")
 	}
 	cmd()
 	if opened != target {

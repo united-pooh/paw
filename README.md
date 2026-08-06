@@ -271,6 +271,26 @@ context meter 左侧显示紧凑 token 与比例，例如 `260k↑ 2.05k↓ 25%(
 - `ctrl+o`: 展开/折叠模型 thinking 过程；折叠时 thinking 仍保存在 transcript 中，但不渲染到 viewport。
 - `ctrl+g`: 打开右侧 Subagents 选择器；使用 ↑↓ 选择，Enter 预览该 subagent transcript，Esc 返回主 session transcript；输入框内容和提交目标保持主 session 不变。
 
+鼠标选择:
+- 在消息历史区按住左键拖拽即可选择文本；拖到面板顶部/底部会自动滚动；释放时把选中内容写入系统剪贴板（本地剪贴板 + OSC 52 终端剪贴板双写，SSH/远程会话同样可用）。
+- **双击**选中一个词（中文按词/标点断开，不切开 emoji 与宽字符），**三击**选中整行；双击/三击后继续拖拽会按词/行边界扩展选区。
+- 单击不复制、不创建选区：链接、todo 和工具行等可点击位置在双击判定窗口（250ms）结束后触发动作，避免「单击已生效、双击又选中」互相冲突。
+- 16 色及以下终端自动把选区降级为反色渲染，与终端原生选区观感一致。
+
+应用内选区与终端原生选择并存：paw 启用鼠标捕获后，普通拖拽是应用内选区；按住下方表格中的修饰键拖拽，终端会接管并做原生选择（用于复制到终端自己的剪贴板、跨应用选词等）：
+
+| 终端 | 原生选择修饰键 |
+| --- | --- |
+| Ghostty / kitty / WezTerm / Alacritty | **Shift** + 拖拽 |
+| iTerm2 | **Option** + 拖拽 |
+
+可选：希望「Shift+拖拽」的原生选区与 paw 自绘选区同色时，可在 Ghostty 配置中加入（kitty 为 `selection_background`/`selection_foreground`，WezTerm 为 `colors.selection_bg`/`colors.selection_fg`）：
+
+```ghostty
+selection-background = #4c5064   # tokyo-night 主题示例；其他主题见 docs/mouse-selection-research.md §4.3
+selection-foreground = #c0caf5
+```
+
 图片输入:
 - 当前支持 PNG、JPEG、GIF、WebP 和 BMP；macOS 使用系统 `NSPasteboard`（JXA/AppKit，兼容截图常见的 PNG/TIFF 类型），Linux 优先尝试 `wl-paste`，并保留 `xclip` 适配入口。
 - 图片会保存到当前项目的 `.paw/attachments/`，使用内容哈希去重并以 `0600` 权限保存；会话 JSONL 只记录相对附件引用，不写入 base64 图片。

@@ -3,6 +3,7 @@ package bubble
 
 import (
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	"time"
 )
 
@@ -355,10 +356,24 @@ func rebuildLegacyStyles() {
 		BorderLeft(true).
 		BorderLeftForeground(colorManager.LipglossColor(colorLabelError)).
 		PaddingLeft(1)
-	toolFocusedStyle = lipgloss.NewStyle().
-		Background(colorManager.LipglossColor(colorSelectionBackground)).
-		Foreground(colorManager.LipglossColor(colorSelectionForeground)).
-		Bold(true)
+	// 16 色及以下终端没有可靠的 RGB 背景近似：选区降级为反色渲染，
+	// 与终端原生选区观感一致，避免 lipgloss 把真彩色近似成奇怪颜色。
+	lowColorSelection := lipgloss.ColorProfile() == termenv.ANSI || lipgloss.ColorProfile() == termenv.Ascii
+	if lowColorSelection {
+		toolFocusedStyle = lipgloss.NewStyle().
+			Bold(true).
+			Reverse(true)
+		selectedTranscriptLineStyle = lipgloss.NewStyle().
+			Reverse(true)
+	} else {
+		toolFocusedStyle = lipgloss.NewStyle().
+			Background(colorManager.LipglossColor(colorSelectionBackground)).
+			Foreground(colorManager.LipglossColor(colorSelectionForeground)).
+			Bold(true)
+		selectedTranscriptLineStyle = lipgloss.NewStyle().
+			Background(colorManager.LipglossColor(colorSelectionBackground)).
+			Foreground(colorManager.LipglossColor(colorSelectionForeground))
+	}
 	todoTitleStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorLabelAssistant)).
 		Bold(true)
@@ -378,9 +393,14 @@ func rebuildLegacyStyles() {
 	todoSummaryStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorMarkdownQuote))
 
-	selectedTranscriptLineStyle = lipgloss.NewStyle().
-		Background(colorManager.LipglossColor(colorSelectionBackground)).
-		Foreground(colorManager.LipglossColor(colorSelectionForeground))
+	if lowColorSelection {
+		selectedTranscriptLineStyle = lipgloss.NewStyle().
+			Reverse(true)
+	} else {
+		selectedTranscriptLineStyle = lipgloss.NewStyle().
+			Background(colorManager.LipglossColor(colorSelectionBackground)).
+			Foreground(colorManager.LipglossColor(colorSelectionForeground))
+	}
 	syntaxKeywordStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorSignal)).
 		Bold(true)

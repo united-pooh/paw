@@ -486,11 +486,28 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case worktreeRefreshTickMsg:
 		return m, nil
+	case transcriptClickActionMsg:
+		if msg.seq != m.clickActionSeq || !m.clickActionPending {
+			// 双击窗口内到达了新的按下：延迟的单击动作作废。
+			return m, nil
+		}
+		m.clickActionPending = false
+		next, handled, cmd := m.performTranscriptClick(msg.point)
+		if !handled {
+			m.refreshViewportPreservingOffset()
+			return m, nil
+		}
+		return next, cmd
 	case tea.KeyMsg:
 		var rawMouseFragment bool
 		msg, rawMouseFragment = m.filterRawMouseEscapeKey(msg)
 		if rawMouseFragment {
 			return m, nil
+		}
+		// 键盘输入意味着用户已经离开点击意图，取消挂起的延迟单击动作。
+		if m.clickActionPending {
+			m.clickActionPending = false
+			m.clickActionSeq++
 		}
 		if m.selectionDock != nil {
 			return m.handleSelectionDockKey(msg)
@@ -676,6 +693,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tea.MouseMsg:
 		m.rawMouseEscapePending = ""
+		// 任何新的按下（transcript / todo / 通知 / 输入 dock / 滚轮）都取消
+		// 挂起的延迟单击动作，使双击优先于单击动作。
+		if msg.Action == tea.MouseActionPress && m.clickActionPending {
+			m.clickActionPending = false
+			m.clickActionSeq++
+		}
 		if m.todoPage != nil {
 			return m.handleTodoPageMouse(msg)
 		}
