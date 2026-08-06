@@ -184,9 +184,6 @@ func TestAssistantStreamRendersMarkdownForEachStableLine(t *testing.T) {
 	next, _ = model.Update(assistantDeltaMsg("ld**\n"))
 	model = next.(appModel)
 	entry := model.transcript[model.activeAssistant]
-	if entry.renderMode != transcriptRenderFormatted {
-		t.Fatalf("stream render mode = %v, want formatted", entry.renderMode)
-	}
 	streamed := ansi.Strip(renderEntry(entry, 80))
 	if !strings.Contains(streamed, "bold") || strings.Contains(streamed, "**bold**") {
 		t.Fatalf("streamed entry = %q, want formatted markdown before done", streamed)
@@ -206,9 +203,6 @@ func TestAssistantStreamRendersMarkdownForEachStableLine(t *testing.T) {
 	next, _ = model.Update(doneMsg{})
 	model = next.(appModel)
 	entry = lastEntryOfKind(t, model.transcript, entryAssistant)
-	if entry.renderMode != transcriptRenderFormatted {
-		t.Fatalf("final render mode = %v", entry.renderMode)
-	}
 }
 
 func TestAssistantDoneKeepsAndShowsTrailingMarkdownCodeBlock(t *testing.T) {
@@ -285,7 +279,7 @@ func TestAssistantStreamErrorFlushesPlainTailAndResets(t *testing.T) {
 	model = next.(appModel)
 
 	entry := lastEntryOfKind(t, model.transcript, entryAssistant)
-	if entry.body != "partial **markdown" || entry.renderMode != transcriptRenderPlain {
+	if entry.body != "partial **markdown" {
 		t.Fatalf("aborted assistant entry = %#v", entry)
 	}
 	if model.assistantStream.HasContent() || model.activeAssistant != -1 {
@@ -314,7 +308,7 @@ func TestToolBoundaryFlushesAssistantTail(t *testing.T) {
 	model = next.(appModel)
 
 	entry := lastEntryOfKind(t, model.transcript, entryAssistant)
-	if entry.body != "before tool" || entry.renderMode != transcriptRenderFormatted {
+	if entry.body != "before tool" {
 		t.Fatalf("assistant before tool = %#v", entry)
 	}
 	if model.assistantStream.HasContent() {
@@ -348,15 +342,11 @@ func TestCanceledStreamFlushesPlainAndDoesNotLeak(t *testing.T) {
 	model = next.(appModel)
 	next, _ = model.Update(doneMsg{})
 	model = next.(appModel)
-	completed := lastEntryOfKind(t, model.transcript, entryAssistant)
-	if completed.renderMode != transcriptRenderFormatted {
-		t.Fatalf("done assistant entry = %#v, want tentative formatted mode", completed)
-	}
 	next, _ = model.Update(turnFinishedMsg{err: context.Canceled})
 	model = next.(appModel)
 
 	entry := lastEntryOfKind(t, model.transcript, entryAssistant)
-	if entry.body != "canceled **tail" || entry.renderMode != transcriptRenderPlain {
+	if entry.body != "canceled **tail" {
 		t.Fatalf("canceled assistant entry = %#v", entry)
 	}
 

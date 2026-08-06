@@ -211,13 +211,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case toolCallMsg:
 		m.turnHasModelOutput = true
 		m.finalizeThinkingStream()
-		m.finalizeAssistantStream(transcriptRenderFormatted)
+		m.finalizeAssistantStream()
 		m.isGenerating = false
 		m.recordToolCallEntry(msg.ID, msg.Name, json.RawMessage(msg.Input), msg.FileMutationKnown, msg.IsFileMutation, msg.FileMutation)
 		return m, nil
 	case toolResultMsg:
 		m.finalizeThinkingStream()
-		m.finalizeAssistantStream(transcriptRenderFormatted)
+		m.finalizeAssistantStream()
 		status := "ok"
 		if msg.IsError {
 			status = "error"
@@ -238,7 +238,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case doneMsg:
 		m.finalizeThinkingStream()
-		m.doneAssistant = m.finalizeAssistantStream(transcriptRenderFormatted)
+		m.doneAssistant = m.finalizeAssistantStream()
 		m.isGenerating = false
 		m.refreshViewport()
 		return m, nil
@@ -274,10 +274,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.finalizeThinkingStream()
 		assistantIndex := m.doneAssistant
 		if msg.err != nil {
-			m.finalizeAssistantStream(transcriptRenderPlain)
-			m.setAssistantRenderMode(m.doneAssistant, transcriptRenderPlain)
+			m.finalizeAssistantStream()
 		} else {
-			if finalized := m.finalizeAssistantStream(transcriptRenderFormatted); finalized >= 0 {
+			if finalized := m.finalizeAssistantStream(); finalized >= 0 {
 				assistantIndex = finalized
 			}
 			if msg.metadata != nil && assistantIndex >= 0 && assistantIndex < len(m.transcript) && m.transcript[assistantIndex].kind == entryAssistant {

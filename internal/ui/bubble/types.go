@@ -23,14 +23,6 @@ import (
 // entryKind 表示 transcript 中一条消息的来源类别。
 type entryKind int
 
-type transcriptRenderMode uint8
-
-const (
-	transcriptRenderFormatted transcriptRenderMode = iota
-	transcriptRenderStreamingPlain
-	transcriptRenderPlain
-)
-
 // transcript 条目类型常量。
 const (
 	// entrySystem 表示系统状态或命令提示消息。
@@ -88,7 +80,6 @@ type transcriptEntry struct {
 	toolFinishedAt      time.Time
 	turnMetadata          *session.TurnMetadata
 	version               int
-	renderMode            transcriptRenderMode
 }
 
 type toolCitation struct {

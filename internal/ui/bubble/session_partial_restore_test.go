@@ -11,7 +11,7 @@ import (
 	"paw/internal/session"
 )
 
-func TestSessionRestoreShowsPartialAssistantPlainAndRecoveryError(t *testing.T) {
+func TestSessionRestoreShowsPartialAssistantAndRecoveryError(t *testing.T) {
 	ctx := context.Background()
 	store, err := session.NewJSONLStore(t.TempDir())
 	if err != nil {
@@ -48,9 +48,6 @@ func TestSessionRestoreShowsPartialAssistantPlainAndRecoveryError(t *testing.T) 
 	}
 	if partial == nil {
 		t.Fatalf("entries=%#v, want restored partial assistant", msg.entries)
-	}
-	if partial.renderMode != transcriptRenderPlain {
-		t.Fatalf("partial renderMode=%v, want plain", partial.renderMode)
 	}
 	if recovery == nil || !strings.Contains(recovery.body, "stream truncated") {
 		t.Fatalf("recovery entry=%#v, want visible recovery error", recovery)

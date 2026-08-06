@@ -24,8 +24,7 @@ func benchTranscriptEntries(count int) []transcriptEntry {
 			entries = append(entries, transcriptEntry{
 				kind:       entryAssistant,
 				title:      "assistant",
-				body:       fmt.Sprintf("**回答 %d**：这里是一段 markdown 正文，包含 `code`、[链接](https://example.com) 以及 *强调*。\n\n1. 第一点\n2. 第二点", i),
-				renderMode: transcriptRenderFormatted,
+				body: fmt.Sprintf("**回答 %d**：这里是一段 markdown 正文，包含 `code`、[链接](https://example.com) 以及 *强调*。\n\n1. 第一点\n2. 第二点", i),
 			})
 		default:
 			entries = append(entries, transcriptEntry{

@@ -104,7 +104,6 @@ func TestVisualGeometryFullViewUsesUnifiedCellPipeline(t *testing.T) {
 						body: "| 文件 | 改动 |\n|---|---|\n" +
 							"| `responses.go` / `openai_compatible_adapter.go` / `deepseek_adapter.go` | 中文 👩‍💻 é हिन्दी العربية |\n\n" +
 							"```go\nfunc render() { fmt.Println(\"cell\") }\n```",
-						renderMode: transcriptRenderFormatted,
 					},
 					{
 						kind:          entryTool,
@@ -184,7 +183,6 @@ func TestMixedLanguageTranscriptKeepsRendererWidthWhileScrolling(t *testing.T) {
 		body: strings.Repeat("before\n", 70) +
 			"### 混合语言\n中文 English 日本語 한국어 Русский العربية हिन्दी ภาษาไทย\n" +
 			strings.Repeat("after\n", 70),
-		renderMode: transcriptRenderFormatted,
 	}}
 	model.relayout()
 	model.refreshViewport()

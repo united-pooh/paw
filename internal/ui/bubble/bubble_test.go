@@ -3979,9 +3979,8 @@ func TestRenderInlineMarkdownKeepsBalancedURLParentheses(t *testing.T) {
 func TestStreamingAssistantURLIsClickableBeforeMarkdownFinalization(t *testing.T) {
 	const target = "https://example.com/live"
 	rendered := renderEntryBody(transcriptEntry{
-		kind:       entryAssistant,
-		body:       "Live: " + target,
-		renderMode: transcriptRenderStreamingPlain,
+		kind: entryAssistant,
+		body: "Live: " + target,
 	}, 80)
 
 	if !strings.Contains(rendered, ansi.SetHyperlink(target)) {

@@ -199,13 +199,6 @@ func transcriptEntriesFromRecords(records []session.Record, metadata []session.T
 		todoTracker.observeCalls(record)
 		todoTracker.foldForAssistant(record, entries)
 		recordEntries := transcriptEntriesFromMessage(record.Message, createdAt, workspaceRoot)
-		if record.Kind == session.JournalAssistantPartial {
-			for index := range recordEntries {
-				if recordEntries[index].kind == entryAssistant {
-					recordEntries[index].renderMode = transcriptRenderPlain
-				}
-			}
-		}
 		if item, ok := metadataByRecordIndex[recordIndex]; ok {
 			for index := len(recordEntries) - 1; index >= 0; index-- {
 				if recordEntries[index].kind == entryAssistant {

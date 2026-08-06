@@ -27,7 +27,6 @@ type transcriptRenderCacheEntry struct {
 
 type transcriptRenderCacheKey struct {
 	kind                 entryKind
-	renderMode           transcriptRenderMode
 	title                string
 	body                 string
 	inputTokens          string
@@ -67,19 +66,14 @@ type transcriptRenderCacheKey struct {
 func (m *appModel) ensureAssistantStreamEntry() {
 	if m.activeAssistant < 0 || m.activeAssistant >= len(m.transcript) || m.transcript[m.activeAssistant].kind != entryAssistant {
 		m.transcript = append(m.transcript, transcriptEntry{
-			kind:       entryAssistant,
-			title:      "assistant",
-			citations:  m.consumePendingToolCitations(),
-			createdAt:  m.animationNow(),
-			renderMode: transcriptRenderFormatted,
+			kind:      entryAssistant,
+			title:     "assistant",
+			citations: m.consumePendingToolCitations(),
+			createdAt: m.animationNow(),
 		})
 		m.activeAssistant = len(m.transcript) - 1
 	} else if len(m.pendingToolCites) > 0 {
 		m.transcript[m.activeAssistant].citations = append(m.transcript[m.activeAssistant].citations, m.consumePendingToolCitations()...)
-	}
-	if m.transcript[m.activeAssistant].renderMode != transcriptRenderFormatted {
-		m.transcript[m.activeAssistant].renderMode = transcriptRenderFormatted
-		touchTranscriptEntry(&m.transcript[m.activeAssistant])
 	}
 }
 
@@ -114,10 +108,9 @@ func (m *appModel) ensureThinkingStreamEntry() {
 	m.activeAssistant = -1
 	if m.activeThinking < 0 || m.activeThinking >= len(m.transcript) || m.transcript[m.activeThinking].kind != entryThinking {
 		m.transcript = append(m.transcript, transcriptEntry{
-			kind:       entryThinking,
-			title:      "thinking",
-			createdAt:  m.animationNow(),
-			renderMode: transcriptRenderPlain,
+			kind:      entryThinking,
+			title:     "thinking",
+			createdAt: m.animationNow(),
 		})
 		m.activeThinking = len(m.transcript) - 1
 	}
@@ -153,7 +146,7 @@ func (m *appModel) consumeThinkingStreamDelta(delta string) {
 		return
 	}
 	if m.assistantStream.HasContent() {
-		m.finalizeAssistantStream(transcriptRenderFormatted)
+		m.finalizeAssistantStream()
 	}
 	committed := m.thinkingStream.Push(delta, m.streamingBodyWidth())
 	if m.thinkingStream.HasContent() {
@@ -162,7 +155,7 @@ func (m *appModel) consumeThinkingStreamDelta(delta string) {
 	m.appendThinkingDelta(committed)
 }
 
-func (m *appModel) finalizeAssistantStream(mode transcriptRenderMode) int {
+func (m *appModel) finalizeAssistantStream() int {
 	hadContent := m.assistantStream.HasContent()
 	committed := m.assistantStream.Flush(m.streamingBodyWidth())
 	if hadContent {
@@ -170,20 +163,8 @@ func (m *appModel) finalizeAssistantStream(mode transcriptRenderMode) int {
 	}
 	m.appendAssistantDelta(committed)
 	finalized := m.activeAssistant
-	m.setAssistantRenderMode(finalized, mode)
 	m.activeAssistant = -1
 	return finalized
-}
-
-func (m *appModel) setAssistantRenderMode(index int, mode transcriptRenderMode) {
-	if index < 0 || index >= len(m.transcript) || m.transcript[index].kind != entryAssistant {
-		return
-	}
-	if m.transcript[index].renderMode != mode {
-		m.transcript[index].renderMode = mode
-		touchTranscriptEntry(&m.transcript[index])
-		m.refreshViewport()
-	}
 }
 
 func (m *appModel) finalizeThinkingStream() {
@@ -1022,7 +1003,6 @@ func (m *appModel) renderTranscriptContentAt(width int, showThinking bool, at ti
 func transcriptRenderKey(entry transcriptEntry, width int, at time.Time) transcriptRenderCacheKey {
 	key := transcriptRenderCacheKey{
 		kind:                 entry.kind,
-		renderMode:           entry.renderMode,
 		title:                entry.title,
 		inputTokens:          inputTokenSnapshot(entry.inputTokens),
 		color:                entry.color,

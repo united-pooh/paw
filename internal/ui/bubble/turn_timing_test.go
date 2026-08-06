@@ -112,7 +112,7 @@ func TestTurnFinishedUpdateRefreshesFooterIntoViewport(t *testing.T) {
 	model.width = 80
 	model.height = 24
 	model.ready = true
-	model.transcript = []transcriptEntry{{kind: entryAssistant, title: "assistant", body: "answer", renderMode: transcriptRenderFormatted}}
+	model.transcript = []transcriptEntry{{kind: entryAssistant, title: "assistant", body: "answer"}}
 	model.doneAssistant = 0
 	model.queryGuard.StartModel()
 	model.refreshViewport()
@@ -137,7 +137,6 @@ func TestTurnFooterLeavesBottomSpacerForInputDock(t *testing.T) {
 		kind:         entryAssistant,
 		title:        "assistant",
 		body:         "answer",
-		renderMode:   transcriptRenderFormatted,
 		turnMetadata: &session.TurnMetadata{DurationMS: 95000, ResponseAt: &response, Status: session.TurnStatusCompleted},
 	}}
 	model.refreshViewport()
