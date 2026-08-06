@@ -151,6 +151,20 @@ func (m appModel) isTranscriptViewportMouse(msg tea.MouseMsg) bool {
 	return true
 }
 
+// isInputDockMouse 判断鼠标坐标是否落在底部输入 dock（输入框 + 队列面板）
+// 区域内。布局行序固定为：header → transcript → status → input dock。
+func (m appModel) isInputDockMouse(msg tea.MouseMsg) bool {
+	if msg.Y < 1 {
+		return false
+	}
+	layout := m.currentLayout()
+	if msg.X < 0 || msg.X >= layout.frameWidth {
+		return false
+	}
+	top := 1 + layout.headerHeight + layout.transcriptHeight + layout.statusHeight
+	return msg.Y >= top && msg.Y < 1+layout.contentHeight
+}
+
 // transcriptPointForMouse 将鼠标屏幕坐标转换为 transcript 内容中的全局显示单元格坐标。
 func (m appModel) transcriptPointForMouse(x, y int) (selectionPoint, bool) {
 	row, ok := m.transcriptContentRow(y)

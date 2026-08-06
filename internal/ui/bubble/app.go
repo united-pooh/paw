@@ -72,6 +72,15 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 
 	vp := viewport.New(80, 20)
 	vp.MouseWheelDelta = 1
+	// viewport 默认 KeyMap 把空格、j/k/u/d/f/b/h/l 和 ctrl+u/ctrl+d 等绑定为
+	// 滚动键。输入框常驻聚焦时，这些按键必须原样交给 textarea（打字与编辑），
+	// 否则输入字符会连带滚动 transcript（ctrl+u/ctrl+d 还会同时删字和滚屏）。
+	// 这里只保留不与输入冲突的 pgup/pgdn 分页键：↑/↓ 由 app 自行路由，
+	// 左右无横向滚动内容，滚轮滚动也由 app 显式处理。
+	vp.KeyMap = viewport.KeyMap{
+		PageDown: key.NewBinding(key.WithKeys("pgdown")),
+		PageUp:   key.NewBinding(key.WithKeys("pgup")),
+	}
 	skillRoot, _ := os.Getwd()
 	model := appModel{
 		theme:                     selectedTheme,
@@ -678,9 +687,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if next, handled, cmd := m.handleTranscriptMouse(msg); handled {
 			next.syncNewMessageNoticeAfterScroll()
-			if msg.Action != tea.MouseActionMotion || next.selecting {
-				next.transcriptKeyScrollActive = true
-			}
+			// 单击/拖选是选择与打开意图，不进入键盘滚动焦点；只有滚轮滚动
+			// 才把 ↑/↓ 交给 transcript（见下方 isMouseWheel 分支）。
 			return next, cmd
 		}
 		if isMouseWheel(msg) {
@@ -692,6 +700,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, viewportCmd
 			}
 			return m, nil
+		}
+		if msg.Action == tea.MouseActionPress && m.isInputDockMouse(msg) {
+			// 用户点回输入框准备编辑：退出 transcript 键盘滚动焦点，
+			// 让 ↑/↓ 恢复为输入框内光标移动/历史导航。
+			m.transcriptKeyScrollActive = false
 		}
 	}
 

@@ -2836,6 +2836,111 @@ func TestTypingClearsTranscriptKeyScrollFocus(t *testing.T) {
 	}
 }
 
+// TestTypingScrollKeysDoesNotScrollTranscript 回归：输入框打字（空格/j/k/u/d/f/b
+// 等字符）不得滚动 transcript。bubbles viewport 默认把这些字符键绑定为滚动键，
+// 必须从 viewport KeyMap 中移除，避免输入字符时 transcript 被连带滚动。
+func TestTypingScrollKeysDoesNotScrollTranscript(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 10
+	model.input.SetValue("")
+	model.relayout()
+	model.transcript = nil
+	for i := 0; i < 30; i++ {
+		model.transcript = append(model.transcript, transcriptEntry{
+			kind:  entryAssistant,
+			title: "assistant",
+			body:  fmt.Sprintf("line %02d", i),
+		})
+	}
+	model.refreshViewport()
+	model.viewport.ScrollUp(5)
+	startOffset := model.viewport.YOffset
+	if startOffset <= 0 {
+		t.Fatalf("test setup: YOffset = %d, want > 0", startOffset)
+	}
+
+	for _, key := range []string{" ", "j", "k", "u", "d", "f", "b"} {
+		next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+		model = next.(appModel)
+		if model.viewport.YOffset != startOffset {
+			t.Fatalf("typing %q scrolled transcript: YOffset %d -> %d", key, startOffset, model.viewport.YOffset)
+		}
+	}
+	if got := model.input.Value(); got != " jkudfb" {
+		t.Fatalf("input value = %q, want %q", got, " jkudfb")
+	}
+}
+
+// TestClickTranscriptDoesNotActivateKeyScroll 回归：单击 transcript（选择/打开
+// 等意图）不再把 ↑/↓ 置为 transcript 滚动焦点；只有鼠标滚轮滚动才进入该模式。
+func TestClickTranscriptDoesNotActivateKeyScroll(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 10
+	model.relayout()
+	model.transcript = nil
+	for i := 0; i < 30; i++ {
+		model.transcript = append(model.transcript, transcriptEntry{
+			kind:  entryAssistant,
+			title: "assistant",
+			body:  fmt.Sprintf("line %02d", i),
+		})
+	}
+	model.refreshViewport()
+
+	model = mouseClickAt(model, 10, 3)
+	if model.transcriptKeyScrollActive {
+		t.Fatalf("transcript click must not activate key scroll mode")
+	}
+}
+
+// TestClickInputDockExitsKeyScrollMode 回归：鼠标滚轮滚动 transcript 进入键盘
+// 滚动焦点后，点击底部输入框应退出该模式，让 ↑/↓ 恢复为输入框内光标移动。
+func TestClickInputDockExitsKeyScrollMode(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 10
+	model.input.SetValue("draft")
+	model.relayout()
+	model.transcript = nil
+	for i := 0; i < 30; i++ {
+		model.transcript = append(model.transcript, transcriptEntry{
+			kind:  entryAssistant,
+			title: "assistant",
+			body:  fmt.Sprintf("line %02d", i),
+		})
+	}
+	model.refreshViewport()
+
+	next, _ := model.Update(tea.MouseMsg{
+		X:      10,
+		Y:      3,
+		Type:   tea.MouseWheelUp,
+		Button: tea.MouseButtonWheelUp,
+		Action: tea.MouseActionPress,
+	})
+	model = next.(appModel)
+	if !model.transcriptKeyScrollActive {
+		t.Fatalf("transcriptKeyScrollActive = false after transcript wheel")
+	}
+	offsetAfterWheel := model.viewport.YOffset
+
+	model = mouseClickAt(model, 10, model.height-2)
+	if model.transcriptKeyScrollActive {
+		t.Fatalf("transcriptKeyScrollActive = true after input dock click")
+	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyUp})
+	model = next.(appModel)
+	if model.viewport.YOffset != offsetAfterWheel {
+		t.Fatalf("YOffset = %d, want unchanged %d after input up", model.viewport.YOffset, offsetAfterWheel)
+	}
+}
+
 func TestFullWidthTranscriptMouseWheelScrollsViewport(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
