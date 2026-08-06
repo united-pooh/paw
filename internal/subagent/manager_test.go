@@ -3,6 +3,7 @@ package subagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -771,7 +772,7 @@ func TestLaunchTracksStatusListAndNotification(t *testing.T) {
 	}
 
 	event := notifier.wait(t)
-	if event.Title != "subagent" || !strings.Contains(event.Body, "status=completed") || !strings.Contains(event.Body, "background answer") {
+	if event.Title != "subagent" || !strings.Contains(event.Body, `<task id="`+task.ID+`"`) || !strings.Contains(event.Body, `state="completed"`) || !strings.Contains(event.Body, "summary: background answer") {
 		t.Fatalf("system event = %#v", event)
 	}
 }
@@ -867,20 +868,21 @@ func TestBackgroundCompletionSubmitsParentContext(t *testing.T) {
 
 	update := sink.wait(t)
 	for _, want := range []string{
-		"Background subagent completed.",
-		"id: " + task.ID,
-		"description: collect context",
-		"status: completed",
-		"result:",
+		"<task id=\"" + task.ID + "\"",
+		`state="completed"`,
+		"summary: ",
 		"[truncated; full result: " + completed.OutputPath + "]",
+		"transcript: " + completed.TranscriptPath,
+		"output: " + completed.OutputPath,
+		"</task>",
 	} {
 		if !strings.Contains(update, want) {
 			t.Fatalf("context update = %q, want %q", update, want)
 		}
 	}
-	_, afterResult, ok := strings.Cut(update, "result:\n")
+	_, afterResult, ok := strings.Cut(update, "summary: ")
 	if !ok {
-		t.Fatalf("context update = %q, want result section", update)
+		t.Fatalf("context update = %q, want summary section", update)
 	}
 	resultSection, _, ok := strings.Cut(afterResult, "\n[truncated; full result:")
 	if !ok {
@@ -970,16 +972,247 @@ func TestSubagentToolsProvideSyncAndStatusAccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status list Run() error = %v", err)
 	}
-	if !strings.Contains(listOut, launched.ID) || !strings.Contains(listOut, `"status": "completed"`) {
-		t.Fatalf("status list output = %q", listOut)
+	// Without id, status lists only running tasks; the launched task already
+	// completed, so the list must be empty and never carry content.
+	if strings.Contains(listOut, launched.ID) || strings.Contains(listOut, "background answer") {
+		t.Fatalf("status list output = %q, want running-only tasks without content", listOut)
 	}
 
 	singleOut, err := statusTool.Run(context.Background(), json.RawMessage(`{"id":"`+launched.ID+`"}`))
 	if err != nil {
 		t.Fatalf("status single Run() error = %v", err)
 	}
-	if !strings.Contains(singleOut, `"id": "`+launched.ID+`"`) || !strings.Contains(singleOut, `"content": "background answer"`) {
+	if !strings.Contains(singleOut, `"id": "`+launched.ID+`"`) || !strings.Contains(singleOut, `"status": "completed"`) {
 		t.Fatalf("status single output = %q", singleOut)
+	}
+	if strings.Contains(singleOut, "background answer") || strings.Contains(singleOut, `"content"`) {
+		t.Fatalf("status single output = %q, want no content field", singleOut)
+	}
+}
+
+func TestWaitAnyReturnsWhenAnyTaskCompletes(t *testing.T) {
+	modelStreamer := &recordingModel{
+		rounds: []fakeRound{
+			{events: []model.StreamEvent{{Delta: "first answer"}, {Done: true}}},
+			{events: []model.StreamEvent{{Delta: "second answer"}, {Done: true}}},
+			{events: []model.StreamEvent{{Delta: "third answer"}, {Done: true}}},
+		},
+	}
+	manager, _, _ := newTestManager(t, modelStreamer, settings.DefaultConfig(), nil)
+
+	first, err := manager.Launch(context.Background(), Request{Prompt: "first"})
+	if err != nil {
+		t.Fatalf("first Launch() error = %v", err)
+	}
+	second, err := manager.Launch(context.Background(), Request{Prompt: "second"})
+	if err != nil {
+		t.Fatalf("second Launch() error = %v", err)
+	}
+	third, err := manager.Launch(context.Background(), Request{Prompt: "third"})
+	if err != nil {
+		t.Fatalf("third Launch() error = %v", err)
+	}
+
+	start := time.Now()
+	result, err := manager.WaitAny(context.Background(), []string{first.ID, second.ID, third.ID}, 2*time.Second)
+	if err != nil {
+		t.Fatalf("WaitAny() error = %v", err)
+	}
+	if result.TimedOut {
+		t.Fatalf("WaitAny() timed out, want completion: %#v", result)
+	}
+	if !result.AnyTerminal {
+		t.Fatalf("WaitAny() AnyTerminal = false, want true: %#v", result)
+	}
+	if time.Since(start) > 1500*time.Millisecond {
+		t.Fatalf("WaitAny() blocked for %v, want return as soon as the fastest task completes", time.Since(start))
+	}
+	if len(result.Tasks) != 3 {
+		t.Fatalf("WaitAny() tasks = %#v, want 3 summaries", result.Tasks)
+	}
+	terminal := 0
+	for _, summary := range result.Tasks {
+		if summary.ID == first.ID && summary.Status != TaskCompleted {
+			t.Fatalf("first summary = %#v, want completed", summary)
+		}
+		if isTerminalStatus(summary.Status) {
+			terminal++
+		}
+	}
+	if terminal != 1 {
+		t.Fatalf("WaitAny() terminal count = %d, want exactly 1 (only fastest)", terminal)
+	}
+	// Drain the remaining workers so the tempdir cleanup does not race them.
+	for _, id := range []string{first.ID, second.ID, third.ID} {
+		waitForTask(t, manager, id, TaskCompleted)
+	}
+}
+
+func TestWaitAnyAlreadyFinishedReturnsImmediately(t *testing.T) {
+	modelStreamer := &recordingModel{
+		rounds: []fakeRound{
+			{events: []model.StreamEvent{{Delta: "done answer"}, {Done: true}}},
+		},
+	}
+	manager, _, _ := newTestManager(t, modelStreamer, settings.DefaultConfig(), nil)
+
+	task, err := manager.Launch(context.Background(), Request{Prompt: "already done"})
+	if err != nil {
+		t.Fatalf("Launch() error = %v", err)
+	}
+	waitForTask(t, manager, task.ID, TaskCompleted)
+
+	start := time.Now()
+	result, err := manager.WaitAny(context.Background(), []string{task.ID}, 10*time.Second)
+	if err != nil {
+		t.Fatalf("WaitAny() error = %v", err)
+	}
+	if result.TimedOut || !result.AnyTerminal {
+		t.Fatalf("WaitAny() = %#v, want immediate completion", result)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatalf("WaitAny() on finished task blocked for %v", time.Since(start))
+	}
+	if len(result.Tasks) != 1 || result.Tasks[0].ID != task.ID || result.Tasks[0].Status != TaskCompleted {
+		t.Fatalf("WaitAny() tasks = %#v", result.Tasks)
+	}
+}
+
+func TestWaitAnyTimeoutReturnsSnapshot(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	launcher := &blockingLauncher{}
+	manager := NewManager(Config{
+		Store:    store,
+		Root:     root,
+		Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+		Launcher: launcher,
+	})
+
+	task, err := manager.Launch(context.Background(), Request{Prompt: "slow"})
+	if err != nil {
+		t.Fatalf("Launch() error = %v", err)
+	}
+
+	result, err := manager.WaitAny(context.Background(), []string{task.ID}, 30*time.Millisecond)
+	if err != nil {
+		t.Fatalf("WaitAny() error = %v", err)
+	}
+	if !result.TimedOut {
+		t.Fatalf("WaitAny() = %#v, want timed_out=true", result)
+	}
+	if result.AnyTerminal {
+		t.Fatalf("WaitAny() AnyTerminal = true on timeout, want false")
+	}
+	if len(result.Tasks) != 1 || result.Tasks[0].ID != task.ID || result.Tasks[0].Status != TaskRunning {
+		t.Fatalf("WaitAny() timeout snapshot = %#v, want still-running summary", result.Tasks)
+	}
+	if _, err := manager.Stop(context.Background(), task.ID); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+}
+
+func TestWaitAnyContextCancelReturnsError(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	launcher := &blockingLauncher{}
+	manager := NewManager(Config{
+		Store:    store,
+		Root:     root,
+		Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+		Launcher: launcher,
+	})
+
+	task, err := manager.Launch(context.Background(), Request{Prompt: "slow"})
+	if err != nil {
+		t.Fatalf("Launch() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		cancel()
+	}()
+	if _, err := manager.WaitAny(ctx, []string{task.ID}, 10*time.Second); !errors.Is(err, context.Canceled) {
+		t.Fatalf("WaitAny() error = %v, want context.Canceled", err)
+	}
+	if _, err := manager.Stop(context.Background(), task.ID); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+}
+
+func TestWaitAnyUnknownIDsMarkedNotFound(t *testing.T) {
+	modelStreamer := &recordingModel{
+		rounds: []fakeRound{
+			{events: []model.StreamEvent{{Delta: "real answer"}, {Done: true}}},
+		},
+	}
+	manager, _, _ := newTestManager(t, modelStreamer, settings.DefaultConfig(), nil)
+
+	real, err := manager.Launch(context.Background(), Request{Prompt: "real"})
+	if err != nil {
+		t.Fatalf("Launch() error = %v", err)
+	}
+	waitForTask(t, manager, real.ID, TaskCompleted)
+
+	result, err := manager.WaitAny(context.Background(), []string{real.ID, "ghost-task-1", "ghost-task-2"}, time.Second)
+	if err != nil {
+		t.Fatalf("WaitAny() error = %v", err)
+	}
+	if result.TimedOut {
+		t.Fatalf("WaitAny() = %#v, want completion despite unknown ids", result)
+	}
+	byID := make(map[string]TaskSummary, len(result.Tasks))
+	for _, summary := range result.Tasks {
+		byID[summary.ID] = summary
+	}
+	if byID[real.ID].Status != TaskCompleted {
+		t.Fatalf("real task = %#v, want completed", byID[real.ID])
+	}
+	for _, ghost := range []string{"ghost-task-1", "ghost-task-2"} {
+		if byID[ghost].Status != TaskNotFound || !byID[ghost].NotFound {
+			t.Fatalf("unknown task %s = %#v, want not_found marker", ghost, byID[ghost])
+		}
+	}
+}
+
+func TestWaitToolRejectsEmptyTaskIDs(t *testing.T) {
+	manager, _, _ := newTestManager(t, &recordingModel{}, settings.DefaultConfig(), nil)
+	waitTool := NewWaitTool(manager)
+	if _, err := waitTool.Run(context.Background(), json.RawMessage(`{"task_ids":[]}`)); err == nil {
+		t.Fatal("Wait() with empty task_ids should fail")
+	}
+	if _, err := waitTool.Run(context.Background(), json.RawMessage(`{}`)); err == nil {
+		t.Fatal("Wait() without task_ids should fail")
+	}
+}
+
+func TestWaitToolAppliesDefaultTimeoutFromSettings(t *testing.T) {
+	modelStreamer := &recordingModel{
+		rounds: []fakeRound{
+			{events: []model.StreamEvent{{Delta: "fast answer"}, {Done: true}}},
+		},
+	}
+	cfg := settings.DefaultConfig()
+	cfg.Subagent.WaitTimeoutMs = 42
+	manager, _, _ := newTestManager(t, modelStreamer, cfg, nil)
+	waitTool := NewWaitTool(manager)
+
+	task, err := manager.Launch(context.Background(), Request{Prompt: "fast"})
+	if err != nil {
+		t.Fatalf("Launch() error = %v", err)
+	}
+	out, err := waitTool.Run(context.Background(), json.RawMessage(`{"task_ids":["`+task.ID+`"]}`))
+	if err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	if !strings.Contains(out, `"timed_out": false`) || !strings.Contains(out, `"status": "completed"`) {
+		t.Fatalf("Wait() output = %q", out)
 	}
 }
 

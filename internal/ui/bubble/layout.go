@@ -194,6 +194,12 @@ func (m appModel) renderTranscriptRegion(layout tuiLayout) string {
 		content,
 	)
 
+	// 运行中 subagent 任务卡：贴在 transcript 右边界内侧、垂直居中。
+	// modal / completion 浮层在其之后合成，必要时覆盖卡片。
+	if card := m.renderSubagentTaskCard(m.animationNow()); card != "" {
+		base = placeRightCenteredOverlay(base, card, layout.contentWidth, layout.transcriptHeight)
+	}
+
 	if modal := m.renderActiveModalBox(layout); modal != "" {
 		return placeOpaqueOverlay(
 			base,

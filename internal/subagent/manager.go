@@ -79,6 +79,11 @@ type Manager struct {
 	tasks   map[string]TaskSnapshot
 	running map[string]Process
 
+	// notifyCh 广播任务状态转换。每次有任务进入终态（或启动失败）时在
+	// m.mu 内 close 并替换为新 channel，唤醒所有 SubagentWait 等待者。
+	// WaitAny 每次迭代都在锁内获取引用并先检查终态，保证不丢失唤醒。
+	notifyCh chan struct{}
+
 	// diskTaskCache avoids rescanning the task registry on every status poll.
 	// In-memory tasks are always merged so running/completed transitions remain
 	// immediately visible; disk changes are observed at most one TTL later.
@@ -136,6 +141,9 @@ const (
 	TaskCompleted TaskStatus = "completed"
 	TaskFailed    TaskStatus = "failed"
 	TaskStopped   TaskStatus = "stopped"
+	// TaskNotFound 标记 SubagentWait/SubagentStatus 中请求了未知任务 id。
+	// 它不参与终态判断，仅用于宽容地告知调用方该 id 不存在。
+	TaskNotFound TaskStatus = "not_found"
 )
 
 type TaskSnapshot struct {
@@ -165,6 +173,52 @@ type TaskSnapshot struct {
 	Usage           *tokentracer.Usage   `json:"usage,omitempty"`
 }
 
+// TaskSummary 是面向模型/工具的轻量任务摘要：绝不包含 content、prompt、
+// system_prompt、usage 等大字段。需要完整结果时用 Read 读取 output_path。
+type TaskSummary struct {
+	ID             string     `json:"id"`
+	Name           string     `json:"name,omitempty"`
+	Status         TaskStatus `json:"status"`
+	StartedAt      time.Time  `json:"started_at"`
+	FinishedAt     *time.Time `json:"finished_at,omitempty"`
+	Depth          int        `json:"depth"`
+	ParentTaskID   string     `json:"parent_task_id,omitempty"`
+	ExitCode       *int       `json:"exit_code,omitempty"`
+	Error          string     `json:"error,omitempty"`
+	OutputPath     string     `json:"output_path,omitempty"`
+	TranscriptPath string     `json:"transcript_path"`
+	NotFound       bool       `json:"not_found,omitempty"`
+}
+
+// WaitResult 是 SubagentWait 的返回体。AnyTerminal 仅供内部判断使用，
+// 不进入 JSON 输出。
+type WaitResult struct {
+	TimedOut    bool          `json:"timed_out"`
+	Tasks       []TaskSummary `json:"tasks"`
+	AnyTerminal bool          `json:"-"`
+}
+
+// summarizeTask 把 TaskSnapshot 折叠为 TaskSummary，永不携带大字段。
+func summarizeTask(task TaskSnapshot) TaskSummary {
+	summary := TaskSummary{
+		ID:             task.ID,
+		Name:           task.Name,
+		Status:         task.Status,
+		StartedAt:      task.StartedAt,
+		FinishedAt:     task.FinishedAt,
+		Depth:          task.Depth,
+		ParentTaskID:   task.ParentTaskID,
+		ExitCode:       task.ExitCode,
+		Error:          task.Error,
+		OutputPath:     task.OutputPath,
+		TranscriptPath: task.TranscriptPath,
+	}
+	if task.Status == TaskNotFound {
+		summary.NotFound = true
+	}
+	return summary
+}
+
 type sinkUI struct{}
 
 var _ ui.UI = sinkUI{}
@@ -186,6 +240,7 @@ func NewManager(cfg Config) *Manager {
 		mcpBroker:    cfg.MCPBroker,
 		tasks:        make(map[string]TaskSnapshot),
 		running:      make(map[string]Process),
+		notifyCh:     make(chan struct{}),
 	}
 	if m.maxDepth <= 0 {
 		m.maxDepth = 4
@@ -389,8 +444,165 @@ func (m *Manager) Stop(ctx context.Context, id string) (TaskSnapshot, error) {
 		Error:     task.Error,
 		ExitCode:  exitCode,
 	})
+	m.signalTaskUpdate()
 	m.notifyTaskFinished(task)
 	return task, nil
+}
+
+// signalTaskUpdate 唤醒所有阻塞在 WaitAny 上的等待者。必须在任务状态
+// 已切换为终态之后调用；close 与替换都在 m.mu 内完成，等待者每次迭代
+// 也在锁内获取 channel 引用，因此不会丢失唤醒也不会读到已关闭的旧 channel。
+func (m *Manager) signalTaskUpdate() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	close(m.notifyCh)
+	m.notifyCh = make(chan struct{})
+	m.mu.Unlock()
+}
+
+// WaitAny 阻塞直到任意一个给定任务进入终态（completed/failed/stopped）或
+// timeout 到期。返回所有请求任务的最新快照；超时时 timed_out=true（非错误）。
+// 未知 id 标记 not_found 且不构成"完成"条件。ctx 取消时返回错误。
+func (m *Manager) WaitAny(ctx context.Context, ids []string, timeout time.Duration) (WaitResult, error) {
+	if m == nil {
+		return WaitResult{}, fmt.Errorf("subagent manager is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return WaitResult{}, err
+	}
+	seen := make(map[string]bool, len(ids))
+	targets := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		targets = append(targets, id)
+	}
+	if len(targets) == 0 {
+		return WaitResult{}, fmt.Errorf("at least one subagent task id is required")
+	}
+
+	// 磁盘加载过的任务快照，避免每次迭代读盘。
+	loaded := make(map[string]TaskSnapshot, len(targets))
+	notFound := make(map[string]bool, len(targets))
+	deadline := time.Now().Add(timeout)
+
+	snapshot := func() WaitResult {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		tasks := make([]TaskSummary, 0, len(targets))
+		anyTerminal := false
+		allSettled := true
+		for _, id := range targets {
+			if task, ok := m.tasks[id]; ok {
+				tasks = append(tasks, summarizeTask(task))
+				if isTerminalStatus(task.Status) {
+					anyTerminal = true
+				} else {
+					allSettled = false
+				}
+				continue
+			}
+			if task, ok := loaded[id]; ok {
+				tasks = append(tasks, summarizeTask(task))
+				if isTerminalStatus(task.Status) {
+					anyTerminal = true
+				} else {
+					allSettled = false
+				}
+				continue
+			}
+			if notFound[id] {
+				tasks = append(tasks, TaskSummary{ID: id, Status: TaskNotFound, NotFound: true})
+				continue
+			}
+			// 既不在内存也不在本地缓存：尝试从磁盘加载一次（宽容处理，
+			// 例如父进程重启后等待历史任务）。加载失败视为 not_found。
+			m.mu.RUnlock()
+			task, ok := m.Status(id)
+			m.mu.RLock()
+			if !ok {
+				notFound[id] = true
+				tasks = append(tasks, TaskSummary{ID: id, Status: TaskNotFound, NotFound: true})
+				continue
+			}
+			loaded[id] = task
+			tasks = append(tasks, summarizeTask(task))
+			if isTerminalStatus(task.Status) {
+				anyTerminal = true
+			} else {
+				allSettled = false
+			}
+		}
+		if allSettled {
+			anyTerminal = true
+		}
+		return WaitResult{TimedOut: false, Tasks: tasks, AnyTerminal: anyTerminal}
+	}
+
+	remaining := timeout
+	for {
+		result := snapshot()
+		if result.AnyTerminal {
+			return result, nil
+		}
+		if remaining <= 0 {
+			result.TimedOut = true
+			result.AnyTerminal = false
+			return result, nil
+		}
+		m.mu.RLock()
+		ch := m.notifyCh
+		m.mu.RUnlock()
+		timer := time.NewTimer(remaining)
+		select {
+		case <-ch:
+			timer.Stop()
+			// 重新检查状态；循环顶部会重算剩余时间。
+			remaining = time.Until(deadline)
+			if remaining <= 0 {
+				result := snapshot()
+				result.TimedOut = true
+				return result, nil
+			}
+			continue
+		case <-ctx.Done():
+			timer.Stop()
+			return WaitResult{}, ctx.Err()
+		case <-timer.C:
+			result := snapshot()
+			result.TimedOut = true
+			return result, nil
+		}
+	}
+}
+
+func isTerminalStatus(status TaskStatus) bool {
+	switch status {
+	case TaskCompleted, TaskFailed, TaskStopped:
+		return true
+	default:
+		return false
+	}
+}
+
+// RunningTasks 返回当前所有运行中任务的摘要列表（仅内存+磁盘中 running 的任务）。
+func (m *Manager) RunningTasks() []TaskSnapshot {
+	if m == nil {
+		return nil
+	}
+	tasks := m.ListTasks()
+	out := make([]TaskSnapshot, 0, len(tasks))
+	for _, task := range tasks {
+		if task.Status == TaskRunning {
+			out = append(out, task)
+		}
+	}
+	return out
 }
 
 func (m *Manager) Status(id string) (TaskSnapshot, bool) {
@@ -597,6 +809,7 @@ func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Pro
 			Error:     task.Error,
 			ExitCode:  exitCode,
 		})
+		m.signalTaskUpdate()
 		return TaskSnapshot{}, nil, err
 	}
 	task.PID = process.PID()
@@ -623,6 +836,7 @@ func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Pro
 			ExitCode:  exitCode,
 		})
 		_ = m.registry.saveTask(ctx, task)
+		m.signalTaskUpdate()
 		return TaskSnapshot{}, nil, err
 	}
 	m.recordTaskStarted(task)
@@ -759,6 +973,7 @@ func (m *Manager) finishTask(ctx context.Context, taskID string, result WorkerRe
 	delete(m.running, taskID)
 	m.mu.Unlock()
 
+	m.signalTaskUpdate()
 	m.submitTaskContext(task)
 	m.recordTaskFinished(task)
 	return task
@@ -983,16 +1198,10 @@ func (m *Manager) notifyTaskFinished(task TaskSnapshot) {
 	if m == nil || m.notifier == nil {
 		return
 	}
-	status := string(task.Status)
-	body := fmt.Sprintf("%s finished with status=%s", shortID(task.ID), status)
-	if task.Error != "" {
-		body += ": " + task.Error
-	} else if task.Content != "" {
-		body += ": " + summarize(task.Content)
-	}
+	// 与 SubmitSupplement 注入父会话的块一致：TUI 识别 <task> 块并渲染为框线卡片。
 	_ = m.notifier.OnSystemMessage(ui.SystemEvent{
 		Title: "subagent",
-		Body:  body,
+		Body:  renderTaskCompletionBlock(task),
 	})
 }
 
@@ -1005,41 +1214,74 @@ func (m *Manager) submitTaskContext(task TaskSnapshot) {
 	if strings.TrimSpace(task.ParentSessionID) == "" {
 		return
 	}
-	update := renderTaskContextUpdate(task)
+	update := renderTaskCompletionBlock(task)
 	if strings.TrimSpace(update) == "" {
 		return
 	}
 	_ = m.contextSink.SubmitSupplement(update)
 }
 
-func renderTaskContextUpdate(task TaskSnapshot) string {
-	var lines []string
-	lines = append(lines, "Background subagent completed.")
-	lines = append(lines, "id: "+task.ID)
-	if task.Name != "" {
-		lines = append(lines, "name: "+task.Name)
+// renderTaskCompletionBlock 把后台任务完成事件渲染成结构化 <task> 块。
+// 该块注入父会话上下文（模型侧可见原始 XML），同时被 TUI 识别为框线块。
+func renderTaskCompletionBlock(task TaskSnapshot) string {
+	state := string(task.Status)
+	if state != string(TaskCompleted) && state != string(TaskFailed) && state != string(TaskStopped) {
+		state = string(TaskCompleted)
 	}
-	if task.Description != "" {
-		lines = append(lines, "description: "+task.Description)
+	var attrs strings.Builder
+	attrs.WriteString(`id="` + escapeTaskAttr(task.ID) + `"`)
+	attrs.WriteString(` state="` + state + `"`)
+	if name := strings.TrimSpace(task.Name); name != "" {
+		attrs.WriteString(` name="` + escapeTaskAttr(name) + `"`)
 	}
-	lines = append(lines, "status: "+string(task.Status))
-	lines = append(lines, "context_mode: "+string(task.ContextMode))
-	lines = append(lines, "run_mode: "+string(task.RunMode))
-	if task.TranscriptPath != "" {
-		lines = append(lines, "transcript: "+task.TranscriptPath)
+	if task.FinishedAt != nil && !task.StartedAt.IsZero() {
+		durationMs := task.FinishedAt.Sub(task.StartedAt).Milliseconds()
+		if durationMs >= 0 {
+			attrs.WriteString(fmt.Sprintf(` duration_ms="%d"`, durationMs))
+		}
 	}
-	if task.OutputPath != "" {
-		lines = append(lines, "output: "+task.OutputPath)
+	if size := outputFileSize(task.OutputPath); size >= 0 {
+		attrs.WriteString(fmt.Sprintf(` output_size="%d"`, size))
 	}
-	if task.Error != "" {
-		lines = append(lines, "error: "+task.Error)
-	}
+
+	var body strings.Builder
 	content := strings.TrimSpace(task.Content)
 	if content != "" {
-		lines = append(lines, "result:")
-		lines = append(lines, truncateForParentContext(content, parentContextResultMaxRunes, task.OutputPath))
+		body.WriteString("summary: ")
+		body.WriteString(truncateForParentContext(content, parentContextResultMaxRunes, task.OutputPath))
+		body.WriteString("\n")
 	}
-	return strings.Join(lines, "\n")
+	if strings.TrimSpace(task.Error) != "" {
+		body.WriteString("error: " + strings.TrimSpace(task.Error) + "\n")
+	}
+	if strings.TrimSpace(task.TranscriptPath) != "" {
+		body.WriteString("transcript: " + strings.TrimSpace(task.TranscriptPath) + "\n")
+	}
+	if strings.TrimSpace(task.OutputPath) != "" {
+		body.WriteString("output: " + strings.TrimSpace(task.OutputPath) + "\n")
+	}
+	return "<task " + attrs.String() + ">\n" + strings.TrimRight(body.String(), "\n") + "\n</task>"
+}
+
+// escapeTaskAttr 转义 XML 属性中的特殊字符，防止注入破坏 <task> 块结构。
+func escapeTaskAttr(value string) string {
+	value = strings.ReplaceAll(value, "&", "&amp;")
+	value = strings.ReplaceAll(value, `"`, "&quot;")
+	value = strings.ReplaceAll(value, "<", "&lt;")
+	value = strings.ReplaceAll(value, ">", "&gt;")
+	return value
+}
+
+// outputFileSize 返回 output 文件字节数；读取失败返回 -1（调用方省略属性）。
+func outputFileSize(path string) int64 {
+	if strings.TrimSpace(path) == "" {
+		return -1
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return -1
+	}
+	return info.Size()
 }
 
 func truncateForParentContext(content string, limit int, outputPath string) string {
@@ -1268,6 +1510,10 @@ type stopTool struct {
 	manager *Manager
 }
 
+type waitTool struct {
+	manager *Manager
+}
+
 type toolInput struct {
 	Prompt      string               `json:"prompt"`
 	Description string               `json:"description,omitempty"`
@@ -1283,6 +1529,11 @@ type stopInput struct {
 	ID string `json:"id"`
 }
 
+type waitInput struct {
+	TaskIDs   []string `json:"task_ids"`
+	TimeoutMs int      `json:"timeout_ms,omitempty"`
+}
+
 func NewTool(manager *Manager, parentSessionID string) tool.Tool {
 	return &subagentTool{manager: manager, parentSessionID: parentSessionID}
 }
@@ -1293,6 +1544,10 @@ func NewStatusTool(manager *Manager) tool.Tool {
 
 func NewStopTool(manager *Manager) tool.Tool {
 	return &stopTool{manager: manager}
+}
+
+func NewWaitTool(manager *Manager) tool.Tool {
+	return &waitTool{manager: manager}
 }
 
 func (t *subagentTool) Name() string {
@@ -1355,7 +1610,7 @@ func (t *statusTool) Name() string {
 }
 
 func (t *statusTool) Description() string {
-	return "List background subagent tasks or get one task by id."
+	return "Summarize subagent tasks. Without id, lists only running tasks. Results are not included — read the task's output_path. Never poll — use SubagentWait instead."
 }
 
 func (t *statusTool) InputSchema() json.RawMessage {
@@ -1381,9 +1636,14 @@ func (t *statusTool) Run(ctx context.Context, raw json.RawMessage) (string, erro
 		if !ok {
 			return "", fmt.Errorf("subagent task not found: %s", in.ID)
 		}
-		return marshalResult(task), nil
+		return marshalResult(summarizeTask(task)), nil
 	}
-	return marshalResult(t.manager.ListTasks()), nil
+	running := t.manager.RunningTasks()
+	summaries := make([]TaskSummary, 0, len(running))
+	for _, task := range running {
+		summaries = append(summaries, summarizeTask(task))
+	}
+	return marshalResult(summaries), nil
 }
 
 func (t *stopTool) Name() string {
@@ -1408,6 +1668,52 @@ func (t *stopTool) Run(ctx context.Context, raw json.RawMessage) (string, error)
 		return marshalResult(task), err
 	}
 	return marshalResult(task), nil
+}
+
+func (t *waitTool) Name() string {
+	return "SubagentWait"
+}
+
+func (t *waitTool) Description() string {
+	return "Block until any of the given subagent tasks finishes (completed, failed, or stopped). Returns the latest snapshot of all requested tasks with timed_out=false once at least one finishes; on timeout returns timed_out=true with the current snapshot (not an error). Do not poll SubagentStatus — use SubagentWait instead."
+}
+
+func (t *waitTool) InputSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"task_ids":{"type":"array","items":{"type":"string"},"minItems":1},"timeout_ms":{"type":"number"}},"required":["task_ids"]}`)
+}
+
+func (t *waitTool) IsConcurrencySafe(json.RawMessage) bool {
+	return t != nil && t.manager != nil
+}
+
+func (t *waitTool) Run(ctx context.Context, raw json.RawMessage) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	var in waitInput
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return "", err
+	}
+	if len(in.TaskIDs) == 0 {
+		return "", fmt.Errorf("task_ids is required (at least one subagent task id)")
+	}
+	timeout := time.Duration(in.TimeoutMs) * time.Millisecond
+	if timeout <= 0 {
+		timeout = time.Duration(t.manager.defaultWaitTimeout()) * time.Millisecond
+	}
+	result, err := t.manager.WaitAny(ctx, in.TaskIDs, timeout)
+	if err != nil {
+		return "", err
+	}
+	return marshalResult(result), nil
+}
+
+// defaultWaitTimeout 返回 settings.subagent.wait_timeout_ms 的默认等待上限。
+func (m *Manager) defaultWaitTimeout() int {
+	if m == nil || m.settings == nil {
+		return settings.DefaultSubagentWaitTimeoutMs
+	}
+	return m.settings.CurrentSettings().Subagent.WaitTimeoutMs
 }
 
 func marshalResult(v any) string {

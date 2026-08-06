@@ -1,0 +1,275 @@
+// 本文件覆盖 subagent 任务卡（右侧垂直居中）与 <task> 结构化完成块的
+// 解析、渲染和叠加行为。
+package bubble
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+
+	"paw/internal/settings"
+	"paw/internal/subagent"
+	"paw/internal/ui"
+)
+
+func TestIsTaskCompletionBlock(t *testing.T) {
+	for _, body := range []string{
+		"<task id=\"abc\" state=\"completed\">\nsummary: done\n</task>",
+		"  <task id=\"abc\" state=\"failed\">\n</task>\n",
+	} {
+		if !isTaskCompletionBlock(body) {
+			t.Fatalf("isTaskCompletionBlock(%q) = false, want true", body)
+		}
+	}
+	for _, body := range []string{
+		"",
+		"<task id=\"abc\" state=\"completed\">",
+		"</task>",
+		"plain text <task id=\"abc\">\n</task>",
+		"<task id=\"abc\">\nno closing tag",
+	} {
+		if isTaskCompletionBlock(body) {
+			t.Fatalf("isTaskCompletionBlock(%q) = true, want false", body)
+		}
+	}
+}
+
+func TestParseTaskCompletionBlock(t *testing.T) {
+	body := "<task id=\"a6c81e94\" state=\"failed\" name=\"二叶筑\" duration_ms=\"42420\" output_size=\"1536\">\n" +
+		"summary: 模型接口返回异常状态 400: invalid_request_error\n" +
+		"error: missing field `output`\n" +
+		"transcript: /tmp/a6c81e94/transcript.jsonl\n" +
+		"output: /tmp/a6c81e94/output.json\n" +
+		"</task>"
+	info, ok := parseTaskCompletionBlock(body)
+	if !ok {
+		t.Fatalf("parseTaskCompletionBlock() = false, want true")
+	}
+	if info.ID != "a6c81e94" || info.State != "failed" || info.Name != "二叶筑" {
+		t.Fatalf("task info = %#v", info)
+	}
+	if info.DurationMS != 42420 || info.OutputSize != 1536 {
+		t.Fatalf("task info = %#v, want duration/size parsed", info)
+	}
+	if !strings.Contains(info.Summary, "invalid_request_error") || info.Error != "missing field `output`" {
+		t.Fatalf("task info = %#v, want summary/error sections", info)
+	}
+	if info.Transcript != "/tmp/a6c81e94/transcript.jsonl" || info.Output != "/tmp/a6c81e94/output.json" {
+		t.Fatalf("task info = %#v, want paths", info)
+	}
+}
+
+func TestParseTaskCompletionBlockUnescapesAttributes(t *testing.T) {
+	body := "<task id=\"a&amp;b&lt;c&gt;d&quot;e\" state=\"completed\" name=\"&quot;quoted&quot;\">\n</task>"
+	info, ok := parseTaskCompletionBlock(body)
+	if !ok {
+		t.Fatalf("parseTaskCompletionBlock() = false, want true")
+	}
+	if info.ID != "a&b<c>d\"e" || info.Name != `"quoted"` {
+		t.Fatalf("task info = %#v, want unescaped attribute values", info)
+	}
+}
+
+func TestRenderTaskCompletionCardStates(t *testing.T) {
+	cases := []struct {
+		state  string
+		marker string
+		text   string
+	}{
+		{"completed", "✓", "完成"},
+		{"failed", "✗", "失败"},
+		{"stopped", "■", "已停止"},
+		{"unknown-state", "✓", "完成"},
+	}
+	for _, tc := range cases {
+		body := "<task id=\"task-1\" state=\"" + tc.state + "\" name=\"角色A\">\nsummary: 结果摘要\n</task>"
+		rendered := ansi.Strip(renderTaskCompletionCard(body, 60))
+		if !strings.Contains(rendered, tc.marker) || !strings.Contains(rendered, tc.text) {
+			t.Fatalf("state %q rendered = %q, want marker %q + %q", tc.state, rendered, tc.marker, tc.text)
+		}
+		if !strings.Contains(rendered, "角色A") || !strings.Contains(rendered, "结果摘要") {
+			t.Fatalf("state %q rendered = %q, want name and summary", tc.state, rendered)
+		}
+	}
+}
+
+func TestRenderTaskCompletionCardFallsBackToPlainBody(t *testing.T) {
+	rendered := renderTaskCompletionCard("<task id=\"x\"", 60)
+	if !strings.Contains(rendered, "<task id=\"x\"") {
+		t.Fatalf("fallback rendered = %q, want raw body preserved", rendered)
+	}
+}
+
+func TestTaskBlockMetaLineFormatsDurationAndSize(t *testing.T) {
+	meta := taskBlockMetaLine(taskBlockInfo{ID: "a6c81e94", DurationMS: 42420, OutputSize: 1536})
+	for _, want := range []string{"a6c81e94", "42s", "1.5KB"} {
+		if !strings.Contains(meta, want) {
+			t.Fatalf("meta line = %q, want %q", meta, want)
+		}
+	}
+	if got := taskBlockMetaLine(taskBlockInfo{}); got != "" {
+		t.Fatalf("empty meta line = %q, want empty", got)
+	}
+}
+
+func TestSystemTaskBlockEntryRendersAsCard(t *testing.T) {
+	entry := transcriptEntry{
+		kind:  entrySystem,
+		title: "subagent",
+		body:  "<task id=\"task-9\" state=\"completed\" name=\"深潜者\">\nsummary: 完成工作\n</task>",
+	}
+	rendered := ansi.Strip(renderEntryAt(entry, 60, time.Time{}))
+	for _, want := range []string{"✓", "深潜者", "完成", "摘要: 完成工作"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered = %q, want %q", rendered, want)
+		}
+	}
+	if strings.Contains(rendered, "subagent") {
+		t.Fatalf("rendered = %q, should not show the subagent system label", rendered)
+	}
+	for _, line := range strings.Split(rendered, "\n") {
+		if got := lipgloss.Width(line); got > 60 {
+			t.Fatalf("line width = %d, want <= 60: %q", got, line)
+		}
+	}
+}
+
+func TestRenderSubagentTaskCardEmpty(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.subagents = &fakeSubagentController{}
+	if card := model.renderSubagentTaskCard(time.Time{}); card != "" {
+		t.Fatalf("task card = %q, want empty for no running tasks", card)
+	}
+}
+
+func TestRenderSubagentTaskCardListsRunningOnly(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.subagents = &fakeSubagentController{tasks: []subagent.TaskSnapshot{
+		{ID: "running-1", Name: "二叶筑", Color: "#ff9900", Status: subagent.TaskRunning},
+		{ID: "done-1", Name: "已完成", Status: subagent.TaskCompleted},
+		{ID: "running-2", Status: subagent.TaskRunning},
+	}}
+	card := ansi.Strip(model.renderSubagentTaskCard(time.Time{}))
+	for _, want := range []string{"subagents · 2 运行中", "二叶筑", "running-1", "running-2"} {
+		if !strings.Contains(card, want) {
+			t.Fatalf("task card = %q, want %q", card, want)
+		}
+	}
+	if strings.Contains(card, "done-1") || strings.Contains(card, "已完成") {
+		t.Fatalf("task card = %q, should not list completed tasks", card)
+	}
+	for _, line := range strings.Split(card, "\n") {
+		if got := lipgloss.Width(line); got > subagentTaskCardMaxWidth {
+			t.Fatalf("task card line width = %d, want <= %d: %q", got, subagentTaskCardMaxWidth, line)
+		}
+	}
+}
+
+func TestSpinnerFrameIndexRotates(t *testing.T) {
+	base := time.Unix(0, 0)
+	if spinnerFrameIndex(base) != 0 {
+		t.Fatalf("spinnerFrameIndex(zero) = %d, want 0", spinnerFrameIndex(base))
+	}
+	seen := make(map[int]bool)
+	for i := 0; i < len(subagentSpinnerFrames)*4; i++ {
+		frame := spinnerFrameIndex(base.Add(time.Duration(i) * 250 * time.Millisecond))
+		seen[frame] = true
+	}
+	if len(seen) != len(subagentSpinnerFrames) {
+		t.Fatalf("spinner frames seen = %d, want %d", len(seen), len(subagentSpinnerFrames))
+	}
+}
+
+func TestPlaceRightCenteredOverlayPosition(t *testing.T) {
+	width, height := 40, 10
+	base := strings.Repeat("x\n", height-1) + "x"
+	overlay := "AAA\nBBB"
+	composed := ansi.Strip(placeRightCenteredOverlay(base, overlay, width, height))
+	lines := strings.Split(composed, "\n")
+	if len(lines) != height {
+		t.Fatalf("composed lines = %d, want %d", len(lines), height)
+	}
+	// 垂直居中：overlay 高度 2，首行应在 (10-2)/2 = 4。
+	if idx := strings.Index(lines[4], "AAA"); idx != 36 {
+		t.Fatalf("line 4 = %q, want overlay first row at column 36 (got %d)", lines[4], idx)
+	}
+	if idx := strings.Index(lines[5], "BBB"); idx != 36 {
+		t.Fatalf("line 5 = %q, want overlay second row at column 36 (got %d)", lines[5], idx)
+	}
+	// 其余行保持 base 内容。
+	if !strings.Contains(lines[0], "x") || strings.Contains(lines[0], "AAA") {
+		t.Fatalf("line 0 = %q, want untouched base", lines[0])
+	}
+}
+
+func TestRenderSubagentTaskCardRowUsesPersonaColorAndShortID(t *testing.T) {
+	row := ansi.Strip(renderSubagentTaskCardRow(subagent.TaskSnapshot{
+		ID:    "a6c81e94d94a5e40",
+		Name:  "八潮瑠唯",
+		Color: "#669988",
+	}, "◐"))
+	for _, want := range []string{"◐", "八潮瑠唯", "a6c81e94"} {
+		if !strings.Contains(row, want) {
+			t.Fatalf("task row = %q, want %q", row, want)
+		}
+	}
+	if strings.Contains(row, "a6c81e94d94a5e40") {
+		t.Fatalf("task row = %q, want shortened id", row)
+	}
+}
+
+func TestRunningSubagentTasksKeepsAnimationFrames(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.subagents = &fakeSubagentController{}
+	if model.needsUIAnimationFrames(time.Now()) {
+		t.Fatal("animation frames needed without running tasks")
+	}
+	model.subagents = &fakeSubagentController{tasks: []subagent.TaskSnapshot{
+		{ID: "run-1", Status: subagent.TaskRunning},
+		{ID: "done-1", Status: subagent.TaskCompleted},
+	}}
+	if !model.needsUIAnimationFrames(time.Now()) {
+		t.Fatal("animation frames not needed with a running task")
+	}
+	model.subagents = &fakeSubagentController{tasks: []subagent.TaskSnapshot{
+		{ID: "done-1", Status: subagent.TaskCompleted},
+	}}
+	if model.needsUIAnimationFrames(time.Now()) {
+		t.Fatal("animation frames needed with only completed tasks")
+	}
+}
+
+func TestSystemEventTaskBlockAppearsInViewport(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 20
+	model.relayout()
+
+	next, _ := model.Update(systemEventMsg(uiSystemEventTaskBlock()))
+	model = next.(appModel)
+
+	rendered := ansi.Strip(model.viewport.View())
+	for _, want := range []string{"✓", "二叶筑", "完成", "摘要"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("viewport = %q, want task card content %q", rendered, want)
+		}
+	}
+}
+
+func uiSystemEventTaskBlock() systemEventMsg {
+	return systemEventMsg(ui.SystemEvent{
+		Title: "subagent",
+		Body:  "<task id=\"a6c81e94\" state=\"completed\" name=\"二叶筑\">\nsummary: 后台调查完成\n</task>",
+	})
+}
+
+func TestSettingsDefaultWaitTimeout(t *testing.T) {
+	cfg := settings.DefaultConfig()
+	if cfg.Subagent.WaitTimeoutMs != settings.DefaultSubagentWaitTimeoutMs {
+		t.Fatalf("default wait_timeout_ms = %d, want %d", cfg.Subagent.WaitTimeoutMs, settings.DefaultSubagentWaitTimeoutMs)
+	}
+}

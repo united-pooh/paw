@@ -50,6 +50,7 @@ func registerTools(registry *tool.Registry, root string, readRoots []string, sub
 	registry.Register(subagent.NewTool(subagentManager, sessionID))
 	registry.Register(subagent.NewStatusTool(subagentManager))
 	registry.Register(subagent.NewStopTool(subagentManager))
+	registry.Register(subagent.NewWaitTool(subagentManager))
 	if broker != nil {
 		adapted := toolmcp.NewTools(broker)
 		tools := make([]tool.Tool, 0, len(adapted))

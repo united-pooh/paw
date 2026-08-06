@@ -147,6 +147,7 @@ func TestSaveLoadAndControllerRoundTrip(t *testing.T) {
 	want.Subagent = SubagentConfig{
 		DefaultContextMode: ContextModeFork,
 		DefaultRunMode:     RunModeBackground,
+		WaitTimeoutMs:      DefaultSubagentWaitTimeoutMs,
 	}
 	want.UI = UIConfig{
 		Theme:                theme.Default,
@@ -178,6 +179,7 @@ func TestSaveLoadAndControllerRoundTrip(t *testing.T) {
 	next.Subagent = SubagentConfig{
 		DefaultContextMode: ContextModeEmpty,
 		DefaultRunMode:     RunModeSync,
+		WaitTimeoutMs:      DefaultSubagentWaitTimeoutMs,
 	}
 	next.UI = UIConfig{
 		Theme:                theme.Default,

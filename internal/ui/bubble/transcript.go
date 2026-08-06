@@ -4,6 +4,7 @@ package bubble
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -1411,6 +1412,15 @@ func renderEntryAt(entry transcriptEntry, width int, at time.Time) string {
 		return indentLines(renderTodoEntry(entry, transcriptBodyWidth(width)), transcriptEntryGutter)
 	}
 	bodyWidth := transcriptBodyWidth(width)
+	// 结构化 <task> 完成块：整块渲染为状态色框线卡片，不显示 "subagent" 标签
+	// （卡片标题行自带 ✓/✗/■ 状态标记与名称）。
+	if entry.kind == entrySystem && isTaskCompletionBlock(entry.body) {
+		card := renderTaskCompletionCard(entry.body, bodyWidth)
+		if card == "" {
+			return ""
+		}
+		return indentLines(card, transcriptEntryGutter)
+	}
 	body := renderEntryBodyAt(entry, bodyWidth, at)
 	if entry.kind == entryAssistant && entry.turnMetadata != nil {
 		footer := contextFreeStyle.Render(formatTurnFooter(*entry.turnMetadata))
@@ -1483,6 +1493,180 @@ func (m appModel) hasRenderableTranscript() bool {
 func renderEmptyState(width, height int) string {
 	content := emptyTitleStyle.Render("アトリ高性能ですから!")
 	return lipgloss.Place(maxInt(1, width), maxInt(1, height), lipgloss.Center, lipgloss.Center, content)
+}
+
+// ---- <task> 结构化完成块渲染 ----
+
+// taskBlockInfo 是从父会话注入/系统事件推送的 <task> 块解析出的展示信息。
+type taskBlockInfo struct {
+	ID         string
+	State      string
+	Name       string
+	DurationMS int64
+	OutputSize int64
+	Summary    string
+	Error      string
+	Transcript string
+	Output     string
+}
+
+// taskBlockAttrPattern 匹配 <task ...> 首行中的 XML 属性。
+var taskBlockAttrPattern = regexp.MustCompile(`([a-z_]+)="([^"]*)"`)
+
+func isTaskCompletionBlock(body string) bool {
+	trimmed := strings.TrimSpace(body)
+	return strings.HasPrefix(trimmed, "<task ") && strings.HasSuffix(trimmed, "</task>")
+}
+
+func parseTaskCompletionBlock(body string) (taskBlockInfo, bool) {
+	trimmed := strings.TrimSpace(body)
+	if !isTaskCompletionBlock(trimmed) {
+		return taskBlockInfo{}, false
+	}
+	headerEnd := strings.IndexByte(trimmed, '>')
+	if headerEnd < 0 {
+		return taskBlockInfo{}, false
+	}
+	info := taskBlockInfo{}
+	for _, match := range taskBlockAttrPattern.FindAllStringSubmatch(trimmed[:headerEnd], -1) {
+		value := unescapeTaskBlockAttr(match[2])
+		switch match[1] {
+		case "id":
+			info.ID = value
+		case "state":
+			info.State = value
+		case "name":
+			info.Name = value
+		case "duration_ms":
+			info.DurationMS, _ = strconv.ParseInt(value, 10, 64)
+		case "output_size":
+			info.OutputSize, _ = strconv.ParseInt(value, 10, 64)
+		}
+	}
+	for _, line := range strings.Split(strings.TrimSuffix(trimmed[headerEnd+1:], "</task>"), "\n") {
+		line = strings.TrimRight(line, "\r")
+		switch {
+		case strings.HasPrefix(line, "summary: "):
+			info.Summary = strings.TrimPrefix(line, "summary: ")
+		case strings.HasPrefix(line, "error: "):
+			info.Error = strings.TrimPrefix(line, "error: ")
+		case strings.HasPrefix(line, "transcript: "):
+			info.Transcript = strings.TrimPrefix(line, "transcript: ")
+		case strings.HasPrefix(line, "output: "):
+			info.Output = strings.TrimPrefix(line, "output: ")
+		}
+	}
+	return info, true
+}
+
+func unescapeTaskBlockAttr(value string) string {
+	value = strings.ReplaceAll(value, "&quot;", `"`)
+	value = strings.ReplaceAll(value, "&lt;", "<")
+	value = strings.ReplaceAll(value, "&gt;", ">")
+	value = strings.ReplaceAll(value, "&amp;", "&")
+	return value
+}
+
+// renderTaskCompletionCard 把 <task> 完成块渲染为状态色框线卡片：
+//
+//	┌ ✓ 名称 完成 ───────┐
+//	│ 短id · 42s · 12.4KB │
+//	│ 摘要: ...           │
+//	└─────────────────────┘
+func renderTaskCompletionCard(body string, width int) string {
+	info, ok := parseTaskCompletionBlock(body)
+	if !ok {
+		return bodyStyle.Width(width).Render(sanitizeTerminalText(body))
+	}
+	state := info.State
+	if state != "completed" && state != "failed" && state != "stopped" {
+		state = "completed"
+	}
+	borderColor := colorManager.LipglossColor(colorWorktreeClean)
+	marker := "✓"
+	stateText := "完成"
+	switch state {
+	case "failed":
+		borderColor = colorManager.LipglossColor(colorLabelError)
+		marker = "✗"
+		stateText = "失败"
+	case "stopped":
+		borderColor = colorManager.LipglossColor(colorContextCache)
+		marker = "■"
+		stateText = "已停止"
+	}
+	name := strings.TrimSpace(info.Name)
+	if name == "" {
+		name = shortTaskID(info.ID)
+	}
+	title := lipgloss.NewStyle().Foreground(borderColor).Bold(true).Render(marker + " " + name + " " + stateText)
+
+	lines := []string{title}
+	if meta := taskBlockMetaLine(info); meta != "" {
+		lines = append(lines, meta)
+	}
+	if value := strings.TrimSpace(info.Error); value != "" {
+		lines = append(lines, "错误: "+value)
+	}
+	if value := strings.TrimSpace(info.Summary); value != "" {
+		lines = append(lines, "摘要: "+value)
+	}
+	if value := strings.TrimSpace(info.Output); value != "" {
+		lines = append(lines, "输出: "+value)
+	}
+
+	cardStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Padding(0, 1)
+	// lipgloss 的 Width 含 padding 但不含 border：styleWidth 只减边框，
+	// body 再 fit 到减去 padding 后的宽度，最终总宽精确等于 width。
+	horizontalBorder := cardStyle.GetHorizontalBorderSize()
+	styleWidth := maxInt(1, width-horizontalBorder)
+	bodyWidth := maxInt(1, styleWidth-cardStyle.GetHorizontalPadding())
+	content := make([]string, 0, len(lines))
+	for _, line := range lines {
+		content = append(content, fitStyledCellLine(truncateStyledCellLine(line, bodyWidth), bodyWidth))
+	}
+	return cardStyle.Width(styleWidth).Render(strings.Join(content, "\n"))
+}
+
+func taskBlockMetaLine(info taskBlockInfo) string {
+	parts := make([]string, 0, 3)
+	if strings.TrimSpace(info.ID) != "" {
+		parts = append(parts, shortTaskID(info.ID))
+	}
+	if info.DurationMS > 0 {
+		parts = append(parts, formatTaskBlockDuration(info.DurationMS))
+	}
+	if info.OutputSize > 0 {
+		parts = append(parts, formatTaskBlockSize(info.OutputSize))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, " · ")
+}
+
+func formatTaskBlockDuration(ms int64) string {
+	if ms <= 0 {
+		return ""
+	}
+	duration := time.Duration(ms) * time.Millisecond
+	if duration < time.Second {
+		return fmt.Sprintf("%dms", ms)
+	}
+	return formatWholeSeconds(int(duration / time.Second))
+}
+
+func formatTaskBlockSize(bytes int64) string {
+	if bytes < 1024 {
+		return fmt.Sprintf("%dB", bytes)
+	}
+	if bytes < 1024*1024 {
+		return trimDurationTrailingZeros(fmt.Sprintf("%.1fKB", float64(bytes)/1024))
+	}
+	return trimDurationTrailingZeros(fmt.Sprintf("%.1fMB", float64(bytes)/(1024*1024)))
 }
 
 // renderEntryBody 按消息类型渲染正文，assistant 消息会走 Markdown 渲染。

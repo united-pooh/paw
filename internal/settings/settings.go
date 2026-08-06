@@ -53,6 +53,7 @@ type ContextMaintenanceConfig struct {
 type SubagentConfig struct {
 	DefaultContextMode ContextMode `json:"default_context_mode"`
 	DefaultRunMode     RunMode     `json:"default_run_mode"`
+	WaitTimeoutMs      int         `json:"wait_timeout_ms"`
 }
 
 type UIConfig struct {
@@ -69,11 +70,15 @@ type Controller struct {
 
 func DefaultConfig() Config {
 	return Config{
-		Subagent:           SubagentConfig{DefaultContextMode: ContextModeEmpty, DefaultRunMode: RunModeBackground},
+		Subagent:           SubagentConfig{DefaultContextMode: ContextModeEmpty, DefaultRunMode: RunModeBackground, WaitTimeoutMs: DefaultSubagentWaitTimeoutMs},
 		UI:                 UIConfig{Theme: theme.Default, ContextLimitTokens: DefaultContextLimitTokens, ContextMeterLocation: MeterLocationInputAbove},
 		ContextMaintenance: DefaultContextMaintenanceConfig(),
 	}
 }
+
+// DefaultSubagentWaitTimeoutMs 是 SubagentWait 未显式指定 timeout_ms 时的默认
+// 等待上限（10 分钟）。超时返回当前快照 + timed_out 标记，并非错误。
+const DefaultSubagentWaitTimeoutMs = 600000
 
 func DefaultContextMaintenanceConfig() ContextMaintenanceConfig {
 	return ContextMaintenanceConfig{
@@ -164,6 +169,9 @@ func Save(path string, cfg Config) error {
 func Normalize(cfg Config) Config {
 	cfg.Subagent.DefaultContextMode = NormalizeContextMode(cfg.Subagent.DefaultContextMode)
 	cfg.Subagent.DefaultRunMode = NormalizeRunMode(cfg.Subagent.DefaultRunMode)
+	if cfg.Subagent.WaitTimeoutMs <= 0 {
+		cfg.Subagent.WaitTimeoutMs = DefaultSubagentWaitTimeoutMs
+	}
 	cfg.UI.Theme = theme.NormalizeID(string(cfg.UI.Theme))
 	cfg.UI.ContextMeterLocation = NormalizeMeterLocation(cfg.UI.ContextMeterLocation)
 	if cfg.UI.ContextLimitTokens <= 0 {
