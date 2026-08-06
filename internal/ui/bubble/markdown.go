@@ -59,7 +59,7 @@ func renderMarkdown(markdown string, width int) string {
 			continue
 		}
 
-		parts = append(parts, bodyStyle.Width(width).Render(leading+renderInlineMarkdown(strings.TrimRight(line, " \t"))))
+		parts = append(parts, bodyStyle.Width(width).Render(wrapCompact(leading+renderInlineMarkdown(strings.TrimRight(line, " \t")), width)))
 	}
 
 	return strings.TrimRight(strings.Join(parts, "\n"), "\n")
