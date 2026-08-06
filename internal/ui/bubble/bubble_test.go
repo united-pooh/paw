@@ -818,6 +818,71 @@ func TestSettingCommandPersistsWizardSelections(t *testing.T) {
 	}
 }
 
+// TestSettingWizardTranslateSessionOnly 验证 /setting 面板里也能做「动态开关」：
+// Translate 步骤选中 on (session only) 后确认，只更新内存（currentSettings
+// 立即生效）、不写配置文件（controller.saved 保持为空），摘要标注 apply mode。
+func TestSettingWizardTranslateSessionOnly(t *testing.T) {
+	settingsController := &fakeSettingsController{current: settings.DefaultConfig()}
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, settingsController, nil, nil, newTerminalCursorAnchor())
+
+	handled, cmd := model.handleCommand("/setting")
+	if !handled || cmd != nil {
+		t.Fatalf("/setting handled/cmd = %v/%v", handled, cmd)
+	}
+	if model.settingWizard == nil {
+		t.Fatal("/setting should open wizard")
+	}
+
+	// context → runmode → translate。
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if model.settingWizard.step != settingWizardTranslate {
+		t.Fatalf("wizard step = %v, want translate", model.settingWizard.step)
+	}
+
+	// 选项 [on, off, on (session only)]：默认配置 off → 初始选中索引 1，
+	// 向下一次选中 session-only（索引 2）。
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = next.(appModel)
+	if got := model.settingWizard.selected[settingWizardTranslate]; got != 2 {
+		t.Fatalf("translate selected index = %d, want 2 (on session only)", got)
+	}
+
+	// confirm 步骤应提示 apply mode。
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if model.settingWizard.step != settingWizardConfirm || !model.settingWizard.sessionOnly {
+		t.Fatalf("confirm step = step:%v sessionOnly:%v, want flagged session-only", model.settingWizard.step, model.settingWizard.sessionOnly)
+	}
+	if confirm := model.renderSettingConfirmStep(); !strings.Contains(confirm, "session only") {
+		t.Fatalf("confirm step = %q, want session-only hint", confirm)
+	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+
+	if model.settingWizard != nil {
+		t.Fatalf("settingWizard = %#v, want nil after apply", model.settingWizard)
+	}
+	if len(settingsController.saved) != 0 {
+		t.Fatalf("session-only apply wrote to disk: saved = %#v", settingsController.saved)
+	}
+	if !model.currentSettings().UI.TranslateOnDoubleClick {
+		t.Fatal("session-only apply did not enable the runtime setting")
+	}
+	body := model.transcript[len(model.transcript)-1].body
+	for _, want := range []string{
+		"ui.translate_on_double_click=on",
+		"session only",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("settings summary = %q, want %q", body, want)
+		}
+	}
+}
+
 // TestSettingCommandTranslateRuntimeToggle 验证 /setting translate on|off 是
 // 运行期动态开关：只更新内存配置（currentSettings 立即生效）、不写配置文件
 // （controller.saved 保持为空），并给出用法反馈。

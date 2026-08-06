@@ -242,6 +242,9 @@ const (
 type settingOption struct {
 	label       string
 	description string
+	// sessionOnly 标记该选项只更新运行期内存、不写入配置文件
+	// （/setting 面板里的「动态开关」入口）。
+	sessionOnly bool
 	apply       func(*settings.Config)
 }
 
@@ -250,6 +253,9 @@ type settingWizard struct {
 	selected map[settingWizardStep]int
 	draft    settings.Config
 	err      string
+	// sessionOnly 为 true 时，confirm 步骤只调用 UpdateRuntime 应用
+	// draft，不写配置文件（与 settingOption.sessionOnly 联动）。
+	sessionOnly bool
 }
 
 // contextMeterAnimation 记录 context 进度条从旧 token 用量跳到新用量的短时动画。

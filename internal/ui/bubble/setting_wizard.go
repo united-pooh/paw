@@ -52,6 +52,7 @@ func settingOptions(step settingWizardStep) []settingOption {
 		return []settingOption{
 			{label: "on", description: "double-click a word to translate it", apply: func(cfg *settings.Config) { cfg.UI.TranslateOnDoubleClick = true }},
 			{label: "off", description: "double-click only selects the word", apply: func(cfg *settings.Config) { cfg.UI.TranslateOnDoubleClick = false }},
+			{label: "on (session only)", description: "enable now without writing the settings file", sessionOnly: true, apply: func(cfg *settings.Config) { cfg.UI.TranslateOnDoubleClick = true }},
 		}
 	default:
 		return nil
@@ -126,6 +127,9 @@ func (m appModel) advanceSettingWizard() appModel {
 			index = 0
 		}
 		options[index].apply(&m.settingWizard.draft)
+		if options[index].sessionOnly {
+			m.settingWizard.sessionOnly = true
+		}
 	}
 	m.settingWizard.step++
 	return m
@@ -136,17 +140,28 @@ func (m appModel) applySettingWizard() appModel {
 		return m
 	}
 	cfg := settings.Normalize(m.settingWizard.draft)
-	if m.settingsConfig != nil {
+	sessionOnly := m.settingWizard.sessionOnly
+	switch {
+	case sessionOnly:
+		// 面板里的动态开关：只更新内存、不写配置文件。
+		if m.settingsConfig != nil {
+			m.settingsConfig.UpdateRuntime(cfg)
+		}
+	case m.settingsConfig != nil:
 		if err := m.settingsConfig.SaveSettings(cfg); err != nil {
 			m.settingWizard.err = err.Error()
 			return m
 		}
 	}
 	m.settingWizard = nil
+	body := renderSettingsSummary(cfg)
+	if sessionOnly {
+		body += "\napply mode: session only (not written to disk)"
+	}
 	m.addEntry(transcriptEntry{
 		kind:  entrySystem,
 		title: "settings",
-		body:  renderSettingsSummary(cfg),
+		body:  body,
 	})
 	m.relayout()
 	return m
@@ -195,7 +210,11 @@ func (m appModel) renderSettingConfirmStep() string {
 	lines := []string{
 		wizardTitleStyle.Render("Confirm settings"),
 		renderSettingsSummary(cfg),
-		"Press enter to save, b to go back, esc to cancel.",
+	}
+	if m.settingWizard.sessionOnly {
+		lines = append(lines, "Apply mode: session only — takes effect now, not written to disk. Enter to apply, b back, esc cancel.")
+	} else {
+		lines = append(lines, "Press enter to save, b to go back, esc to cancel.")
 	}
 	if m.settingWizard.err != "" {
 		lines = append(lines, labelErrorStyle.Render(m.settingWizard.err))
