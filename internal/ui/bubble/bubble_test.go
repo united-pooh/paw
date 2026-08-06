@@ -784,6 +784,9 @@ func TestSettingCommandPersistsWizardSelections(t *testing.T) {
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
 
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+
 	if model.settingWizard != nil {
 		t.Fatalf("settingWizard = %#v, want nil after save", model.settingWizard)
 	}
@@ -793,13 +796,15 @@ func TestSettingCommandPersistsWizardSelections(t *testing.T) {
 	got := settingsController.saved[0]
 	if got.Subagent.DefaultContextMode != settings.ContextModeEmpty ||
 		got.Subagent.DefaultRunMode != settings.RunModeBackground ||
-		got.UI.ContextMeterLocation != settings.MeterLocationInputAbove {
+		got.UI.ContextMeterLocation != settings.MeterLocationInputAbove ||
+		got.UI.TranslateOnDoubleClick {
 		t.Fatalf("saved config = %#v", got)
 	}
 	body := model.transcript[len(model.transcript)-1].body
 	for _, want := range []string{
 		"subagent.context=empty",
 		"subagent.run=background",
+		"ui.translate_on_double_click=off",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("settings summary = %q, want %q", body, want)

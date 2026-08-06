@@ -57,9 +57,10 @@ type SubagentConfig struct {
 }
 
 type UIConfig struct {
-	Theme                theme.ThemeID `json:"theme"`
-	ContextLimitTokens   int           `json:"context_limit_tokens"`
-	ContextMeterLocation MeterLocation `json:"context_meter_location"`
+	Theme                  theme.ThemeID `json:"theme"`
+	ContextLimitTokens     int           `json:"context_limit_tokens"`
+	ContextMeterLocation   MeterLocation `json:"context_meter_location"`
+	TranslateOnDoubleClick bool          `json:"translate_on_double_click"`
 }
 
 type Controller struct {

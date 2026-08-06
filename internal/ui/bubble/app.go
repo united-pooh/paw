@@ -502,6 +502,22 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 复制反馈到期：清除状态栏 toast，触发一次重绘。
 		m.copyToast = ""
 		return m, nil
+	case translateResultMsg:
+		// 过期响应（面板已切换/关闭）直接丢弃；否则按结果更新面板。
+		if msg.seq != m.translateSeq || m.translatePanel == nil || m.translatePanel.word != msg.word {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.translatePanel = &translatePanel{
+				state: translatePanelError,
+				word:  msg.word,
+				err:   msg.err.Error(),
+			}
+			return m, nil
+		}
+		panel := parseTranslateResult(msg.word, msg.text)
+		m.translatePanel = &panel
+		return m, nil
 	case tea.KeyMsg:
 		var rawMouseFragment bool
 		msg, rawMouseFragment = m.filterRawMouseEscapeKey(msg)
@@ -512,6 +528,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.clickActionPending {
 			m.clickActionPending = false
 			m.clickActionSeq++
+		}
+		if m.translatePanel != nil {
+			// 翻译面板是最轻量的浮层：esc 直接关闭，不影响其他状态。
+			if msg.String() == "esc" {
+				m.translatePanel = nil
+				return m, nil
+			}
 		}
 		if m.selectionDock != nil {
 			return m.handleSelectionDockKey(msg)

@@ -141,6 +141,38 @@ func TestNormalizeLegacyInputTitleMeterLocation(t *testing.T) {
 	}
 }
 
+func TestTranslateOnDoubleClickDefaultsOffAndRoundTrips(t *testing.T) {
+	if DefaultConfig().UI.TranslateOnDoubleClick {
+		t.Fatal("TranslateOnDoubleClick must default to false")
+	}
+	path := filepath.Join(t.TempDir(), "settings.json")
+	want := DefaultConfig()
+	want.UI.TranslateOnDoubleClick = true
+	if err := Save(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.UI.TranslateOnDoubleClick {
+		t.Fatal("TranslateOnDoubleClick did not survive round trip")
+	}
+
+	// 旧 settings.json 缺该字段 → 零值 false，天然兼容。
+	legacyPath := filepath.Join(t.TempDir(), "legacy.json")
+	if err := os.WriteFile(legacyPath, []byte(`{"ui":{"theme":"default"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := Load(legacyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.UI.TranslateOnDoubleClick {
+		t.Fatal("legacy settings must default TranslateOnDoubleClick to false")
+	}
+}
+
 func TestSaveLoadAndControllerRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".paw", "settings.json")
 	want := DefaultConfig()

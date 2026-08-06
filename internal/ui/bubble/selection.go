@@ -133,6 +133,16 @@ func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.C
 			m.selectionStart = point
 			m.selectionEnd = point
 		}
+		var translateCmd tea.Cmd
+		if m.clickCount == 2 && m.currentSettings().UI.TranslateOnDoubleClick {
+			// 「翻译选中词」开关开启：双击选词后立即发起单次翻译请求，
+			// 面板先进入 loading 态；后续双击新词递增 translateSeq 切换。
+			if word := m.selectedTranscriptText(); word != "" {
+				m.translatePanel = &translatePanel{state: translatePanelLoading, word: word}
+				m.translateSeq++
+				translateCmd = m.startTranslateCmd(m.translateSeq, word)
+			}
+		}
 		hoverIndex, _ := m.toolIndexAtTranscriptRow(point.row)
 		hoverChanged := m.setToolHover(hoverIndex)
 		if hadSelection || hoverChanged || m.clickCount >= 2 {
@@ -140,7 +150,7 @@ func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.C
 			// 否则选区高亮要等下一次鼠标移动/按键才出现，看起来像没反应。
 			m.refreshViewportPreservingOffset()
 		}
-		return m, true, nil
+		return m, true, translateCmd
 	case tea.MouseActionMotion:
 		if !m.selecting {
 			hoverIndex := m.toolHoverIndexAtMouse(msg.X, msg.Y)

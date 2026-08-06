@@ -120,6 +120,35 @@ type transcriptClickActionMsg struct {
 // copyToastExpiredMsg 复制反馈 toast 到期，清除状态栏提示。
 type copyToastExpiredMsg struct{}
 
+// translateResultMsg 携带单次翻译请求的返回（原始文本 + 错误）。
+// seq 与 appModel.translateSeq 比对，过期响应直接丢弃。
+type translateResultMsg struct {
+	seq  uint64
+	word string
+	text string
+	err  error
+}
+
+// translatePanelState 是翻译面板的展示状态。
+type translatePanelState int
+
+const (
+	translatePanelLoading translatePanelState = iota
+	translatePanelDone
+	translatePanelError
+)
+
+// translatePanel 保存「双击选中词翻译」面板的临时状态。
+type translatePanel struct {
+	state       translatePanelState
+	word        string // 原始选中词（面板标题）
+	phonetic    string // IPA 音标（英文词）
+	pos         string // 词性（英文词）
+	translation string // 释义
+	note        string // 用法/例句备注（可选）
+	err         string // state==Error 时的错误描述
+}
+
 // assistantDeltaMsg 表示模型流式输出的一段文本增量。
 type assistantDeltaMsg string
 
@@ -206,6 +235,7 @@ type settingWizardStep int
 const (
 	settingWizardContext settingWizardStep = iota
 	settingWizardRunMode
+	settingWizardTranslate
 	settingWizardConfirm
 )
 
@@ -415,6 +445,8 @@ type appModel struct {
 	clickActionPending         bool
 	copyToast                  string
 	copyToastUntil             time.Time
+	translatePanel             *translatePanel
+	translateSeq               uint64
 	cursorFrameAt              time.Time
 	uiAnimationFrameScheduled  bool
 	turnStartedAt              time.Time

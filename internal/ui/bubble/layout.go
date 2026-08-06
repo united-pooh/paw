@@ -235,6 +235,8 @@ func (m appModel) renderActiveModalBox(layout tuiLayout) string {
 		return ""
 	}
 	switch {
+	case m.translatePanel != nil:
+		return m.renderTranslatePanel()
 	case m.themePicker != nil:
 		return m.renderThemePickerBox()
 	case m.modelWizard != nil:

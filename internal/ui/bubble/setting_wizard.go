@@ -16,7 +16,15 @@ func newSettingWizard(current settings.Config) *settingWizard {
 	}
 	w.selected[settingWizardContext] = selectedSettingIndex(settingOptions(settingWizardContext), string(current.Subagent.DefaultContextMode))
 	w.selected[settingWizardRunMode] = selectedSettingIndex(settingOptions(settingWizardRunMode), string(current.Subagent.DefaultRunMode))
+	w.selected[settingWizardTranslate] = selectedSettingIndex(settingOptions(settingWizardTranslate), boolSettingLabel(current.UI.TranslateOnDoubleClick))
 	return w
+}
+
+func boolSettingLabel(value bool) string {
+	if value {
+		return "on"
+	}
+	return "off"
 }
 
 func selectedSettingIndex(options []settingOption, value string) int {
@@ -40,6 +48,11 @@ func settingOptions(step settingWizardStep) []settingOption {
 			{label: string(settings.RunModeSync), description: "wait for subagent result", apply: func(cfg *settings.Config) { cfg.Subagent.DefaultRunMode = settings.RunModeSync }},
 			{label: string(settings.RunModeBackground), description: "return a task id immediately", apply: func(cfg *settings.Config) { cfg.Subagent.DefaultRunMode = settings.RunModeBackground }},
 		}
+	case settingWizardTranslate:
+		return []settingOption{
+			{label: "on", description: "double-click a word to translate it", apply: func(cfg *settings.Config) { cfg.UI.TranslateOnDoubleClick = true }},
+			{label: "off", description: "double-click only selects the word", apply: func(cfg *settings.Config) { cfg.UI.TranslateOnDoubleClick = false }},
+		}
 	default:
 		return nil
 	}
@@ -51,6 +64,8 @@ func settingStepTitle(step settingWizardStep) string {
 		return "Subagent context"
 	case settingWizardRunMode:
 		return "Subagent run mode"
+	case settingWizardTranslate:
+		return "Translate selected word"
 	default:
 		return "Confirm settings"
 	}
@@ -191,8 +206,9 @@ func (m appModel) renderSettingConfirmStep() string {
 func renderSettingsSummary(cfg settings.Config) string {
 	cfg = settings.Normalize(cfg)
 	return fmt.Sprintf(
-		"subagent.context=%s\nsubagent.run=%s",
+		"subagent.context=%s\nsubagent.run=%s\nui.translate_on_double_click=%s",
 		cfg.Subagent.DefaultContextMode,
 		cfg.Subagent.DefaultRunMode,
+		boolSettingLabel(cfg.UI.TranslateOnDoubleClick),
 	)
 }
