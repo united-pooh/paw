@@ -30,7 +30,29 @@ var writeClipboardOSC52 = func(text string) tea.Cmd {
 // doubleClickInterval 是双击/三击判定窗口：两次左键按下间隔不超过该值且
 // 位置基本重合时，依次进入选词 / 选行模式。单击动作（链接、todo、工具行）
 // 也会延迟到该窗口结束后再执行，避免与双击冲突。
-var doubleClickInterval = 250 * time.Millisecond
+// 400ms 对齐 macOS 系统双击阈值（默认约 500ms）与 Alacritty 的默认值，
+// 保证常见双击节奏都能落在窗口内；代价是单击动作最多延迟 400ms。
+var doubleClickInterval = 400 * time.Millisecond
+
+// clickSlopCells 是单击判定容差：按下与抬起（或按下期间的 motion）坐标差
+// 不超过 1 格时仍视为单击。终端坐标按 cell 量化（transcriptContentColumn
+// 是 x-padding-1），真实鼠标的 1px 抖动/漂移足以跨过 cell 边界，若按严格
+// 相等判定，一次普通单击就会被误判为拖拽：触发复制、重置双击计数。
+const clickSlopCells = 1
+
+// selectionPointsWithinSlop 报告两个坐标是否在单击容差内（Chebyshev 距离
+// <= clickSlopCells）。真实拖动一旦超出容差，立刻进入拖拽语义。
+func selectionPointsWithinSlop(a, b selectionPoint) bool {
+	rowDelta := a.row - b.row
+	if rowDelta < 0 {
+		rowDelta = -rowDelta
+	}
+	colDelta := a.col - b.col
+	if colDelta < 0 {
+		colDelta = -colDelta
+	}
+	return rowDelta <= clickSlopCells && colDelta <= clickSlopCells
+}
 
 // copyToastDuration 是复制反馈 toast 在状态栏的停留时长。
 const copyToastDuration = 2 * time.Second
@@ -66,12 +88,13 @@ type transcriptLineSnapshot struct {
 
 // handleTranscriptMouse 处理 transcript 面板中的鼠标拖拽选择事件。
 // 交互模型：
-//   - 单击：按下即开始选区跟踪；释放时若无位移，动作（链接 / todo / 工具行）
+//   - 单击：按下即开始选区跟踪；释放时若未超出单击容差（clickSlopCells，
+//     按下/抬起 1 格内的抖动与漂移都算单击），动作（链接 / todo / 工具行）
 //     延迟到双击窗口结束后执行，保证双击/三击优先判定。
 //   - 双击：按下瞬间建立「词」选区（wordBoundsAt 吸附），释放不复制。
 //   - 三击：按下瞬间建立「行」选区，释放不复制。
-//   - 拖拽（含从双击/三击继续拖动）：按当前模式（字符/词/行）扩展选区，
-//     释放时写入本地剪贴板并追加 OSC 52 双写。
+//   - 拖拽（含从双击/三击继续拖动）：超出容差即按当前模式（字符/词/行）
+//     扩展选区，释放时写入本地剪贴板并追加 OSC 52 双写。
 func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.Cmd) {
 	if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown ||
 		msg.Button == tea.MouseButtonWheelLeft || msg.Button == tea.MouseButtonWheelRight {
@@ -112,7 +135,9 @@ func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.C
 		}
 		hoverIndex, _ := m.toolIndexAtTranscriptRow(point.row)
 		hoverChanged := m.setToolHover(hoverIndex)
-		if hadSelection || hoverChanged {
+		if hadSelection || hoverChanged || m.clickCount >= 2 {
+			// 双击/三击在按下瞬间建立了词/行选区：必须立刻刷新视口，
+			// 否则选区高亮要等下一次鼠标移动/按键才出现，看起来像没反应。
 			m.refreshViewportPreservingOffset()
 		}
 		return m, true, nil
@@ -125,26 +150,26 @@ func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.C
 			}
 			return m, changed || hoverIndex >= 0, nil
 		}
-		m.scrollTranscriptSelectionAtEdge(msg.Y)
 		if point, ok := m.transcriptPointForMouse(msg.X, msg.Y); ok {
-			if point != m.selectionAnchor {
-				// 真实拖动打断单击/双击计数，避免拖拽起始按下被计入下一次双击。
+			if !selectionPointsWithinSlop(point, m.selectionAnchor) {
+				// 真实拖动（超出单击容差）：拖到边缘时滚动，并打断单击/双击
+				// 计数，避免拖拽起始按下被计入下一次双击。
+				m.scrollTranscriptSelectionAtEdge(msg.Y)
 				m.clickCount = 0
 				m.lastClickAt = time.Time{}
-			}
-			switch m.selectionMode {
-			case selectionModeWord:
-				m.extendWordSelection(point)
-			case selectionModeLine:
-				m.extendLineSelection(point)
-			default:
-				if point != m.selectionAnchor {
+				switch m.selectionMode {
+				case selectionModeWord:
+					m.extendWordSelection(point)
+				case selectionModeLine:
+					m.extendLineSelection(point)
+				default:
 					point.col++
 					m.selectionEnd = point
 					m.selectionActive = true
 					m.selectionMoved = true
 				}
 			}
+			// 容差内的 motion（按下期间手抖 1 格）不改选区、不打断双击计数。
 		}
 		m.refreshViewport()
 		return m, true, nil
@@ -154,8 +179,9 @@ func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.C
 		}
 		m.selecting = false
 		if m.selectionMode == selectionModeChar {
-			// 保留原行为：以释放点为准再修正一次选区终点。
-			if point, ok := m.transcriptPointForMouse(msg.X, msg.Y); ok && point != m.selectionAnchor {
+			// 保留原行为：以释放点为准再修正一次选区终点；超出单击容差的
+			// 位移才算拖拽（1 格内的按下/抬起漂移仍是单击，不复制）。
+			if point, ok := m.transcriptPointForMouse(msg.X, msg.Y); ok && !selectionPointsWithinSlop(point, m.selectionAnchor) {
 				point.col++
 				m.selectionEnd = point
 				m.selectionActive = true

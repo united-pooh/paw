@@ -3388,6 +3388,136 @@ func TestTranscriptDoubleClickSelectsWord(t *testing.T) {
 	}
 }
 
+// TestTranscriptDoubleClickSurvivesJitter 验证真实终端里双击第一次按下到抬起
+// 之间常见的 1 格抖动（motion 事件、press/release 相差 1 格）不会触发复制，
+// 也不会重置双击计数：第二次按下仍识别为双击并建立词选区。
+func TestTranscriptDoubleClickSurvivesJitter(t *testing.T) {
+	oldWriteClipboard := writeClipboard
+	var copied string
+	writeClipboard = func(text string) error {
+		copied = text
+		return nil
+	}
+	defer func() {
+		writeClipboard = oldWriteClipboard
+	}()
+
+	oldInterval := doubleClickInterval
+	doubleClickInterval = time.Hour // 任意两次按下都落在双击窗口内
+	defer func() {
+		doubleClickInterval = oldInterval
+	}()
+
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 12
+	model.relayout()
+	model.transcript = []transcriptEntry{{
+		kind:  entryAssistant,
+		title: "assistant",
+		body:  "hello world",
+	}}
+	model.refreshViewport()
+	model.viewport.GotoTop()
+
+	lines := model.transcriptLineSnapshots()
+	offset := strings.Index(lines[0].plain, "world")
+	if offset < 0 {
+		t.Fatalf("snapshot plain = %q, want world", lines[0].plain)
+	}
+	x := mainContentPadding + offset + 3 // 点击 "world" 内部（col = offset+2）
+	y := model.transcriptScreenTop()
+
+	// 第一次单击：press → motion(+1 格) → release(+1 格)，模拟按下期间手抖。
+	next, _ := model.Update(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	model = next.(appModel)
+	next, _ = model.Update(tea.MouseMsg{X: x + 1, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
+	model = next.(appModel)
+	next, _ = model.Update(tea.MouseMsg{X: x + 1, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
+	model = next.(appModel)
+
+	if copied != "" {
+		t.Fatalf("jittery single click copied %q, want no copy", copied)
+	}
+	if model.selectionActive || model.selectionMoved {
+		t.Fatalf("jittery single click created selection: active=%v moved=%v", model.selectionActive, model.selectionMoved)
+	}
+
+	// 第二次按下：仍在双击窗口内且位置重合，应识别为双击并选中整个词。
+	next, _ = model.Update(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	model = next.(appModel)
+	if !model.selectionActive || model.selectionMode != selectionModeWord {
+		t.Fatalf("double-click after jitter = active:%v mode:%v", model.selectionActive, model.selectionMode)
+	}
+	next, _ = model.Update(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
+	model = next.(appModel)
+	if got := model.selectedTranscriptText(); got != "world" {
+		t.Fatalf("double-click after jitter selected %q, want world", got)
+	}
+	if copied != "" {
+		t.Fatalf("double-click after jitter copied %q, want no copy", copied)
+	}
+}
+
+// TestTranscriptDoubleClickRendersSelectionImmediately 验证双击建立词选区后
+// 视口立即刷新，选区高亮立刻可见，不需要等下一次鼠标移动才出现。
+func TestTranscriptDoubleClickRendersSelectionImmediately(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(previousProfile)
+		rebuildLegacyStyles()
+	})
+	rebuildLegacyStyles()
+
+	oldInterval := doubleClickInterval
+	doubleClickInterval = time.Hour
+	defer func() {
+		doubleClickInterval = oldInterval
+	}()
+
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 12
+	model.relayout()
+	model.transcript = []transcriptEntry{{
+		kind:  entryAssistant,
+		title: "assistant",
+		body:  "hello world",
+	}}
+	model.refreshViewport()
+	model.viewport.GotoTop()
+
+	lines := model.transcriptLineSnapshots()
+	offset := strings.Index(lines[0].plain, "world")
+	if offset < 0 {
+		t.Fatalf("snapshot plain = %q, want world", lines[0].plain)
+	}
+	x := mainContentPadding + offset + 3
+	y := model.transcriptScreenTop()
+
+	press := tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}
+	release := tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease}
+	next, _ := model.Update(press)
+	model = next.(appModel)
+	next, _ = model.Update(release)
+	model = next.(appModel)
+	next, _ = model.Update(press) // 双击
+	model = next.(appModel)
+	next, _ = model.Update(release)
+	model = next.(appModel)
+
+	selSGR := sgrPrefixOf(selectedTranscriptLineStyle.Render(" "))
+	if selSGR == "" {
+		t.Fatal("selection SGR is empty under truecolor profile")
+	}
+	if !strings.Contains(model.viewport.View(), selSGR) {
+		t.Fatalf("viewport after double-click = %q, want selection SGR %q visible immediately", model.viewport.View(), selSGR)
+	}
+}
+
 // TestTranscriptDoubleClickDragExtendsByWord 验证双击选词后继续拖拽会按词边界
 // 扩展选区，释放时复制完整词序列。
 func TestTranscriptDoubleClickDragExtendsByWord(t *testing.T) {

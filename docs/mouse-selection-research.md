@@ -5,6 +5,8 @@
 > 方法：deep-research（方案调研）+ frontend-design（配色设计），对比度数据按 WCAG 2.x 相对亮度公式实测计算
 >
 > **落地状态（2026-08-06）**：§3.5 的 P0 全部落地（OSC 52 双写、README 终端修饰键对照表）、P1 落地（双击选词/三击选行 + 词行吸附 + 单击动作延迟到双击窗口后、复制反馈 toast「已复制 N 字符」）；§4 的配色公式已实现于 `internal/theme/themes.go`（`palette()` 内 30% 混合 + Default 25% 特例），16 色终端选区自动降级为反色。实测公式结果与 §4.3 表格值相差 1–2 个 RGB 单位（四舍五入方向差异），视觉无区别。P2 的 Bubble Tea v2 升级经实测评估后**暂缓**（结论见 §3.6，收益点不成立 + 破坏面巨大）；256 色终端选区色验证见 §4.4 说明（lipgloss 自动近似，未发现明显偏差）。
+>
+> **双击可靠性补丁（2026-08-06 晚）**：实测发现三处让真实终端双击失效的问题并修复——① 按下/抬起 1 格抖动（motion 事件或 press/release 坐标漂移）会把单击误判为拖拽，触发复制并重置双击计数，导致第二次按下永远成不了双击：新增 `clickSlopCells = 1` 单击容差（`selectionPointsWithinSlop`），容差内不建选区、不复制、不打断计数；② 双击/三击按下建立选区后未刷新视口，高亮要等下一次鼠标移动才出现：press 分支在 `clickCount >= 2` 时立即 `refreshViewportPreservingOffset`；③ 双击窗口 250ms 短于 macOS/Ghostty 系统双击节奏（约 500ms）：提升到 **400ms**（对齐 Alacritty 默认值），代价是单击动作最多延迟 400ms。新增回归测试 `TestTranscriptDoubleClickSurvivesJitter`（1 格抖动不复制、双击仍生效）与 `TestTranscriptDoubleClickRendersSelectionImmediately`（选区立即可见）。
 
 ---
 
@@ -76,7 +78,7 @@
 
 ### 3.4 高级交互（RQ5）
 
-- **双击选词**：v1 需自实现（press→release→press 间隔 < 250ms 且位移小于阈值，进入 word 模式；三击进 line 模式）。工作量中等（需基于 `snapCellRangeToGraphemes` 的 word 边界）。**捷径**：Bubble Tea v2 的 `MouseClickMsg` 自带 `Count`，且 v2 已发布一年+；若计划升级 v2，双击选词应排在 v2 升级之后。
+- **双击选词**：v1 需自实现（press→release→press 间隔 < 400ms 且位置重合，进入 word 模式；三击进 line 模式）。工作量中等（需基于 `snapCellRangeToGraphemes` 的 word 边界）。**捷径**：Bubble Tea v2 的 `MouseClickMsg` 自带 `Count`，且 v2 已发布一年+；若计划升级 v2，双击选词应排在 v2 升级之后。
 - **拖拽出窗口**：release 在窗口外时 `MouseMsg` 坐标可能是边界值，需确认 `transcriptPointForMouse` 已钳制（paw 的 `selectionBounds` 有 clamp，✅）。
 - **拖拽中 hover 冻结**：paw 已在 `selecting` 时跳过 hover 分支，避免拖拽时频繁重绘，✅（这正是 `MouseAllMotion` 下需要注意的性能点）。
 - **选区与点击冲突**：paw 的「release 无位移 = 点击」消解已正确处理「选区 vs 链接/todo/tool」冲突，✅。
