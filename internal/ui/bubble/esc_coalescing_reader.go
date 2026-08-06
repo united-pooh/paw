@@ -1,3 +1,5 @@
+//go:build !windows
+
 // ESC 聚合输入 reader。
 //
 // BubbleTea 的 readAnsiInputs 在 256 字节缓冲上循环 Read。当终端把一条
