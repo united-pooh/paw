@@ -3559,6 +3559,64 @@ func TestTranscriptDragWritesOSC52Clipboard(t *testing.T) {
 	}
 }
 
+// TestTranscriptDragShowsCopyToast 验证拖拽复制后状态栏短暂显示
+// 「已复制 N 字符」，到期后自动清除。
+func TestTranscriptDragShowsCopyToast(t *testing.T) {
+	oldWriteClipboard := writeClipboard
+	writeClipboard = func(text string) error { return nil }
+	defer func() {
+		writeClipboard = oldWriteClipboard
+	}()
+	oldOSC52 := writeClipboardOSC52
+	writeClipboardOSC52 = func(text string) tea.Cmd { return nil }
+	defer func() {
+		writeClipboardOSC52 = oldOSC52
+	}()
+	oldExpiry := scheduleCopyToastExpiry
+	scheduleCopyToastExpiry = func() tea.Cmd {
+		return func() tea.Msg { return copyToastExpiredMsg{} }
+	}
+	defer func() {
+		scheduleCopyToastExpiry = oldExpiry
+	}()
+
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 12
+	model.relayout()
+	model.transcript = []transcriptEntry{{
+		kind:  entryAssistant,
+		title: "assistant",
+		body:  "hello",
+	}}
+	model.refreshViewport()
+	model.viewport.GotoTop()
+
+	next, _ := model.Update(tea.MouseMsg{X: 6, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	model = next.(appModel)
+	next, _ = model.Update(tea.MouseMsg{X: 8, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
+	model = next.(appModel)
+	next, cmd := model.Update(tea.MouseMsg{X: 8, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
+	model = next.(appModel)
+
+	if got := model.renderStatusLeftSegment(); !strings.Contains(ansi.Strip(got), "已复制 3 字符") {
+		t.Fatalf("status after copy = %q, want 已复制 3 字符", got)
+	}
+	if cmd == nil {
+		t.Fatalf("copy release returned no expiry command")
+	}
+	next, _ = model.Update(cmd())
+	model = next.(appModel)
+	got := ansi.Strip(model.renderStatusLeftSegment())
+	if strings.Contains(got, "已复制") {
+		t.Fatalf("status after expiry = %q, want toast cleared", got)
+	}
+	if !strings.Contains(got, "ready") {
+		t.Fatalf("status after expiry = %q, want ready back", got)
+	}
+}
+
 // TestSelectionStyleFallsBackToReverseIn16Color 验证 16 色及以下终端里选区
 // 样式降级为反色渲染，与终端原生选区观感一致。
 func TestSelectionStyleFallsBackToReverseIn16Color(t *testing.T) {

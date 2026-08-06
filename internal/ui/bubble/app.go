@@ -498,6 +498,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return next, cmd
+	case copyToastExpiredMsg:
+		// 复制反馈到期：清除状态栏 toast，触发一次重绘。
+		m.copyToast = ""
+		return m, nil
 	case tea.KeyMsg:
 		var rawMouseFragment bool
 		msg, rawMouseFragment = m.filterRawMouseEscapeKey(msg)

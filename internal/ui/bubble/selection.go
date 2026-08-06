@@ -2,6 +2,7 @@
 package bubble
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -29,6 +30,22 @@ var writeClipboardOSC52 = func(text string) tea.Cmd {
 // 位置基本重合时，依次进入选词 / 选行模式。单击动作（链接、todo、工具行）
 // 也会延迟到该窗口结束后再执行，避免与双击冲突。
 var doubleClickInterval = 250 * time.Millisecond
+
+// copyToastDuration 是复制反馈 toast 在状态栏的停留时长。
+const copyToastDuration = 2 * time.Second
+
+// scheduleCopyToastExpiry 在 toast 显示时长结束后派发清除消息；测试中可
+// 替换为立即派发，避免 tea.Tick 的真实计时拖慢测试。
+var scheduleCopyToastExpiry = func() tea.Cmd {
+	return tea.Tick(copyToastDuration, func(time.Time) tea.Msg { return copyToastExpiredMsg{} })
+}
+
+// showCopyToast 在状态栏显示「已复制 N 字符」反馈，并返回到期清除消息。
+func (m *appModel) showCopyToast(charCount int) tea.Cmd {
+	m.copyToast = fmt.Sprintf("已复制 %d 字符", charCount)
+	m.copyToastUntil = m.animationNow().Add(copyToastDuration)
+	return scheduleCopyToastExpiry()
+}
 
 // scheduleClickAction 在双击窗口结束后派发一次延迟的单击动作；测试中可
 // 替换为立即派发，避免 tea.Tick 的真实计时拖慢测试。
@@ -150,7 +167,10 @@ func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.C
 			if text := m.selectedTranscriptText(); text != "" {
 				_ = writeClipboard(text)
 				m.refreshViewport()
-				return m, true, writeClipboardOSC52(text)
+				return m, true, tea.Batch(
+					writeClipboardOSC52(text),
+					m.showCopyToast(utf8.RuneCountInString(text)),
+				)
 			}
 			m.refreshViewport()
 			return m, true, nil

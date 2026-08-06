@@ -67,6 +67,7 @@ var (
 	terminalInputTextStyle       lipgloss.Style
 	generatingStatusStyle        lipgloss.Style
 	idleStatusStyle              lipgloss.Style
+	copyToastStyle               lipgloss.Style
 	modeTerminalStyle            lipgloss.Style
 	modeShellStyle               lipgloss.Style
 	modeMultilineStyle           lipgloss.Style
@@ -287,6 +288,10 @@ func rebuildLegacyStyles() {
 		Bold(true)
 	idleStatusStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorMarkdownRule))
+	// 复制反馈 toast：与 generating 同色系但更高饱和，短暂提示不喧宾夺主。
+	copyToastStyle = lipgloss.NewStyle().
+		Foreground(colorManager.LipglossColor(colorWorktreeClean)).
+		Bold(true)
 	modeTerminalStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorInputTerminal)).
 		Bold(true)

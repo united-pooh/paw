@@ -78,8 +78,8 @@ type transcriptEntry struct {
 	createdAt           time.Time
 	toolStartedAt       time.Time
 	toolFinishedAt      time.Time
-	turnMetadata          *session.TurnMetadata
-	version               int
+	turnMetadata        *session.TurnMetadata
+	version             int
 }
 
 type toolCitation struct {
@@ -116,6 +116,9 @@ type transcriptClickActionMsg struct {
 	seq   uint64
 	point selectionPoint
 }
+
+// copyToastExpiredMsg 复制反馈 toast 到期，清除状态栏提示。
+type copyToastExpiredMsg struct{}
 
 // assistantDeltaMsg 表示模型流式输出的一段文本增量。
 type assistantDeltaMsg string
@@ -410,6 +413,8 @@ type appModel struct {
 	lastClickPoint             selectionPoint
 	clickActionSeq             uint64
 	clickActionPending         bool
+	copyToast                  string
+	copyToastUntil             time.Time
 	cursorFrameAt              time.Time
 	uiAnimationFrameScheduled  bool
 	turnStartedAt              time.Time

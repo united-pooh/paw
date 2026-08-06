@@ -4,7 +4,7 @@
 > 目标环境：Ghostty、kitty、WezTerm、Alacritty 等现代终端 + iTerm2/macOS（本地为主，无 tmux/SSH）
 > 方法：deep-research（方案调研）+ frontend-design（配色设计），对比度数据按 WCAG 2.x 相对亮度公式实测计算
 >
-> **落地状态（2026-08-06）**：§3.5 的 P0 全部落地（OSC 52 双写、README 终端修饰键对照表）、P1 落地（双击选词/三击选行 + 词行吸附 + 单击动作延迟到双击窗口后）；§4 的配色公式已实现于 `internal/theme/themes.go`（`palette()` 内 30% 混合 + Default 25% 特例），16 色终端选区自动降级为反色。实测公式结果与 §4.3 表格值相差 1–2 个 RGB 单位（四舍五入方向差异），视觉无区别。未落地：复制 toast（P1）、Bubble Tea v2 升级（P2）。
+> **落地状态（2026-08-06）**：§3.5 的 P0 全部落地（OSC 52 双写、README 终端修饰键对照表）、P1 落地（双击选词/三击选行 + 词行吸附 + 单击动作延迟到双击窗口后、复制反馈 toast「已复制 N 字符」）；§4 的配色公式已实现于 `internal/theme/themes.go`（`palette()` 内 30% 混合 + Default 25% 特例），16 色终端选区自动降级为反色。实测公式结果与 §4.3 表格值相差 1–2 个 RGB 单位（四舍五入方向差异），视觉无区别。P2 的 Bubble Tea v2 升级经实测评估后**暂缓**（结论见 §3.6，收益点不成立 + 破坏面巨大）；256 色终端选区色验证见 §4.4 说明（lipgloss 自动近似，未发现明显偏差）。
 
 ---
 
@@ -91,6 +91,30 @@
 | P1 | 复制反馈（状态栏 toast） | 小 | 「已复制 N 字符」 |
 | P2 | 评估升级 Bubble Tea v2 | 大 | 收益：OSC 52 原生、`MouseClickMsg` 点击计数、声明式 mouse mode |
 | P2 | 256 色终端下选区色验证 | 小 | lipgloss 自动近似，但个别色映射偏差大（§4.4） |
+
+### 3.6 Bubble Tea v2 升级评估（2026-08-06 实测结论：暂缓）
+
+按 §3.5 的 P2 对 `charm.land/bubbletea/v2`（v2.0.8）做了实测评估。**结论：不建议现在升级，暂缓并保留 v1.3.10。**
+
+**收益点全部落空或已被覆盖**：
+
+| 报告预估收益 | 实测结果 |
+|---|---|
+| `MouseClickMsg` 自带点击计数，可简化双击选词 | ❌ v2.0.8 的 `MouseClickMsg` 底层是 `Mouse{X,Y,Button,Mod}`，**没有 `Count` 字段**；点击计数仍需自实现（paw 已实现且有完整测试） |
+| OSC 52 原生剪贴板（`tea.SetClipboard`） | ✅ 存在，但 paw 已用 `charmbracelet/x/ansi` 自实现双写，升级只是「可简化」而非必需 |
+| 声明式 mouse mode | 收益微弱，paw 只需 `WithMouseAllMotion` 一个选项 |
+
+**破坏面（实测代码量）**：
+
+| 破坏点 | 规模 |
+|---|---|
+| `KeyMsg`/`MouseMsg` 从 struct 变为 **interface**，`Key.Type`/`Runes` 与 `Mouse.Action`/`Type` 全部移除，按钮常量改名（`MouseButtonLeft`→`MouseLeft`），`KeyRunes` 常量移除，paste 事件机制变更 | 生产 26 个文件 + 测试 198 处 `tea.KeyMsg{}` / 54 处 `tea.MouseMsg{}` 构造全量重写 |
+| v2 options 中无 `WithAltScreen`/`WithMouseAllMotion`，需迁移到新机制 | `bubble.go` 入口重写 |
+| `bubbles/v2` 依赖 **`charm.land/lipgloss/v2`**，lipgloss `Color` 类型体系变更（`Color()` 返回 `color.Color` 接口、`NoColor{}` 语义） | lipgloss v1→v2 连锁迁移 34 个文件；`colorManager.LipglossColor()` 返回类型变更带动 30+ 调用点 |
+| `bubbles/v2`（viewport/textarea/cursor/key/textinput）按 v2 消息接口重写 | 11 个文件 |
+| 新依赖链 `charm.land/bubbletea/v2` + `ultraviolet`，模块路径从 github.com 迁移到 charm.land | go.mod/go.sum 全量变更，行为回归风险高 |
+
+**后续路线图**（若未来要升级）：单独分支做全量迁移 → 先修 `go.mod` 依赖 → 用编译器错误清单逐包迁移（建议顺序：lipgloss v2 → bubbles v2 → bubbletea v2 消息层 → 鼠标/键盘处理 → 测试重写）→ 全量回归。预计 40+ 文件、数千行改动，应安排独立会话进行。
 
 ---
 

@@ -160,8 +160,12 @@ func (m appModel) renderDockStatusLine(width int) string {
 	return fitStyledCellLine(line, width)
 }
 
-// renderStatusLeftSegment 返回左段：工作中态显示 spinner + 状态词，空闲显示 ready。
+// renderStatusLeftSegment 返回左段：优先显示复制反馈 toast，其次工作中态
+// spinner + 状态词，空闲显示 ready。
 func (m appModel) renderStatusLeftSegment() string {
+	if toast := m.copyToastAt(m.animationNow()); toast != "" {
+		return copyToastStyle.Render(toast)
+	}
 	if m.isGenerating {
 		return generatingStatusStyle.Render(spinnerFrame(m.spinnerFrameIdx) + " generating")
 	}
@@ -169,6 +173,14 @@ func (m appModel) renderStatusLeftSegment() string {
 		return generatingStatusStyle.Render(spinnerFrame(m.spinnerFrameIdx) + " working")
 	}
 	return idleStatusStyle.Render("ready")
+}
+
+// copyToastAt 返回当前仍有效的复制反馈文本（未过期），过期则返回空串。
+func (m appModel) copyToastAt(now time.Time) string {
+	if m.copyToast != "" && now.Before(m.copyToastUntil) {
+		return m.copyToast
+	}
+	return ""
 }
 
 func (m appModel) renderTokenFrontier(width, used, limit int) string {
