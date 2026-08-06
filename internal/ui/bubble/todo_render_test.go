@@ -82,6 +82,28 @@ func TestTodoStatusTagsAlignAcrossItems(t *testing.T) {
 	}
 }
 
+func TestInProgressTodoItemAndTagUseSynchronizedBlueStyle(t *testing.T) {
+	want := colorManager.LipglossColor(colorContextUsed)
+	if got := todoInProgressStyle.GetForeground(); got != want {
+		t.Fatalf("in-progress tag foreground = %#v, want %#v", got, want)
+	}
+	if got := todoItemBodyStyle(todo.StatusInProgress).GetForeground(); got != want {
+		t.Fatalf("in-progress item foreground = %#v, want %#v", got, want)
+	}
+	if got := todoItemBodyStyle(todo.StatusPending).GetForeground(); got == want {
+		t.Fatalf("pending item unexpectedly uses in-progress foreground %#v", want)
+	}
+}
+
+func TestCompletedTodoItemUsesDimmedBodyAndUnchangedTag(t *testing.T) {
+	if got := todoItemBodyStyle(todo.StatusCompleted).GetForeground(); got != colorManager.LipglossColor(colorMarkdownQuote) {
+		t.Fatalf("completed item foreground = %#v, want dimmed color %#v", got, colorManager.LipglossColor(colorMarkdownQuote))
+	}
+	if got := todoCompletedStyle.GetForeground(); got != colorManager.LipglossColor(colorWorktreeClean) {
+		t.Fatalf("completed tag foreground = %#v, want %#v", got, colorManager.LipglossColor(colorWorktreeClean))
+	}
+}
+
 func TestCompletedTodoItemUsesStrikethrough(t *testing.T) {
 	if !todoItemBodyStyle(todo.StatusCompleted).GetStrikethrough() {
 		t.Fatal("completed item style does not enable strikethrough")

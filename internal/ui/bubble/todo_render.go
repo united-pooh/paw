@@ -83,10 +83,13 @@ func renderTodoExpanded(snapshot todo.Snapshot, width int) string {
 
 func todoItemBodyStyle(status todo.Status) lipgloss.Style {
 	style := bodyStyle
-	if status == todo.StatusCompleted {
+	switch status {
+	case todo.StatusCompleted:
 		style = style.Copy().
 			Foreground(colorManager.LipglossColor(colorMarkdownQuote)).
 			Strikethrough(true)
+	case todo.StatusInProgress:
+		style = style.Copy().Foreground(colorManager.LipglossColor(colorContextUsed))
 	}
 	return style
 }

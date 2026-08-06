@@ -136,11 +136,38 @@ func TestFormatFileMutationToolCallBodyEditSummary(t *testing.T) {
 	if !strings.Contains(first, "Edit  +1 -1") {
 		t.Fatalf("first line = %q, want summary Edit  +1 -1", first)
 	}
-	if !strings.Contains(body, "a.go") {
-		t.Fatalf("missing target in body: %q", body)
+	if strings.Contains(body, "a.go") {
+		t.Fatalf("Edit preview should not repeat the file path: %q", body)
 	}
 	if !strings.Contains(body, "+ │ return 2") || !strings.Contains(body, "- │ return 1") {
 		t.Fatalf("missing diff lines: %q", body)
+	}
+}
+
+func TestEditMutationPreviewOmitsDuplicateFilePath(t *testing.T) {
+	input := editInputJSON(t, "internal/foo.go", "return 1", "return 2")
+	body := formatFileMutationToolCallBody("Edit", toolInputFields(input), "")
+	lines := strings.Split(body, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("body = %q, want summary and diff preview", body)
+	}
+	if lines[1] == "internal/foo.go" {
+		t.Fatalf("duplicate file path should not be rendered as the preview first line: %q", body)
+	}
+	if strings.Contains(body, "internal/foo.go") {
+		t.Fatalf("Edit preview should not repeat the file path: %q", body)
+	}
+	if !strings.Contains(body, "- │ return 1") || !strings.Contains(body, "+ │ return 2") {
+		t.Fatalf("diff preview missing: %q", body)
+	}
+}
+
+func TestWriteMutationPreviewKeepsFilePath(t *testing.T) {
+	input := writeInputJSON(t, "new.go", "package p\n")
+	body := formatFileMutationToolCallBody("Write", toolInputFields(input), "")
+	lines := strings.Split(body, "\n")
+	if len(lines) < 2 || lines[1] != "new.go" {
+		t.Fatalf("Write preview should retain file path, got %q", body)
 	}
 }
 
@@ -188,8 +215,8 @@ func TestEditRunningBodyRendersRegionDiff(t *testing.T) {
 	if !strings.Contains(first, "Edit  running  +1 -1") {
 		t.Fatalf("summary line = %q", first)
 	}
-	if !strings.Contains(body, "internal/foo.go") {
-		t.Fatalf("missing target: %q", body)
+	if strings.Contains(body, "internal/foo.go") {
+		t.Fatalf("Edit preview should not repeat the file path: %q", body)
 	}
 	if !strings.Contains(body, "- │ \treturn 1") || !strings.Contains(body, "+ │ \treturn 2") {
 		t.Fatalf("missing region diff lines: %q", body)
@@ -219,11 +246,11 @@ func TestRenderToolDetailLinesHandlesNumberedDiff(t *testing.T) {
 	old := "a\nreturn 1\nb\n"
 	input := editInputJSON(t, "a.go", "return 1", "return 2")
 	body := formatRunningToolCallBody("Edit", input, old)
-	// Drop the first two lines (summary + target) to isolate diff lines.
-	parts := strings.SplitN(body, "\n", 3)
+	// Drop the summary line to isolate diff lines.
+	parts := strings.SplitN(body, "\n", 2)
 	diffLines := []string{}
-	if len(parts) == 3 {
-		diffLines = strings.Split(parts[2], "\n")
+	if len(parts) == 2 {
+		diffLines = strings.Split(parts[1], "\n")
 	}
 	rendered := renderToolDetailLines(diffLines, 80)
 	// Text content must survive styling (lipgloss escape sequences wrap it).

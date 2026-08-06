@@ -53,6 +53,26 @@ func TestQueueSelectionDownThenIPressesEdit(t *testing.T) {
 	}
 }
 
+func TestQueueSelectionDownDuringRunningTurnOpensQueue(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 24
+	if !model.queryGuard.StartModel() {
+		t.Fatal("StartModel() failed")
+	}
+	model.syncRunningFlags()
+	model = model.queueChatInput("first queued")
+	model = model.queueChatInput("second queued")
+	model.relayout()
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = next.(appModel)
+	if model.queueMode != queueModeSelecting {
+		t.Fatalf("queue mode = %v, want selecting while turn is running", model.queueMode)
+	}
+}
+
 func TestLongSoftWrappedInputUsesWidthAwareFoldProjection(t *testing.T) {
 	value := strings.Repeat("x", 120)
 	width := 10

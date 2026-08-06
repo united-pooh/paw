@@ -179,7 +179,7 @@ func formatFileMutationToolCallBodyWithSnapshot(name string, fields []toolDispla
 		preview = fileMutationDiffPreview(fields, oldContent)
 	}
 	lines := []string{summary}
-	if target := firstNonEmptyField(fields, "file_path", "path"); target != "" {
+	if target := firstNonEmptyField(fields, "file_path", "path"); target != "" && !strings.EqualFold(strings.TrimSpace(name), "Edit") {
 		lines = append(lines, target)
 	}
 	if preview != "" {
