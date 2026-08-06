@@ -105,10 +105,13 @@ func TestRenderTaskCompletionCardFallsBackToPlainBody(t *testing.T) {
 
 func TestTaskBlockMetaLineFormatsDurationAndSize(t *testing.T) {
 	meta := taskBlockMetaLine(taskBlockInfo{ID: "a6c81e94", DurationMS: 42420, OutputSize: 1536})
-	for _, want := range []string{"a6c81e94", "42s", "1.5KB"} {
+	for _, want := range []string{"42s", "1.5KB"} {
 		if !strings.Contains(meta, want) {
 			t.Fatalf("meta line = %q, want %q", meta, want)
 		}
+	}
+	if strings.Contains(meta, "a6c81e94") {
+		t.Fatalf("meta line = %q, should not show task id / session id", meta)
 	}
 	if got := taskBlockMetaLine(taskBlockInfo{}); got != "" {
 		t.Fatalf("empty meta line = %q, want empty", got)
@@ -153,13 +156,16 @@ func TestRenderSubagentTaskCardListsRunningOnly(t *testing.T) {
 		{ID: "running-2", Status: subagent.TaskRunning},
 	}}
 	card := ansi.Strip(model.renderSubagentTaskCard(time.Time{}))
-	for _, want := range []string{"subagents · 2 运行中", "二叶筑", "running-1", "running-2"} {
+	for _, want := range []string{"subagents · 2 运行中", "二叶筑", "subagent"} {
 		if !strings.Contains(card, want) {
 			t.Fatalf("task card = %q, want %q", card, want)
 		}
 	}
 	if strings.Contains(card, "done-1") || strings.Contains(card, "已完成") {
 		t.Fatalf("task card = %q, should not list completed tasks", card)
+	}
+	if strings.Contains(card, "running-1") || strings.Contains(card, "running-2") {
+		t.Fatalf("task card = %q, should not show task id / session id", card)
 	}
 	for _, line := range strings.Split(card, "\n") {
 		if got := lipgloss.Width(line); got > subagentTaskCardMaxWidth {
@@ -205,19 +211,23 @@ func TestPlaceRightCenteredOverlayPosition(t *testing.T) {
 	}
 }
 
-func TestRenderSubagentTaskCardRowUsesPersonaColorAndShortID(t *testing.T) {
+func TestRenderSubagentTaskCardRowHidesSessionID(t *testing.T) {
 	row := ansi.Strip(renderSubagentTaskCardRow(subagent.TaskSnapshot{
 		ID:    "a6c81e94d94a5e40",
 		Name:  "八潮瑠唯",
 		Color: "#669988",
 	}, "◐"))
-	for _, want := range []string{"◐", "八潮瑠唯", "a6c81e94"} {
+	for _, want := range []string{"◐", "八潮瑠唯"} {
 		if !strings.Contains(row, want) {
 			t.Fatalf("task row = %q, want %q", row, want)
 		}
 	}
-	if strings.Contains(row, "a6c81e94d94a5e40") {
-		t.Fatalf("task row = %q, want shortened id", row)
+	if strings.Contains(row, "a6c81e94") {
+		t.Fatalf("task row = %q, should not show task id / session id", row)
+	}
+	fallback := ansi.Strip(renderSubagentTaskCardRow(subagent.TaskSnapshot{ID: "x123", Status: subagent.TaskRunning}, "◐"))
+	if !strings.Contains(fallback, "subagent") || strings.Contains(fallback, "x123") {
+		t.Fatalf("nameless task row = %q, want generic name without id", fallback)
 	}
 }
 

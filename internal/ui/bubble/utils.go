@@ -494,14 +494,6 @@ func nonEmptyStrings(values ...string) []string {
 	return out
 }
 
-func shortTaskID(id string) string {
-	id = strings.TrimSpace(id)
-	if terminalCellWidth(id) <= 12 {
-		return id
-	}
-	return truncateStyledCells(id, 11, "…")
-}
-
 func sanitizeAssistantVisibleBody(body string) string {
 	// Fenced JSON is ordinary assistant Markdown (often an example), so do not
 	// remove it here. Transport tool-use artifacts are filtered only from prose

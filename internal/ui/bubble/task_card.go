@@ -49,8 +49,8 @@ func (m appModel) hasRunningSubagentTasks() bool {
 // renderSubagentTaskCard 渲染运行中任务卡；没有 running 任务时返回空串。
 //
 //	┌ subagents · 2 运行中 ──┐
-//	│ ◐ 二叶筑   a6c81e94    │
-//	│ ◐ 深潜者   b2d9f0aa    │
+//	│ ◐ 二叶筑               │
+//	│ ◐ 深潜者               │
 //	└───────────────────────┘
 func (m appModel) renderSubagentTaskCard(now time.Time) string {
 	running := m.runningSubagentTasks()
@@ -87,7 +87,8 @@ func (m appModel) renderSubagentTaskCard(now time.Time) string {
 	return cardStyle.Width(styleWidth).Render(strings.Join(content, "\n"))
 }
 
-// renderSubagentTaskCardRow 渲染单行任务：spinner + 名称（persona 色）+ 短 id。
+// renderSubagentTaskCardRow 渲染单行任务：spinner + 名称（persona 色）。
+// 不显示任务 id / session id。
 func renderSubagentTaskCardRow(task subagent.TaskSnapshot, spinner string) string {
 	nameStyle := lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorBody))
 	if color := strings.TrimSpace(task.Color); color != "" {
@@ -95,16 +96,12 @@ func renderSubagentTaskCardRow(task subagent.TaskSnapshot, spinner string) strin
 	}
 	name := strings.TrimSpace(task.Name)
 	if name == "" {
-		name = shortTaskID(task.ID)
+		name = "subagent"
 	}
-	id := shortTaskID(task.ID)
-	idStyle := lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorContextFree))
 
 	return spinnerStyle.Render(spinner) +
 		" " +
-		nameStyle.Render(name) +
-		"  " +
-		idStyle.Render(id)
+		nameStyle.Render(name)
 }
 
 // spinnerStyle 是任务卡 spinner 的颜色（与 mockup 的暖色一致）。

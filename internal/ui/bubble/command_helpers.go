@@ -317,9 +317,6 @@ func renderSubagentResult(result subagent.Result) string {
 	lines := []string{
 		fmt.Sprintf("done  depth %d", result.Depth),
 	}
-	if result.AgentID != "" {
-		lines = append(lines, "id  "+result.AgentID)
-	}
 	if result.OutputPath != "" {
 		lines = append(lines, "output  "+result.OutputPath)
 	}
@@ -335,9 +332,6 @@ func renderSubagentResult(result subagent.Result) string {
 func renderTask(task subagent.TaskSnapshot) string {
 	lines := []string{
 		fmt.Sprintf("%s  %s  %s  depth %d", taskDisplayName(task), task.Status, task.ContextMode, task.Depth),
-	}
-	if task.Name != "" && task.ID != "" {
-		lines = append(lines, "id  "+task.ID)
 	}
 	if task.PID > 0 {
 		lines = append(lines, fmt.Sprintf("pid  %d", task.PID))
@@ -361,14 +355,14 @@ func taskDisplayName(task subagent.TaskSnapshot) string {
 	if name := strings.TrimSpace(task.Name); name != "" {
 		return name
 	}
-	return shortTaskID(task.ID)
+	return "subagent"
 }
 
 func resultDisplayName(result subagent.Result) string {
 	if name := strings.TrimSpace(result.AgentName); name != "" {
 		return name
 	}
-	return shortTaskID(result.AgentID)
+	return "subagent"
 }
 
 func (m *appModel) syncRunnerModelContextLimit(cfg model.Config) {

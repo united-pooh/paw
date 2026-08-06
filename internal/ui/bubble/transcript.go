@@ -1333,9 +1333,6 @@ func renderSubagentToolDetail(entry transcriptEntry) string {
 	if value := strings.TrimSpace(payload.Status); value != "" {
 		lines = append(lines, "status: "+value)
 	}
-	if value := strings.TrimSpace(payload.ID); value != "" {
-		lines = append(lines, "id: "+value)
-	}
 	if value := strings.TrimSpace(payload.Name); value != "" {
 		lines = append(lines, "agent: "+value)
 	}
@@ -1344,9 +1341,6 @@ func renderSubagentToolDetail(entry transcriptEntry) string {
 	}
 	if value := strings.TrimSpace(payload.Description); value != "" {
 		lines = append(lines, "description: "+value)
-	}
-	if value := strings.TrimSpace(payload.SessionID); value != "" {
-		lines = append(lines, "session: "+value)
 	}
 	if value := strings.TrimSpace(payload.Content); value != "" {
 		lines = append(lines, "result: "+value)
@@ -1597,7 +1591,7 @@ func renderTaskCompletionCard(body string, width int) string {
 	}
 	name := strings.TrimSpace(info.Name)
 	if name == "" {
-		name = shortTaskID(info.ID)
+		name = "subagent"
 	}
 	title := lipgloss.NewStyle().Foreground(borderColor).Bold(true).Render(marker + " " + name + " " + stateText)
 
@@ -1631,11 +1625,10 @@ func renderTaskCompletionCard(body string, width int) string {
 	return cardStyle.Width(styleWidth).Render(strings.Join(content, "\n"))
 }
 
+// taskBlockMetaLine 渲染完成块卡片的 meta 行（时长 · 输出大小）。
+// 刻意不显示任务 id / session id。
 func taskBlockMetaLine(info taskBlockInfo) string {
-	parts := make([]string, 0, 3)
-	if strings.TrimSpace(info.ID) != "" {
-		parts = append(parts, shortTaskID(info.ID))
-	}
+	parts := make([]string, 0, 2)
 	if info.DurationMS > 0 {
 		parts = append(parts, formatTaskBlockDuration(info.DurationMS))
 	}

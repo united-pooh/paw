@@ -2259,6 +2259,7 @@ func TestSubagentCommandUsesDefaultsAndTasksRender(t *testing.T) {
 	subagents := &fakeSubagentController{
 		launchTask: subagent.TaskSnapshot{
 			ID:             "task-42",
+			Name:           "worker",
 			SessionID:      "task-42",
 			Status:         subagent.TaskRunning,
 			ContextMode:    settings.ContextModeFork,
@@ -2283,8 +2284,11 @@ func TestSubagentCommandUsesDefaultsAndTasksRender(t *testing.T) {
 	if req.ContextMode != settings.ContextModeFork || req.RunMode != settings.RunModeBackground || req.ParentSessionID != "session-1" || req.Prompt != "summarize recent changes" {
 		t.Fatalf("launch request = %#v", req)
 	}
-	if got := model.transcript[len(model.transcript)-1].body; !strings.Contains(got, "task-42  running  fork") {
+	if got := model.transcript[len(model.transcript)-1].body; !strings.Contains(got, "worker  running  fork") {
 		t.Fatalf("launch transcript = %q", got)
+	}
+	if strings.Contains(model.transcript[len(model.transcript)-1].body, "id  ") {
+		t.Fatalf("launch transcript = %q, should not show task id / session id", model.transcript[len(model.transcript)-1].body)
 	}
 
 	handled, cmd = model.handleCommand("/tasks")
@@ -2294,8 +2298,8 @@ func TestSubagentCommandUsesDefaultsAndTasksRender(t *testing.T) {
 	if model.subagentPicker == nil || model.subagentPicker.tab != activityTabSubagents {
 		t.Fatalf("activity = %#v, want Subagents tab", model.subagentPicker)
 	}
-	if got := model.renderActivityBox(); !strings.Contains(got, "task-42") {
-		t.Fatalf("Activity modal = %q, want task-42", got)
+	if got := model.renderActivityBox(); !strings.Contains(got, "worker") {
+		t.Fatalf("Activity modal = %q, want worker", got)
 	}
 }
 
@@ -2338,14 +2342,17 @@ func TestSyncSubagentCompletionStartsQueuedTurn(t *testing.T) {
 	var subagentEntry transcriptEntry
 	foundSubagent := false
 	for _, entry := range model.transcript {
-		if entry.title == "agent-7" {
+		if entry.title == "subagent" && strings.Contains(entry.body, "done  depth 0") {
 			subagentEntry = entry
 			foundSubagent = true
 			break
 		}
 	}
-	if !foundSubagent || !strings.Contains(subagentEntry.body, "done  depth 0") || !strings.Contains(subagentEntry.body, "/tmp/agent-7.jsonl") {
+	if !foundSubagent || !strings.Contains(subagentEntry.body, "/tmp/agent-7.jsonl") {
 		t.Fatalf("subagent transcript = %#v", model.transcript)
+	}
+	if strings.Contains(subagentEntry.body, "id  ") {
+		t.Fatalf("subagent transcript = %q, should not show task id / session id", subagentEntry.body)
 	}
 
 	finished, ok := followCmd().(turnFinishedMsg)
@@ -5703,8 +5710,8 @@ func TestRenderDockStatusLine_ContainsModelTokenAndFree(t *testing.T) {
 func TestRenderSubagentsCard_ShowsRunningAndDone(t *testing.T) {
 	ctrl := &fakeSubagentController{
 		tasks: []subagent.TaskSnapshot{
-			{ID: "worker-1", ParentSessionID: "session-1", Status: subagent.TaskRunning},
-			{ID: "worker-2", ParentSessionID: "session-1", Status: subagent.TaskCompleted},
+			{ID: "worker-1", Name: "worker-1", ParentSessionID: "session-1", Status: subagent.TaskRunning},
+			{ID: "worker-2", Name: "worker-2", ParentSessionID: "session-1", Status: subagent.TaskCompleted},
 		},
 	}
 	model := newTestModel(&fakeRunner{})

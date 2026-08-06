@@ -380,7 +380,7 @@ func decorateSubagentTranscript(task subagent.TaskSnapshot, entries []transcript
 	header := transcriptEntry{
 		kind:      entrySystem,
 		title:     "subagent",
-		body:      fmt.Sprintf("viewing %s  session %s", taskDisplayName(task), shortTaskID(firstNonEmptyString(task.SessionID, task.ID))),
+		body:      fmt.Sprintf("viewing %s", taskDisplayName(task)),
 		createdAt: createdAt,
 	}
 	out := make([]transcriptEntry, 0, len(entries)+1)
