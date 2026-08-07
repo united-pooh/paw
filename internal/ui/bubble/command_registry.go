@@ -188,6 +188,15 @@ func NewCommandRegistry() *CommandRegistry {
 		},
 	})
 	registry.Register(Command{
+		Name:              "/goal",
+		Description:       "run and control a long-lived session goal",
+		ArgumentHint:      "[start <objective>|status|pause|resume|stop]",
+		AllowWhileRunning: true,
+		Handler: func(m *appModel, invocation string) tea.Cmd {
+			return m.handleGoalCommand(invocation)
+		},
+	})
+	registry.Register(Command{
 		Name:              "/mcp",
 		Description:       "show MCP server status",
 		AllowWhileRunning: true,
@@ -409,6 +418,54 @@ func commandToken(line string) string {
 		return line
 	}
 	return fields[0]
+}
+
+func (m *appModel) handleGoalCommand(invocation string) tea.Cmd {
+	if m == nil || m.goalController == nil {
+		m.addEntry(transcriptEntry{kind: entryError, title: "goal", body: "goal controller is unavailable"})
+		return nil
+	}
+	args := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(invocation), commandToken(invocation)))
+	fields := strings.Fields(args)
+	if len(fields) == 0 || fields[0] == "status" {
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "goal", body: m.goalController.Status()})
+		return nil
+	}
+	switch fields[0] {
+	case "start":
+		objective := strings.TrimSpace(strings.TrimPrefix(args, "start"))
+		if objective == "" {
+			m.addEntry(transcriptEntry{kind: entryError, title: "goal", body: "usage: /goal start <objective>"})
+			return nil
+		}
+		id, err := m.goalController.Start(objective)
+		if err != nil {
+			m.addEntry(transcriptEntry{kind: entryError, title: "goal", body: err.Error()})
+			return nil
+		}
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "goal", body: "started goal " + id})
+	case "pause":
+		if err := m.goalController.Pause(); err != nil {
+			m.addEntry(transcriptEntry{kind: entryError, title: "goal", body: err.Error()})
+			return nil
+		}
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "goal", body: "goal paused"})
+	case "resume":
+		if err := m.goalController.Resume(); err != nil {
+			m.addEntry(transcriptEntry{kind: entryError, title: "goal", body: err.Error()})
+			return nil
+		}
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "goal", body: "goal resumed"})
+	case "stop", "cancel":
+		if err := m.goalController.Cancel(); err != nil {
+			m.addEntry(transcriptEntry{kind: entryError, title: "goal", body: err.Error()})
+			return nil
+		}
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "goal", body: "goal cancelled"})
+	default:
+		m.addEntry(transcriptEntry{kind: entryError, title: "goal", body: "usage: /goal start <objective>|status|pause|resume|stop"})
+	}
+	return nil
 }
 
 func (m *appModel) handleStreamMACommand(invocation string) tea.Cmd {

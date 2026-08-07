@@ -204,3 +204,12 @@ func taskIDFromTiming(timing *TurnTiming) string {
 
 var _ TurnExecutor = runnerTurnExecutor{}
 var _ CompletionEvaluator = runnerCompletionEvaluator{}
+
+// GoalTurnExecutor exposes the existing single-turn adapter to higher-level
+// goal orchestration without exposing Runner's tool-loop internals.
+func (runner *Runner) GoalTurnExecutor() TurnExecutor {
+	if runner == nil {
+		return nil
+	}
+	return runnerTurnExecutor{runner: runner}
+}

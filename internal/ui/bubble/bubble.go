@@ -110,6 +110,15 @@ type MCPStatusController interface {
 	Status() []coremcp.ServerStatus
 }
 
+// GoalController exposes safe lifecycle controls for the session Goal mode.
+type GoalController interface {
+	Start(objective string) (string, error)
+	Status() string
+	Pause() error
+	Resume() error
+	Cancel() error
+}
+
 // UI 是基于 Bubble Tea 的交互式终端界面实现。
 type UI struct {
 	mu                    sync.Mutex
@@ -119,6 +128,7 @@ type UI struct {
 	subagentController    SubagentController
 	sessionStore          SessionStore
 	mcpController         MCPStatusController
+	goalController        GoalController
 	selectionBroker       *selecttool.Broker
 	todoBroker            *todo.Broker
 	sendMsg               func(tea.Msg)
@@ -179,6 +189,13 @@ func (u *UI) SetMCPStatusController(controller MCPStatusController) {
 	u.mcpController = controller
 }
 
+// SetGoalController injects the opt-in Goal lifecycle controller.
+func (u *UI) SetGoalController(controller GoalController) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.goalController = controller
+}
+
 // filterIdleMouseMotion drops passive mouse movement that cannot change UI
 // state. All-motion mode is required for real hover events, but Bubble Tea
 // otherwise runs Update and View for every reported cell crossed by the mouse.
@@ -208,6 +225,7 @@ func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 	subagentController := u.subagentController
 	sessionStore := u.sessionStore
 	mcpController := u.mcpController
+	goalController := u.goalController
 	selectionBroker := u.selectionBroker
 	todoBroker := u.todoBroker
 	u.mu.Unlock()
@@ -218,6 +236,7 @@ func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 	appModel.todoBroker = todoBroker
 	appModel.workspaceRoot = workspaceRootOf(runner)
 	appModel.mcpController = mcpController
+	appModel.goalController = goalController
 	// WithInput 包一层 ESC 聚合 reader：在 BubbleTea 解析字节之前，把被读边界
 	// 切断的 \x1b[<...M 鼠标序列重新拼合，从源头杜绝 ESC 与 [ 分离导致的
 	// [[[[[[[ 泄漏。reader 内嵌 *os.File，MakeRaw 与 kqueue 路径不受影响。

@@ -78,6 +78,7 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	output.SetSubagentController(subagentManager)
 	output.SetSessionStore(store)
 	output.SetMCPStatusController(mcpManager)
+	output.SetGoalController(newSessionGoalController(sessionID, runner, todoBroker))
 	return output.Run(ctx, runner, sessionID)
 }
 
