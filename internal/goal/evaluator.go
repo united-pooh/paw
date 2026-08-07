@@ -135,7 +135,7 @@ func ClassifyError(err error) PauseReason {
 	if strings.Contains(text, "permission") || strings.Contains(text, "approval") {
 		return PausePermissionRequired
 	}
-	if strings.Contains(text, "dangerous") {
+	if strings.Contains(text, "dangerous") || strings.Contains(text, "unsafe") {
 		return PauseDangerousCommand
 	}
 	if strings.Contains(text, "blocked") {
