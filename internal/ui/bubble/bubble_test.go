@@ -48,7 +48,19 @@ type fakeRunner struct {
 
 type ctrlCRunner struct {
 	fakeRunner
-	runCtx context.Context
+	runCtx          context.Context
+	activeTool      bool
+	cancelToolCalls int
+	cancelTurnCalls int
+}
+
+func (r *ctrlCRunner) CancelCurrentTool() bool {
+	r.cancelToolCalls++
+	return r.activeTool
+}
+
+func (r *ctrlCRunner) CancelTurn() {
+	r.cancelTurnCalls++
 }
 
 func (r *ctrlCRunner) RunTurn(ctx context.Context, input string) (message.Message, error) {
@@ -6700,6 +6712,83 @@ func TestCtrlCWhileModelWorkingCancelsWithoutClearingInput(t *testing.T) {
 	}
 }
 
+func TestCtrlCFirstPressCancelsActiveToolBeforeTurn(t *testing.T) {
+	runner := &ctrlCRunner{activeTool: true}
+	model := newTestModel(runner)
+	model.input.SetValue("first")
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if cmd == nil {
+		t.Fatal("submit returned nil command")
+	}
+
+	next, cancelCmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	model = next.(appModel)
+	if cancelCmd != nil {
+		t.Fatalf("first tool Ctrl+C returned command: %T", cancelCmd)
+	}
+	if runner.cancelToolCalls != 1 || runner.cancelTurnCalls != 0 {
+		t.Fatalf("first Ctrl+C calls = tool:%d turn:%d, want tool:1 turn:0", runner.cancelToolCalls, runner.cancelTurnCalls)
+	}
+	if !model.toolCancelRequested {
+		t.Fatal("first tool cancellation should mark the tool cancellation requested")
+	}
+	if model.lastCtrlCAt.IsZero() == false {
+		t.Fatal("working Ctrl+C should not start the idle double-press timer")
+	}
+
+	// A second press escalates to cancelling the whole turn.
+	next, cancelCmd = model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	model = next.(appModel)
+	if cancelCmd != nil {
+		t.Fatalf("second tool Ctrl+C returned command: %T", cancelCmd)
+	}
+	if runner.cancelToolCalls != 1 || runner.cancelTurnCalls != 1 {
+		t.Fatalf("second Ctrl+C calls = tool:%d turn:%d, want tool:1 turn:1", runner.cancelToolCalls, runner.cancelTurnCalls)
+	}
+	if !model.modelCancelRequested {
+		t.Fatal("second Ctrl+C should request turn cancellation")
+	}
+
+	finishedMsg := cmd()
+	finished, ok := finishedMsg.(turnFinishedMsg)
+	if !ok {
+		t.Fatalf("cancelled command returned %T, want turnFinishedMsg", finishedMsg)
+	}
+	_, _ = model.Update(finished)
+}
+
+func TestCtrlCWithoutActiveToolCancelsTurnImmediately(t *testing.T) {
+	runner := &ctrlCRunner{}
+	model := newTestModel(runner)
+	model.input.SetValue("first")
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if cmd == nil {
+		t.Fatal("submit returned nil command")
+	}
+
+	next, cancelCmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	model = next.(appModel)
+	if cancelCmd != nil {
+		t.Fatalf("turn Ctrl+C returned command: %T", cancelCmd)
+	}
+	if runner.cancelToolCalls != 1 || runner.cancelTurnCalls != 1 {
+		t.Fatalf("Ctrl+C calls = tool:%d turn:%d, want tool:1 turn:1", runner.cancelToolCalls, runner.cancelTurnCalls)
+	}
+	if !model.modelCancelRequested {
+		t.Fatal("Ctrl+C without an active tool should request turn cancellation")
+	}
+
+	finishedMsg := cmd()
+	finished, ok := finishedMsg.(turnFinishedMsg)
+	if !ok {
+		t.Fatalf("cancelled command returned %T, want turnFinishedMsg", finishedMsg)
+	}
+	_, _ = model.Update(finished)
+}
 func TestCtrlCWithoutModelOutputRestoresInputAndRemovesTranscript(t *testing.T) {
 	runner := &ctrlCRunner{}
 	model := newTestModel(runner)

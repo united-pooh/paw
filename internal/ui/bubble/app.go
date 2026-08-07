@@ -224,6 +224,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.isGenerating = false
 		m.recordToolCallEntry(msg.ID, msg.Name, json.RawMessage(msg.Input), msg.FileMutationKnown, msg.IsFileMutation, msg.FileMutation)
 		return m, nil
+	case toolOutputMsg:
+		m.recordToolOutputEntry(msg)
+		return m, nil
 	case toolResultMsg:
 		m.finalizeThinkingStream()
 		m.finalizeAssistantStream()
@@ -674,8 +677,18 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "ctrl+c":
 			if m.isAgentWorking() {
-				// 工作态优先取消当前模型操作，不清空用户输入，也不开始双击退出计时。
+				// 工作态优先取消当前 streaming tool。第一次 Ctrl+C 只停止工具，
+				// 不取消整轮；再次按下或没有活动工具时才取消当前 turn。
 				m.lastCtrlCAt = time.Time{}
+				if !m.toolCancelRequested {
+					if canceler, ok := m.runner.(ForegroundCancelRunner); ok && canceler.CancelCurrentTool() {
+						m.toolCancelRequested = true
+						return m, nil
+					}
+				}
+				if canceler, ok := m.runner.(ForegroundCancelRunner); ok {
+					canceler.CancelTurn()
+				}
 				m.cancelModelWork()
 				return m, nil
 			}

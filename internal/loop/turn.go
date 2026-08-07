@@ -32,6 +32,9 @@ func (runner *Runner) runTurnWithTiming(ctx context.Context, userInput message.M
 	if runner == nil {
 		return TurnExecution{}, fmt.Errorf("runner 未初始化")
 	}
+	turnCtx, finishTurn := runner.beginActiveTurn(ctx)
+	defer finishTurn()
+	ctx = turnCtx
 	config, broker := runner.autoContinueState()
 	if !config.Enabled || broker == nil {
 		return runner.runSingleTurnWithTiming(ctx, userInput, timing)

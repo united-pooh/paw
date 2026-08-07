@@ -12,6 +12,28 @@ type Tool interface {
 	InputSchema() json.RawMessage
 }
 
+// ToolOutputStream identifies the source stream for a streamed tool output
+// event.
+type ToolOutputStream string
+
+const (
+	ToolOutputStdout ToolOutputStream = "stdout"
+	ToolOutputStderr ToolOutputStream = "stderr"
+)
+
+// ToolOutputEvent is one chunk of output emitted by an optional streaming
+// tool capability.
+type ToolOutputEvent struct {
+	Stream ToolOutputStream
+	Chunk  string
+}
+
+// StreamTool is an optional capability for tools that can emit output while
+// running. The Tool interface remains the compatibility path for all tools.
+type StreamTool interface {
+	Stream(ctx context.Context, input json.RawMessage, emit func(ToolOutputEvent) error) (output string, interrupted bool, err error)
+}
+
 type ConcurrencySafeTool interface {
 	IsConcurrencySafe(input json.RawMessage) bool
 }

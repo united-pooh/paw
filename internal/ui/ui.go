@@ -22,8 +22,21 @@ type ToolCallEvent struct {
 	FileMutation      *FileMutationSnapshot
 }
 
-// ToolResultEvent 描述一次工具执行结果事件。
-// Name 单独保留一份，避免 UI 还要再从其他结构推断工具名。
+// ToolOutputEvent describes one live output chunk from a streaming tool.
+type ToolOutputEvent struct {
+	ToolUseID string
+	Name      string
+	Stream    string
+	Chunk     string
+}
+
+// ToolOutputReceiver is an optional UI capability for live tool output.
+// Implementations that do not provide it keep the normal one-shot tool path.
+type ToolOutputReceiver interface {
+	OnToolOutput(event ToolOutputEvent) error
+}
+
+// ToolResultEvent describes one tool execution result event.
 type ToolResultEvent struct {
 	ToolUseID         string
 	Name              string

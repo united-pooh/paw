@@ -35,6 +35,14 @@ type RichInputRunner interface {
 	RunRichTurn(ctx context.Context, input message.Message) (message.Message, error)
 }
 
+// ForegroundCancelRunner exposes optional cancellation routing for foreground
+// work. It is kept separate from Runner so existing integrations and test
+// doubles remain source-compatible.
+type ForegroundCancelRunner interface {
+	CancelCurrentTool() bool
+	CancelTurn()
+}
+
 // WorkspaceRootProvider is an optional runner capability used to render
 // workspace-relative file targets in the transcript.
 type WorkspaceRootProvider interface {
@@ -268,6 +276,15 @@ func cloneToolCallMsg(event ui.ToolCallEvent) toolCallMsg {
 	event.Input = append(json.RawMessage(nil), event.Input...)
 	event.FileMutation = cloneFileMutationSnapshot(event.FileMutation)
 	return toolCallMsg(event)
+}
+
+// OnToolOutput 接收工具运行期间的 stdout/stderr 增量，并转发给 Bubble Tea 状态机。
+func (u *UI) OnToolOutput(event ui.ToolOutputEvent) error {
+	return u.send(cloneToolOutputMsg(event))
+}
+
+func cloneToolOutputMsg(event ui.ToolOutputEvent) toolOutputMsg {
+	return toolOutputMsg(event)
 }
 
 // OnToolResult 接收工具结果事件，并转发给 Bubble Tea 状态机展示。

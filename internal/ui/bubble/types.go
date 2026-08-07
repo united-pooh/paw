@@ -58,6 +58,10 @@ type transcriptEntry struct {
 	fileMutationKnown     bool
 	isFileMutation        bool
 	toolResult            string
+	toolStdout            string
+	toolStderr            string
+	toolInterrupted       bool
+	toolTruncated         bool
 	toolExpanded          bool
 	toolGroupPending      bool
 	toolGroupOpen         bool
@@ -157,6 +161,9 @@ type thinkingDeltaMsg string
 
 // toolCallMsg 表示工具调用事件。
 type toolCallMsg ui.ToolCallEvent
+
+// toolOutputMsg 表示工具运行期间的一段 stdout/stderr 增量。
+type toolOutputMsg ui.ToolOutputEvent
 
 // toolResultMsg 表示工具结果事件。
 type toolResultMsg ui.ToolResultEvent
@@ -501,6 +508,7 @@ type appModel struct {
 	turnHasModelOutput         bool
 	modelCancelRequested       bool
 	activeModelCancel          context.CancelFunc
+	toolCancelRequested        bool
 	lastCtrlCAt                time.Time // 追踪双击 Ctrl+C 退出
 	modelWizard                *modelWizard
 	settingWizard              *settingWizard

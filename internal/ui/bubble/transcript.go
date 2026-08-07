@@ -39,6 +39,10 @@ type transcriptRenderCacheKey struct {
 	toolInput            string
 	toolResult           string
 	toolResultLen        int
+	toolStdout           string
+	toolStderr           string
+	toolInterrupted      bool
+	toolTruncated        bool
 	toolExpanded         bool
 	toolGroupPending     bool
 	toolGroupOpen        bool
@@ -373,6 +377,35 @@ func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMes
 	m.refreshViewport()
 }
 
+func (m *appModel) recordToolOutputEntry(event toolOutputMsg) {
+	if m == nil || strings.TrimSpace(string(event.Chunk)) == "" {
+		return
+	}
+	toolUseID := strings.TrimSpace(event.ToolUseID)
+	name := strings.TrimSpace(event.Name)
+	for index := len(m.transcript) - 1; index >= 0; index-- {
+		entry := &m.transcript[index]
+		if !isToolTransaction(*entry) || toolEntryStatus(*entry) != "running" {
+			continue
+		}
+		if toolUseID != "" && entry.toolUseID != "" && entry.toolUseID != toolUseID {
+			continue
+		}
+		if toolUseID == "" && name != "" && !strings.EqualFold(entry.toolName, name) {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(event.Stream)) {
+		case "stderr":
+			entry.toolStderr += event.Chunk
+		default:
+			entry.toolStdout += event.Chunk
+		}
+		touchTranscriptEntry(entry)
+		m.refreshViewportForStreaming()
+		return
+	}
+}
+
 func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string, isError, mutationKnown, isMutation bool, mutation *ui.FileMutationSnapshot) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -439,6 +472,9 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 		entry.isError = isError
 		entry.toolStatus = status
 		entry.toolResult = content
+		trimmedContent := strings.ToLower(strings.TrimSpace(content))
+		entry.toolInterrupted = strings.HasPrefix(trimmedContent, "interrupted") || strings.HasPrefix(trimmedContent, "interrupted:")
+		entry.toolTruncated = strings.Contains(strings.ToLower(content), "[truncated]") || strings.Contains(strings.ToLower(content), "[response truncated]")
 		if strings.EqualFold(name, "Select") && strings.EqualFold(status, "ok") {
 			if presentation, ok := parseSelectToolPresentation(entry.toolInput, content); ok {
 				entry.toolTarget = presentation.target
@@ -904,6 +940,8 @@ func transcriptRenderSignature(entries []transcriptEntry, width int, showThinkin
 		mix(uint64(entry.version))
 		mix(uint64(len(entry.body)))
 		mix(uint64(len(entry.toolResult)))
+		mix(uint64(len(entry.toolStdout)))
+		mix(uint64(len(entry.toolStderr)))
 		mix(uint64(len(entry.citations)))
 	}
 	return h
@@ -1022,7 +1060,12 @@ func transcriptRenderKey(entry transcriptEntry, width int, at time.Time) transcr
 		toolStatus:           entry.toolStatus,
 		toolTarget:           entry.toolTarget,
 		toolInput:            string(entry.toolInput),
+		toolResult:           entry.toolResult,
 		toolResultLen:        len(entry.toolResult),
+		toolStdout:           entry.toolStdout,
+		toolStderr:           entry.toolStderr,
+		toolInterrupted:      entry.toolInterrupted,
+		toolTruncated:        entry.toolTruncated,
 		toolExpanded:         entry.toolExpanded,
 		toolGroupPending:     entry.toolGroupPending,
 		toolGroupOpen:        entry.toolGroupOpen,
@@ -1389,10 +1432,17 @@ func renderGroupedToolEntry(entry transcriptEntry, width int, at time.Time, full
 		summary = toolFocusedStyle.Width(innerWidth).Render(summary)
 	}
 	if toolEntryStatus(entry) == "running" {
+		live := renderToolLiveOutput(entry, maxInt(1, innerWidth-2))
 		if !isSubagentToolEntry(entry) {
-			return borderStyle.Width(contentWidth).Render(summary)
+			if live == "" {
+				return borderStyle.Width(contentWidth).Render(summary)
+			}
+			return borderStyle.Width(contentWidth).Render(summary + "\n" + live)
 		}
 		detail := renderToolInputForDisplay(entry, maxInt(1, innerWidth-2))
+		if live != "" {
+			detail = strings.TrimSpace(detail + "\n" + live)
+		}
 		if detail == "" {
 			return borderStyle.Width(contentWidth).Render(summary)
 		}
@@ -1408,12 +1458,47 @@ func renderGroupedToolEntry(entry transcriptEntry, width int, at time.Time, full
 	if result == "" {
 		result = "(empty result)"
 	}
+	if live := renderToolLiveOutput(entry, maxInt(1, innerWidth-2)); live != "" {
+		if strings.TrimSpace(result) == "" {
+			result = live
+		} else {
+			result = live + "\n" + result
+		}
+	}
 	resultLines := strings.Split(result, "\n")
 	if !(fullResult && entry.toolFocused) {
 		resultLines = limitRenderedDetailLines(resultLines, maxRenderedToolDetailLines)
 	}
 	detail := renderToolDetailLinesWithHint(resultLines, maxInt(1, innerWidth-2), entry.toolTarget)
 	return borderStyle.Width(contentWidth).Render(summary + "\n" + detail)
+}
+
+func renderToolLiveOutput(entry transcriptEntry, width int) string {
+	sections := make([]string, 0, 3)
+	appendSection := func(label, content string) {
+		if strings.TrimSpace(content) == "" {
+			return
+		}
+		lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+		limited := limitRenderedDetailLines(lines, maxRenderedToolDetailLines)
+		if len(limited) < len(lines) {
+			entry.toolTruncated = true
+		}
+		sections = append(sections, label+":\n"+renderToolDetailLinesWithHint(limited, width, ""))
+	}
+	appendSection("stdout", entry.toolStdout)
+	appendSection("stderr", entry.toolStderr)
+	if entry.toolInterrupted {
+		sections = append(sections, "[interrupted]")
+	}
+	if entry.toolTruncated {
+		sections = append(sections, "[truncated]")
+	}
+	return strings.Join(sections, "\n")
+}
+
+func renderToolOutputSections(entry transcriptEntry, width int) string {
+	return renderToolLiveOutput(entry, width)
 }
 
 func renderToolInputForDisplay(entry transcriptEntry, width int) string {
@@ -1933,6 +2018,10 @@ func renderToolTransactionEntry(entry transcriptEntry, width int, at time.Time) 
 	}
 
 	if status == "running" || !entry.toolExpanded {
+		live := renderToolLiveOutput(entry, maxInt(1, innerWidth-2))
+		if live != "" {
+			return borderStyle.Width(contentWidth).Render(summary + "\n" + live)
+		}
 		return borderStyle.Width(contentWidth).Render(summary)
 	}
 
@@ -1945,6 +2034,13 @@ func renderToolTransactionEntry(entry transcriptEntry, width int, at time.Time) 
 	} else if strings.EqualFold(name, "Select") && status == "ok" {
 		if presentation, ok := parseSelectToolPresentation(entry.toolInput, entry.toolResult); ok {
 			result = presentation.detail
+		}
+	}
+	if live := renderToolLiveOutput(entry, maxInt(1, innerWidth-2)); live != "" {
+		if strings.TrimSpace(result) == "" {
+			result = live
+		} else {
+			result = live + "\n" + result
 		}
 	}
 	result = renderTerminalLinks(sanitizeTerminalText(result))

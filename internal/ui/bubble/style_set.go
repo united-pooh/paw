@@ -40,7 +40,7 @@ func NewStyleSet(p theme.Palette) StyleSet {
 		MarkdownHeading:         lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownHeading)).Bold(true),
 		MarkdownBold:            lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownBold)).Bold(true),
 		MarkdownItalic:          lipgloss.NewStyle().Foreground(c.LipglossColor(colorBody)).Italic(true),
-		MarkdownHighlight:       lipgloss.NewStyle().Foreground(c.LipglossColor(colorBody)).Background(c.LipglossColor(colorMarkdownHighlight)),
+		MarkdownHighlight:       lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownHighlightForeground)).Background(c.LipglossColor(colorMarkdownHighlight)),
 		MarkdownRule:            lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownRule)),
 		MarkdownBullet:          lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownBullet)).Bold(true),
 		MarkdownCode:            lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownCodeForeground)).Background(c.LipglossColor(colorMarkdownCodeBackground)).Padding(0, 1),

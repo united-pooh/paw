@@ -187,7 +187,7 @@ func rebuildLegacyStyles() {
 		Foreground(colorManager.LipglossColor(colorBody)).
 		Italic(true)
 	markdownHighlightStyle = lipgloss.NewStyle().
-		Foreground(colorManager.LipglossColor(colorBody)).
+		Foreground(colorManager.LipglossColor(colorMarkdownHighlightForeground)).
 		Background(colorManager.LipglossColor(colorMarkdownHighlight))
 	markdownHeadingStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorMarkdownHeading)).

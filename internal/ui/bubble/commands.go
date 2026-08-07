@@ -72,6 +72,7 @@ func (m *appModel) beginModelWorkContext() context.Context {
 	ctx, cancel := context.WithCancel(parent)
 	m.activeModelCancel = cancel
 	m.modelCancelRequested = false
+	m.toolCancelRequested = false
 	return ctx
 }
 

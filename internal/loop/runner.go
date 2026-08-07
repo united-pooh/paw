@@ -93,6 +93,15 @@ type Runner struct {
 	autoContinueConfig     AutoContinueConfig
 	todoBroker             *todo.Broker
 	lastProgressHash       string
+	activeTool             activeToolState
+	activeTurnCancel       context.CancelFunc
+}
+
+type activeToolState struct {
+	id     string
+	name   string
+	cancel context.CancelFunc
+	stream bool
 }
 
 type tokenUsageTotals struct {
@@ -198,13 +207,76 @@ func NewRunnerWithInstructionRoot(model ModelStreamer, output ui.UI, registry *t
 	}
 }
 
+func (runner *Runner) registerActiveTool(id, name string, cancel context.CancelFunc) {
+	if runner == nil {
+		return
+	}
+	runner.mu.Lock()
+	runner.activeTool = activeToolState{id: id, name: name, cancel: cancel, stream: true}
+	runner.mu.Unlock()
+}
+
+func (runner *Runner) clearActiveTool(id string) {
+	if runner == nil {
+		return
+	}
+	runner.mu.Lock()
+	if id == "" || runner.activeTool.id == id {
+		runner.activeTool = activeToolState{}
+	}
+	runner.mu.Unlock()
+}
+
+// CancelCurrentTool cancels the active streaming tool, if one is registered.
+func (runner *Runner) CancelCurrentTool() bool {
+	if runner == nil {
+		return false
+	}
+	runner.mu.RLock()
+	active := runner.activeTool
+	runner.mu.RUnlock()
+	if !active.stream || active.cancel == nil {
+		return false
+	}
+	active.cancel()
+	return true
+}
+
+// CancelTurn cancels the active turn context, if one is registered.
+func (runner *Runner) CancelTurn() {
+	if runner == nil {
+		return
+	}
+	runner.mu.RLock()
+	cancel := runner.activeTurnCancel
+	runner.mu.RUnlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (runner *Runner) beginActiveTurn(ctx context.Context) (context.Context, func()) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	turnCtx, cancel := context.WithCancel(ctx)
+	runner.mu.Lock()
+	runner.activeTurnCancel = cancel
+	runner.mu.Unlock()
+	return turnCtx, func() {
+		cancel()
+		runner.mu.Lock()
+		runner.activeTurnCancel = nil
+		runner.mu.Unlock()
+	}
+}
+
 func (runner *Runner) WorkspaceRoot() string {
 	if runner == nil {
 		return ""
 	}
 	return runner.workRoot
 }
-
 func (runner *Runner) ReplaceToolNamespace(namespace string, tools []tool.Tool) error {
 	if runner == nil || runner.registry == nil {
 		return fmt.Errorf("runner tool registry is unavailable")

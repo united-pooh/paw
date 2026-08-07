@@ -99,7 +99,7 @@ func (runner *Runner) runToolCallBatch(ctx context.Context, calls []resolvedTool
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results[i] = executeResolvedToolCall(ctx, calls[i])
+			results[i] = runner.executeResolvedToolCall(ctx, calls[i])
 			mutations[i] = completeFileMutationCapture(captures[i], results[i])
 			if checkpoint != nil {
 				if err := checkpoint(offset+i, results[i]); err != nil {
@@ -139,7 +139,7 @@ func (runner *Runner) runResolvedToolCallWithCheckpoint(ctx context.Context, res
 		return message.ToolResult{}, err
 	}
 
-	result := executeResolvedToolCall(ctx, resolved)
+	result := runner.executeResolvedToolCall(ctx, resolved)
 	mutation := completeFileMutationCapture(capture, result)
 	if checkpoint != nil {
 		if err := checkpoint(callIndex, result); err != nil {
@@ -251,13 +251,22 @@ func isToolCallConcurrencySafe(resolved resolvedToolCall) bool {
 	if resolved.resolveError != "" {
 		return false
 	}
+	if _, streaming := resolved.selectedTool.(tool.StreamTool); streaming {
+		// Runner exposes one active-tool cancellation slot, so streamed tools
+		// must run outside concurrent batches.
+		return false
+	}
 	safeTool, ok := resolved.selectedTool.(tool.ConcurrencySafeTool)
 	return ok && safeTool.IsConcurrencySafe(append(json.RawMessage(nil), resolved.call.Input...))
 }
 
-func executeResolvedToolCall(ctx context.Context, resolved resolvedToolCall) message.ToolResult {
+func (runner *Runner) executeResolvedToolCall(ctx context.Context, resolved resolvedToolCall) message.ToolResult {
 	if resolved.resolveError != "" {
 		return message.ToolResult{ToolUseID: resolved.call.ID, Content: resolved.resolveError, IsError: true}
+	}
+
+	if streamed, ok := resolved.selectedTool.(tool.StreamTool); ok {
+		return runner.executeStreamToolCall(ctx, resolved, streamed)
 	}
 
 	output, err := resolved.selectedTool.Run(ctx, resolved.call.Input)
@@ -265,5 +274,42 @@ func executeResolvedToolCall(ctx context.Context, resolved resolvedToolCall) mes
 		return message.ToolResult{ToolUseID: resolved.call.ID, Content: err.Error(), IsError: true}
 	}
 
+	return message.ToolResult{ToolUseID: resolved.call.ID, Content: output}
+}
+
+func (runner *Runner) executeStreamToolCall(ctx context.Context, resolved resolvedToolCall, streamed tool.StreamTool) message.ToolResult {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	toolCtx, cancel := context.WithCancel(ctx)
+	runner.registerActiveTool(resolved.call.ID, resolved.call.Name, cancel)
+	defer func() {
+		cancel()
+		runner.clearActiveTool(resolved.call.ID)
+	}()
+
+	emit := func(event tool.ToolOutputEvent) error {
+		receiver, ok := runner.ui.(ui.ToolOutputReceiver)
+		if !ok {
+			return nil
+		}
+		return receiver.OnToolOutput(ui.ToolOutputEvent{
+			ToolUseID: resolved.call.ID,
+			Name:      resolved.call.Name,
+			Stream:    string(event.Stream),
+			Chunk:     event.Chunk,
+		})
+	}
+	output, interrupted, err := streamed.Stream(toolCtx, resolved.call.Input, emit)
+	if err != nil {
+		return message.ToolResult{ToolUseID: resolved.call.ID, Content: err.Error(), IsError: true}
+	}
+	if interrupted {
+		content := "interrupted"
+		if output != "" {
+			content += "\n" + output
+		}
+		return message.ToolResult{ToolUseID: resolved.call.ID, Content: content, IsError: true}
+	}
 	return message.ToolResult{ToolUseID: resolved.call.ID, Content: output}
 }
