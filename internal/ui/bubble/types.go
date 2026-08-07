@@ -424,6 +424,7 @@ type appModel struct {
 	subagents                  SubagentController
 	sessionStore               SessionStore
 	mcpController              MCPStatusController
+	goalController             GoalController
 	commandRegistry            *CommandRegistry
 	skillRegistry              *skill.Registry
 	queryGuard                 QueryGuard
