@@ -147,6 +147,10 @@ func (r *Runtime) Run(ctx context.Context, id GoalID) error {
 	task := &loop.Task{ID: goal.CurrentTaskID, Input: message.Message{Role: message.RoleUser, Content: goal.Objective}, Status: loop.TaskRunning}
 	_, runErr := (loop.TaskOrchestrator{Executor: r.executor, Evaluator: adapter, Events: r.taskEvents}).Run(ctx, task)
 	if runErr != nil {
+		latest, found, getErr := r.store.Get(context.Background(), id)
+		if getErr == nil && found && latest.Status.Terminal() {
+			return nil
+		}
 		return r.finishWithError(ctx, goal, runErr)
 	}
 	goal, _, _ = r.store.Get(context.Background(), id)
