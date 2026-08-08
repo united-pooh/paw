@@ -174,6 +174,25 @@ type systemEventMsg ui.SystemEvent
 // doneMsg 表示当前 assistant 输出已经结束。
 type doneMsg struct{}
 
+// planFinalizedMsg 表示 plan 会话已定稿（用户选择"执行"且文档已落盘）。
+// Path 指向已批准的 plan 文档，UI 收到后切回 chat 模式并自动开始执行轮。
+type planFinalizedMsg struct {
+	path string
+}
+
+// planStoppedMsg 表示 plan 会话非定稿结束（暂停/失败/取消），UI 释放
+// planWorking 并回到 chat 模式。
+type planStoppedMsg struct {
+	reason string
+}
+
+// goalStoppedMsg 表示 goal 会话结束（完成/失败/取消/暂停），UI 释放
+// goalWorking 并回到 chat 模式。goal 在后台长期运行，UI 无法自行感知
+// 结束时刻，必须由 goal 控制器经 NotifyGoalStopped 投递。
+type goalStoppedMsg struct {
+	reason string
+}
+
 // turnFinishedMsg 表示一轮模型调用已经结束，并携带可能的错误。
 // restoreDraft is populated for failed rich-image turns so the user can fix
 // the model/endpoint or retry without losing the clipboard image.
@@ -201,6 +220,10 @@ type shellFinishedMsg struct {
 type subagentFinishedMsg struct {
 	result subagent.Result
 	err    error
+}
+
+type subagentTaskUpdateMsg struct {
+	closed bool
 }
 
 // cursorFrameMsg 驱动自定义光标动画更新一帧。
@@ -422,9 +445,12 @@ type appModel struct {
 	modelConfig                ModelConfigController
 	settingsConfig             SettingsController
 	subagents                  SubagentController
+	subagentTaskUpdates        <-chan struct{}
+	subagentTaskUpdatesStop    func()
 	sessionStore               SessionStore
 	mcpController              MCPStatusController
 	goalController             GoalController
+	planController             PlanController
 	commandRegistry            *CommandRegistry
 	skillRegistry              *skill.Registry
 	queryGuard                 QueryGuard
@@ -442,6 +468,8 @@ type appModel struct {
 	running                    bool
 	runningTerminal            bool
 	terminalMode               bool
+	goalMode                   bool
+	planMode                   bool
 	terminalPreview            bool
 	hasInteracted              bool
 	showThinking               bool
@@ -463,8 +491,12 @@ type appModel struct {
 	translateSeq               uint64
 	cursorFrameAt              time.Time
 	uiAnimationFrameScheduled  bool
+	clockTickScheduled         bool      // 空闲时钟链去重标志
+	lastKeyEventAt             time.Time // 最后键盘输入时刻（IME 安全窗口用）
 	turnStartedAt              time.Time
 	turnID                     string
+	goalWorking                bool
+	planWorking                bool
 	contextMeter               contextMeterAnimation
 	pending                    []inputDraft
 	inputTokens                []inputToken

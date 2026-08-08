@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-08-08
+
+- 修复空闲态 header 时钟冻结：动画帧链停止后由 15s 低频空闲时钟链接手，header/状态栏时间持续走动；保留 3s 键盘静默窗口，打字与 Ghostty IME 合成期间不扰动预编辑光标。
+
 ## 2026-08-03
 
 - 加固 Responses 工具协议：为工具结果引入 provider-data 信封，隔离并规范化各 provider 的返回数据。

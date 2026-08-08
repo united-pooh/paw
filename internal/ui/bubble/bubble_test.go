@@ -3442,21 +3442,21 @@ func TestTranscriptMouseDragCopiesCharacterRange(t *testing.T) {
 
 	next, _ := model.Update(tea.MouseMsg{
 		X:      5,
-		Y:      2,
+		Y:      1,
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
 	})
 	model = next.(appModel)
 	next, _ = model.Update(tea.MouseMsg{
 		X:      7,
-		Y:      2,
+		Y:      1,
 		Action: tea.MouseActionMotion,
 		Button: tea.MouseButtonLeft,
 	})
 	model = next.(appModel)
 	next, _ = model.Update(tea.MouseMsg{
 		X:      7,
-		Y:      2,
+		Y:      1,
 		Action: tea.MouseActionRelease,
 		Button: tea.MouseButtonLeft,
 	})
@@ -3497,11 +3497,11 @@ func TestTranscriptMouseDragSelectsExactCells(t *testing.T) {
 		model.refreshViewport()
 		model.viewport.GotoTop()
 
-		next, _ := model.Update(tea.MouseMsg{X: pressX, Y: 2, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+		next, _ := model.Update(tea.MouseMsg{X: pressX, Y: 1, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 		model = next.(appModel)
-		next, _ = model.Update(tea.MouseMsg{X: motionX, Y: 2, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+		next, _ = model.Update(tea.MouseMsg{X: motionX, Y: 1, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
 		model = next.(appModel)
-		next, _ = model.Update(tea.MouseMsg{X: motionX, Y: 2, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
+		next, _ = model.Update(tea.MouseMsg{X: motionX, Y: 1, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
 		model = next.(appModel)
 
 		if copied != want {
@@ -3547,11 +3547,11 @@ func TestTranscriptDragSelectsThroughLineEnd(t *testing.T) {
 	pressX := mainContentPadding + 2
 	endX := mainContentPadding + model.viewport.Width - 1
 
-	next, _ := model.Update(tea.MouseMsg{X: pressX, Y: 2, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	next, _ := model.Update(tea.MouseMsg{X: pressX, Y: 1, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	model = next.(appModel)
-	next, _ = model.Update(tea.MouseMsg{X: endX, Y: 2, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	next, _ = model.Update(tea.MouseMsg{X: endX, Y: 1, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
 	model = next.(appModel)
-	next, _ = model.Update(tea.MouseMsg{X: endX, Y: 2, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
+	next, _ = model.Update(tea.MouseMsg{X: endX, Y: 1, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
 	model = next.(appModel)
 
 	if got := strings.Count(copied, "x"); got != len(body) {
@@ -3995,11 +3995,11 @@ func TestTranscriptDragWritesOSC52Clipboard(t *testing.T) {
 	model.refreshViewport()
 	model.viewport.GotoTop()
 
-	next, _ := model.Update(tea.MouseMsg{X: 5, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	next, _ := model.Update(tea.MouseMsg{X: 5, Y: 1, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
 	model = next.(appModel)
-	next, _ = model.Update(tea.MouseMsg{X: 7, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
+	next, _ = model.Update(tea.MouseMsg{X: 7, Y: 1, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
 	model = next.(appModel)
-	next, _ = model.Update(tea.MouseMsg{X: 7, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
+	next, _ = model.Update(tea.MouseMsg{X: 7, Y: 1, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
 	model = next.(appModel)
 
 	if oscText != "llo" {
@@ -4041,11 +4041,11 @@ func TestTranscriptDragShowsCopyToast(t *testing.T) {
 	model.refreshViewport()
 	model.viewport.GotoTop()
 
-	next, _ := model.Update(tea.MouseMsg{X: 5, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	next, _ := model.Update(tea.MouseMsg{X: 5, Y: 1, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
 	model = next.(appModel)
-	next, _ = model.Update(tea.MouseMsg{X: 7, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
+	next, _ = model.Update(tea.MouseMsg{X: 7, Y: 1, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
 	model = next.(appModel)
-	next, cmd := model.Update(tea.MouseMsg{X: 7, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
+	next, cmd := model.Update(tea.MouseMsg{X: 7, Y: 1, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
 	model = next.(appModel)
 
 	if got := model.renderStatusLeftSegment(); !strings.Contains(ansi.Strip(got), "已复制 3 字符") {
@@ -4060,8 +4060,8 @@ func TestTranscriptDragShowsCopyToast(t *testing.T) {
 	if strings.Contains(got, "已复制") {
 		t.Fatalf("status after expiry = %q, want toast cleared", got)
 	}
-	if !strings.Contains(got, "ready") {
-		t.Fatalf("status after expiry = %q, want ready back", got)
+	if got != "" {
+		t.Fatalf("status after expiry = %q, want empty left segment", got)
 	}
 }
 
@@ -6907,18 +6907,26 @@ func TestRenderToolEntryBody_UsesQuietDetailLines(t *testing.T) {
 	}
 }
 
-// TestRenderDockStatusLine_ContainsModelTokenAndFree 验证底部状态行包含 token 数和进度条。
+// TestRenderDockStatusLine_ContainsModelTokenAndFree 验证上边框保留模式与
+// 进度线，token 用量移到下边框，模型名仍只在 header。
 func TestRenderDockStatusLine_ContainsModelTokenAndFree(t *testing.T) {
 	runner := &fakeRunner{stats: loop.ContextStats{UsedTokens: 5000, LimitTokens: 100000}}
 	model := newTestModel(runner)
 	model.width = 100
 	model.cursorFrameAt = time.Now()
 	dock := model.renderDockStatusLine(98)
-	if !strings.Contains(dock, "5k / 100k") {
-		t.Errorf("status dock = %q, want token count", dock)
+	if strings.Contains(dock, "5k / 100k") {
+		t.Errorf("status dock = %q, token count should live in the bottom border", dock)
 	}
 	if !strings.ContainsAny(dock, "━─") {
 		t.Errorf("status dock = %q, want frontier progress glyphs", dock)
+	}
+	bottom := model.renderBottomDockLine(98)
+	if !strings.Contains(bottom, "5k / 100k") {
+		t.Errorf("bottom border = %q, want token count", bottom)
+	}
+	if !strings.ContainsAny(bottom, "━─") {
+		t.Errorf("bottom border = %q, want embedded hairline rule", bottom)
 	}
 	// 模型名现在在 header，不在 dock。
 	if strings.Contains(dock, "model-a") {
@@ -7441,18 +7449,24 @@ func TestCursorThemeSwitchPublishesNewPalette(t *testing.T) {
 	}
 }
 
-func TestIdleCursorFrameDoesNotScheduleAnotherFullRedraw(t *testing.T) {
+// TestIdleCursorFrameSchedulesClockTickInsteadOfAnimationFrame 验证空闲帧的
+// 新契约：不再续命 30fps 动画帧链，而是由 15s 空闲时钟链接手（供 header
+// 时钟继续走动）。注意不要调用返回的 cmd——Batch 内的 15s tick 会阻塞测试。
+func TestIdleCursorFrameSchedulesClockTickInsteadOfAnimationFrame(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
 	model.cursorFrameAt = time.Unix(10, 0)
 
-	_, cmd := model.Update(cursorFrameMsg(time.Unix(11, 0)))
+	next, cmd := model.Update(cursorFrameMsg(time.Unix(11, 0)))
+	model = next.(appModel)
 	if cmd == nil {
-		t.Fatal("idle cursor frame should still perform the one-shot pipeline poll")
+		t.Fatal("idle cursor frame should schedule the idle clock tick")
 	}
-	msg := cmd()
-	if _, ok := msg.(pipelineStateUpdatedMsg); !ok {
-		t.Fatalf("idle cursor frame command returned %T, want only one-shot pipeline poll", msg)
+	if !model.clockTickScheduled {
+		t.Fatal("idle cursor frame should mark the clock tick scheduled")
+	}
+	if model.uiAnimationFrameScheduled {
+		t.Fatal("idle cursor frame must not schedule another animation frame")
 	}
 }
 
@@ -7467,3 +7481,80 @@ func TestWorktreeRefreshDoesNotStartIdleRedrawLoop(t *testing.T) {
 		t.Fatalf("worktree name = %q, want refreshed snapshot", model.worktree.name)
 	}
 }
+
+func TestSubagentTaskUpdateMsgRefreshesActivityAndPreview(t *testing.T) {
+	controller := &fakeSubagentController{tasks: []subagent.TaskSnapshot{{
+		ID: "task-1", SessionID: "task-1", ParentSessionID: "session-1", Name: "worker", Status: subagent.TaskRunning,
+	}}}
+	model := newTestModel(&fakeRunner{})
+	model.subagents = controller
+	model.openActivity(activityTabSubagents)
+	model.subagentPreview = &subagentTranscriptPreview{
+		task:      controller.tasks[0],
+		sessionID: "task-1",
+	}
+	model.subagentPreview.liveContent = "partial result"
+	model.subagentTaskUpdates = make(chan struct{})
+
+	controller.tasks[0].Status = subagent.TaskCompleted
+	controller.tasks[0].Content = "final result"
+	controller.tasks[0].FinishedAt = ptrTime(time.Now())
+
+	next, cmd := model.Update(subagentTaskUpdateMsg{})
+	model = next.(appModel)
+	if cmd == nil {
+		t.Fatal("task update should re-arm the subscription wait command")
+	}
+	if len(model.subagentPicker.tasks) != 1 || model.subagentPicker.tasks[0].Status != subagent.TaskCompleted {
+		t.Fatalf("activity tasks = %#v, want completed task", model.subagentPicker.tasks)
+	}
+	if model.subagentPreview.task.Status != subagent.TaskCompleted || model.subagentPreview.liveContent != "" {
+		t.Fatalf("preview = %#v, want refreshed terminal task without live content", model.subagentPreview)
+	}
+	card := ansi.Strip(model.renderSubagentTaskCard(time.Now()))
+	if strings.Contains(card, "running") || strings.Contains(card, "worker") {
+		t.Fatalf("sidebar card = %q, want no running worker after completion", card)
+	}
+}
+
+func TestSubagentTaskUpdateMsgClosedStopsRearming(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	updates := make(chan struct{})
+	model.subagentTaskUpdates = updates
+
+	next, cmd := model.Update(subagentTaskUpdateMsg{closed: true})
+	model = next.(appModel)
+	if cmd != nil {
+		t.Fatal("closed task update should not re-arm wait command")
+	}
+	if model.subagentTaskUpdates != nil {
+		t.Fatalf("subagentTaskUpdates = %v, want nil after close", model.subagentTaskUpdates)
+	}
+}
+
+func TestSubagentTaskUpdateMsgRefreshesToolEntryImmediately(t *testing.T) {
+	controller := &fakeSubagentController{tasks: []subagent.TaskSnapshot{{
+		ID: "task-1", SessionID: "task-1", ParentSessionID: "session-1", Name: "worker", Status: subagent.TaskRunning,
+	}}}
+	model := newTestModel(&fakeRunner{})
+	model.subagents = controller
+	model.transcript = []transcriptEntry{{
+		kind:       entryTool,
+		toolName:   "Subagent",
+		toolStatus: "ok",
+		toolResult: `{"id":"task-1","session_id":"task-1"}`,
+	}}
+
+	controller.tasks[0].Status = subagent.TaskCompleted
+	controller.tasks[0].Content = "done"
+	next, _ := model.Update(subagentTaskUpdateMsg{})
+	model = next.(appModel)
+	if model.transcript[0].toolStatus != "ok" {
+		t.Fatalf("tool status = %q, want successful completed task result", model.transcript[0].toolStatus)
+	}
+	if !strings.Contains(model.transcript[0].toolResult, `"status":"completed"`) {
+		t.Fatalf("tool result = %q, want refreshed completed snapshot", model.transcript[0].toolResult)
+	}
+}
+
+func ptrTime(value time.Time) *time.Time { return &value }

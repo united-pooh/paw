@@ -48,8 +48,8 @@ var (
 	mainFrameStyle               lipgloss.Style
 	transcriptContentStyle       lipgloss.Style
 	inputDockStyle               lipgloss.Style
-	inputDockMultilineStyle      lipgloss.Style
 	inputDockTerminalStyle       lipgloss.Style
+	inputDockGoalStyle           lipgloss.Style
 	worktreeNameStyle            lipgloss.Style
 	worktreeSeparatorStyle       lipgloss.Style
 	worktreeChipStyle            lipgloss.Style
@@ -66,12 +66,12 @@ var (
 	terminalInputLabelStyle      lipgloss.Style
 	terminalInputTextStyle       lipgloss.Style
 	generatingStatusStyle        lipgloss.Style
-	idleStatusStyle              lipgloss.Style
 	copyToastStyle               lipgloss.Style
 	modeTerminalStyle            lipgloss.Style
 	modeShellStyle               lipgloss.Style
-	modeMultilineStyle           lipgloss.Style
 	modeChatStyle                lipgloss.Style
+	modeGoalStyle                lipgloss.Style
+	modePlanStyle                lipgloss.Style
 	inputCommandTokenStyle       lipgloss.Style
 	inputFileTokenStyle          lipgloss.Style
 	inputImageTokenStyle         lipgloss.Style
@@ -79,7 +79,6 @@ var (
 	inputPanelStyle              lipgloss.Style
 	inputPanelFocusedStyle       lipgloss.Style
 	inputPanelWaitingStyle       lipgloss.Style
-	inputPanelMultilineStyle     lipgloss.Style
 	inputPanelTerminalStyle      lipgloss.Style
 	selectedProviderStyle        lipgloss.Style
 	unselectedProviderStyle      lipgloss.Style
@@ -237,10 +236,9 @@ func rebuildLegacyStyles() {
 		Padding(0, mainContentPadding)
 	inputDockStyle = lipgloss.NewStyle().
 		Padding(0, mainContentPadding)
-	inputDockMultilineStyle = inputDockStyle.Copy().
-		Foreground(colorManager.LipglossColor(colorInputMultilineBorder))
 	inputDockTerminalStyle = inputDockStyle.Copy().
 		Foreground(colorManager.LipglossColor(colorInputTerminal))
+	inputDockGoalStyle = inputDockStyle.Copy()
 	worktreeNameStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorMarkdownQuote)).
 		Background(colorManager.LipglossColor(colorWorktreeBackground))
@@ -282,12 +280,10 @@ func rebuildLegacyStyles() {
 		Bold(true)
 	terminalInputTextStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorInputTerminal))
-	// 底部 status 三段样式：生成态、模式标记。复用既有颜色角色，不新增调色板。
+	// generating 状态样式（translate 面板「翻译中…」）与复制反馈 toast。
 	generatingStatusStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorContextUsed)).
 		Bold(true)
-	idleStatusStyle = lipgloss.NewStyle().
-		Foreground(colorManager.LipglossColor(colorMarkdownRule))
 	// 复制反馈 toast：与 generating 同色系但更高饱和，短暂提示不喧宾夺主。
 	copyToastStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorWorktreeClean)).
@@ -297,10 +293,18 @@ func rebuildLegacyStyles() {
 		Bold(true)
 	modeShellStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorInputTerminal))
-	modeMultilineStyle = lipgloss.NewStyle().
-		Foreground(colorManager.LipglossColor(colorInputMultilineBorder))
 	modeChatStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorMarkdownRule))
+	// agentmode（plan/goal）用背景高亮块 + 终端背景色字体；chat/shell/
+	// terminal 保持前景色文字，不与 agentmode 抢视觉权重。
+	modeGoalStyle = lipgloss.NewStyle().
+		Background(colorManager.LipglossColor(colorInputTokenCommand)).
+		Foreground(colorManager.LipglossColor(colorTerminalBackground)).
+		Bold(true)
+	modePlanStyle = lipgloss.NewStyle().
+		Background(colorManager.LipglossColor(colorSignal)).
+		Foreground(colorManager.LipglossColor(colorTerminalBackground)).
+		Bold(true)
 	inputCommandTokenStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorInputTokenCommand)).
 		Bold(true)
@@ -321,8 +325,6 @@ func rebuildLegacyStyles() {
 		BorderForeground(colorManager.LipglossColor(colorInputFocusedBorder))
 	inputPanelWaitingStyle = inputPanelStyle.Copy().
 		BorderForeground(colorManager.LipglossColor(colorInputWaitingBorder))
-	inputPanelMultilineStyle = inputPanelStyle.Copy().
-		BorderForeground(colorManager.LipglossColor(colorInputMultilineBorder))
 	inputPanelTerminalStyle = inputPanelStyle.Copy().
 		BorderForeground(colorManager.LipglossColor(colorInputTerminal))
 	selectedProviderStyle = lipgloss.NewStyle().
@@ -427,6 +429,8 @@ func rebuildLegacyStyles() {
 // 这些常量控制光标动画节奏、输入框高度、边框尺寸和主题色。
 const (
 	cursorFrameInterval            = time.Second / 30
+	idleClockInterval              = 15 * time.Second // 空闲态时钟刷新间隔
+	idleClockInputGuard            = 3 * time.Second  // 距最后按键的静默窗口，窗口内跳过时钟重绘
 	cursorCycleDuration            = 3 * time.Second
 	cursorHiddenThreshold          = 0.03
 	inputMinVisibleLines           = 1

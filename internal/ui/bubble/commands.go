@@ -206,6 +206,17 @@ func cursorFrameTick() tea.Cmd {
 	})
 }
 
+// clockTickMsg 是空闲态低频时钟帧：只推进 cursorFrameAt 供 header/status
+// 时间显示刷新，不运行动画管线。
+type clockTickMsg time.Time
+
+// clockTickCmd 安排下一次空闲时钟帧（15s 一次）。
+func clockTickCmd() tea.Cmd {
+	return tea.Tick(idleClockInterval, func(t time.Time) tea.Msg {
+		return clockTickMsg(t)
+	})
+}
+
 // shellResultBody 把终端命令执行结果转换为适合 transcript 展示的文本。
 func shellResultBody(msg shellFinishedMsg) string {
 	var parts []string

@@ -90,6 +90,16 @@ func (m *appModel) scheduleUIAnimationFrame() tea.Cmd {
 	return cursorFrameTick()
 }
 
+// scheduleClockTick ensures at most one idle clock tick is in flight.
+// 空闲时钟链与动画帧链互斥：同一时刻至多存在一条链。
+func (m *appModel) scheduleClockTick() tea.Cmd {
+	if m == nil || m.clockTickScheduled {
+		return nil
+	}
+	m.clockTickScheduled = true
+	return clockTickCmd()
+}
+
 // needsUIAnimationFrames reports whether non-cursor TUI elements still require
 // Bubble Tea redraws. Cursor color itself is animated directly by anchoredOutput.
 func (m appModel) needsUIAnimationFrames(now time.Time) bool {

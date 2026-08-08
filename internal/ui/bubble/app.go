@@ -134,6 +134,9 @@ func (m appModel) Init() tea.Cmd {
 	if m.todoBroker != nil {
 		cmds = append(cmds, waitTodoBrokerEventCmd(m.ctx, m.todoBroker))
 	}
+	if m.subagentTaskUpdates != nil {
+		cmds = append(cmds, waitSubagentTaskUpdateCmd(m.ctx, m.subagentTaskUpdates))
+	}
 	if m.worktreeCWD != "" {
 		cmds = append(cmds, worktreeRefreshCmd(m.ctx, m.worktreeCWD, m.worktreeReader))
 	}
@@ -179,6 +182,18 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resizeStreamingBuffers()
 		m.refreshViewportWithBottomState(wasAtBottom)
 		return m, nil
+	case subagentTaskUpdateMsg:
+		m.refreshActivityTasks()
+		m.refreshSubagentPreviewFromTasks()
+		m.refreshSubagentToolEntriesFromTasks()
+		m.refreshViewport()
+		if m.subagentTaskUpdates != nil && !msg.closed {
+			return m, waitSubagentTaskUpdateCmd(m.ctx, m.subagentTaskUpdates)
+		}
+		if msg.closed {
+			m.subagentTaskUpdates = nil
+		}
+		return m, nil
 	case cursorFrameMsg:
 		m.uiAnimationFrameScheduled = false
 		m.cursorFrameAt = time.Time(msg)
@@ -192,12 +207,30 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var frameCmd tea.Cmd
 		if m.needsUIAnimationFrames(time.Time(msg)) {
 			frameCmd = m.scheduleUIAnimationFrame()
+		} else {
+			frameCmd = m.scheduleClockTick() // 空闲：由低频率时钟链接手
 		}
 		pollCmd := pipelinePollCmd(m.pipelineActiveAfter)
 		if frameCmd == nil {
 			return m, pollCmd
 		}
 		return m, tea.Batch(frameCmd, pollCmd)
+	case clockTickMsg:
+		m.clockTickScheduled = false
+		now := time.Time(msg)
+		// 工作/动画帧链已接管屏幕：时钟链退出，不再续命。
+		if m.needsUIAnimationFrames(now) {
+			return m, nil
+		}
+		// 用户刚有过键盘输入（含 IME 合成期）：跳过本次重绘，避免扰动
+		// Ghostty 预编辑光标；稍后重试。
+		if now.Sub(m.lastKeyEventAt) < idleClockInputGuard {
+			return m, m.scheduleClockTick()
+		}
+		// 空闲且无近期输入：推进帧时间并重绘（Bubble Tea 自动重绘整帧），
+		// header 时钟 / 状态栏时间随之刷新；继续时钟链。
+		m.cursorFrameAt = now
+		return m, m.scheduleClockTick()
 	case assistantDeltaMsg:
 		if string(msg) != "" {
 			m.turnHasModelOutput = true
@@ -254,6 +287,44 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.isGenerating = false
 		m.refreshViewport()
 		return m, nil
+	case planFinalizedMsg:
+		m.planWorking = false
+		m.planMode = false
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "plan", body: "plan 已定稿：" + msg.path + "\n切换到 chat 模式开始执行。"})
+		m.inputSource = inputSourceFresh
+		next, cmd := m.startChatTurn("开始执行已批准的计划：" + msg.path)
+		return next, cmd
+	case planStoppedMsg:
+		m.planWorking = false
+		m.planMode = false
+		m.turnStartedAt = time.Time{}
+		m.turnID = ""
+		body := "plan 会话已结束"
+		if strings.TrimSpace(msg.reason) != "" {
+			body += "：" + msg.reason
+		}
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "plan", body: body})
+		cmds = append(cmds, m.input.Focus())
+		return m, tea.Batch(cmds...)
+	case goalStoppedMsg:
+		wasWorking := m.isAgentWorking()
+		m.goalWorking = false
+		m.goalMode = false
+		m.turnStartedAt = time.Time{}
+		m.turnID = ""
+		body := "goal 会话已结束"
+		if strings.TrimSpace(msg.reason) != "" {
+			body += "：" + msg.reason
+		}
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "goal", body: body})
+		if wasWorking && !m.isAgentWorking() {
+			m.startTokenRippleExit(m.animationNow())
+			if frameCmd := m.scheduleUIAnimationFrame(); frameCmd != nil {
+				cmds = append(cmds, frameCmd)
+			}
+		}
+		cmds = append(cmds, m.input.Focus())
+		return m, tea.Batch(cmds...)
 	case contextCompactionFinishedMsg:
 		m.finishModelWork()
 		m.modelCancelRequested = false
@@ -371,6 +442,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.finishModelWork()
 		m.modelCancelRequested = false
 		m.queryGuard.FinishModel()
+		m.isGenerating = false
 		m.turnStartedAt = time.Time{}
 		m.syncRunningFlags()
 		if wasWorking && !m.isAgentWorking() {
@@ -527,6 +599,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if rawMouseFragment {
 			return m, nil
 		}
+		// 记录最后键盘输入时刻（确认不是 raw mouse 碎片后）：空闲时钟链
+		// 用它在 IME 合成/连续输入窗口内跳过重绘。
+		m.lastKeyEventAt = time.Now()
 		// 键盘输入意味着用户已经离开点击意图，取消挂起的延迟单击动作。
 		if m.clickActionPending {
 			m.clickActionPending = false
@@ -725,6 +800,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "down":
 			return m.handleInputVerticalNavigation(1)
 		case "tab":
+			if m.completion == nil && !m.isModelWorkRunning() {
+				m.cycleInputMode()
+				return m, nil
+			}
 			if m.isModelWorkRunning() {
 				return m.handleQueueSubmit()
 			}
