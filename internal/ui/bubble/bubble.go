@@ -104,6 +104,13 @@ type SubagentController interface {
 	ListTasks() []subagent.TaskSnapshot
 }
 
+// SubagentTaskUpdateSubscriber is an optional live-update capability. It lets
+// the TUI wake immediately when a background task changes state instead of
+// waiting for the animation/poll interval.
+type SubagentTaskUpdateSubscriber interface {
+	SubscribeTaskUpdates() (<-chan struct{}, func())
+}
+
 // MCPStatusController exposes sanitized MCP runtime state to /mcp.
 type MCPStatusController interface {
 	ConfigPath() string
@@ -117,6 +124,18 @@ type GoalController interface {
 	Pause() error
 	Resume() error
 	Cancel() error
+	Budget() string
+}
+
+// PlanController exposes lifecycle controls for the standalone Plan mode.
+// Plans are spec/scope documents independent of Goals; plan mode authors them
+// through a clarification → draft → approval workflow.
+type PlanController interface {
+	Start(requirement string) (string, error)
+	Status() string
+	List() string
+	Show(id string) string
+	Cancel() error
 }
 
 // UI 是基于 Bubble Tea 的交互式终端界面实现。
@@ -129,6 +148,7 @@ type UI struct {
 	sessionStore          SessionStore
 	mcpController         MCPStatusController
 	goalController        GoalController
+	planController        PlanController
 	selectionBroker       *selecttool.Broker
 	todoBroker            *todo.Broker
 	sendMsg               func(tea.Msg)
@@ -196,6 +216,32 @@ func (u *UI) SetGoalController(controller GoalController) {
 	u.goalController = controller
 }
 
+// SetPlanController injects the opt-in Plan lifecycle controller.
+func (u *UI) SetPlanController(controller PlanController) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.planController = controller
+}
+
+// NotifyPlanFinalized routes a plan-approval event into the running Bubble
+// Tea program so the TUI can switch back to chat mode and start execution.
+func (u *UI) NotifyPlanFinalized(path string) error {
+	return u.send(planFinalizedMsg{path: path})
+}
+
+// NotifyPlanStopped routes a non-final plan-session end (paused/failed/
+// cancelled) into the TUI so it releases the plan working state.
+func (u *UI) NotifyPlanStopped(reason string) error {
+	return u.send(planStoppedMsg{reason: reason})
+}
+
+// NotifyGoalStopped routes a goal-session end (completed/failed/cancelled/
+// paused) into the TUI so it releases the goal working state. Goals run in
+// the background, so this is the only path that unblocks the header spinner.
+func (u *UI) NotifyGoalStopped(reason string) error {
+	return u.send(goalStoppedMsg{reason: reason})
+}
+
 // filterIdleMouseMotion drops passive mouse movement that cannot change UI
 // state. All-motion mode is required for real hover events, but Bubble Tea
 // otherwise runs Update and View for every reported cell crossed by the mouse.
@@ -226,17 +272,25 @@ func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 	sessionStore := u.sessionStore
 	mcpController := u.mcpController
 	goalController := u.goalController
+	planController := u.planController
 	selectionBroker := u.selectionBroker
 	todoBroker := u.todoBroker
 	u.mu.Unlock()
 
 	anchor := newTerminalCursorAnchor()
 	appModel := newModel(ctx, runner, sessionID, controller, settingsController, subagentController, sessionStore, anchor)
+	if subscriber, ok := subagentController.(SubagentTaskUpdateSubscriber); ok {
+		updates, stopUpdates := subscriber.SubscribeTaskUpdates()
+		appModel.subagentTaskUpdates = updates
+		appModel.subagentTaskUpdatesStop = stopUpdates
+		defer stopUpdates()
+	}
 	appModel.selectionBroker = selectionBroker
 	appModel.todoBroker = todoBroker
 	appModel.workspaceRoot = workspaceRootOf(runner)
 	appModel.mcpController = mcpController
 	appModel.goalController = goalController
+	appModel.planController = planController
 	// WithInput 包一层 ESC 聚合 reader：在 BubbleTea 解析字节之前，把被读边界
 	// 切断的 \x1b[<...M 鼠标序列重新拼合，从源头杜绝 ESC 与 [ 分离导致的
 	// [[[[[[[ 泄漏。reader 内嵌 *os.File，MakeRaw 与 kqueue 路径不受影响。

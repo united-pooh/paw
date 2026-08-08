@@ -46,3 +46,8 @@ index.html
 qa-report.json
 diff-demo.md
 .worktrees/
+
+# Python caches
+__pycache__/
+*.pyc
+.pytest_cache/

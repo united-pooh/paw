@@ -147,17 +147,25 @@ func TestViewRendersNewMessageNoticeAboveStatusLine(t *testing.T) {
 	model.newMessageNoticeCount = 3
 	view := ansi.Strip(model.View())
 	lines := strings.Split(view, "\n")
-	noticeRow, statusRow := -1, -1
+	noticeRow := -1
 	for i, line := range lines {
 		if strings.Contains(line, "↓ 3 条新消息") {
 			noticeRow = i
 		}
-		if strings.Contains(line, "ready") && strings.Contains(line, "chat") {
-			statusRow = i
+	}
+	if noticeRow < 0 {
+		t.Fatalf("notice row=%d\n%s", noticeRow, view)
+	}
+	// Runtime status is rendered in the header; the input dock no longer has
+	// a duplicate ready/working status row beneath the transcript.
+	headerRow := -1
+	for i, line := range lines {
+		if strings.Contains(line, "ready") && strings.Contains(line, "model-a") {
+			headerRow = i
 		}
 	}
-	if noticeRow < 0 || statusRow < 0 || noticeRow >= statusRow {
-		t.Fatalf("notice row=%d status row=%d\n%s", noticeRow, statusRow, view)
+	if headerRow < 0 || noticeRow <= headerRow {
+		t.Fatalf("notice row=%d header row=%d\n%s", noticeRow, headerRow, view)
 	}
 }
 

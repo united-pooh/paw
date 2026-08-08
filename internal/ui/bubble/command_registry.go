@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -190,10 +191,19 @@ func NewCommandRegistry() *CommandRegistry {
 	registry.Register(Command{
 		Name:              "/goal",
 		Description:       "run and control a long-lived session goal",
-		ArgumentHint:      "[start <objective>|status|pause|resume|stop]",
+		ArgumentHint:      "[start <objective>|status|pause|resume|stop|budget]",
 		AllowWhileRunning: true,
 		Handler: func(m *appModel, invocation string) tea.Cmd {
 			return m.handleGoalCommand(invocation)
+		},
+	})
+	registry.Register(Command{
+		Name:              "/plan",
+		Description:       "author an independent plan document (spec/scope)",
+		ArgumentHint:      "[new <requirement>|status|list|show <id>|stop]",
+		AllowWhileRunning: true,
+		Handler: func(m *appModel, invocation string) tea.Cmd {
+			return m.handlePlanCommand(invocation)
 		},
 	})
 	registry.Register(Command{
@@ -444,26 +454,93 @@ func (m *appModel) handleGoalCommand(invocation string) tea.Cmd {
 			return nil
 		}
 		m.addEntry(transcriptEntry{kind: entrySystem, title: "goal", body: "started goal " + id})
+		m.goalWorking = true
+		m.turnStartedAt = time.Now()
+		m.turnID = id
+		m.applyCursorAnimation()
+		return m.scheduleUIAnimationFrame()
 	case "pause":
 		if err := m.goalController.Pause(); err != nil {
 			m.addEntry(transcriptEntry{kind: entryError, title: "goal", body: err.Error()})
 			return nil
 		}
+		m.goalWorking = false
+		m.turnStartedAt = time.Time{}
+		m.turnID = ""
 		m.addEntry(transcriptEntry{kind: entrySystem, title: "goal", body: "goal paused"})
 	case "resume":
 		if err := m.goalController.Resume(); err != nil {
 			m.addEntry(transcriptEntry{kind: entryError, title: "goal", body: err.Error()})
 			return nil
 		}
-		m.addEntry(transcriptEntry{kind: entrySystem, title: "goal", body: "goal resumed"})
+		m.goalWorking = true
+		m.turnStartedAt = time.Now()
+		m.applyCursorAnimation()
+		return m.scheduleUIAnimationFrame()
+	case "budget":
+		body := m.goalController.Budget()
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "goal budget", body: body})
 	case "stop", "cancel":
 		if err := m.goalController.Cancel(); err != nil {
 			m.addEntry(transcriptEntry{kind: entryError, title: "goal", body: err.Error()})
 			return nil
 		}
+		m.goalWorking = false
+		m.goalMode = false
+		m.turnStartedAt = time.Time{}
+		m.turnID = ""
 		m.addEntry(transcriptEntry{kind: entrySystem, title: "goal", body: "goal cancelled"})
 	default:
-		m.addEntry(transcriptEntry{kind: entryError, title: "goal", body: "usage: /goal start <objective>|status|pause|resume|stop"})
+		m.addEntry(transcriptEntry{kind: entryError, title: "goal", body: "usage: /goal start <objective>|status|pause|resume|stop|budget"})
+	}
+	return nil
+}
+
+// handlePlanCommand 处理独立的 Plan 会话命令。Plan 不依赖 Goal：/plan new
+// 直接启动一个文档创作会话，其余子命令查看或停止当前会话。
+func (m *appModel) handlePlanCommand(invocation string) tea.Cmd {
+	if m == nil || m.planController == nil {
+		m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: "plan controller is unavailable"})
+		return nil
+	}
+	args := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(invocation), commandToken(invocation)))
+	fields := strings.Fields(args)
+	if len(fields) == 0 || fields[0] == "status" {
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "plan", body: m.planController.Status()})
+		return nil
+	}
+	switch fields[0] {
+	case "new":
+		requirement := strings.TrimSpace(strings.TrimPrefix(args, "new"))
+		if requirement == "" {
+			m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: "usage: /plan new <requirement>"})
+			return nil
+		}
+		id, err := m.planController.Start(requirement)
+		if err != nil {
+			m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: err.Error()})
+			return nil
+		}
+		m.planWorking = true
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "plan", body: "started " + id + "\nrequirement: " + requirement})
+	case "list":
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "plan list", body: m.planController.List()})
+	case "show":
+		if len(fields) < 2 {
+			m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: "usage: /plan show <id>"})
+			return nil
+		}
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "plan show", body: m.planController.Show(fields[1])})
+	case "stop", "cancel":
+		if err := m.planController.Cancel(); err != nil {
+			m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: err.Error()})
+			return nil
+		}
+		m.planWorking = false
+		m.planMode = false
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "plan", body: "plan session stopped"})
+	default:
+		m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: "usage: /plan new <requirement>|status|list|show <id>|stop"})
 	}
 	return nil
 }

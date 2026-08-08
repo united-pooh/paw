@@ -42,11 +42,8 @@ func computeTUILayoutWithInputLimit(width, height, requestedInputHeight, inputHe
 	contentWidth := maxInt(1, frameWidth-mainFrameHorizontalFrame)
 	contentHeight := maxInt(1, frameHeight-mainFrameVerticalFrame)
 
-	// header 在内容足够高时占 1 行；极小终端优先保留 transcript+input。
+	// header 已嵌入顶边框线（renderDockedFrame），不再占用内容区行数。
 	headerHeight := 0
-	if contentHeight >= 4 {
-		headerHeight = dockStatusHeight
-	}
 	statusHeight := 0
 	if contentHeight-headerHeight >= 2 {
 		statusHeight = dockStatusHeight
@@ -119,10 +116,7 @@ func (m appModel) View() string {
 		}
 		return view
 	}
-	parts := make([]string, 0, 4)
-	if layout.headerHeight > 0 {
-		parts = append(parts, m.renderHeaderLine(layout.contentWidth))
-	}
+	parts := make([]string, 0, 3)
 	if layout.transcriptHeight > 0 {
 		parts = append(parts, m.renderTranscriptRegion(layout))
 	}
@@ -135,9 +129,17 @@ func (m appModel) View() string {
 	}
 
 	inner := fitStyledRect(strings.Join(parts, "\n"), layout.contentWidth, layout.contentHeight)
-	view := renderHairlineFrame(inner, layout.frameWidth, layout.frameHeight)
+	// 顶边框线嵌入 header（模型名/状态/时间），底边框线嵌入 token 用量与
+	// 工作树 chip；上下边框颜色随 agentmode（plan/goal）变化。
+	view := renderDockedFrame(
+		inner,
+		m.renderHeaderEmbedded(layout.contentWidth),
+		m.renderBottomDockLine(layout.contentWidth),
+		layout.frameWidth,
+		layout.frameHeight,
+	)
 	if layout.queueInlineHeight > 0 {
-		view = renderQueueInlineBottomBorder(view, layout.frameWidth, m.queuePanelContent(layout.frameWidth))
+		view = renderQueueInlineBottomBorder(view, layout.frameWidth, m.queuePanelContent(layout.frameWidth), m.currentModeHex())
 	}
 	view = paintStyledBackground(view, layout.frameWidth, layout.frameHeight, m.styles.Frame, m.theme.Colors.TerminalBackground)
 	m.updateTerminalCursorAnchor(layout)
@@ -175,6 +177,47 @@ func renderHairlineFrame(inner string, width, height int) string {
 	}
 	inner = fitStyledRect(inner, width, maxInt(1, height-2))
 	return strings.Repeat("─", width) + "\n" + inner + "\n" + strings.Repeat("─", width)
+}
+
+// renderDockedFrame 渲染主界面固定外框：顶部 ─ 线嵌入 header（模型名/状态/
+// 时间），底部 ─ 线嵌入 dock 元数据（token 用量/工作树）。线色由各内容自带
+// （modeHex 通过 embedHairlineContent 的 lineColor 参数控制）。
+func renderDockedFrame(inner, topContent, bottomContent string, width, height int) string {
+	width = maxInt(1, width)
+	height = maxInt(1, height)
+	if height == 1 {
+		return embedHairlineContent(topContent, width, "")
+	}
+	inner = fitStyledRect(inner, width, maxInt(1, height-2))
+	return embedHairlineContent(topContent, width, "") + "\n" +
+		inner + "\n" +
+		embedHairlineContent(bottomContent, width, "")
+}
+
+// embedHairlineContent 把内容居中嵌入一条 ─ 线：内容两侧各留一个空格（空间
+// 允许时），左右以 ─ 补齐到严格 width。lineColor 非空时整条线使用该前景色。
+func embedHairlineContent(content string, width int, lineColor string) string {
+	width = maxInt(1, width)
+	lineStyle := lipgloss.NewStyle()
+	if lineColor != "" {
+		lineStyle = lineStyle.Foreground(lipgloss.Color(lineColor))
+	}
+	renderDash := func(n int) string {
+		if n <= 0 {
+			return ""
+		}
+		return lineStyle.Render(strings.Repeat("─", n))
+	}
+	content = truncateStyledCellLine(content, maxInt(1, width))
+	contentWidth := terminalCellWidth(content)
+	fill := maxInt(0, width-contentWidth)
+	if fill >= 2 {
+		left := (fill - 2) / 2
+		right := fill - 2 - left
+		return renderDash(left) + " " + content + " " + renderDash(right)
+	}
+	left := fill / 2
+	return renderDash(left) + content + renderDash(fill-left)
 }
 
 func (m appModel) renderTranscriptRegion(layout tuiLayout) string {
@@ -451,8 +494,6 @@ func (m appModel) renderInputBoxForLayout(layout tuiLayout) string {
 	style := inputDockStyle
 	if m.isTerminalInputActive() || m.runningTerminal {
 		style = inputDockTerminalStyle
-	} else if m.hasMultilineInput() {
-		style = inputDockMultilineStyle
 	}
 	bodyWidth := inputDockContentWidth(layout.contentWidth)
 	queueHeight := minInt(layout.queueHeight, maxInt(0, layout.inputHeight-1))
@@ -474,7 +515,7 @@ func (m appModel) renderInputContentWithHints(width, height int) string {
 	if width <= 0 || height <= 0 {
 		return ""
 	}
-	if strings.TrimSpace(m.input.Value()) == "" && !m.isTerminalInputActive() && !m.runningTerminal && !m.hasMultilineInput() {
+	if strings.TrimSpace(m.input.Value()) == "" && !m.isGoalInputActive() && !m.isTerminalInputActive() && !m.runningTerminal {
 		if m.hasInteracted {
 			return fitStyledRect("", width, height)
 		}

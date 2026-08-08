@@ -11,9 +11,13 @@ func CanTransition(from, to GoalStatus) bool {
 	}
 	switch from {
 	case GoalDraft:
-		return to == GoalRunning || to == GoalCancelled
+		return to == GoalPlanning || to == GoalRunning || to == GoalCancelled
+	case GoalPlanning:
+		return to == GoalRunning || to == GoalPaused || to == GoalCancelled
 	case GoalRunning:
-		return to == GoalCompleted || to == GoalPaused || to == GoalBlocked || to == GoalFailed || to == GoalCancelled
+		return to == GoalCompleted || to == GoalPaused || to == GoalBlocked || to == GoalReplanning || to == GoalFailed || to == GoalCancelled
+	case GoalReplanning:
+		return to == GoalRunning || to == GoalPaused || to == GoalCancelled
 	case GoalPaused, GoalBlocked:
 		return to == GoalRunning || to == GoalCancelled
 	default:

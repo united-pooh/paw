@@ -1,7 +1,8 @@
 // 底部 status 行渲染层（方案 B  细线分隔）。
 //
-// 布局：[状态]  [模式]  [token ripple]  [token count]  [工作树]
-// 生成态前导 braille 旋转 spinner；均衡器 idle=进度填充、generating=波浪起伏。
+// 布局：[toast?]  [模式]  [token ripple]  [token count]  [工作树]
+// ready/working/generating 状态词只保留在 header；输入 dock 仅在有复制反馈
+// toast 时显示左段，其余空间让给 token 进度条。
 // 遵循 UI/数据隔离：各段从 appModel accessor 读数据，按 cell 预算截断，整体
 // 严格等于 width 个 cell，数据内容绝不破坏布局。
 package bubble
@@ -27,7 +28,7 @@ const equalizerAmpDuration = 400 * time.Millisecond
 // 置 false，但整轮未结束（queryGuard 仍 running），此时应保持 working 态——
 // 均衡器继续起伏、状态词显示 working，而非退回 idle。
 func (m appModel) isAgentWorking() bool {
-	return m.isGenerating || m.isModelWorkRunning()
+	return m.isGenerating || m.isModelWorkRunning() || m.goalWorking || m.planWorking
 }
 
 // startTokenRippleExit 保留当前 Ripple 周期的剩余部分，让回答结束时波纹
@@ -89,90 +90,104 @@ const (
 	tokenRippleTail   = 14
 )
 
-// renderDockStatusLine 渲染输入框上方的单行状态条。
+// renderDockStatusLine 渲染输入区上边框：复制反馈 toast + 模式指示 + token
+// frontier 细线。模式指示（plan/goal）为背景高亮块；plan/goal 时整条线使用
+// agentmode 强调色。token 用量与工作树 chip 已移至下边框（renderBottomDockLine）。
 func (m appModel) renderDockStatusLine(width int) string {
 	width = maxInt(1, width)
 
 	left := m.renderStatusLeftSegment()
+	mode := m.renderModeIndicator()
 	stats := m.contextStats()
 	limit := maxInt(1, stats.LimitTokens)
 	used := clampInt(stats.UsedTokens, 0, limit)
-	count := contextUsedStyle.Render(formatCompactTokenCount(used) + " / " + formatCompactTokenCount(limit))
-	mode := m.renderModeIndicator()
+	modeHex := m.currentModeHex()
 	sepW := terminalCellWidth(statusSegmentSeparator)
 	left = truncateStyledCellLine(left, minInt(18, width))
 
+	// toast 优先级最低：空间不足时先隐藏，mode 与 frontier 始终保留。
+	if left != "" && terminalCellWidth(left)+terminalCellWidth(mode)+sepW >= width {
+		left = ""
+	}
+	fixed := terminalCellWidth(left) + terminalCellWidth(mode)
+	parts := 1
+	if left != "" {
+		parts++
+	}
+	if mode != "" {
+		parts++
+	}
+	fixed += (parts - 1) * sepW
+	barBudget := maxInt(1, width-fixed)
+	bar := m.renderTokenFrontierWith(barBudget, used, limit, modeHex)
+	statusParts := []string{}
+	if left != "" {
+		statusParts = append(statusParts, left)
+	}
+	statusParts = append(statusParts, mode)
+	statusParts = append(statusParts, bar)
+	return fitStyledCellLine(strings.Join(statusParts, statusSegmentSeparator), width)
+}
+
+// renderBottomDockLine 渲染输入区下边框：token 用量与工作树 chip 居中嵌入
+// ─ 底线，线色随 agentmode（plan/goal）变化。
+func (m appModel) renderBottomDockLine(width int) string {
+	return embedHairlineContent(m.renderBottomDockContent(width), width, m.currentModeHex())
+}
+
+// renderBottomDockContent 返回下边框的文本内容（不含 ─ 线），供嵌入与测试。
+// 宽度不足时按优先级丢弃 worktree、再丢 count，最终允许为空（纯线）。
+func (m appModel) renderBottomDockContent(width int) string {
+	width = maxInt(1, width)
+	stats := m.contextStats()
+	limit := maxInt(1, stats.LimitTokens)
+	used := clampInt(stats.UsedTokens, 0, limit)
+	countStyle := contextUsedStyle
+	if modeHex := m.currentModeHex(); modeHex != "" {
+		countStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(modeHex)).Bold(true)
+	}
+	count := countStyle.Render(formatCompactTokenCount(used) + " / " + formatCompactTokenCount(limit))
 	worktree := ""
 	if width >= worktreeInlineMinimumWidth {
 		worktree = m.renderWorktreeChip(minInt(28, maxInt(1, width/3)))
 	}
-
-	// Keep the requested information order. When space gets tight, hide the
-	// worktree first, then mode, then token count, while retaining a frontier.
-	includeMode := true
-	includeCount := true
-	worktreeGap := 2
-	statusWidth := func(includeMode, includeCount bool, worktree string) int {
-		fixed := terminalCellWidth(left)
-		// The frontier is always present, so it is already one of the parts.
-		parts := 2
-		if includeMode {
-			fixed += terminalCellWidth(mode)
-			parts++
-		}
-		if includeCount {
-			fixed += terminalCellWidth(count)
-			parts++
-		}
-		fixed += (parts - 1) * sepW
-		if worktree != "" {
-			fixed += worktreeGap + terminalCellWidth(worktree)
-		}
-		return fixed
-	}
-	fixed := statusWidth(includeMode, includeCount, worktree)
-	if fixed >= width {
-		worktree = ""
-		fixed = statusWidth(includeMode, includeCount, worktree)
-	}
-	if fixed >= width {
-		includeMode = false
-		fixed = statusWidth(includeMode, includeCount, worktree)
-	}
-	if fixed >= width {
-		includeCount = false
-		fixed = statusWidth(includeMode, includeCount, worktree)
-	}
-	barBudget := maxInt(1, width-fixed)
-	bar := m.renderTokenFrontier(barBudget, used, limit)
-	statusParts := []string{left}
-	if includeMode {
-		statusParts = append(statusParts, mode)
-	}
-	statusParts = append(statusParts, bar)
-	if includeCount {
-		statusParts = append(statusParts, count)
-	}
-	line := strings.Join(statusParts, statusSegmentSeparator)
+	content := count
 	if worktree != "" {
-		line += strings.Repeat(" ", worktreeGap) + worktree
+		content += statusSegmentSeparator + worktree
 	}
-	return fitStyledCellLine(line, width)
+	if terminalCellWidth(content) > maxInt(1, width-2) {
+		content = count
+	}
+	if terminalCellWidth(content) > maxInt(1, width-2) {
+		content = ""
+	}
+	return content
 }
 
-// renderStatusLeftSegment 返回左段：优先显示复制反馈 toast，其次工作中态
-// spinner + 状态词，空闲显示 ready。
+// currentModeHex 返回 agentmode（plan/goal）的强调色 hex；chat/shell/
+// terminal 等非 agentmode 返回空串，表示保持默认配色。
+func (m appModel) currentModeHex() string {
+	switch {
+	case m.planMode:
+		return colorManager.Hex(colorSignal)
+	case m.goalMode:
+		return colorManager.Hex(colorInputTokenCommand)
+	default:
+		return ""
+	}
+}
+
+// renderStatusLeftSegment 返回左段：仅复制反馈 toast。状态词
+// （ready/working/generating）已移入 header，输入 dock 不再显示。
 func (m appModel) renderStatusLeftSegment() string {
+	if m.isGoalInputActive() {
+		// Goal 状态通过边框和 mode=goal 表示；输入区不显示 toast。
+		return ""
+	}
 	if toast := m.copyToastAt(m.animationNow()); toast != "" {
 		return copyToastStyle.Render(toast)
 	}
-	if m.isGenerating {
-		return generatingStatusStyle.Render(spinnerFrame(m.spinnerFrameIdx) + " generating")
-	}
-	if m.isModelWorkRunning() {
-		return generatingStatusStyle.Render(spinnerFrame(m.spinnerFrameIdx) + " working")
-	}
-	return idleStatusStyle.Render("ready")
+	return ""
 }
 
 // copyToastAt 返回当前仍有效的复制反馈文本（未过期），过期则返回空串。
@@ -184,17 +199,32 @@ func (m appModel) copyToastAt(now time.Time) string {
 }
 
 func (m appModel) renderTokenFrontier(width, used, limit int) string {
+	return m.renderTokenFrontierWith(width, used, limit, "")
+}
+
+// renderTokenFrontierWith 渲染 token 进度细线。modeHex 非空时（plan/goal
+// agentmode）整条线使用强调色：已用段加粗 ━、空闲段淡化 ─；否则保持默认
+// context 双色。ripple 波纹同样跟随该颜色。
+func (m appModel) renderTokenFrontierWith(width, used, limit int, modeHex string) string {
 	width = maxInt(1, width)
 	limit = maxInt(1, limit)
 	used = clampInt(used, 0, limit)
 	usedCells := int(float64(width) * float64(used) / float64(limit))
 	usedCells = clampInt(usedCells, 0, width)
+	usedStyle := contextUsedStyle
+	freeStyle := contextFreeStyle
+	signalHex := colorManager.Hex(colorSignal)
+	if modeHex != "" {
+		usedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(modeHex)).Bold(true)
+		freeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(interpolateHexColor(colorManager.Hex(colorTerminalBackground), modeHex, 0.45)))
+		signalHex = modeHex
+	}
 	cells := make([]string, width)
 	for i := range cells {
 		if i < usedCells {
-			cells[i] = contextUsedStyle.Render("━")
+			cells[i] = usedStyle.Render("━")
 		} else {
-			cells[i] = contextFreeStyle.Render("─")
+			cells[i] = freeStyle.Render("─")
 		}
 	}
 	if usedCells >= width {
@@ -213,14 +243,14 @@ func (m appModel) renderTokenFrontier(width, used, limit int) string {
 		// A narrow free span is a window into one uncompressed cyclic ripple.
 		// The next head waits for the previous tail to pass instead of crowding it.
 		for offset, distance := range tokenRippleNarrowDistances(freeCells, phase) {
-			cells[usedCells+offset] = renderTokenRippleCell(distance, fade, background)
+			cells[usedCells+offset] = renderTokenRippleCell(distance, fade, background, signalHex)
 		}
 		return strings.Join(cells, "")
 	}
 
 	head := tokenRippleHead(usedCells, width, phase)
 	for i := maxInt(usedCells, head-tokenRippleTail+1); i <= head && i < width; i++ {
-		cells[i] = renderTokenRippleCell(head-i, fade, background)
+		cells[i] = renderTokenRippleCell(head-i, fade, background, signalHex)
 	}
 	return strings.Join(cells, "")
 }
@@ -278,7 +308,7 @@ func tokenRippleNarrowDistancesAtHead(freeCells, virtualHead int) []int {
 	return distances
 }
 
-func renderTokenRippleCell(distance int, fade float64, background string) string {
+func renderTokenRippleCell(distance int, fade float64, background, signalHex string) string {
 	alpha := float64(tokenRippleTail-distance) / float64(tokenRippleTail)
 	alpha = clamp01(alpha) * fade
 	glyph := "░"
@@ -290,7 +320,7 @@ func renderTokenRippleCell(distance int, fade float64, background string) string
 	case 2:
 		glyph = "▒"
 	}
-	color := interpolateHexColor(background, colorManager.Hex(colorSignal), alpha)
+	color := interpolateHexColor(background, signalHex, alpha)
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(glyph)
 }
 
@@ -305,15 +335,17 @@ func positiveModulo(value, modulus int) int {
 	return result
 }
 
-// renderModeIndicator 返回右侧模式标记。优先级：terminal > !bang > multiline > chat。
+// renderModeIndicator 返回当前输入模式标记；chat/多行输入共用 chat 模式。
 func (m appModel) renderModeIndicator() string {
 	switch {
+	case m.planMode:
+		return modePlanStyle.Render("plan")
+	case m.goalMode:
+		return modeGoalStyle.Render("goal")
 	case m.isTerminalInputActive() || m.runningTerminal:
 		return modeTerminalStyle.Render("terminal")
 	case hasBangPrefix(m.input.Value()):
 		return modeShellStyle.Render("!shell")
-	case m.hasMultilineInput():
-		return modeMultilineStyle.Render("multiline")
 	default:
 		return modeChatStyle.Render("chat")
 	}

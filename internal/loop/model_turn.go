@@ -21,6 +21,15 @@ func (runner *Runner) runModelTurn(ctx context.Context, history []message.Messag
 	var tools []model.ToolDefinition
 	if runner.registry != nil {
 		tools = runner.registry.Definitions()
+		if filter := runner.currentToolFilter(); filter != nil {
+			filtered := make([]model.ToolDefinition, 0, len(tools))
+			for _, definition := range tools {
+				if filter(definition.Name, nil) == nil {
+					filtered = append(filtered, definition)
+				}
+			}
+			tools = filtered
+		}
 	}
 	baseModelMessages, err := runner.buildModelMessages(ctx, history, turn)
 	if err != nil {
@@ -189,11 +198,31 @@ func (runner *Runner) buildSystemPromptForTurn(turn *TurnState) string {
 	if runner.registry != nil {
 		runner.mu.RLock()
 		compactToolPrompt := runner.compactToolPrompt
+		filter := runner.turnToolFilter
 		runner.mu.RUnlock()
 		if compactToolPrompt {
 			descriptions = runner.registry.DescribeBrief()
 		} else {
 			descriptions = runner.registry.Describe()
+		}
+		if filter != nil {
+			allowed := map[string]bool{}
+			for _, definition := range runner.registry.Definitions() {
+				if filter(definition.Name, nil) == nil {
+					allowed[definition.Name] = true
+				}
+			}
+			filtered := make([]string, 0, len(descriptions))
+			for _, description := range descriptions {
+				name := strings.TrimSpace(description)
+				if idx := strings.IndexByte(name, ':'); idx > 0 {
+					name = strings.TrimSpace(name[:idx])
+				}
+				if allowed[name] {
+					filtered = append(filtered, description)
+				}
+			}
+			descriptions = filtered
 		}
 	}
 	if runner.prompt == nil {

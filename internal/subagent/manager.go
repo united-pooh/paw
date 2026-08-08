@@ -84,6 +84,10 @@ type Manager struct {
 	// WaitAny 每次迭代都在锁内获取引用并先检查终态，保证不丢失唤醒。
 	notifyCh chan struct{}
 
+	// taskUpdateSubs 接收任务状态变化通知，供 TUI 等实时消费者唤醒刷新。
+	// 通知只负责唤醒，消费者应通过 ListTasks 获取最新快照。
+	taskUpdateSubs map[chan struct{}]struct{}
+
 	// diskTaskCache avoids rescanning the task registry on every status poll.
 	// In-memory tasks are always merged so running/completed transitions remain
 	// immediately visible; disk changes are observed at most one TTL later.
@@ -229,22 +233,23 @@ var _ ui.UI = sinkUI{}
 
 func NewManager(cfg Config) *Manager {
 	m := &Manager{
-		model:        cfg.Model,
-		store:        cfg.Store,
-		root:         cfg.Root,
-		settings:     cfg.Settings,
-		notifier:     cfg.Notifier,
-		contextSink:  cfg.Context,
-		launcher:     cfg.Launcher,
-		tracer:       cfg.Tracer,
-		registry:     newTaskRegistry(cfg.Root),
-		depth:        cfg.Depth,
-		maxDepth:     cfg.MaxDepth,
-		parentTaskID: strings.TrimSpace(cfg.ParentTaskID),
-		mcpBroker:    cfg.MCPBroker,
-		tasks:        make(map[string]TaskSnapshot),
-		running:      make(map[string]Process),
-		notifyCh:     make(chan struct{}),
+		model:          cfg.Model,
+		store:          cfg.Store,
+		root:           cfg.Root,
+		settings:       cfg.Settings,
+		notifier:       cfg.Notifier,
+		contextSink:    cfg.Context,
+		launcher:       cfg.Launcher,
+		tracer:         cfg.Tracer,
+		registry:       newTaskRegistry(cfg.Root),
+		depth:          cfg.Depth,
+		maxDepth:       cfg.MaxDepth,
+		parentTaskID:   strings.TrimSpace(cfg.ParentTaskID),
+		mcpBroker:      cfg.MCPBroker,
+		tasks:          make(map[string]TaskSnapshot),
+		running:        make(map[string]Process),
+		taskUpdateSubs: make(map[chan struct{}]struct{}),
+		notifyCh:       make(chan struct{}),
 	}
 	if m.maxDepth <= 0 {
 		m.maxDepth = 4
@@ -505,6 +510,32 @@ func (m *Manager) Stop(ctx context.Context, id string) (TaskSnapshot, error) {
 	return task, nil
 }
 
+// SubscribeTaskUpdates returns a wakeup stream for task status changes. The
+// stream carries no task data; consumers must call ListTasks for a fresh snapshot.
+// The cancel function is idempotent and must be called when the consumer exits.
+func (m *Manager) SubscribeTaskUpdates() (<-chan struct{}, func()) {
+	if m == nil {
+		closed := make(chan struct{})
+		close(closed)
+		return closed, func() {}
+	}
+	ch := make(chan struct{}, 1)
+	m.mu.Lock()
+	if m.taskUpdateSubs == nil {
+		m.taskUpdateSubs = make(map[chan struct{}]struct{})
+	}
+	m.taskUpdateSubs[ch] = struct{}{}
+	m.mu.Unlock()
+	return ch, func() {
+		m.mu.Lock()
+		if _, ok := m.taskUpdateSubs[ch]; ok {
+			delete(m.taskUpdateSubs, ch)
+			close(ch)
+		}
+		m.mu.Unlock()
+	}
+}
+
 // signalTaskUpdate 唤醒所有阻塞在 WaitAny 上的等待者。必须在任务状态
 // 已切换为终态之后调用；close 与替换都在 m.mu 内完成，等待者每次迭代
 // 也在锁内获取 channel 引用，因此不会丢失唤醒也不会读到已关闭的旧 channel。
@@ -515,6 +546,12 @@ func (m *Manager) signalTaskUpdate() {
 	m.mu.Lock()
 	close(m.notifyCh)
 	m.notifyCh = make(chan struct{})
+	for ch := range m.taskUpdateSubs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 	m.mu.Unlock()
 }
 

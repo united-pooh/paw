@@ -17,13 +17,26 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+func waitSubagentTaskUpdateCmd(ctx context.Context, updates <-chan struct{}) tea.Cmd {
+	return func() tea.Msg {
+		if updates == nil {
+			return subagentTaskUpdateMsg{closed: true}
+		}
+		select {
+		case _, ok := <-updates:
+			return subagentTaskUpdateMsg{closed: !ok}
+		case <-ctx.Done():
+			return subagentTaskUpdateMsg{closed: true}
+		}
+	}
+}
+
 func newSubagentPicker(tasks []subagent.TaskSnapshot) *subagentPicker {
 	return &subagentPicker{
 		tasks: append([]subagent.TaskSnapshot(nil), tasks...),
 		tab:   activityTabSubagents,
 	}
 }
-
 func (m appModel) openSubagentPicker() (tea.Model, tea.Cmd) {
 	m.openActivity(activityTabSubagents)
 	return m, nil

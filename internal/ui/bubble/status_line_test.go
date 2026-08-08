@@ -33,15 +33,51 @@ func TestStatusLineModeIndicator(t *testing.T) {
 	}
 }
 
-func TestStatusLineUsesTokenCountAndReady(t *testing.T) {
+func TestStatusLineShowsTokenCountWithoutStatusWord(t *testing.T) {
 	model := newTestModel(&fakeRunner{stats: loop.ContextStats{UsedTokens: 12000, LimitTokens: 128000}})
 	model.cursorFrameAt = time.Unix(0, 0)
-	dock := ansi.Strip(model.renderDockStatusLine(100))
-	if !strings.Contains(dock, "ready") || !strings.Contains(dock, "12k / 128k") {
-		t.Fatalf("idle dock = %q, want ready and token count", dock)
+	bottom := ansi.Strip(model.renderBottomDockLine(100))
+	if !strings.Contains(bottom, "12k / 128k") {
+		t.Fatalf("bottom border = %q, want token count", bottom)
 	}
-	if strings.Contains(dock, "cache") || strings.Contains(dock, "free") {
-		t.Fatalf("idle dock still contains retired telemetry: %q", dock)
+	for _, unwanted := range []string{"ready", "working", "generating"} {
+		if strings.Contains(bottom, unwanted) {
+			t.Fatalf("bottom border = %q, should not contain %q", bottom, unwanted)
+		}
+	}
+	if strings.Contains(bottom, "cache") || strings.Contains(bottom, "free") {
+		t.Fatalf("bottom border still contains retired telemetry: %q", bottom)
+	}
+}
+
+func TestGoalInputUsesModeIndicatorWithoutStatusOrPurpleBody(t *testing.T) {
+	model := newTestModel(&fakeRunner{stats: loop.ContextStats{UsedTokens: 12000, LimitTokens: 128000}})
+	model.cursorFrameAt = time.Unix(0, 0)
+	model.goalMode = true
+	model.input.SetWidth(40)
+	model.input.SetHeight(1)
+	model.input.SetValue("finish the migration")
+	model.input.CursorEnd()
+
+	goalContent := model.renderInputContentWithHints(40, 1)
+	model.goalMode = false
+	chatContent := model.renderInputContentWithHints(40, 1)
+	if goalContent != chatContent {
+		t.Fatalf("goal input body styling differs from chat body; goal=%q chat=%q", goalContent, chatContent)
+	}
+
+	model.goalMode = true
+	dock := ansi.Strip(model.renderDockStatusLine(100))
+	if !strings.Contains(dock, "goal") {
+		t.Fatalf("goal mode indicator missing: %q", dock)
+	}
+	for _, unwanted := range []string{"ready", "working", "generating"} {
+		if strings.Contains(dock, unwanted) {
+			t.Fatalf("goal status line contains %q: %q", unwanted, dock)
+		}
+	}
+	if strings.Contains(ansi.Strip(goalContent), "goal") {
+		t.Fatalf("goal leaked into input body: %q", ansi.Strip(goalContent))
 	}
 }
 
@@ -169,15 +205,20 @@ func TestTokenFrontierRippleSurvivesTurnCompletion(t *testing.T) {
 	}
 }
 
-func TestStatusLineWorkingDuringToolCall(t *testing.T) {
+func TestStatusLineHasNoStatusWordDuringToolCall(t *testing.T) {
 	model := newTestModel(&fakeRunner{stats: loop.ContextStats{UsedTokens: 45000, LimitTokens: 100000}})
 	if !model.queryGuard.StartModel() {
 		t.Fatal("StartModel failed")
 	}
 	model.syncRunningFlags()
 	dock := ansi.Strip(model.renderDockStatusLine(80))
-	if !strings.Contains(dock, "working") || strings.Contains(dock, "ready") {
-		t.Fatalf("tool-call dock = %q, want working only", dock)
+	for _, unwanted := range []string{"ready", "working", "generating"} {
+		if strings.Contains(dock, unwanted) {
+			t.Fatalf("tool-call dock = %q, should not contain %q", dock, unwanted)
+		}
+	}
+	if !strings.Contains(dock, "chat") {
+		t.Fatalf("tool-call dock = %q, want chat mode indicator", dock)
 	}
 }
 

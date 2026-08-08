@@ -64,9 +64,9 @@ type inputProjectionLine struct {
 }
 
 type inputProjection struct {
-	lines         []inputProjectionLine
-	cursorRow     int
-	cursorColumn  int
+	lines          []inputProjectionLine
+	cursorRow      int
+	cursorColumn   int
 	cursorAbsolute int
 }
 
@@ -783,7 +783,11 @@ func (m appModel) renderTokenInputContent() string {
 	if m.input.Value() == "" {
 		placeholderText := m.input.Placeholder
 		placeholderStyle := m.input.FocusedStyle.Placeholder
-		if m.isTerminalInputActive() || m.runningTerminal {
+		if m.isGoalInputActive() {
+			// Goal 仅通过输入框边框和状态栏模式标识呈现；正文保持普通聊天色。
+			placeholderText = ""
+			placeholderStyle = bodyStyle
+		} else if m.isTerminalInputActive() || m.runningTerminal {
 			placeholderText = "$"
 			placeholderStyle = terminalInputLabelStyle
 		}

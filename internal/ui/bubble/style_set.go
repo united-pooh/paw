@@ -12,7 +12,7 @@ type StyleSet struct {
 	LabelUser, LabelAssistant, LabelThinking, LabelTool, LabelSystem, LabelError                                               lipgloss.Style
 	MarkdownHeading, MarkdownRule, MarkdownBullet, MarkdownBold, MarkdownItalic, MarkdownHighlight, MarkdownCode, MarkdownLink lipgloss.Style
 	MarkdownCodeBlock, MarkdownCodeBlockBorder, MarkdownCodeBlockLabel, MarkdownQuote                                          lipgloss.Style
-	TranscriptContent, InputDock, InputDockMultiline, InputDockTerminal                                                        lipgloss.Style
+	TranscriptContent, InputDock, InputDockTerminal                                                                            lipgloss.Style
 	InputHint, InputPrompt, InputTokenCommand, InputTokenFile, InputTokenImage                                                 lipgloss.Style
 	ContextCache, ContextUsed, ContextFree, ContextThinking                                                                    lipgloss.Style
 	TerminalInputLabel, TerminalInputText                                                                                      lipgloss.Style
@@ -51,7 +51,6 @@ func NewStyleSet(p theme.Palette) StyleSet {
 		MarkdownQuote:           lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownQuote)).Border(lipgloss.Border{Left: "│"}).BorderForeground(c.LipglossColor(colorMarkdownQuoteBorder)).PaddingLeft(1),
 		TranscriptContent:       lipgloss.NewStyle().Background(bg).Padding(0, mainContentPadding),
 		InputDock:               lipgloss.NewStyle().Background(bg).Padding(0, mainContentPadding),
-		InputDockMultiline:      lipgloss.NewStyle().Background(bg).Foreground(c.LipglossColor(colorInputMultilineBorder)).Padding(0, mainContentPadding),
 		InputDockTerminal:       lipgloss.NewStyle().Background(bg).Foreground(c.LipglossColor(colorInputTerminal)).Padding(0, mainContentPadding),
 		InputHint:               lipgloss.NewStyle().Foreground(c.LipglossColor(colorContextFree)).Background(bg),
 		InputPrompt:             lipgloss.NewStyle().Foreground(c.LipglossColor(colorSignal)).Background(bg).Bold(true),

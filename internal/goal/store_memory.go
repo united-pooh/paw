@@ -2,10 +2,13 @@ package goal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
 )
+
+var ErrRevisionConflict = errors.New("goal revision conflict")
 
 type GoalStore interface {
 	Create(context.Context, Goal) error
@@ -46,11 +49,13 @@ func (s *MemoryStore) Create(ctx context.Context, g Goal) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.goals[g.ID]; ok {
+	if g.Revision == 0 {
+		g.Revision = 1
+	}
+	if _, exists := s.goals[g.ID]; exists {
 		return fmt.Errorf("goal %q already exists", g.ID)
 	}
-	g.Budget = g.Budget.Normalize()
-	s.goals[g.ID] = g
+	s.goals[g.ID] = cloneGoal(g)
 	return nil
 }
 
@@ -64,7 +69,7 @@ func (s *MemoryStore) Get(ctx context.Context, id GoalID) (Goal, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	g, ok := s.goals[id]
-	return g, ok, nil
+	return cloneGoal(g), ok, nil
 }
 
 func (s *MemoryStore) Update(ctx context.Context, g Goal) error {
@@ -79,11 +84,21 @@ func (s *MemoryStore) Update(ctx context.Context, g Goal) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.goals[g.ID]; !ok {
+	current, ok := s.goals[g.ID]
+	if !ok {
 		return fmt.Errorf("goal %q not found", g.ID)
 	}
+	if g.Revision == 0 {
+		return fmt.Errorf("%w: goal %q", ErrRevisionConflict, g.ID)
+	}
+	if g.Revision != current.Revision && g.Revision != current.Revision+1 {
+		return fmt.Errorf("%w: goal %q", ErrRevisionConflict, g.ID)
+	}
 	g.Budget = g.Budget.Normalize()
-	s.goals[g.ID] = g
+	if g.Revision == current.Revision {
+		g.Revision++
+	}
+	s.goals[g.ID] = cloneGoal(g)
 	return nil
 }
 

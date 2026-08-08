@@ -32,6 +32,12 @@ func (runner *Runner) resolveToolCall(call message.ToolCall) resolvedToolCall {
 		return resolved
 	}
 	resolved.selectedTool = selected
+	if filter := runner.currentToolFilter(); filter != nil {
+		if err := filter(selected.Name(), call.Input); err != nil {
+			resolved.resolveError = err.Error()
+			return resolved
+		}
+	}
 	if strings.TrimSpace(call.InputError) != "" {
 		resolved.resolveError = call.InputError
 	}

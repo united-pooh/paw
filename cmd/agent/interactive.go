@@ -5,14 +5,22 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"paw/internal/loop"
+	"paw/internal/plan"
 	"paw/internal/todo"
 	"paw/internal/tokentracer"
 	"paw/internal/tool"
 	selecttool "paw/internal/tool/select"
 	bubbleui "paw/internal/ui/bubble"
 	"paw/internal/ui/headless"
+	"strings"
 	"time"
 )
+
+// finalizeTool is the plan_finalize tool registered in interactive mode. Its
+// hook is wired once the session plan controller exists.
+var finalizeTool = plan.NewFinalizeTool(nil)
 
 func runSingleTurnMode(ctx context.Context, opts options) error {
 	output := headless.New(os.Stdout)
@@ -49,7 +57,11 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 		if err := registerMainAgentTools(registry, todoBroker); err != nil {
 			return err
 		}
-		return registerInteractiveTools(registry, selectionBroker)
+		if err := registerInteractiveTools(registry, selectionBroker); err != nil {
+			return err
+		}
+		registry.Register(finalizeTool)
+		return nil
 	})
 	if err != nil {
 		return err
@@ -78,8 +90,33 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	output.SetSubagentController(subagentManager)
 	output.SetSessionStore(store)
 	output.SetMCPStatusController(mcpManager)
-	output.SetGoalController(newSessionGoalController(sessionID, runner, todoBroker))
+	goalController := newSessionGoalController(sessionID, runner, todoBroker)
+	goalController.SetStopped(func(reason string) {
+		_ = output.NotifyGoalStopped(reason)
+	})
+	output.SetGoalController(goalController)
+	planController := newSessionPlanController(sessionID, runner, plansDir(runner))
+	planController.SetNotify(func(doc plan.PlanDoc) {
+		_ = output.NotifyPlanFinalized(doc.Path)
+	})
+	planController.SetStopped(func(reason string) {
+		_ = output.NotifyPlanStopped(reason)
+	})
+	output.SetPlanController(planController)
+	finalizeTool.SetHook(planController.Finalize)
 	return output.Run(ctx, runner, sessionID)
+}
+
+// plansDir resolves the plan document directory under the workspace root.
+func plansDir(runner *loop.Runner) string {
+	root := ""
+	if runner != nil {
+		root = runner.WorkspaceRoot()
+	}
+	if strings.TrimSpace(root) == "" {
+		root = "."
+	}
+	return filepath.Join(root, "docs", "superpowers", "plans")
 }
 
 func startTokenTracer(ctx context.Context, sessionID string, opts options) (*tokentracer.Tracer, *tokentracer.Server, error) {

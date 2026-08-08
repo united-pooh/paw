@@ -102,3 +102,30 @@ func (m appModel) renderHeaderLine(width int) string {
 	}
 	return renderHeader(m.collectHeaderData(now), width)
 }
+
+// renderHeaderCompact 返回紧凑的 header 文本（模型 + 状态 + 时间），
+// 不带右侧填充，供嵌入顶边框线使用。
+func renderHeaderCompact(s headerSnapshot, width int) string {
+	modelBudget := clampInt(width/3, 6, 28)
+	model := truncateStyledCellLine(s.modelLabel, modelBudget)
+	status := strings.TrimSpace(s.statusLabel)
+	if status == "" {
+		status = "ready"
+	}
+	left := model + headerFieldSeparator + status
+	clock := s.now.Format("15:04")
+	return truncateStyledCellLine(left+headerFieldSeparator+clock, width)
+}
+
+// renderHeaderEmbedded 渲染嵌入顶边框线的紧凑 header 内容：把「模型名 +
+// 状态 + 时间」按紧凑形式拼好，由调用方（renderDockedFrame）居中嵌进 ─ 线。
+func (m appModel) renderHeaderEmbedded(width int) string {
+	if width <= 0 {
+		return ""
+	}
+	now := m.cursorFrameAt
+	if now.IsZero() {
+		now = time.Now()
+	}
+	return renderHeaderCompact(m.collectHeaderData(now), width)
+}

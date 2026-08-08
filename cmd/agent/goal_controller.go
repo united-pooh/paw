@@ -18,6 +18,7 @@ type sessionGoalController struct {
 	sessionID string
 	mu        sync.Mutex
 	activeID  goal.GoalID
+	stopped   func(reason string)
 }
 
 func newSessionGoalController(sessionID string, runner *loop.Runner, broker *todo.Broker) *sessionGoalController {
@@ -25,13 +26,29 @@ func newSessionGoalController(sessionID string, runner *loop.Runner, broker *tod
 	if broker != nil {
 		source = broker.Latest
 	}
-	return &sessionGoalController{
-		runtime: goal.NewRuntime(goal.RuntimeConfig{
-			Executor: runner.GoalTurnExecutor(),
-			Todo:     source,
-		}),
-		sessionID: sessionID,
-	}
+	c := &sessionGoalController{sessionID: sessionID}
+	c.runtime = goal.NewRuntime(goal.RuntimeConfig{
+		Executor: runner.GoalTurnExecutor(),
+		Todo:     source,
+		Events: func(e goal.Event) {
+			switch e.Type {
+			// 会话结束（完成/失败/取消）或暂停：goal 不再占用前台工作态，
+			// 通知 UI 释放 goalWorking（否则 header 永久显示 working）。
+			case goal.EventCompleted, goal.EventFailed, goal.EventCancelled, goal.EventPaused:
+				if c.stopped != nil {
+					c.stopped(string(e.Type))
+				}
+			}
+		},
+	})
+	return c
+}
+
+// SetStopped wires the goal-session end callback (TUI releases working state).
+func (c *sessionGoalController) SetStopped(fn func(reason string)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stopped = fn
 }
 
 func (c *sessionGoalController) Start(objective string) (string, error) {
@@ -102,10 +119,19 @@ func (c *sessionGoalController) Cancel() error {
 	return c.runtime.Cancel(context.Background(), s.ID)
 }
 
+func (c *sessionGoalController) Budget() string {
+	s, err := c.current()
+	if err != nil {
+		return err.Error()
+	}
+	return fmt.Sprintf("turns: %d/%d\ntool calls: %d/%d\ncontinuations: %d/%d\nno-progress: %d/%d\ndeadline: %s", s.TurnsUsed, s.Budget.MaxTurns, s.ToolCallsUsed, s.Budget.MaxToolCalls, s.ContinuationUsed, s.Budget.MaxContinuations, s.NoProgressCount, s.Budget.MaxNoProgress, s.Budget.Deadline.Format("2006-01-02T15:04:05Z07:00"))
+}
+
 var _ interface {
 	Start(string) (string, error)
 	Status() string
 	Pause() error
 	Resume() error
 	Cancel() error
+	Budget() string
 } = (*sessionGoalController)(nil)

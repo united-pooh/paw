@@ -40,18 +40,40 @@ type Observation struct {
 	ContextNeedsMaintenance bool
 	ContinuationUsed        int
 	NoProgressCount         int
+	TurnsUsed               int
+	ToolCallsUsed           int
+	MaxTurns                int
+	MaxToolCalls            int
+	AcceptancePassed        bool
+	HasAcceptanceCriteria   bool
+	Verification            []VerificationSpec
+	Evidence                []Evidence
 	ToolError               error
+}
+
+type EvaluatorConfig struct {
+	Policy Policy
+	Now    func() time.Time
 }
 
 type Evaluator struct {
 	policy          Policy
+	now             func() time.Time
 	lastFingerprint string
 	repeated        int
 }
 
 func NewEvaluator(policy Policy) *Evaluator {
-	policy = policy.Normalize()
-	return &Evaluator{policy: policy}
+	return NewEvaluatorWithConfig(EvaluatorConfig{Policy: policy})
+}
+
+func NewEvaluatorWithConfig(config EvaluatorConfig) *Evaluator {
+	policy := config.Policy.Normalize()
+	nowFn := config.Now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	return &Evaluator{policy: policy, now: nowFn}
 }
 
 func (e *Evaluator) Evaluate(o Observation) Decision {
@@ -61,8 +83,14 @@ func (e *Evaluator) Evaluate(o Observation) Decision {
 	if o.ToolError != nil {
 		return Decision{Action: ActionPause, Reason: o.ToolError.Error(), PauseReason: ClassifyError(o.ToolError)}
 	}
-	if e.policy.DeadlineExceeded(now()) {
+	if e.policy.DeadlineExceeded(e.now()) {
 		return Decision{Action: ActionPause, Reason: "goal deadline exceeded", PauseReason: PauseBudgetExhausted}
+	}
+	if e.policy.Budget.MaxTurns > 0 && o.TurnsUsed >= e.policy.Budget.MaxTurns {
+		return Decision{Action: ActionPause, Reason: "goal turn budget exhausted", PauseReason: PauseBudgetExhausted}
+	}
+	if e.policy.Budget.MaxToolCalls > 0 && o.ToolCallsUsed >= e.policy.Budget.MaxToolCalls {
+		return Decision{Action: ActionPause, Reason: "goal tool-call budget exhausted", PauseReason: PauseBudgetExhausted}
 	}
 	if o.GateDecision.Action == loop.CompletionBlocked {
 		return Decision{Action: ActionBlocked, Reason: o.GateDecision.Reason, PauseReason: PauseBlocked}
@@ -70,11 +98,20 @@ func (e *Evaluator) Evaluate(o Observation) Decision {
 	if o.GateDecision.Action == loop.CompletionPause {
 		return Decision{Action: ActionPause, Reason: o.GateDecision.Reason, PauseReason: PauseNoProgress}
 	}
+	if o.GateDecision.Action == loop.CompletionFailed {
+		return Decision{Action: ActionFailed, Reason: o.GateDecision.Reason, PauseReason: PauseBlocked}
+	}
 	if o.ContextNeedsMaintenance || o.GateDecision.Action == loop.CompletionCompact {
 		return Decision{Action: ActionCompact, Reason: "context maintenance is required"}
 	}
 	pending := o.HasTodo && pendingTodos(o.Todo) > 0
 	if !pending {
+		if o.HasAcceptanceCriteria && !o.AcceptancePassed {
+			return Decision{Action: ActionPause, Reason: "acceptance criteria are not satisfied", PauseReason: PauseVerificationFailed}
+		}
+		if len(o.Verification) > 0 && !RequiredEvidenceComplete(o.Verification, o.Evidence) {
+			return Decision{Action: ActionPause, Reason: "required verification evidence is missing or stale", PauseReason: PauseVerificationFailed}
+		}
 		return Decision{Action: ActionComplete, Reason: "no unfinished todo items"}
 	}
 	fingerprint := fingerprint(o)

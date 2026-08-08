@@ -311,10 +311,15 @@ func TestDockStatusLineFitsNarrowWidths(t *testing.T) {
 		}
 	}
 
-	// 状态行按信息优先级排列：ready  chat  token info。
+	// 状态行按信息优先级排列：chat  token info，无 ready/working 状态词。
 	line := ansi.Strip(model.renderDockStatusLine(80))
-	if ready, chat := strings.Index(line, "ready"), strings.Index(line, "chat"); ready < 0 || chat < 0 || ready >= chat {
-		t.Fatalf("status order = %q", line)
+	if chat := strings.Index(line, "chat"); chat < 0 {
+		t.Fatalf("status order = %q, want chat indicator", line)
+	}
+	for _, unwanted := range []string{"ready", "working", "generating"} {
+		if strings.Contains(line, unwanted) {
+			t.Fatalf("status line = %q, should not contain %q", line, unwanted)
+		}
 	}
 }
 

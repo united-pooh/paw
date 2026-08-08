@@ -164,6 +164,18 @@ func (e runnerTurnExecutor) ExecuteTurn(ctx context.Context, input message.Messa
 	return e.runner.runSingleTurnWithTiming(ctx, input, timing)
 }
 
+func (e runnerTurnExecutor) SetTurnToolFilter(filter ToolFilter) {
+	e.runner.SetTurnToolFilter(filter)
+}
+
+func (e runnerTurnExecutor) SystemSupplement() string {
+	return e.runner.SystemSupplement()
+}
+
+func (e runnerTurnExecutor) SetSystemSupplement(supplement string) {
+	e.runner.SetSystemSupplement(supplement)
+}
+
 // runnerCompletionEvaluator adapts the existing Completion Gate signals.
 type runnerCompletionEvaluator struct{ runner *Runner }
 

@@ -337,7 +337,7 @@ func (s *JSONLStore) appendRecords(ctx context.Context, sessionID string, record
 	}
 	// 用追加后的真实文件大小更新内存缓存，使下一次 append 无需重扫。
 	if fi, statErr := f.Stat(); statErr == nil {
-		s.journal[sessionID] = journalState{nextSeq: lastSeq + 1, size: fi.Size()}
+		s.setJournalState(sessionID, journalState{nextSeq: lastSeq + 1, size: fi.Size()})
 	}
 	if err := os.Chtimes(s.metaPath(sessionID), now, now); err != nil {
 		return -1, -1, fmt.Errorf("更新 session 最近使用时间失败: %w", err)
@@ -368,12 +368,24 @@ func (s *JSONLStore) syncAfterAppend(f *os.File, sessionID string, turnBoundary 
 	return nil
 }
 
-// journalNextSeq 返回会话下一次 append 应使用的 sequence。优先使用内存缓存；
+func (s *JSONLStore) setJournalState(sessionID string, state journalState) {
+	s.mu.Lock()
+	s.journal[sessionID] = state
+	s.mu.Unlock()
+}
+
+func (s *JSONLStore) getJournalState(sessionID string) (journalState, bool) {
+	s.mu.Lock()
+	state, ok := s.journal[sessionID]
+	s.mu.Unlock()
+	return state, ok
+}
+
 // 仅当 transcript 文件大小与上次观察一致时才命中缓存。任何大小不匹配
 // （进程重启、外部进程写入、首次 append）都会触发一次完整重扫，保证持久化
 // 语义与每次扫描时逐字节一致。
 func (s *JSONLStore) journalNextSeq(ctx context.Context, sessionID string) (int64, error) {
-	if cached, ok := s.journal[sessionID]; ok {
+	if cached, ok := s.getJournalState(sessionID); ok {
 		if fi, err := os.Stat(s.transcriptPath(sessionID)); err == nil && fi.Size() == cached.size {
 			return cached.nextSeq, nil
 		}
@@ -391,7 +403,7 @@ func (s *JSONLStore) journalNextSeq(ctx context.Context, sessionID string) (int6
 	if fi, err := os.Stat(s.transcriptPath(sessionID)); err == nil {
 		size = fi.Size()
 	}
-	s.journal[sessionID] = journalState{nextSeq: nextSeq, size: size}
+	s.setJournalState(sessionID, journalState{nextSeq: nextSeq, size: size})
 	return nextSeq, nil
 }
 

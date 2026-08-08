@@ -165,13 +165,11 @@ func TestNewModelStartsWithEmptyTranscript(t *testing.T) {
 func TestStatusLinePlacesWorktreeAfterTokenInfo(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.worktree = worktreeSnapshot{name: "paw", ref: "dev", state: worktreeDirty, isGit: true}
-	dock := ansi.Strip(model.renderDockStatusLine(100))
-	ready := strings.Index(dock, "ready")
-	chat := strings.Index(dock, "chat")
-	count := strings.Index(dock, " / ")
-	worktree := strings.Index(dock, "paw  dev")
-	if ready < 0 || chat < 0 || count < 0 || worktree < 0 || !(ready < chat && chat < count && count < worktree) {
-		t.Fatalf("status line order = %q", dock)
+	bottom := ansi.Strip(model.renderBottomDockLine(100))
+	count := strings.Index(bottom, " / ")
+	worktree := strings.Index(bottom, "paw  dev")
+	if count < 0 || worktree < 0 || !(count < worktree) {
+		t.Fatalf("bottom border order = %q", bottom)
 	}
 }
 

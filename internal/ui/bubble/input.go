@@ -28,6 +28,17 @@ func (m appModel) handleSubmit() (tea.Model, tea.Cmd) {
 		m.toggleTerminalMode()
 		return m, nil
 	}
+	if m.planMode {
+		return m.submitPlan(line)
+	}
+	if m.goalMode {
+		m.rememberInputHistory(line)
+		return m.submitGoal(line)
+	}
+	if m.planWorking {
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "busy", body: "chat is unavailable while a plan session is running"})
+		return m, nil
+	}
 	if m.terminalMode {
 		m.rememberInputHistory(line)
 		return m.submitShellCommand(line)
@@ -177,7 +188,99 @@ func (m *appModel) toggleTerminalMode() {
 	})
 }
 
-// isTerminalInputActive 判断当前输入框是否需要展示终端模式视觉状态。
+// isGoalInputActive 判断当前输入框是否处于 Goal 模式视觉状态。
+func (m appModel) isGoalInputActive() bool {
+	return m.goalMode
+}
+
+// cycleInputMode 在 Chat、Goal、Plan 三种输入模式之间循环。三种模式共用
+// 同一个输入框；Plan 模式是独立的文档创作模式（不依赖 Goal）：Enter 提交
+// 需求后由 plan 控制器驱动澄清→撰写→确认流程。
+func (m *appModel) cycleInputMode() {
+	if m == nil {
+		return
+	}
+	switch {
+	case m.goalMode:
+		m.goalMode = false
+		m.planMode = true
+	case m.planMode:
+		m.planMode = false
+	default:
+		m.goalMode = true
+	}
+	if m.goalMode || m.planMode {
+		m.terminalMode = false
+		m.terminalPreview = false
+	}
+	m.pending = nil
+	m.activeAssistant = -1
+	// Mode switches start a fresh input context. If the user returns to Chat
+	// with an empty draft, show the landing affordance again.
+	m.hasInteracted = false
+	m.clearCompletionAndRelayout()
+	m.applyCursorAnimation()
+	m.relayout()
+}
+
+// toggleGoalMode 保留给旧调用点，统一转发到三态模式循环。
+func (m *appModel) toggleGoalMode() {
+	m.cycleInputMode()
+}
+
+// submitPlan 将 Plan 输入提交给独立的 plan 控制器：提交需求后运行时负责
+// 澄清、撰写文档、展示并最终确认【执行/修改】。Plan 独立于 Goal 存在，
+// 不需要任何 Goal 上下文。
+func (m appModel) submitPlan(line string) (tea.Model, tea.Cmd) {
+	if m.planController == nil {
+		m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: "plan controller is unavailable"})
+		return m, nil
+	}
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return m, nil
+	}
+	m.rememberInputHistory(line)
+	id, err := m.planController.Start(line)
+	if err != nil {
+		m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: err.Error()})
+		return m, nil
+	}
+	m.addEntry(transcriptEntry{kind: entrySystem, title: "plan", body: "started " + id + "\nrequirement: " + line})
+	m.inputSource = inputSourceFresh
+	m.planWorking = true
+	m.turnStartedAt = time.Now()
+	m.turnID = id
+	m.applyCursorAnimation()
+	return m, m.scheduleUIAnimationFrame()
+}
+
+// submitGoal 将 Goal 输入提交给生命周期控制器，而不是普通聊天 runner。
+func (m appModel) submitGoal(line string) (tea.Model, tea.Cmd) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return m, nil
+	}
+	if m.goalController == nil {
+		m.addEntry(transcriptEntry{kind: entryError, title: "goal", body: "goal controller is unavailable"})
+		return m, nil
+	}
+	m.rememberInputHistory(line)
+	id, err := m.goalController.Start(line)
+	if err != nil {
+		m.addEntry(transcriptEntry{kind: entryError, title: "goal", body: err.Error()})
+		return m, nil
+	}
+	m.addEntry(transcriptEntry{kind: entrySystem, title: "goal", body: "started " + id + "\nobjective: " + line})
+	m.inputSource = inputSourceFresh
+	m.goalWorking = true
+	m.turnStartedAt = time.Now()
+	m.turnID = id
+	m.applyCursorAnimation()
+	return m, m.scheduleUIAnimationFrame()
+}
+
+// isTerminalInputActive 判断当前输入框是否需要展示终端或 Goal 模式视觉状态。
 func (m appModel) isTerminalInputActive() bool {
 	return m.terminalMode || m.terminalPreview
 }

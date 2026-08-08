@@ -22,6 +22,20 @@ const (
 	toolUseResponseType = "tool_use"
 )
 
+// ToolFilter restricts which tools a turn may advertise and execute. A nil
+// filter allows all registered tools. The filter receives the tool name and
+// the raw input when available (nil input while building the prompt).
+type ToolFilter func(name string, input json.RawMessage) error
+
+// ToolFilterApplier scopes a runner's tool set and system supplement for the
+// turns of a higher-level runtime (e.g. plan mode). It is implemented by the
+// runner's turn executor so runtimes stay testable with fake executors.
+type ToolFilterApplier interface {
+	SetTurnToolFilter(ToolFilter)
+	SystemSupplement() string
+	SetSystemSupplement(string)
+}
+
 type ModelStreamer interface {
 	StreamMessage(ctx context.Context, messages []message.Message, tools []model.ToolDefinition) (<-chan model.StreamEvent, error)
 }
@@ -95,6 +109,7 @@ type Runner struct {
 	lastProgressHash       string
 	activeTool             activeToolState
 	activeTurnCancel       context.CancelFunc
+	turnToolFilter         ToolFilter
 }
 
 type activeToolState struct {
@@ -291,6 +306,38 @@ func (runner *Runner) SetYoloModeHandler(handler func(bool)) {
 	runner.mu.Lock()
 	runner.yoloModeHandler = handler
 	runner.mu.Unlock()
+}
+
+// SetTurnToolFilter scopes the tool set for subsequent turns. A nil filter
+// restores unrestricted access. Higher-level runtimes set it around their own
+// turns and restore the previous value afterwards.
+func (runner *Runner) SetTurnToolFilter(filter ToolFilter) {
+	if runner == nil {
+		return
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	runner.turnToolFilter = filter
+}
+
+// currentToolFilter returns the active turn tool filter, if any.
+func (runner *Runner) currentToolFilter() ToolFilter {
+	if runner == nil {
+		return nil
+	}
+	runner.mu.RLock()
+	defer runner.mu.RUnlock()
+	return runner.turnToolFilter
+}
+
+// SystemSupplement returns the current additional system instructions.
+func (runner *Runner) SystemSupplement() string {
+	if runner == nil {
+		return ""
+	}
+	runner.mu.RLock()
+	defer runner.mu.RUnlock()
+	return runner.systemSupplement
 }
 
 func (runner *Runner) SetYoloMode(enabled bool) (bool, error) {

@@ -3,6 +3,8 @@ package bubble
 import (
 	"fmt"
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 const queuePanelMaxHeight = 8
@@ -99,7 +101,7 @@ func (m appModel) renderQueuePanel(width, height int) string {
 	return fitStyledRect(m.queuePanelContent(width), width, height)
 }
 
-func renderQueueInlineBottomBorder(view string, width int, summary string) string {
+func renderQueueInlineBottomBorder(view string, width int, summary, lineColor string) string {
 	if width <= 0 {
 		return ""
 	}
@@ -114,7 +116,11 @@ func renderQueueInlineBottomBorder(view string, width int, summary string) strin
 	if leftWidth+summaryWidth > width {
 		leftWidth = maxInt(0, width-summaryWidth)
 	}
-	line := strings.Repeat("─", leftWidth) + summary + strings.Repeat("─", maxInt(0, width-leftWidth-summaryWidth))
+	lineStyle := lipgloss.NewStyle()
+	if lineColor != "" {
+		lineStyle = lineStyle.Foreground(lipgloss.Color(lineColor))
+	}
+	line := lineStyle.Render(strings.Repeat("─", leftWidth)) + summary + lineStyle.Render(strings.Repeat("─", maxInt(0, width-leftWidth-summaryWidth)))
 	viewLines := strings.Split(view, "\n")
 	if len(viewLines) == 0 {
 		return fitStyledRect(line, width, 1)

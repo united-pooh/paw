@@ -1032,17 +1032,15 @@ func TestWaitAnyReturnsWhenAnyTaskCompletes(t *testing.T) {
 	}
 	terminal := 0
 	for _, summary := range result.Tasks {
-		if summary.ID == first.ID && summary.Status != TaskCompleted {
-			t.Fatalf("first summary = %#v, want completed", summary)
-		}
 		if isTerminalStatus(summary.Status) {
 			terminal++
 		}
 	}
 	if terminal != 1 {
-		t.Fatalf("WaitAny() terminal count = %d, want exactly 1 (only fastest)", terminal)
+		t.Fatalf("WaitAny() terminal count = %d, want exactly 1 (only fastest): %#v", terminal, result.Tasks)
 	}
-	// Drain the remaining workers so the tempdir cleanup does not race them.
+	// Worker scheduling is intentionally nondeterministic; the first Launch
+	// call is not guaranteed to be the first task to finish.
 	for _, id := range []string{first.ID, second.ID, third.ID} {
 		waitForTask(t, manager, id, TaskCompleted)
 	}
@@ -1570,5 +1568,110 @@ func TestWaitAnyInterruptedTaskReturnsImmediately(t *testing.T) {
 	}
 	if len(result.Tasks) != 1 || result.Tasks[0].Status != TaskInterrupted {
 		t.Fatalf("WaitAny() tasks = %#v, want interrupted", result.Tasks)
+	}
+}
+
+type failingStartLauncher struct {
+	err error
+}
+
+func (l failingStartLauncher) Start(context.Context, WorkerRequest) (Process, error) {
+	return nil, l.err
+}
+
+func TestSubscribeTaskUpdatesNotifiesAfterCompletion(t *testing.T) {
+	modelStreamer := &recordingModel{rounds: []fakeRound{{events: []model.StreamEvent{{Delta: "done"}, {Done: true}}}}}
+	manager, _, _ := newTestManager(t, modelStreamer, settings.DefaultConfig(), nil)
+	updates, cancel := manager.SubscribeTaskUpdates()
+	defer cancel()
+
+	task, err := manager.Launch(context.Background(), Request{Prompt: "finish"})
+	if err != nil {
+		t.Fatalf("Launch() error = %v", err)
+	}
+	select {
+	case <-updates:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for completion update")
+	}
+	completed, ok := manager.Status(task.ID)
+	if !ok || completed.Status != TaskCompleted {
+		t.Fatalf("Status() = %#v/%v, want completed", completed, ok)
+	}
+}
+
+func TestSubscribeTaskUpdatesNotifiesAfterStop(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(Config{Store: store, Root: root, Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()}, Launcher: &blockingLauncher{}})
+	updates, cancel := manager.SubscribeTaskUpdates()
+	defer cancel()
+
+	task, err := manager.Launch(context.Background(), Request{Prompt: "stop"})
+	if err != nil {
+		t.Fatalf("Launch() error = %v", err)
+	}
+	if _, err := manager.Stop(context.Background(), task.ID); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	select {
+	case <-updates:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for stop update")
+	}
+	stopped, ok := manager.Status(task.ID)
+	if !ok || stopped.Status != TaskStopped {
+		t.Fatalf("Status() = %#v/%v, want stopped", stopped, ok)
+	}
+}
+
+func TestSubscribeTaskUpdatesNotifiesAfterStartFailure(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(Config{
+		Store: store, Root: root, Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+		Launcher: failingStartLauncher{err: errors.New("launcher unavailable")},
+	})
+	updates, cancel := manager.SubscribeTaskUpdates()
+	defer cancel()
+
+	if _, err := manager.Launch(context.Background(), Request{Prompt: "fail to start"}); err == nil {
+		t.Fatal("Launch() error = nil, want launcher failure")
+	}
+	select {
+	case <-updates:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for start-failure update")
+	}
+	var failed bool
+	for _, task := range manager.ListTasks() {
+		if task.Status == TaskFailed {
+			failed = true
+		}
+	}
+	if !failed {
+		t.Fatalf("ListTasks() = %#v, want failed task", manager.ListTasks())
+	}
+}
+
+func TestSubscribeTaskUpdatesCancelIsIdempotentAndStopsDelivery(t *testing.T) {
+	manager, _, _ := newTestManager(t, &recordingModel{}, settings.DefaultConfig(), nil)
+	updates, cancel := manager.SubscribeTaskUpdates()
+	cancel()
+	cancel()
+
+	manager.signalTaskUpdate()
+	select {
+	case _, ok := <-updates:
+		if ok {
+			t.Fatal("unsubscribed update channel received a notification")
+		}
+	default:
 	}
 }
