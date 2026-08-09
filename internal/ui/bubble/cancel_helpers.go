@@ -36,5 +36,6 @@ func (m *appModel) removeInterruptedTurnUserEntry() {
 	}
 	m.activeTurnUserEntry = -1
 	m.transcriptRenderCache = nil
+	m.transcriptLinesValid = false
 	m.refreshViewport()
 }

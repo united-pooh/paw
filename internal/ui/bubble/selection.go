@@ -550,6 +550,7 @@ func (m appModel) transcriptContentLines() []string {
 // 必须与 viewport 实际显示的内容同源（renderTranscriptContent 的组渲染器）：
 // 否则一旦工具组展开或某个工具详情打开，非组渲染器的行数与屏幕显示的行数
 // 分叉，鼠标 press/release 的行坐标就会错位，点击落在错误的工具行上。
+// 快照直接基于增量渲染的行缓存构建，与 viewport 显示逐行一致。
 func (m *appModel) transcriptLineSnapshots() []transcriptLineSnapshot {
 	if m == nil {
 		return nil
@@ -557,13 +558,8 @@ func (m *appModel) transcriptLineSnapshots() []transcriptLineSnapshot {
 	if m.transcriptLineCacheReady {
 		return m.transcriptLineCache
 	}
-	content := m.transcriptRenderedContent
-	if !m.transcriptContentCached {
-		content = m.renderTranscriptContentAt(maxInt(20, m.viewport.Width), m.showThinking, m.animationNow())
-		m.transcriptRenderedContent = content
-		m.transcriptContentCached = true
-	}
-	m.transcriptLineCache = buildTranscriptLineSnapshots(content)
+	m.ensureTranscriptLinesAt(maxInt(20, m.viewport.Width), m.showThinking, m.animationNow())
+	m.transcriptLineCache = buildTranscriptLineSnapshotsFromLines(m.transcriptLines)
 	m.transcriptLineCacheReady = true
 	return m.transcriptLineCache
 }
@@ -572,12 +568,8 @@ func (m *appModel) transcriptHyperlinkAtPoint(point selectionPoint) string {
 	if m == nil {
 		return ""
 	}
-	content := m.transcriptRenderedContent
-	if !m.transcriptContentCached {
-		content = m.renderTranscriptContentAt(maxInt(20, m.viewport.Width), m.showThinking, m.animationNow())
-		m.transcriptRenderedContent = content
-		m.transcriptContentCached = true
-	}
+	m.ensureTranscriptLinesAt(maxInt(20, m.viewport.Width), m.showThinking, m.animationNow())
+	content := strings.Join(m.transcriptLines, "\n")
 	return terminalHyperlinkAtPoint(content, normalizeTranscriptHyperlinkPoint(content, point))
 }
 
@@ -674,10 +666,14 @@ func consumeTerminalHyperlinkSequence(text string) (target string, consumed int,
 
 // buildTranscriptLineSnapshots 将渲染文本拆成可按显示单元格寻址的行快照。
 func buildTranscriptLineSnapshots(content string) []transcriptLineSnapshot {
-	if content == "" {
+	return buildTranscriptLineSnapshotsFromLines(strings.Split(content, "\n"))
+}
+
+// buildTranscriptLineSnapshotsFromLines 基于已拆分的渲染行构建行快照。
+func buildTranscriptLineSnapshotsFromLines(rawLines []string) []transcriptLineSnapshot {
+	if len(rawLines) == 0 || (len(rawLines) == 1 && rawLines[0] == "") {
 		return nil
 	}
-	rawLines := strings.Split(content, "\n")
 	lines := make([]transcriptLineSnapshot, 0, len(rawLines))
 	for _, line := range rawLines {
 		plain := ansi.Strip(line)
@@ -724,6 +720,29 @@ func (m appModel) selectedTranscriptText() string {
 		selected = append(selected, text)
 	}
 	return strings.TrimRight(strings.Join(selected, "\n"), "\n")
+}
+
+// selectionRenderSignature 折叠当前选区状态（激活标志、吸附模式、起止点）
+// 为轻量签名。拖拽/双击/三击只修改这些字段，不改变 transcript 内容签名
+// （transcriptRenderSignature），applyTranscriptToViewport 用本签名判断
+// 选区高亮是否需要重绘，避免拖拽中途视口停留在旧选区。
+func (m appModel) selectionRenderSignature() uint64 {
+	var h uint64 = 1469598103934665603 // FNV-1a offset
+	mix := func(v uint64) {
+		h ^= v
+		h *= 1099511628211
+	}
+	if m.selectionActive {
+		mix(1)
+	} else {
+		mix(0)
+	}
+	mix(uint64(m.selectionMode))
+	mix(uint64(m.selectionStart.row))
+	mix(uint64(m.selectionStart.col))
+	mix(uint64(m.selectionEnd.row))
+	mix(uint64(m.selectionEnd.col))
+	return h
 }
 
 // renderTranscriptSelection 给当前选择范围内的 transcript 行加高亮。

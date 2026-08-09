@@ -351,15 +351,6 @@ func cloneToolCallMsg(event ui.ToolCallEvent) toolCallMsg {
 	return toolCallMsg(event)
 }
 
-// OnToolOutput 接收工具运行期间的 stdout/stderr 增量，并转发给 Bubble Tea 状态机。
-func (u *UI) OnToolOutput(event ui.ToolOutputEvent) error {
-	return u.send(cloneToolOutputMsg(event))
-}
-
-func cloneToolOutputMsg(event ui.ToolOutputEvent) toolOutputMsg {
-	return toolOutputMsg(event)
-}
-
 // OnToolResult 接收工具结果事件，并转发给 Bubble Tea 状态机展示。
 func (u *UI) OnToolResult(event ui.ToolResultEvent) error {
 	return u.send(cloneToolResultMsg(event))

@@ -14,13 +14,13 @@ import (
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"paw/internal/model"
 	"paw/internal/settings"
 	"paw/internal/skill"
 	"paw/internal/theme"
 	selecttool "paw/internal/tool/select"
+	"paw/internal/ui/bubble/viewportx"
 )
 
 // pipelinePollCmd 异步检测 .pipeline-workspace/ 并返回 pipelineStateUpdatedMsg。
@@ -70,14 +70,14 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 	}
 	styles := NewStyleSet(selectedTheme.Colors)
 
-	vp := viewport.New(80, 20)
+	vp := viewportx.New(80, 20)
 	vp.MouseWheelDelta = 1
 	// viewport 默认 KeyMap 把空格、j/k/u/d/f/b/h/l 和 ctrl+u/ctrl+d 等绑定为
 	// 滚动键。输入框常驻聚焦时，这些按键必须原样交给 textarea（打字与编辑），
 	// 否则输入字符会连带滚动 transcript（ctrl+u/ctrl+d 还会同时删字和滚屏）。
 	// 这里只保留不与输入冲突的 pgup/pgdn 分页键：↑/↓ 由 app 自行路由，
 	// 左右无横向滚动内容，滚轮滚动也由 app 显式处理。
-	vp.KeyMap = viewport.KeyMap{
+	vp.KeyMap = viewportx.KeyMap{
 		PageDown: key.NewBinding(key.WithKeys("pgdown")),
 		PageUp:   key.NewBinding(key.WithKeys("pgup")),
 	}
@@ -256,9 +256,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.finalizeAssistantStream()
 		m.isGenerating = false
 		m.recordToolCallEntry(msg.ID, msg.Name, json.RawMessage(msg.Input), msg.FileMutationKnown, msg.IsFileMutation, msg.FileMutation)
-		return m, nil
-	case toolOutputMsg:
-		m.recordToolOutputEntry(msg)
 		return m, nil
 	case toolResultMsg:
 		m.finalizeThinkingStream()

@@ -294,19 +294,7 @@ func (runner *Runner) executeStreamToolCall(ctx context.Context, resolved resolv
 		runner.clearActiveTool(resolved.call.ID)
 	}()
 
-	emit := func(event tool.ToolOutputEvent) error {
-		receiver, ok := runner.ui.(ui.ToolOutputReceiver)
-		if !ok {
-			return nil
-		}
-		return receiver.OnToolOutput(ui.ToolOutputEvent{
-			ToolUseID: resolved.call.ID,
-			Name:      resolved.call.Name,
-			Stream:    string(event.Stream),
-			Chunk:     event.Chunk,
-		})
-	}
-	output, interrupted, err := streamed.Stream(toolCtx, resolved.call.Input, emit)
+	output, interrupted, err := streamed.Stream(toolCtx, resolved.call.Input)
 	if err != nil {
 		return message.ToolResult{ToolUseID: resolved.call.ID, Content: err.Error(), IsError: true}
 	}

@@ -198,6 +198,9 @@ func (c *Client) RunMessage(ctx context.Context, messages []message.Message) (st
 		return "", fmt.Errorf("messages 不能为空")
 	}
 
+	// 出站前修复工具调用配对，与 StreamMessage 入口保持一致。
+	messages, _ = RepairToolCallPairs(messages)
+
 	cfg := c.CurrentModelConfig()
 	if shouldUseResponsesAPI(cfg) {
 		return c.runResponsesMessage(ctx, cfg, messages)

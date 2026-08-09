@@ -192,6 +192,40 @@ func IsContextOverflowError(err error) bool {
 	return hasExplicitContextOverflowText(text)
 }
 
+// IsToolPairingInvalidRequest 判断是否为工具调用配对损坏导致的 400
+// （历史中 tool_use/tool_result 或 function_call/function_call_output 配对断裂，
+// 典型报错 "No tool call found for tool output with call_id ..."）。
+// 对齐 CodeWhale 的错误分类：此类错误不可重试，只能修复历史或换新请求。
+func (e *ProviderHTTPError) IsToolPairingInvalidRequest() bool {
+	if e == nil || e.StatusCode != http.StatusBadRequest {
+		return false
+	}
+	lowerMessage := strings.ToLower(strings.Join([]string{e.Message, e.Body}, " "))
+	hardFeature := strings.Contains(lowerMessage, "no tool call found")
+	errorType := strings.ToLower(strings.TrimSpace(e.Type))
+	if errorType == "" {
+		// 部分网关不填 type；只有明确命中特征文本才判定。
+		return hardFeature
+	}
+	if !strings.Contains(errorType, "invalid_request") {
+		return false
+	}
+	if hardFeature {
+		return true
+	}
+	for _, feature := range []string{
+		"tool_call_id",
+		"tool output",
+		"tool result",
+		"tool call",
+	} {
+		if strings.Contains(lowerMessage, feature) {
+			return true
+		}
+	}
+	return false
+}
+
 func hasExplicitContextOverflowText(text string) bool {
 	for _, subject := range []string{"context", "input", "prompt"} {
 		if !strings.Contains(text, subject) {

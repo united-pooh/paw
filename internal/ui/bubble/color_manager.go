@@ -3,6 +3,7 @@ package bubble
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -232,4 +233,8 @@ func parseHexColor(color string) (int, int, int) {
 	return int(r), int(g), int(b)
 }
 
-func lerpInt(from, to int, amount float64) int { return from + int(float64(to-from)*amount+0.5) }
+func lerpInt(from, to int, amount float64) int {
+	// math.Round 而非 int()+0.5：int() 向零截断，负向插值（亮→暗）时
+	// 端点会偏 1（如 -136.5 → -136），导致 amount=1 时取不到目标色。
+	return from + int(math.Round(float64(to-from)*amount))
+}

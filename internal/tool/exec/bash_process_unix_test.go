@@ -11,8 +11,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"paw/internal/tool"
 )
 
 func TestBashStreamTerminatesChildProcessGroup(t *testing.T) {
@@ -21,17 +19,40 @@ func TestBashStreamTerminatesChildProcessGroup(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	_, interrupted, err := bash.Stream(ctx, json.RawMessage(`{"command":"sleep 30 & child=$!; printf '%s' $child > `+pidFile+`; printf ready; wait $child"}`), func(event tool.ToolOutputEvent) error {
-		if strings.Contains(event.Chunk, "ready") {
+	resultCh := make(chan struct {
+		interrupted bool
+		err         error
+	}, 1)
+	go func() {
+		_, interrupted, err := bash.Stream(ctx, json.RawMessage(`{"command":"sleep 30 & child=$!; printf '%s' $child > `+pidFile+`; printf ready; wait $child"}`))
+		resultCh <- struct {
+			interrupted bool
+			err         error
+		}{interrupted, err}
+	}()
+	// The child writes its pid file before entering `wait`, so its presence is
+	// the signal that the process group is up; cancel once it appears.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, statErr := os.Stat(pidFile); statErr == nil {
 			cancel()
+			break
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("Stream() error = %v", err)
+		if time.Now().After(deadline) {
+			t.Fatal("child pid file never appeared")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	if !interrupted {
-		t.Fatal("Stream() interrupted = false, want true")
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			t.Fatalf("Stream() error = %v", result.err)
+		}
+		if !result.interrupted {
+			t.Fatal("Stream() interrupted = false, want true")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("canceled Stream() did not return")
 	}
 
 	data, err := os.ReadFile(pidFile)
@@ -42,8 +63,8 @@ func TestBashStreamTerminatesChildProcessGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse child pid %q: %v", data, err)
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
+	killDeadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(killDeadline) {
 		err = syscall.Kill(pid, 0)
 		if err != nil {
 			if err == syscall.ESRCH {

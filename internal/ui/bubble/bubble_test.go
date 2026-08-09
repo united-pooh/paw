@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -1392,14 +1393,25 @@ func TestAssistantDeltaBuffersTailAndRefreshesCompletedLineImmediately(t *testin
 	next, _ = model.Update(assistantDeltaMsg("\n"))
 	model = next.(appModel)
 
-	if model.transcriptRefreshPending {
-		t.Fatalf("transcriptRefreshPending = true, want false after immediate refresh")
+	// 完整行也进入 33ms 帧窗口合并（增量渲染后每次重建成本已足够低，
+	// 不再为单个换行插队全量刷新）；窗口到期后由 cursorFrame 驱动 flush。
+	if !model.transcriptRefreshPending {
+		t.Fatalf("transcriptRefreshPending = false, want frame-window merge for completed line")
 	}
 	if got := model.transcript[len(model.transcript)-1].body; got != "streamed text\n" {
 		t.Fatalf("assistant body = %q, want completed line", got)
 	}
+	if strings.Contains(model.viewport.View(), "streamed text") {
+		t.Fatalf("viewport leaked content before flush window: %q", model.viewport.View())
+	}
+
+	next, _ = model.Update(cursorFrameMsg(model.transcriptRefreshPendingAt.Add(transcriptStreamingRefreshInterval)))
+	model = next.(appModel)
+	if model.transcriptRefreshPending {
+		t.Fatalf("transcriptRefreshPending = true, want false after flush window")
+	}
 	if !strings.Contains(model.viewport.View(), "streamed text") {
-		t.Fatalf("viewport = %q, want streamed text immediately after stable line", model.viewport.View())
+		t.Fatalf("viewport = %q, want streamed text after flush window", model.viewport.View())
 	}
 }
 
@@ -4638,12 +4650,17 @@ func TestContextMeterAnimatesBarAndLabels(t *testing.T) {
 
 	// 260ms：动画进行中，进度条和标签都应显示中间插值，而非立即跳到 400
 	model.cursorFrameAt = started.Add(260 * time.Millisecond)
-	animatedUsed, _, pulse := model.animatedContextTokens(1000)
+	animatedUsed, _, phase := model.animatedContextTokens(1000)
 	if animatedUsed <= 100 || animatedUsed > 400 {
 		t.Fatalf("animatedUsed = %d, want value between 100 and 400 (bar animating)", animatedUsed)
 	}
-	if pulse <= 0 {
-		t.Fatalf("pulse = %f, want active pulse during animation", pulse)
+	if phase < 0 {
+		t.Fatalf("phase = %d, want active flow phase during animation", phase)
+	}
+	// 第二次 updateContextMeterAnimation 在 started+100ms 重置起点，
+	// 260ms 时 elapsed = 160ms → phase = int(160ms/100ms) = 1。
+	if wantPhase := int(160 * time.Millisecond / (100 * time.Millisecond)); phase != wantPhase {
+		t.Fatalf("phase = %d, want %d at 260ms (elapsed from restart / 100ms)", phase, wantPhase)
 	}
 	meter := model.contextMeterLine(48)
 	// 标签数字应也在动画中：不等于旧值 100↑，也不等于新值 400↑
@@ -4654,15 +4671,134 @@ func TestContextMeterAnimatesBarAndLabels(t *testing.T) {
 		t.Fatalf("meter = %q, label should not jump to final value 400↑ yet", meter)
 	}
 
-	// 动画结束（1s 后）：进度条和标签都应到达目标值
+	// 动画结束（1s 后）：进度条和标签都应到达目标值，流动熄灭
 	model.cursorFrameAt = started.Add(time.Second)
-	animatedUsed, _, pulse = model.animatedContextTokens(1000)
-	if animatedUsed != 400 || pulse != 0 {
-		t.Fatalf("animation end = used %d pulse %f, want target 400 and no pulse", animatedUsed, pulse)
+	animatedUsed, _, phase = model.animatedContextTokens(1000)
+	if animatedUsed != 400 || phase != -1 {
+		t.Fatalf("animation end = used %d phase %d, want target 400 and no flow (-1)", animatedUsed, phase)
 	}
 	finalMeter := model.contextMeterLine(48)
 	if !strings.Contains(finalMeter, "400↑") {
 		t.Fatalf("finalMeter = %q, want 400↑ after animation completes", finalMeter)
+	}
+}
+
+// TestContextFlowBrightnessSequence 验证流动光带：固定 contextFlowLength=14 格，
+// 前沿最亮（=14）向后逐级递减到 1，phase 每 +1 整体右移一格（环形）；
+// used 区不足 14 格时截断为 usedCells 全条发光；phase<0 或 usedCells<=0 全熄灭；
+// 每帧亮度总和守恒（1+2+…+flowLen）。
+func TestContextFlowBrightnessSequence(t *testing.T) {
+	// usedCells=6 < 14：全条发光，序列环形右移
+	const usedCells = 6
+	got := func(phase int) []int {
+		row := make([]int, usedCells)
+		for index := 0; index < usedCells; index++ {
+			row[index] = contextFlowBrightness(phase, index, usedCells)
+		}
+		return row
+	}
+	if row := got(0); !reflect.DeepEqual(row, []int{1, 2, 3, 4, 5, 6}) {
+		t.Fatalf("usedCells=6 phase 0 = %v, want [1 2 3 4 5 6]", row)
+	}
+	if row := got(1); !reflect.DeepEqual(row, []int{2, 3, 4, 5, 6, 1}) {
+		t.Fatalf("usedCells=6 phase 1 = %v, want [2 3 4 5 6 1]", row)
+	}
+	if row := got(2); !reflect.DeepEqual(row, []int{3, 4, 5, 6, 1, 2}) {
+		t.Fatalf("usedCells=6 phase 2 = %v, want [3 4 5 6 1 2]", row)
+	}
+	if row := got(6); !reflect.DeepEqual(row, got(0)) {
+		t.Fatalf("phase 6 should repeat phase 0, got %v", row)
+	}
+	sum := 0
+	for index := 0; index < usedCells; index++ {
+		sum += got(3)[index]
+	}
+	if sum != usedCells*(usedCells+1)/2 {
+		t.Fatalf("usedCells=6 phase 3 sum = %d, want %d (brightness conserved)", sum, usedCells*(usedCells+1)/2)
+	}
+
+	// usedCells=20 > 14：光带固定 14 格，其余为 0，亮度 1..14 且总和守恒
+	const wide = 20
+	row := make([]int, wide)
+	for index := 0; index < wide; index++ {
+		row[index] = contextFlowBrightness(0, index, wide)
+	}
+	want := make([]int, wide)
+	for index := 0; index < wide; index++ {
+		switch {
+		case index >= 6 && index <= 19:
+			want[index] = index - 5 // 尾部 index=6 → 1，前沿 index=19 → 14
+		default:
+			want[index] = 0
+		}
+	}
+	if !reflect.DeepEqual(row, want) {
+		t.Fatalf("usedCells=20 phase 0 = %v, want %v", row, want)
+	}
+	// phase=1 时整体右移一格：光带落在 index 5..18
+	row = make([]int, wide)
+	for index := 0; index < wide; index++ {
+		row[index] = contextFlowBrightness(1, index, wide)
+	}
+	if row[18] != 14 || row[5] != 1 || row[19] != 0 || row[4] != 0 {
+		t.Fatalf("usedCells=20 phase 1 shifted wrong: %v", row)
+	}
+	flowSum := 0
+	for _, phase := range []int{0, 3, 7} {
+		flowSum = 0
+		for index := 0; index < wide; index++ {
+			b := contextFlowBrightness(phase, index, wide)
+			if b < 0 || b > contextFlowLength {
+				t.Fatalf("phase %d brightness %d out of range 0-%d", phase, b, contextFlowLength)
+			}
+			flowSum += b
+		}
+		if flowSum != contextFlowLength*(contextFlowLength+1)/2 {
+			t.Fatalf("phase %d brightness sum = %d, want %d (1+2+…+14 conserved)", phase, flowSum, contextFlowLength*(contextFlowLength+1)/2)
+		}
+	}
+
+	// 边界：无动画相位或空 used 区全部熄灭。
+	for _, index := range []int{0, 5, 9, 19} {
+		if b := contextFlowBrightness(-1, index, wide); b != 0 {
+			t.Fatalf("phase -1 brightness at %d = %d, want 0", index, b)
+		}
+	}
+	for _, phase := range []int{-1, 0, 1, 2, 3} {
+		if b := contextFlowBrightness(phase, 0, 0); b != 0 {
+			t.Fatalf("usedCells 0 brightness = %d, want 0", b)
+		}
+	}
+}
+
+// TestContextUsedFlowStyleColorGradient 验证流动光带是纯颜色渐变：不加额外
+// 加粗（Bold 与进度条本体一致），前沿 = markdown.heading 最亮，尾部停在
+// contextFlowTailAmount 处（比 context.used 明显亮、肉眼可见），保证环形
+// 流动跨边界时"头"与"尾"同时在进度条两端可见。
+func TestContextUsedFlowStyleColorGradient(t *testing.T) {
+	headingHex := colorManager.Hex(colorMarkdownHeading)
+	usedHex := colorManager.Hex(colorContextUsed)
+	const usedCells = 20
+	front := contextUsedFlowStyle(0, 19, usedCells)
+	if front.GetBold() != contextUsedStyle.GetBold() {
+		t.Fatalf("front bold = %v, want same as used style %v (纯颜色渐变，不额外加粗)", front.GetBold(), contextUsedStyle.GetBold())
+	}
+	if got := fmt.Sprint(front.GetForeground()); got != headingHex {
+		t.Fatalf("front foreground = %s, want heading %s", got, headingHex)
+	}
+	tail := contextUsedFlowStyle(0, 6, usedCells)
+	wantTail := interpolateHexColor(headingHex, usedHex, contextFlowTailAmount)
+	if got := fmt.Sprint(tail.GetForeground()); got != wantTail {
+		t.Fatalf("tail foreground = %s, want %s", got, wantTail)
+	}
+	// 尾部必须与普通 used 格有明显色差（尾部可见，头尾同时存在）。
+	if tail.GetForeground() == contextUsedStyle.GetForeground() {
+		t.Fatalf("tail foreground = %s, want visibly brighter than used %s", tail.GetForeground(), contextUsedStyle.GetForeground())
+	}
+	// 光带外格子与普通样式一致（无前景色覆盖）
+	plain := contextUsedFlowStyle(0, 0, usedCells)
+	if got := fmt.Sprint(plain.GetForeground()); got != fmt.Sprint(contextUsedStyle.GetForeground()) {
+		t.Fatalf("off-band foreground = %s, want plain used %s", got, contextUsedStyle.GetForeground())
 	}
 }
 

@@ -24,17 +24,13 @@ func (*cancelableStreamTool) InputSchema() json.RawMessage {
 func (*cancelableStreamTool) Run(context.Context, json.RawMessage) (string, error) {
 	return "run fallback", nil
 }
-func (t *cancelableStreamTool) Stream(ctx context.Context, _ json.RawMessage, emit func(tool.ToolOutputEvent) error) (string, bool, error) {
-	if err := emit(tool.ToolOutputEvent{Stream: tool.ToolOutputStdout, Chunk: "partial"}); err != nil {
-		return "partial", false, err
-	}
+func (t *cancelableStreamTool) Stream(ctx context.Context, _ json.RawMessage) (string, bool, error) {
 	close(t.started)
 	<-ctx.Done()
 	return "partial", true, nil
 }
 
 type toolOutputUI struct {
-	outputs []ui.ToolOutputEvent
 	results []ui.ToolResultEvent
 }
 
@@ -45,10 +41,6 @@ func (u *toolOutputUI) OnToolResult(event ui.ToolResultEvent) error {
 	return nil
 }
 func (*toolOutputUI) OnDone() error { return nil }
-func (u *toolOutputUI) OnToolOutput(event ui.ToolOutputEvent) error {
-	u.outputs = append(u.outputs, event)
-	return nil
-}
 
 func TestRunnerCancelCurrentToolPreservesInterruptedStreamResult(t *testing.T) {
 	stream := &cancelableStreamTool{started: make(chan struct{})}
@@ -83,9 +75,6 @@ func TestRunnerCancelCurrentToolPreservesInterruptedStreamResult(t *testing.T) {
 	if runner.CancelCurrentTool() {
 		t.Fatal("CancelCurrentTool() = true after tool cleanup")
 	}
-	if len(output.outputs) != 1 || output.outputs[0].Chunk != "partial" {
-		t.Fatalf("live output = %#v", output.outputs)
-	}
 	if len(output.results) != 1 || !output.results[0].IsError {
 		t.Fatalf("final tool results = %#v", output.results)
 	}
@@ -118,4 +107,3 @@ func TestRunnerStreamToolsRunOutsideConcurrentBatch(t *testing.T) {
 }
 
 var _ tool.StreamTool = (*cancelableStreamTool)(nil)
-var _ ui.ToolOutputReceiver = (*toolOutputUI)(nil)

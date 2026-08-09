@@ -22,20 +22,6 @@ type ToolCallEvent struct {
 	FileMutation      *FileMutationSnapshot
 }
 
-// ToolOutputEvent describes one live output chunk from a streaming tool.
-type ToolOutputEvent struct {
-	ToolUseID string
-	Name      string
-	Stream    string
-	Chunk     string
-}
-
-// ToolOutputReceiver is an optional UI capability for live tool output.
-// Implementations that do not provide it keep the normal one-shot tool path.
-type ToolOutputReceiver interface {
-	OnToolOutput(event ToolOutputEvent) error
-}
-
 // ToolResultEvent describes one tool execution result event.
 type ToolResultEvent struct {
 	ToolUseID         string

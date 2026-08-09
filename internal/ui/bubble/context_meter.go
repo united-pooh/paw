@@ -25,13 +25,13 @@ func (m appModel) contextMeterLine(width int) string {
 	limit := maxInt(1, stats.LimitTokens)
 	rawUsed := maxInt(0, stats.UsedTokens)
 	rawCache := clampInt(stats.CacheTokens, 0, rawUsed)
-	// 进度条：easeOutBack（有轻微超出感，720ms）
-	animatedUsed, animatedCache, pulse := m.animatedContextTokens(limit)
+	// 进度条：匀速线性（720ms）
+	animatedUsed, animatedCache, phase := m.animatedContextTokens(limit)
 	// 标签数字：easeOutCubic（无超出，400ms），呈现快速计数跳动效果
 	labelUsed, labelCache := m.animatedLabelTokens(rawUsed, rawCache, limit)
 	usedLabel := formatContextUsageLabel(labelUsed, labelCache, limit, m.isGenerating)
 	freeLabel := formatContextFreeLabel(labelUsed, limit)
-	return renderContextMeterLine(width, usedLabel, freeLabel, animatedUsed, animatedCache, limit, m.thinkingLabel(), pulse)
+	return renderContextMeterLine(width, usedLabel, freeLabel, animatedUsed, animatedCache, limit, m.thinkingLabel(), phase)
 }
 
 func formatContextUsageLabel(used, cache, limit int, isGenerating bool) string {
@@ -146,7 +146,7 @@ func compactContextLabel(label string) string {
 	return strings.Join(fields[:2], " ")
 }
 
-func renderContextMeterLine(width int, usedLabel, freeLabel string, used, cache, limit int, overlay string, pulse float64) string {
+func renderContextMeterLine(width int, usedLabel, freeLabel string, used, cache, limit int, overlay string, phase int) string {
 	width = maxInt(1, width)
 	barWidth := contextBarWidth(width, usedLabel, freeLabel)
 	if barWidth+terminalCellWidth(usedLabel)+terminalCellWidth(freeLabel)+2 > width {
@@ -158,7 +158,7 @@ func renderContextMeterLine(width int, usedLabel, freeLabel string, used, cache,
 	barWidth = maxInt(contextMeterMinimumBarCells, width-terminalCellWidth(usedLabel)-terminalCellWidth(freeLabel)-2)
 	barOffset := terminalCellWidth(usedLabel) + 1
 	overlayStart := centeredOverlayStart(width, barOffset, barWidth, overlay)
-	bar := renderContextBarWithOverlayStart(used, cache, limit, barWidth, overlay, overlayStart, pulse)
+	bar := renderContextBarWithOverlayStart(used, cache, limit, barWidth, overlay, overlayStart, phase)
 	line := usedText + " " + bar + " " + freeText
 	if visible := terminalCellWidth(line); visible < width {
 		line += strings.Repeat(" ", width-visible)
@@ -171,10 +171,10 @@ func renderContextBar(used, cache, limit, width int, overlay string) string {
 	if overlayWidth := terminalCellWidth(overlay); overlayWidth > 0 && overlayWidth <= width {
 		overlayStart = (width - overlayWidth) / 2
 	}
-	return renderContextBarWithOverlayStart(used, cache, limit, width, overlay, overlayStart, 0)
+	return renderContextBarWithOverlayStart(used, cache, limit, width, overlay, overlayStart, -1)
 }
 
-func renderContextBarWithOverlayStart(used, cache, limit, width int, overlay string, overlayStart int, pulse float64) string {
+func renderContextBarWithOverlayStart(used, cache, limit, width int, overlay string, overlayStart int, phase int) string {
 	limit = maxInt(1, limit)
 	width = maxInt(contextMeterMinimumBarCells, width)
 	usedCells := int(math.Round(float64(clampInt(used, 0, limit)) / float64(limit) * float64(width)))
@@ -188,7 +188,7 @@ func renderContextBarWithOverlayStart(used, cache, limit, width int, overlay str
 		case i < cacheCells:
 			cells[i] = contextCacheStyle.Render("▰")
 		case i < usedCells:
-			cells[i] = contextUsedPulseStyle(pulse, i, usedCells).Render("▰")
+			cells[i] = contextUsedFlowStyle(phase, i, usedCells).Render("▰")
 		default:
 			cells[i] = contextFreeStyle.Render("▱")
 		}
@@ -231,9 +231,9 @@ func (m *appModel) updateContextMeterAnimation() {
 	m.contextMeter.targetCache = cache
 }
 
-func (m appModel) animatedContextTokens(limit int) (int, int, float64) {
+func (m appModel) animatedContextTokens(limit int) (int, int, int) {
 	if !m.contextMeter.initialized {
-		return m.contextMeter.targetUsed, m.contextMeter.targetCache, 0
+		return m.contextMeter.targetUsed, m.contextMeter.targetCache, -1
 	}
 	now := m.animationNow()
 	elapsed := now.Sub(m.contextMeter.startedAt)
@@ -242,12 +242,23 @@ func (m appModel) animatedContextTokens(limit int) (int, int, float64) {
 	}
 	const duration = 720 * time.Millisecond
 	progress := clamp01(float64(elapsed) / float64(duration))
-	eased := easeOutBack(progress)
+	eased := progress // 匀速线性（原 easeOutBack）
 	animatedUsed := int(math.Round(lerp(m.contextMeter.fromUsed, float64(m.contextMeter.targetUsed), eased)))
 	animatedCache := int(math.Round(lerp(m.contextMeter.fromCache, float64(m.contextMeter.targetCache), eased)))
 	animatedUsed = clampInt(animatedUsed, 0, limit)
 	animatedCache = clampInt(animatedCache, 0, animatedUsed)
-	return animatedUsed, animatedCache, contextPulse(progress)
+	return animatedUsed, animatedCache, contextFlowPhase(elapsed, progress)
+}
+
+// contextFlowPhase 从时间推导流动相位（无状态）：动画期间返回随 elapsed
+// 递增的整数相位（每 flowInterval 加 1，渲染端对 usedCells 取模形成循环），
+// 动画结束或未进行时返回 -1（不流动）。
+func contextFlowPhase(elapsed time.Duration, progress float64) int {
+	if progress <= 0 || progress >= 1 {
+		return -1
+	}
+	const flowInterval = 100 * time.Millisecond // 约 3 帧/格，可调
+	return int(elapsed / flowInterval)
 }
 
 // animatedLabelTokens 用 easeOutCubic + 400ms 为数字标签计算动画值。
@@ -271,30 +282,49 @@ func (m appModel) animatedLabelTokens(rawUsed, rawCache, limit int) (used, cache
 	return animUsed, animCache
 }
 
-func contextPulse(progress float64) float64 {
-	if progress <= 0 || progress >= 1 {
+// contextFlowLength 是流动光带的固定长度（格）：前沿 1 格最亮，向后逐级
+// 递减。used 区不足时自动截断为 usedCells。
+const contextFlowLength = 14
+
+// contextFlowTailAmount 是光带尾部颜色的插值位置（0 = heading 最亮，
+// 1 = used 最暗）。尾部停在 0.65 而不是 1.0：让整条光带（含尾）肉眼可见、
+// 与光带外的普通 used 格区分开——环形流动跨边界时"头"在右端、"尾"绕到
+// 左端，头尾同时存在。
+const contextFlowTailAmount = 0.65
+
+// contextFlowBrightness 返回格子亮度级别 1..contextFlowLength（越大越亮，
+// 前沿 = contextFlowLength），0 = 不在光带。光带绕 used 区环形右移：
+// phase 每 +1 光带整体右移一格，形成传送带式流动感。
+func contextFlowBrightness(phase, index, usedCells int) int {
+	if phase < 0 || usedCells <= 0 || index < 0 || index >= usedCells {
 		return 0
 	}
-	return math.Sin(progress * math.Pi)
+	flowLen := minInt(contextFlowLength, usedCells)
+	front := ((usedCells-1-phase)%usedCells + usedCells) % usedCells
+	d := ((front-index)%usedCells + usedCells) % usedCells
+	if d >= flowLen {
+		return 0
+	}
+	return flowLen - d
 }
 
-func contextUsedPulseStyle(pulse float64, index, usedCells int) lipgloss.Style {
-	if pulse <= 0 || usedCells <= 0 || index < usedCells-2 {
+// contextUsedFlowStyle 为流动光带内的格子生成纯颜色渐变的样式：
+// 前沿用 markdown.heading 色（最亮），向后线性渐变到 contextFlowTailAmount
+// 处的浅青色（尾部保持可见，与光带外普通 used 格有明确色差）；不使用加粗
+// 等块状效果。
+func contextUsedFlowStyle(phase, index, usedCells int) lipgloss.Style {
+	level := contextFlowBrightness(phase, index, usedCells)
+	if level <= 0 {
 		return contextUsedStyle
 	}
-	return contextUsedStyle.Copy().Foreground(colorManager.LipglossColor(colorMarkdownHeading)).Bold(true)
+	flowLen := minInt(contextFlowLength, usedCells)
+	amount := float64(flowLen-level) / float64(maxInt(flowLen-1, 1)) * contextFlowTailAmount
+	hex := interpolateHexColor(colorManager.Hex(colorMarkdownHeading), colorManager.Hex(colorContextUsed), amount)
+	return contextUsedStyle.Copy().Foreground(lipgloss.Color(hex))
 }
 
 func lerp(from, to, t float64) float64 {
 	return from + (to-from)*t
-}
-
-func easeOutBack(t float64) float64 {
-	t = clamp01(t)
-	const c1 = 1.70158
-	const c3 = c1 + 1
-	x := t - 1
-	return 1 + c3*x*x*x + c1*x*x
 }
 
 func centeredOverlayStart(lineWidth, barOffset, barWidth int, overlay string) int {

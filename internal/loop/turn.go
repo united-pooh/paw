@@ -36,14 +36,20 @@ func (runner *Runner) runTurnWithTiming(ctx context.Context, userInput message.M
 	defer finishTurn()
 	ctx = turnCtx
 	config, broker := runner.autoContinueState()
-	if !config.Enabled || broker == nil {
-		return runner.runSingleTurnWithTiming(ctx, userInput, timing)
-	}
 
-	runner.mu.Lock()
-	runner.lastProgressHash = ""
-	runner.mu.Unlock()
-	return runner.runTask(ctx, userInput, timing)
+	var execution TurnExecution
+	var err error
+	if !config.Enabled || broker == nil {
+		execution, err = runner.runSingleTurnWithTiming(ctx, userInput, timing)
+	} else {
+		runner.mu.Lock()
+		runner.lastProgressHash = ""
+		runner.mu.Unlock()
+		execution, err = runner.runTask(ctx, userInput, timing)
+	}
+	// 工具配对损坏类 400 不可重试，附加修复提示后交给 UI 展示
+	// （对齐 CodeWhale：分类 → 不重试 → 展示给用户手动恢复）。
+	return execution, decorateToolPairError(err)
 }
 
 func (runner *Runner) runSingleTurnWithTiming(ctx context.Context, userInput message.Message, timing *TurnTiming) (execution TurnExecution, err error) {

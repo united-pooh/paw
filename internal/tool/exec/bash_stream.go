@@ -7,14 +7,12 @@ import (
 	"io"
 	osexec "os/exec"
 	"sync"
-
-	"paw/internal/tool"
 )
 
-// Stream runs bash while forwarding stdout and stderr as they arrive. The
-// returned output uses the same bounded collector and non-zero-exit rendering
-// as Run; interrupted distinguishes caller cancellation from command failure.
-func (t *BashTool) Stream(ctx context.Context, input json.RawMessage, emit func(tool.ToolOutputEvent) error) (output string, interrupted bool, err error) {
+// Stream runs bash while collecting stdout and stderr into the same bounded
+// collector as Run. interrupted distinguishes caller cancellation from
+// command failure; the output collected so far is preserved on cancellation.
+func (t *BashTool) Stream(ctx context.Context, input json.RawMessage) (output string, interrupted bool, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -55,8 +53,6 @@ func (t *BashTool) Stream(ctx context.Context, input json.RawMessage, emit func(
 	}
 
 	var collected streamCollector
-	var emitMu sync.Mutex
-	var emitErr error
 	var stopOnce sync.Once
 	stopProcess := func() {
 		stopOnce.Do(func() { terminateProcessGroup(cmd) })
@@ -70,24 +66,13 @@ func (t *BashTool) Stream(ctx context.Context, input json.RawMessage, emit func(
 		}
 	}()
 
-	read := func(stream tool.ToolOutputStream, r io.Reader, done chan<- struct{}) {
+	read := func(r io.Reader, done chan<- struct{}) {
 		defer close(done)
 		buf := make([]byte, 32*1024)
 		for {
 			n, readErr := r.Read(buf)
 			if n > 0 {
-				chunk := append([]byte(nil), buf[:n]...)
-				collected.Write(chunk)
-				if emit != nil {
-					emitMu.Lock()
-					if emitErr == nil {
-						emitErr = emit(tool.ToolOutputEvent{Stream: stream, Chunk: string(chunk)})
-						if emitErr != nil {
-							cancel()
-						}
-					}
-					emitMu.Unlock()
-				}
+				collected.Write(append([]byte(nil), buf[:n]...))
 			}
 			if readErr != nil {
 				return
@@ -96,8 +81,8 @@ func (t *BashTool) Stream(ctx context.Context, input json.RawMessage, emit func(
 	}
 	stdoutDone := make(chan struct{})
 	stderrDone := make(chan struct{})
-	go read(tool.ToolOutputStdout, stdout, stdoutDone)
-	go read(tool.ToolOutputStderr, stderr, stderrDone)
+	go read(stdout, stdoutDone)
+	go read(stderr, stderrDone)
 
 	waitErr := cmd.Wait()
 	// Closing the pipe readers after the process exits prevents a descendant
@@ -109,9 +94,6 @@ func (t *BashTool) Stream(ctx context.Context, input json.RawMessage, emit func(
 	close(watchDone)
 
 	rendered := collected.String()
-	if emitErr != nil {
-		return rendered, false, emitErr
-	}
 	if ctx.Err() != nil {
 		return rendered, true, nil
 	}

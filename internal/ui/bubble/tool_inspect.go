@@ -20,6 +20,9 @@ type transcriptEntryLocation struct {
 // scroll-into-view use the same row arithmetic as the visible content. A
 // collapsed Tools group therefore occupies only its header row, an expanded
 // group the header plus every tool summary and open result detail row.
+//
+// 位置直接由增量渲染的行区间缓存（transcriptEntrySpans）构建，与 viewport
+// 显示逐行一致，不再重复渲染条目。
 func (m *appModel) transcriptEntryLocationsAt() []transcriptEntryLocation {
 	if m == nil {
 		return nil
@@ -27,9 +30,25 @@ func (m *appModel) transcriptEntryLocationsAt() []transcriptEntryLocation {
 	if m.transcriptLocationsReady {
 		return m.transcriptLocationCache
 	}
-	m.transcriptLocationCache = transcriptEntryLocationsWith(m.transcript, maxInt(20, m.viewport.Width), m.showThinking, m.animationNow(), m.toolGroupExpanded, m.toolGroupFullResult)
+	m.ensureTranscriptLinesAt(maxInt(20, m.viewport.Width), m.showThinking, m.animationNow())
+	m.transcriptLocationCache = m.transcriptEntryLocationsFromSpans()
 	m.transcriptLocationsReady = true
 	return m.transcriptLocationCache
+}
+
+func (m *appModel) transcriptEntryLocationsFromSpans() []transcriptEntryLocation {
+	locations := make([]transcriptEntryLocation, 0, len(m.transcriptEntrySpans))
+	for index, span := range m.transcriptEntrySpans {
+		if span.startRow < 0 || span.height <= 0 {
+			continue
+		}
+		locations = append(locations, transcriptEntryLocation{
+			transcriptIndex: index,
+			startRow:        span.startRow,
+			height:          span.height,
+		})
+	}
+	return locations
 }
 
 // transcriptEntryLocations is the free-function form used by tests; pending
@@ -207,7 +226,7 @@ func renderToolResultDetailHeight(entry transcriptEntry, width int, fullResult b
 }
 
 func (m appModel) todoIndexAtTranscriptRow(row int) (int, bool) {
-	for _, location := range transcriptEntryLocations(m.transcript, maxInt(20, m.viewport.Width), m.showThinking, m.animationNow()) {
+	for _, location := range m.transcriptEntryLocationsAt() {
 		if row < location.startRow || row >= location.startRow+location.height {
 			continue
 		}

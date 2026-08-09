@@ -177,6 +177,9 @@ func buildResponsesRequest(cfg Config, messages []message.Message, tools Prepare
 	if err != nil {
 		return responsesRequest{}, err
 	}
+	// wire 层兜底：隔离孤儿 function_call_output、给悬空 function_call 补合成
+	// output（覆盖 ProviderData 重放与结构化字段不一致的崩溃场景）。
+	input, _ = repairResponsesInputItems(input)
 	if err := validateResponsesInputItems(input); err != nil {
 		return responsesRequest{}, err
 	}

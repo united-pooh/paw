@@ -3,29 +3,16 @@ package exec
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
-	"sync"
 	"testing"
-
-	"paw/internal/tool"
+	"time"
 )
 
-func TestBashStreamEmitsStdoutAndStderr(t *testing.T) {
+func TestBashStreamCollectsStdoutAndStderr(t *testing.T) {
 	bash := &BashTool{Root: t.TempDir()}
-	var mu sync.Mutex
-	var events []tool.ToolOutputEvent
-	output, interrupted, err := bash.Stream(context.Background(), json.RawMessage(`{"command":"printf out; printf err >&2"}`), func(event tool.ToolOutputEvent) error {
-		mu.Lock()
-		events = append(events, event)
-		mu.Unlock()
-		return nil
-	})
+	output, interrupted, err := bash.Stream(context.Background(), json.RawMessage(`{"command":"printf out; printf err >&2"}`))
 	if err != nil || interrupted {
 		t.Fatalf("Stream() = output=%q interrupted=%v err=%v", output, interrupted, err)
-	}
-	if !containsStreamText(events, tool.ToolOutputStdout, "out") || !containsStreamText(events, tool.ToolOutputStderr, "err") {
-		t.Fatalf("events = %#v", events)
 	}
 	if !strings.Contains(output, "out") || !strings.Contains(output, "err") {
 		t.Fatalf("output = %q, want both streams", output)
@@ -37,36 +24,41 @@ func TestBashStreamCancellationPreservesPartialOutput(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	started := make(chan struct{})
-	var once sync.Once
-	output, interrupted, err := bash.Stream(ctx, json.RawMessage(`{"command":"printf partial; printf 'stderr-partial' >&2; sleep 30"}`), func(event tool.ToolOutputEvent) error {
-		if strings.Contains(event.Chunk, "partial") {
-			once.Do(func() {
-				close(started)
-				cancel()
-			})
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("Stream() error = %v", err)
-	}
-	if !interrupted {
-		t.Fatal("Stream() interrupted = false, want true")
-	}
-	if !strings.Contains(output, "partial") {
-		t.Fatalf("output = %q, want partial output", output)
-	}
+	outputCh := make(chan struct {
+		output      string
+		interrupted bool
+		err         error
+	}, 1)
+	go func() {
+		output, interrupted, err := bash.Stream(ctx, json.RawMessage(`{"command":"printf partial; printf 'stderr-partial' >&2; sleep 30"}`))
+		outputCh <- struct {
+			output      string
+			interrupted bool
+			err         error
+		}{output, interrupted, err}
+	}()
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
 	select {
-	case <-started:
-	default:
-		t.Fatal("command did not emit partial output")
+	case result := <-outputCh:
+		if result.err != nil {
+			t.Fatalf("Stream() error = %v", result.err)
+		}
+		if !result.interrupted {
+			t.Fatal("Stream() interrupted = false, want true")
+		}
+		if !strings.Contains(result.output, "partial") {
+			t.Fatalf("output = %q, want partial output", result.output)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled Stream() did not return")
 	}
 }
 
 func TestBashStreamTimeoutPreservesOutput(t *testing.T) {
 	bash := &BashTool{Root: t.TempDir()}
-	output, interrupted, err := bash.Stream(context.Background(), json.RawMessage(`{"command":"printf before-timeout; sleep 5","timeout_seconds":1}`), nil)
+	output, interrupted, err := bash.Stream(context.Background(), json.RawMessage(`{"command":"printf before-timeout; sleep 5","timeout_seconds":1}`))
 	if interrupted {
 		t.Fatal("timeout reported as caller interruption")
 	}
@@ -80,7 +72,7 @@ func TestBashStreamTimeoutPreservesOutput(t *testing.T) {
 
 func TestBashStreamNonZeroExitIsReturnedInOutput(t *testing.T) {
 	bash := &BashTool{Root: t.TempDir()}
-	output, interrupted, err := bash.Stream(context.Background(), json.RawMessage(`{"command":"printf failed; printf diagnostic >&2; exit 7"}`), nil)
+	output, interrupted, err := bash.Stream(context.Background(), json.RawMessage(`{"command":"printf failed; printf diagnostic >&2; exit 7"}`))
 	if err != nil || interrupted {
 		t.Fatalf("Stream() = output=%q interrupted=%v err=%v", output, interrupted, err)
 	}
@@ -89,26 +81,9 @@ func TestBashStreamNonZeroExitIsReturnedInOutput(t *testing.T) {
 	}
 }
 
-func TestBashStreamEmitErrorStopsCommand(t *testing.T) {
-	bash := &BashTool{Root: t.TempDir()}
-	emitErr := errors.New("output consumer stopped")
-	output, interrupted, err := bash.Stream(context.Background(), json.RawMessage(`{"command":"printf hello; sleep 30"}`), func(tool.ToolOutputEvent) error {
-		return emitErr
-	})
-	if !errors.Is(err, emitErr) {
-		t.Fatalf("Stream() error = %v, want %v", err, emitErr)
-	}
-	if interrupted {
-		t.Fatal("emit failure reported as caller interruption")
-	}
-	if !strings.Contains(output, "hello") {
-		t.Fatalf("output = %q, want emitted output preserved", output)
-	}
-}
-
 func TestBashStreamOutputLimitRemainsBounded(t *testing.T) {
 	bash := &BashTool{Root: t.TempDir()}
-	output, interrupted, err := bash.Stream(context.Background(), json.RawMessage(`{"command":"head -c 40000 /dev/zero"}`), nil)
+	output, interrupted, err := bash.Stream(context.Background(), json.RawMessage(`{"command":"head -c 40000 /dev/zero"}`))
 	if err != nil || interrupted {
 		t.Fatalf("Stream() = output=%q interrupted=%v err=%v", output, interrupted, err)
 	}
@@ -118,13 +93,4 @@ func TestBashStreamOutputLimitRemainsBounded(t *testing.T) {
 	if !strings.Contains(output, "[output truncated]") {
 		t.Fatal("output missing truncation marker")
 	}
-}
-
-func containsStreamText(events []tool.ToolOutputEvent, stream tool.ToolOutputStream, text string) bool {
-	for _, event := range events {
-		if event.Stream == stream && strings.Contains(event.Chunk, text) {
-			return true
-		}
-	}
-	return false
 }

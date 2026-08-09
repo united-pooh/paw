@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"fmt"
+	"log"
 	"paw/internal/message"
 	"paw/internal/model"
 	"paw/internal/session"
@@ -337,6 +338,16 @@ func (runner *Runner) LoadSession(ctx context.Context, sessionID string) (Sessio
 		}
 		result.Messages = append([]message.Message(nil), messages...)
 		activeHistory = append([]message.Message(nil), messages...)
+	}
+	// 会话加载时修复工具调用配对（对齐 CodeWhale session_manager 加载修复）：
+	// 崩溃/中断后持久化的历史可能带孤儿 tool result 或悬空 tool_use，
+	// 先修复再交给后续轮次使用，避免出站请求触发配对类 400。
+	activeHistory, repairStats := model.RepairToolCallPairs(activeHistory)
+	if repairStats.RepairedToolCalls > 0 || repairStats.OrphanedResults > 0 {
+		log.Printf("tool history repair on session load: repaired=%d orphaned=%d repaired_ids=%v orphaned_ids=%v",
+			repairStats.RepairedToolCalls, repairStats.OrphanedResults,
+			repairStats.RepairedCallIDs, repairStats.OrphanedResultIDs)
+		result.Messages = activeHistory
 	}
 	runner.setHistory(activeHistory)
 	runner.mu.Lock()

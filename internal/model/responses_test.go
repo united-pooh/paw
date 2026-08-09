@@ -387,11 +387,17 @@ func TestBuildResponsesInputOmitsOutputFromOtherItemTypes(t *testing.T) {
 	}
 }
 
-func TestResponsesRejectsFunctionCallOutputWithoutCallIDBeforeHTTP(t *testing.T) {
-	requested := false
+func TestResponsesRepairsFunctionCallOutputWithoutCallIDBeforeHTTP(t *testing.T) {
+	var capturedInput []json.RawMessage
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requested = true
-		w.WriteHeader(http.StatusInternalServerError)
+		defer r.Body.Close()
+		var request responsesRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		capturedInput = request.Input
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`)
 	}))
 	defer server.Close()
 
@@ -399,23 +405,38 @@ func TestResponsesRejectsFunctionCallOutputWithoutCallIDBeforeHTTP(t *testing.T)
 		Transport: "openai-responses", APIBaseURL: server.URL, APIPath: "/responses",
 		Model: "gpt-test", Timeout: time.Second,
 	})
-	_, err := client.StreamMessage(context.Background(), []message.Message{{
+	events, err := client.StreamMessage(context.Background(), []message.Message{{
 		Role:       message.RoleUser,
 		ToolResult: &message.ToolResult{Content: "result"},
 	}}, nil)
-	if err == nil || !strings.Contains(err.Error(), "call_id") {
-		t.Fatalf("StreamMessage() error = %v, want missing call_id", err)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v, want repaired request to proceed", err)
 	}
-	if requested {
-		t.Fatal("invalid function_call_output reached HTTP server")
+	for range events {
+	}
+	// 空 call_id 的 output 无法配对，在 wire 层被隔离而不是拒绝整个请求。
+	for _, raw := range capturedInput {
+		var view responsesItem
+		if err := json.Unmarshal(raw, &view); err != nil {
+			t.Fatal(err)
+		}
+		if view.Type == "function_call_output" {
+			t.Fatalf("unpaired function_call_output reached HTTP server: %s", raw)
+		}
 	}
 }
 
-func TestResponsesRejectsFunctionCallOutputWithoutOutputBeforeHTTP(t *testing.T) {
-	requested := false
+func TestResponsesRepairsOrphanedReplayedFunctionCallOutputBeforeHTTP(t *testing.T) {
+	var capturedInput []json.RawMessage
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requested = true
-		w.WriteHeader(http.StatusInternalServerError)
+		defer r.Body.Close()
+		var request responsesRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		capturedInput = request.Input
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`)
 	}))
 	defer server.Close()
 
@@ -423,7 +444,7 @@ func TestResponsesRejectsFunctionCallOutputWithoutOutputBeforeHTTP(t *testing.T)
 		Transport: "openai-responses", APIBaseURL: server.URL, APIPath: "/responses",
 		Model: "gpt-test", Timeout: time.Second,
 	})
-	_, err := client.StreamMessage(context.Background(), []message.Message{{
+	events, err := client.StreamMessage(context.Background(), []message.Message{{
 		Role: message.RoleAssistant,
 		ProviderData: json.RawMessage(`{
 			"transport":"openai-responses",
@@ -431,11 +452,21 @@ func TestResponsesRejectsFunctionCallOutputWithoutOutputBeforeHTTP(t *testing.T)
 			"output_items":[{"type":"function_call_output","call_id":"call_1"}]
 		}`),
 	}}, nil)
-	if err == nil || !strings.Contains(err.Error(), "output") {
-		t.Fatalf("StreamMessage() error = %v, want missing output", err)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v, want repaired request to proceed", err)
 	}
-	if requested {
-		t.Fatal("invalid function_call_output reached HTTP server")
+	for range events {
+	}
+	// ProviderData 重放出的 output 引用了输入中不存在的 function_call，
+	// 属于崩溃遗留孤儿，在 wire 层被隔离而不是拒绝整个请求。
+	for _, raw := range capturedInput {
+		var view responsesItem
+		if err := json.Unmarshal(raw, &view); err != nil {
+			t.Fatal(err)
+		}
+		if view.Type == "function_call_output" {
+			t.Fatalf("orphaned replayed function_call_output reached HTTP server: %s", raw)
+		}
 	}
 }
 

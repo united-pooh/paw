@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
 	"paw/internal/loop"
 	"paw/internal/model"
 	"paw/internal/session"
@@ -16,6 +15,7 @@ import (
 	"paw/internal/todo"
 	selecttool "paw/internal/tool/select"
 	"paw/internal/ui"
+	"paw/internal/ui/bubble/viewportx"
 	"strings"
 	"time"
 )
@@ -58,10 +58,6 @@ type transcriptEntry struct {
 	fileMutationKnown     bool
 	isFileMutation        bool
 	toolResult            string
-	toolStdout            string
-	toolStderr            string
-	toolInterrupted       bool
-	toolTruncated         bool
 	toolExpanded          bool
 	toolGroupPending      bool
 	toolGroupOpen         bool
@@ -161,9 +157,6 @@ type thinkingDeltaMsg string
 
 // toolCallMsg 表示工具调用事件。
 type toolCallMsg ui.ToolCallEvent
-
-// toolOutputMsg 表示工具运行期间的一段 stdout/stderr 增量。
-type toolOutputMsg ui.ToolOutputEvent
 
 // toolResultMsg 表示工具结果事件。
 type toolResultMsg ui.ToolResultEvent
@@ -461,7 +454,7 @@ type appModel struct {
 	inputSource                inputSource
 	cursorAnchor               *terminalCursorAnchor
 	input                      textarea.Model
-	viewport                   viewport.Model
+	viewport                   viewportx.Model
 	width                      int
 	height                     int
 	ready                      bool
@@ -509,8 +502,12 @@ type appModel struct {
 	transcript                 []transcriptEntry
 	transcriptRenderCache      []transcriptRenderCacheEntry
 	transcriptRenderSignature  uint64
-	transcriptRenderedContent  string
 	transcriptContentCached    bool
+	transcriptLines            []string              // 增量渲染行缓存：与 viewport 行同步（末尾保留一行空隙）
+	transcriptEntrySpans       []transcriptEntrySpan // 每条目渲染行区间，与 transcript 等长；startRow<0 表示未渲染
+	transcriptLinesValid       bool                  // 行缓存与 transcript 结构对齐（条目数一致）
+	viewportShowsSelection     bool                  // viewport 当前显示的是选择高亮版内容
+	lastSelectionRenderSig     uint64                // 上次实际渲染进 viewport 的选区签名（selectionRenderSignature）
 	transcriptLineCache        []transcriptLineSnapshot
 	transcriptLineCacheReady   bool
 	transcriptLocationCache    []transcriptEntryLocation

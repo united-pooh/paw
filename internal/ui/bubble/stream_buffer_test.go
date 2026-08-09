@@ -188,12 +188,17 @@ func TestAssistantStreamRendersMarkdownForEachStableLine(t *testing.T) {
 	if !strings.Contains(streamed, "bold") || strings.Contains(streamed, "**bold**") {
 		t.Fatalf("streamed entry = %q, want formatted markdown before done", streamed)
 	}
+	// 完整行进入 33ms 帧窗口：由 cursorFrame 驱动 flush 后 viewport 才显示。
+	next, _ = model.Update(cursorFrameMsg(model.transcriptRefreshPendingAt.Add(transcriptStreamingRefreshInterval)))
+	model = next.(appModel)
 	viewport := ansi.Strip(model.viewport.View())
 	if !strings.Contains(viewport, "bold") || strings.Contains(viewport, "**bold**") {
 		t.Fatalf("viewport = %q, want formatted markdown before done", viewport)
 	}
 
 	next, _ = model.Update(assistantDeltaMsg("\n- item\n"))
+	model = next.(appModel)
+	next, _ = model.Update(cursorFrameMsg(model.transcriptRefreshPendingAt.Add(transcriptStreamingRefreshInterval)))
 	model = next.(appModel)
 	viewport = ansi.Strip(model.viewport.View())
 	if !strings.Contains(viewport, "bold") || !strings.Contains(viewport, "item") {

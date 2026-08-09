@@ -23,6 +23,17 @@ type transcriptRenderCacheEntry struct {
 	rendered          string
 	renderable        bool
 	renderableVersion int
+	// sourceSignature 折叠渲染该条目时的输入版本（entry version + 关键字段长度）。
+	// 增量渲染用它做轻量变化检测：组条目折叠组内全部条目的签名。
+	sourceSignature uint64
+}
+
+// transcriptEntrySpan 记录一条 transcript 条目在渲染行缓存中的行区间。
+// startRow<0 表示该条目未渲染（被隐藏/跳过/渲染为空）。
+type transcriptEntrySpan struct {
+	startRow int
+	height   int
+	kind     entryKind // 实际渲染 kind（工具组统一为 entryTool）
 }
 
 type transcriptRenderCacheKey struct {
@@ -39,10 +50,6 @@ type transcriptRenderCacheKey struct {
 	toolInput            string
 	toolResult           string
 	toolResultLen        int
-	toolStdout           string
-	toolStderr           string
-	toolInterrupted      bool
-	toolTruncated        bool
 	toolExpanded         bool
 	toolGroupPending     bool
 	toolGroupOpen        bool
@@ -82,28 +89,20 @@ func (m *appModel) ensureAssistantStreamEntry() {
 }
 
 // appendAssistantDelta 将经过流隔离器确认的稳定文本逐行追加到当前 assistant 消息。
-// 刷新策略按内容可见性分级：
+// 刷新统一交给帧窗口合并（refreshViewportForStreaming，33ms 节流）：
 //   - 没有任何提交内容（纯未完成尾部，streamLineBuffer 已隐藏）时完全不刷新；
-//   - 包含完整行时立即刷新，保证用户看到整行输出不卡顿；
-//   - 只有未完成尾行时交给帧窗口合并（refreshViewportForStreaming），
-//     避免每个 token 都触发一次全量 transcript 重建。
+//   - 增量渲染使单次重建成本与变化段成正比，33ms 窗口内的多次 delta 合并为
+//     一次刷新即可，完整行不再单独插队全量重建（旧实现每个换行都全量刷新，
+//     在大会话上是滚动/输入延迟的主要来源）。
 func (m *appModel) appendAssistantDelta(delta string) {
 	if delta == "" {
 		return
 	}
-	hasCompletedLine := false
 	for _, line := range strings.SplitAfter(delta, "\n") {
 		m.ensureAssistantStreamEntry()
 		m.transcript[m.activeAssistant].body += line
 		touchTranscriptEntry(&m.transcript[m.activeAssistant])
 		m.recordAssistantActivity(m.activeAssistant)
-		if strings.HasSuffix(line, "\n") {
-			hasCompletedLine = true
-		}
-	}
-	if hasCompletedLine {
-		m.refreshViewport()
-		return
 	}
 	m.refreshViewportForStreaming()
 }
@@ -377,35 +376,6 @@ func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMes
 	m.refreshViewport()
 }
 
-func (m *appModel) recordToolOutputEntry(event toolOutputMsg) {
-	if m == nil || strings.TrimSpace(string(event.Chunk)) == "" {
-		return
-	}
-	toolUseID := strings.TrimSpace(event.ToolUseID)
-	name := strings.TrimSpace(event.Name)
-	for index := len(m.transcript) - 1; index >= 0; index-- {
-		entry := &m.transcript[index]
-		if !isToolTransaction(*entry) || toolEntryStatus(*entry) != "running" {
-			continue
-		}
-		if toolUseID != "" && entry.toolUseID != "" && entry.toolUseID != toolUseID {
-			continue
-		}
-		if toolUseID == "" && name != "" && !strings.EqualFold(entry.toolName, name) {
-			continue
-		}
-		switch strings.ToLower(strings.TrimSpace(event.Stream)) {
-		case "stderr":
-			entry.toolStderr += event.Chunk
-		default:
-			entry.toolStdout += event.Chunk
-		}
-		touchTranscriptEntry(entry)
-		m.refreshViewportForStreaming()
-		return
-	}
-}
-
 func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string, isError, mutationKnown, isMutation bool, mutation *ui.FileMutationSnapshot) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -472,9 +442,6 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 		entry.isError = isError
 		entry.toolStatus = status
 		entry.toolResult = content
-		trimmedContent := strings.ToLower(strings.TrimSpace(content))
-		entry.toolInterrupted = strings.HasPrefix(trimmedContent, "interrupted") || strings.HasPrefix(trimmedContent, "interrupted:")
-		entry.toolTruncated = strings.Contains(strings.ToLower(content), "[truncated]") || strings.Contains(strings.ToLower(content), "[response truncated]")
 		if strings.EqualFold(name, "Select") && strings.EqualFold(status, "ok") {
 			if presentation, ok := parseSelectToolPresentation(entry.toolInput, content); ok {
 				entry.toolTarget = presentation.target
@@ -597,6 +564,7 @@ func (m *appModel) removeSubagentWaitEntry(toolUseID, name string) bool {
 		}
 		m.transcript = append(m.transcript[:index], m.transcript[index+1:]...)
 		m.transcriptRenderCache = nil
+		m.transcriptLinesValid = false
 		return true
 	}
 	return false
@@ -745,11 +713,7 @@ func (m *appModel) refreshViewport() {
 
 func (m *appModel) refreshViewportWithBottomState(wasAtBottom bool) {
 	offset := m.viewport.YOffset
-	content := m.renderTranscriptContent()
-	if m.selectionActive {
-		content = m.renderTranscriptSelection(content)
-	}
-	m.viewport.SetContent(content)
+	m.applyTranscriptToViewport(maxInt(20, m.viewport.Width), m.showThinking, m.animationNow())
 	if wasAtBottom {
 		m.viewport.GotoBottom()
 	} else {
@@ -761,13 +725,347 @@ func (m *appModel) refreshViewportWithBottomState(wasAtBottom bool) {
 // refreshViewportPreservingOffset 刷新 transcript 内容，但保留用户当前滚动位置。
 func (m *appModel) refreshViewportPreservingOffset() {
 	offset := m.viewport.YOffset
-	content := m.renderTranscriptContent()
-	if m.selectionActive {
-		content = m.renderTranscriptSelection(content)
-	}
-	m.viewport.SetContent(content)
+	m.applyTranscriptToViewport(maxInt(20, m.viewport.Width), m.showThinking, m.animationNow())
 	m.viewport.SetYOffset(offset)
 	m.markTranscriptRefreshed()
+}
+
+// applyTranscriptToViewport 把 transcript 增量渲染到 viewport。
+// 非选择状态走增量行替换；选择激活时（选择高亮会改写选区行的 SGR）退化为
+// 全量 content 重绘，仅在选择期间付出该成本。
+func (m *appModel) applyTranscriptToViewport(width int, showThinking bool, at time.Time) {
+	changed, startRow, newLines := m.ensureTranscriptLinesAt(width, showThinking, at)
+	if m.selectionActive {
+		// 拖拽/双击/三击只改选区状态（selectionStart/End/Mode），不触发
+		// transcript 内容签名变化；必须把选区签名纳入重绘判断，否则拖拽
+		// 中途视口高亮停留在第一次超出容差时的选区，与最终复制内容不符。
+		sig := m.selectionRenderSignature()
+		if changed || !m.viewportShowsSelection || sig != m.lastSelectionRenderSig {
+			content := strings.Join(m.transcriptLines, "\n")
+			m.viewport.SetContent(m.renderTranscriptSelection(content))
+			m.viewportShowsSelection = true
+			m.lastSelectionRenderSig = sig
+		}
+		return
+	}
+	switch {
+	case changed && startRow < 0:
+		m.viewport.SetLines(m.transcriptLines)
+	case changed:
+		m.viewport.ReplaceLines(startRow, newLines)
+	case m.viewportShowsSelection:
+		m.viewport.SetLines(m.transcriptLines)
+	}
+	m.viewportShowsSelection = false
+	m.lastSelectionRenderSig = 0
+}
+
+// ensureTranscriptLinesAt 保证 m.transcriptLines / m.transcriptEntrySpans 与
+// 当前 transcript 内容同步，并返回如何更新 viewport：
+//   - changed=false：无内容变化，viewport 无需更新；
+//   - changed=true 且 startRow<0：需要全量 SetLines；
+//   - changed=true 且 startRow>=0：只需 ReplaceLines(startRow, newLines)。
+//
+// 行缓存失效（首次渲染、条目增删、宽度/可见性变化）时走全量重建；其余
+// 变化只重渲染「第一个变化条目到末尾」的段并增量替换行区间。渲染成本与
+// 变化段大小成正比，流式追加/工具计时等尾部更新因此是 O(变化段) 而非
+// O(全部条目)。
+func (m *appModel) ensureTranscriptLinesAt(width int, showThinking bool, at time.Time) (changed bool, startRow int, newLines []string) {
+	if m == nil {
+		return false, -1, nil
+	}
+	if len(m.transcriptRenderCache) != len(m.transcript) {
+		next := make([]transcriptRenderCacheEntry, len(m.transcript))
+		copy(next, m.transcriptRenderCache)
+		m.transcriptRenderCache = next
+	}
+	if m.transcriptLinesValid && m.transcriptContentCached {
+		sig := transcriptRenderSignature(m.transcript, width, showThinking, m.toolGroupExpanded, m.toolGroupFullResult)
+		if sig == m.transcriptRenderSignature {
+			return false, -1, nil
+		}
+	}
+	// 内容确实变化：交互缓存（行快照/条目位置）全部失效。
+	m.transcriptLineCache = nil
+	m.transcriptLineCacheReady = false
+	m.transcriptLocationCache = nil
+	m.transcriptLocationsReady = false
+
+	if len(m.transcript) == 0 {
+		m.transcriptLines = nil
+		m.transcriptEntrySpans = nil
+		m.transcriptLinesValid = true
+		m.transcriptContentCached = true
+		m.transcriptRenderSignature = transcriptRenderSignature(m.transcript, width, showThinking, m.toolGroupExpanded, m.toolGroupFullResult)
+		return true, -1, nil
+	}
+
+	if !m.transcriptLinesValid {
+		segment, spans := m.renderTranscriptEntriesFrom(0, width, showThinking, at)
+		m.transcriptLines = transcriptSegmentLines(segment)
+		m.transcriptEntrySpans = spans
+		m.transcriptLinesValid = true
+		m.transcriptContentCached = true
+		m.transcriptRenderSignature = transcriptRenderSignature(m.transcript, width, showThinking, m.toolGroupExpanded, m.toolGroupFullResult)
+		return true, -1, nil
+	}
+	// 条目追加后对齐 spans 长度（新条目的 span 无效，firstChanged 会从新条目
+	// 开始增量渲染）。条目删除/重排的路径必须显式置 transcriptLinesValid=false
+	// 走全量重建，否则后续 span 的行号会错位。注意新 span 必须显式置
+	// startRow=-1：零值 startRow=0 会被误认为有效渲染条目，把替换起点
+	// 错算到内容顶部。
+	if len(m.transcriptEntrySpans) < len(m.transcript) {
+		for len(m.transcriptEntrySpans) < len(m.transcript) {
+			m.transcriptEntrySpans = append(m.transcriptEntrySpans, transcriptEntrySpan{startRow: -1})
+		}
+	} else if len(m.transcriptEntrySpans) > len(m.transcript) {
+		m.transcriptEntrySpans = m.transcriptEntrySpans[:len(m.transcript)]
+	}
+
+	startIdx := m.firstChangedTranscriptIndex(width, showThinking, at)
+	if startIdx < 0 {
+		// 签名不同但条目级签名全命中：兜底全量重建（正常不会发生）。
+		segment, spans := m.renderTranscriptEntriesFrom(0, width, showThinking, at)
+		m.transcriptLines = transcriptSegmentLines(segment)
+		m.transcriptEntrySpans = spans
+		m.transcriptContentCached = true
+		m.transcriptRenderSignature = transcriptRenderSignature(m.transcript, width, showThinking, m.toolGroupExpanded, m.toolGroupFullResult)
+		return true, -1, nil
+	}
+	startRow = 0
+	if startIdx > 0 {
+		for i := startIdx - 1; i >= 0; i-- {
+			if span := m.transcriptEntrySpans[i]; span.startRow >= 0 && span.height > 0 {
+				startRow = span.startRow + span.height
+				break
+			}
+		}
+	}
+	segment, spans := m.renderTranscriptEntriesFrom(startIdx, width, showThinking, at)
+	for i := startIdx; i < len(m.transcript); i++ {
+		m.transcriptEntrySpans[i] = spans[i-startIdx]
+	}
+	// 替换起点 = 段内第一个渲染条目的 startRow：条目间的分隔符空行属于
+	// 前缀（保留在 lines 中），替换只从条目本体开始。段内无渲染条目时
+	// 回退到上一渲染条目的结束行（截断尾部）。
+	replaceStart := startRow
+	for _, span := range spans {
+		if span.startRow >= 0 {
+			replaceStart = span.startRow
+			break
+		}
+	}
+	newLines = transcriptSegmentLines(segment)
+	if replaceStart >= len(m.transcriptLines) {
+		m.transcriptLines = append(m.transcriptLines, newLines...)
+	} else {
+		m.transcriptLines = append(m.transcriptLines[:replaceStart], newLines...)
+	}
+	m.transcriptContentCached = true
+	m.transcriptRenderSignature = transcriptRenderSignature(m.transcript, width, showThinking, m.toolGroupExpanded, m.toolGroupFullResult)
+	return true, replaceStart, newLines
+}
+
+// transcriptSegmentLines 把渲染段字符串拆成行，并保留内容底部的一行空隙
+// （与旧 renderTranscriptContentAt 尾部追加 "\n" 的行为一致）。
+func transcriptSegmentLines(segment string) []string {
+	if segment == "" {
+		return nil
+	}
+	lines := strings.Split(segment, "\n")
+	lines = append(lines, "")
+	return lines
+}
+
+// transcriptEntrySignature 折叠渲染单条 entry 所需的输入版本。所有会改变
+// 渲染结果的字段变更路径都会 touchTranscriptEntry（version++），因此
+// version + 关键长度足以作为轻量变化检测；完整校验由 cache key 承担。
+func transcriptEntrySignature(entry transcriptEntry) uint64 {
+	var h uint64 = 1469598103934665603 // FNV-1a offset
+	mix := func(v uint64) {
+		h ^= v
+		h *= 1099511628211
+	}
+	mix(uint64(entry.kind))
+	mix(uint64(entry.version))
+	mix(uint64(len(entry.body)))
+	mix(uint64(len(entry.toolResult)))
+	mix(uint64(len(entry.citations)))
+	return h
+}
+
+// transcriptGroupSourceSignature 折叠工具组内全部条目的版本签名：组渲染
+// 依赖组内任意条目，任一变化都必须使组缓存失效。
+func transcriptGroupSourceSignature(entries []transcriptEntry, first, last int) uint64 {
+	var h uint64 = 1469598103934665603
+	mix := func(v uint64) {
+		h ^= v
+		h *= 1099511628211
+	}
+	mix(1) // 标记组
+	for i := first; i <= last; i++ {
+		h ^= transcriptEntrySignature(entries[i])
+		h *= 1099511628211
+	}
+	return h
+}
+
+// transcriptEntryRenderable 返回条目 idx 是否参与渲染，结果缓存在渲染缓存
+// 里：assistant 条目的可渲染判断会清洗整段 body（O(body)），不能在每次
+// 刷新的变化检测里重算。version 为 0（未 touch 的直构条目）时缓存零值
+// 不可信，总是重算。
+func (m *appModel) transcriptEntryRenderable(idx int, showThinking bool) bool {
+	entry := m.transcript[idx]
+	if entry.kind == entryThinking && !showThinking {
+		return false
+	}
+	cache := &m.transcriptRenderCache[idx]
+	if cache.renderableVersion != entry.version || entry.version == 0 {
+		cache.renderable = assistantEntryIsRenderable(entry)
+		cache.renderableVersion = entry.version
+	}
+	return cache.renderable
+}
+
+// firstChangedTranscriptIndex 返回第一个渲染输入发生变化的条目索引；没有
+// 变化返回 -1。判断基于条目级轻量签名（渲染循环的完整 cache key 是权威）。
+func (m *appModel) firstChangedTranscriptIndex(width int, showThinking bool, at time.Time) int {
+	for idx := range m.transcript {
+		if !m.transcriptEntryRenderable(idx, showThinking) {
+			continue
+		}
+		if toolEntryUsesReadyGroup(m.transcript, idx) {
+			first, last := toolGroupRange(m.transcript, idx)
+			if first != idx {
+				continue
+			}
+			if m.transcriptRenderCache[idx].sourceSignature != transcriptGroupSourceSignature(m.transcript, first, last) {
+				return first
+			}
+			continue
+		}
+		if m.transcriptRenderCache[idx].sourceSignature != transcriptEntrySignature(m.transcript[idx]) {
+			return idx
+		}
+	}
+	return -1
+}
+
+// renderTranscriptEntriesFrom 渲染 [startIdx, len(transcript)) 的条目段，
+// 复用 per-entry 渲染缓存，并同步输出每个条目的渲染行区间（spans）。
+// 返回段字符串（不含底部空隙行）与 spans。调用方保证 startIdx 之前的
+// 条目已渲染且 m.transcriptEntrySpans 有效（用于分隔符与前缀行数）。
+func (m *appModel) renderTranscriptEntriesFrom(startIdx int, width int, showThinking bool, at time.Time) (string, []transcriptEntrySpan) {
+	var rendered strings.Builder
+	hasPrevious := false
+	var previousKind entryKind
+	wroteAny := false
+	totalRows := 0
+	spans := make([]transcriptEntrySpan, len(m.transcript)-startIdx)
+	if startIdx > 0 {
+		for i := startIdx - 1; i >= 0; i-- {
+			if span := m.transcriptEntrySpans[i]; span.startRow >= 0 && span.height > 0 {
+				hasPrevious = true
+				previousKind = span.kind
+				totalRows = span.startRow + span.height
+				break
+			}
+		}
+	}
+	for idx := startIdx; idx < len(m.transcript); idx++ {
+		entry := m.transcript[idx]
+		span := &spans[idx-startIdx]
+		span.startRow = -1
+		if !m.transcriptEntryRenderable(idx, showThinking) {
+			continue
+		}
+		var renderedEntry string
+		kind := entry.kind
+		if toolEntryUsesReadyGroup(m.transcript, idx) {
+			first, last := toolGroupRange(m.transcript, idx)
+			if first != idx {
+				continue
+			}
+			key := transcriptRenderKey(entry, width, at)
+			groupEntries := toolEntriesForGroup(m.transcript, idx)
+			groupExpanded := m.toolGroupExpanded
+			if !toolGroupHasRunning(m.transcript, first, last) {
+				groupExpanded = m.transcript[first].toolExpanded
+			}
+			key.body = toolGroupRenderSnapshot(groupEntries, width, at)
+			key.version = 0
+			if groupExpanded {
+				key.toolExpanded = true
+			}
+			key.toolGroupPending = false
+			key.toolFocused = key.toolFocused || m.toolGroupFullResult
+			if m.transcriptRenderCache[idx].key == key {
+				renderedEntry = m.transcriptRenderCache[idx].rendered
+			} else {
+				renderedEntry = renderToolsGroup(groupEntries, width, at, groupExpanded, m.toolGroupFullResult)
+				if renderedEntry == "" {
+					continue
+				}
+				m.storeTranscriptRenderCacheEntry(idx, key, renderedEntry, transcriptGroupSourceSignature(m.transcript, first, last), entry.version)
+			}
+			kind = entryTool
+		} else {
+			key := transcriptRenderKey(entry, width, at)
+			if m.transcriptRenderCache[idx].key == key {
+				renderedEntry = m.transcriptRenderCache[idx].rendered
+			} else {
+				renderedEntry = renderEntryAt(entry, width, at)
+				if renderedEntry == "" {
+					continue
+				}
+				m.storeTranscriptRenderCacheEntry(idx, key, renderedEntry, transcriptEntrySignature(entry), entry.version)
+			}
+		}
+		renderedEntry = strings.TrimRight(renderedEntry, "\n")
+		if renderedEntry == "" {
+			continue
+		}
+		sep := ""
+		if hasPrevious {
+			sep = transcriptEntrySeparator(previousKind, kind)
+		}
+		startRow := totalRows
+		if hasPrevious {
+			startRow = totalRows + strings.Count(sep, "\n") - 1
+		}
+		// 分隔符的换行计入前缀行数（startRow），但段内第一个条目不再把
+		// 分隔符写进段字符串：前缀行已包含到 startRow，再写会把空行多算
+		// 一次，导致增量替换后内容整体下移一行。
+		if wroteAny {
+			rendered.WriteString(sep)
+		}
+		rendered.WriteString(renderedEntry)
+		height := maxInt(1, lipgloss.Height(renderedEntry))
+		span.startRow = startRow
+		span.height = height
+		span.kind = kind
+		totalRows = startRow + height
+		hasPrevious = true
+		previousKind = kind
+		wroteAny = true
+	}
+	return rendered.String(), spans
+}
+
+// storeTranscriptRenderCacheEntry 写入条目渲染缓存，保留可渲染性缓存的
+// 现值（渲染循环调用方已经判断过该条目可渲染）。
+func (m *appModel) storeTranscriptRenderCacheEntry(idx int, key transcriptRenderCacheKey, rendered string, sourceSignature uint64, version int) {
+	entry := transcriptRenderCacheEntry{
+		key:               key,
+		rendered:          rendered,
+		renderable:        true,
+		renderableVersion: version,
+		sourceSignature:   sourceSignature,
+	}
+	if version == 0 {
+		entry.renderable = assistantEntryIsRenderable(m.transcript[idx])
+	}
+	m.transcriptRenderCache[idx] = entry
 }
 
 func (m *appModel) refreshViewportForStreaming() {
@@ -775,14 +1073,20 @@ func (m *appModel) refreshViewportForStreaming() {
 		return
 	}
 	now := time.Now()
+	if m.transcriptRefreshPending {
+		// 已有合并窗口在等待：窗口到期后由 cursorFrame flush；若动画帧链
+		// 未运行，后续 delta 到达时直接补刷，保证内容不会滞留。
+		if now.Sub(m.transcriptRefreshPendingAt) >= transcriptStreamingRefreshInterval {
+			m.flushTranscriptRefreshIfDue(now)
+		}
+		return
+	}
 	if m.lastTranscriptRefreshAt.IsZero() || now.Sub(m.lastTranscriptRefreshAt) >= transcriptStreamingRefreshInterval {
 		m.refreshViewport()
 		return
 	}
-	if !m.transcriptRefreshPending {
-		m.transcriptRefreshPending = true
-		m.transcriptRefreshPendingAt = now
-	}
+	m.transcriptRefreshPending = true
+	m.transcriptRefreshPendingAt = now
 }
 
 // flushTranscriptRefreshIfDue 由 cursorFrameMsg 帧驱动调用：pending 置位后至少
@@ -879,6 +1183,7 @@ func (m *appModel) markRunningToolsError(err error) {
 			// 由后续 entryError 呈现失败原因，不保留悬挂的工具块。
 			m.transcript = append(m.transcript[:index], m.transcript[index+1:]...)
 			m.transcriptRenderCache = nil
+			m.transcriptLinesValid = false
 			changed = true
 			continue
 		}
@@ -902,15 +1207,7 @@ func (m *appModel) markRunningToolsError(err error) {
 }
 
 func (m *appModel) renderTranscriptContent() string {
-	content := m.renderTranscriptContentAt(maxInt(20, m.viewport.Width), m.showThinking, m.animationNow())
-	m.transcriptRenderedContent = content
-	m.transcriptContentCached = true
-	m.transcriptRenderSignature = transcriptRenderSignature(m.transcript, maxInt(20, m.viewport.Width), m.showThinking, m.toolGroupExpanded, m.toolGroupFullResult)
-	m.transcriptLineCache = nil
-	m.transcriptLineCacheReady = false
-	m.transcriptLocationCache = nil
-	m.transcriptLocationsReady = false
-	return content
+	return m.renderTranscriptContentAt(maxInt(20, m.viewport.Width), m.showThinking, m.animationNow())
 }
 
 // transcriptRenderSignature folds every input that can change the rendered
@@ -940,112 +1237,17 @@ func transcriptRenderSignature(entries []transcriptEntry, width int, showThinkin
 		mix(uint64(entry.version))
 		mix(uint64(len(entry.body)))
 		mix(uint64(len(entry.toolResult)))
-		mix(uint64(len(entry.toolStdout)))
-		mix(uint64(len(entry.toolStderr)))
 		mix(uint64(len(entry.citations)))
 	}
 	return h
 }
 
+// renderTranscriptContentAt 渲染完整 transcript 内容（兼容入口，供测试与
+// 外部调用）。实际 viewport 路径使用 applyTranscriptToViewport 的增量渲染；
+// 这里复用同一份行缓存，内容未变化时只付出一次 join 的代价。
 func (m *appModel) renderTranscriptContentAt(width int, showThinking bool, at time.Time) string {
-	if len(m.transcript) == 0 {
-		m.transcriptRenderCache = nil
-		return ""
-	}
-	if len(m.transcriptRenderCache) != len(m.transcript) {
-		next := make([]transcriptRenderCacheEntry, len(m.transcript))
-		copy(next, m.transcriptRenderCache)
-		m.transcriptRenderCache = next
-	}
-	// Strict revision cache: when nothing that affects the rendered transcript
-	// has changed since the last render, reuse the cached content verbatim and
-	// skip the per-entry key comparison and string assembly entirely. The
-	// signature folds every render input (width, visibility flags, group flags,
-	// and per-entry version + body/tool lens). Mutating paths bump entry
-	// versions via touchTranscriptEntry, so the sum of versions catches all
-	// content changes; the remaining inputs are captured explicitly.
-	if m.transcriptContentCached {
-		sig := transcriptRenderSignature(m.transcript, width, showThinking, m.toolGroupExpanded, m.toolGroupFullResult)
-		if sig == m.transcriptRenderSignature {
-			return m.transcriptRenderedContent
-		}
-	}
-	var renderedTranscript strings.Builder
-	hasPrevious := false
-	var previousKind entryKind
-	for idx, entry := range m.transcript {
-		if entry.kind == entryThinking && !showThinking {
-			continue
-		}
-		if !assistantEntryIsRenderable(entry) {
-			continue
-		}
-		if toolEntryUsesReadyGroup(m.transcript, idx) {
-			first, last := toolGroupRange(m.transcript, idx)
-			if first != idx {
-				continue
-			}
-			key := transcriptRenderKey(entry, width, at)
-			groupEntries := toolEntriesForGroup(m.transcript, idx)
-			// A group that is still running stays expanded while the tool runs
-			// (toolGroupExpanded). A completed group collapses by default; the
-			// user expands it by clicking anywhere inside it, which toggles the
-			// first entry's toolExpanded flag. This keeps multiple completed
-			// groups in one turn independent of each other instead of sharing a
-			// single global flag that would expand every group at once.
-			groupExpanded := m.toolGroupExpanded
-			if !toolGroupHasRunning(m.transcript, first, last) {
-				groupExpanded = m.transcript[first].toolExpanded
-			}
-			// The group is rendered from every tool entry, so the cache key must
-			// include every entry as well. Otherwise hovering, completing, or
-			// expanding a later call leaves the cached first frame on screen.
-			key.body = toolGroupRenderSnapshot(groupEntries, width, at)
-			key.version = 0
-			if groupExpanded {
-				key.toolExpanded = true
-			}
-			key.toolGroupPending = false
-			key.toolFocused = key.toolFocused || m.toolGroupFullResult
-			if m.transcriptRenderCache[idx].key == key {
-				appendTranscriptRenderedEntry(&renderedTranscript, m.transcriptRenderCache[idx].rendered, entryTool, previousKind, hasPrevious)
-				previousKind = entryTool
-				hasPrevious = true
-				continue
-			}
-			rendered := renderToolsGroup(groupEntries, width, at, groupExpanded, m.toolGroupFullResult)
-			if rendered == "" {
-				continue
-			}
-			m.transcriptRenderCache[idx] = transcriptRenderCacheEntry{key: key, rendered: rendered}
-			appendTranscriptRenderedEntry(&renderedTranscript, rendered, entryTool, previousKind, hasPrevious)
-			previousKind = entryTool
-			hasPrevious = true
-			continue
-		}
-		key := transcriptRenderKey(entry, width, at)
-		if m.transcriptRenderCache[idx].key == key {
-			appendTranscriptRenderedEntry(&renderedTranscript, m.transcriptRenderCache[idx].rendered, entry.kind, previousKind, hasPrevious)
-			previousKind = entry.kind
-			hasPrevious = true
-			continue
-		}
-		rendered := renderEntryAt(entry, width, at)
-		if rendered == "" {
-			continue
-		}
-		m.transcriptRenderCache[idx] = transcriptRenderCacheEntry{key: key, rendered: rendered}
-		appendTranscriptRenderedEntry(&renderedTranscript, rendered, entry.kind, previousKind, hasPrevious)
-		previousKind = entry.kind
-		hasPrevious = true
-	}
-	if !hasPrevious {
-		return ""
-	}
-	// Keep one real content row below the final transcript entry. The row is
-	// part of viewport content, so scrolling/GotoBottom accounts for the dock
-	// gap instead of placing the footer directly against the input box.
-	return renderedTranscript.String() + "\n"
+	m.ensureTranscriptLinesAt(width, showThinking, at)
+	return strings.Join(m.transcriptLines, "\n")
 }
 
 func transcriptRenderKey(entry transcriptEntry, width int, at time.Time) transcriptRenderCacheKey {
@@ -1062,10 +1264,6 @@ func transcriptRenderKey(entry transcriptEntry, width int, at time.Time) transcr
 		toolInput:            string(entry.toolInput),
 		toolResult:           entry.toolResult,
 		toolResultLen:        len(entry.toolResult),
-		toolStdout:           entry.toolStdout,
-		toolStderr:           entry.toolStderr,
-		toolInterrupted:      entry.toolInterrupted,
-		toolTruncated:        entry.toolTruncated,
 		toolExpanded:         entry.toolExpanded,
 		toolGroupPending:     entry.toolGroupPending,
 		toolGroupOpen:        entry.toolGroupOpen,
@@ -1432,17 +1630,10 @@ func renderGroupedToolEntry(entry transcriptEntry, width int, at time.Time, full
 		summary = toolFocusedStyle.Width(innerWidth).Render(summary)
 	}
 	if toolEntryStatus(entry) == "running" {
-		live := renderToolLiveOutput(entry, maxInt(1, innerWidth-2))
 		if !isSubagentToolEntry(entry) {
-			if live == "" {
-				return borderStyle.Width(contentWidth).Render(summary)
-			}
-			return borderStyle.Width(contentWidth).Render(summary + "\n" + live)
+			return borderStyle.Width(contentWidth).Render(summary)
 		}
 		detail := renderToolInputForDisplay(entry, maxInt(1, innerWidth-2))
-		if live != "" {
-			detail = strings.TrimSpace(detail + "\n" + live)
-		}
 		if detail == "" {
 			return borderStyle.Width(contentWidth).Render(summary)
 		}
@@ -1458,47 +1649,12 @@ func renderGroupedToolEntry(entry transcriptEntry, width int, at time.Time, full
 	if result == "" {
 		result = "(empty result)"
 	}
-	if live := renderToolLiveOutput(entry, maxInt(1, innerWidth-2)); live != "" {
-		if strings.TrimSpace(result) == "" {
-			result = live
-		} else {
-			result = live + "\n" + result
-		}
-	}
 	resultLines := strings.Split(result, "\n")
 	if !(fullResult && entry.toolFocused) {
 		resultLines = limitRenderedDetailLines(resultLines, maxRenderedToolDetailLines)
 	}
 	detail := renderToolDetailLinesWithHint(resultLines, maxInt(1, innerWidth-2), entry.toolTarget)
 	return borderStyle.Width(contentWidth).Render(summary + "\n" + detail)
-}
-
-func renderToolLiveOutput(entry transcriptEntry, width int) string {
-	sections := make([]string, 0, 3)
-	appendSection := func(label, content string) {
-		if strings.TrimSpace(content) == "" {
-			return
-		}
-		lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
-		limited := limitRenderedDetailLines(lines, maxRenderedToolDetailLines)
-		if len(limited) < len(lines) {
-			entry.toolTruncated = true
-		}
-		sections = append(sections, label+":\n"+renderToolDetailLinesWithHint(limited, width, ""))
-	}
-	appendSection("stdout", entry.toolStdout)
-	appendSection("stderr", entry.toolStderr)
-	if entry.toolInterrupted {
-		sections = append(sections, "[interrupted]")
-	}
-	if entry.toolTruncated {
-		sections = append(sections, "[truncated]")
-	}
-	return strings.Join(sections, "\n")
-}
-
-func renderToolOutputSections(entry transcriptEntry, width int) string {
-	return renderToolLiveOutput(entry, width)
 }
 
 func renderToolInputForDisplay(entry transcriptEntry, width int) string {
@@ -2018,10 +2174,6 @@ func renderToolTransactionEntry(entry transcriptEntry, width int, at time.Time) 
 	}
 
 	if status == "running" || !entry.toolExpanded {
-		live := renderToolLiveOutput(entry, maxInt(1, innerWidth-2))
-		if live != "" {
-			return borderStyle.Width(contentWidth).Render(summary + "\n" + live)
-		}
 		return borderStyle.Width(contentWidth).Render(summary)
 	}
 
@@ -2034,13 +2186,6 @@ func renderToolTransactionEntry(entry transcriptEntry, width int, at time.Time) 
 	} else if strings.EqualFold(name, "Select") && status == "ok" {
 		if presentation, ok := parseSelectToolPresentation(entry.toolInput, entry.toolResult); ok {
 			result = presentation.detail
-		}
-	}
-	if live := renderToolLiveOutput(entry, maxInt(1, innerWidth-2)); live != "" {
-		if strings.TrimSpace(result) == "" {
-			result = live
-		} else {
-			result = live + "\n" + result
 		}
 	}
 	result = renderTerminalLinks(sanitizeTerminalText(result))

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/bubbles/viewport"
+	"paw/internal/ui/bubble/viewportx"
 )
 
 // TestRunningToolElapsedAdvancesAcrossFrames 回归：running tool 的 elapsed
@@ -15,7 +15,7 @@ import (
 // 只有鼠标 hover（touch entry）才会偶然刷新。修复后 elapsed 变化时
 // touch running entry 使缓存失效。
 func TestRunningToolElapsedAdvancesAcrossFrames(t *testing.T) {
-	vp := viewport.New(100, 20)
+	vp := viewportx.New(100, 20)
 	vp.Width = 100
 	m := appModel{
 		viewport: vp,
@@ -52,7 +52,7 @@ func TestRunningToolElapsedAdvancesAcrossFrames(t *testing.T) {
 
 // TestSubagentWaitProgressAdvances 回归：SubagentWait 状态行计时同样不被缓存冻结。
 func TestSubagentWaitProgressAdvances(t *testing.T) {
-	vp := viewport.New(100, 20)
+	vp := viewportx.New(100, 20)
 	vp.Width = 100
 	started := time.Now().Add(-2 * time.Second)
 	m := appModel{

@@ -80,6 +80,12 @@ func (c *Client) StreamMessage(ctx context.Context, messages []message.Message, 
 		return nil, fmt.Errorf("messages 不能为空")
 	}
 
+	// 出站前修复工具调用配对（对齐 CodeWhale prepare_model_bound_request）：
+	// 隔离孤儿 tool result、给悬空 tool_use 补合成错误结果，从源头避免
+	// "No tool call found for tool output with call_id ..." 类 400。
+	// 幂等且无问题时零拷贝；修复统计在此层不暴露，由上层另行记录。
+	messages, _ = RepairToolCallPairs(messages)
+
 	cfg := c.CurrentModelConfig()
 	adapter := SelectModelAdapter(cfg)
 	prepared, err := c.prepareTools(adapter, tools)

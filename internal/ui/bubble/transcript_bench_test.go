@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/bubbles/viewport"
+	"paw/internal/ui/bubble/viewportx"
 )
 
 // benchTranscriptEntries 构造一条固定宽度下的真实 transcript：交替 user /
@@ -22,9 +22,9 @@ func benchTranscriptEntries(count int) []transcriptEntry {
 			})
 		case 1:
 			entries = append(entries, transcriptEntry{
-				kind:       entryAssistant,
-				title:      "assistant",
-				body: fmt.Sprintf("**回答 %d**：这里是一段 markdown 正文，包含 `code`、[链接](https://example.com) 以及 *强调*。\n\n1. 第一点\n2. 第二点", i),
+				kind:  entryAssistant,
+				title: "assistant",
+				body:  fmt.Sprintf("**回答 %d**：这里是一段 markdown 正文，包含 `code`、[链接](https://example.com) 以及 *强调*。\n\n1. 第一点\n2. 第二点", i),
 			})
 		default:
 			entries = append(entries, transcriptEntry{
@@ -78,7 +78,7 @@ func BenchmarkTranscriptRegionCacheHit(b *testing.B) {
 	}
 }
 
-func benchViewport(width, height int) viewport.Model {
-	vp := viewport.New(width, height)
+func benchViewport(width, height int) viewportx.Model {
+	vp := viewportx.New(width, height)
 	return vp
 }
