@@ -38,7 +38,7 @@ func runSubagentWorkerMode(ctx context.Context, input io.Reader, output io.Write
 	workerDone := make(chan subagent.WorkerResult, 1)
 	go func() {
 		workerUI := &workerUsageUI{UI: headless.New(io.Discard)}
-		runner, sessionID, _, _, _, _, _, err := buildRunnerWithSubagentContext(workerCtx, req.SessionID, workerUI, allowOutsideRead, subagentRuntimeContext{
+		runner, sessionID, _, configController, _, _, _, _, err := buildRunnerWithSubagentContext(workerCtx, req.SessionID, workerUI, allowOutsideRead, false, subagentRuntimeContext{
 			depth:           req.Depth,
 			maxDepth:        req.MaxDepth,
 			parentTaskID:    req.TaskID,
@@ -52,6 +52,7 @@ func runSubagentWorkerMode(ctx context.Context, input io.Reader, output io.Write
 			workerDone <- result
 			return
 		}
+		defer func() { _ = configController.Close() }()
 		broker.SetUpdateHandler(func(snapshot coremcp.Snapshot) {
 			adapted := toolmcp.NewSnapshotTools(snapshot, broker)
 			tools := make([]tool.Tool, 0, len(adapted))

@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	configv2 "paw/internal/config"
 	"paw/internal/loop"
 	coremcp "paw/internal/mcp"
 	"paw/internal/model"
 	"paw/internal/session"
 	"paw/internal/settings"
+	"paw/internal/skill"
 	"paw/internal/subagent"
 	"paw/internal/tool"
 	toolmcp "paw/internal/tool/mcp"
@@ -25,35 +27,56 @@ type subagentRuntimeContext struct {
 
 type runnerToolConfigurator func(*tool.Registry) error
 
-func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI, allowOutsideRead bool, configurators ...runnerToolConfigurator) (*loop.Runner, string, *model.Client, *settings.Controller, *subagent.Manager, *session.JSONLStore, *coremcp.Manager, error) {
-	return buildRunnerWithSubagentContext(ctx, sessionIDFlag, output, allowOutsideRead, subagentRuntimeContext{}, configurators...)
+func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI, allowOutsideRead bool, allowIncompleteConfig bool, configurators ...runnerToolConfigurator) (*loop.Runner, string, *model.Client, *configv2.Controller, *settings.Controller, *subagent.Manager, *session.JSONLStore, *coremcp.Manager, error) {
+	return buildRunnerWithSubagentContext(ctx, sessionIDFlag, output, allowOutsideRead, allowIncompleteConfig, subagentRuntimeContext{}, configurators...)
 }
 
-func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, output uiiface.UI, allowOutsideRead bool, subCtx subagentRuntimeContext, configurators ...runnerToolConfigurator) (*loop.Runner, string, *model.Client, *settings.Controller, *subagent.Manager, *session.JSONLStore, *coremcp.Manager, error) {
-	cfg, err := model.LoadConfigFromEnv()
-	if err != nil {
-		return nil, "", nil, nil, nil, nil, nil, err
-	}
-
+func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, output uiiface.UI, allowOutsideRead bool, allowIncompleteConfig bool, subCtx subagentRuntimeContext, configurators ...runnerToolConfigurator) (*loop.Runner, string, *model.Client, *configv2.Controller, *settings.Controller, *subagent.Manager, *session.JSONLStore, *coremcp.Manager, error) {
 	root, err := os.Getwd()
 	if err != nil {
-		return nil, "", nil, nil, nil, nil, nil, err
+		return nil, "", nil, nil, nil, nil, nil, nil, err
 	}
+	paths, err := configv2.ResolvePaths(configv2.PathOptions{WorkspaceRoot: root})
+	if err != nil {
+		return nil, "", nil, nil, nil, nil, nil, nil, err
+	}
+	configManager, err := configv2.Open(ctx, configv2.Options{Paths: paths})
+	if err != nil {
+		return nil, "", nil, nil, nil, nil, nil, nil, err
+	}
+	var configController *configv2.Controller
+	success := false
+	defer func() {
+		if !success {
+			if configController != nil {
+				_ = configController.Close()
+			} else {
+				_ = configManager.Close()
+			}
+		}
+	}()
+	if !allowIncompleteConfig {
+		if err := configManager.RequireReady(); err != nil {
+			return nil, "", nil, nil, nil, nil, nil, nil, err
+		}
+	}
+	cfg := configManager.Snapshot().Active
 
 	store, err := session.NewJSONLStoreInCwd()
 	if err != nil {
-		return nil, "", nil, nil, nil, nil, nil, fmt.Errorf("初始化 session store 失败: %w", err)
+		return nil, "", nil, nil, nil, nil, nil, nil, fmt.Errorf("初始化 session store 失败: %w", err)
 	}
 
 	sessionID, err := resolveSessionID(ctx, store, sessionIDFlag, root)
 	if err != nil {
-		return nil, "", nil, nil, nil, nil, nil, err
+		return nil, "", nil, nil, nil, nil, nil, nil, err
 	}
 
 	client := model.NewClient(cfg)
-	settingsController, err := settings.NewDefaultController(nil)
+	configController = configv2.NewController(configManager, client)
+	settingsController, err := settings.NewController(paths.Settings)
 	if err != nil {
-		return nil, "", nil, nil, nil, nil, nil, err
+		return nil, "", nil, nil, nil, nil, nil, nil, err
 	}
 	var notifier subagent.Notifier
 	if n, ok := output.(subagent.Notifier); ok {
@@ -61,18 +84,18 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 	}
 	executable, err := os.Executable()
 	if err != nil {
-		return nil, "", nil, nil, nil, nil, nil, fmt.Errorf("resolve executable: %w", err)
+		return nil, "", nil, nil, nil, nil, nil, nil, fmt.Errorf("resolve executable: %w", err)
 	}
 	broker := subCtx.mcpBroker
 	var mcpManager *coremcp.Manager
 	if broker == nil {
-		mcpConfig, err := coremcp.LoadConfig("", root)
+		mcpConfig, err := coremcp.LoadConfigFile(paths.MCP, root)
 		if err != nil {
-			return nil, "", nil, nil, nil, nil, nil, err
+			return nil, "", nil, nil, nil, nil, nil, nil, err
 		}
 		mcpManager, err = coremcp.Start(ctx, mcpConfig)
 		if err != nil {
-			return nil, "", nil, nil, nil, nil, nil, err
+			return nil, "", nil, nil, nil, nil, nil, nil, err
 		}
 		broker = mcpManager
 	}
@@ -81,11 +104,15 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 	launcher.SetMCPBroker(broker)
 	registry := tool.NewRegistry()
 	runner := loop.NewRunnerWithInstructionRoot(client, output, registry, store, sessionID, root)
+	runner.SetSkillRegistry(skill.NewRegistry([]string{paths.Skills}))
+	configController.SetSnapshotHandler(func(snapshot configv2.Snapshot) {
+		runner.SetContextLimitTokens(model.EffectiveContextLimitTokens(snapshot.Active))
+	})
 	if err := runner.SetContextMaintenanceConfig(settingsController.CurrentSettings().ContextMaintenance); err != nil {
 		if mcpManager != nil {
 			_ = mcpManager.Close(context.Background())
 		}
-		return nil, "", nil, nil, nil, nil, nil, fmt.Errorf("configure context maintenance: %w", err)
+		return nil, "", nil, nil, nil, nil, nil, nil, fmt.Errorf("configure context maintenance: %w", err)
 	}
 	subagentManager := subagent.NewManager(subagent.Config{
 		Model:        client,
@@ -109,7 +136,7 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 		if mcpManager != nil {
 			_ = mcpManager.Close(context.Background())
 		}
-		return nil, "", nil, nil, nil, nil, nil, err
+		return nil, "", nil, nil, nil, nil, nil, nil, err
 	}
 	runner.SetYoloModeHandler(launcher.SetDangerousMode)
 	if !subCtx.disableMainTodo {
@@ -117,7 +144,7 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 			if mcpManager != nil {
 				_ = mcpManager.Close(context.Background())
 			}
-			return nil, "", nil, nil, nil, nil, nil, err
+			return nil, "", nil, nil, nil, nil, nil, nil, err
 		}
 	}
 	for _, configure := range configurators {
@@ -128,7 +155,7 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 			if mcpManager != nil {
 				_ = mcpManager.Close(context.Background())
 			}
-			return nil, "", nil, nil, nil, nil, nil, err
+			return nil, "", nil, nil, nil, nil, nil, nil, err
 		}
 	}
 	if mcpManager != nil {
@@ -146,7 +173,8 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 		}()
 	}
 
-	return runner, sessionID, client, settingsController, subagentManager, store, mcpManager, nil
+	success = true
+	return runner, sessionID, client, configController, settingsController, subagentManager, store, mcpManager, nil
 }
 
 type streamMASubagentAdapter struct {
