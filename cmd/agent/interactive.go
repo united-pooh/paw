@@ -26,12 +26,13 @@ func runSingleTurnMode(ctx context.Context, opts options) error {
 	output := headless.New(os.Stdout)
 	todoBroker := todo.NewBroker()
 	defer todoBroker.Close()
-	runner, sessionID, _, _, _, _, mcpManager, err := buildRunner(ctx, opts.sessionID, output, opts.allowOutsideRead, func(registry *tool.Registry) error {
+	runner, sessionID, _, configController, _, _, _, mcpManager, err := buildRunner(ctx, opts.sessionID, output, opts.allowOutsideRead, false, func(registry *tool.Registry) error {
 		return registerMainAgentTools(registry, todoBroker)
 	})
 	if err != nil {
 		return err
 	}
+	defer func() { _ = configController.Close() }()
 	runner.SetTodoBroker(todoBroker)
 	if mcpManager != nil {
 		defer func() { _ = mcpManager.Close(context.Background()) }()
@@ -53,7 +54,7 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	defer todoBroker.Close()
 	output.SetSelectionBroker(selectionBroker)
 	output.SetTodoBroker(todoBroker)
-	runner, sessionID, client, settingsController, subagentManager, store, mcpManager, err := buildRunner(ctx, opts.sessionID, output, opts.allowOutsideRead, func(registry *tool.Registry) error {
+	runner, sessionID, _, configController, settingsController, subagentManager, store, mcpManager, err := buildRunner(ctx, opts.sessionID, output, opts.allowOutsideRead, true, func(registry *tool.Registry) error {
 		if err := registerMainAgentTools(registry, todoBroker); err != nil {
 			return err
 		}
@@ -66,6 +67,7 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	if err != nil {
 		return err
 	}
+	defer func() { _ = configController.Close() }()
 	runner.SetTodoBroker(todoBroker)
 	if mcpManager != nil {
 		defer func() { _ = mcpManager.Close(context.Background()) }()
@@ -85,7 +87,8 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 		subagentManager.SetTokenTracer(tracer)
 	}
 
-	output.SetModelConfigController(client)
+	output.SetModelConfigController(configController)
+	output.SetConfigCenterController(configController)
 	output.SetSettingsController(settingsController)
 	output.SetSubagentController(subagentManager)
 	output.SetSessionStore(store)

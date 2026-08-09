@@ -32,6 +32,7 @@ func newMessageNoticeText(count int, hovered bool, width int) string {
 func (m appModel) newMessageNoticeCanRender() bool {
 	return m.modelWizard == nil &&
 		m.settingWizard == nil &&
+		m.configCenter == nil &&
 		m.sessionPicker == nil &&
 		m.subagentPicker == nil &&
 		m.todoPage == nil &&

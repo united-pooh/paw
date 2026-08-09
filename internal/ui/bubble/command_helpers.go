@@ -26,12 +26,28 @@ func (m *appModel) handleModelCommand(invocation string) tea.Cmd {
 		m.pending = nil
 	case "status":
 		cfg := m.currentModelConfig()
+		stableID := ""
+		if m.configCenterController != nil {
+			stableID = m.configCenterController.Snapshot().ActiveModelID
+		}
 		m.addEntry(transcriptEntry{
 			kind:  entrySystem,
 			title: "model",
-			body:  fmt.Sprintf("provider=%s base=%s path=%s model=%s models=%s context=%d retries=%d key=%s", cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, strings.Join(model.AvailableModels(cfg), ","), model.EffectiveContextLimitTokens(cfg), cfg.RetryCount, cfg.APIKeyEnvName),
+			body:  fmt.Sprintf("id=%s provider=%s base=%s path=%s model=%s models=%s context=%d retries=%d key=%s", stableID, cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, strings.Join(model.AvailableModels(cfg), ","), model.EffectiveContextLimitTokens(cfg), cfg.RetryCount, cfg.APIKeyEnvName),
 		})
 	default:
+		if m.configCenterController != nil {
+			if _, ok := m.configCenterController.Snapshot().Document.Models[args]; ok {
+				if err := m.configCenterController.SetActiveModelID(args); err != nil {
+					m.addEntry(transcriptEntry{kind: entryError, title: "model", body: err.Error()})
+					return nil
+				}
+				cfg := m.currentModelConfig()
+				m.syncRunnerModelContextLimit(cfg)
+				m.addEntry(transcriptEntry{kind: entrySystem, title: "model", body: fmt.Sprintf("id=%s provider=%s model=%s", args, cfg.Provider, cfg.Model)})
+				return nil
+			}
+		}
 		cfg := m.currentModelConfig()
 		profiles := model.ConfiguredProfiles(cfg)
 		for _, profile := range profiles {
@@ -79,14 +95,14 @@ func (m *appModel) applyModelConfigFromCommand(cfg model.Config) {
 
 // handleSettingCommand 处理 /setting 指令：
 //
-//	/setting                 → 打开持久化设置向导（写入 ~/.paw/settings.json）
+//	/setting                  → 打开统一配置中心
 //	/setting translate on|off → 运行期动态开关，只改内存、不写配置文件
 //
 // 动态开关立即生效，重启后失效；需要持久化请用 /setting 向导。
 func (m *appModel) handleSettingCommand(invocation string) tea.Cmd {
 	args := commandArgs(invocation)
 	if args == "" {
-		m.settingWizard = newSettingWizard(m.currentSettings())
+		m.openConfigCenter()
 		m.pending = nil
 		return nil
 	}

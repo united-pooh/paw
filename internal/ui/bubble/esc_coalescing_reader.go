@@ -17,9 +17,7 @@
 package bubble
 
 import (
-	"errors"
 	"os"
-	"syscall"
 )
 
 // escCoalescingReader 包装 *os.File，在 Read 时聚合被读边界切断的 ESC 序列。
@@ -99,25 +97,6 @@ func (r *escCoalescingReader) coalesceTrailing(p []byte, n int) int {
 	}
 }
 
-// peekOne 在非阻塞模式下读一次底层 fd。读到字节返回 (n, true)；
-// 无数据可读（EAGAIN/EWOULDBLOCK）返回 (0, false)。读完恢复 fd 原状态。
-func (r *escCoalescingReader) peekOne(buf []byte) (int, bool) {
-	if err := setNonblock(r.File, true); err != nil {
-		return 0, false
-	}
-	defer setNonblock(r.File, false) //nolint:errcheck
-
-	m, err := r.File.Read(buf)
-	if err == nil && m > 0 {
-		return m, true
-	}
-	if err != nil && (errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EWOULDBLOCK)) {
-		return 0, false
-	}
-	// 其它错误（如 EOF）也视为无续接。
-	return 0, false
-}
-
 // firstErr 返回第一个非 nil 的错误。
 func firstErr(errs ...error) error {
 	for _, e := range errs {
@@ -126,31 +105,6 @@ func firstErr(errs ...error) error {
 		}
 	}
 	return nil
-}
-
-// setNonblock 切换 fd 的 O_NONBLOCK 标志。
-func setNonblock(f *os.File, nonblock bool) error {
-	fd := f.Fd()
-	arg, err := fcntl(fd, syscall.F_GETFL, 0)
-	if err != nil {
-		return err
-	}
-	if nonblock {
-		arg |= syscall.O_NONBLOCK
-	} else {
-		arg &^= syscall.O_NONBLOCK
-	}
-	_, err = fcntl(fd, syscall.F_SETFL, arg)
-	return err
-}
-
-// fcntl 包装系统调用，统一处理 errno。
-func fcntl(fd, cmd, arg uintptr) (uintptr, error) {
-	r1, _, errno := syscall.Syscall(syscall.SYS_FCNTL, fd, cmd, arg)
-	if errno != 0 {
-		return 0, errno
-	}
-	return r1, nil
 }
 
 // trailingEscapeSlice 返回 b 末尾"可能是不完整 ESC 序列"的字节数。

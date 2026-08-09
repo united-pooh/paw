@@ -18,6 +18,9 @@ import (
 // Client 封装模型调用的 HTTP 客户端。
 // 这一层只负责请求发送、响应解析、错误格式化。
 type Client struct {
+	// httpClient is an immutable transport template in production. Tests may
+	// replace its Transport; every request still clones it and applies timeout
+	// from the same captured Config snapshot.
 	httpClient *http.Client
 	mu         sync.RWMutex
 	cfg        Config
@@ -31,7 +34,7 @@ type Client struct {
 func NewClient(cfg Config) *Client {
 	cfg = CloneConfig(fillConfigDefaults(cfg))
 	return &Client{
-		httpClient: &http.Client{Timeout: cfg.Timeout},
+		httpClient: &http.Client{},
 		cfg:        cfg,
 	}
 }
@@ -51,10 +54,9 @@ func (c *Client) doRequestWithRetry(ctx context.Context, cfg Config, stream bool
 		attempts = 1
 	}
 
-	client := c.httpClient
-	if stream {
-		client = c.streamHTTPClient()
-	}
+	// Derive the transport from the exact configuration captured by the
+	// request. Hot reloads can no longer splice a new timeout into old work.
+	client := c.httpClientForConfig(cfg, stream)
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
 		req, err := buildRequest()
@@ -144,20 +146,30 @@ func drainAndClose(body io.ReadCloser) error {
 	return closeErr
 }
 
-func (c *Client) streamHTTPClient() *http.Client {
+func (c *Client) httpClientForConfig(cfg Config, stream bool) *http.Client {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if c.httpClient == nil {
-		return &http.Client{}
+	template := c.httpClient
+	c.mu.RUnlock()
+	client := &http.Client{}
+	if template != nil {
+		*client = *template
 	}
-	client := *c.httpClient
-	client.Timeout = 0
-	return &client
+	client.Timeout = cfg.Timeout
+	if stream {
+		client.Timeout = 0
+	}
+	return client
 }
 
 func (c *Client) setRequestHeaders(req *http.Request) {
-	cfg := c.CurrentModelConfig()
+	c.setRequestHeadersForConfig(req, c.CurrentModelConfig())
+}
+
+func (c *Client) setRequestHeadersForConfig(req *http.Request, cfg Config) {
 	req.Header.Set("Content-Type", "application/json")
+	for name, value := range cfg.Headers {
+		req.Header.Set(name, value)
+	}
 	if strings.TrimSpace(cfg.APIKey) != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 	}
@@ -183,12 +195,7 @@ func (c *Client) ApplyModelConfig(cfg Config) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.cfg = cfg
-	c.httpClient.Timeout = cfg.Timeout
 	return nil
-}
-
-func (c *Client) SaveModelConfig(cfg Config) error {
-	return SaveModelConfig(cfg)
 }
 
 // RunMessage 执行一次最小“输入 -> 输出”调用。
@@ -234,7 +241,7 @@ func (c *Client) RunMessage(ctx context.Context, messages []message.Message) (st
 		if err != nil {
 			return nil, fmt.Errorf("创建 HTTP 请求失败: %w", err)
 		}
-		c.setRequestHeaders(req)
+		c.setRequestHeadersForConfig(req, cfg)
 		return req, nil
 	})
 	if err != nil {

@@ -21,12 +21,14 @@ const (
 type Config struct {
 	Provider                string
 	Transport               string
+	Adapter                 string
 	ProfileID               string
 	ProfileName             string
 	APIBaseURL              string
 	APIPath                 string
 	APIKey                  string
 	APIKeyEnvName           string
+	Headers                 map[string]string
 	Model                   string
 	Models                  []string
 	ExtraBody               RequestBody
@@ -35,7 +37,9 @@ type Config struct {
 	ModelContextLimitTokens map[string]int
 	Timeout                 time.Duration
 	RetryCount              int
+	RetryCountSet           bool
 	Stream                  bool
+	StreamSet               bool
 	streamSet               bool
 	Profiles                []Profile
 }
@@ -48,10 +52,12 @@ type Profile struct {
 	Name                    string
 	Provider                string
 	Transport               string
+	Adapter                 string
 	APIBaseURL              string
 	APIPath                 string
 	APIKey                  string
 	APIKeyEnvName           string
+	Headers                 map[string]string
 	Model                   string
 	Models                  []string
 	ExtraBody               RequestBody
@@ -60,6 +66,7 @@ type Profile struct {
 	ModelContextLimitTokens map[string]int
 	Timeout                 time.Duration
 	RetryCount              int
+	RetryCountSet           bool
 	Stream                  bool
 	StreamSet               bool
 	CredentialID            string
@@ -74,12 +81,14 @@ func (p Profile) Config() Config {
 	return Config{
 		Provider:                p.Provider,
 		Transport:               p.Transport,
+		Adapter:                 p.Adapter,
 		ProfileID:               p.ID,
 		ProfileName:             p.Name,
 		APIBaseURL:              p.APIBaseURL,
 		APIPath:                 p.APIPath,
 		APIKey:                  p.APIKey,
 		APIKeyEnvName:           p.APIKeyEnvName,
+		Headers:                 cloneStringMap(p.Headers),
 		Model:                   modelName,
 		Models:                  models,
 		ExtraBody:               CloneRequestBody(p.ExtraBody),
@@ -88,7 +97,9 @@ func (p Profile) Config() Config {
 		ModelContextLimitTokens: cloneModelContextLimits(p.ModelContextLimitTokens),
 		Timeout:                 p.Timeout,
 		RetryCount:              p.RetryCount,
+		RetryCountSet:           p.RetryCountSet,
 		Stream:                  p.Stream,
+		StreamSet:               p.StreamSet,
 		streamSet:               p.StreamSet,
 	}
 }
@@ -419,10 +430,10 @@ func fillConfigDefaults(cfg Config) Config {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = defaultTimeout()
 	}
-	if cfg.RetryCount <= 0 {
+	if cfg.RetryCount < 0 || (cfg.RetryCount == 0 && !cfg.RetryCountSet) {
 		cfg.RetryCount = defaultRetryCount()
 	}
-	if !cfg.Stream && !cfg.streamSet {
+	if !cfg.Stream && !cfg.streamSet && !cfg.StreamSet {
 		cfg.Stream = true
 	}
 	return cfg
@@ -476,6 +487,7 @@ func configuredProfiles(persisted []persistedModelConfig, envValues map[string]s
 		}
 		if raw.RetryCount > 0 {
 			profile.RetryCount = raw.RetryCount
+			profile.RetryCountSet = true
 		}
 		if raw.Stream != nil {
 			profile.Stream = *raw.Stream
@@ -504,6 +516,7 @@ func cloneProfiles(profiles []Profile) []Profile {
 	for index, profile := range profiles {
 		cloned[index] = profile
 		cloned[index].Models = append([]string(nil), profile.Models...)
+		cloned[index].Headers = cloneStringMap(profile.Headers)
 		cloned[index].ExtraBody = CloneRequestBody(profile.ExtraBody)
 		cloned[index].ModelExtraBody = CloneModelExtraBodies(profile.ModelExtraBody)
 		cloned[index].ModelContextLimitTokens = cloneModelContextLimits(profile.ModelContextLimitTokens)
@@ -523,18 +536,21 @@ func ConfiguredProfiles(cfg Config) []Profile {
 		Name:           cfg.ProfileName,
 		Provider:       cfg.Provider,
 		Transport:      cfg.Transport,
+		Adapter:        cfg.Adapter,
 		APIBaseURL:     cfg.APIBaseURL,
 		APIPath:        cfg.APIPath,
 		APIKey:         cfg.APIKey,
 		APIKeyEnvName:  cfg.APIKeyEnvName,
+		Headers:        cloneStringMap(cfg.Headers),
 		Model:          cfg.Model,
 		Models:         append([]string(nil), cfg.Models...),
 		ExtraBody:      CloneRequestBody(cfg.ExtraBody),
 		ModelExtraBody: CloneModelExtraBodies(cfg.ModelExtraBody),
 		Timeout:        cfg.Timeout,
 		RetryCount:     cfg.RetryCount,
+		RetryCountSet:  cfg.RetryCountSet,
 		Stream:         cfg.Stream,
-		StreamSet:      cfg.streamSet,
+		StreamSet:      cfg.streamSet || cfg.StreamSet,
 	}}
 }
 

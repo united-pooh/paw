@@ -104,6 +104,16 @@ func NewCommandRegistry() *CommandRegistry {
 		},
 	})
 	registry.Register(Command{
+		Name:              "/config",
+		Description:       "open or inspect the configuration center",
+		ArgumentHint:      "[reload|status|path]",
+		AllowWhileRunning: false,
+		Handler: func(m *appModel, invocation string) tea.Cmd {
+			m.handleConfigCommand(invocation)
+			return nil
+		},
+	})
+	registry.Register(Command{
 		Name:              "/subagent",
 		Description:       "launch a subagent",
 		ArgumentHint:      "[--fork|--empty] [--background|--sync] <prompt>",

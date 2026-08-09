@@ -21,13 +21,10 @@ func writeTestSkill(t *testing.T, root, name, body string) string {
 }
 
 func TestDefaultRootsUsesOnlyPawSkillsDirectory(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	configHome := filepath.Join(t.TempDir(), "Paw")
+	t.Setenv("PAW_CONFIG_HOME", configHome)
 	roots := DefaultRoots(filepath.Join(t.TempDir(), "workspace"))
-	want := filepath.Join(home, ".paw", "skills")
+	want := filepath.Join(configHome, "skills")
 	if len(roots) != 1 || roots[0] != want {
 		t.Fatalf("roots = %#v, want only %q", roots, want)
 	}

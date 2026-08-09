@@ -37,15 +37,19 @@ func NewRegistry(roots []string) *Registry {
 	return &Registry{roots: cleanRoots(roots)}
 }
 
-// DefaultRoots returns Paw's only global skill directory. The work root is
-// retained in the signature for callers that already pass it, but it is not
-// used: skills must come exclusively from ~/.paw/skills.
+// DefaultRoots returns Paw's only global skill directory. New callers should
+// inject a resolved path; this compatibility helper follows PAW_CONFIG_HOME or
+// os.UserConfigDir()/Paw and never falls back to the workspace.
 func DefaultRoots(_ string) []string {
-	home, err := os.UserHomeDir()
-	if err != nil || strings.TrimSpace(home) == "" {
-		return nil
+	root := strings.TrimSpace(os.Getenv("PAW_CONFIG_HOME"))
+	if root == "" {
+		base, err := os.UserConfigDir()
+		if err != nil || strings.TrimSpace(base) == "" {
+			return nil
+		}
+		root = filepath.Join(base, "Paw")
 	}
-	return cleanRoots([]string{filepath.Join(home, ".paw", "skills")})
+	return cleanRoots([]string{filepath.Join(root, "skills")})
 }
 
 // Roots returns a copy of the configured skill roots.

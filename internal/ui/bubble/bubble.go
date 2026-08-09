@@ -8,12 +8,15 @@ import (
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
 	"os"
+	"path/filepath"
+	configv2 "paw/internal/config"
 	"paw/internal/loop"
 	coremcp "paw/internal/mcp"
 	"paw/internal/message"
 	"paw/internal/model"
 	"paw/internal/session"
 	"paw/internal/settings"
+	"paw/internal/skill"
 	"paw/internal/subagent"
 	"paw/internal/todo"
 	selecttool "paw/internal/tool/select"
@@ -89,6 +92,18 @@ type ModelConfigSaver interface {
 	SaveModelConfig(model.Config) error
 }
 
+// ConfigCenterController is the optional config-v2 capability used by the
+// unified /setting and /config center. Legacy embedders can continue to expose
+// only ModelConfigController.
+type ConfigCenterController interface {
+	Snapshot() configv2.Snapshot
+	ReloadConfig() error
+	ConfigPath() string
+	SetActiveModelID(string) error
+	UpdateConfig(context.Context, uint64, []configv2.Operation) (configv2.Snapshot, error)
+	CredentialStore() configv2.CredentialStore
+}
+
 // SettingsController 描述运行时读取和保存 UI/agent 设置的控制器。
 type SettingsController interface {
 	CurrentSettings() settings.Config
@@ -140,18 +155,19 @@ type PlanController interface {
 
 // UI 是基于 Bubble Tea 的交互式终端界面实现。
 type UI struct {
-	mu                    sync.Mutex
-	program               *tea.Program
-	modelConfigController ModelConfigController
-	settingsController    SettingsController
-	subagentController    SubagentController
-	sessionStore          SessionStore
-	mcpController         MCPStatusController
-	goalController        GoalController
-	planController        PlanController
-	selectionBroker       *selecttool.Broker
-	todoBroker            *todo.Broker
-	sendMsg               func(tea.Msg)
+	mu                     sync.Mutex
+	program                *tea.Program
+	modelConfigController  ModelConfigController
+	configCenterController ConfigCenterController
+	settingsController     SettingsController
+	subagentController     SubagentController
+	sessionStore           SessionStore
+	mcpController          MCPStatusController
+	goalController         GoalController
+	planController         PlanController
+	selectionBroker        *selecttool.Broker
+	todoBroker             *todo.Broker
+	sendMsg                func(tea.Msg)
 }
 
 // 确保 UI 满足通用终端 UI 接口。
@@ -179,6 +195,13 @@ func (u *UI) SetModelConfigController(controller ModelConfigController) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.modelConfigController = controller
+}
+
+// SetConfigCenterController injects Paw's v2 provider/model registry.
+func (u *UI) SetConfigCenterController(controller ConfigCenterController) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.configCenterController = controller
 }
 
 // SetSettingsController 注入 settings 控制器，供 /setting 和状态栏读取。
@@ -267,6 +290,7 @@ func filterIdleMouseMotion(model tea.Model, msg tea.Msg) tea.Msg {
 func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 	u.mu.Lock()
 	controller := u.modelConfigController
+	configCenterController := u.configCenterController
 	settingsController := u.settingsController
 	subagentController := u.subagentController
 	sessionStore := u.sessionStore
@@ -279,6 +303,13 @@ func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 
 	anchor := newTerminalCursorAnchor()
 	appModel := newModel(ctx, runner, sessionID, controller, settingsController, subagentController, sessionStore, anchor)
+	appModel.configCenterController = configCenterController
+	if configCenterController != nil && configCenterController.ConfigPath() != "" {
+		appModel.skillRegistry = skill.NewRegistry([]string{filepath.Join(filepath.Dir(configCenterController.ConfigPath()), "skills")})
+	}
+	if configCenterController != nil && !configCenterController.Snapshot().Ready {
+		appModel.openConfigCenter()
+	}
 	if subscriber, ok := subagentController.(SubagentTaskUpdateSubscriber); ok {
 		updates, stopUpdates := subscriber.SubscribeTaskUpdates()
 		appModel.subagentTaskUpdates = updates

@@ -78,6 +78,26 @@ func LoadConfig(homeDir, workspaceRoot string) (Config, error) {
 	}
 
 	path := filepath.Join(homeDir, configDirectoryName, configFileName)
+	return LoadConfigFile(path, workspaceRoot)
+}
+
+// LoadConfigFile loads an explicitly resolved global MCP configuration path.
+// Config-v2 callers use this to avoid re-reading HOME or assuming ~/.paw.
+func LoadConfigFile(path, workspaceRoot string) (Config, error) {
+	path, err := filepath.Abs(strings.TrimSpace(path))
+	if err != nil {
+		return Config{}, fmt.Errorf("resolve MCP config path: %w", err)
+	}
+	if strings.TrimSpace(path) == "" {
+		return Config{}, fmt.Errorf("MCP config path is empty")
+	}
+	workspaceRoot, err = filepath.Abs(strings.TrimSpace(workspaceRoot))
+	if err != nil {
+		return Config{}, fmt.Errorf("resolve workspace root: %w", err)
+	}
+	if strings.TrimSpace(workspaceRoot) == "" {
+		return Config{}, fmt.Errorf("workspace root is empty")
+	}
 	if err := ensureConfigFile(path); err != nil {
 		return Config{}, err
 	}

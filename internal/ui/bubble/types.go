@@ -436,6 +436,8 @@ type appModel struct {
 	todoPage                   *todoPage
 	sessionID                  string
 	modelConfig                ModelConfigController
+	configCenterController     ConfigCenterController
+	configCenter               *configCenterState
 	settingsConfig             SettingsController
 	subagents                  SubagentController
 	subagentTaskUpdates        <-chan struct{}
