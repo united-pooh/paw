@@ -35,11 +35,23 @@ func CloneModelExtraBodies(values map[string]RequestBody) map[string]RequestBody
 
 func CloneConfig(cfg Config) Config {
 	cfg.Models = append([]string(nil), cfg.Models...)
+	cfg.Headers = cloneStringMap(cfg.Headers)
 	cfg.ExtraBody = CloneRequestBody(cfg.ExtraBody)
 	cfg.ModelExtraBody = CloneModelExtraBodies(cfg.ModelExtraBody)
 	cfg.ModelContextLimitTokens = cloneModelContextLimits(cfg.ModelContextLimitTokens)
 	cfg.Profiles = cloneProfiles(cfg.Profiles)
 	return cfg
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func cloneJSONValue(value any) any {

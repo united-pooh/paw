@@ -21,6 +21,7 @@ func TestSelectModelAdapter(t *testing.T) {
 		{"gpt model", Config{Provider: "gateway", Model: "gpt-4.1"}, "gpt"},
 		{"o model is compatible", Config{Model: "o3"}, "openai-compatible"},
 		{"fallback", Config{Provider: "gateway", Model: "claude-3"}, "openai-compatible"},
+		{"explicit adapter wins", Config{Provider: "openai", Model: "gpt-5", Adapter: "deepseek"}, "deepseek"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

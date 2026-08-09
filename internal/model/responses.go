@@ -347,7 +347,7 @@ func (c *Client) runResponsesMessage(ctx context.Context, cfg Config, messages [
 		if err != nil {
 			return nil, fmt.Errorf("创建 HTTP 请求失败: %w", err)
 		}
-		c.setRequestHeaders(req)
+		c.setRequestHeadersForConfig(req, cfg)
 		return req, nil
 	})
 	if err != nil {
@@ -404,7 +404,7 @@ func (c *Client) streamResponsesMessage(ctx context.Context, cfg Config, message
 		if err != nil {
 			return nil, fmt.Errorf("创建 HTTP 请求失败: %w", err)
 		}
-		c.setRequestHeaders(req)
+		c.setRequestHeadersForConfig(req, cfg)
 		return req, nil
 	})
 	if err != nil {
@@ -432,7 +432,7 @@ func (c *Client) nonStreamingResponsesMessage(ctx context.Context, cfg Config, m
 		if err != nil {
 			return nil, err
 		}
-		c.setRequestHeaders(req)
+		c.setRequestHeadersForConfig(req, cfg)
 		return req, nil
 	})
 	if err != nil {

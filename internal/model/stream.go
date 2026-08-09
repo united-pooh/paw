@@ -166,7 +166,7 @@ func (c *Client) nonStreamingOpenAIMessage(ctx context.Context, cfg Config, adap
 		if err != nil {
 			return nil, fmt.Errorf("创建 HTTP 请求失败: %w", err)
 		}
-		c.setRequestHeaders(req)
+		c.setRequestHeadersForConfig(req, cfg)
 		return req, nil
 	})
 	if err != nil {
@@ -252,7 +252,7 @@ func (c *Client) streamOpenAIMessage(ctx context.Context, cfg Config, adapter Mo
 			return nil, fmt.Errorf("创建 HTTP 请求失败: %w", err)
 		}
 		// 当前本地网关沿用标准 JSON 请求体和 Bearer 鉴权头。
-		c.setRequestHeaders(req)
+		c.setRequestHeadersForConfig(req, cfg)
 		return req, nil
 	})
 	if err != nil {

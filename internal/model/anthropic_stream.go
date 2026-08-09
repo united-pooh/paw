@@ -178,6 +178,9 @@ func anthropicMessagesURL(cfg Config) string {
 
 func setAnthropicRequestHeaders(req *http.Request, cfg Config) {
 	req.Header.Set("Content-Type", "application/json")
+	for name, value := range cfg.Headers {
+		req.Header.Set(name, value)
+	}
 	req.Header.Set("Anthropic-Version", anthropicVersion)
 	if strings.TrimSpace(cfg.APIKey) != "" {
 		req.Header.Set("X-Api-Key", cfg.APIKey)

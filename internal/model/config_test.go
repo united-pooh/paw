@@ -505,7 +505,11 @@ func chdirForTest(t *testing.T, dir string) func() {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("chdir to temp dir: %v", err)
 	}
-	t.Setenv("HOME", filepath.Join(dir, "home"))
+	testHome := filepath.Join(dir, "home")
+	t.Setenv("HOME", testHome)
+	// os.UserHomeDir uses USERPROFILE on Windows. Setting HOME alone caused
+	// historical tests to write the real ~/.paw/config.json.
+	t.Setenv("USERPROFILE", testHome)
 	return func() {
 		if err := os.Chdir(wd); err != nil {
 			t.Fatalf("restore cwd: %v", err)
