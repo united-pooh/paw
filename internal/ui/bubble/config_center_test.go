@@ -76,6 +76,19 @@ func TestSettingAndConfigShareUnifiedCenter(t *testing.T) {
 	}
 }
 
+func TestConfigCenterBackFromHomeClosesWithoutPanic(t *testing.T) {
+	controller, _ := newConfigCenterHarness(t)
+	model := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	model.configCenterController = controller
+	model.openConfigCenter()
+
+	model.configCenterBack()
+
+	if model.configCenter != nil {
+		t.Fatalf("config center remained open: %#v", model.configCenter)
+	}
+}
+
 func TestIncompleteFirstRunOpensProviderThenCredentialSetup(t *testing.T) {
 	for _, name := range []string{"PAW_MODEL", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "OLLAMA_HOST", "OLLAMA_MODEL"} {
 		t.Setenv(name, "")

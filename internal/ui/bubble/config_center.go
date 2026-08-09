@@ -185,6 +185,7 @@ func (m *appModel) configCenterBack() {
 	switch m.configCenter.page {
 	case configCenterHome:
 		m.configCenter = nil
+		return
 	case configCenterProviderActions, configCenterAddProvider:
 		m.configCenter.page = configCenterProviders
 	case configCenterModelActions, configCenterAddModelProvider:
