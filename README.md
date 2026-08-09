@@ -17,6 +17,7 @@ cmd/agent/main.go
 
 internal/message/types.go
 
+internal/config/
 internal/model/config.go
 internal/model/types.go
 internal/model/client.go
@@ -140,9 +141,10 @@ git config core.hooksPath .githooks
 
 这是当前的依赖装配点。
 
-当前会注册的持久化目录:
-- `~/.paw/config.json`（全局配置，模型通过 `modelProfiles` 和 `activeModelProfileId` 保存；缺失时自动创建）
-- `~/.paw/settings.json`（全局 settings；项目内 `.paw/settings.json` 不再读取或迁移）
+当前会注册的持久化目录（完整契约见 [配置系统 v2](./docs/configuration-v2.md)）:
+- `os.UserConfigDir()/Paw/config.jsonc`（可由 `PAW_CONFIG_HOME` 覆盖；Provider/Model registry、JSONC、Schema 与热重载）
+- `os.UserConfigDir()/Paw/settings.json`、`mcp.toml`、`skills/`
+- 项目 `.paw/config.jsonc`（仅活动模型和安全模型参数覆盖）
 - `.paw/exports/`
 - `.paw/sessions/<sessionID>/`
 
@@ -158,7 +160,7 @@ git config core.hooksPath .githooks
 
 ### MCP / CodeGraph
 
-Paw 是 MCP client，主 Agent 在启动时读取 `~/.paw/mcp.toml`，通过本地 stdio 启动配置的 MCP server。文件不存在时会自动创建为空文件；启用的 server 初始化或能力发现失败会阻止本次启动。
+Paw 是 MCP client，主 Agent 在启动时读取统一全局配置目录中的 `mcp.toml`，通过本地 stdio 启动配置的 MCP server。文件不存在时会自动创建为空文件；启用的 server 初始化或能力发现失败会阻止本次启动。
 
 配置沿用 Codex 风格的 `mcp_servers` 表，例如：
 
@@ -208,6 +210,7 @@ enabled = true
 - `/model [status|<profile>|<model>]`
 - `/export [filename]`
 - `/setting [translate on|off]`
+- `/config [reload|status|path]`
 - `/theme`
 - `/sessions`
 - `/subagent [--fork|--empty] [--background|--sync] <prompt>`
@@ -224,10 +227,10 @@ enabled = true
 - `/exit` / `/quit`
 
 当前行为:
-- `/model` 无参数时打开 profile → model 二级向导；profile 和模型列表全部来自全局 `~/.paw/config.json`；没有活动 profile/model 时默认使用配置中第一个 profile 的第一个模型；`status` 输出当前配置和可用模型；输入已配置的 profile ID、provider、名称或模型名即可切换并持久化活动选择
+- `/model` 无参数时打开 Provider → Model 快速切换器；也可以输入 v2 稳定模型 ID（如 `deepseek/chat`）切换并只持久化 `activeModel`
 - `/export` 默认导出到 `.paw/exports/conversation-YYYY-MM-DD-HHMMSS.txt`，也支持工作区内显式路径；导出文件权限为 `0600`
-- `/setting` 无参数时打开向导，保存默认 subagent context/run mode、context meter 位置和 token limit（写入 `~/.paw/settings.json`）；`/setting translate on|off` 是运行期动态开关：只改内存、立即生效、**不写配置文件**，重启后恢复为磁盘配置（默认 off），反馈会注明「session only」
-- `/theme` 打开内置主题选择器；↑/↓、j/k、Home/End 会实时预览，Enter 保存到 `~/.paw/settings.json`，Esc 恢复打开前的主题且不写盘
+- `/setting` 无参数时与 `/config` 打开统一配置中心；`/setting translate on|off` 是只改内存、立即生效且不写盘的会话级动态开关；`/config reload|status|path` 用于热重载、诊断和路径查询
+- `/theme` 打开内置主题选择器；↑/↓、j/k、Home/End 会实时预览，Enter 保存到统一全局配置目录的 `settings.json`，Esc 恢复打开前的主题且不写盘
 - `/sessions` 列出所有历史会话（ID 前缀、日期、文件大小、首条消息），选中条目后直接恢复该会话
 - `/subagent` 支持 `empty` 与 `fork` 两种上下文模式，以及 `sync` 与 `background` 两种运行模式；后台任务完成后会发 UI 系统通知，并把截断后的结果作为补充上下文注入后续模型轮次（完整结果仍在任务 output/transcript 路径中）
 - `/streamma <prompt>` 显式把当前任务交给 StreamMA runtime；runtime 会按任务选择一个小型 DAG，并把每个 StreamMA worker 映射为真实 subagent。一次 run 内同一个 logical agent 复用同一个 subagent session 作为真实 `ctx_a`；首次调用写入 agent base context + problem，后续调用只追加新 inbound step。只有同步到精确 `END_STEP` step 后才继续在 DAG 中传播；缺失 `END_STEP` 会失败而不是在 agent `Done` 时兜底传播，最终由 finalizer 的最后一步作为 assistant 回复写回会话历史。可选参数包括 `--profile`、`--topology`、`--agents`/`--a`、`--steps`/`--s`、`--protocol`；默认 `adaptive` profile 会保留任务模板图，显式 `--topology` 或 `paper` profile 可按指定拓扑生成 chain/tree/graph 形状
@@ -543,6 +546,8 @@ main (-subagent-worker)
 
 文件: [config.go](./internal/model/config.go)
 
+持久化、迁移、Schema、凭据与热重载已经迁到 `internal/config`；本包只保留解析后的运行时请求配置，以及 v1 调用方的兼容读取函数。v2 文档见 [配置系统 v2](./docs/configuration-v2.md)。
+
 ##### `type Config struct`
 
 模型连接参数。
@@ -560,8 +565,8 @@ main (-subagent-worker)
 - `ModelExtraBody`（`map[string]RequestBody`，按模型名附加的请求体）
 - `ContextLimitTokens` / `ModelContextLimitTokens`（上下文 token 上限，可按模型覆盖）
 - `Timeout`
-- `RetryCount`（持久化为 `~/.paw/config.json` 当前 model profile 的 `retryCount`；网络请求失败或遇到 408/425/429/5xx 时的重试次数，默认 3）
-- `Stream`（持久化为 `~/.paw/config.json` 当前 model profile 的 `stream`；默认 `true`，只有显式写为 `false` 才使用非流式请求）
+- `RetryCount` / `RetryCountSet`（来自 v2 Provider `retries`；网络失败或遇到 408/425/429/5xx 时的重试次数，显式 `0` 有效）
+- `Stream` / `StreamSet`（来自 Provider/Model/工作区分层结果；显式 `false` 有效）
 - `Profiles`（全部已配置 profile）
 
 ##### `type Profile struct`
@@ -577,15 +582,9 @@ main (-subagent-worker)
 
 ##### `LoadConfigFromEnv() (Config, error)`
 
-职责:
-- 从环境变量构造 `Config`
-- 启动时按顺序尝试加载当前目录下的 `.env`、`.env.local`
-- 读取 `~/.paw/config.json` 中 `modelProfiles` 的 profile；优先使用 `activeModelProfileId`，没有时使用第一个 profile
-- 每个 profile 的 `models` 是 `/model` 向导的二级模型列表；profile 没有单独的 `model` 时使用 `models[0]`
-- 文件不存在时自动创建空的 `config.json`，不会注入 provider、API URL、API path 或模型名；保存时保留其他全局配置字段
-- `.env.local` 会覆盖 `.env` 和外部 shell 继承进来的同名变量
+这是 v1 兼容 API，不再由应用启动链调用。新启动链通过 `internal/config.Manager` 读取 v2 JSONC、迁移 v1，并把不可变运行时快照注入 `model.Client`。
 
-配置示例（字段名可按 profile 实际情况调整）：
+以下仅为需要兼容旧调用方时的 v1 结构；新配置不要继续使用：
 
 ```json
 {
@@ -1853,7 +1852,7 @@ Manager 同文件中实现了三个供 LLM 调用的工具：
 ##### `NewDefaultController(homeDir HomeDirFunc) (*Controller, error)`
 
 职责:
-- 从 `~/.paw/settings.json` 加载全局配置并创建 Controller；`homeDir` 可注入以隔离测试
+- 兼容构造器；应用启动链改用解析后的显式 `settings.json` 路径创建 Controller，测试不再修改 HOME
 
 ##### `CurrentSettings() Config`
 
@@ -1979,7 +1978,7 @@ Manager 同文件中实现了三个供 LLM 调用的工具：
 ### 接入新 MCP server
 
 位置:
-- `~/.paw/mcp.toml`（用户侧）
+- `os.UserConfigDir()/Paw/mcp.toml`（用户侧，可由 `PAW_CONFIG_HOME` 覆盖）
 - `internal/mcp/`（协议实现）
 
 扩展方式:
