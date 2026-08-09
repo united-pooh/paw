@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://paw.invalid/schemas/config-v2.schema.json",
+  "title": "Paw configuration v2",
+  "type": "object",
+  "required": ["schemaVersion", "providers", "models"],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "activeModel": { "type": "string" },
+    "providers": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/provider" }
+    },
+    "models": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/model" }
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "provider": {
+      "type": "object",
+      "properties": {
+        "preset": { "type": "string" },
+        "transport": { "enum": ["openai-responses", "openai-compatible", "anthropic-compatible"] },
+        "endpoint": { "type": "string", "minLength": 1 },
+        "apiPath": { "type": "string" },
+        "auth": {
+          "type": "object",
+          "properties": {
+            "credential": { "type": "string" },
+            "env": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+          },
+          "additionalProperties": false
+        },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+        "body": { "type": "object" },
+        "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 3600 },
+        "retries": { "type": "integer", "minimum": 0, "maximum": 20 },
+        "stream": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "model": {
+      "type": "object",
+      "required": ["provider", "name"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "adapter": { "enum": ["gpt", "deepseek", "openai-compatible"] },
+        "contextWindow": { "type": "integer", "minimum": 1 },
+        "stream": { "type": "boolean" },
+        "capabilities": { "type": "object", "additionalProperties": { "type": "boolean" } },
+        "parameters": { "type": "object" }
+      },
+      "additionalProperties": true
+    }
+  }
+}
