@@ -617,6 +617,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.themePicker != nil {
 			return m.handleThemePickerKey(msg)
 		}
+		if m.configCenter != nil {
+			return m.handleConfigCenterKey(msg)
+		}
 		if m.settingWizard != nil {
 			return m.handleSettingWizardKey(msg)
 		}

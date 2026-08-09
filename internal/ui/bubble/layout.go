@@ -284,6 +284,8 @@ func (m appModel) renderActiveModalBox(layout tuiLayout) string {
 		return m.renderThemePickerBox()
 	case m.modelWizard != nil:
 		return m.renderModelWizardBox()
+	case m.configCenter != nil:
+		return m.renderConfigCenterBox()
 	case m.settingWizard != nil:
 		return m.renderSettingWizardBox()
 	case m.sessionPicker != nil:
@@ -426,6 +428,7 @@ func (m appModel) shouldAnchorTextInputCursor() bool {
 		m.themePicker == nil &&
 		m.modelWizard == nil &&
 		m.settingWizard == nil &&
+		m.configCenter == nil &&
 		m.sessionPicker == nil &&
 		m.subagentPicker == nil &&
 		m.todoPage == nil
