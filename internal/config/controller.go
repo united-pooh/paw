@@ -15,8 +15,8 @@ type ModelRuntime interface {
 }
 
 // Controller bridges the durable registry and the model runtime. It also
-// satisfies the legacy TUI model-controller interface while ensuring saves
-// only change activeModel in config-v2.
+// satisfies the legacy TUI model-controller interface while keeping configured
+// selections to activeModel-only updates and pinning only selected discoveries.
 type Controller struct {
 	manager         *Manager
 	runtime         ModelRuntime
@@ -118,8 +118,8 @@ func (c *Controller) SaveModelConfig(value model.Config) error {
 	wantedProvider := strings.TrimSpace(firstNonEmpty(value.ProfileID, value.Provider))
 	wantedModel := strings.TrimSpace(value.Model)
 	match := ""
-	for id, configuredModel := range snapshot.Document.Models {
-		if configuredModel.Provider == wantedProvider && configuredModel.Name == wantedModel {
+	for id, item := range snapshot.EffectiveModels {
+		if item.Model.Provider == wantedProvider && item.Model.Name == wantedModel {
 			if match != "" {
 				return fmt.Errorf("model %q is ambiguous under provider %q", wantedModel, wantedProvider)
 			}
@@ -127,13 +127,28 @@ func (c *Controller) SaveModelConfig(value model.Config) error {
 		}
 	}
 	if match == "" {
-		return fmt.Errorf("model %q under provider %q is not registered", wantedModel, wantedProvider)
+		return fmt.Errorf("model %q under provider %q is not in the effective catalog", wantedModel, wantedProvider)
 	}
-	updated, err := c.manager.Update(context.Background(), snapshot.Revision, []Operation{SetActiveModel(match)})
+	updated, err := c.activateCatalogModel(context.Background(), match)
 	if err != nil {
 		return err
 	}
 	return c.applySnapshot(updated)
+}
+
+func (c *Controller) activateCatalogModel(ctx context.Context, id string) (Snapshot, error) {
+	id = strings.TrimSpace(id)
+	snapshot := c.manager.Snapshot()
+	item, ok := snapshot.EffectiveModels[id]
+	if !ok {
+		return Snapshot{}, fmt.Errorf("model %q is not in the effective catalog", id)
+	}
+	operations := make([]Operation, 0, 2)
+	if item.Source == ModelSourceDiscovered {
+		operations = append(operations, UpsertModel(item.ID, item.Model))
+	}
+	operations = append(operations, SetActiveModel(item.ID))
+	return c.manager.Update(ctx, snapshot.Revision, operations)
 }
 
 func (c *Controller) Manager() *Manager {
@@ -168,8 +183,7 @@ func (c *Controller) SetActiveModelID(id string) error {
 	if c == nil || c.manager == nil {
 		return fmt.Errorf("configuration manager is unavailable")
 	}
-	snapshot := c.manager.Snapshot()
-	updated, err := c.manager.Update(context.Background(), snapshot.Revision, []Operation{SetActiveModel(id)})
+	updated, err := c.activateCatalogModel(context.Background(), id)
 	if err != nil {
 		return err
 	}
