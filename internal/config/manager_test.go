@@ -3,9 +3,13 @@ package config
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -398,6 +402,416 @@ func TestManagerDiscoveryHotReloadDoesNotRequestAgain(t *testing.T) {
 	if len(discoverer.calls) != 1 {
 		t.Fatalf("discovery calls after hot reload = %#v", discoverer.calls)
 	}
+}
+
+func TestManagerDefaultDiscovererPerformsOneSafeHTTPRequest(t *testing.T) {
+	clearDetectionEnv(t)
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.Method != http.MethodGet {
+			t.Errorf("method = %q", r.Method)
+		}
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"data":[{"id":"live-default"}]}`)
+	}))
+	defer server.Close()
+
+	paths := isolatedPaths(t, false)
+	document := emptyDocument()
+	document.Providers["local"] = discoveryTestProvider(server.URL + "/v1")
+	document.Models["local/manual"] = Model{Provider: "local", Name: "manual"}
+	document.ActiveModel = "local/manual"
+	writeManagerDocument(t, paths, document)
+
+	manager, err := Open(context.Background(), Options{
+		Paths:        paths,
+		Credentials:  &FakeCredentialStore{Unavailable: true},
+		DisableWatch: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("requests = %d, want 1", got)
+	}
+	snapshot := manager.Snapshot()
+	if !snapshot.Ready {
+		t.Fatalf("snapshot not ready: %#v", snapshot.Diagnostics)
+	}
+	if _, ok := snapshot.EffectiveModels["local/live-default"]; !ok {
+		t.Fatalf("default discovery result missing: %#v", snapshot.EffectiveModels)
+	}
+}
+
+func TestManagerDiscoveryEndpointUpdateRejectsRetainedModelsWithoutRequest(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, false)
+	provider := discoveryTestProvider("http://127.0.0.1:1234/v1")
+	document := emptyDocument()
+	document.Providers["local"] = provider
+	document.Models["local/manual"] = Model{Provider: "local", Name: "manual"}
+	document.ActiveModel = "local/manual"
+	writeManagerDocument(t, paths, document)
+	discoverer := &fakeModelDiscoverer{models: []DiscoveredModel{{Name: "stale-live"}}}
+
+	manager, err := Open(context.Background(), Options{Paths: paths, Credentials: &FakeCredentialStore{Unavailable: true}, DisableWatch: true, Discoverer: discoverer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	if _, ok := manager.Snapshot().EffectiveModels["local/stale-live"]; !ok {
+		t.Fatal("startup discovery result missing")
+	}
+
+	provider.Endpoint = "http://127.0.0.1:5678/v1"
+	after, err := manager.Update(context.Background(), manager.Snapshot().Revision, []Operation{UpsertProvider("local", provider)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRetainedDiscoveryRejected(t, after, "local/stale-live")
+	if len(discoverer.calls) != 1 {
+		t.Fatalf("discovery calls after endpoint update = %#v", discoverer.calls)
+	}
+}
+
+func TestManagerDiscoveryPathReloadRejectsRetainedModelsWithoutRequest(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, false)
+	provider := discoveryTestProvider("http://127.0.0.1:1234/v1")
+	document := emptyDocument()
+	document.Providers["local"] = provider
+	document.Models["local/manual"] = Model{Provider: "local", Name: "manual"}
+	document.ActiveModel = "local/manual"
+	writeManagerDocument(t, paths, document)
+	discoverer := &fakeModelDiscoverer{models: []DiscoveredModel{{Name: "stale-live"}}}
+
+	manager, err := Open(context.Background(), Options{Paths: paths, Credentials: &FakeCredentialStore{Unavailable: true}, DisableWatch: true, Discoverer: discoverer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+
+	provider.Discovery.Path = "other-models"
+	document.Providers["local"] = provider
+	writeManagerDocument(t, paths, document)
+	if err := manager.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	assertRetainedDiscoveryRejected(t, manager.Snapshot(), "local/stale-live")
+	if len(discoverer.calls) != 1 {
+		t.Fatalf("discovery calls after path reload = %#v", discoverer.calls)
+	}
+}
+
+func TestManagerDiscoveryFormatWatcherRejectsRetainedModelsWithoutRequest(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, false)
+	provider := discoveryTestProvider("http://127.0.0.1:1234/v1")
+	document := emptyDocument()
+	document.Providers["local"] = provider
+	document.Models["local/manual"] = Model{Provider: "local", Name: "manual"}
+	document.ActiveModel = "local/manual"
+	writeManagerDocument(t, paths, document)
+	discoverer := &fakeModelDiscoverer{models: []DiscoveredModel{{Name: "stale-live"}}}
+
+	manager, err := Open(context.Background(), Options{Paths: paths, Credentials: &FakeCredentialStore{Unavailable: true}, Discoverer: discoverer, Debounce: 20 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	updates, cancel := manager.Subscribe()
+	defer cancel()
+	<-updates
+
+	provider.Discovery.Format = DiscoveryFormatOllamaTags
+	document.Providers["local"] = provider
+	raw, err := marshalStarter(document, "manager discovery format watcher")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWriteFile(paths.GlobalConfig, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case snapshot := <-updates:
+		assertRetainedDiscoveryRejected(t, snapshot, "local/stale-live")
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for discovery format watcher")
+	}
+	if len(discoverer.calls) != 1 {
+		t.Fatalf("discovery calls after format watcher = %#v", discoverer.calls)
+	}
+}
+
+func assertRetainedDiscoveryRejected(t *testing.T, snapshot Snapshot, staleID string) {
+	t.Helper()
+	if _, ok := snapshot.EffectiveModels[staleID]; ok {
+		t.Fatalf("stale retained model reappeared: %#v", snapshot.EffectiveModels)
+	}
+	if snapshot.Discovery.Source != "manual-only" || snapshot.Discovery.CacheState != "rejected" {
+		t.Fatalf("stale discovery status = %#v", snapshot.Discovery)
+	}
+	if snapshot.Discovery.DiscoveredAt != (time.Time{}) {
+		t.Fatalf("stale discoveredAt retained: %v", snapshot.Discovery.DiscoveredAt)
+	}
+	if snapshot.Discovery.EffectiveCount != len(snapshot.EffectiveModels) {
+		t.Fatalf("effective count = %d, catalog = %d", snapshot.Discovery.EffectiveCount, len(snapshot.EffectiveModels))
+	}
+}
+
+func TestManagerDiscoveryFailureWithPassiveOnlyCacheIsManualOnly(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, false)
+	activeProvider := discoveryTestProvider("http://127.0.0.1:1234/v1")
+	passiveProvider := discoveryTestProvider("http://127.0.0.1:5678/v1")
+	document := emptyDocument()
+	document.Providers["active"] = activeProvider
+	document.Providers["passive"] = passiveProvider
+	document.Models["active/manual"] = Model{Provider: "active", Name: "manual"}
+	document.ActiveModel = "active/manual"
+	writeManagerDocument(t, paths, document)
+	if err := writeDiscoveryCache(paths.ModelDiscoveryCache, discoveryCacheFile{
+		Version: discoveryCacheVersion,
+		Providers: map[string]discoveryCacheEntry{
+			"passive": {
+				EndpointFingerprint: discoveryEndpointFingerprint(passiveProvider),
+				Format:              DiscoveryFormatOpenAIList,
+				DiscoveredAt:        time.Unix(100, 0).UTC(),
+				Models:              []string{"cached-passive"},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	discoverer := &fakeModelDiscoverer{err: errors.New("offline")}
+
+	manager, err := Open(context.Background(), Options{Paths: paths, Credentials: &FakeCredentialStore{Unavailable: true}, DisableWatch: true, Discoverer: discoverer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+
+	snapshot := manager.Snapshot()
+	if snapshot.Discovery.Source != "manual-only" || snapshot.Discovery.CacheState != "missing" || snapshot.Discovery.CacheProviders != 1 {
+		t.Fatalf("passive-only cache status = %#v", snapshot.Discovery)
+	}
+	if snapshot.Discovery.DiscoveredAt != (time.Time{}) {
+		t.Fatalf("passive cache timestamp leaked into target status: %v", snapshot.Discovery.DiscoveredAt)
+	}
+	if _, ok := snapshot.EffectiveModels["passive/cached-passive"]; !ok {
+		t.Fatalf("passive cached catalog entry missing: %#v", snapshot.EffectiveModels)
+	}
+}
+
+func TestManagerDiscoveryFailureRecognizesEmptyMatchingTargetCache(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, false)
+	provider := discoveryTestProvider("http://127.0.0.1:1234/v1")
+	document := emptyDocument()
+	document.Providers["local"] = provider
+	document.Models["local/manual"] = Model{Provider: "local", Name: "manual"}
+	document.ActiveModel = "local/manual"
+	writeManagerDocument(t, paths, document)
+	discoveredAt := time.Unix(200, 0).UTC()
+	if err := writeDiscoveryCache(paths.ModelDiscoveryCache, discoveryCacheFile{
+		Version: discoveryCacheVersion,
+		Providers: map[string]discoveryCacheEntry{
+			"local": {
+				EndpointFingerprint: discoveryEndpointFingerprint(provider),
+				Format:              DiscoveryFormatOpenAIList,
+				DiscoveredAt:        discoveredAt,
+				Models:              []string{},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	discoverer := &fakeModelDiscoverer{err: errors.New("offline")}
+
+	manager, err := Open(context.Background(), Options{Paths: paths, Credentials: &FakeCredentialStore{Unavailable: true}, DisableWatch: true, Discoverer: discoverer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+
+	snapshot := manager.Snapshot()
+	if snapshot.Discovery.Source != "cache" || snapshot.Discovery.CacheState != "matched" || snapshot.Discovery.CacheProviders != 1 {
+		t.Fatalf("empty matching target cache status = %#v", snapshot.Discovery)
+	}
+	if !snapshot.Discovery.DiscoveredAt.Equal(discoveredAt) {
+		t.Fatalf("discoveredAt = %v, want %v", snapshot.Discovery.DiscoveredAt, discoveredAt)
+	}
+	if snapshot.Discovery.EffectiveCount != 1 || len(snapshot.EffectiveModels) != 1 {
+		t.Fatalf("empty target cache counts/status = %#v / %#v", snapshot.Discovery, snapshot.EffectiveModels)
+	}
+}
+
+func TestManagerDiscoveryFailurePropagatesTargetCacheTimestamp(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, false)
+	provider := discoveryTestProvider("http://127.0.0.1:1234/v1")
+	document := emptyDocument()
+	document.Providers["local"] = provider
+	document.Models["local/manual"] = Model{Provider: "local", Name: "manual"}
+	document.ActiveModel = "local/manual"
+	writeManagerDocument(t, paths, document)
+	discoveredAt := time.Date(2026, time.August, 12, 10, 11, 12, 0, time.UTC)
+	if err := writeDiscoveryCache(paths.ModelDiscoveryCache, discoveryCacheFile{
+		Version: discoveryCacheVersion,
+		Providers: map[string]discoveryCacheEntry{
+			"local": {
+				EndpointFingerprint: discoveryEndpointFingerprint(provider),
+				Format:              DiscoveryFormatOpenAIList,
+				DiscoveredAt:        discoveredAt,
+				Models:              []string{"cached"},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	manager, err := Open(context.Background(), Options{Paths: paths, Credentials: &FakeCredentialStore{Unavailable: true}, DisableWatch: true, Discoverer: &fakeModelDiscoverer{err: errors.New("offline")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+
+	if got := manager.Snapshot().Discovery.DiscoveredAt; !got.Equal(discoveredAt) {
+		t.Fatalf("target cache discoveredAt = %v, want %v", got, discoveredAt)
+	}
+}
+
+func TestManagerDiscoveryFailureRejectsMismatchedTargetCache(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, false)
+	provider := discoveryTestProvider("http://127.0.0.1:1234/v1")
+	oldProvider := discoveryTestProvider("http://127.0.0.1:5678/v1")
+	document := emptyDocument()
+	document.Providers["local"] = provider
+	document.Models["local/manual"] = Model{Provider: "local", Name: "manual"}
+	document.ActiveModel = "local/manual"
+	writeManagerDocument(t, paths, document)
+	if err := writeDiscoveryCache(paths.ModelDiscoveryCache, discoveryCacheFile{
+		Version: discoveryCacheVersion,
+		Providers: map[string]discoveryCacheEntry{
+			"local": {
+				EndpointFingerprint: discoveryEndpointFingerprint(oldProvider),
+				Format:              DiscoveryFormatOpenAIList,
+				DiscoveredAt:        time.Unix(300, 0).UTC(),
+				Models:              []string{"stale"},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	manager, err := Open(context.Background(), Options{Paths: paths, Credentials: &FakeCredentialStore{Unavailable: true}, DisableWatch: true, Discoverer: &fakeModelDiscoverer{err: errors.New("offline")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+
+	snapshot := manager.Snapshot()
+	if snapshot.Discovery.Source != "manual-only" || snapshot.Discovery.CacheState != "rejected" || snapshot.Discovery.CacheProviders != 0 {
+		t.Fatalf("mismatched target cache status = %#v", snapshot.Discovery)
+	}
+	if snapshot.Discovery.DiscoveredAt != (time.Time{}) {
+		t.Fatalf("rejected target cache timestamp retained: %v", snapshot.Discovery.DiscoveredAt)
+	}
+	if _, ok := snapshot.EffectiveModels["local/stale"]; ok {
+		t.Fatalf("mismatched target cache model reused: %#v", snapshot.EffectiveModels)
+	}
+}
+
+func TestManagerDiscoveryFailureDiagnosticSurvivesReloadAndUpdate(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, false)
+	document := emptyDocument()
+	document.Providers["local"] = discoveryTestProvider("http://127.0.0.1:1234/v1")
+	document.Models["local/one"] = Model{Provider: "local", Name: "one"}
+	document.Models["local/two"] = Model{Provider: "local", Name: "two"}
+	document.ActiveModel = "local/one"
+	writeManagerDocument(t, paths, document)
+	discoverer := &fakeModelDiscoverer{err: errors.New("secret-token=do-not-render")}
+
+	manager, err := Open(context.Background(), Options{Paths: paths, Credentials: &FakeCredentialStore{Unavailable: true}, DisableWatch: true, Discoverer: discoverer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	assertWarningDiagnostic(t, manager.Snapshot(), "continuing with manual models")
+	if err := manager.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	assertWarningDiagnostic(t, manager.Snapshot(), "continuing with manual models")
+	after, err := manager.Update(context.Background(), manager.Snapshot().Revision, []Operation{SetActiveModel("local/two")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertWarningDiagnostic(t, after, "continuing with manual models")
+	if len(discoverer.calls) != 1 {
+		t.Fatalf("discovery calls after diagnostic reload/update = %#v", discoverer.calls)
+	}
+}
+
+func TestManagerDiscoveryCacheWriteFailureDiagnosticSurvivesReloadAndUpdate(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, false)
+	document := emptyDocument()
+	document.Providers["local"] = discoveryTestProvider("http://127.0.0.1:1234/v1")
+	document.Models["local/one"] = Model{Provider: "local", Name: "one"}
+	document.Models["local/two"] = Model{Provider: "local", Name: "two"}
+	document.ActiveModel = "local/one"
+	writeManagerDocument(t, paths, document)
+	blockedParent := filepath.Join(paths.Home, "blocked-cache-parent")
+	if err := os.WriteFile(blockedParent, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	paths.ModelDiscoveryCache = filepath.Join(blockedParent, "model-discovery-cache.json")
+	discoverer := &fakeModelDiscoverer{models: []DiscoveredModel{{Name: "live"}}}
+
+	manager, err := Open(context.Background(), Options{Paths: paths, Credentials: &FakeCredentialStore{Unavailable: true}, DisableWatch: true, Discoverer: discoverer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	assertWarningDiagnostic(t, manager.Snapshot(), "cache could not be updated")
+	if err := manager.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	assertWarningDiagnostic(t, manager.Snapshot(), "cache could not be updated")
+	after, err := manager.Update(context.Background(), manager.Snapshot().Revision, []Operation{SetActiveModel("local/two")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertWarningDiagnostic(t, after, "cache could not be updated")
+	if len(discoverer.calls) != 1 {
+		t.Fatalf("discovery calls after cache diagnostic reload/update = %#v", discoverer.calls)
+	}
+}
+
+func assertWarningDiagnostic(t *testing.T, snapshot Snapshot, substring string) {
+	t.Helper()
+	for _, diagnostic := range snapshot.Diagnostics {
+		if strings.Contains(diagnostic.Message, substring) {
+			if diagnostic.Severity != "warning" {
+				t.Fatalf("diagnostic severity = %q: %#v", diagnostic.Severity, diagnostic)
+			}
+			if strings.Contains(diagnostic.Message, "secret-token") {
+				t.Fatalf("diagnostic leaked secret: %#v", diagnostic)
+			}
+			if !snapshot.Ready {
+				t.Fatalf("warning diagnostic changed Ready: %#v", snapshot.Diagnostics)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing warning diagnostic containing %q: %#v", substring, snapshot.Diagnostics)
 }
 
 func TestFirstRunCreatesStarterWithoutTouchingUserHome(t *testing.T) {

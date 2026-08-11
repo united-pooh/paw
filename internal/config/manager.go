@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,14 +31,27 @@ type Options struct {
 	Debounce              time.Duration
 }
 
+type retainedDiscovery struct {
+	Models              []DiscoveredModel
+	EndpointFingerprint string
+	Format              string
+	DiscoveredAt        time.Time
+	Origin              string
+}
+
 type Manager struct {
-	paths                 Paths
-	credentials           CredentialStore
-	debounce              time.Duration
-	discoverer            ModelDiscoverer
-	disableModelDiscovery bool
-	discoveredModels      map[string][]DiscoveredModel
-	discoveryStatus       DiscoveryStatus
+	paths                       Paths
+	credentials                 CredentialStore
+	debounce                    time.Duration
+	discoverer                  ModelDiscoverer
+	disableModelDiscovery       bool
+	retainedDiscoveries         map[string]retainedDiscovery
+	discoveryCache              discoveryCacheFile
+	discoveryCacheInvalid       bool
+	discoveryStatus             DiscoveryStatus
+	discoveryTargetFingerprint  string
+	discoveryTargetFormat       string
+	startupDiscoveryDiagnostics []Diagnostic
 
 	mu          sync.RWMutex
 	updateMu    sync.Mutex
@@ -66,7 +80,7 @@ func Open(ctx context.Context, options Options) (*Manager, error) {
 		options.Debounce = 180 * time.Millisecond
 	}
 	if options.Discoverer == nil {
-		options.Discoverer = NewHTTPModelDiscoverer(nil)
+		options.Discoverer = NewHTTPModelDiscoverer(http.DefaultClient)
 	}
 	if err := os.MkdirAll(paths.Home, 0o700); err != nil {
 		return nil, fmt.Errorf("create Paw config directory: %w", err)
@@ -107,7 +121,8 @@ func Open(ctx context.Context, options Options) (*Manager, error) {
 		debounce:              options.Debounce,
 		discoverer:            options.Discoverer,
 		disableModelDiscovery: options.DisableModelDiscovery,
-		discoveredModels:      map[string][]DiscoveredModel{},
+		retainedDiscoveries:   map[string]retainedDiscovery{},
+		discoveryCache:        emptyDiscoveryCache(),
 		subscribers:           map[chan Snapshot]struct{}{},
 		done:                  make(chan struct{}),
 	}
@@ -121,9 +136,8 @@ func Open(ctx context.Context, options Options) (*Manager, error) {
 	} else {
 		candidate, loadErr = manager.loadCandidate(ctx, 1)
 		if loadErr == nil {
-			discoveryDiagnostics := manager.initializeModelDiscovery(ctx, candidate.Document, candidate.ActiveModelID)
+			manager.startupDiscoveryDiagnostics = append([]Diagnostic(nil), manager.initializeModelDiscovery(ctx, candidate.Document, candidate.ActiveModelID)...)
 			candidate, loadErr = manager.candidateFromRaw(ctx, candidate.Raw, 1)
-			candidate.Diagnostics = append(discoveryDiagnostics, candidate.Diagnostics...)
 		}
 	}
 	if loadErr != nil {
@@ -255,35 +269,27 @@ func (m *Manager) loadCandidate(ctx context.Context, revision uint64) (Snapshot,
 func (m *Manager) initializeModelDiscovery(ctx context.Context, document Document, activeID string) []Diagnostic {
 	cache, err := readDiscoveryCache(m.paths.ModelDiscoveryCache)
 	diagnostics := []Diagnostic(nil)
-	cacheState := "miss"
+	m.discoveryCacheInvalid = err != nil
 	if err != nil {
 		cache = emptyDiscoveryCache()
-		cacheState = "invalid"
 		diagnostics = append(diagnostics, Diagnostic{
 			Severity: "warning",
 			File:     m.paths.ModelDiscoveryCache,
 			Message:  "model discovery cache could not be read; continuing without cached models",
 		})
 	}
+	m.discoveryCache = cache
 
-	cachedModels, cacheProviders := m.matchingCachedModels(document, cache)
-	m.discoveredModels = cachedModels
-	if cacheProviders > 0 && cacheState != "invalid" {
-		cacheState = "matched"
-	}
+	cachedDiscoveries, cacheProviders := matchingCachedDiscoveries(document, cache)
+	m.retainedDiscoveries = cachedDiscoveries
 	m.discoveryStatus = DiscoveryStatus{
-		Source:         discoverySourceForCache(cacheProviders),
+		Source:         "manual-only",
 		CacheProviders: cacheProviders,
-		CacheState:     cacheState,
+		CacheState:     "missing",
 	}
-	defer m.refreshDiscoveryCounts(document)
 
 	providerID, skippedReason := discoveryTarget(document, activeID)
 	m.discoveryStatus.ProviderID = providerID
-	if m.disableModelDiscovery {
-		m.discoveryStatus.SkippedReason = "disabled"
-		return diagnostics
-	}
 	if skippedReason != "" {
 		m.discoveryStatus.SkippedReason = skippedReason
 		return diagnostics
@@ -291,7 +297,23 @@ func (m *Manager) initializeModelDiscovery(ctx context.Context, document Documen
 
 	provider := mergePreset(providerID, document.Providers[providerID])
 	if provider.Discovery == nil || provider.Discovery.Enabled == nil || !*provider.Discovery.Enabled {
+		m.discoveryStatus.CacheState = cacheStateForProvider(cache, m.discoveryCacheInvalid, providerID, "", "")
 		m.discoveryStatus.SkippedReason = "provider-disabled"
+		return diagnostics
+	}
+
+	fingerprint := discoveryEndpointFingerprint(provider)
+	format := provider.Discovery.Format
+	m.discoveryTargetFingerprint = fingerprint
+	m.discoveryTargetFormat = format
+	targetCache, targetCacheMatched := matchingCacheEntry(cache, providerID, fingerprint, format)
+	m.discoveryStatus.CacheState = cacheStateForProvider(cache, m.discoveryCacheInvalid, providerID, fingerprint, format)
+	if targetCacheMatched {
+		m.discoveryStatus.Source = "cache"
+		m.discoveryStatus.DiscoveredAt = targetCache.DiscoveredAt
+	}
+	if m.disableModelDiscovery {
+		m.discoveryStatus.SkippedReason = "disabled"
 		return diagnostics
 	}
 
@@ -303,34 +325,40 @@ func (m *Manager) initializeModelDiscovery(ctx context.Context, document Documen
 		credential, _, err = resolveCredential(ctx, m.credentials, provider.Auth)
 		if err != nil {
 			m.discoveryStatus.LastError = "model discovery credential is unavailable"
-			diagnostics = append(diagnostics, m.discoveryFailureDiagnostic(providerID))
+			diagnostics = append(diagnostics, m.discoveryFailureDiagnostic(providerID, targetCacheMatched))
 			return diagnostics
 		}
 	}
 	if m.discoverer == nil {
 		m.discoveryStatus.LastError = "model discovery is unavailable"
-		diagnostics = append(diagnostics, m.discoveryFailureDiagnostic(providerID))
+		diagnostics = append(diagnostics, m.discoveryFailureDiagnostic(providerID, targetCacheMatched))
 		return diagnostics
 	}
 
 	models, err := m.discoverer.Discover(ctx, providerID, provider, credential)
 	if err != nil {
 		m.discoveryStatus.LastError = safeModelDiscoveryError(err)
-		diagnostics = append(diagnostics, m.discoveryFailureDiagnostic(providerID))
+		diagnostics = append(diagnostics, m.discoveryFailureDiagnostic(providerID, targetCacheMatched))
 		return diagnostics
 	}
 
 	models, cacheNames := normalizeLiveDiscoveredModels(providerID, models)
-	m.discoveredModels[providerID] = models
 	succeededAt := time.Now().UTC()
+	m.retainedDiscoveries[providerID] = retainedDiscovery{
+		Models:              cloneDiscoveredModels(models),
+		EndpointFingerprint: fingerprint,
+		Format:              format,
+		DiscoveredAt:        succeededAt,
+		Origin:              "live",
+	}
 	m.discoveryStatus.Source = "live"
 	m.discoveryStatus.SucceededAt = succeededAt
 	m.discoveryStatus.DiscoveredAt = succeededAt
 	m.discoveryStatus.LastError = ""
 
 	cache.Providers[providerID] = discoveryCacheEntry{
-		EndpointFingerprint: discoveryEndpointFingerprint(provider),
-		Format:              provider.Discovery.Format,
+		EndpointFingerprint: fingerprint,
+		Format:              format,
 		DiscoveredAt:        succeededAt,
 		Models:              cacheNames,
 	}
@@ -343,7 +371,9 @@ func (m *Manager) initializeModelDiscovery(ctx context.Context, document Documen
 		})
 		return diagnostics
 	}
-	_, m.discoveryStatus.CacheProviders = m.matchingCachedModels(document, cache)
+	m.discoveryCache = cache
+	m.discoveryCacheInvalid = false
+	_, m.discoveryStatus.CacheProviders = matchingCachedDiscoveries(document, cache)
 	m.discoveryStatus.CacheState = "updated"
 	return diagnostics
 }
@@ -373,8 +403,8 @@ func discoveryTarget(document Document, activeID string) (providerID, skippedRea
 	return "", "no-provider"
 }
 
-func (m *Manager) matchingCachedModels(document Document, cache discoveryCacheFile) (map[string][]DiscoveredModel, int) {
-	matched := make(map[string][]DiscoveredModel)
+func matchingCachedDiscoveries(document Document, cache discoveryCacheFile) (map[string]retainedDiscovery, int) {
+	matched := make(map[string]retainedDiscovery)
 	providerIDs := make([]string, 0, len(document.Providers))
 	for providerID := range document.Providers {
 		providerIDs = append(providerIDs, providerID)
@@ -385,7 +415,8 @@ func (m *Manager) matchingCachedModels(document Document, cache discoveryCacheFi
 		if provider.Discovery == nil || provider.Discovery.Enabled == nil || !*provider.Discovery.Enabled {
 			continue
 		}
-		entry, ok := matchingCacheEntry(cache, providerID, discoveryEndpointFingerprint(provider), provider.Discovery.Format)
+		fingerprint := discoveryEndpointFingerprint(provider)
+		entry, ok := matchingCacheEntry(cache, providerID, fingerprint, provider.Discovery.Format)
 		if !ok {
 			continue
 		}
@@ -393,20 +424,34 @@ func (m *Manager) matchingCachedModels(document Document, cache discoveryCacheFi
 		for index, name := range entry.Models {
 			models[index] = DiscoveredModel{ProviderID: providerID, Name: name}
 		}
-		matched[providerID] = models
+		matched[providerID] = retainedDiscovery{
+			Models:              models,
+			EndpointFingerprint: fingerprint,
+			Format:              provider.Discovery.Format,
+			DiscoveredAt:        entry.DiscoveredAt,
+			Origin:              "cache",
+		}
 	}
 	return matched, len(matched)
 }
 
-func (m *Manager) discoveryFailureDiagnostic(providerID string) Diagnostic {
+func cacheStateForProvider(cache discoveryCacheFile, invalid bool, providerID, fingerprint, format string) string {
+	if invalid {
+		return "invalid"
+	}
+	if _, exists := cache.Providers[providerID]; !exists {
+		return "missing"
+	}
+	if _, ok := matchingCacheEntry(cache, providerID, fingerprint, format); ok {
+		return "matched"
+	}
+	return "rejected"
+}
+
+func (m *Manager) discoveryFailureDiagnostic(providerID string, targetCacheMatched bool) Diagnostic {
 	fallback := "manual models"
-	if _, ok := m.discoveredModels[providerID]; ok {
-		m.discoveryStatus.Source = "cache"
+	if targetCacheMatched {
 		fallback = "matching cached models"
-	} else if m.discoveryStatus.CacheProviders > 0 {
-		m.discoveryStatus.Source = "cache"
-	} else {
-		m.discoveryStatus.Source = "manual-only"
 	}
 	detail := strings.TrimSpace(m.discoveryStatus.LastError)
 	if detail == "" {
@@ -420,18 +465,8 @@ func (m *Manager) discoveryFailureDiagnostic(providerID string) Diagnostic {
 	}
 }
 
-func (m *Manager) refreshDiscoveryCounts(document Document) {
-	_, stats := buildEffectiveCatalog(document, m.discoveredModels)
-	m.discoveryStatus.DiscoveredCount = stats.Discovered
-	m.discoveryStatus.FilteredCount = stats.Filtered
-	m.discoveryStatus.EffectiveCount = stats.Merged
-}
-
-func discoverySourceForCache(cacheProviders int) string {
-	if cacheProviders > 0 {
-		return "cache"
-	}
-	return "manual-only"
+func cloneDiscoveredModels(models []DiscoveredModel) []DiscoveredModel {
+	return append([]DiscoveredModel(nil), models...)
 }
 
 func safeModelDiscoveryError(err error) string {
@@ -473,6 +508,98 @@ func normalizeLiveDiscoveredModels(providerID string, models []DiscoveredModel) 
 	return normalized, canonicalNames
 }
 
+func (m *Manager) matchingRetainedDiscoveries(document Document) (map[string][]DiscoveredModel, map[string]retainedDiscovery) {
+	models := make(map[string][]DiscoveredModel)
+	provenance := make(map[string]retainedDiscovery)
+	providerIDs := make([]string, 0, len(document.Providers))
+	for providerID := range document.Providers {
+		providerIDs = append(providerIDs, providerID)
+	}
+	sort.Strings(providerIDs)
+	for _, providerID := range providerIDs {
+		provider := mergePreset(providerID, document.Providers[providerID])
+		if provider.Discovery == nil || provider.Discovery.Enabled == nil || !*provider.Discovery.Enabled {
+			continue
+		}
+		retained, ok := m.retainedDiscoveries[providerID]
+		if !ok || retained.EndpointFingerprint != discoveryEndpointFingerprint(provider) || retained.Format != provider.Discovery.Format {
+			continue
+		}
+		retained.Models = cloneDiscoveredModels(retained.Models)
+		models[providerID] = retained.Models
+		provenance[providerID] = retained
+	}
+	return models, provenance
+}
+
+func (m *Manager) discoveryStatusForDocument(document Document, activeID string, matched map[string]retainedDiscovery) DiscoveryStatus {
+	_, cacheProviders := matchingCachedDiscoveries(document, m.discoveryCache)
+	providerID, skippedReason := discoveryTarget(document, activeID)
+	status := DiscoveryStatus{
+		ProviderID:     providerID,
+		Source:         "manual-only",
+		CacheProviders: cacheProviders,
+		CacheState:     "missing",
+		SkippedReason:  skippedReason,
+	}
+	if providerID == "" || skippedReason != "" {
+		if m.discoveryCacheInvalid {
+			status.CacheState = "invalid"
+		}
+		return status
+	}
+
+	provider := mergePreset(providerID, document.Providers[providerID])
+	enabled := provider.Discovery != nil && provider.Discovery.Enabled != nil && *provider.Discovery.Enabled
+	fingerprint := ""
+	format := ""
+	if provider.Discovery != nil {
+		fingerprint = discoveryEndpointFingerprint(provider)
+		format = provider.Discovery.Format
+	}
+	sameStartupTarget := enabled && providerID == m.discoveryStatus.ProviderID && fingerprint == m.discoveryTargetFingerprint && format == m.discoveryTargetFormat
+	if sameStartupTarget {
+		status = m.discoveryStatus
+		status.ProviderID = providerID
+		status.CacheProviders = cacheProviders
+	} else {
+		status.CacheState = cacheStateForProvider(m.discoveryCache, m.discoveryCacheInvalid, providerID, fingerprint, format)
+	}
+
+	status.Source = "manual-only"
+	status.DiscoveredAt = time.Time{}
+	if retained, ok := matched[providerID]; ok {
+		status.Source = retained.Origin
+		status.DiscoveredAt = retained.DiscoveredAt
+	}
+
+	switch {
+	case m.disableModelDiscovery:
+		status.SkippedReason = "disabled"
+	case !enabled:
+		status = clearDiscoveryAttempt(status)
+		status.ProviderID = providerID
+		status.Source = "manual-only"
+		status.CacheProviders = cacheProviders
+		status.DiscoveredAt = time.Time{}
+		status.SkippedReason = "provider-disabled"
+		if _, exists := m.discoveryCache.Providers[providerID]; exists && status.CacheState != "invalid" {
+			status.CacheState = "rejected"
+		}
+	case !sameStartupTarget:
+		status.SkippedReason = ""
+	}
+	return status
+}
+
+func clearDiscoveryAttempt(status DiscoveryStatus) DiscoveryStatus {
+	status.Attempted = false
+	status.AttemptedAt = time.Time{}
+	status.SucceededAt = time.Time{}
+	status.LastError = ""
+	return status
+}
+
 func (m *Manager) candidateFromRaw(ctx context.Context, raw []byte, revision uint64) (Snapshot, error) {
 	document, diagnostics, err := parseAndValidateGlobal(raw, m.paths.GlobalConfig)
 	if err != nil {
@@ -501,10 +628,12 @@ func (m *Manager) candidateFromRaw(ctx context.Context, raw []byte, revision uin
 		}
 		activeID = override
 	}
-	catalog, stats := buildEffectiveCatalog(document, m.discoveredModels)
+	discoveredModels, retainedProvenance := m.matchingRetainedDiscoveries(document)
+	catalog, stats := buildEffectiveCatalog(document, discoveredModels)
 	runtimeConfig, ready, runtimeDiagnostics := m.runtimeConfig(ctx, document, workspace, activeID, catalog)
+	diagnostics = append(diagnostics, m.startupDiscoveryDiagnostics...)
 	diagnostics = append(diagnostics, runtimeDiagnostics...)
-	discoveryStatus := m.discoveryStatus
+	discoveryStatus := m.discoveryStatusForDocument(document, activeID, retainedProvenance)
 	discoveryStatus.DiscoveredCount = stats.Discovered
 	discoveryStatus.FilteredCount = stats.Filtered
 	discoveryStatus = withEffectiveCount(discoveryStatus, stats.Merged)
