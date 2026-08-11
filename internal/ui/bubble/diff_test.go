@@ -43,11 +43,23 @@ func TestFileMutationDiffPreviewNewFile(t *testing.T) {
 	input := writeInputJSON(t, "new.go", "package p\n")
 	fields := toolInputFields(input)
 	got := fileMutationDiffPreview(fields, "")
-	if !strings.Contains(got, "+ │ package p") {
-		t.Fatalf("new-file diff missing + line: %q", got)
+	if !strings.Contains(got, "  1 + │ package p") {
+		t.Fatalf("new-file diff missing blank old column and new line number: %q", got)
 	}
 	if strings.Contains(got, " - ") {
 		t.Fatalf("new-file diff must have no removed lines: %q", got)
+	}
+}
+
+func TestFileMutationDiffPreviewDeletedFile(t *testing.T) {
+	input := writeInputJSON(t, "old.go", "")
+	fields := toolInputFields(input)
+	got := fileMutationDiffPreview(fields, "package p\n")
+	if !strings.Contains(got, "1   - │ package p") {
+		t.Fatalf("deleted-file diff missing old line number and blank new column: %q", got)
+	}
+	if strings.Contains(got, " + ") {
+		t.Fatalf("deleted-file diff must have no added lines: %q", got)
 	}
 }
 
@@ -87,37 +99,62 @@ func TestFileMutationDiffPreviewEmpty(t *testing.T) {
 	}
 }
 
-func TestStructuredDiffNumbersRemoveBlockRewind(t *testing.T) {
+func TestStructuredDiffTracksOldAndNewNumbersAcrossRemoval(t *testing.T) {
 	old := []string{"a", "b", "c", "d"}
-	newS := []string{"a", "d"} // remove b,c
+	newS := []string{"a", "d"} // remove old lines 2 and 3
 	lines := structuredDiff(old, newS)
-	// Expect: ' ' a(1), '-' b(2), '-' c(3), ' ' d(2) — the remove block
-	// advances through b,c then rewinds by numRemoved, so the line after
-	// the block keeps the removal-start number (2), matching old behavior.
 	if len(lines) != 4 {
 		t.Fatalf("len = %d, want 4: %+v", len(lines), lines)
 	}
-	if lines[1].Kind != '-' || lines[1].Number != 2 || lines[1].Text != "b" {
-		t.Fatalf("line[1] = %+v, want - b @2", lines[1])
+	if lines[1].Kind != '-' || lines[1].OldNumber != 2 || lines[1].NewNumber != 0 || lines[1].Text != "b" {
+		t.Fatalf("line[1] = %+v, want - b @old:2", lines[1])
 	}
-	if lines[2].Kind != '-' || lines[2].Number != 3 || lines[2].Text != "c" {
-		t.Fatalf("line[2] = %+v, want - c @3", lines[2])
+	if lines[2].Kind != '-' || lines[2].OldNumber != 3 || lines[2].NewNumber != 0 || lines[2].Text != "c" {
+		t.Fatalf("line[2] = %+v, want - c @old:3", lines[2])
 	}
-	if lines[3].Kind != ' ' || lines[3].Number != 2 || lines[3].Text != "d" {
-		t.Fatalf("line[3] = %+v, want ' ' d @2 (rewound)", lines[3])
+	if lines[3].Kind != ' ' || lines[3].OldNumber != 4 || lines[3].NewNumber != 2 || lines[3].Text != "d" {
+		t.Fatalf("line[3] = %+v, want context d @old:4,new:2", lines[3])
 	}
 }
 
-func TestStructuredDiffAddDoesNotAdvanceNumber(t *testing.T) {
+func TestStructuredDiffTracksOldAndNewNumbersAcrossInsertion(t *testing.T) {
 	old := []string{"a", "c"}
-	newS := []string{"a", "b", "c"} // insert b at line 2
+	newS := []string{"a", "b", "c"} // insert new line 2
 	lines := structuredDiff(old, newS)
-	// Expect: ' ' a(1), '+' b(2), ' ' c(2)
-	if lines[1].Kind != '+' || lines[1].Number != 2 || lines[1].Text != "b" {
-		t.Fatalf("line[1] = %+v, want + b @2", lines[1])
+	if lines[1].Kind != '+' || lines[1].OldNumber != 0 || lines[1].NewNumber != 2 || lines[1].Text != "b" {
+		t.Fatalf("line[1] = %+v, want + b @new:2", lines[1])
 	}
-	if lines[2].Kind != ' ' || lines[2].Number != 2 || lines[2].Text != "c" {
-		t.Fatalf("line[2] = %+v, want ' ' c @2 (not advanced)", lines[2])
+	if lines[2].Kind != ' ' || lines[2].OldNumber != 2 || lines[2].NewNumber != 3 || lines[2].Text != "c" {
+		t.Fatalf("line[2] = %+v, want context c @old:2,new:3", lines[2])
+	}
+}
+
+func TestRenderDiffPreviewUsesOldAndNewNumberColumns(t *testing.T) {
+	old := []string{"one", "two", "three", "old plan", "old type", "scope", "tail"}
+	newS := []string{"one", "two", "three", "new plan", "new type", "scope", "tail"}
+	preview := renderDiffPreview(structuredDiff(old, newS))
+	for _, want := range []string{
+		"4   - │ old plan",
+		"5   - │ old type",
+		"  4 + │ new plan",
+		"  5 + │ new type",
+		"6 6   │ scope",
+	} {
+		if !strings.Contains(preview, want) {
+			t.Fatalf("preview missing %q:\n%s", want, preview)
+		}
+	}
+}
+
+func TestNumberedDiffDetectionAcceptsOldAndNewColumns(t *testing.T) {
+	for _, line := range []string{
+		"6 7   │ context",
+		"6   - │ removed",
+		"  7 + │ added",
+	} {
+		if !isNumberedDiffLine(line) {
+			t.Fatalf("isNumberedDiffLine(%q) = false, want true", line)
+		}
 	}
 }
 

@@ -213,41 +213,22 @@ func fileMutationChangeCounts(fields []toolDisplayField, oldContent string) (dif
 
 func fileMutationDiffPreview(fields []toolDisplayField, oldContent string) string {
 	oldContent, newContent := fileMutationContents(fields, oldContent)
-
 	if oldContent == "" && newContent == "" {
 		return ""
 	}
-	// 新建文件（无旧内容）：只显示 + 行
-	if oldContent == "" {
-		return strings.Join(limitDiffPreviewLines(numberedLines("+", newContent)), "\n")
-	}
-	// 删除文件或清空（无新内容）：只显示 - 行
-	if newContent == "" {
-		return strings.Join(limitDiffPreviewLines(numberedLines("-", oldContent)), "\n")
-	}
 
-	lines := structuredDiff(splitLines(oldContent), splitLines(newContent))
-	return renderDiffPreview(lines)
+	var oldLines, newLines []string
+	if oldContent != "" {
+		oldLines = splitLines(oldContent)
+	}
+	if newContent != "" {
+		newLines = splitLines(newContent)
+	}
+	return renderDiffPreview(structuredDiff(oldLines, newLines))
 }
 
 func splitLines(s string) []string {
 	return strings.Split(strings.TrimRight(s, "\n"), "\n")
-}
-
-func numberedLines(prefix, content string) []string {
-	lines := splitLines(content)
-	total := len(lines)
-	width := len(fmt.Sprintf("%d", total))
-	out := make([]string, total)
-	for i, l := range lines {
-		out[i] = fmt.Sprintf("%*d %s │ %s", width, i+1, prefix, l)
-	}
-	return out
-}
-
-func formatNumberedDiffLine(prefix string, lineNumber, total int, content string) string {
-	width := len(fmt.Sprintf("%d", total))
-	return fmt.Sprintf("%*d %s │ %s", width, lineNumber, prefix, content)
 }
 
 func limitDiffPreviewLines(lines []string) []string {

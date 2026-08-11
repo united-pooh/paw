@@ -1847,7 +1847,7 @@ func TestBashToolCallBodyHidesDefaultCWD(t *testing.T) {
 
 func TestWriteToolCallBodyRendersDiffPreview(t *testing.T) {
 	body := formatToolCallBody("Write", []byte(`{"file_path":"main.py","content":"def hanoi():\n    pass\n"}`), "")
-	for _, want := range []string{"Write", "main.py", "1 + │ def hanoi():", "2 + │     pass"} {
+	for _, want := range []string{"Write", "main.py", "  1 + │ def hanoi():", "  2 + │     pass"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("write body = %q, want %q", body, want)
 		}
@@ -1861,7 +1861,7 @@ func TestWriteToolCallBodyRendersDiffPreview(t *testing.T) {
 
 func TestUpdateToolCallBodyRendersOldNewDiffPreview(t *testing.T) {
 	body := formatToolCallBody("Update", []byte(`{"file_path":"main.py","old_string":"return 1\n","new_string":"return 2\n"}`), "")
-	for _, want := range []string{"Update", "main.py", "1 - │ return 1", "1 + │ return 2"} {
+	for _, want := range []string{"Update", "main.py", "1   - │ return 1", "  1 + │ return 2"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("update body = %q, want %q", body, want)
 		}

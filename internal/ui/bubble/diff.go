@@ -8,13 +8,14 @@ import (
 )
 
 // DiffLine is one line of a structured line diff.
-// Kind is ' ' (unchanged), '+' (added), or '-' (removed).
-// Number is the old-file line number; added lines carry the line number at
-// the insertion position and do not advance the counter.
+// Kind is ' ' (unchanged), '+' (added), or '-' (removed). OldNumber and
+// NewNumber are independent file coordinates; the absent side of an added or
+// removed line is zero.
 type DiffLine struct {
-	Kind   rune
-	Number int
-	Text   string
+	Kind      rune
+	OldNumber int
+	NewNumber int
+	Text      string
 }
 
 type lcsOp struct {
@@ -65,33 +66,25 @@ func lcsOps(a, b []string) []lcsOp {
 }
 
 // structuredDiff computes the LCS edit script between oldLines and newLines and
-// returns ordered DiffLines carrying old-file line numbers, matching Claude
-// Code's numberDiffLines strategy: unchanged/removed advance the counter; an
-// added line shows the current number without advancing; a removed block
-// advances through the block then rewinds so subsequent lines keep their number.
+// assigns each row its independent old-file and new-file coordinates. Removed
+// rows have no new coordinate, added rows have no old coordinate, and context
+// rows advance both counters.
 func structuredDiff(oldLines, newLines []string) []DiffLine {
 	ops := lcsOps(oldLines, newLines)
 	numbered := make([]DiffLine, 0, len(ops))
-	lineNum := 1
-	for idx := 0; idx < len(ops); {
-		op := ops[idx]
+	oldLine, newLine := 1, 1
+	for _, op := range ops {
 		switch op.kind {
 		case ' ':
-			numbered = append(numbered, DiffLine{' ', lineNum, op.text})
-			lineNum++
-			idx++
+			numbered = append(numbered, DiffLine{Kind: ' ', OldNumber: oldLine, NewNumber: newLine, Text: op.text})
+			oldLine++
+			newLine++
 		case '+':
-			numbered = append(numbered, DiffLine{'+', lineNum, op.text})
-			idx++
+			numbered = append(numbered, DiffLine{Kind: '+', NewNumber: newLine, Text: op.text})
+			newLine++
 		case '-':
-			numRemoved := 0
-			for idx < len(ops) && ops[idx].kind == '-' {
-				numbered = append(numbered, DiffLine{'-', lineNum, ops[idx].text})
-				lineNum++
-				numRemoved++
-				idx++
-			}
-			lineNum -= numRemoved
+			numbered = append(numbered, DiffLine{Kind: '-', OldNumber: oldLine, Text: op.text})
+			oldLine++
 		}
 	}
 	return numbered
@@ -111,24 +104,25 @@ func diffCounts(lines []DiffLine) (added, removed int) {
 }
 
 // renderDiffPreview applies a 3-line context window around changed lines,
-// collapses unchanged runs with "...", formats each line with a number column,
-// and caps total output length via limitDiffPreviewLines.
+// collapses unchanged runs with "...", formats each line with independent old
+// and new number columns, and caps total output length via limitDiffPreviewLines.
 func renderDiffPreview(lines []DiffLine) string {
-	maxLine := 0
-	for _, n := range lines {
-		if n.Number > maxLine {
-			maxLine = n.Number
+	maxOldLine, maxNewLine := 0, 0
+	for _, line := range lines {
+		if line.OldNumber > maxOldLine {
+			maxOldLine = line.OldNumber
+		}
+		if line.NewNumber > maxNewLine {
+			maxNewLine = line.NewNumber
 		}
 	}
-	width := 1
-	if maxLine > 0 {
-		width = len(fmt.Sprintf("%d", maxLine))
-	}
+	oldWidth := maxInt(1, len(fmt.Sprintf("%d", maxOldLine)))
+	newWidth := maxInt(1, len(fmt.Sprintf("%d", maxNewLine)))
 
 	const context = 3
 	visible := make([]bool, len(lines))
-	for i, n := range lines {
-		if n.Kind != ' ' {
+	for i, line := range lines {
+		if line.Kind != ' ' {
 			for j := maxInt(0, i-context); j <= minInt(len(lines)-1, i+context); j++ {
 				visible[j] = true
 			}
@@ -137,7 +131,7 @@ func renderDiffPreview(lines []DiffLine) string {
 
 	out := []string{}
 	prevVisible := false
-	for i, n := range lines {
+	for i, line := range lines {
 		if !visible[i] {
 			prevVisible = false
 			continue
@@ -146,16 +140,25 @@ func renderDiffPreview(lines []DiffLine) string {
 			out = append(out, "...")
 		}
 		prevVisible = true
-		switch n.Kind {
+		oldNumber := formatDiffLineNumber(line.OldNumber, oldWidth)
+		newNumber := formatDiffLineNumber(line.NewNumber, newWidth)
+		switch line.Kind {
 		case '-':
-			out = append(out, fmt.Sprintf("%*d - │ %s", width, n.Number, n.Text))
+			out = append(out, fmt.Sprintf("%s %s - │ %s", oldNumber, newNumber, line.Text))
 		case '+':
-			out = append(out, fmt.Sprintf("%*d + │ %s", width, n.Number, n.Text))
+			out = append(out, fmt.Sprintf("%s %s + │ %s", oldNumber, newNumber, line.Text))
 		default:
-			out = append(out, fmt.Sprintf("%*d   │ %s", width, n.Number, n.Text))
+			out = append(out, fmt.Sprintf("%s %s   │ %s", oldNumber, newNumber, line.Text))
 		}
 	}
 	return strings.Join(limitDiffPreviewLines(out), "\n")
+}
+
+func formatDiffLineNumber(number, width int) string {
+	if number <= 0 {
+		return strings.Repeat(" ", width)
+	}
+	return fmt.Sprintf("%*d", width, number)
 }
 
 // fileMutationContents extracts the legacy old/new content pair used when no

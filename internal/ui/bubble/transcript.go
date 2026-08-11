@@ -2610,7 +2610,10 @@ func isNumberedDiffLine(line string) bool {
 	if fields[1] == "│" {
 		return true
 	}
-	return len(fields) >= 3 && (fields[1] == "+" || fields[1] == "-") && fields[2] == "│"
+	if len(fields) < 3 || fields[2] != "│" {
+		return false
+	}
+	return isDecimalNumber(fields[1]) || fields[1] == "+" || fields[1] == "-"
 }
 
 func hasUnifiedDiffHunk(lines []string) bool {
