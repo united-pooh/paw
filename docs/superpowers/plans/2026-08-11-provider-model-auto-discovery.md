@@ -1,7 +1,7 @@
 # Provider 模型自动发现实现计划（完成记录）
 
-**状态：** 功能实现、逐任务评审、Task 8 验证和四项最终 Important 集成修正均已完成。
-**实现范围：** `fcbd952c` 之后的 18 个 feature/fix commits，当前实现基线 `ec85c22c51d8235e69e08d8fcfe515ebe345fa12`。
+**状态：** 功能实现、逐任务评审、Task 8 验证、四项最终 Important 集成修正和最终 TOCTOU blocker 均已完成。
+**实现范围：** `fcbd952c` 之后的 19 个 feature/fix commits，当前实现基线 `56399b59b63379fa7217dd88f0ce236dbe53e1a7`。
 **原则：** 本记录描述已经评审通过的代码，不再保留与实现矛盾的预期伪代码或未采用方案。
 
 ## 最终架构
@@ -13,7 +13,7 @@
 - HTTP discovery 保留 raw 名称；Manager 在 trim/dedup 前执行 512 UTF-8 bytes、Unicode control 和空白拒绝，并把 raw rejection 计入 `FilteredCount`。
 - `DiscoveryConfig.PathSet` 区分 omitted path 与显式空 path，并贯穿 preset、clone、merge、Upsert 和 JSONC round trip。
 - discovered-only 激活携带 `CatalogSelection`，要求 prospective active ID 与选择完全一致，通过文件基线校验、runtime preflight、`commitPreview` 和 rollback 事务提交。
-- global/workspace bytes 与 existence 在 preview、commit candidate 构建前及 writer 前比较；外部编辑冲突不会被覆盖。
+- global/workspace bytes 与 existence 在 preview、commit candidate 构建前和 CAS writer 内比较；`0600` advisory lock 从 writer 最终校验保持到 atomic replace，同 baseline 多 Manager 只允许一个提交。
 - `/model`、Configuration Center 和 Diagnostics 消费 `EffectiveModels`/`DiscoveryStatus`；所有状态文本经过终端净化和 240-cell 截断。
 - subagent discovery 禁用由显式 `workerMode` 决定；worker.start 在 `config.Open` 前校验 `MaxDepth >= 1` 和 `1 <= Depth <= MaxDepth`。
 
@@ -28,18 +28,24 @@
 - `internal/config/model_cache.go`
 - `internal/config/model_cache_test.go`
 - `internal/config/controller_test.go`
+- `internal/config/config_lock_unix.go`
+- `internal/config/config_lock_windows.go`
+- `internal/config/config_lock_fallback.go`
 - `cmd/agent/bootstrap_test.go`
 - `cmd/agent/worker_test.go`
 
 ### 修改
 
+- `go.mod`
 - `internal/config/types.go`
 - `internal/config/catalog.go`
 - `internal/config/validate.go`
 - `internal/config/schema/config-v2.schema.json`
 - `internal/config/paths.go`
 - `internal/config/paths_test.go`
+- `internal/config/atomic.go`
 - `internal/config/manager.go`
+- `internal/config/migrate.go`
 - `internal/config/manager_test.go`
 - `internal/config/controller.go`
 - `internal/ui/bubble/bubble.go`
@@ -219,9 +225,26 @@
 
 验证记录：新增测试先以 `PathSet` 缺失编译失败进入 red；实现后 focused tests repeated 10 次、完整 `internal/config`、config+bubble race、`cmd/agent`、`go test ./...`、`go vet ./...`、gofmt、schema/security/diff checks 均通过。最终文档提交后再次执行交付验证。
 
+## Final TOCTOU blocker — CAS atomic writer 与跨进程锁
+
+最终 review 指出 Manager 原有“writer 前重读”与 `replaceFile` 之间仍有 TOCTOU：两个独立 Manager 可同时通过相同 baseline 校验，随后 last-write-win。该 blocker 采用 TDD 修正，未启动 subagent：
+
+- [x] 先把 Controller 的 global/workspace 外部编辑测试移动到 temp 已创建同步、writer 内最终校验尚未执行的确定性 hook；初始编译因 `configWriteHook` 缺失进入 red。
+- [x] 增加同路径双 Manager 并发测试；两个 writer 都先完成 temp 准备，再同时竞争提交，断言 exactly one success、one `ErrRevisionConflict`、disk 等于 winner、loser Snapshot 不发布 candidate。
+- [x] 新 CAS writer 接收 expected global state 与 Manager file-state validation callback；temp `0600` write+`Sync`+close 后获取 lock，持锁重读 expected global、回调重读 global/workspace，成功才 atomic replace。
+- [x] mismatch/read conflict 删除 temp 且不 replace；Controller 恢复旧 runtime，外部 global/workspace bytes 保留，Manager Snapshot 保持旧 revision/content。
+- [x] `<global-config>.lock` 在 Flock-capable Unix 使用 `golang.org/x/sys/unix.Flock`，Windows 使用 `LockFileEx`；其他目标保留可构建的进程内 fallback。lock file mode 为 `0600`。
+- [x] starter 与 legacy migration 也改用 expected-missing CAS，不覆盖其他进程已创建的 global winner；schema/cache 继续使用普通 `atomicWriteFile`，watcher 仍只匹配 global/workspace config path，不消费 lock/temp 事件。
+
+提交：
+
+- `56399b59` — `fix(config): serialize CAS config commits`
+
+验证记录：新 transaction tests repeated 20 次、完整 config、config+bubble race、`cmd/agent`、`go test ./...`、`go vet ./...`、gofmt/diff/security checks，以及 Windows/Linux/Plan 9 config package cross-build 均通过。
+
 ## 提交总览
 
-截至实现基线共有 18 个 feature/fix 提交：
+截至实现基线共有 19 个 feature/fix 提交：
 
 ```text
 c1fd0a52 feat(config): add effective model catalog
@@ -242,6 +265,7 @@ c75409a0 fix(tui): preserve catalog selection identity
 27e00551 fix(agent): avoid model discovery in subagent workers
 d65c4eb6 fix(agent): identify subagent workers explicitly
 ec85c22c fix(config): close final discovery integration gaps
+56399b59 fix(config): serialize CAS config commits
 ```
 
-逐任务 report 与最终集成修正记录 focused、package、race、vet、repository、schema/security/diff 命令；最终结果以 `.superpowers/sdd/task-8-report.md` 为准。
+逐任务 report、最终集成修正和 CAS/lock TOCTOU 修正记录 focused、package、race、vet、repository、cross-build、schema/security/diff 命令；最终结果以 `.superpowers/sdd/task-8-report.md` 为准。

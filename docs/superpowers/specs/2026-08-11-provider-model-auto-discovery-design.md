@@ -1,7 +1,7 @@
 # Provider 模型自动发现设计（已实现）
 
 **日期：** 2026-08-11
-**状态：** 已实现、已评审并完成最终集成修正；实现基线 `ec85c22c51d8235e69e08d8fcfe515ebe345fa12`
+**状态：** 已实现、已评审并完成最终集成与 TOCTOU 修正；实现基线 `56399b59b63379fa7217dd88f0ce236dbe53e1a7`
 
 ## 概述
 
@@ -227,12 +227,16 @@ fingerprint 来自 `discoveryURL(endpoint, path)` 解析出的**实际 GET URL**
 
 诊断按当前 target/fingerprint/format 重新判断适用性；旧 Provider 的启动失败不会污染后来不相关的配置。发现失败是 warning/fallback，不改变既有 `Ready` 语义。
 
-### update 文件状态冲突
+### update 文件状态冲突与 CAS 提交
 
 - Snapshot 私有基线保存 global/workspace 的 bytes 与 existence；missing、created、deleted 和 content replacement 都是不同状态。
 - `PreviewUpdate` 在 `updateMu` 内先重读两份文件并与 originating Snapshot 比较；不一致立即返回 `ErrRevisionConflict`，不 patch、不写盘、不发布。
-- `Update`/`commitPreview` 重算 candidate 时再次执行同一比较，并在 atomic writer 前最后重读一次，覆盖 candidate 构建期间发生的外部编辑。
-- candidate 使用第一次校验时捕获的 workspace bytes，不在构建途中静默吸收外部 workspace 状态。外部编辑始终保留，Manager 继续发布旧 Snapshot，直到显式 reload/watcher 成功。
+- `Update`/`commitPreview` 重算 candidate 时再次执行同一比较；candidate 使用第一次校验时捕获的 workspace bytes，不在构建途中静默吸收外部 workspace 状态。
+- global config 写入使用专用 CAS atomic writer，而 schema、discovery cache 等继续使用普通 `atomicWriteFile`。Manager commit 提供 originating expected state 与 callback；starter/migration 使用 expected-missing CAS，若另一个 Paw 进程已创建 winner 则不覆盖并继续加载 winner。CAS writer 先在目标目录创建 `0600` temp、写入并 `fsync`、关闭，再进入提交窗口。
+- 提交窗口使用 `<global-config>.lock` advisory lock：支持 `Flock` 的 Unix 目标通过 `golang.org/x/sys/unix.Flock(LOCK_EX)` 跨进程序列化，Windows 使用 `LockFileEx`；其余可构建目标使用进程内后备锁。lock file 明确收紧为 `0600`。
+- writer 在持锁状态下重新比较 expected global existence+bytes，并调用 Manager 提供的第二次 global/workspace 校验 callback；锁一直保持到 `replaceFile` 完成。任一 mismatch 返回 `ErrRevisionConflict`，defer 删除已同步 temp，不替换目标。
+- 两个拥有同一 baseline 的 Manager 即使都已生成并同步 temp，也只有先获得锁者可提交；后获得锁者看到 global baseline 已变化并 conflict，不再 last-write-win。
+- 外部编辑始终保留，Manager 继续发布旧 Snapshot，直到显式 reload/watcher 成功；CAS temp/lock 文件事件不匹配 watched config path，不破坏现有 watcher 兼容性。
 
 ## discovered-only 模型事务激活
 
@@ -258,8 +262,8 @@ type CatalogSelection struct {
 4. `ActivateCatalogSelection` 必须确认 `prospective.ActiveModelID == selection.ID`；workspace `activeModel` 或 `PAW_MODEL` 若覆盖请求，则返回包含移除/修改建议的错误，且 discovered model 不 pin。
 5. Controller 在 `applyMu` 下保存旧 runtime config，先把 truthful prospective runtime 应用到 client。
 6. `commitPreview` 再次验证文件基线、重构 candidate，并校验 durable content、workspace、effective catalog 和 runtime config 与 preview 完全一致。
-7. atomic writer 前最后重读 global/workspace；校验成功后才用 `0600` 原子写 config 并发布 Snapshot。
-8. runtime apply、revision、credential/workspace/env drift、外部文件编辑或写盘失败时恢复旧 runtime；外部 bytes 保留，Manager Snapshot 在 reload 前不变。
+7. CAS writer 写入并同步 `0600` temp，获取跨进程 config lock，在 writer 内再次比较 expected global 并回调校验 global/workspace；仅校验成功才原子 replace 并发布 Snapshot。
+8. runtime apply、revision、credential/workspace/env drift、外部文件编辑、CAS conflict 或写盘失败时恢复旧 runtime；外部 bytes 保留、失败 temp 被删除，Manager Snapshot 在 reload 前不变。
 
 该流程保证只登记所选 discovered 模型，不产生悬空 active model，也不静默激活被其他身份占用的 stale ID。
 
@@ -298,7 +302,8 @@ worker 在调用 `config.Open` 前必须满足：
 6. cache、错误、diagnostic 和 UI status 不保存或回显 credential、Authorization、Cookie 或 response body。
 7. Snapshot/retained/cache 都通过 clone 和只读替换保持发布后不可变。
 8. 用户选择通过 CatalogSelection + truthful prospective active ID + PreviewUpdate/commitPreview 保持运行时、文件和 Snapshot 一致。
-9. global/workspace 的外部 bytes/existence 变化在 preview 与 commit 写入前产生 `ErrRevisionConflict`，不会被覆盖。
+9. global/workspace 的外部 bytes/existence 变化在 preview、Manager commit 校验或 CAS writer 内部最终校验时产生 `ErrRevisionConflict`，不会被覆盖。
+10. 同一 global config 的 Paw writer 通过 `0600` advisory lock 跨进程序列化；锁覆盖 writer 内部最终校验到 atomic replacement，防止相同 baseline 的并发 Manager last-write-win。
 
 ## 实现文件
 
@@ -306,6 +311,7 @@ worker 在调用 `config.Open` 前必须满足：
 - HTTP discovery：`internal/config/model_discovery.go`
 - cache/path：`internal/config/model_cache.go`、`paths.go`
 - lifecycle/runtime：`internal/config/manager.go`
+- CAS/atomic/lock：`internal/config/atomic.go`、`config_lock_unix.go`、`config_lock_windows.go`、`config_lock_fallback.go`
 - transactional activation：`internal/config/controller.go`
 - UI：`internal/ui/bubble/{bubble.go,command_helpers.go,config_center.go,model_wizard.go,types.go}`
 - worker boundary：`cmd/agent/{bootstrap.go,worker.go}`
@@ -314,4 +320,4 @@ worker 在调用 `config.Open` 前必须满足：
 
 ## 验收状态
 
-实现已经通过逐任务 spec/quality review，并在 `ec85c22c51d8235e69e08d8fcfe515ebe345fa12` 完成四项最终 Important 集成修正：外部文件冲突、override truthfulness、显式空 discovery path presence、raw 名称预 trim 安全过滤。最终 focused/repeated、full/race、`cmd/agent`、`go test ./...`、`go vet ./...`、gofmt、schema/security/diff 命令与结果记录在 `.superpowers/sdd/task-8-report.md`。
+实现已经通过逐任务 spec/quality review，并在 `ec85c22c51d8235e69e08d8fcfe515ebe345fa12` 完成四项最终 Important 集成修正：外部文件冲突、override truthfulness、显式空 discovery path presence、raw 名称预 trim 安全过滤。最终 TOCTOU blocker 在 `56399b59b63379fa7217dd88f0ce236dbe53e1a7` 通过 CAS atomic writer、advisory lock 和 writer 内二次校验关闭；同 baseline 双 Manager 测试确认 exactly-one commit。focused/repeated、full/race、`cmd/agent`、`go test ./...`、`go vet ./...`、gofmt、cross-build/security/diff 命令与结果记录在 `.superpowers/sdd/task-8-report.md`。
