@@ -39,11 +39,25 @@ type retainedDiscovery struct {
 	Origin              string
 }
 
+type retainedDiscoveryDiagnostic struct {
+	Diagnostic          Diagnostic
+	Kind                string
+	ProviderID          string
+	EndpointFingerprint string
+	Format              string
+}
+
+const (
+	discoveryDiagnosticCacheRead = "cache-read"
+	discoveryDiagnosticTarget    = "target"
+)
+
 type Manager struct {
 	paths                       Paths
 	credentials                 CredentialStore
 	debounce                    time.Duration
 	discoverer                  ModelDiscoverer
+	discoveryCacheWriter        func(string, discoveryCacheFile) error
 	disableModelDiscovery       bool
 	retainedDiscoveries         map[string]retainedDiscovery
 	discoveryCache              discoveryCacheFile
@@ -51,7 +65,7 @@ type Manager struct {
 	discoveryStatus             DiscoveryStatus
 	discoveryTargetFingerprint  string
 	discoveryTargetFormat       string
-	startupDiscoveryDiagnostics []Diagnostic
+	startupDiscoveryDiagnostics []retainedDiscoveryDiagnostic
 
 	mu          sync.RWMutex
 	updateMu    sync.Mutex
@@ -65,6 +79,13 @@ type Manager struct {
 }
 
 func Open(ctx context.Context, options Options) (*Manager, error) {
+	return openManager(ctx, options, writeDiscoveryCache)
+}
+
+func openManager(ctx context.Context, options Options, cacheWriter func(string, discoveryCacheFile) error) (*Manager, error) {
+	if cacheWriter == nil {
+		cacheWriter = writeDiscoveryCache
+	}
 	paths := options.Paths
 	if strings.TrimSpace(paths.Home) == "" {
 		var err error
@@ -120,6 +141,7 @@ func Open(ctx context.Context, options Options) (*Manager, error) {
 		credentials:           options.Credentials,
 		debounce:              options.Debounce,
 		discoverer:            options.Discoverer,
+		discoveryCacheWriter:  cacheWriter,
 		disableModelDiscovery: options.DisableModelDiscovery,
 		retainedDiscoveries:   map[string]retainedDiscovery{},
 		discoveryCache:        emptyDiscoveryCache(),
@@ -134,15 +156,40 @@ func Open(ctx context.Context, options Options) (*Manager, error) {
 		candidate = Snapshot{Document: emptyDocument(), Revision: 1, ContentHash: hex.EncodeToString(hash[:]), Diagnostics: diagnostics, Ready: false, LoadedAt: time.Now(), Raw: raw}
 		diagnostics = nil
 	} else {
-		candidate, loadErr = manager.loadCandidate(ctx, 1)
-		if loadErr == nil {
-			manager.startupDiscoveryDiagnostics = append([]Diagnostic(nil), manager.initializeModelDiscovery(ctx, candidate.Document, candidate.ActiveModelID)...)
-			candidate, loadErr = manager.candidateFromRaw(ctx, candidate.Raw, 1)
+		document, activeID, err := manager.loadDiscoverySelection()
+		if err == nil {
+			manager.initializeModelDiscovery(ctx, document, activeID)
 		}
+	}
+
+	var watchContext context.Context
+	if !options.DisableWatch {
+		var err error
+		watchContext, err = manager.registerWatcher(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	cleanupRegisteredWatcher := func() {
+		if manager.cancel != nil {
+			manager.cancel()
+		}
+		if manager.watcher != nil {
+			_ = manager.watcher.Close()
+		}
+	}
+
+	// The discovery selection above is deliberately parse-only. Register all
+	// watches before the one full runtime/profile load so both global and
+	// workspace changes during discovery, or immediately after it, are either
+	// observed by this synchronous read or queued for the watch loop.
+	if migrationErr == nil {
+		candidate, loadErr = manager.loadCandidate(ctx, 1)
 	}
 	if loadErr != nil {
 		raw, readErr := os.ReadFile(paths.GlobalConfig)
 		if readErr != nil {
+			cleanupRegisteredWatcher()
 			return nil, loadErr
 		}
 		hash := sha256.Sum256(raw)
@@ -150,10 +197,8 @@ func Open(ctx context.Context, options Options) (*Manager, error) {
 	}
 	candidate.Diagnostics = append(diagnostics, candidate.Diagnostics...)
 	manager.snapshot = candidate
-	if !options.DisableWatch {
-		if err := manager.startWatcher(ctx); err != nil {
-			return nil, err
-		}
+	if watchContext != nil {
+		go manager.watchLoop(watchContext)
 	}
 	return manager, nil
 }
@@ -266,22 +311,81 @@ func (m *Manager) loadCandidate(ctx context.Context, revision uint64) (Snapshot,
 	return m.candidateFromRaw(ctx, raw, revision)
 }
 
-func (m *Manager) initializeModelDiscovery(ctx context.Context, document Document, activeID string) []Diagnostic {
+type parsedCandidate struct {
+	document     Document
+	workspace    WorkspaceDocument
+	workspaceRaw []byte
+	activeID     string
+	diagnostics  []Diagnostic
+}
+
+func (m *Manager) loadDiscoverySelection() (Document, string, error) {
+	raw, err := os.ReadFile(m.paths.GlobalConfig)
+	if err != nil {
+		return Document{}, "", err
+	}
+	parsed, err := m.parseCandidate(raw)
+	if err != nil {
+		return Document{}, "", err
+	}
+	return parsed.document, parsed.activeID, nil
+}
+
+func (m *Manager) parseCandidate(raw []byte) (parsedCandidate, error) {
+	document, diagnostics, err := parseAndValidateGlobal(raw, m.paths.GlobalConfig)
+	if err != nil {
+		return parsedCandidate{}, err
+	}
+	workspace := WorkspaceDocument{}
+	workspaceRaw := []byte(nil)
+	if m.paths.WorkspaceConfig != "" {
+		workspaceRaw, err = os.ReadFile(m.paths.WorkspaceConfig)
+		if err == nil {
+			workspace, err = parseAndValidateWorkspace(workspaceRaw, m.paths.WorkspaceConfig, document)
+			if err != nil {
+				return parsedCandidate{}, err
+			}
+		} else if !os.IsNotExist(err) {
+			return parsedCandidate{}, err
+		}
+	}
+	activeID := strings.TrimSpace(document.ActiveModel)
+	if workspace.ActiveModel != "" {
+		activeID = workspace.ActiveModel
+	}
+	if override := strings.TrimSpace(os.Getenv("PAW_MODEL")); override != "" {
+		if _, ok := document.Models[override]; !ok {
+			return parsedCandidate{}, fmt.Errorf("PAW_MODEL references missing model %q", override)
+		}
+		activeID = override
+	}
+	return parsedCandidate{
+		document:     document,
+		workspace:    workspace,
+		workspaceRaw: workspaceRaw,
+		activeID:     activeID,
+		diagnostics:  diagnostics,
+	}, nil
+}
+
+func (m *Manager) initializeModelDiscovery(ctx context.Context, document Document, activeID string) {
 	cache, err := readDiscoveryCache(m.paths.ModelDiscoveryCache)
-	diagnostics := []Diagnostic(nil)
 	m.discoveryCacheInvalid = err != nil
 	if err != nil {
 		cache = emptyDiscoveryCache()
-		diagnostics = append(diagnostics, Diagnostic{
-			Severity: "warning",
-			File:     m.paths.ModelDiscoveryCache,
-			Message:  "model discovery cache could not be read; continuing without cached models",
+		m.startupDiscoveryDiagnostics = append(m.startupDiscoveryDiagnostics, retainedDiscoveryDiagnostic{
+			Kind: discoveryDiagnosticCacheRead,
+			Diagnostic: Diagnostic{
+				Severity: "warning",
+				File:     m.paths.ModelDiscoveryCache,
+				Message:  "model discovery cache could not be read; continuing without cached models",
+			},
 		})
 	}
 	m.discoveryCache = cache
+	m.retainedDiscoveries = map[string]retainedDiscovery{}
 
-	cachedDiscoveries, cacheProviders := matchingCachedDiscoveries(document, cache)
-	m.retainedDiscoveries = cachedDiscoveries
+	_, cacheProviders := matchingCachedDiscoveries(document, m.discoveryCache)
 	m.discoveryStatus = DiscoveryStatus{
 		Source:         "manual-only",
 		CacheProviders: cacheProviders,
@@ -292,54 +396,53 @@ func (m *Manager) initializeModelDiscovery(ctx context.Context, document Documen
 	m.discoveryStatus.ProviderID = providerID
 	if skippedReason != "" {
 		m.discoveryStatus.SkippedReason = skippedReason
-		return diagnostics
+		return
 	}
 
 	provider := mergePreset(providerID, document.Providers[providerID])
 	if provider.Discovery == nil || provider.Discovery.Enabled == nil || !*provider.Discovery.Enabled {
-		m.discoveryStatus.CacheState = cacheStateForProvider(cache, m.discoveryCacheInvalid, providerID, "", "")
+		m.discoveryStatus.CacheState = cacheStateForProvider(m.discoveryCache, m.discoveryCacheInvalid, providerID, "", "")
 		m.discoveryStatus.SkippedReason = "provider-disabled"
-		return diagnostics
+		return
 	}
 
 	fingerprint := discoveryEndpointFingerprint(provider)
 	format := provider.Discovery.Format
 	m.discoveryTargetFingerprint = fingerprint
 	m.discoveryTargetFormat = format
-	targetCache, targetCacheMatched := matchingCacheEntry(cache, providerID, fingerprint, format)
-	m.discoveryStatus.CacheState = cacheStateForProvider(cache, m.discoveryCacheInvalid, providerID, fingerprint, format)
+	targetCache, targetCacheMatched := matchingCacheEntry(m.discoveryCache, providerID, fingerprint, format)
+	m.discoveryStatus.CacheState = cacheStateForProvider(m.discoveryCache, m.discoveryCacheInvalid, providerID, fingerprint, format)
 	if targetCacheMatched {
 		m.discoveryStatus.Source = "cache"
 		m.discoveryStatus.DiscoveredAt = targetCache.DiscoveredAt
 	}
 	if m.disableModelDiscovery {
 		m.discoveryStatus.SkippedReason = "disabled"
-		return diagnostics
+		return
 	}
 
-	attemptedAt := time.Now().UTC()
 	m.discoveryStatus.Attempted = true
-	m.discoveryStatus.AttemptedAt = attemptedAt
+	m.discoveryStatus.AttemptedAt = time.Now().UTC()
 	credential := ""
 	if provider.Auth.Credential != "" || len(provider.Auth.Env) > 0 {
 		credential, _, err = resolveCredential(ctx, m.credentials, provider.Auth)
 		if err != nil {
 			m.discoveryStatus.LastError = "model discovery credential is unavailable"
-			diagnostics = append(diagnostics, m.discoveryFailureDiagnostic(providerID, targetCacheMatched))
-			return diagnostics
+			m.retainTargetDiscoveryDiagnostic(m.discoveryFailureDiagnostic(providerID, targetCacheMatched), providerID, fingerprint, format)
+			return
 		}
 	}
 	if m.discoverer == nil {
 		m.discoveryStatus.LastError = "model discovery is unavailable"
-		diagnostics = append(diagnostics, m.discoveryFailureDiagnostic(providerID, targetCacheMatched))
-		return diagnostics
+		m.retainTargetDiscoveryDiagnostic(m.discoveryFailureDiagnostic(providerID, targetCacheMatched), providerID, fingerprint, format)
+		return
 	}
 
 	models, err := m.discoverer.Discover(ctx, providerID, provider, credential)
 	if err != nil {
 		m.discoveryStatus.LastError = safeModelDiscoveryError(err)
-		diagnostics = append(diagnostics, m.discoveryFailureDiagnostic(providerID, targetCacheMatched))
-		return diagnostics
+		m.retainTargetDiscoveryDiagnostic(m.discoveryFailureDiagnostic(providerID, targetCacheMatched), providerID, fingerprint, format)
+		return
 	}
 
 	models, cacheNames := normalizeLiveDiscoveredModels(providerID, models)
@@ -356,26 +459,50 @@ func (m *Manager) initializeModelDiscovery(ctx context.Context, document Documen
 	m.discoveryStatus.DiscoveredAt = succeededAt
 	m.discoveryStatus.LastError = ""
 
-	cache.Providers[providerID] = discoveryCacheEntry{
+	updatedCache := cloneDiscoveryCache(m.discoveryCache)
+	updatedCache.Providers[providerID] = discoveryCacheEntry{
 		EndpointFingerprint: fingerprint,
 		Format:              format,
 		DiscoveredAt:        succeededAt,
 		Models:              cacheNames,
 	}
-	if err := writeDiscoveryCache(m.paths.ModelDiscoveryCache, cache); err != nil {
+	if err := m.discoveryCacheWriter(m.paths.ModelDiscoveryCache, cloneDiscoveryCache(updatedCache)); err != nil {
 		m.discoveryStatus.CacheState = "write-failed"
-		diagnostics = append(diagnostics, Diagnostic{
+		m.retainTargetDiscoveryDiagnostic(Diagnostic{
 			Severity: "warning",
 			File:     m.paths.ModelDiscoveryCache,
 			Message:  "live model discovery succeeded, but its cache could not be updated",
-		})
-		return diagnostics
+		}, providerID, fingerprint, format)
+		return
 	}
-	m.discoveryCache = cache
+	m.discoveryCache = updatedCache
 	m.discoveryCacheInvalid = false
-	_, m.discoveryStatus.CacheProviders = matchingCachedDiscoveries(document, cache)
+	_, m.discoveryStatus.CacheProviders = matchingCachedDiscoveries(document, m.discoveryCache)
 	m.discoveryStatus.CacheState = "updated"
-	return diagnostics
+}
+
+func (m *Manager) retainTargetDiscoveryDiagnostic(diagnostic Diagnostic, providerID, fingerprint, format string) {
+	m.startupDiscoveryDiagnostics = append(m.startupDiscoveryDiagnostics, retainedDiscoveryDiagnostic{
+		Diagnostic:          diagnostic,
+		Kind:                discoveryDiagnosticTarget,
+		ProviderID:          providerID,
+		EndpointFingerprint: fingerprint,
+		Format:              format,
+	})
+}
+
+func cloneDiscoveryCache(cache discoveryCacheFile) discoveryCacheFile {
+	cloned := discoveryCacheFile{
+		Version:   cache.Version,
+		Providers: make(map[string]discoveryCacheEntry, len(cache.Providers)),
+	}
+	for providerID, entry := range cache.Providers {
+		if entry.Models != nil {
+			entry.Models = append([]string{}, entry.Models...)
+		}
+		cloned.Providers[providerID] = entry
+	}
+	return cloned
 }
 
 func discoveryTarget(document Document, activeID string) (providerID, skippedReason string) {
@@ -509,8 +636,10 @@ func normalizeLiveDiscoveredModels(providerID string, models []DiscoveredModel) 
 }
 
 func (m *Manager) matchingRetainedDiscoveries(document Document) (map[string][]DiscoveredModel, map[string]retainedDiscovery) {
-	models := make(map[string][]DiscoveredModel)
-	provenance := make(map[string]retainedDiscovery)
+	// Cache entries are derived afresh from the immutable full cache for every
+	// candidate. Applicable process-local live results then replace the cache
+	// entry for their provider, including an intentionally empty live result.
+	matched, _ := matchingCachedDiscoveries(document, m.discoveryCache)
 	providerIDs := make([]string, 0, len(document.Providers))
 	for providerID := range document.Providers {
 		providerIDs = append(providerIDs, providerID)
@@ -526,10 +655,47 @@ func (m *Manager) matchingRetainedDiscoveries(document Document) (map[string][]D
 			continue
 		}
 		retained.Models = cloneDiscoveredModels(retained.Models)
+		matched[providerID] = retained
+	}
+
+	models := make(map[string][]DiscoveredModel, len(matched))
+	provenance := make(map[string]retainedDiscovery, len(matched))
+	for providerID, retained := range matched {
+		retained.Models = cloneDiscoveredModels(retained.Models)
 		models[providerID] = retained.Models
 		provenance[providerID] = retained
 	}
 	return models, provenance
+}
+
+func (m *Manager) applicableDiscoveryDiagnostics(document Document, activeID string) []Diagnostic {
+	providerID, skippedReason := discoveryTarget(document, activeID)
+	fingerprint := ""
+	format := ""
+	enabled := false
+	if skippedReason == "" && providerID != "" {
+		provider := mergePreset(providerID, document.Providers[providerID])
+		enabled = provider.Discovery != nil && provider.Discovery.Enabled != nil && *provider.Discovery.Enabled
+		if provider.Discovery != nil {
+			fingerprint = discoveryEndpointFingerprint(provider)
+			format = provider.Discovery.Format
+		}
+	}
+
+	diagnostics := make([]Diagnostic, 0, len(m.startupDiscoveryDiagnostics))
+	for _, retained := range m.startupDiscoveryDiagnostics {
+		switch retained.Kind {
+		case discoveryDiagnosticCacheRead:
+			if m.discoveryCacheInvalid {
+				diagnostics = append(diagnostics, retained.Diagnostic)
+			}
+		case discoveryDiagnosticTarget:
+			if enabled && providerID == retained.ProviderID && fingerprint == retained.EndpointFingerprint && format == retained.Format {
+				diagnostics = append(diagnostics, retained.Diagnostic)
+			}
+		}
+	}
+	return diagnostics
 }
 
 func (m *Manager) discoveryStatusForDocument(document Document, activeID string, matched map[string]retainedDiscovery) DiscoveryStatus {
@@ -601,44 +767,22 @@ func clearDiscoveryAttempt(status DiscoveryStatus) DiscoveryStatus {
 }
 
 func (m *Manager) candidateFromRaw(ctx context.Context, raw []byte, revision uint64) (Snapshot, error) {
-	document, diagnostics, err := parseAndValidateGlobal(raw, m.paths.GlobalConfig)
+	parsed, err := m.parseCandidate(raw)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	workspace := WorkspaceDocument{}
-	workspaceRaw := []byte(nil)
-	if m.paths.WorkspaceConfig != "" {
-		workspaceRaw, err = os.ReadFile(m.paths.WorkspaceConfig)
-		if err == nil {
-			workspace, err = parseAndValidateWorkspace(workspaceRaw, m.paths.WorkspaceConfig, document)
-			if err != nil {
-				return Snapshot{}, err
-			}
-		} else if !os.IsNotExist(err) {
-			return Snapshot{}, err
-		}
-	}
-	activeID := strings.TrimSpace(document.ActiveModel)
-	if workspace.ActiveModel != "" {
-		activeID = workspace.ActiveModel
-	}
-	if override := strings.TrimSpace(os.Getenv("PAW_MODEL")); override != "" {
-		if _, ok := document.Models[override]; !ok {
-			return Snapshot{}, fmt.Errorf("PAW_MODEL references missing model %q", override)
-		}
-		activeID = override
-	}
-	discoveredModels, retainedProvenance := m.matchingRetainedDiscoveries(document)
-	catalog, stats := buildEffectiveCatalog(document, discoveredModels)
-	runtimeConfig, ready, runtimeDiagnostics := m.runtimeConfig(ctx, document, workspace, activeID, catalog)
-	diagnostics = append(diagnostics, m.startupDiscoveryDiagnostics...)
+	discoveredModels, retainedProvenance := m.matchingRetainedDiscoveries(parsed.document)
+	catalog, stats := buildEffectiveCatalog(parsed.document, discoveredModels)
+	runtimeConfig, ready, runtimeDiagnostics := m.runtimeConfig(ctx, parsed.document, parsed.workspace, parsed.activeID, catalog)
+	diagnostics := append([]Diagnostic(nil), parsed.diagnostics...)
+	diagnostics = append(diagnostics, m.applicableDiscoveryDiagnostics(parsed.document, parsed.activeID)...)
 	diagnostics = append(diagnostics, runtimeDiagnostics...)
-	discoveryStatus := m.discoveryStatusForDocument(document, activeID, retainedProvenance)
+	discoveryStatus := m.discoveryStatusForDocument(parsed.document, parsed.activeID, retainedProvenance)
 	discoveryStatus.DiscoveredCount = stats.Discovered
 	discoveryStatus.FilteredCount = stats.Filtered
 	discoveryStatus = withEffectiveCount(discoveryStatus, stats.Merged)
-	hash := sha256.Sum256(append(append(append([]byte(nil), raw...), 0), workspaceRaw...))
-	return Snapshot{Document: document, Workspace: workspace, Active: runtimeConfig, ActiveModelID: activeID, EffectiveModels: catalog, Discovery: discoveryStatus, Revision: revision, ContentHash: hex.EncodeToString(hash[:]), Diagnostics: diagnostics, Ready: ready, LoadedAt: time.Now(), Raw: raw}, nil
+	hash := sha256.Sum256(append(append(append([]byte(nil), raw...), 0), parsed.workspaceRaw...))
+	return Snapshot{Document: parsed.document, Workspace: parsed.workspace, Active: runtimeConfig, ActiveModelID: parsed.activeID, EffectiveModels: catalog, Discovery: discoveryStatus, Revision: revision, ContentHash: hex.EncodeToString(hash[:]), Diagnostics: diagnostics, Ready: ready, LoadedAt: time.Now(), Raw: raw}, nil
 }
 
 func withEffectiveCount(status DiscoveryStatus, count int) DiscoveryStatus {
@@ -993,31 +1137,30 @@ func (m *Manager) Close() error {
 	return nil
 }
 
-func (m *Manager) startWatcher(parent context.Context) error {
+func (m *Manager) registerWatcher(parent context.Context) (context.Context, error) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	directories := map[string]bool{filepath.Dir(m.paths.GlobalConfig): true}
 	if m.paths.WorkspaceConfig != "" {
 		directory := filepath.Dir(m.paths.WorkspaceConfig)
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			_ = watcher.Close()
-			return err
+			return nil, err
 		}
 		directories[directory] = true
 	}
 	for directory := range directories {
 		if err := watcher.Add(directory); err != nil {
 			_ = watcher.Close()
-			return fmt.Errorf("watch config directory %s: %w", directory, err)
+			return nil, fmt.Errorf("watch config directory %s: %w", directory, err)
 		}
 	}
 	ctx, cancel := context.WithCancel(parent)
 	m.watcher = watcher
 	m.cancel = cancel
-	go m.watchLoop(ctx)
-	return nil
+	return ctx, nil
 }
 
 func (m *Manager) watchLoop(ctx context.Context) {
