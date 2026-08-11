@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -57,26 +58,30 @@ func (e *DiscoveryError) Unwrap() error {
 	return e.Err
 }
 
-// NewHTTPModelDiscoverer copies client before installing a no-redirect policy,
-// so callers can continue using their client unchanged. A nil client uses a
-// copy of http.DefaultClient.
+// NewHTTPModelDiscoverer copies client before removing its cookie jar and
+// installing a no-redirect policy, so callers can continue using their client
+// unchanged. A nil client leaves the discoverer invalid rather than silently
+// inheriting process-global HTTP behavior.
 func NewHTTPModelDiscoverer(client *http.Client) *HTTPModelDiscoverer {
+	discoverer := &HTTPModelDiscoverer{maxBodyBytes: maxDiscoveryBodyBytes}
 	if client == nil {
-		client = http.DefaultClient
+		return discoverer
 	}
 	cloned := *client
+	cloned.Jar = nil
 	cloned.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
-	return &HTTPModelDiscoverer{
-		client:       &cloned,
-		maxBodyBytes: maxDiscoveryBodyBytes,
-	}
+	discoverer.client = &cloned
+	return discoverer
 }
 
 func (d *HTTPModelDiscoverer) Discover(ctx context.Context, providerID string, provider Provider, credential string) ([]DiscoveredModel, error) {
 	if ctx == nil {
 		return nil, &DiscoveryError{Kind: "invalid_config", Err: errors.New("nil context")}
+	}
+	if d == nil || d.client == nil {
+		return nil, &DiscoveryError{Kind: "invalid_config", Err: errors.New("missing HTTP client")}
 	}
 	if provider.Discovery == nil {
 		return nil, &DiscoveryError{Kind: "invalid_config", Err: errors.New("missing discovery configuration")}
@@ -104,23 +109,28 @@ func (d *HTTPModelDiscoverer) Discover(ctx context.Context, providerID string, p
 	if err != nil {
 		return nil, &DiscoveryError{Kind: "invalid_url", Err: err}
 	}
-	copyDiscoveryHeaders(request.Header, provider.Headers)
+	if err := copyDiscoveryHeaders(request.Header, provider.Headers); err != nil {
+		return nil, &DiscoveryError{Kind: "invalid_config", Err: err}
+	}
 	if credential != "" {
 		request.Header.Set("Authorization", "Bearer "+credential)
 	}
 
-	client := http.DefaultClient
-	if d != nil && d.client != nil {
-		client = d.client
-	}
-	response, err := client.Do(request)
+	response, err := d.client.Do(request)
 	if err != nil {
 		return nil, classifyDiscoveryIOError(requestContext, "request_failed", err)
 	}
 	defer response.Body.Close()
 
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return nil, &DiscoveryError{
+			Kind:       discoveryHTTPStatusKind(response.StatusCode),
+			StatusCode: response.StatusCode,
+		}
+	}
+
 	bodyLimit := int64(maxDiscoveryBodyBytes)
-	if d != nil && d.maxBodyBytes > 0 {
+	if d.maxBodyBytes > 0 {
 		bodyLimit = d.maxBodyBytes
 	}
 	limited := io.LimitReader(response.Body, bodyLimit+1)
@@ -130,12 +140,6 @@ func (d *HTTPModelDiscoverer) Discover(ctx context.Context, providerID string, p
 	}
 	if int64(len(body)) > bodyLimit {
 		return nil, &DiscoveryError{Kind: "response_too_large"}
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, &DiscoveryError{
-			Kind:       discoveryHTTPStatusKind(response.StatusCode),
-			StatusCode: response.StatusCode,
-		}
 	}
 
 	names, err := parseDiscoveredModelNames(cfg.Format, body)
@@ -154,7 +158,7 @@ func discoveryURL(endpoint, discoveryPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid provider endpoint: %w", err)
 	}
-	if (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" || base.Opaque != "" {
+	if (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" || base.User != nil || base.Opaque != "" {
 		return "", errors.New("provider endpoint must be an absolute HTTP(S) URL")
 	}
 	if err := validateDiscoveryPath(discoveryPath); err != nil {
@@ -204,17 +208,90 @@ func appendDiscoveryPath(basePath, discoveryPath string) string {
 	return basePath + "/" + discoveryPath
 }
 
-func copyDiscoveryHeaders(destination http.Header, headers map[string]string) {
-	for name, value := range headers {
+func copyDiscoveryHeaders(destination http.Header, headers map[string]string) error {
+	if err := validateProviderHeaders(headers); err != nil {
+		return err
+	}
+	for _, name := range sortedProviderHeaderNames(headers) {
 		if excludedDiscoveryHeader(name) {
 			continue
 		}
-		destination.Set(name, value)
+		destination.Set(name, headers[name])
+	}
+	return nil
+}
+
+func validateProviderHeaders(headers map[string]string) error {
+	seen := make(map[string]struct{}, len(headers))
+	for _, name := range sortedProviderHeaderNames(headers) {
+		if name != strings.TrimSpace(name) {
+			return errors.New("header name has leading or trailing whitespace")
+		}
+		if !validHTTPHeaderName(name) {
+			return errors.New("header name contains an invalid token character")
+		}
+		canonicalName := strings.ToLower(name)
+		if _, exists := seen[canonicalName]; exists {
+			return fmt.Errorf("duplicate header name %q", canonicalName)
+		}
+		seen[canonicalName] = struct{}{}
+		if !validHTTPHeaderValue(headers[name]) {
+			return fmt.Errorf("header %q contains invalid value characters", canonicalName)
+		}
+	}
+	return nil
+}
+
+func sortedProviderHeaderNames(headers map[string]string) []string {
+	names := make([]string, 0, len(headers))
+	for name := range headers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func validHTTPHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for index := 0; index < len(name); index++ {
+		if !isHTTPTokenByte(name[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isHTTPTokenByte(value byte) bool {
+	switch {
+	case value >= 'a' && value <= 'z':
+		return true
+	case value >= 'A' && value <= 'Z':
+		return true
+	case value >= '0' && value <= '9':
+		return true
+	}
+	switch value {
+	case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~':
+		return true
+	default:
+		return false
 	}
 }
 
+func validHTTPHeaderValue(value string) bool {
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if character == 0x7f || (character < 0x20 && character != '\t') {
+			return false
+		}
+	}
+	return true
+}
+
 func excludedDiscoveryHeader(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(name)) {
+	switch strings.ToLower(name) {
 	case "authorization", "proxy-authorization", "x-api-key", "api-key", "x-auth-token",
 		"cookie", "set-cookie", "host", "content-length", "transfer-encoding":
 		return true
@@ -224,34 +301,42 @@ func excludedDiscoveryHeader(name string) bool {
 }
 
 func parseDiscoveredModelNames(format string, body []byte) ([]string, error) {
+	var fieldName string
+	switch format {
+	case DiscoveryFormatOpenAIList:
+		fieldName = "data"
+	case DiscoveryFormatOllamaTags:
+		fieldName = "models"
+	default:
+		return nil, errors.New("unsupported discovery response format")
+	}
+
+	list, err := requiredDiscoveryList(body, fieldName)
+	if err != nil {
+		return nil, err
+	}
 	var names []string
 	switch format {
 	case DiscoveryFormatOpenAIList:
-		var payload struct {
-			Data []struct {
-				ID string `json:"id"`
-			} `json:"data"`
+		var items []struct {
+			ID string `json:"id"`
 		}
-		if err := json.Unmarshal(body, &payload); err != nil {
-			return nil, err
+		if err := json.Unmarshal(list, &items); err != nil {
+			return nil, fmt.Errorf("discovery field %q must be an array: %w", fieldName, err)
 		}
-		for _, item := range payload.Data {
+		for _, item := range items {
 			names = append(names, item.ID)
 		}
 	case DiscoveryFormatOllamaTags:
-		var payload struct {
-			Models []struct {
-				Name string `json:"name"`
-			} `json:"models"`
+		var items []struct {
+			Name string `json:"name"`
 		}
-		if err := json.Unmarshal(body, &payload); err != nil {
-			return nil, err
+		if err := json.Unmarshal(list, &items); err != nil {
+			return nil, fmt.Errorf("discovery field %q must be an array: %w", fieldName, err)
 		}
-		for _, item := range payload.Models {
+		for _, item := range items {
 			names = append(names, item.Name)
 		}
-	default:
-		return nil, errors.New("unsupported discovery response format")
 	}
 
 	unique := make(map[string]struct{}, len(names))
@@ -267,6 +352,24 @@ func parseDiscoveredModelNames(format string, body []byte) ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+func requiredDiscoveryList(body []byte, fieldName string) (json.RawMessage, error) {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("discovery response must be a JSON object: %w", err)
+	}
+	if payload == nil {
+		return nil, errors.New("discovery response must be a non-null JSON object")
+	}
+	list, exists := payload[fieldName]
+	if !exists {
+		return nil, fmt.Errorf("discovery response is missing required field %q", fieldName)
+	}
+	if bytes.Equal(bytes.TrimSpace(list), []byte("null")) {
+		return nil, fmt.Errorf("discovery field %q must not be null", fieldName)
+	}
+	return list, nil
 }
 
 func classifyDiscoveryIOError(ctx context.Context, fallbackKind string, err error) *DiscoveryError {
@@ -293,10 +396,8 @@ func classifyDiscoveryIOError(ctx context.Context, fallbackKind string, err erro
 
 func discoveryHTTPStatusKind(statusCode int) string {
 	switch statusCode {
-	case http.StatusUnauthorized:
-		return "unauthorized"
-	case http.StatusForbidden:
-		return "forbidden"
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return "auth_failed"
 	case http.StatusTooManyRequests:
 		return "rate_limited"
 	}
@@ -309,7 +410,7 @@ func discoveryHTTPStatusKind(statusCode int) string {
 func safeDiscoveryErrorKind(kind string) string {
 	switch kind {
 	case "invalid_config", "unsupported_format", "invalid_url", "request_failed", "timeout", "canceled",
-		"read_failed", "response_too_large", "unauthorized", "forbidden", "rate_limited", "redirect",
+		"read_failed", "response_too_large", "auth_failed", "rate_limited", "redirect",
 		"http_status", "invalid_response":
 		return kind
 	default:
@@ -335,10 +436,8 @@ func discoveryErrorSummary(kind string) string {
 		return "response could not be read"
 	case "response_too_large":
 		return "response exceeded the size limit"
-	case "unauthorized":
-		return "provider rejected the credential"
-	case "forbidden":
-		return "provider denied the request"
+	case "auth_failed":
+		return "provider authentication failed"
 	case "rate_limited":
 		return "provider rate limited the request"
 	case "redirect":

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -70,6 +72,86 @@ func TestHTTPModelDiscovererOllamaTagsUsesOriginRelativePath(t *testing.T) {
 	}
 }
 
+func TestHTTPModelDiscovererRejectsNilAndUninitializedClientsWithoutRequests(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Redirect(w, r, "/redirected", http.StatusFound)
+	}))
+	defer server.Close()
+
+	provider := Provider{
+		Endpoint:  server.URL + "/endpoint-secret",
+		Discovery: &DiscoveryConfig{Path: "models", Format: DiscoveryFormatOpenAIList},
+	}
+	tests := []struct {
+		name       string
+		discoverer *HTTPModelDiscoverer
+	}{
+		{name: "nil receiver", discoverer: nil},
+		{name: "zero value discoverer", discoverer: &HTTPModelDiscoverer{}},
+		{name: "nil constructor client", discoverer: NewHTTPModelDiscoverer(nil)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before := requests.Load()
+			_, err := tt.discoverer.Discover(context.Background(), "local", provider, "credential-secret")
+			var discoveryErr *DiscoveryError
+			if !errors.As(err, &discoveryErr) || discoveryErr.Kind != "invalid_config" {
+				t.Fatalf("error=%T %v", err, err)
+			}
+			if requests.Load() != before {
+				t.Fatalf("uninitialized discoverer sent a request: before=%d after=%d", before, requests.Load())
+			}
+			for _, secret := range []string{server.URL, "endpoint-secret", "credential-secret"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("unsafe error leaked %q: %v", secret, err)
+				}
+			}
+		})
+	}
+}
+
+func TestParseDiscoveredModelNamesRequiresNonNullListField(t *testing.T) {
+	tests := []struct {
+		name    string
+		format  string
+		body    string
+		wantOK  bool
+		wantLen int
+	}{
+		{name: "openai empty array", format: DiscoveryFormatOpenAIList, body: `{"data":[]}`, wantOK: true},
+		{name: "ollama empty array", format: DiscoveryFormatOllamaTags, body: `{"models":[]}`, wantOK: true},
+		{name: "openai missing field", format: DiscoveryFormatOpenAIList, body: `{}`},
+		{name: "ollama missing field", format: DiscoveryFormatOllamaTags, body: `{}`},
+		{name: "openai null object", format: DiscoveryFormatOpenAIList, body: `null`},
+		{name: "ollama null object", format: DiscoveryFormatOllamaTags, body: `null`},
+		{name: "openai array top level", format: DiscoveryFormatOpenAIList, body: `[]`},
+		{name: "ollama array top level", format: DiscoveryFormatOllamaTags, body: `[]`},
+		{name: "openai error object", format: DiscoveryFormatOpenAIList, body: `{"error":{"message":"denied"}}`},
+		{name: "ollama error object", format: DiscoveryFormatOllamaTags, body: `{"error":"denied"}`},
+		{name: "openai null list", format: DiscoveryFormatOpenAIList, body: `{"data":null}`},
+		{name: "ollama null list", format: DiscoveryFormatOllamaTags, body: `{"models":null}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseDiscoveredModelNames(tt.format, []byte(tt.body))
+			if tt.wantOK {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(got) != tt.wantLen {
+					t.Fatalf("models=%v want length=%d", got, tt.wantLen)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("models=%v, expected invalid response", got)
+			}
+		})
+	}
+}
+
 func TestHTTPModelDiscovererCopiesOnlyNonSensitiveHeadersAndKeepsErrorsSafe(t *testing.T) {
 	const (
 		credentialSecret = "credential-secret"
@@ -124,6 +206,47 @@ func TestHTTPModelDiscovererCopiesOnlyNonSensitiveHeadersAndKeepsErrorsSafe(t *t
 	}
 }
 
+func TestHTTPModelDiscovererRejectsInvalidProviderHeadersBeforeRequest(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = io.WriteString(w, `{"data":[]}`)
+	}))
+	defer server.Close()
+
+	tests := []struct {
+		name    string
+		headers map[string]string
+	}{
+		{name: "case insensitive duplicate", headers: map[string]string{"X-Trace": "one", "x-trace": "two"}},
+		{name: "leading whitespace", headers: map[string]string{" X-Trace": "value"}},
+		{name: "trailing whitespace", headers: map[string]string{"X-Trace ": "value"}},
+		{name: "invalid token character", headers: map[string]string{"X@Trace": "value"}},
+		{name: "carriage return value", headers: map[string]string{"X-Trace": "safe\rsecret"}},
+		{name: "line feed value", headers: map[string]string{"X-Trace": "safe\nsecret"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before := requests.Load()
+			_, err := NewHTTPModelDiscoverer(server.Client()).Discover(context.Background(), "local", Provider{
+				Endpoint:  server.URL,
+				Headers:   tt.headers,
+				Discovery: &DiscoveryConfig{Path: "models", Format: DiscoveryFormatOpenAIList},
+			}, "credential-secret")
+			var discoveryErr *DiscoveryError
+			if !errors.As(err, &discoveryErr) || discoveryErr.Kind != "invalid_config" {
+				t.Fatalf("error=%T %v", err, err)
+			}
+			if requests.Load() != before {
+				t.Fatalf("invalid headers reached provider: before=%d after=%d", before, requests.Load())
+			}
+			if strings.Contains(err.Error(), "secret") || strings.ContainsAny(err.Error(), "\r\n") {
+				t.Fatalf("unsafe error=%q", err)
+			}
+		})
+	}
+}
+
 func TestHTTPModelDiscovererClassifiesUnauthorizedWithoutLeakingBody(t *testing.T) {
 	const secret = "unauthorized-response-secret"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -140,11 +263,51 @@ func TestHTTPModelDiscovererClassifiesUnauthorizedWithoutLeakingBody(t *testing.
 	if !errors.As(err, &discoveryErr) {
 		t.Fatalf("error=%T %v", err, err)
 	}
-	if discoveryErr.Kind != "unauthorized" || discoveryErr.StatusCode != http.StatusUnauthorized {
+	if discoveryErr.Kind != "auth_failed" || discoveryErr.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("discovery error=%#v", discoveryErr)
 	}
 	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "credential-secret") {
 		t.Fatalf("unsafe error=%v", err)
+	}
+}
+
+func TestHTTPModelDiscovererClassifiesAuthenticationBeforeReadingBody(t *testing.T) {
+	tests := []struct {
+		name string
+		body io.ReadCloser
+	}{
+		{name: "oversized body", body: &trackingReadCloser{reader: strings.NewReader("xx")}},
+		{name: "failing body", body: &trackingReadCloser{readErr: errors.New("body read failed")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := tt.body.(*trackingReadCloser)
+			client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusUnauthorized,
+					Header:     make(http.Header),
+					Body:       body,
+					Request:    r,
+				}, nil
+			})}
+			discoverer := NewHTTPModelDiscoverer(client)
+			discoverer.maxBodyBytes = 1
+
+			_, err := discoverer.Discover(context.Background(), "local", Provider{
+				Endpoint:  "http://example.invalid/v1",
+				Discovery: &DiscoveryConfig{Path: "models", Format: DiscoveryFormatOpenAIList},
+			}, "credential-secret")
+			var discoveryErr *DiscoveryError
+			if !errors.As(err, &discoveryErr) || discoveryErr.Kind != "auth_failed" || discoveryErr.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("error=%T %v", err, err)
+			}
+			if body.read.Load() {
+				t.Fatal("authentication failure body was read")
+			}
+			if !body.closed.Load() {
+				t.Fatal("authentication failure body was not closed")
+			}
+		})
 	}
 }
 
@@ -207,6 +370,80 @@ func TestHTTPModelDiscovererDoesNotFollowRedirectsOrMutateClient(t *testing.T) {
 	}
 	if err := client.CheckRedirect(nil, nil); err != nil || !callerRedirectPolicyCalled.Load() {
 		t.Fatalf("caller redirect policy changed: called=%v err=%v", callerRedirectPolicyCalled.Load(), err)
+	}
+}
+
+func TestHTTPModelDiscovererZeroValueClientDoesNotFollowRedirects(t *testing.T) {
+	var followed atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/models":
+			http.Redirect(w, r, "/redirected", http.StatusTemporaryRedirect)
+		case "/redirected":
+			followed.Store(true)
+			_, _ = io.WriteString(w, `{"data":[]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	_, err := NewHTTPModelDiscoverer(&http.Client{}).Discover(context.Background(), "local", Provider{
+		Endpoint:  server.URL,
+		Discovery: &DiscoveryConfig{Path: "models", Format: DiscoveryFormatOpenAIList},
+	}, "credential-secret")
+	var discoveryErr *DiscoveryError
+	if !errors.As(err, &discoveryErr) || discoveryErr.Kind != "redirect" || discoveryErr.StatusCode != http.StatusTemporaryRedirect {
+		t.Fatalf("error=%T %v", err, err)
+	}
+	if followed.Load() {
+		t.Fatal("zero-value client followed redirect")
+	}
+}
+
+func TestHTTPModelDiscovererDropsCallerCookieJar(t *testing.T) {
+	var receivedCookie atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Cookie") != "" {
+			receivedCookie.Store(true)
+		}
+		http.SetCookie(w, &http.Cookie{Name: "provider", Value: "mutated", Path: "/"})
+		_, _ = io.WriteString(w, `{"data":[]}`)
+	}))
+	defer server.Close()
+
+	serverURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jar.SetCookies(serverURL, []*http.Cookie{{Name: "caller", Value: "secret", Path: "/"}})
+	client := server.Client()
+	client.Jar = jar
+	discoverer := NewHTTPModelDiscoverer(client)
+	if discoverer.client == client {
+		t.Fatal("discoverer retained caller client pointer")
+	}
+	if discoverer.client.Jar != nil {
+		t.Fatal("discoverer retained caller cookie jar")
+	}
+
+	_, err = discoverer.Discover(context.Background(), "local", Provider{
+		Endpoint:  server.URL,
+		Discovery: &DiscoveryConfig{Path: "models", Format: DiscoveryFormatOpenAIList},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receivedCookie.Load() {
+		t.Fatal("caller cookie jar populated discovery request")
+	}
+	cookies := jar.Cookies(serverURL)
+	if len(cookies) != 1 || cookies[0].Name != "caller" || cookies[0].Value != "secret" {
+		t.Fatalf("caller cookie jar was mutated: %#v", cookies)
 	}
 }
 
@@ -336,6 +573,7 @@ func TestDiscoveryURL(t *testing.T) {
 		{name: "parent segment", endpoint: "https://example.com/v1", path: "models/../secrets", wantError: true},
 		{name: "encoded parent segment", endpoint: "https://example.com/v1", path: "models/%2e%2e/secrets", wantError: true},
 		{name: "invalid endpoint", endpoint: "://bad", path: "models", wantError: true},
+		{name: "endpoint userinfo", endpoint: "https://user:pass@example.com/v1", path: "models", wantError: true},
 		{name: "non HTTP endpoint", endpoint: "file:///tmp/v1", path: "models", wantError: true},
 	}
 	for _, tt := range tests {
@@ -355,6 +593,26 @@ func TestDiscoveryURL(t *testing.T) {
 			}
 		})
 	}
+}
+
+type trackingReadCloser struct {
+	reader  io.Reader
+	readErr error
+	read    atomic.Bool
+	closed  atomic.Bool
+}
+
+func (r *trackingReadCloser) Read(p []byte) (int, error) {
+	r.read.Store(true)
+	if r.readErr != nil {
+		return 0, r.readErr
+	}
+	return r.reader.Read(p)
+}
+
+func (r *trackingReadCloser) Close() error {
+	r.closed.Store(true)
+	return nil
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

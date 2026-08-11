@@ -315,6 +315,78 @@ func TestValidateProviderDiscovery(t *testing.T) {
 	}
 }
 
+func TestValidateDocumentRejectsUnsafeProviderHeaders(t *testing.T) {
+	documentWithHeaders := func(headers map[string]string) Document {
+		return Document{
+			SchemaVersion: SchemaVersion,
+			Providers: map[string]Provider{
+				"local": {Transport: TransportOpenAICompatible, Endpoint: "http://127.0.0.1:1234/v1", Headers: headers},
+			},
+			Models: map[string]Model{},
+		}
+	}
+	if _, err := validateDocument(documentWithHeaders(map[string]string{"X-Trace": "trace-value"}), "config.jsonc"); err != nil {
+		t.Fatalf("valid headers: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		headers map[string]string
+		want    string
+	}{
+		{name: "case insensitive duplicate", headers: map[string]string{"X-Trace": "one", "x-trace": "two"}, want: "duplicate header name"},
+		{name: "leading whitespace", headers: map[string]string{" X-Trace": "value"}, want: "leading or trailing whitespace"},
+		{name: "trailing whitespace", headers: map[string]string{"X-Trace ": "value"}, want: "leading or trailing whitespace"},
+		{name: "invalid token character", headers: map[string]string{"X@Trace": "value"}, want: "invalid token"},
+		{name: "carriage return value", headers: map[string]string{"X-Trace": "safe\rsecret"}, want: "invalid value"},
+		{name: "line feed value", headers: map[string]string{"X-Trace": "safe\nsecret"}, want: "invalid value"},
+		{name: "protected header", headers: map[string]string{"Authorization": "Bearer secret"}, want: "protected"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := validateDocument(documentWithHeaders(tt.headers), "config.jsonc")
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error=%v want substring %q", err, tt.want)
+			}
+			if strings.ContainsAny(err.Error(), "\r\n") {
+				t.Fatalf("unsafe validation error=%q", err)
+			}
+		})
+	}
+}
+
+func TestValidateDocumentProviderHeaderErrorsAreDeterministic(t *testing.T) {
+	document := Document{
+		SchemaVersion: SchemaVersion,
+		Providers: map[string]Provider{
+			"local": {
+				Transport: TransportOpenAICompatible,
+				Endpoint:  "http://127.0.0.1:1234/v1",
+				Headers: map[string]string{
+					"Z@Invalid": "value",
+					"A@Invalid": "value",
+					"X-Trace":   "safe\nsecret",
+				},
+			},
+		},
+		Models: map[string]Model{},
+	}
+	var want string
+	for range 100 {
+		_, err := validateDocument(document, "config.jsonc")
+		if err == nil {
+			t.Fatal("unsafe headers were accepted")
+		}
+		if want == "" {
+			want = err.Error()
+			continue
+		}
+		if err.Error() != want {
+			t.Fatalf("nondeterministic errors: first=%q current=%q", want, err)
+		}
+	}
+}
+
 func TestParseAndValidateGlobalDiscoverySchema(t *testing.T) {
 	valid := []byte(`{"schemaVersion":2,"providers":{"local":{"transport":"openai-compatible","endpoint":"http://127.0.0.1:1234/v1","discovery":{"enabled":true,"path":"models","format":"openai-list","timeoutSeconds":3,"include":["org/*"],"exclude":[]}}},"models":{}}`)
 	if _, _, err := parseAndValidateGlobal(valid, "config.jsonc"); err != nil {

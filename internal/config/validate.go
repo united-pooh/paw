@@ -98,8 +98,11 @@ func validateDocument(document Document, path string) ([]Diagnostic, error) {
 		if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Host == "" {
 			return nil, fmt.Errorf("%s: providers.%s.endpoint must be an http(s) URL", path, id)
 		}
-		for name := range resolved.Headers {
-			lower := strings.ToLower(strings.TrimSpace(name))
+		if err := validateProviderHeaders(resolved.Headers); err != nil {
+			return nil, fmt.Errorf("%s: providers.%s.headers: %w", path, id, err)
+		}
+		for _, name := range sortedProviderHeaderNames(resolved.Headers) {
+			lower := strings.ToLower(name)
 			if lower == "authorization" || lower == "proxy-authorization" || lower == "x-api-key" {
 				return nil, fmt.Errorf("%s: providers.%s.headers.%s is protected; configure auth instead", path, id, name)
 			}
