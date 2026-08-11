@@ -265,6 +265,52 @@ func TestUpsertProviderAddsAndRemovesDiscovery(t *testing.T) {
 	}
 }
 
+func TestUpsertProviderPreservesNilAndExplicitEmptyDiscoveryFilters(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, false)
+	if err := os.MkdirAll(paths.Home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	provider := Provider{Transport: TransportOpenAICompatible, Endpoint: "http://127.0.0.1:1234/v1"}
+	document := emptyDocument()
+	document.Providers["local"] = provider
+	document.Models["local/model"] = Model{Provider: "local", Name: "model"}
+	document.ActiveModel = "local/model"
+	raw, _ := marshalStarter(document, "provider discovery slice round trip")
+	if err := os.WriteFile(paths.GlobalConfig, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := openTestManager(t, paths, &FakeCredentialStore{Unavailable: true}, false)
+
+	enabled := true
+	provider.Discovery = &DiscoveryConfig{Enabled: &enabled, Include: []string{}, Exclude: nil}
+	withEmptyInclude, err := manager.Update(context.Background(), manager.Snapshot().Revision, []Operation{UpsertProvider("local", provider)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := withEmptyInclude.Document.Providers["local"].Discovery
+	if got == nil || got.Include == nil || len(got.Include) != 0 || got.Exclude != nil {
+		t.Fatalf("include nil/empty distinction was lost: %#v", got)
+	}
+
+	provider.Discovery = &DiscoveryConfig{Enabled: &enabled, Include: nil, Exclude: []string{}}
+	withEmptyExclude, err := manager.Update(context.Background(), withEmptyInclude.Revision, []Operation{UpsertProvider("local", provider)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = withEmptyExclude.Document.Providers["local"].Discovery
+	if got == nil || got.Include != nil || got.Exclude == nil || len(got.Exclude) != 0 {
+		t.Fatalf("exclude nil/empty distinction was lost: %#v", got)
+	}
+	written, err := os.ReadFile(paths.GlobalConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(written), `"include"`) || !strings.Contains(string(written), `"exclude": []`) {
+		t.Fatalf("upsert did not preserve explicit empty exclude in JSONC:\n%s", written)
+	}
+}
+
 func TestConcurrentUpdatesUseOptimisticRevision(t *testing.T) {
 	clearDetectionEnv(t)
 	paths := isolatedPaths(t, false)

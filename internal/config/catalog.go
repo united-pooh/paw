@@ -55,7 +55,7 @@ func BuiltinPresets() map[string]Preset {
 	for id, preset := range builtinPresets {
 		preset.Provider = cloneProvider(preset.Provider)
 		preset.DefaultModel = cloneModel(preset.DefaultModel)
-		preset.DetectionEnv = append([]string(nil), preset.DetectionEnv...)
+		preset.DetectionEnv = cloneStringSlice(preset.DetectionEnv)
 		out[id] = preset
 	}
 	return out
@@ -120,10 +120,10 @@ func mergePreset(id string, configured Provider) Provider {
 			merged.TimeoutSeconds = configured.Discovery.TimeoutSeconds
 		}
 		if configured.Discovery.Include != nil {
-			merged.Include = append([]string(nil), configured.Discovery.Include...)
+			merged.Include = cloneStringSlice(configured.Discovery.Include)
 		}
 		if configured.Discovery.Exclude != nil {
-			merged.Exclude = append([]string(nil), configured.Discovery.Exclude...)
+			merged.Exclude = cloneStringSlice(configured.Discovery.Exclude)
 		}
 		base.Discovery = &merged
 	}

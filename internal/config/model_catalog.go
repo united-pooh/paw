@@ -55,10 +55,11 @@ func buildEffectiveCatalog(document Document, discovered map[string][]Discovered
 			continue
 		}
 		cfg := *cloneDiscoveryConfig(resolved.Discovery)
+		normalizedProviderID := strings.TrimSpace(providerID)
 		names := make([]string, 0, len(discovered[providerID]))
 		for _, candidate := range discovered[providerID] {
 			candidateProviderID := strings.TrimSpace(candidate.ProviderID)
-			if candidateProviderID != "" && candidateProviderID != providerID {
+			if candidateProviderID != "" && candidateProviderID != normalizedProviderID {
 				continue
 			}
 			names = append(names, candidate.Name)
@@ -83,15 +84,24 @@ func buildEffectiveCatalog(document Document, discovered map[string][]Discovered
 }
 
 func filterDiscoveredModels(names []string, cfg DiscoveryConfig) ([]string, int) {
-	unique := make(map[string]struct{}, len(names))
+	uniqueRaw := make(map[string]struct{}, len(names))
 	for _, name := range names {
+		uniqueRaw[name] = struct{}{}
+	}
+	uniqueNormalized := make(map[string]struct{}, len(uniqueRaw))
+	filtered := 0
+	for name := range uniqueRaw {
+		if unsafeDiscoveredModelName(name) {
+			filtered++
+			continue
+		}
 		name = strings.TrimSpace(name)
 		if name != "" {
-			unique[name] = struct{}{}
+			uniqueNormalized[name] = struct{}{}
 		}
 	}
-	normalized := make([]string, 0, len(unique))
-	for name := range unique {
+	normalized := make([]string, 0, len(uniqueNormalized))
+	for name := range uniqueNormalized {
 		normalized = append(normalized, name)
 	}
 	sort.Strings(normalized)
@@ -107,21 +117,35 @@ func filterDiscoveredModels(names []string, cfg DiscoveryConfig) ([]string, int)
 		}
 		if keep {
 			result = append(result, name)
+		} else {
+			filtered++
 		}
 	}
-	return result, len(normalized) - len(result)
+	return result, filtered
+}
+
+func unsafeDiscoveredModelName(name string) bool {
+	if len(name) > 512 {
+		return true
+	}
+	for _, current := range name {
+		if unicode.IsControl(current) {
+			return true
+		}
+	}
+	return false
 }
 
 func stableDiscoveredModelID(providerID, modelName string, occupied map[string]CatalogModel) string {
-	providerID = strings.TrimSpace(providerID)
+	normalizedProviderID := strings.TrimSpace(providerID)
 	modelName = strings.TrimSpace(modelName)
-	base := providerID + "/" + modelName
+	base := normalizedProviderID + "/" + modelName
 	identity := modelIdentity{providerID: providerID, name: modelName}
 	if item, exists := occupied[base]; !exists || identityForModel(item.Model) == identity {
 		return base
 	}
 
-	hash := sha256.Sum256([]byte(providerID + "\x00" + modelName))
+	hash := sha256.Sum256([]byte(normalizedProviderID + "\x00" + modelName))
 	hashed := fmt.Sprintf("%s~%x", base, hash[:4])
 	if item, exists := occupied[hashed]; !exists || identityForModel(item.Model) == identity {
 		return hashed
@@ -135,11 +159,10 @@ func stableDiscoveredModelID(providerID, modelName string, occupied map[string]C
 }
 
 func builtinDiscoveredModel(providerID, modelName string, provider Provider) Model {
-	providerID = strings.TrimSpace(providerID)
 	modelName = strings.TrimSpace(modelName)
 	presetID := strings.TrimSpace(provider.Preset)
 	if presetID == "" {
-		presetID = providerID
+		presetID = strings.TrimSpace(providerID)
 	}
 	adapter := AdapterOpenAICompatible
 	switch strings.ToLower(presetID) {
@@ -199,5 +222,5 @@ func heuristicallyExcludedModel(name string) bool {
 }
 
 func identityForModel(model Model) modelIdentity {
-	return modelIdentity{providerID: strings.TrimSpace(model.Provider), name: strings.TrimSpace(model.Name)}
+	return modelIdentity{providerID: model.Provider, name: strings.TrimSpace(model.Name)}
 }

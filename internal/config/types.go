@@ -66,6 +66,32 @@ type DiscoveryConfig struct {
 	Exclude        []string `json:"exclude,omitempty"`
 }
 
+func (value DiscoveryConfig) MarshalJSON() ([]byte, error) {
+	type encodedDiscoveryConfig struct {
+		Enabled        *bool     `json:"enabled,omitempty"`
+		Path           string    `json:"path,omitempty"`
+		Format         string    `json:"format,omitempty"`
+		TimeoutSeconds int       `json:"timeoutSeconds,omitempty"`
+		Include        *[]string `json:"include,omitempty"`
+		Exclude        *[]string `json:"exclude,omitempty"`
+	}
+	encoded := encodedDiscoveryConfig{
+		Enabled:        value.Enabled,
+		Path:           value.Path,
+		Format:         value.Format,
+		TimeoutSeconds: value.TimeoutSeconds,
+	}
+	if value.Include != nil {
+		include := cloneStringSlice(value.Include)
+		encoded.Include = &include
+	}
+	if value.Exclude != nil {
+		exclude := cloneStringSlice(value.Exclude)
+		encoded.Exclude = &exclude
+	}
+	return json.Marshal(encoded)
+}
+
 type Auth struct {
 	Credential string   `json:"credential,omitempty"`
 	Env        []string `json:"env,omitempty"`
@@ -236,7 +262,7 @@ func cloneDocument(in Document) Document {
 func cloneProvider(value Provider) Provider {
 	value.Headers = cloneStringMap(value.Headers)
 	value.Body = cloneAnyMap(value.Body)
-	value.Auth.Env = append([]string(nil), value.Auth.Env...)
+	value.Auth.Env = cloneStringSlice(value.Auth.Env)
 	if value.Retries != nil {
 		retries := *value.Retries
 		value.Retries = &retries
@@ -252,8 +278,8 @@ func cloneDiscoveryConfig(value *DiscoveryConfig) *DiscoveryConfig {
 	}
 	cloned := *value
 	cloned.Enabled = cloneBoolPointer(value.Enabled)
-	cloned.Include = append([]string(nil), value.Include...)
-	cloned.Exclude = append([]string(nil), value.Exclude...)
+	cloned.Include = cloneStringSlice(value.Include)
+	cloned.Exclude = cloneStringSlice(value.Exclude)
 	return &cloned
 }
 
@@ -296,6 +322,15 @@ func cloneBoolPointer(value *bool) *bool {
 	}
 	cloned := *value
 	return &cloned
+}
+
+func cloneStringSlice(in []string) []string {
+	if in == nil {
+		return nil
+	}
+	out := make([]string, len(in))
+	copy(out, in)
+	return out
 }
 
 func cloneStringMap(in map[string]string) map[string]string {

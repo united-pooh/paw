@@ -175,6 +175,70 @@ func TestFilterDiscoveredModelsIncludeRestoresAndExcludeWins(t *testing.T) {
 	}
 }
 
+func TestFilterDiscoveredModelsRejectsUnsafeUniqueNames(t *testing.T) {
+	oversized := strings.Repeat("界", 171)
+	if len(oversized) <= 512 {
+		t.Fatalf("oversized test name is only %d bytes", len(oversized))
+	}
+	unicodeName := "模型/聊天-β"
+	got, filtered := filterDiscoveredModels([]string{
+		"bad\x1bmodel",
+		"\nchat-model",
+		oversized,
+		"bad\x1bmodel",
+		unicodeName,
+	}, DiscoveryConfig{})
+	if !slices.Equal([]string{unicodeName}, got) {
+		t.Fatalf("models=%q", got)
+	}
+	if filtered != 3 {
+		t.Fatalf("filtered=%d want=3", filtered)
+	}
+}
+
+func TestBuildEffectiveCatalogTrimsProviderIDsWithoutChangingDocumentIdentity(t *testing.T) {
+	const providerKey = " local "
+	document := Document{
+		Providers: map[string]Provider{
+			providerKey: {Discovery: &DiscoveryConfig{Enabled: boolPointer(true)}},
+		},
+		Models: map[string]Model{
+			"manual-alias": {Provider: providerKey, Name: "manual"},
+		},
+	}
+	discovered := map[string][]DiscoveredModel{
+		providerKey: {
+			{ProviderID: "local", Name: "manual"},
+			{ProviderID: " local ", Name: "chat"},
+		},
+	}
+
+	catalog, stats := buildEffectiveCatalog(document, discovered)
+
+	if len(catalog) != 2 || stats.Discovered != 2 || stats.Filtered != 0 || stats.Merged != 2 {
+		t.Fatalf("catalog=%#v stats=%#v", catalog, stats)
+	}
+	if _, exists := catalog["local/manual"]; exists {
+		t.Fatalf("exact configured identity did not suppress discovery: %#v", catalog["local/manual"])
+	}
+	discoveredChat, ok := catalog["local/chat"]
+	if !ok {
+		t.Fatalf("catalog=%#v, missing normalized base ID", catalog)
+	}
+	if discoveredChat.Source != ModelSourceDiscovered || discoveredChat.Model.Provider != providerKey || discoveredChat.Model.Name != "chat" {
+		t.Fatalf("discovered model lost exact provider identity: %#v", discoveredChat)
+	}
+
+	occupied := map[string]CatalogModel{
+		"local/chat": {Model: Model{Provider: "local", Name: "chat"}},
+	}
+	hash := sha256.Sum256([]byte("local\x00chat"))
+	wantCollisionID := fmt.Sprintf("local/chat~%x", hash[:4])
+	if got := stableDiscoveredModelID(providerKey, "chat", occupied); got != wantCollisionID {
+		t.Fatalf("trim-equivalent identity collision ID=%q want=%q", got, wantCollisionID)
+	}
+}
+
 func TestMergePresetDiscoveryDefaultsAndExplicitDisable(t *testing.T) {
 	resolved := mergePreset("openai", Provider{})
 	if resolved.Discovery == nil || resolved.Discovery.Enabled == nil || !*resolved.Discovery.Enabled {
@@ -196,6 +260,24 @@ func TestMergePresetDiscoveryDefaultsAndExplicitDisable(t *testing.T) {
 	ollama := mergePreset("ollama", Provider{})
 	if ollama.Discovery == nil || ollama.Discovery.Path != "/api/tags" || ollama.Discovery.Format != DiscoveryFormatOllamaTags {
 		t.Fatalf("ollama discovery=%#v", ollama.Discovery)
+	}
+}
+
+func TestMergePresetPreservesNilAndExplicitEmptyDiscoveryFilters(t *testing.T) {
+	resolved := mergePreset("openai", Provider{Discovery: &DiscoveryConfig{Include: []string{}, Exclude: nil}})
+	if resolved.Discovery == nil || resolved.Discovery.Include == nil || len(resolved.Discovery.Include) != 0 {
+		t.Fatalf("explicitly empty include was lost: %#v", resolved.Discovery)
+	}
+	if resolved.Discovery.Exclude != nil {
+		t.Fatalf("nil exclude became non-nil: %#v", resolved.Discovery.Exclude)
+	}
+
+	resolved = mergePreset("openai", Provider{Discovery: &DiscoveryConfig{Include: nil, Exclude: []string{}}})
+	if resolved.Discovery == nil || resolved.Discovery.Exclude == nil || len(resolved.Discovery.Exclude) != 0 {
+		t.Fatalf("explicitly empty exclude was lost: %#v", resolved.Discovery)
+	}
+	if resolved.Discovery.Include != nil {
+		t.Fatalf("nil include became non-nil: %#v", resolved.Discovery.Include)
 	}
 }
 
@@ -241,6 +323,48 @@ func TestParseAndValidateGlobalDiscoverySchema(t *testing.T) {
 	invalid := []byte(`{"schemaVersion":2,"providers":{"local":{"transport":"openai-compatible","endpoint":"http://127.0.0.1:1234/v1","discovery":{"unknown":true}}},"models":{}}`)
 	if _, _, err := parseAndValidateGlobal(invalid, "config.jsonc"); err == nil {
 		t.Fatal("unknown discovery property was accepted")
+	}
+}
+
+func TestCloneProviderPreservesNilAndExplicitEmptyDiscoveryFilters(t *testing.T) {
+	tests := []struct {
+		name     string
+		include  []string
+		exclude  []string
+		wantIncl bool
+		wantExcl bool
+	}{
+		{name: "nil", include: nil, exclude: nil},
+		{name: "empty include", include: []string{}, exclude: nil, wantIncl: true},
+		{name: "empty exclude", include: nil, exclude: []string{}, wantExcl: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cloned := cloneProvider(Provider{Discovery: &DiscoveryConfig{Include: tt.include, Exclude: tt.exclude}})
+			if got := cloned.Discovery.Include != nil; got != tt.wantIncl {
+				t.Fatalf("include non-nil=%v want=%v (%#v)", got, tt.wantIncl, cloned.Discovery.Include)
+			}
+			if got := cloned.Discovery.Exclude != nil; got != tt.wantExcl {
+				t.Fatalf("exclude non-nil=%v want=%v (%#v)", got, tt.wantExcl, cloned.Discovery.Exclude)
+			}
+		})
+	}
+}
+
+func TestSnapshotClonePreservesNilAndExplicitEmptyDiscoveryFilters(t *testing.T) {
+	snapshot := Snapshot{Document: Document{Providers: map[string]Provider{
+		"empty-include": {Discovery: &DiscoveryConfig{Include: []string{}, Exclude: nil}},
+		"empty-exclude": {Discovery: &DiscoveryConfig{Include: nil, Exclude: []string{}}},
+	}}}
+
+	cloned := snapshot.Clone()
+	include := cloned.Document.Providers["empty-include"].Discovery
+	if include.Include == nil || include.Exclude != nil {
+		t.Fatalf("include clone lost nil/empty distinction: %#v", include)
+	}
+	exclude := cloned.Document.Providers["empty-exclude"].Discovery
+	if exclude.Include != nil || exclude.Exclude == nil {
+		t.Fatalf("exclude clone lost nil/empty distinction: %#v", exclude)
 	}
 }
 
