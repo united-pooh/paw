@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -121,13 +122,18 @@ func Open(ctx context.Context, options Options) (*Manager, error) {
 }
 
 func ensureSchema(paths Paths) error {
-	if _, err := os.Stat(paths.Schema); err == nil {
+	expected := SchemaBytes()
+	installed, err := os.ReadFile(paths.Schema)
+	if err == nil && bytes.Equal(installed, expected) {
 		return nil
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read installed config schema: %w", err)
 	}
 	if err := os.MkdirAll(paths.Schemas, 0o700); err != nil {
 		return err
 	}
-	if err := atomicWriteFile(paths.Schema, SchemaBytes(), 0o600); err != nil {
+	if err := atomicWriteFile(paths.Schema, expected, 0o600); err != nil {
 		return fmt.Errorf("install config schema: %w", err)
 	}
 	return nil

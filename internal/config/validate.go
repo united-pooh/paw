@@ -84,6 +84,11 @@ func validateDocument(document Document, path string) ([]Diagnostic, error) {
 			return nil, fmt.Errorf("%s: provider ID cannot be empty", path)
 		}
 		resolved := mergePreset(id, provider)
+		if resolved.Discovery != nil {
+			if err := validateDiscoveryConfig(id, *resolved.Discovery); err != nil {
+				return nil, fmt.Errorf("%s: %w", path, err)
+			}
+		}
 		switch resolved.Transport {
 		case TransportOpenAIResponses, TransportOpenAICompatible, TransportAnthropicCompatible:
 		default:
@@ -129,6 +134,47 @@ func validateDocument(document Document, path string) ([]Diagnostic, error) {
 		}
 	}
 	return nil, nil
+}
+
+func validateDiscoveryConfig(providerID string, cfg DiscoveryConfig) error {
+	if cfg.Format != "" && cfg.Format != DiscoveryFormatOpenAIList && cfg.Format != DiscoveryFormatOllamaTags {
+		return fmt.Errorf("providers.%s.discovery.format is unsupported", providerID)
+	}
+	if cfg.TimeoutSeconds < 0 || cfg.TimeoutSeconds > 10 {
+		return fmt.Errorf("providers.%s.discovery.timeoutSeconds must be between 1 and 10", providerID)
+	}
+	if err := validateDiscoveryPath(cfg.Path); err != nil {
+		return fmt.Errorf("providers.%s.discovery.path: %w", providerID, err)
+	}
+	patterns := append(append([]string(nil), cfg.Include...), cfg.Exclude...)
+	for _, pattern := range patterns {
+		if err := validateModelGlob(pattern); err != nil {
+			return fmt.Errorf("providers.%s.discovery pattern %q: %w", providerID, pattern, err)
+		}
+	}
+	return nil
+}
+
+func validateDiscoveryPath(value string) error {
+	if value == "" {
+		return nil
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return fmt.Errorf("must be a valid same-origin path: %w", err)
+	}
+	if parsed.IsAbs() || parsed.Scheme != "" || parsed.Host != "" || parsed.User != nil || parsed.Opaque != "" || strings.HasPrefix(value, "//") {
+		return fmt.Errorf("must be a same-origin path")
+	}
+	if parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || strings.Contains(value, "#") {
+		return fmt.Errorf("must not contain a query or fragment")
+	}
+	for _, segment := range strings.Split(parsed.Path, "/") {
+		if segment == ".." {
+			return fmt.Errorf("must not contain a parent path segment")
+		}
+	}
+	return nil
 }
 
 func protectedBodyField(value any, prefix string) string {

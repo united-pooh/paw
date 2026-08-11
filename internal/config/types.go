@@ -22,6 +22,8 @@ const (
 	AdapterGPT                   = "gpt"
 	AdapterDeepSeek              = "deepseek"
 	AdapterOpenAICompatible      = "openai-compatible"
+	DiscoveryFormatOpenAIList    = "openai-list"
+	DiscoveryFormatOllamaTags    = "ollama-tags"
 )
 
 var (
@@ -52,6 +54,16 @@ type Provider struct {
 	TimeoutSeconds int               `json:"timeoutSeconds,omitempty"`
 	Retries        *int              `json:"retries,omitempty"`
 	Stream         *bool             `json:"stream,omitempty"`
+	Discovery      *DiscoveryConfig  `json:"discovery,omitempty"`
+}
+
+type DiscoveryConfig struct {
+	Enabled        *bool    `json:"enabled,omitempty"`
+	Path           string   `json:"path,omitempty"`
+	Format         string   `json:"format,omitempty"`
+	TimeoutSeconds int      `json:"timeoutSeconds,omitempty"`
+	Include        []string `json:"include,omitempty"`
+	Exclude        []string `json:"exclude,omitempty"`
 }
 
 type Auth struct {
@@ -76,6 +88,35 @@ type Capabilities struct {
 	Attachment *bool `json:"attachment,omitempty"`
 }
 
+type ModelSource string
+
+const (
+	ModelSourceConfigured ModelSource = "configured"
+	ModelSourceDiscovered ModelSource = "discovered"
+)
+
+type CatalogModel struct {
+	ID     string
+	Model  Model
+	Source ModelSource
+}
+
+type DiscoveryStatus struct {
+	Attempted       bool
+	ProviderID      string
+	Source          string
+	AttemptedAt     time.Time
+	SucceededAt     time.Time
+	DiscoveredAt    time.Time
+	DiscoveredCount int
+	FilteredCount   int
+	EffectiveCount  int
+	CacheProviders  int
+	CacheState      string
+	SkippedReason   string
+	LastError       string
+}
+
 // WorkspaceDocument is deliberately narrow. A workspace cannot override
 // provider connectivity or credentials inherited from the user's config.
 type WorkspaceDocument struct {
@@ -97,22 +138,25 @@ type Diagnostic struct {
 }
 
 type Snapshot struct {
-	Document      Document
-	Workspace     WorkspaceDocument
-	Active        model.Config
-	ActiveModelID string
-	Revision      uint64
-	ContentHash   string
-	Diagnostics   []Diagnostic
-	Ready         bool
-	LoadedAt      time.Time
-	Raw           []byte
+	Document        Document
+	Workspace       WorkspaceDocument
+	Active          model.Config
+	ActiveModelID   string
+	EffectiveModels map[string]CatalogModel
+	Discovery       DiscoveryStatus
+	Revision        uint64
+	ContentHash     string
+	Diagnostics     []Diagnostic
+	Ready           bool
+	LoadedAt        time.Time
+	Raw             []byte
 }
 
 func (s Snapshot) Clone() Snapshot {
 	s.Document = cloneDocument(s.Document)
 	s.Workspace = cloneWorkspace(s.Workspace)
 	s.Active = model.CloneConfig(s.Active)
+	s.EffectiveModels = cloneCatalog(s.EffectiveModels)
 	s.Diagnostics = append([]Diagnostic(nil), s.Diagnostics...)
 	s.Raw = append([]byte(nil), s.Raw...)
 	return s
@@ -180,25 +224,57 @@ func cloneDocument(in Document) Document {
 	out := in
 	out.Providers = make(map[string]Provider, len(in.Providers))
 	for id, value := range in.Providers {
-		value.Headers = cloneStringMap(value.Headers)
-		value.Body = cloneAnyMap(value.Body)
-		value.Auth.Env = append([]string(nil), value.Auth.Env...)
-		if value.Retries != nil {
-			retries := *value.Retries
-			value.Retries = &retries
-		}
-		value.Stream = cloneBoolPointer(value.Stream)
-		out.Providers[id] = value
+		out.Providers[id] = cloneProvider(value)
 	}
 	out.Models = make(map[string]Model, len(in.Models))
 	for id, value := range in.Models {
-		value.Parameters = cloneAnyMap(value.Parameters)
-		value.Stream = cloneBoolPointer(value.Stream)
-		value.Capabilities.Tools = cloneBoolPointer(value.Capabilities.Tools)
-		value.Capabilities.Vision = cloneBoolPointer(value.Capabilities.Vision)
-		value.Capabilities.Reasoning = cloneBoolPointer(value.Capabilities.Reasoning)
-		value.Capabilities.Attachment = cloneBoolPointer(value.Capabilities.Attachment)
-		out.Models[id] = value
+		out.Models[id] = cloneModel(value)
+	}
+	return out
+}
+
+func cloneProvider(value Provider) Provider {
+	value.Headers = cloneStringMap(value.Headers)
+	value.Body = cloneAnyMap(value.Body)
+	value.Auth.Env = append([]string(nil), value.Auth.Env...)
+	if value.Retries != nil {
+		retries := *value.Retries
+		value.Retries = &retries
+	}
+	value.Stream = cloneBoolPointer(value.Stream)
+	value.Discovery = cloneDiscoveryConfig(value.Discovery)
+	return value
+}
+
+func cloneDiscoveryConfig(value *DiscoveryConfig) *DiscoveryConfig {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	cloned.Enabled = cloneBoolPointer(value.Enabled)
+	cloned.Include = append([]string(nil), value.Include...)
+	cloned.Exclude = append([]string(nil), value.Exclude...)
+	return &cloned
+}
+
+func cloneModel(value Model) Model {
+	value.Parameters = cloneAnyMap(value.Parameters)
+	value.Stream = cloneBoolPointer(value.Stream)
+	value.Capabilities.Tools = cloneBoolPointer(value.Capabilities.Tools)
+	value.Capabilities.Vision = cloneBoolPointer(value.Capabilities.Vision)
+	value.Capabilities.Reasoning = cloneBoolPointer(value.Capabilities.Reasoning)
+	value.Capabilities.Attachment = cloneBoolPointer(value.Capabilities.Attachment)
+	return value
+}
+
+func cloneCatalog(in map[string]CatalogModel) map[string]CatalogModel {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]CatalogModel, len(in))
+	for id, value := range in {
+		value.Model = cloneModel(value.Model)
+		out[id] = value
 	}
 	return out
 }
