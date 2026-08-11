@@ -63,6 +63,11 @@ type SubagentTokensProvider interface {
 	TotalSubagentTokens(parentSessionID string) int
 }
 
+// TurnOwnedTaskCleaner stops background work owned by an exact outer turn.
+type TurnOwnedTaskCleaner interface {
+	StopOwnedTasks(ctx context.Context, parentSessionID, parentTurnID, reason string)
+}
+
 type modelUsageReceiver interface {
 	OnModelUsage(usage model.Usage)
 }
@@ -96,6 +101,7 @@ type Runner struct {
 	streamMAEnabled        bool
 	streamMASubagents      StreamMASubagentRunner
 	subagentTokensProvider SubagentTokensProvider
+	turnOwnedTaskCleaner   TurnOwnedTaskCleaner
 	recovery               *session.RecoveryState
 	skillRegistry          *skill.Registry
 	activeSkillContext     string

@@ -89,6 +89,15 @@ func (runner *Runner) SetSubagentTokensProvider(p SubagentTokensProvider) {
 	runner.subagentTokensProvider = p
 }
 
+func (runner *Runner) SetTurnOwnedTaskCleaner(cleaner TurnOwnedTaskCleaner) {
+	if runner == nil {
+		return
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	runner.turnOwnedTaskCleaner = cleaner
+}
+
 func (runner *Runner) SetSystemSupplement(supplement string) {
 	if runner == nil {
 		return

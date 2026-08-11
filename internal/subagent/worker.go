@@ -21,6 +21,7 @@ type WorkerRequest struct {
 	TaskID          string               `json:"task_id"`
 	SessionID       string               `json:"session_id"`
 	ParentSessionID string               `json:"parent_session_id,omitempty"`
+	ParentTurnID    string               `json:"parent_turn_id,omitempty"`
 	ParentTaskID    string               `json:"parent_task_id,omitempty"`
 	Prompt          string               `json:"prompt"`
 	Description     string               `json:"description,omitempty"`
@@ -224,6 +225,7 @@ type workerMessage struct {
 	TaskID          string               `json:"task_id,omitempty"`
 	SessionID       string               `json:"session_id,omitempty"`
 	ParentSessionID string               `json:"parent_session_id,omitempty"`
+	ParentTurnID    string               `json:"parent_turn_id,omitempty"`
 	ParentTaskID    string               `json:"parent_task_id,omitempty"`
 	Prompt          string               `json:"prompt,omitempty"`
 	Description     string               `json:"description,omitempty"`
@@ -258,6 +260,7 @@ func NewWorkerStartMessage(req WorkerRequest, snapshot coremcp.Snapshot) WorkerM
 		TaskID:          req.TaskID,
 		SessionID:       req.SessionID,
 		ParentSessionID: req.ParentSessionID,
+		ParentTurnID:    req.ParentTurnID,
 		ParentTaskID:    req.ParentTaskID,
 		Prompt:          req.Prompt,
 		Description:     req.Description,
@@ -274,6 +277,7 @@ func (m workerMessage) Request() WorkerRequest {
 		TaskID:          m.TaskID,
 		SessionID:       m.SessionID,
 		ParentSessionID: m.ParentSessionID,
+		ParentTurnID:    m.ParentTurnID,
 		ParentTaskID:    m.ParentTaskID,
 		Prompt:          m.Prompt,
 		Description:     m.Description,

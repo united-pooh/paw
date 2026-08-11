@@ -713,3 +713,90 @@ func TestStreamingResponsesDeltaOverridesEmptyCompletedArguments(t *testing.T) {
 		t.Fatalf("calls = %#v, want delta arguments", calls)
 	}
 }
+
+func TestStreamingResponsesRetriesFailedBeforeProgress(t *testing.T) {
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "text/event-stream")
+		if requests == 1 {
+			_, _ = fmt.Fprint(w, `data: {"type":"response.failed","response":{"error":{"type":"server_error","code":"overloaded","message":"try again"}}}`+"\n\n")
+			return
+		}
+		_, _ = fmt.Fprint(w, `data: {"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"recovered"}]}]}}`+"\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{Transport: "openai-responses", APIBaseURL: server.URL, APIPath: "/responses", Model: "gpt-test", RetryCount: 1, RetryCountSet: true})
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "hello"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+	var text string
+	for event := range events {
+		if event.Err != nil {
+			t.Fatalf("stream error = %v", event.Err)
+		}
+		text += event.Delta
+	}
+	if requests != 2 || text != "recovered" {
+		t.Fatalf("requests=%d text=%q, want safe retry and recovered output", requests, text)
+	}
+}
+
+func TestStreamingResponsesDoesNotRetryAfterTextProgress(t *testing.T) {
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.output_text.delta","delta":"partial"}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.failed","response":{"error":{"type":"server_error","code":"overloaded","message":"failed after output"}}}`+"\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{Transport: "openai-responses", APIBaseURL: server.URL, APIPath: "/responses", Model: "gpt-test", RetryCount: 2, RetryCountSet: true})
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "hello"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+	var text string
+	var gotErr error
+	for event := range events {
+		text += event.Delta
+		if event.Err != nil {
+			gotErr = event.Err
+		}
+	}
+	if requests != 1 || text != "partial" || gotErr == nil {
+		t.Fatalf("requests=%d text=%q err=%v, want no replay after progress", requests, text, gotErr)
+	}
+}
+
+func TestStreamingResponsesRetriesUnexpectedEOFFeforeProgress(t *testing.T) {
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "text/event-stream")
+		if requests == 1 {
+			return
+		}
+		_, _ = fmt.Fprint(w, `data: {"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"after eof"}]}]}}`+"\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{Transport: "openai-responses", APIBaseURL: server.URL, APIPath: "/responses", Model: "gpt-test", RetryCount: 1, RetryCountSet: true})
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "hello"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+	var text string
+	for event := range events {
+		if event.Err != nil {
+			t.Fatalf("stream error = %v", event.Err)
+		}
+		text += event.Delta
+	}
+	if requests != 2 || text != "after eof" {
+		t.Fatalf("requests=%d text=%q", requests, text)
+	}
+}

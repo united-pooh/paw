@@ -132,6 +132,7 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 		parentSessionID: sessionID,
 	})
 	runner.SetSubagentTokensProvider(subagentManager)
+	runner.SetTurnOwnedTaskCleaner(subagentManager)
 	if err := registerTools(registry, root, runner.SkillRoots(), subagentManager, sessionID, broker, allowOutsideRead); err != nil {
 		if mcpManager != nil {
 			_ = mcpManager.Close(context.Background())

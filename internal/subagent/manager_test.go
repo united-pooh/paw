@@ -1036,11 +1036,10 @@ func TestWaitAnyReturnsWhenAnyTaskCompletes(t *testing.T) {
 			terminal++
 		}
 	}
-	if terminal != 1 {
-		t.Fatalf("WaitAny() terminal count = %d, want exactly 1 (only fastest): %#v", terminal, result.Tasks)
+	if terminal < 1 {
+		t.Fatalf("WaitAny() terminal count = %d, want at least 1: %#v", terminal, result.Tasks)
 	}
-	// Worker scheduling is intentionally nondeterministic; the first Launch
-	// call is not guaranteed to be the first task to finish.
+	// Multiple fast workers may finish between the first wakeup and snapshot.
 	for _, id := range []string{first.ID, second.ID, third.ID} {
 		waitForTask(t, manager, id, TaskCompleted)
 	}
@@ -1283,6 +1282,79 @@ func TestStopStopsRunningWorkerAndPersistsStoppedStatus(t *testing.T) {
 	if _, err := os.Stat(stopped.OutputPath); err != nil {
 		t.Fatalf("stopped output path %q stat error = %v", stopped.OutputPath, err)
 	}
+}
+
+func TestStopOwnedTasksOnlyInterruptsExactParentTurn(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(Config{Store: store, Root: root, Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()}, Launcher: &blockingLauncher{}})
+
+	a1, err := manager.Launch(context.Background(), Request{ParentSessionID: "parent", ParentTurnID: "turn-a", Prompt: "a1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a2, err := manager.Launch(context.Background(), Request{ParentSessionID: "parent", ParentTurnID: "turn-a", Prompt: "a2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b1, err := manager.Launch(context.Background(), Request{ParentSessionID: "parent", ParentTurnID: "turn-b", Prompt: "b1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := manager.Launch(context.Background(), Request{ParentSessionID: "parent", Prompt: "legacy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	manager.StopOwnedTasks(context.Background(), "parent", "turn-a", "interrupted: parent failed")
+	for _, id := range []string{a1.ID, a2.ID} {
+		task, ok := manager.Status(id)
+		if !ok || task.Status != TaskInterrupted || !strings.Contains(task.Error, "parent failed") {
+			t.Fatalf("owned task %s = %#v/%v", id, task, ok)
+		}
+	}
+	for _, id := range []string{b1.ID, legacy.ID} {
+		task, ok := manager.Status(id)
+		if !ok || task.Status != TaskRunning {
+			t.Fatalf("unowned task %s = %#v/%v, want running", id, task, ok)
+		}
+	}
+	if len(manager.RunningTasks()) != 2 {
+		t.Fatalf("RunningTasks() = %#v, want turn-b and legacy only", manager.RunningTasks())
+	}
+	// Repeated cleanup is idempotent and must not change another owner's tasks.
+	manager.StopOwnedTasks(context.Background(), "parent", "turn-a", "second cleanup")
+	if task, _ := manager.Status(a1.ID); task.Error != "interrupted: parent failed" {
+		t.Fatalf("repeated cleanup rewrote terminal task: %#v", task)
+	}
+	_, _ = manager.Stop(context.Background(), b1.ID)
+	_, _ = manager.Stop(context.Background(), legacy.ID)
+}
+
+func TestSubagentToolPropagatesTurnOwnerFromContext(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(Config{Store: store, Root: root, Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()}, Launcher: &blockingLauncher{}})
+	tool := NewTool(manager, "fallback-session")
+	ctx := loop.WithTurnOwner(context.Background(), "parent-session", "turn-42")
+	out, err := tool.Run(ctx, json.RawMessage(`{"prompt":"owned"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var task TaskSnapshot
+	if err := json.Unmarshal([]byte(out), &task); err != nil {
+		t.Fatal(err)
+	}
+	if task.ParentSessionID != "parent-session" || task.ParentTurnID != "turn-42" {
+		t.Fatalf("task owner = %q/%q", task.ParentSessionID, task.ParentTurnID)
+	}
+	_, _ = manager.Stop(context.Background(), task.ID)
 }
 
 func TestProcessLauncherParsesWorkerJSON(t *testing.T) {

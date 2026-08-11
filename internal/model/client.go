@@ -112,11 +112,18 @@ func isRetryableRequestError(ctx context.Context, err error) bool {
 }
 
 func waitForRequestRetry(ctx context.Context, attempt int) error {
+	return waitForRequestRetryAfter(ctx, attempt, 0)
+}
+
+func waitForRequestRetryAfter(ctx context.Context, attempt int, retryAfter time.Duration) error {
 	shift := attempt
 	if shift > 3 {
 		shift = 3
 	}
 	delay := requestRetryBaseDelay * time.Duration(1<<shift)
+	if retryAfter > delay {
+		delay = retryAfter
+	}
 	if delay > requestRetryMaxDelay {
 		delay = requestRetryMaxDelay
 	}

@@ -6,12 +6,14 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"paw/internal/message"
 	"sort"
 	"strings"
+	"time"
 )
 
 const (
@@ -399,22 +401,87 @@ func (c *Client) streamResponsesMessage(ctx context.Context, cfg Config, message
 	if err != nil {
 		return nil, fmt.Errorf("序列化请求体失败: %w", err)
 	}
-	resp, err := c.doRequestWithRetry(ctx, cfg, true, func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.APIBaseURL+cfg.APIPath, bytes.NewReader(bodyBytes))
-		if err != nil {
-			return nil, fmt.Errorf("创建 HTTP 请求失败: %w", err)
+
+	requestAttempts := 0
+	buildRequest := func() (*http.Request, error) {
+		requestAttempts++
+		req, buildErr := http.NewRequestWithContext(ctx, http.MethodPost, cfg.APIBaseURL+cfg.APIPath, bytes.NewReader(bodyBytes))
+		if buildErr != nil {
+			return nil, fmt.Errorf("创建 HTTP 请求失败: %w", buildErr)
 		}
 		c.setRequestHeadersForConfig(req, cfg)
 		return req, nil
-	})
+	}
+	initialResp, err := c.doRequestWithRetry(ctx, cfg, true, buildRequest)
 	if err != nil {
 		return nil, fmt.Errorf("调用模型接口失败: %w", err)
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, providerHTTPErrorFromResponse(resp, "模型接口")
+	if initialResp.StatusCode < 200 || initialResp.StatusCode >= 300 {
+		return nil, providerHTTPErrorFromResponse(initialResp, "模型接口")
 	}
+
 	events := make(chan StreamEvent)
-	go c.consumeResponsesStream(ctx, resp, events)
+	go func() {
+		defer close(events)
+		attempts := cfg.RetryCount + 2 - requestAttempts
+		if attempts < 1 {
+			attempts = 1
+		}
+		client := c.httpClientForConfig(cfg, true)
+		for attempt := 0; attempt < attempts; attempt++ {
+			resp := initialResp
+			var requestErr error
+			if attempt > 0 {
+				var req *http.Request
+				req, requestErr = buildRequest()
+				if requestErr == nil {
+					resp, requestErr = client.Do(req)
+				}
+			}
+			if requestErr != nil {
+				if resp != nil && resp.Body != nil {
+					_ = resp.Body.Close()
+				}
+				if attempt < attempts-1 && isRetryableRequestError(ctx, requestErr) {
+					if waitErr := waitForRequestRetry(ctx, attempt); waitErr == nil {
+						continue
+					} else {
+						requestErr = waitErr
+					}
+				}
+				_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("调用模型接口失败: %w", requestErr)})
+				return
+			}
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				providerErr := providerHTTPErrorFromResponse(resp, "模型接口")
+				if attempt < attempts-1 && isRetryableHTTPStatus(providerErr.StatusCode) {
+					if waitErr := waitForRequestRetryAfter(ctx, attempt, providerErr.RetryAfter); waitErr == nil {
+						continue
+					} else {
+						_ = emitStreamEvent(ctx, events, StreamEvent{Err: waitErr})
+						return
+					}
+				}
+				_ = emitStreamEvent(ctx, events, StreamEvent{Err: providerErr})
+				return
+			}
+
+			result := c.consumeResponsesStream(ctx, resp, events)
+			if result.err == nil {
+				return
+			}
+			if attempt < attempts-1 && !result.madeProgress && isRetryableResponsesStreamError(ctx, result.err) {
+				if waitErr := waitForRequestRetryAfter(ctx, attempt, result.retryAfter); waitErr == nil {
+					continue
+				} else {
+					_ = emitStreamEvent(ctx, events, StreamEvent{Err: waitErr})
+					return
+				}
+			}
+			_ = emitStreamEvent(ctx, events, StreamEvent{Err: result.err})
+			return
+		}
+	}()
 	return events, nil
 }
 
@@ -544,17 +611,92 @@ type activeResponseToolCall struct {
 	name   string
 }
 
-func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response, events chan<- StreamEvent) {
-	defer close(events)
+type responsesStreamFailure struct {
+	EventType string
+	Type      string
+	Code      string
+	Message   string
+	RequestID string
+	Retryable bool
+	cause     error
+}
+
+func (e *responsesStreamFailure) Error() string {
+	if e == nil {
+		return ""
+	}
+	message := strings.TrimSpace(e.Message)
+	if message == "" {
+		message = "Responses API 请求失败"
+	}
+	detail := message
+	if e.Code != "" {
+		detail += " (code=" + e.Code + ")"
+	}
+	if e.RequestID != "" {
+		detail += " (request_id=" + e.RequestID + ")"
+	}
+	return "模型接口返回错误: " + detail
+}
+
+func (e *responsesStreamFailure) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+type responsesStreamResult struct {
+	err          error
+	madeProgress bool
+	retryAfter   time.Duration
+}
+
+func isRetryableResponsesStreamError(ctx context.Context, err error) bool {
+	if err == nil || (ctx != nil && ctx.Err() != nil) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var failure *responsesStreamFailure
+	if errors.As(err, &failure) {
+		return failure.Retryable
+	}
+	return isRetryableRequestError(ctx, err)
+}
+
+func responsesFailureFromEvent(event responsesStreamEvent, header http.Header) *responsesStreamFailure {
+	providerErr := event.Error
+	if providerErr == nil && event.Response != nil {
+		providerErr = event.Response.Error
+	}
+	failure := &responsesStreamFailure{
+		EventType: event.Type,
+		RequestID: providerRequestID(header),
+		Retryable: event.Type == "response.failed" || event.Type == "response.incomplete",
+	}
+	if providerErr != nil {
+		failure.Type = strings.TrimSpace(providerErr.Type)
+		failure.Code = strings.TrimSpace(providerErr.Code)
+		failure.Message = strings.TrimSpace(providerErr.Message)
+	}
+	// Request/auth/schema failures are deterministic and must not be replayed.
+	nonRetryable := strings.ToLower(failure.Type + " " + failure.Code)
+	for _, marker := range []string{"invalid", "authentication", "authorization", "permission", "not_found", "unsupported", "context_length", "rate_limit"} {
+		if strings.Contains(nonRetryable, marker) {
+			failure.Retryable = false
+			break
+		}
+	}
+	return failure
+}
+
+func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response, events chan<- StreamEvent) responsesStreamResult {
 	defer resp.Body.Close()
+	result := responsesStreamResult{retryAfter: providerRetryAfter(resp.Header, time.Now())}
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, streamScannerInitialBufferBytes), streamScannerMaxTokenBytes)
-	// Keep both the provider's raw item and argument deltas. Some gateways omit
-	// arguments from output_item.done or response.completed entirely.
 	active := make(map[int]*activeResponseToolCall)
 	sawOutputTextDelta := false
-	completed := false
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -567,30 +709,32 @@ func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response
 		}
 		var event responsesStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
-			_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("解析 Responses 流式数据失败: %w", err)})
-			return
+			result.err = &responsesStreamFailure{EventType: "decode", Message: "解析 Responses 流式数据失败", RequestID: providerRequestID(resp.Header), Retryable: true, cause: err}
+			return result
 		}
 		switch event.Type {
 		case "response.output_text.delta":
 			if event.Delta != "" {
+				result.madeProgress = true
 				if !emitStreamEvent(ctx, events, StreamEvent{Delta: event.Delta}) {
-					return
+					result.err = ctx.Err()
+					return result
 				}
 				sawOutputTextDelta = true
 			}
 		case "response.output_item.added":
 			if len(event.Item) != 0 {
+				result.madeProgress = true
 				call := &activeResponseToolCall{item: append(json.RawMessage(nil), event.Item...)}
 				var view responsesOutputItemView
 				if json.Unmarshal(event.Item, &view) == nil && view.Type == "function_call" {
-					call.id = view.ID
-					call.callID = view.CallID
-					call.name = view.Name
+					call.id, call.callID, call.name = view.ID, view.CallID, view.Name
 					call.args.WriteString(view.Arguments)
 					active[event.OutputIndex] = call
 				}
 			}
 		case "response.function_call_arguments.delta":
+			result.madeProgress = true
 			call := active[event.OutputIndex]
 			if call == nil {
 				call = &activeResponseToolCall{id: event.ItemID, callID: event.CallID, name: event.Name}
@@ -612,6 +756,7 @@ func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response
 			}
 		case "response.output_item.done":
 			if len(event.Item) != 0 {
+				result.madeProgress = true
 				call := active[event.OutputIndex]
 				if call == nil {
 					call = &activeResponseToolCall{}
@@ -630,35 +775,32 @@ func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response
 			}
 			finalEvent, err := completedResponsesEvent(output, usage)
 			if err != nil {
-				_ = emitStreamEvent(ctx, events, StreamEvent{Err: err})
-				return
+				result.err = err
+				return result
 			}
 			if sawOutputTextDelta {
 				finalEvent.Delta = ""
 			}
 			if !emitFinalResponsesEvent(ctx, events, finalEvent) {
-				return
+				result.err = ctx.Err()
+				return result
 			}
-			completed = true
-			return
+			return result
 		case "response.failed", "response.incomplete", "error":
-			msg := "Responses API 请求失败"
-			if event.Error != nil && event.Error.Message != "" {
-				msg = event.Error.Message
-			} else if event.Response != nil && event.Response.Error != nil && event.Response.Error.Message != "" {
-				msg = event.Response.Error.Message
-			}
-			_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("模型接口返回错误: %s", msg)})
-			return
+			result.err = responsesFailureFromEvent(event, resp.Header)
+			return result
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("读取 Responses 流式响应失败: %w", err)})
-		return
+		if ctx != nil && ctx.Err() != nil {
+			result.err = ctx.Err()
+		} else {
+			result.err = &responsesStreamFailure{EventType: "stream_read", Message: "读取 Responses 流式响应失败", RequestID: providerRequestID(resp.Header), Retryable: true, cause: err}
+		}
+		return result
 	}
-	if !completed {
-		_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("Responses stream ended before response.completed")})
-	}
+	result.err = &responsesStreamFailure{EventType: "unexpected_eof", Message: "Responses stream ended before response.completed", RequestID: providerRequestID(resp.Header), Retryable: true}
+	return result
 }
 
 func responsesRawOutputWithDeltas(active map[int]*activeResponseToolCall) []json.RawMessage {

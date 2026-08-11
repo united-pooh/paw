@@ -100,6 +100,7 @@ type Manager struct {
 type Request struct {
 	SessionID       string
 	ParentSessionID string
+	ParentTurnID    string
 	Prompt          string
 	SystemPrompt    string
 	Description     string
@@ -160,6 +161,7 @@ type TaskSnapshot struct {
 	Color           string               `json:"color,omitempty"`
 	SessionID       string               `json:"session_id"`
 	ParentSessionID string               `json:"parent_session_id,omitempty"`
+	ParentTurnID    string               `json:"parent_turn_id,omitempty"`
 	Description     string               `json:"description,omitempty"`
 	Prompt          string               `json:"prompt"`
 	SystemPrompt    string               `json:"system_prompt,omitempty"`
@@ -394,7 +396,7 @@ func (m *Manager) Run(ctx context.Context, req Request) (Result, error) {
 		return Result{}, err
 	}
 	workerResult, waitErr := process.Wait()
-	task = m.finishTask(ctx, task.ID, workerResult, waitErr)
+	task, _ = m.finishTask(ctx, task.ID, workerResult, waitErr)
 	result := resultFromTask(task)
 	if waitErr != nil {
 		return result, waitErr
@@ -465,7 +467,7 @@ func (m *Manager) Stop(ctx context.Context, id string) (TaskSnapshot, error) {
 	}
 
 	m.mu.RLock()
-	process, ok := m.running[id]
+	process := m.running[id]
 	task, taskOK := m.tasks[id]
 	m.mu.RUnlock()
 	if !taskOK {
@@ -481,33 +483,87 @@ func (m *Manager) Stop(ctx context.Context, id string) (TaskSnapshot, error) {
 	if task.Status != TaskRunning {
 		return task, fmt.Errorf("subagent task %s is not running (status=%s)", id, task.Status)
 	}
-
-	if ok && process != nil {
+	if process != nil {
 		_ = process.Stop()
 	}
+	stopped, changed := m.transitionTaskStopped(ctx, id, TaskStopped, "stopped")
+	if !changed {
+		return stopped, fmt.Errorf("subagent task %s is not running (status=%s)", id, stopped.Status)
+	}
+	m.notifyTaskFinished(stopped)
+	return stopped, nil
+}
 
+// StopOwnedTasks interrupts running background tasks launched by one exact
+// parent turn. Empty ownership never matches, preserving compatibility with
+// tasks created before ParentTurnID was introduced.
+func (m *Manager) StopOwnedTasks(ctx context.Context, parentSessionID, parentTurnID, reason string) {
+	if m == nil {
+		return
+	}
+	parentSessionID = strings.TrimSpace(parentSessionID)
+	parentTurnID = strings.TrimSpace(parentTurnID)
+	if parentSessionID == "" || parentTurnID == "" {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "interrupted: parent turn ended unexpectedly"
+	}
+
+	type ownedProcess struct {
+		id      string
+		process Process
+	}
+	m.mu.RLock()
+	owned := make([]ownedProcess, 0)
+	for id, task := range m.tasks {
+		if task.Status == TaskRunning && task.RunMode == settings.RunModeBackground &&
+			task.ParentSessionID == parentSessionID && task.ParentTurnID == parentTurnID {
+			owned = append(owned, ownedProcess{id: id, process: m.running[id]})
+		}
+	}
+	m.mu.RUnlock()
+
+	for _, item := range owned {
+		if item.process != nil {
+			_ = item.process.Stop()
+		}
+		if task, changed := m.transitionTaskStopped(ctx, item.id, TaskInterrupted, reason); changed {
+			m.notifyTaskFinished(task)
+		}
+	}
+}
+
+func (m *Manager) transitionTaskStopped(ctx context.Context, id string, status TaskStatus, reason string) (TaskSnapshot, bool) {
 	now := time.Now().UTC()
 	exitCode := -1
-	task.Status = TaskStopped
+	m.mu.Lock()
+	task := m.tasks[id]
+	if task.Status != TaskRunning {
+		delete(m.running, id)
+		m.mu.Unlock()
+		return task, false
+	}
+	if status != TaskStopped && status != TaskInterrupted {
+		status = TaskInterrupted
+	}
+	task.Status = status
 	task.FinishedAt = &now
 	task.ExitCode = &exitCode
-	task.Error = "stopped"
-
-	m.mu.Lock()
+	task.Error = reason
 	m.tasks[id] = task
 	delete(m.running, id)
 	m.mu.Unlock()
 
+	_ = m.registry.saveOutput(ctx, id, WorkerResult{TaskID: id, SessionID: task.SessionID, Error: reason, ExitCode: exitCode})
 	_ = m.registry.saveTask(ctx, task)
-	_ = m.registry.saveOutput(ctx, id, WorkerResult{
-		TaskID:    id,
-		SessionID: task.SessionID,
-		Error:     task.Error,
-		ExitCode:  exitCode,
-	})
 	m.signalTaskUpdate()
-	m.notifyTaskFinished(task)
-	return task, nil
+	m.recordTaskFinished(task)
+	return task, true
 }
 
 // SubscribeTaskUpdates returns a wakeup stream for task status changes. The
@@ -851,6 +907,7 @@ func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Pro
 		Color:           persona.Color,
 		SessionID:       sessionID,
 		ParentSessionID: strings.TrimSpace(req.ParentSessionID),
+		ParentTurnID:    strings.TrimSpace(req.ParentTurnID),
 		Description:     req.Description,
 		Prompt:          req.Prompt,
 		SystemPrompt:    strings.TrimSpace(req.SystemPrompt),
@@ -868,6 +925,7 @@ func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Pro
 		TaskID:          task.ID,
 		SessionID:       task.SessionID,
 		ParentSessionID: strings.TrimSpace(req.ParentSessionID),
+		ParentTurnID:    strings.TrimSpace(req.ParentTurnID),
 		ParentTaskID:    task.ParentTaskID,
 		Prompt:          req.Prompt,
 		Description:     req.Description,
@@ -961,6 +1019,7 @@ func (m *Manager) startStreamingTask(ctx context.Context, req Request) (TaskSnap
 		Color:           persona.Color,
 		SessionID:       sessionID,
 		ParentSessionID: strings.TrimSpace(req.ParentSessionID),
+		ParentTurnID:    strings.TrimSpace(req.ParentTurnID),
 		Description:     req.Description,
 		Prompt:          req.Prompt,
 		SystemPrompt:    strings.TrimSpace(req.SystemPrompt),
@@ -1008,11 +1067,13 @@ func (m *Manager) runStreamingTask(ctx context.Context, task TaskSnapshot, event
 
 func (m *Manager) waitBackground(taskID string, process Process) {
 	result, err := process.Wait()
-	task := m.finishTask(context.Background(), taskID, result, err)
-	m.notifyTaskFinished(task)
+	task, changed := m.finishTask(context.Background(), taskID, result, err)
+	if changed {
+		m.notifyTaskFinished(task)
+	}
 }
 
-func (m *Manager) finishTask(ctx context.Context, taskID string, result WorkerResult, err error) TaskSnapshot {
+func (m *Manager) finishTask(ctx context.Context, taskID string, result WorkerResult, err error) (TaskSnapshot, bool) {
 	now := time.Now().UTC()
 	m.mu.Lock()
 	task := m.tasks[taskID]
@@ -1024,7 +1085,7 @@ func (m *Manager) finishTask(ctx context.Context, taskID string, result WorkerRe
 	if task.Status != TaskRunning {
 		delete(m.running, taskID)
 		m.mu.Unlock()
-		return task
+		return task, false
 	}
 	exitCode := result.ExitCode
 	if exitCode == 0 && err != nil {
@@ -1053,23 +1114,23 @@ func (m *Manager) finishTask(ctx context.Context, taskID string, result WorkerRe
 	} else {
 		task.Status = TaskCompleted
 	}
-	m.mu.Unlock()
-
-	// Persist the terminal state before publishing it through the in-memory
-	// registry. Consumers that observe a completed task can then immediately
-	// read its output artifact without racing the writer goroutine.
-	_ = m.registry.saveOutput(ctx, taskID, result)
-	_ = m.registry.saveTask(ctx, task)
-
-	m.mu.Lock()
+	// Claim the terminal transition while holding the manager lock. Stop and
+	// owner cleanup can no longer race in after Wait has selected a terminal
+	// result and overwrite (or be overwritten by) that result.
 	m.tasks[taskID] = task
 	delete(m.running, taskID)
+
+	// Persist before releasing the transition to observers. This is a short,
+	// bounded local write and ensures a consumer awakened by signalTaskUpdate can
+	// immediately read the matching output artifact and metadata.
+	_ = m.registry.saveOutput(ctx, taskID, result)
+	_ = m.registry.saveTask(ctx, task)
 	m.mu.Unlock()
 
 	m.signalTaskUpdate()
 	m.submitTaskContext(task)
 	m.recordTaskFinished(task)
-	return task
+	return task, true
 }
 
 func (m *Manager) prepareSession(ctx context.Context, req Request) (string, error) {
@@ -1683,6 +1744,10 @@ func (t *subagentTool) Run(ctx context.Context, raw json.RawMessage) (string, er
 	req, err := t.buildRequest(raw)
 	if err != nil {
 		return "", err
+	}
+	if owner, ok := loop.TurnOwnerFromContext(ctx); ok {
+		req.ParentSessionID = owner.SessionID
+		req.ParentTurnID = owner.TurnID
 	}
 	if req.RunMode == settings.RunModeBackground {
 		task, err := t.manager.Launch(ctx, req)

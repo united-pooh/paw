@@ -6,6 +6,7 @@ import (
 	"paw/internal/message"
 	"paw/internal/model"
 	"paw/internal/session"
+	"time"
 )
 
 func (runner *Runner) RunTurn(ctx context.Context, input string) (msg message.Message, err error) {
@@ -136,7 +137,22 @@ func (runner *Runner) runSingleTurnWithTiming(ctx context.Context, userInput mes
 	}
 	journalStarted := false
 	settled := false
+	ctx = WithTurnOwner(ctx, runner.sessionID, turnID)
 	defer func() {
+		if !settled {
+			runner.mu.RLock()
+			cleaner := runner.turnOwnedTaskCleaner
+			runner.mu.RUnlock()
+			if cleaner != nil {
+				failure := err
+				if failure == nil {
+					failure = fmt.Errorf("turn ended before completion")
+				}
+				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+				cleaner.StopOwnedTasks(cleanupCtx, runner.sessionID, turnID, "interrupted: parent turn failed: "+failure.Error())
+				cancel()
+			}
+		}
 		if !settled && len(injectedSupplements) > 0 {
 			runner.prependSupplements(injectedSupplements)
 		}
