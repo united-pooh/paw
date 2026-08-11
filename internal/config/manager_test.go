@@ -619,6 +619,119 @@ func TestManagerDiscoveryRereadsGlobalAndWorkspaceAfterBlockingRequest(t *testin
 	}
 }
 
+func TestManagerDiscoveryPersistsLiveOnlyAfterFinalDocumentConfirmsProvenance(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, false)
+	queriedProvider := discoveryTestProvider("http://127.0.0.1:1234/v1")
+	currentProvider := discoveryTestProvider("http://127.0.0.1:5678/v1")
+	initial := emptyDocument()
+	initial.Providers["local"] = queriedProvider
+	initial.Models["local/manual"] = Model{Provider: "local", Name: "manual"}
+	initial.ActiveModel = "local/manual"
+	writeManagerDocument(t, paths, initial)
+
+	cachedAt := time.Unix(700, 0).UTC()
+	originalCache := discoveryCacheFile{
+		Version: discoveryCacheVersion,
+		Providers: map[string]discoveryCacheEntry{
+			"local": {
+				EndpointFingerprint: discoveryEndpointFingerprint(currentProvider),
+				Format:              currentProvider.Discovery.Format,
+				DiscoveredAt:        cachedAt,
+				Models:              []string{"cached-current"},
+			},
+		},
+	}
+	if err := writeDiscoveryCache(paths.ModelDiscoveryCache, originalCache); err != nil {
+		t.Fatal(err)
+	}
+
+	discoverer := &blockingModelDiscoverer{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		models:  []DiscoveredModel{{Name: "stale-live"}},
+	}
+	t.Cleanup(func() {
+		select {
+		case <-discoverer.release:
+		default:
+			close(discoverer.release)
+		}
+	})
+	type openResult struct {
+		manager *Manager
+		err     error
+	}
+	opened := make(chan openResult, 1)
+	go func() {
+		manager, err := Open(context.Background(), Options{
+			Paths:        paths,
+			Credentials:  &FakeCredentialStore{Unavailable: true},
+			DisableWatch: true,
+			Discoverer:   discoverer,
+		})
+		opened <- openResult{manager: manager, err: err}
+	}()
+
+	select {
+	case <-discoverer.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for blocking discovery")
+	}
+	current := cloneDocument(initial)
+	current.Providers["local"] = currentProvider
+	writeManagerDocument(t, paths, current)
+	close(discoverer.release)
+
+	var result openResult
+	select {
+	case result = <-opened:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for manager open")
+	}
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	manager := result.manager
+	t.Cleanup(func() { _ = manager.Close() })
+
+	snapshot := manager.Snapshot()
+	if snapshot.Document.Providers["local"].Endpoint != currentProvider.Endpoint || snapshot.Active.APIBaseURL != currentProvider.Endpoint {
+		t.Fatalf("final snapshot did not use current provider: document=%#v active=%#v", snapshot.Document.Providers["local"], snapshot.Active)
+	}
+	if _, ok := snapshot.EffectiveModels["local/cached-current"]; !ok || snapshot.Discovery.Source != "cache" {
+		t.Fatalf("final snapshot did not use matching loaded cache: %#v / %#v", snapshot.EffectiveModels, snapshot.Discovery)
+	}
+	if _, ok := snapshot.EffectiveModels["local/stale-live"]; ok {
+		t.Fatalf("stale live result remained applicable: %#v", snapshot.EffectiveModels)
+	}
+	if got := discoverer.calls.Load(); got != 1 {
+		t.Fatalf("discovery calls = %d, want 1", got)
+	}
+
+	writeManagerDocument(t, paths, initial)
+	if err := manager.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	reverted := manager.Snapshot()
+	if _, ok := reverted.EffectiveModels["local/stale-live"]; ok || reverted.Discovery.Source == "live" {
+		t.Fatalf("unconfirmed live result became applicable on a later reload: %#v / %#v", reverted.EffectiveModels, reverted.Discovery)
+	}
+	if got := discoverer.calls.Load(); got != 1 {
+		t.Fatalf("discovery calls after reload = %d, want 1", got)
+	}
+	if entry := manager.discoveryCache.Providers["local"]; entry.EndpointFingerprint != discoveryEndpointFingerprint(currentProvider) || strings.Join(entry.Models, ",") != "cached-current" || !entry.DiscoveredAt.Equal(cachedAt) {
+		t.Fatalf("in-memory loaded cache was overwritten by stale live result: %#v", manager.discoveryCache)
+	}
+	diskCache, err := readDiscoveryCache(paths.ModelDiscoveryCache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry := diskCache.Providers["local"]; entry.EndpointFingerprint != discoveryEndpointFingerprint(currentProvider) || strings.Join(entry.Models, ",") != "cached-current" || !entry.DiscoveredAt.Equal(cachedAt) {
+		t.Fatalf("persistent cache was overwritten by stale live result: %#v", diskCache)
+	}
+}
+
 func TestManagerDiscoveryWatcherClosesPostReadRegistrationGap(t *testing.T) {
 	clearDetectionEnv(t)
 	paths := isolatedPaths(t, true)
@@ -1446,6 +1559,141 @@ func TestFirstRunCreatesStarterWithoutTouchingUserHome(t *testing.T) {
 	}
 	if !strings.Contains(setupErr.Error(), paths.GlobalConfig) || !strings.Contains(setupErr.Error(), "/config") {
 		t.Fatalf("setup-required error lacks path or repair command: %v", setupErr)
+	}
+}
+
+func TestManagerInvalidGlobalStartupExplicitReloadUsesLoadedDiscoveryCacheWithoutRequest(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, false)
+	provider := discoveryTestProvider("http://127.0.0.1:1234/v1")
+	if err := os.MkdirAll(paths.Home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.GlobalConfig, []byte(`{"schemaVersion":2,`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeDiscoveryCache(paths.ModelDiscoveryCache, discoveryCacheFile{
+		Version: discoveryCacheVersion,
+		Providers: map[string]discoveryCacheEntry{
+			"local": {
+				EndpointFingerprint: discoveryEndpointFingerprint(provider),
+				Format:              provider.Discovery.Format,
+				DiscoveredAt:        time.Unix(800, 0).UTC(),
+				Models:              []string{"cached-after-repair"},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	discoverer := &fakeModelDiscoverer{models: []DiscoveredModel{{Name: "unexpected-live"}}}
+	manager, err := Open(context.Background(), Options{
+		Paths:        paths,
+		Credentials:  &FakeCredentialStore{Unavailable: true},
+		DisableWatch: true,
+		Discoverer:   discoverer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	if manager.Snapshot().Ready || len(manager.Snapshot().Diagnostics) == 0 {
+		t.Fatalf("invalid startup snapshot=%#v", manager.Snapshot())
+	}
+	if entry, ok := manager.discoveryCache.Providers["local"]; !ok || strings.Join(entry.Models, ",") != "cached-after-repair" {
+		t.Fatalf("valid cache was not loaded independently of startup parsing: %#v", manager.discoveryCache)
+	}
+	if len(discoverer.calls) != 0 {
+		t.Fatalf("invalid startup unexpectedly requested discovery: %#v", discoverer.calls)
+	}
+
+	document := emptyDocument()
+	document.Providers["local"] = provider
+	document.Models["local/manual"] = Model{Provider: "local", Name: "manual"}
+	document.ActiveModel = "local/manual"
+	writeManagerDocument(t, paths, document)
+	if err := manager.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := manager.Snapshot()
+	if !snapshot.Ready || snapshot.Discovery.Source != "cache" {
+		t.Fatalf("repaired reload did not use loaded cache: ready=%v discovery=%#v diagnostics=%#v", snapshot.Ready, snapshot.Discovery, snapshot.Diagnostics)
+	}
+	if _, ok := snapshot.EffectiveModels["local/cached-after-repair"]; !ok {
+		t.Fatalf("repaired reload catalog = %#v", snapshot.EffectiveModels)
+	}
+	if len(discoverer.calls) != 0 {
+		t.Fatalf("repaired reload unexpectedly requested discovery: %#v", discoverer.calls)
+	}
+}
+
+func TestManagerInvalidWorkspaceStartupWatcherRepairUsesLoadedDiscoveryCacheWithoutRequest(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, true)
+	provider := discoveryTestProvider("http://127.0.0.1:1234/v1")
+	document := emptyDocument()
+	document.Providers["local"] = provider
+	document.Models["local/manual"] = Model{Provider: "local", Name: "manual"}
+	document.ActiveModel = "local/manual"
+	writeManagerDocument(t, paths, document)
+	if err := os.MkdirAll(filepath.Dir(paths.WorkspaceConfig), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.WorkspaceConfig, []byte(`{"schemaVersion":2,`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeDiscoveryCache(paths.ModelDiscoveryCache, discoveryCacheFile{
+		Version: discoveryCacheVersion,
+		Providers: map[string]discoveryCacheEntry{
+			"local": {
+				EndpointFingerprint: discoveryEndpointFingerprint(provider),
+				Format:              provider.Discovery.Format,
+				DiscoveredAt:        time.Unix(900, 0).UTC(),
+				Models:              []string{"cached-after-watch-repair"},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	discoverer := &fakeModelDiscoverer{models: []DiscoveredModel{{Name: "unexpected-live"}}}
+	manager, err := Open(context.Background(), Options{
+		Paths:       paths,
+		Credentials: &FakeCredentialStore{Unavailable: true},
+		Discoverer:  discoverer,
+		Debounce:    20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	if manager.Snapshot().Ready || len(manager.Snapshot().Diagnostics) == 0 {
+		t.Fatalf("invalid workspace startup snapshot=%#v", manager.Snapshot())
+	}
+	if entry, ok := manager.discoveryCache.Providers["local"]; !ok || strings.Join(entry.Models, ",") != "cached-after-watch-repair" {
+		t.Fatalf("valid cache was not loaded independently of workspace parsing: %#v", manager.discoveryCache)
+	}
+	if len(discoverer.calls) != 0 {
+		t.Fatalf("invalid workspace startup unexpectedly requested discovery: %#v", discoverer.calls)
+	}
+
+	updates, cancel := manager.Subscribe()
+	defer cancel()
+	<-updates
+	if err := atomicWriteFile(paths.WorkspaceConfig, []byte(`{"schemaVersion":2,"activeModel":"local/manual"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case snapshot := <-updates:
+		if !snapshot.Ready || snapshot.Discovery.Source != "cache" {
+			t.Fatalf("watcher repair did not use loaded cache: ready=%v discovery=%#v diagnostics=%#v", snapshot.Ready, snapshot.Discovery, snapshot.Diagnostics)
+		}
+		if _, ok := snapshot.EffectiveModels["local/cached-after-watch-repair"]; !ok {
+			t.Fatalf("watcher repair catalog = %#v", snapshot.EffectiveModels)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for repaired workspace reload")
+	}
+	if len(discoverer.calls) != 0 {
+		t.Fatalf("watcher repair unexpectedly requested discovery: %#v", discoverer.calls)
 	}
 }
 
