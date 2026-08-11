@@ -1,7 +1,7 @@
 # Provider 模型自动发现实现计划（完成记录）
 
-**状态：** 功能实现、逐任务评审和 Task 8 最终验证均已完成。
-**实现范围：** `fcbd952c` 之后的 17 个 feature/fix commits，当前实现基线 `d65c4eb633ceb77c514b7409ea80696623b7a0f1`。
+**状态：** 功能实现、逐任务评审、Task 8 验证和四项最终 Important 集成修正均已完成。
+**实现范围：** `fcbd952c` 之后的 18 个 feature/fix commits，当前实现基线 `ec85c22c51d8235e69e08d8fcfe515ebe345fa12`。
 **原则：** 本记录描述已经评审通过的代码，不再保留与实现矛盾的预期伪代码或未采用方案。
 
 ## 最终架构
@@ -10,8 +10,10 @@
 - 启动先独立加载严格 cache，再执行 parse-only discovery selection；watcher 在最终完整 load 前注册。
 - live result 先 pending，最终文档确认 Provider/fingerprint/format provenance 后才发布，并延迟写入 cache。
 - cache fingerprint 使用 `discoveryURL` 得到的实际请求 URL；cache 读写严格限制 8 MiB。
-- discovered/cache 模型名在目录、缓存和 ID 生成前执行 512 UTF-8 bytes 与 Unicode control filtering。
-- discovered-only 激活携带 `CatalogSelection`，通过 `PreviewUpdate`、runtime preflight、`commitPreview` 和 rollback 事务提交。
+- HTTP discovery 保留 raw 名称；Manager 在 trim/dedup 前执行 512 UTF-8 bytes、Unicode control 和空白拒绝，并把 raw rejection 计入 `FilteredCount`。
+- `DiscoveryConfig.PathSet` 区分 omitted path 与显式空 path，并贯穿 preset、clone、merge、Upsert 和 JSONC round trip。
+- discovered-only 激活携带 `CatalogSelection`，要求 prospective active ID 与选择完全一致，通过文件基线校验、runtime preflight、`commitPreview` 和 rollback 事务提交。
+- global/workspace bytes 与 existence 在 preview、commit candidate 构建前及 writer 前比较；外部编辑冲突不会被覆盖。
 - `/model`、Configuration Center 和 Diagnostics 消费 `EffectiveModels`/`DiscoveryStatus`；所有状态文本经过终端净化和 240-cell 截断。
 - subagent discovery 禁用由显式 `workerMode` 决定；worker.start 在 `config.Open` 前校验 `MaxDepth >= 1` 和 `1 <= Depth <= MaxDepth`。
 
@@ -202,9 +204,24 @@
 - [x] `.superpowers/sdd/task-8-report.md` 记录精确命令、结果、最终 commit 和 concerns（该路径被 Git 忽略）。
 - [x] 最终提交仅包含本 plan/design；提交主题 `docs: finalize provider model auto discovery design`。
 
+## Final Important integration corrections
+
+四项最终集成 findings 采用 TDD 修正，未启动 subagent，未增加无关功能：
+
+- [x] Manager Snapshot 保存 global/workspace bytes+existence 基线；`PreviewUpdate` 和 commit 在 `updateMu` 内重读并比较，writer 前再次比较。content replacement、create/delete/missing 都返回 `ErrRevisionConflict`；Controller 恢复旧 runtime，外部 bytes 和旧 Snapshot 保持到 reload。
+- [x] `ActivateCatalogSelection` 在 preview 后要求 `prospective.ActiveModelID == selection.ID`。workspace `activeModel` 或 `PAW_MODEL` 胜出时返回可操作错误；configured/discovered 两类都不改 runtime/file，discovered 不 pin。
+- [x] `DiscoveryConfig.PathSet` 与 presence-aware JSON marshal/unmarshal 保留显式空 path。preset/nonempty programmatic path 视为 present；omitted 继承 preset，显式空保留 endpoint path；clone/merge/Upsert/reload round trip 均覆盖。
+- [x] HTTP decoder 不再先 trim/dedup；Manager 对 raw 名称先做 512-byte/control/empty 检查，再规范化。危险名称不进入 retained/catalog/cache/selector，all-rejected 结果仍保留 `FilteredCount`。
+
+提交：
+
+- `ec85c22c` — `fix(config): close final discovery integration gaps`
+
+验证记录：新增测试先以 `PathSet` 缺失编译失败进入 red；实现后 focused tests repeated 10 次、完整 `internal/config`、config+bubble race、`cmd/agent`、`go test ./...`、`go vet ./...`、gofmt、schema/security/diff checks 均通过。最终文档提交后再次执行交付验证。
+
 ## 提交总览
 
-截至实现基线共有 17 个提交：
+截至实现基线共有 18 个 feature/fix 提交：
 
 ```text
 c1fd0a52 feat(config): add effective model catalog
@@ -224,6 +241,7 @@ b3fe1e76 fix(config): guard discovery cache lifecycle
 c75409a0 fix(tui): preserve catalog selection identity
 27e00551 fix(agent): avoid model discovery in subagent workers
 d65c4eb6 fix(agent): identify subagent workers explicitly
+ec85c22c fix(config): close final discovery integration gaps
 ```
 
-逐任务 report 均记录 focused、package、race、vet 和 repository test 结果。Task 8 将在同一工作树重新执行最终必需命令，最终结果以 `.superpowers/sdd/task-8-report.md` 为准。
+逐任务 report 与最终集成修正记录 focused、package、race、vet、repository、schema/security/diff 命令；最终结果以 `.superpowers/sdd/task-8-report.md` 为准。

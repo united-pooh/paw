@@ -1,7 +1,7 @@
 # Provider 模型自动发现设计（已实现）
 
 **日期：** 2026-08-11
-**状态：** 已实现、已评审；实现基线 `d65c4eb633ceb77c514b7409ea80696623b7a0f1`
+**状态：** 已实现、已评审并完成最终集成修正；实现基线 `ec85c22c51d8235e69e08d8fcfe515ebe345fa12`
 
 ## 概述
 
@@ -60,6 +60,8 @@ Provider 可包含：
   - `/...` 替换 endpoint path；
   - 非 `/` 开头的路径追加到 endpoint path；
   - 空路径保留 endpoint path。
+  - `DiscoveryConfig.PathSet` 保存 JSON 字段是否出现：显式 `"path":""` 覆盖 preset 并保留 endpoint path，省略 `path` 才继承 preset。
+  - preset 默认路径和非空 programmatic 路径都视为 present；presence 在 JSON/JSONC marshal、unmarshal、clone、merge、`UpsertProvider` patch 和 reload round trip 中保持。
 - `format` 仅支持 `openai-list` 和 `ollama-tags`。
 - `timeoutSeconds` 为 1～10 秒；Go 值 `0` 表示默认 3 秒。
 - `include` / `exclude` 使用大小写敏感 glob；模型名按扁平命名空间匹配，`*`、`?` 可以跨模型名中的 `/`。
@@ -112,9 +114,9 @@ type CatalogModel struct {
 
 - 原始 UTF-8 字符串超过 **512 bytes** 时拒绝；
 - 包含任何 `unicode.IsControl` rune（包括 ESC、换行、C0/C1 控制字符）时拒绝；
-- 安全检查在 trim 前执行，不能靠去掉首尾控制字符绕过；
-- 相同不安全原始名称只计一次过滤；
-- 安全名称再 trim、去空、去重、排序；
+- 安全检查在 trim 和 dedup 前执行，不能靠首尾空白或控制字符把原始超长/危险名称变成可接受名称；
+- 每个被拒绝的 raw occurrence 都增加 `FilteredCount`；纯空白名称也作为拒绝项计数；
+- 安全名称随后才 trim、去空、去重、排序；raw 全部被拒绝时仍保留发现成功状态和过滤计数，但目录与 cache 为空；
 - 启发式排除 embedding、rerank、moderation、transcription、speech/TTS、image generation 等明显非聊天名称。
 
 ### discovered-only 稳定 ID
@@ -148,7 +150,7 @@ type CatalogModel struct {
 - `ollama-tags` 要求非 null 顶层对象和非 null `models` 数组；
 - 缺字段、null 字段、顶层数组、错误对象或类型不符均失败；
 - 显式空数组是成功结果，并会替换旧缓存为空列表；
-- 名称 trim、去空、去重、排序后返回，最终安全过滤仍由目录/缓存边界执行。
+- HTTP decoder 原样返回 raw 名称和顺序，不先 trim/dedup；Manager 在 retained/cache/catalog 边界前执行 raw 512-byte/control/empty 检查，再做规范化，从而准确累计 `FilteredCount`。
 
 ## Discovery cache
 
@@ -225,6 +227,13 @@ fingerprint 来自 `discoveryURL(endpoint, path)` 解析出的**实际 GET URL**
 
 诊断按当前 target/fingerprint/format 重新判断适用性；旧 Provider 的启动失败不会污染后来不相关的配置。发现失败是 warning/fallback，不改变既有 `Ready` 语义。
 
+### update 文件状态冲突
+
+- Snapshot 私有基线保存 global/workspace 的 bytes 与 existence；missing、created、deleted 和 content replacement 都是不同状态。
+- `PreviewUpdate` 在 `updateMu` 内先重读两份文件并与 originating Snapshot 比较；不一致立即返回 `ErrRevisionConflict`，不 patch、不写盘、不发布。
+- `Update`/`commitPreview` 重算 candidate 时再次执行同一比较，并在 atomic writer 前最后重读一次，覆盖 candidate 构建期间发生的外部编辑。
+- candidate 使用第一次校验时捕获的 workspace bytes，不在构建途中静默吸收外部 workspace 状态。外部编辑始终保留，Manager 继续发布旧 Snapshot，直到显式 reload/watcher 成功。
+
 ## discovered-only 模型事务激活
 
 交互选择不再只传字符串 ID，而是传：
@@ -245,11 +254,12 @@ type CatalogSelection struct {
 
 1. discovered source 生成 `UpsertModel(exactID, exactModel)`；configured source 不 upsert。
 2. 同一 operation batch 追加 exact `SetActiveModel`。
-3. `Manager.PreviewUpdate` 用与 Update 相同的 revision、JSONC patch 和验证规则生成不写盘、不发布的 prospective Snapshot。
-4. Controller 在 `applyMu` 下保存旧 runtime config，先把 prospective runtime 应用到 client。
-5. `commitPreview` 重新构造 candidate，并校验 durable content、workspace、effective catalog 和 runtime config 与 preview 完全一致。
-6. 校验成功后才用 `0600` 原子写 config 并发布 Snapshot。
-7. runtime apply、revision、credential/workspace drift 或写盘失败时恢复旧 runtime；文件和 Manager Snapshot 不提交。
+3. `Manager.PreviewUpdate` 先验证 global/workspace 文件仍等于 originating Snapshot，再用相同 revision、JSONC patch 和验证规则生成不写盘、不发布的 prospective Snapshot。
+4. `ActivateCatalogSelection` 必须确认 `prospective.ActiveModelID == selection.ID`；workspace `activeModel` 或 `PAW_MODEL` 若覆盖请求，则返回包含移除/修改建议的错误，且 discovered model 不 pin。
+5. Controller 在 `applyMu` 下保存旧 runtime config，先把 truthful prospective runtime 应用到 client。
+6. `commitPreview` 再次验证文件基线、重构 candidate，并校验 durable content、workspace、effective catalog 和 runtime config 与 preview 完全一致。
+7. atomic writer 前最后重读 global/workspace；校验成功后才用 `0600` 原子写 config 并发布 Snapshot。
+8. runtime apply、revision、credential/workspace/env drift、外部文件编辑或写盘失败时恢复旧 runtime；外部 bytes 保留，Manager Snapshot 在 reload 前不变。
 
 该流程保证只登记所选 discovered 模型，不产生悬空 active model，也不静默激活被其他身份占用的 stale ID。
 
@@ -287,7 +297,8 @@ worker 在调用 `config.Open` 前必须满足：
 5. fingerprint 绑定实际请求 URL 与 format，不包含秘密。
 6. cache、错误、diagnostic 和 UI status 不保存或回显 credential、Authorization、Cookie 或 response body。
 7. Snapshot/retained/cache 都通过 clone 和只读替换保持发布后不可变。
-8. 用户选择通过 CatalogSelection + PreviewUpdate/commitPreview 保持运行时、文件和 Snapshot 一致。
+8. 用户选择通过 CatalogSelection + truthful prospective active ID + PreviewUpdate/commitPreview 保持运行时、文件和 Snapshot 一致。
+9. global/workspace 的外部 bytes/existence 变化在 preview 与 commit 写入前产生 `ErrRevisionConflict`，不会被覆盖。
 
 ## 实现文件
 
@@ -303,4 +314,4 @@ worker 在调用 `config.Open` 前必须满足：
 
 ## 验收状态
 
-实现已经通过逐任务 spec/quality review。Task 8 仅执行最终文档、格式、测试、race、vet、schema/secret/cache 和 worktree 验证；不使用真实外部 Provider，不扩展功能。最终命令和结果记录在 `.superpowers/sdd/task-8-report.md`。
+实现已经通过逐任务 spec/quality review，并在 `ec85c22c51d8235e69e08d8fcfe515ebe345fa12` 完成四项最终 Important 集成修正：外部文件冲突、override truthfulness、显式空 discovery path presence、raw 名称预 trim 安全过滤。最终 focused/repeated、full/race、`cmd/agent`、`go test ./...`、`go vet ./...`、gofmt、schema/security/diff 命令与结果记录在 `.superpowers/sdd/task-8-report.md`。
