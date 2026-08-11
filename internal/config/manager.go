@@ -21,17 +21,23 @@ import (
 )
 
 type Options struct {
-	Paths        Paths
-	PathOptions  PathOptions
-	Credentials  CredentialStore
-	DisableWatch bool
-	Debounce     time.Duration
+	Paths                 Paths
+	PathOptions           PathOptions
+	Credentials           CredentialStore
+	DisableWatch          bool
+	DisableModelDiscovery bool
+	Discoverer            ModelDiscoverer
+	Debounce              time.Duration
 }
 
 type Manager struct {
-	paths       Paths
-	credentials CredentialStore
-	debounce    time.Duration
+	paths                 Paths
+	credentials           CredentialStore
+	debounce              time.Duration
+	discoverer            ModelDiscoverer
+	disableModelDiscovery bool
+	discoveredModels      map[string][]DiscoveredModel
+	discoveryStatus       DiscoveryStatus
 
 	mu          sync.RWMutex
 	updateMu    sync.Mutex
@@ -58,6 +64,9 @@ func Open(ctx context.Context, options Options) (*Manager, error) {
 	}
 	if options.Debounce <= 0 {
 		options.Debounce = 180 * time.Millisecond
+	}
+	if options.Discoverer == nil {
+		options.Discoverer = NewHTTPModelDiscoverer(nil)
 	}
 	if err := os.MkdirAll(paths.Home, 0o700); err != nil {
 		return nil, fmt.Errorf("create Paw config directory: %w", err)
@@ -92,7 +101,16 @@ func Open(ctx context.Context, options Options) (*Manager, error) {
 		return nil, err
 	}
 
-	manager := &Manager{paths: paths, credentials: options.Credentials, debounce: options.Debounce, subscribers: map[chan Snapshot]struct{}{}, done: make(chan struct{})}
+	manager := &Manager{
+		paths:                 paths,
+		credentials:           options.Credentials,
+		debounce:              options.Debounce,
+		discoverer:            options.Discoverer,
+		disableModelDiscovery: options.DisableModelDiscovery,
+		discoveredModels:      map[string][]DiscoveredModel{},
+		subscribers:           map[chan Snapshot]struct{}{},
+		done:                  make(chan struct{}),
+	}
 	var candidate Snapshot
 	var loadErr error
 	if migrationErr != nil {
@@ -102,6 +120,11 @@ func Open(ctx context.Context, options Options) (*Manager, error) {
 		diagnostics = nil
 	} else {
 		candidate, loadErr = manager.loadCandidate(ctx, 1)
+		if loadErr == nil {
+			discoveryDiagnostics := manager.initializeModelDiscovery(ctx, candidate.Document, candidate.ActiveModelID)
+			candidate, loadErr = manager.candidateFromRaw(ctx, candidate.Raw, 1)
+			candidate.Diagnostics = append(discoveryDiagnostics, candidate.Diagnostics...)
+		}
 	}
 	if loadErr != nil {
 		raw, readErr := os.ReadFile(paths.GlobalConfig)
@@ -229,6 +252,227 @@ func (m *Manager) loadCandidate(ctx context.Context, revision uint64) (Snapshot,
 	return m.candidateFromRaw(ctx, raw, revision)
 }
 
+func (m *Manager) initializeModelDiscovery(ctx context.Context, document Document, activeID string) []Diagnostic {
+	cache, err := readDiscoveryCache(m.paths.ModelDiscoveryCache)
+	diagnostics := []Diagnostic(nil)
+	cacheState := "miss"
+	if err != nil {
+		cache = emptyDiscoveryCache()
+		cacheState = "invalid"
+		diagnostics = append(diagnostics, Diagnostic{
+			Severity: "warning",
+			File:     m.paths.ModelDiscoveryCache,
+			Message:  "model discovery cache could not be read; continuing without cached models",
+		})
+	}
+
+	cachedModels, cacheProviders := m.matchingCachedModels(document, cache)
+	m.discoveredModels = cachedModels
+	if cacheProviders > 0 && cacheState != "invalid" {
+		cacheState = "matched"
+	}
+	m.discoveryStatus = DiscoveryStatus{
+		Source:         discoverySourceForCache(cacheProviders),
+		CacheProviders: cacheProviders,
+		CacheState:     cacheState,
+	}
+	defer m.refreshDiscoveryCounts(document)
+
+	providerID, skippedReason := discoveryTarget(document, activeID)
+	m.discoveryStatus.ProviderID = providerID
+	if m.disableModelDiscovery {
+		m.discoveryStatus.SkippedReason = "disabled"
+		return diagnostics
+	}
+	if skippedReason != "" {
+		m.discoveryStatus.SkippedReason = skippedReason
+		return diagnostics
+	}
+
+	provider := mergePreset(providerID, document.Providers[providerID])
+	if provider.Discovery == nil || provider.Discovery.Enabled == nil || !*provider.Discovery.Enabled {
+		m.discoveryStatus.SkippedReason = "provider-disabled"
+		return diagnostics
+	}
+
+	attemptedAt := time.Now().UTC()
+	m.discoveryStatus.Attempted = true
+	m.discoveryStatus.AttemptedAt = attemptedAt
+	credential := ""
+	if provider.Auth.Credential != "" || len(provider.Auth.Env) > 0 {
+		credential, _, err = resolveCredential(ctx, m.credentials, provider.Auth)
+		if err != nil {
+			m.discoveryStatus.LastError = "model discovery credential is unavailable"
+			diagnostics = append(diagnostics, m.discoveryFailureDiagnostic(providerID))
+			return diagnostics
+		}
+	}
+	if m.discoverer == nil {
+		m.discoveryStatus.LastError = "model discovery is unavailable"
+		diagnostics = append(diagnostics, m.discoveryFailureDiagnostic(providerID))
+		return diagnostics
+	}
+
+	models, err := m.discoverer.Discover(ctx, providerID, provider, credential)
+	if err != nil {
+		m.discoveryStatus.LastError = safeModelDiscoveryError(err)
+		diagnostics = append(diagnostics, m.discoveryFailureDiagnostic(providerID))
+		return diagnostics
+	}
+
+	models, cacheNames := normalizeLiveDiscoveredModels(providerID, models)
+	m.discoveredModels[providerID] = models
+	succeededAt := time.Now().UTC()
+	m.discoveryStatus.Source = "live"
+	m.discoveryStatus.SucceededAt = succeededAt
+	m.discoveryStatus.DiscoveredAt = succeededAt
+	m.discoveryStatus.LastError = ""
+
+	cache.Providers[providerID] = discoveryCacheEntry{
+		EndpointFingerprint: discoveryEndpointFingerprint(provider),
+		Format:              provider.Discovery.Format,
+		DiscoveredAt:        succeededAt,
+		Models:              cacheNames,
+	}
+	if err := writeDiscoveryCache(m.paths.ModelDiscoveryCache, cache); err != nil {
+		m.discoveryStatus.CacheState = "write-failed"
+		diagnostics = append(diagnostics, Diagnostic{
+			Severity: "warning",
+			File:     m.paths.ModelDiscoveryCache,
+			Message:  "live model discovery succeeded, but its cache could not be updated",
+		})
+		return diagnostics
+	}
+	_, m.discoveryStatus.CacheProviders = m.matchingCachedModels(document, cache)
+	m.discoveryStatus.CacheState = "updated"
+	return diagnostics
+}
+
+func discoveryTarget(document Document, activeID string) (providerID, skippedReason string) {
+	activeID = strings.TrimSpace(activeID)
+	if activeID != "" {
+		configuredModel, ok := document.Models[activeID]
+		if !ok {
+			return "", "active-model-missing"
+		}
+		providerID = strings.TrimSpace(configuredModel.Provider)
+		if _, ok := document.Providers[providerID]; !ok {
+			return "", "active-provider-missing"
+		}
+		return providerID, ""
+	}
+	if len(document.Providers) == 0 {
+		return "", "no-provider"
+	}
+	if len(document.Providers) > 1 {
+		return "", "multiple-providers-without-active-model"
+	}
+	for providerID := range document.Providers {
+		return providerID, ""
+	}
+	return "", "no-provider"
+}
+
+func (m *Manager) matchingCachedModels(document Document, cache discoveryCacheFile) (map[string][]DiscoveredModel, int) {
+	matched := make(map[string][]DiscoveredModel)
+	providerIDs := make([]string, 0, len(document.Providers))
+	for providerID := range document.Providers {
+		providerIDs = append(providerIDs, providerID)
+	}
+	sort.Strings(providerIDs)
+	for _, providerID := range providerIDs {
+		provider := mergePreset(providerID, document.Providers[providerID])
+		if provider.Discovery == nil || provider.Discovery.Enabled == nil || !*provider.Discovery.Enabled {
+			continue
+		}
+		entry, ok := matchingCacheEntry(cache, providerID, discoveryEndpointFingerprint(provider), provider.Discovery.Format)
+		if !ok {
+			continue
+		}
+		models := make([]DiscoveredModel, len(entry.Models))
+		for index, name := range entry.Models {
+			models[index] = DiscoveredModel{ProviderID: providerID, Name: name}
+		}
+		matched[providerID] = models
+	}
+	return matched, len(matched)
+}
+
+func (m *Manager) discoveryFailureDiagnostic(providerID string) Diagnostic {
+	fallback := "manual models"
+	if _, ok := m.discoveredModels[providerID]; ok {
+		m.discoveryStatus.Source = "cache"
+		fallback = "matching cached models"
+	} else if m.discoveryStatus.CacheProviders > 0 {
+		m.discoveryStatus.Source = "cache"
+	} else {
+		m.discoveryStatus.Source = "manual-only"
+	}
+	detail := strings.TrimSpace(m.discoveryStatus.LastError)
+	if detail == "" {
+		detail = "model discovery failed"
+	}
+	return Diagnostic{
+		Severity: "warning",
+		File:     m.paths.GlobalConfig,
+		Field:    "providers." + providerID + ".discovery",
+		Message:  detail + "; continuing with " + fallback,
+	}
+}
+
+func (m *Manager) refreshDiscoveryCounts(document Document) {
+	_, stats := buildEffectiveCatalog(document, m.discoveredModels)
+	m.discoveryStatus.DiscoveredCount = stats.Discovered
+	m.discoveryStatus.FilteredCount = stats.Filtered
+	m.discoveryStatus.EffectiveCount = stats.Merged
+}
+
+func discoverySourceForCache(cacheProviders int) string {
+	if cacheProviders > 0 {
+		return "cache"
+	}
+	return "manual-only"
+}
+
+func safeModelDiscoveryError(err error) string {
+	var discoveryError *DiscoveryError
+	if errors.As(err, &discoveryError) {
+		return discoveryError.Error()
+	}
+	if errors.Is(err, context.Canceled) {
+		return "model discovery failed: kind=canceled: request was canceled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "model discovery failed: kind=timeout: request timed out"
+	}
+	return "model discovery failed"
+}
+
+func normalizeLiveDiscoveredModels(providerID string, models []DiscoveredModel) ([]DiscoveredModel, []string) {
+	normalized := make([]DiscoveredModel, 0, len(models))
+	cacheNames := make([]string, 0, len(models))
+	for _, discovered := range models {
+		candidateProviderID := strings.TrimSpace(discovered.ProviderID)
+		if candidateProviderID != "" && candidateProviderID != providerID {
+			continue
+		}
+		discovered.ProviderID = providerID
+		normalized = append(normalized, discovered)
+		if unsafeDiscoveredModelName(discovered.Name) {
+			continue
+		}
+		name := strings.TrimSpace(discovered.Name)
+		if name != "" {
+			cacheNames = append(cacheNames, name)
+		}
+	}
+	canonicalNames, err := canonicalDiscoveryCacheModels(cacheNames)
+	if err != nil {
+		canonicalNames = []string{}
+	}
+	return normalized, canonicalNames
+}
+
 func (m *Manager) candidateFromRaw(ctx context.Context, raw []byte, revision uint64) (Snapshot, error) {
 	document, diagnostics, err := parseAndValidateGlobal(raw, m.paths.GlobalConfig)
 	if err != nil {
@@ -257,20 +501,31 @@ func (m *Manager) candidateFromRaw(ctx context.Context, raw []byte, revision uin
 		}
 		activeID = override
 	}
-	runtimeConfig, ready, runtimeDiagnostics := m.runtimeConfig(ctx, document, workspace, activeID)
+	catalog, stats := buildEffectiveCatalog(document, m.discoveredModels)
+	runtimeConfig, ready, runtimeDiagnostics := m.runtimeConfig(ctx, document, workspace, activeID, catalog)
 	diagnostics = append(diagnostics, runtimeDiagnostics...)
+	discoveryStatus := m.discoveryStatus
+	discoveryStatus.DiscoveredCount = stats.Discovered
+	discoveryStatus.FilteredCount = stats.Filtered
+	discoveryStatus = withEffectiveCount(discoveryStatus, stats.Merged)
 	hash := sha256.Sum256(append(append(append([]byte(nil), raw...), 0), workspaceRaw...))
-	return Snapshot{Document: document, Workspace: workspace, Active: runtimeConfig, ActiveModelID: activeID, Revision: revision, ContentHash: hex.EncodeToString(hash[:]), Diagnostics: diagnostics, Ready: ready, LoadedAt: time.Now(), Raw: raw}, nil
+	return Snapshot{Document: document, Workspace: workspace, Active: runtimeConfig, ActiveModelID: activeID, EffectiveModels: catalog, Discovery: discoveryStatus, Revision: revision, ContentHash: hex.EncodeToString(hash[:]), Diagnostics: diagnostics, Ready: ready, LoadedAt: time.Now(), Raw: raw}, nil
 }
 
-func (m *Manager) runtimeConfig(ctx context.Context, document Document, workspace WorkspaceDocument, activeID string) (model.Config, bool, []Diagnostic) {
+func withEffectiveCount(status DiscoveryStatus, count int) DiscoveryStatus {
+	status.EffectiveCount = count
+	return status
+}
+
+func (m *Manager) runtimeConfig(ctx context.Context, document Document, workspace WorkspaceDocument, activeID string, catalog map[string]CatalogModel) (model.Config, bool, []Diagnostic) {
 	if activeID == "" {
 		return model.Config{}, false, []Diagnostic{{Severity: "warning", File: m.paths.GlobalConfig, Field: "activeModel", Message: "choose an active model"}}
 	}
-	configuredModel, ok := document.Models[activeID]
+	catalogModel, ok := catalog[activeID]
 	if !ok {
 		return model.Config{}, false, []Diagnostic{{Severity: "error", File: m.paths.GlobalConfig, Field: "activeModel", Message: "active model is missing"}}
 	}
+	configuredModel := cloneModel(catalogModel.Model)
 	if override, ok := workspace.Models[activeID]; ok {
 		if override.Stream != nil {
 			configuredModel.Stream = override.Stream
@@ -322,18 +577,27 @@ func (m *Manager) runtimeConfig(ctx context.Context, document Document, workspac
 			requestConfig.APIPath = "/chat/completions"
 		}
 	}
-	requestConfig.Profiles = synthesizeProfiles(document, m.credentials, ctx)
-	if models := modelsForProvider(document, configuredModel.Provider); len(models) > 0 {
+	requestConfig.Profiles = synthesizeProfiles(document, catalog, m.credentials, ctx)
+	if models := modelsForProvider(catalog, configuredModel.Provider); len(models) > 0 {
 		requestConfig.Models = models
 	}
-	if configuredModel.Parameters != nil {
-		requestConfig.ModelExtraBody = map[string]model.RequestBody{configuredModel.Name: model.RequestBody(cloneAnyMap(configuredModel.Parameters))}
+	requestConfig.ModelExtraBody = map[string]model.RequestBody{}
+	requestConfig.ModelContextLimitTokens = map[string]int{}
+	for _, catalogModel := range catalogModelsForProvider(catalog, configuredModel.Provider) {
+		value := catalogModel.Model
+		if value.Parameters != nil {
+			requestConfig.ModelExtraBody[value.Name] = model.RequestBody(cloneAnyMap(value.Parameters))
+		}
+		requestConfig.ModelContextLimitTokens[value.Name] = value.ContextWindow
 	}
-	requestConfig.ModelContextLimitTokens = map[string]int{configuredModel.Name: configuredModel.ContextWindow}
+	if configuredModel.Parameters != nil {
+		requestConfig.ModelExtraBody[configuredModel.Name] = model.RequestBody(cloneAnyMap(configuredModel.Parameters))
+	}
+	requestConfig.ModelContextLimitTokens[configuredModel.Name] = configuredModel.ContextWindow
 	return requestConfig, true, nil
 }
 
-func synthesizeProfiles(document Document, store CredentialStore, ctx context.Context) []model.Profile {
+func synthesizeProfiles(document Document, catalog map[string]CatalogModel, store CredentialStore, ctx context.Context) []model.Profile {
 	providerIDs := make([]string, 0, len(document.Providers))
 	for id := range document.Providers {
 		providerIDs = append(providerIDs, id)
@@ -351,16 +615,15 @@ func synthesizeProfiles(document Document, store CredentialStore, ctx context.Co
 		if provider.Stream != nil {
 			profile.Stream = *provider.Stream
 		}
-		profile.Models = modelsForProvider(document, id)
+		profile.Models = modelsForProvider(catalog, id)
 		profile.ModelExtraBody = map[string]model.RequestBody{}
 		profile.ModelContextLimitTokens = map[string]int{}
-		for _, configuredModel := range document.Models {
-			if configuredModel.Provider == id {
-				if configuredModel.Parameters != nil {
-					profile.ModelExtraBody[configuredModel.Name] = model.RequestBody(cloneAnyMap(configuredModel.Parameters))
-				}
-				profile.ModelContextLimitTokens[configuredModel.Name] = configuredModel.ContextWindow
+		for _, catalogModel := range catalogModelsForProvider(catalog, id) {
+			configuredModel := catalogModel.Model
+			if configuredModel.Parameters != nil {
+				profile.ModelExtraBody[configuredModel.Name] = model.RequestBody(cloneAnyMap(configuredModel.Parameters))
 			}
+			profile.ModelContextLimitTokens[configuredModel.Name] = configuredModel.ContextWindow
 		}
 		if len(profile.Models) > 0 {
 			profile.Model = profile.Models[0]
@@ -370,17 +633,33 @@ func synthesizeProfiles(document Document, store CredentialStore, ctx context.Co
 	return profiles
 }
 
-func modelsForProvider(document Document, providerID string) []string {
+func modelsForProvider(catalog map[string]CatalogModel, providerID string) []string {
 	values := make([]string, 0)
 	seen := map[string]bool{}
-	for _, value := range document.Models {
-		if value.Provider == providerID && !seen[value.Name] {
+	for _, catalogModel := range catalogModelsForProvider(catalog, providerID) {
+		value := catalogModel.Model
+		if !seen[value.Name] {
 			values = append(values, value.Name)
 			seen[value.Name] = true
 		}
 	}
 	sort.Strings(values)
 	return values
+}
+
+func catalogModelsForProvider(catalog map[string]CatalogModel, providerID string) []CatalogModel {
+	ids := make([]string, 0, len(catalog))
+	for id, catalogModel := range catalog {
+		if catalogModel.Model.Provider == providerID {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	models := make([]CatalogModel, 0, len(ids))
+	for _, id := range ids {
+		models = append(models, catalog[id])
+	}
+	return models
 }
 
 func mergeAnyMaps(base, override map[string]any) map[string]any {
