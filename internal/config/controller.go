@@ -115,40 +115,61 @@ func (c *Controller) SaveModelConfig(value model.Config) error {
 		return fmt.Errorf("configuration manager is unavailable")
 	}
 	snapshot := c.manager.Snapshot()
-	wantedProvider := strings.TrimSpace(firstNonEmpty(value.ProfileID, value.Provider))
-	wantedModel := strings.TrimSpace(value.Model)
-	match := ""
+	wantedProvider := value.ProfileID
+	if strings.TrimSpace(wantedProvider) == "" {
+		wantedProvider = value.Provider
+	}
+	wantedIdentity := modelIdentity{providerID: wantedProvider, name: strings.TrimSpace(value.Model)}
+	var selection CatalogSelection
+	matches := 0
 	for id, item := range snapshot.EffectiveModels {
-		if item.Model.Provider == wantedProvider && item.Model.Name == wantedModel {
-			if match != "" {
-				return fmt.Errorf("model %q is ambiguous under provider %q", wantedModel, wantedProvider)
-			}
-			match = id
+		if identityForModel(item.Model) != wantedIdentity {
+			continue
 		}
+		selection = newCatalogSelection(snapshot.Revision, id, item)
+		matches++
 	}
-	if match == "" {
-		return fmt.Errorf("model %q under provider %q is not in the effective catalog", wantedModel, wantedProvider)
+	switch matches {
+	case 0:
+		return fmt.Errorf("model %q under provider %q is not in the effective catalog", wantedIdentity.name, wantedIdentity.providerID)
+	case 1:
+		return c.ActivateCatalogSelection(selection)
+	default:
+		return fmt.Errorf("model %q is ambiguous under provider %q", wantedIdentity.name, wantedIdentity.providerID)
 	}
-	updated, err := c.activateCatalogModel(context.Background(), match)
+}
+
+// ActivateCatalogSelection activates the exact catalog identity observed by a
+// selector. It rejects stale revisions and any ID whose identity or source has
+// changed since selection.
+func (c *Controller) ActivateCatalogSelection(selection CatalogSelection) error {
+	if c == nil || c.manager == nil {
+		return fmt.Errorf("configuration manager is unavailable")
+	}
+	c.applyMu.Lock()
+	updated, notify, err := c.activateCatalogSelectionLocked(context.Background(), selection)
+	c.applyMu.Unlock()
 	if err != nil {
 		return err
 	}
-	return c.applySnapshot(updated)
+	if notify {
+		c.notify(updated)
+	}
+	return nil
 }
 
-func (c *Controller) activateCatalogModel(ctx context.Context, id string) (Snapshot, error) {
-	id = strings.TrimSpace(id)
-	snapshot := c.manager.Snapshot()
-	item, ok := snapshot.EffectiveModels[id]
-	if !ok {
-		return Snapshot{}, fmt.Errorf("model %q is not in the effective catalog", id)
+func (c *Controller) activateCatalogSelectionLocked(ctx context.Context, selection CatalogSelection) (Snapshot, bool, error) {
+	current := c.manager.Snapshot()
+	item, ok := current.EffectiveModels[selection.ID]
+	if !ok || !selection.matches(item) {
+		return Snapshot{}, false, fmt.Errorf("%w: selected model %q no longer maps to the same catalog identity and source", ErrRevisionConflict, selection.ID)
 	}
 	operations := make([]Operation, 0, 2)
-	if item.Source == ModelSourceDiscovered {
-		operations = append(operations, UpsertModel(item.ID, item.Model))
+	if selection.Source == ModelSourceDiscovered {
+		operations = append(operations, UpsertModel(selection.ID, item.Model))
 	}
-	operations = append(operations, SetActiveModel(item.ID))
-	return c.manager.Update(ctx, snapshot.Revision, operations)
+	operations = append(operations, setActiveModelExact(selection.ID))
+	return c.commitOperationsLocked(ctx, selection.Revision, operations)
 }
 
 func (c *Controller) Manager() *Manager {
@@ -183,24 +204,62 @@ func (c *Controller) SetActiveModelID(id string) error {
 	if c == nil || c.manager == nil {
 		return fmt.Errorf("configuration manager is unavailable")
 	}
-	updated, err := c.activateCatalogModel(context.Background(), id)
+	selection, err := c.manager.Snapshot().CatalogSelection(id)
 	if err != nil {
 		return err
 	}
-	return c.applySnapshot(updated)
+	return c.ActivateCatalogSelection(selection)
 }
 func (c *Controller) UpdateConfig(ctx context.Context, revision uint64, operations []Operation) (Snapshot, error) {
 	if c == nil || c.manager == nil {
 		return Snapshot{}, fmt.Errorf("configuration manager is unavailable")
 	}
-	snapshot, err := c.manager.Update(ctx, revision, operations)
+	c.applyMu.Lock()
+	snapshot, notify, err := c.commitOperationsLocked(ctx, revision, operations)
+	c.applyMu.Unlock()
 	if err != nil {
 		return Snapshot{}, err
 	}
-	if err := c.applySnapshot(snapshot); err != nil {
-		return Snapshot{}, err
+	if notify {
+		c.notify(snapshot)
 	}
 	return snapshot, nil
+}
+
+// commitOperationsLocked preflights a prospective Snapshot, applies it to the
+// runtime, and only then commits the same operations at the same revision. The
+// caller must hold applyMu so subscription delivery cannot interleave. If the
+// commit fails, the previous runtime config is restored before applyMu is
+// released.
+func (c *Controller) commitOperationsLocked(ctx context.Context, revision uint64, operations []Operation) (Snapshot, bool, error) {
+	prospective, err := c.manager.PreviewUpdate(ctx, revision, operations)
+	if err != nil {
+		return Snapshot{}, false, err
+	}
+	if c.runtime == nil || !prospective.Ready {
+		committed, err := c.manager.Update(ctx, revision, operations)
+		return committed, false, err
+	}
+	previous := c.runtime.CurrentModelConfig()
+	if err := c.runtime.ApplyModelConfig(prospective.Active); err != nil {
+		return Snapshot{}, false, c.restoreRuntime(previous, err)
+	}
+	committed, err := c.manager.commitPreview(ctx, revision, operations, prospective)
+	if err != nil {
+		return Snapshot{}, false, c.restoreRuntime(previous, err)
+	}
+	c.appliedRevision = committed.Revision
+	return committed, true, nil
+}
+
+func (c *Controller) restoreRuntime(previous model.Config, cause error) error {
+	if c.runtime == nil {
+		return cause
+	}
+	if err := c.runtime.ApplyModelConfig(previous); err != nil {
+		return fmt.Errorf("%w (restoring previous runtime config also failed: %v)", cause, err)
+	}
+	return cause
 }
 func (c *Controller) CredentialStore() CredentialStore {
 	if c == nil || c.manager == nil {

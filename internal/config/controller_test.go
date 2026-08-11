@@ -3,18 +3,21 @@ package config
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 
 	"paw/internal/model"
 )
 
 type fakeModelRuntime struct {
-	mu      sync.Mutex
-	current model.Config
-	applied []model.Config
+	mu        sync.Mutex
+	current   model.Config
+	applied   []model.Config
+	applyHook func(model.Config) error
 }
 
 func (f *fakeModelRuntime) CurrentModelConfig() model.Config {
@@ -24,9 +27,17 @@ func (f *fakeModelRuntime) CurrentModelConfig() model.Config {
 }
 
 func (f *fakeModelRuntime) ApplyModelConfig(cfg model.Config) error {
+	cloned := model.CloneConfig(cfg)
+	f.mu.Lock()
+	hook := f.applyHook
+	f.mu.Unlock()
+	if hook != nil {
+		if err := hook(model.CloneConfig(cloned)); err != nil {
+			return err
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	cloned := model.CloneConfig(cfg)
 	f.current = cloned
 	f.applied = append(f.applied, cloned)
 	return nil
@@ -36,6 +47,22 @@ func (f *fakeModelRuntime) state() (model.Config, int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return model.CloneConfig(f.current), len(f.applied)
+}
+
+func (f *fakeModelRuntime) setApplyHook(hook func(model.Config) error) {
+	f.mu.Lock()
+	f.applyHook = hook
+	f.mu.Unlock()
+}
+
+func (f *fakeModelRuntime) appliedModels() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	models := make([]string, len(f.applied))
+	for index, cfg := range f.applied {
+		models[index] = cfg.Model
+	}
+	return models
 }
 
 type controllerTestHarness struct {
@@ -117,6 +144,33 @@ func TestControllerSetActiveModelIDPinsOnlySelectedDiscoveredModel(t *testing.T)
 	}
 	if afterApplies != beforeApplies+1 {
 		t.Fatalf("runtime apply count = %d, want %d", afterApplies, beforeApplies+1)
+	}
+}
+
+func TestControllerSuccessfulActivationAppliesAndNotifiesCommittedRevisionOnce(t *testing.T) {
+	harness := newControllerTestHarness(t, controllerDiscoveryDocument(Auth{}), []DiscoveredModel{{ProviderID: "local", Name: "a"}}, nil)
+	notifications := make(chan Snapshot, 3)
+	harness.controller.SetSnapshotHandler(func(snapshot Snapshot) {
+		notifications <- snapshot
+	})
+	initial := <-notifications
+	_, beforeApplies := harness.runtime.state()
+
+	if err := harness.controller.SetActiveModelID("local/a"); err != nil {
+		t.Fatal(err)
+	}
+	committed := <-notifications
+	if committed.Revision != initial.Revision+1 || committed.ActiveModelID != "local/a" {
+		t.Fatalf("committed notification = revision %d active %q", committed.Revision, committed.ActiveModelID)
+	}
+	_, afterApplies := harness.runtime.state()
+	if afterApplies != beforeApplies+1 {
+		t.Fatalf("runtime apply count = %d, want %d", afterApplies, beforeApplies+1)
+	}
+	select {
+	case duplicate := <-notifications:
+		t.Fatalf("duplicate notification for committed update: revision %d active %q", duplicate.Revision, duplicate.ActiveModelID)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
@@ -204,7 +258,7 @@ func captureControllerState(t *testing.T, harness controllerTestHarness) capture
 	return capturedControllerState{snapshot: harness.manager.Snapshot(), file: raw, runtime: current, applies: applies}
 }
 
-func assertControllerStateUnchanged(t *testing.T, harness controllerTestHarness, before capturedControllerState) {
+func assertControllerPersistenceUnchanged(t *testing.T, harness controllerTestHarness, before capturedControllerState) {
 	t.Helper()
 	after := harness.manager.Snapshot()
 	if !reflect.DeepEqual(after, before.snapshot) {
@@ -217,9 +271,22 @@ func assertControllerStateUnchanged(t *testing.T, harness controllerTestHarness,
 	if !bytes.Equal(raw, before.file) {
 		t.Fatalf("config file changed after failed activation:\nbefore=%s\nafter=%s", before.file, raw)
 	}
+}
+
+func assertControllerStateUnchanged(t *testing.T, harness controllerTestHarness, before capturedControllerState) {
+	t.Helper()
+	assertControllerPersistenceUnchanged(t, harness, before)
 	current, applies := harness.runtime.state()
 	if !reflect.DeepEqual(current, before.runtime) || applies != before.applies {
 		t.Fatalf("runtime changed after failed activation: config=%#v applies=%d, want %#v/%d", current, applies, before.runtime, before.applies)
+	}
+}
+
+func assertControllerRuntimeRestored(t *testing.T, harness controllerTestHarness, before capturedControllerState) {
+	t.Helper()
+	current, _ := harness.runtime.state()
+	if !reflect.DeepEqual(current, before.runtime) {
+		t.Fatalf("runtime config = %#v, want restored %#v", current, before.runtime)
 	}
 }
 
@@ -268,23 +335,237 @@ func TestControllerActivationValidationFailureLeavesStateUnchanged(t *testing.T)
 	assertControllerStateUnchanged(t, harness, before)
 }
 
-func TestControllerActivationWriteFailureLeavesStateUnchanged(t *testing.T) {
+func TestControllerActivationWriteFailureRollsBackRuntime(t *testing.T) {
 	harness := newControllerTestHarness(t, controllerDiscoveryDocument(Auth{}), []DiscoveredModel{{ProviderID: "local", Name: "a"}}, nil)
 	before := captureControllerState(t, harness)
-	if err := os.Chmod(harness.paths.Home, 0o500); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(harness.paths.Home, 0o700) })
-	probe, err := os.CreateTemp(harness.paths.Home, ".controller-write-probe-*")
-	if err == nil {
-		_ = probe.Close()
-		_ = os.Remove(probe.Name())
-		_ = os.Chmod(harness.paths.Home, 0o700)
-		t.Skip("filesystem does not enforce owner write permissions")
+	harness.manager.configWriter = func(string, []byte, os.FileMode) error {
+		return errors.New("forced config write failure")
 	}
 
 	if err := harness.controller.SetActiveModelID("local/a"); err == nil {
 		t.Fatal("expected atomic write error")
 	}
+	assertControllerPersistenceUnchanged(t, harness, before)
+	assertControllerRuntimeRestored(t, harness, before)
+}
+
+func TestControllerActivationRuntimeFailureLeavesPersistenceCoherent(t *testing.T) {
+	harness := newControllerTestHarness(t, controllerDiscoveryDocument(Auth{}), []DiscoveredModel{{ProviderID: "local", Name: "a"}}, nil)
+	before := captureControllerState(t, harness)
+	harness.runtime.setApplyHook(func(cfg model.Config) error {
+		if cfg.Model == "a" {
+			return errors.New("forced runtime apply failure")
+		}
+		return nil
+	})
+
+	if err := harness.controller.SetActiveModelID("local/a"); err == nil {
+		t.Fatal("expected runtime apply error")
+	}
+	assertControllerPersistenceUnchanged(t, harness, before)
+	assertControllerRuntimeRestored(t, harness, before)
+}
+
+func TestControllerProspectiveRuntimeDriftBeforeCommitRollsBack(t *testing.T) {
+	store := &FakeCredentialStore{Values: map[string]string{"local-key": "old-secret"}}
+	harness := newControllerTestHarness(t, controllerDiscoveryDocument(Auth{Credential: "local-key"}), []DiscoveredModel{{ProviderID: "local", Name: "a"}}, store)
+	before := captureControllerState(t, harness)
+	harness.runtime.setApplyHook(func(cfg model.Config) error {
+		if cfg.Model == "a" {
+			return store.Set(context.Background(), "local-key", "new-secret")
+		}
+		return nil
+	})
+
+	err := harness.controller.SetActiveModelID("local/a")
+	if !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("activation error = %v, want prospective drift conflict", err)
+	}
+	assertControllerPersistenceUnchanged(t, harness, before)
+	assertControllerRuntimeRestored(t, harness, before)
+}
+
+func TestControllerUpdateConfigRuntimeFailureLeavesPersistenceCoherent(t *testing.T) {
+	harness := newControllerTestHarness(t, controllerDiscoveryDocument(Auth{}), nil, nil)
+	before := captureControllerState(t, harness)
+	harness.runtime.setApplyHook(func(cfg model.Config) error {
+		if cfg.Model == "configured" {
+			return errors.New("forced runtime apply failure")
+		}
+		return nil
+	})
+
+	if _, err := harness.controller.UpdateConfig(context.Background(), before.snapshot.Revision, []Operation{SetActiveModel("local/configured")}); err == nil {
+		t.Fatal("expected runtime apply error")
+	}
+	assertControllerPersistenceUnchanged(t, harness, before)
+	assertControllerRuntimeRestored(t, harness, before)
+}
+
+func TestControllerCommitConflictRollsBackRuntimeBeforeSubscriptionAppliesWinner(t *testing.T) {
+	harness := newControllerTestHarness(t, controllerDiscoveryDocument(Auth{}), nil, nil)
+	selection, err := harness.manager.Snapshot().CatalogSelection("local/configured")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	var winnerErr error
+	harness.runtime.setApplyHook(func(cfg model.Config) error {
+		if cfg.Model == "configured" {
+			once.Do(func() {
+				_, winnerErr = harness.manager.Update(context.Background(), selection.Revision, []Operation{SetActiveModel("local/manual")})
+			})
+		}
+		return winnerErr
+	})
+
+	err = harness.controller.ActivateCatalogSelection(selection)
+	if !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("activation error = %v, want revision conflict", err)
+	}
+	if winnerErr != nil {
+		t.Fatalf("winning update error = %v", winnerErr)
+	}
+	snapshot := harness.manager.Snapshot()
+	if snapshot.ActiveModelID != "local/manual" || snapshot.Revision != selection.Revision+1 {
+		t.Fatalf("winning snapshot = revision %d active %q", snapshot.Revision, snapshot.ActiveModelID)
+	}
+	current, _ := harness.runtime.state()
+	if current.Model != "manual" {
+		t.Fatalf("runtime model = %q, want winning manual model", current.Model)
+	}
+}
+
+func TestControllerCatalogSelectionRejectsDiscoveredIDRemappedToConfiguredOccupant(t *testing.T) {
+	harness := newControllerTestHarness(t, controllerDiscoveryDocument(Auth{}), []DiscoveredModel{{ProviderID: "local", Name: "a"}}, nil)
+	selection, err := harness.manager.Snapshot().CatalogSelection("local/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.Source != ModelSourceDiscovered {
+		t.Fatalf("selection source = %q", selection.Source)
+	}
+	occupant := Model{Provider: "local", Name: "occupant", Adapter: AdapterDeepSeek}
+	remapped, err := harness.manager.Update(context.Background(), selection.Revision, []Operation{UpsertModel(selection.ID, occupant)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := remapped.EffectiveModels[selection.ID]; got.Source != ModelSourceConfigured || !reflect.DeepEqual(got.Model, occupant) {
+		t.Fatalf("remapped catalog entry = %#v", got)
+	}
+
+	err = harness.controller.ActivateCatalogSelection(selection)
+	if !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("activation error = %v, want selection conflict", err)
+	}
+	after := harness.manager.Snapshot()
+	if after.ActiveModelID != "local/manual" || !reflect.DeepEqual(after.Document.Models[selection.ID], occupant) {
+		t.Fatalf("stale selection activated occupant: active=%q occupant=%#v", after.ActiveModelID, after.Document.Models[selection.ID])
+	}
+	for _, appliedModel := range harness.runtime.appliedModels() {
+		if appliedModel == occupant.Name {
+			t.Fatalf("configured occupant was applied to runtime: %v", harness.runtime.appliedModels())
+		}
+	}
+}
+
+func TestControllerSaveModelConfigCarriesResolvedSelectionThroughCommitConflict(t *testing.T) {
+	harness := newControllerTestHarness(t, controllerDiscoveryDocument(Auth{}), []DiscoveredModel{{ProviderID: "local", Name: "b"}}, nil)
+	origin := harness.manager.Snapshot()
+	occupant := Model{Provider: "local", Name: "occupant"}
+	var once sync.Once
+	var winnerErr error
+	harness.runtime.setApplyHook(func(cfg model.Config) error {
+		if cfg.Model == "b" {
+			once.Do(func() {
+				_, winnerErr = harness.manager.Update(context.Background(), origin.Revision, []Operation{UpsertModel("local/b", occupant)})
+			})
+		}
+		return winnerErr
+	})
+
+	err := harness.controller.SaveModelConfig(model.Config{ProfileID: "local", Model: "b"})
+	if !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("save error = %v, want revision conflict", err)
+	}
+	if winnerErr != nil {
+		t.Fatalf("winning remap error = %v", winnerErr)
+	}
+	after := harness.manager.Snapshot()
+	if after.ActiveModelID != "local/manual" || !reflect.DeepEqual(after.Document.Models["local/b"], occupant) {
+		t.Fatalf("save re-resolved remapped ID: active=%q occupant=%#v", after.ActiveModelID, after.Document.Models["local/b"])
+	}
+	current, _ := harness.runtime.state()
+	if current.Model != "manual" {
+		t.Fatalf("runtime model = %q, want restored manual", current.Model)
+	}
+}
+
+func TestControllerCanonicalCatalogSelectionPreservesExactConfiguredID(t *testing.T) {
+	document := controllerDiscoveryDocument(Auth{})
+	document.Models[" local/spaced "] = Model{Provider: "local", Name: " spaced-name "}
+	harness := newControllerTestHarness(t, document, nil, nil)
+
+	if err := harness.controller.SetActiveModelID("local/spaced"); err != nil {
+		t.Fatal(err)
+	}
+	after := harness.manager.Snapshot()
+	if after.ActiveModelID != " local/spaced " || after.Document.ActiveModel != " local/spaced " {
+		t.Fatalf("active ID = snapshot %q document %q, want exact catalog ID", after.ActiveModelID, after.Document.ActiveModel)
+	}
+	current, _ := harness.runtime.state()
+	if current.Model != " spaced-name " {
+		t.Fatalf("runtime model = %q, want configured catalog value", current.Model)
+	}
+}
+
+func TestControllerCanonicalCatalogSelectionRejectsAmbiguousTrimmedID(t *testing.T) {
+	document := controllerDiscoveryDocument(Auth{})
+	document.Models["local/alias"] = Model{Provider: "local", Name: "first"}
+	document.Models[" local/alias "] = Model{Provider: "local", Name: "second"}
+	harness := newControllerTestHarness(t, document, nil, nil)
+	before := captureControllerState(t, harness)
+
+	if err := harness.controller.SetActiveModelID("  local/alias  "); err == nil {
+		t.Fatal("expected ambiguous trimmed ID error")
+	}
 	assertControllerStateUnchanged(t, harness, before)
+
+	if err := harness.controller.SetActiveModelID("local/alias"); err != nil {
+		t.Fatalf("exact ID lookup should win before fallback: %v", err)
+	}
+	if got := harness.manager.Snapshot().ActiveModelID; got != "local/alias" {
+		t.Fatalf("active ID = %q, want exact match", got)
+	}
+}
+
+func TestControllerSaveModelConfigUsesCatalogIdentityNormalization(t *testing.T) {
+	t.Run("normalized model name is ambiguous across configured aliases", func(t *testing.T) {
+		document := controllerDiscoveryDocument(Auth{})
+		document.Models["local/configured-space"] = Model{Provider: "local", Name: " configured "}
+		harness := newControllerTestHarness(t, document, nil, nil)
+		before := captureControllerState(t, harness)
+
+		if err := harness.controller.SaveModelConfig(model.Config{ProfileID: "local", Model: " configured "}); err == nil {
+			t.Fatal("expected normalized identity ambiguity")
+		}
+		assertControllerStateUnchanged(t, harness, before)
+	})
+
+	t.Run("exact whitespace provider key and exact catalog ID are preserved", func(t *testing.T) {
+		const providerKey = " local "
+		document := emptyDocument()
+		document.Providers[providerKey] = Provider{Transport: TransportOpenAICompatible, Endpoint: "http://127.0.0.1:1234/v1"}
+		document.Models["manual"] = Model{Provider: providerKey, Name: "manual"}
+		document.Models[" selected alias "] = Model{Provider: providerKey, Name: " selected "}
+		document.ActiveModel = "manual"
+		harness := newControllerTestHarness(t, document, nil, nil)
+
+		if err := harness.controller.SaveModelConfig(model.Config{ProfileID: providerKey, Provider: "ignored", Model: "selected"}); err != nil {
+			t.Fatal(err)
+		}
+		if got := harness.manager.Snapshot().ActiveModelID; got != " selected alias " {
+			t.Fatalf("active ID = %q, want exact configured alias", got)
+		}
+	})
 }

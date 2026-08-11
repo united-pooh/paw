@@ -1804,6 +1804,49 @@ func TestDocumentForPresetClonesBuiltinState(t *testing.T) {
 	}
 }
 
+func TestManagerPreviewUpdateDoesNotWritePublishOrMutate(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, false)
+	document := emptyDocument()
+	document.Providers["local"] = Provider{Transport: TransportOpenAICompatible, Endpoint: "http://127.0.0.1:1234/v1"}
+	document.Models["local/one"] = Model{Provider: "local", Name: "one"}
+	document.Models["local/two"] = Model{Provider: "local", Name: "two"}
+	document.ActiveModel = "local/one"
+	writeManagerDocument(t, paths, document)
+	manager := openTestManager(t, paths, &FakeCredentialStore{Unavailable: true}, false)
+	before := manager.Snapshot()
+	beforeFile, err := os.ReadFile(paths.GlobalConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updates, cancel := manager.Subscribe()
+	defer cancel()
+	<-updates
+
+	preview, err := manager.PreviewUpdate(context.Background(), before.Revision, []Operation{SetActiveModel("local/two")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.Revision != before.Revision+1 || preview.ActiveModelID != "local/two" || preview.Active.Model != "two" {
+		t.Fatalf("preview = revision %d active %q runtime %q", preview.Revision, preview.ActiveModelID, preview.Active.Model)
+	}
+	if after := manager.Snapshot(); after.Revision != before.Revision || after.ActiveModelID != before.ActiveModelID || after.ContentHash != before.ContentHash {
+		t.Fatalf("preview mutated manager snapshot: before=%#v after=%#v", before, after)
+	}
+	afterFile, err := os.ReadFile(paths.GlobalConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(afterFile) != string(beforeFile) {
+		t.Fatalf("preview changed config file:\nbefore=%s\nafter=%s", beforeFile, afterFile)
+	}
+	select {
+	case update := <-updates:
+		t.Fatalf("preview published snapshot: %#v", update)
+	default:
+	}
+}
+
 func TestJSONCTargetedUpdatePreservesCommentsUnknownFieldsAndTrailingComma(t *testing.T) {
 	clearDetectionEnv(t)
 	paths := isolatedPaths(t, false)

@@ -127,6 +127,17 @@ type CatalogModel struct {
 	Source ModelSource
 }
 
+// CatalogSelection pins the exact catalog entry and Snapshot revision observed
+// by a selector. ProviderKey preserves the document's exact provider key while
+// ModelName uses the catalog's normalized model-name identity.
+type CatalogSelection struct {
+	Revision    uint64
+	ID          string
+	ProviderKey string
+	ModelName   string
+	Source      ModelSource
+}
+
 type DiscoveryStatus struct {
 	Attempted       bool
 	ProviderID      string
@@ -188,6 +199,51 @@ func (s Snapshot) Clone() Snapshot {
 	return s
 }
 
+// CatalogSelection resolves an exact catalog ID first. For compatibility with
+// callers that surround an ID with whitespace, it falls back to trimmed ID
+// comparison only when that comparison identifies exactly one catalog entry.
+func (s Snapshot) CatalogSelection(requestedID string) (CatalogSelection, error) {
+	if item, ok := s.EffectiveModels[requestedID]; ok {
+		return newCatalogSelection(s.Revision, requestedID, item), nil
+	}
+	trimmedID := strings.TrimSpace(requestedID)
+	var selectedID string
+	var selected CatalogModel
+	matches := 0
+	for id, item := range s.EffectiveModels {
+		if strings.TrimSpace(id) != trimmedID {
+			continue
+		}
+		selectedID = id
+		selected = item
+		matches++
+	}
+	switch matches {
+	case 0:
+		return CatalogSelection{}, fmt.Errorf("model %q is not in the effective catalog", requestedID)
+	case 1:
+		return newCatalogSelection(s.Revision, selectedID, selected), nil
+	default:
+		return CatalogSelection{}, fmt.Errorf("model ID %q is ambiguous after trimming whitespace", requestedID)
+	}
+}
+
+func newCatalogSelection(revision uint64, id string, item CatalogModel) CatalogSelection {
+	return CatalogSelection{
+		Revision:    revision,
+		ID:          id,
+		ProviderKey: item.Model.Provider,
+		ModelName:   strings.TrimSpace(item.Model.Name),
+		Source:      item.Source,
+	}
+}
+
+func (s CatalogSelection) matches(item CatalogModel) bool {
+	return item.ID == s.ID &&
+		item.Source == s.Source &&
+		identityForModel(item.Model) == (modelIdentity{providerID: s.ProviderKey, name: s.ModelName})
+}
+
 type OperationKind string
 
 const (
@@ -207,7 +263,11 @@ type Operation struct {
 }
 
 func SetActiveModel(id string) Operation {
-	raw, _ := json.Marshal(strings.TrimSpace(id))
+	return setActiveModelExact(strings.TrimSpace(id))
+}
+
+func setActiveModelExact(id string) Operation {
+	raw, _ := json.Marshal(id)
 	return Operation{Kind: OperationSetActiveModel, Value: raw}
 }
 

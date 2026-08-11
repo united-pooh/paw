@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -64,6 +65,7 @@ type Manager struct {
 	debounce                    time.Duration
 	discoverer                  ModelDiscoverer
 	discoveryCacheWriter        func(string, discoveryCacheFile) error
+	configWriter                func(string, []byte, os.FileMode) error
 	disableModelDiscovery       bool
 	retainedDiscoveries         map[string]retainedDiscovery
 	pendingDiscovery            *pendingDiscovery
@@ -149,6 +151,7 @@ func openManager(ctx context.Context, options Options, cacheWriter func(string, 
 		debounce:              options.Debounce,
 		discoverer:            options.Discoverer,
 		discoveryCacheWriter:  cacheWriter,
+		configWriter:          atomicWriteFile,
 		disableModelDiscovery: options.DisableModelDiscovery,
 		retainedDiscoveries:   map[string]retainedDiscovery{},
 		discoveryCache:        emptyDiscoveryCache(),
@@ -372,7 +375,7 @@ func (m *Manager) parseCandidate(raw []byte) (parsedCandidate, error) {
 			return parsedCandidate{}, err
 		}
 	}
-	activeID := strings.TrimSpace(document.ActiveModel)
+	activeID := document.ActiveModel
 	if workspace.ActiveModel != "" {
 		activeID = workspace.ActiveModel
 	}
@@ -577,13 +580,12 @@ func cloneDiscoveryCache(cache discoveryCacheFile) discoveryCacheFile {
 }
 
 func discoveryTarget(document Document, activeID string) (providerID, skippedReason string) {
-	activeID = strings.TrimSpace(activeID)
 	if activeID != "" {
 		configuredModel, ok := document.Models[activeID]
 		if !ok {
 			return "", "active-model-missing"
 		}
-		providerID = strings.TrimSpace(configuredModel.Provider)
+		providerID = configuredModel.Provider
 		if _, ok := document.Providers[providerID]; !ok {
 			return "", "active-provider-missing"
 		}
@@ -682,11 +684,12 @@ func safeModelDiscoveryError(err error) string {
 }
 
 func normalizeLiveDiscoveredModels(providerID string, models []DiscoveredModel) ([]DiscoveredModel, []string) {
+	normalizedProviderID := strings.TrimSpace(providerID)
 	normalized := make([]DiscoveredModel, 0, len(models))
 	cacheNames := make([]string, 0, len(models))
 	for _, discovered := range models {
 		candidateProviderID := strings.TrimSpace(discovered.ProviderID)
-		if candidateProviderID != "" && candidateProviderID != providerID {
+		if candidateProviderID != "" && candidateProviderID != normalizedProviderID {
 			continue
 		}
 		discovered.ProviderID = providerID
@@ -1037,21 +1040,79 @@ func (m *Manager) RequireReady() error {
 	return &SetupRequiredError{Path: m.paths.GlobalConfig, Reason: reason}
 }
 
-func (m *Manager) Update(ctx context.Context, expectedRevision uint64, operations []Operation) (Snapshot, error) {
+// PreviewUpdate builds and validates the Snapshot produced by operations at an
+// expected revision without writing the config file or publishing the result.
+func (m *Manager) PreviewUpdate(ctx context.Context, expectedRevision uint64, operations []Operation) (Snapshot, error) {
 	m.updateMu.Lock()
 	defer m.updateMu.Unlock()
+	candidate, _, err := m.prepareUpdate(ctx, expectedRevision, operations)
+	if err != nil {
+		return candidate, err
+	}
+	return candidate.Clone(), nil
+}
+
+func (m *Manager) Update(ctx context.Context, expectedRevision uint64, operations []Operation) (Snapshot, error) {
+	return m.commitUpdate(ctx, expectedRevision, operations, nil)
+}
+
+// commitPreview uses the same commit path as Update but additionally requires
+// the prospective Snapshot to remain identical to the non-publishing preview.
+func (m *Manager) commitPreview(ctx context.Context, expectedRevision uint64, operations []Operation, preview Snapshot) (Snapshot, error) {
+	return m.commitUpdate(ctx, expectedRevision, operations, &preview)
+}
+
+func (m *Manager) commitUpdate(ctx context.Context, expectedRevision uint64, operations []Operation, preview *Snapshot) (Snapshot, error) {
+	m.updateMu.Lock()
+	defer m.updateMu.Unlock()
+	candidate, raw, err := m.prepareUpdate(ctx, expectedRevision, operations)
+	if err != nil {
+		return candidate, err
+	}
+	if preview != nil && !sameUpdatePreview(*preview, candidate) {
+		return m.Snapshot(), fmt.Errorf("%w: prospective configuration changed before commit", ErrRevisionConflict)
+	}
+	writer := m.configWriter
+	if writer == nil {
+		writer = atomicWriteFile
+	}
+	if err := writer(m.paths.GlobalConfig, raw, 0o600); err != nil {
+		return Snapshot{}, err
+	}
+	m.publish(candidate)
+	return candidate.Clone(), nil
+}
+
+func sameUpdatePreview(left, right Snapshot) bool {
+	left = left.Clone()
+	right = right.Clone()
+	return left.Revision == right.Revision &&
+		left.ContentHash == right.ContentHash &&
+		left.ActiveModelID == right.ActiveModelID &&
+		left.Ready == right.Ready &&
+		bytes.Equal(left.Raw, right.Raw) &&
+		reflect.DeepEqual(left.Document, right.Document) &&
+		reflect.DeepEqual(left.Workspace, right.Workspace) &&
+		reflect.DeepEqual(left.EffectiveModels, right.EffectiveModels) &&
+		reflect.DeepEqual(left.Active, right.Active)
+}
+
+// prepareUpdate requires updateMu and is shared by preview and commit so both
+// paths apply identical optimistic-concurrency, patching, and validation rules.
+func (m *Manager) prepareUpdate(ctx context.Context, expectedRevision uint64, operations []Operation) (Snapshot, []byte, error) {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
-		return Snapshot{}, errors.New("configuration manager is closed")
+		return Snapshot{}, nil, errors.New("configuration manager is closed")
 	}
 	if expectedRevision != m.snapshot.Revision {
 		current := m.snapshot.Clone()
 		m.mu.Unlock()
-		return current, fmt.Errorf("%w: expected %d, current %d", ErrRevisionConflict, expectedRevision, current.Revision)
+		return current, nil, fmt.Errorf("%w: expected %d, current %d", ErrRevisionConflict, expectedRevision, current.Revision)
 	}
 	raw := append([]byte(nil), m.snapshot.Raw...)
 	currentRevision := m.snapshot.Revision
+	currentReady := m.snapshot.Ready
 	m.mu.Unlock()
 	var err error
 	for _, operation := range operations {
@@ -1070,24 +1131,20 @@ func (m *Manager) Update(ctx context.Context, expectedRevision uint64, operation
 			err = fmt.Errorf("unsupported config operation %q", operation.Kind)
 		}
 		if err != nil {
-			return Snapshot{}, err
+			return Snapshot{}, nil, err
 		}
 	}
 	if _, _, err := parseAndValidateGlobal(raw, m.paths.GlobalConfig); err != nil {
-		return Snapshot{}, err
+		return Snapshot{}, nil, err
 	}
 	candidate, err := m.candidateFromRaw(ctx, raw, currentRevision+1)
 	if err != nil {
-		return Snapshot{}, err
+		return Snapshot{}, nil, err
 	}
-	if !candidate.Ready && m.Snapshot().Ready {
-		return Snapshot{}, fmt.Errorf("updated configuration does not have a usable active credential")
+	if !candidate.Ready && currentReady {
+		return Snapshot{}, nil, fmt.Errorf("updated configuration does not have a usable active credential")
 	}
-	if err := atomicWriteFile(m.paths.GlobalConfig, raw, 0o600); err != nil {
-		return Snapshot{}, err
-	}
-	m.publish(candidate)
-	return candidate.Clone(), nil
+	return candidate, raw, nil
 }
 
 func (m *Manager) Reload() error { return m.reload(context.Background(), true, true) }

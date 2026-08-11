@@ -100,6 +100,7 @@ type ConfigCenterController interface {
 	ReloadConfig() error
 	ConfigPath() string
 	SetActiveModelID(string) error
+	ActivateCatalogSelection(configv2.CatalogSelection) error
 	UpdateConfig(context.Context, uint64, []configv2.Operation) (configv2.Snapshot, error)
 	CredentialStore() configv2.CredentialStore
 }
