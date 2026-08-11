@@ -26,9 +26,9 @@ type modelIdentity struct {
 }
 
 func buildEffectiveCatalog(document Document, discovered map[string][]DiscoveredModel) (map[string]CatalogModel, CatalogStats) {
-	catalog := make(map[string]CatalogModel)
+	catalog := make(map[string]CatalogModel, len(document.Models))
 	occupied := make(map[string]CatalogModel, len(document.Models))
-	manualByIdentity := make(map[modelIdentity]string, len(document.Models))
+	configuredIdentities := make(map[modelIdentity]struct{}, len(document.Models))
 	manualIDs := make([]string, 0, len(document.Models))
 	for id := range document.Models {
 		manualIDs = append(manualIDs, id)
@@ -37,11 +37,9 @@ func buildEffectiveCatalog(document Document, discovered map[string][]Discovered
 	for _, id := range manualIDs {
 		configured := cloneModel(document.Models[id])
 		item := CatalogModel{ID: id, Model: configured, Source: ModelSourceConfigured}
+		catalog[id] = item
 		occupied[id] = item
-		identity := identityForModel(configured)
-		if _, exists := manualByIdentity[identity]; !exists {
-			manualByIdentity[identity] = id
-		}
+		configuredIdentities[identityForModel(configured)] = struct{}{}
 	}
 
 	providerIDs := make([]string, 0, len(document.Providers))
@@ -53,10 +51,10 @@ func buildEffectiveCatalog(document Document, discovered map[string][]Discovered
 	stats := CatalogStats{}
 	for _, providerID := range providerIDs {
 		resolved := mergePreset(providerID, document.Providers[providerID])
-		cfg := DiscoveryConfig{}
-		if resolved.Discovery != nil {
-			cfg = *cloneDiscoveryConfig(resolved.Discovery)
+		if resolved.Discovery == nil || resolved.Discovery.Enabled == nil || !*resolved.Discovery.Enabled {
+			continue
 		}
+		cfg := *cloneDiscoveryConfig(resolved.Discovery)
 		names := make([]string, 0, len(discovered[providerID]))
 		for _, candidate := range discovered[providerID] {
 			candidateProviderID := strings.TrimSpace(candidate.ProviderID)
@@ -70,28 +68,16 @@ func buildEffectiveCatalog(document Document, discovered map[string][]Discovered
 		stats.Filtered += filtered
 		for _, name := range filteredNames {
 			model := builtinDiscoveredModel(providerID, name, resolved)
-			identity := identityForModel(model)
-			id, manuallyConfigured := manualByIdentity[identity]
-			if !manuallyConfigured {
-				id = stableDiscoveredModelID(providerID, name, occupied)
+			if _, manuallyConfigured := configuredIdentities[identityForModel(model)]; manuallyConfigured {
+				continue
 			}
+			id := stableDiscoveredModelID(providerID, name, occupied)
 			item := CatalogModel{ID: id, Model: model, Source: ModelSourceDiscovered}
 			catalog[id] = item
-			if !manuallyConfigured {
-				occupied[id] = item
-			}
+			occupied[id] = item
 		}
 	}
 
-	// Document.Models remains the durable registry and has final authority over
-	// every field when a discovered identity is also configured manually.
-	for _, id := range manualIDs {
-		configured := cloneModel(document.Models[id])
-		if manualByIdentity[identityForModel(configured)] != id {
-			continue
-		}
-		catalog[id] = CatalogModel{ID: id, Model: configured, Source: ModelSourceConfigured}
-	}
 	stats.Merged = len(catalog)
 	return catalog, stats
 }

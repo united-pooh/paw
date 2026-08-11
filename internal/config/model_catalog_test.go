@@ -14,7 +14,7 @@ import (
 func TestBuildEffectiveCatalogManualOverridesDiscovered(t *testing.T) {
 	stream := false
 	document := Document{
-		Providers: map[string]Provider{"local": {}},
+		Providers: map[string]Provider{"local": {Discovery: &DiscoveryConfig{Enabled: boolPointer(true)}}},
 		Models: map[string]Model{
 			"custom-id": {
 				Provider: "local", Name: "chat-model", Adapter: AdapterDeepSeek,
@@ -42,8 +42,11 @@ func TestBuildEffectiveCatalogManualOverridesDiscovered(t *testing.T) {
 
 func TestBuildEffectiveCatalogSameNameDifferentProvidersDoNotConflict(t *testing.T) {
 	document := Document{
-		Providers: map[string]Provider{"first": {}, "second": {}},
-		Models:    map[string]Model{},
+		Providers: map[string]Provider{
+			"first":  {Discovery: &DiscoveryConfig{Enabled: boolPointer(true)}},
+			"second": {Discovery: &DiscoveryConfig{Enabled: boolPointer(true)}},
+		},
+		Models: map[string]Model{},
 	}
 	discovered := map[string][]DiscoveredModel{
 		"first":  {{ProviderID: "first", Name: "shared"}},
@@ -64,7 +67,10 @@ func TestBuildEffectiveCatalogSameNameDifferentProvidersDoNotConflict(t *testing
 
 func TestBuildEffectiveCatalogStableIDCollisionAppendsHash(t *testing.T) {
 	document := Document{
-		Providers: map[string]Provider{"local": {}, "other": {}},
+		Providers: map[string]Provider{
+			"local": {Discovery: &DiscoveryConfig{Enabled: boolPointer(true)}},
+			"other": {},
+		},
 		Models: map[string]Model{
 			"local/chat": {Provider: "other", Name: "manual"},
 		},
@@ -86,6 +92,75 @@ func TestBuildEffectiveCatalogStableIDCollisionAppendsHash(t *testing.T) {
 	}
 	if manual := catalog["local/chat"]; manual.Source != ModelSourceConfigured || manual.Model.Provider != "other" {
 		t.Fatalf("manual collision entry=%#v", manual)
+	}
+}
+
+func TestBuildEffectiveCatalogIgnoresDiscoveryUnlessResolvedEnabled(t *testing.T) {
+	disabled := false
+	document := Document{
+		Providers: map[string]Provider{
+			"absent":      {},
+			"unspecified": {Discovery: &DiscoveryConfig{Path: "models"}},
+			"disabled":    {Discovery: &DiscoveryConfig{Enabled: &disabled}},
+		},
+		Models: map[string]Model{
+			"configured-absent":      {Provider: "absent", Name: "configured"},
+			"configured-unspecified": {Provider: "unspecified", Name: "configured"},
+			"configured-disabled":    {Provider: "disabled", Name: "configured"},
+		},
+	}
+	discovered := map[string][]DiscoveredModel{
+		"absent":      {{ProviderID: "absent", Name: "retained"}},
+		"unspecified": {{ProviderID: "unspecified", Name: "retained"}},
+		"disabled":    {{ProviderID: "disabled", Name: "retained"}},
+	}
+
+	catalog, stats := buildEffectiveCatalog(document, discovered)
+
+	if len(catalog) != len(document.Models) || stats.Merged != len(document.Models) {
+		t.Fatalf("catalog=%#v stats=%#v", catalog, stats)
+	}
+	if stats.Discovered != 0 || stats.Filtered != 0 {
+		t.Fatalf("disabled discovery affected stats: %#v", stats)
+	}
+	for id := range document.Models {
+		if got, ok := catalog[id]; !ok || got.Source != ModelSourceConfigured {
+			t.Fatalf("configured model %q lost: %#v present=%v", id, got, ok)
+		}
+	}
+}
+
+func TestBuildEffectiveCatalogPreservesConfiguredAliases(t *testing.T) {
+	document := Document{
+		ActiveModel: "alias-z",
+		Providers: map[string]Provider{
+			"local": {Discovery: &DiscoveryConfig{Enabled: boolPointer(true)}},
+		},
+		Models: map[string]Model{
+			"alias-a": {Provider: "local", Name: "chat", Adapter: AdapterGPT},
+			"alias-z": {Provider: "local", Name: "chat", Adapter: AdapterDeepSeek, ContextWindow: 128000},
+		},
+	}
+	discovered := map[string][]DiscoveredModel{
+		"local": {{ProviderID: "local", Name: "chat"}},
+	}
+
+	catalog, stats := buildEffectiveCatalog(document, discovered)
+
+	if len(catalog) != 2 || stats.Merged != 2 {
+		t.Fatalf("catalog=%#v stats=%#v", catalog, stats)
+	}
+	if _, exists := catalog["local/chat"]; exists {
+		t.Fatalf("discovered-only duplicate was retained: %#v", catalog["local/chat"])
+	}
+	for _, id := range []string{"alias-a", document.ActiveModel} {
+		if got, ok := catalog[id]; !ok || got.Source != ModelSourceConfigured {
+			t.Fatalf("configured alias %q lost: %#v present=%v", id, got, ok)
+		}
+	}
+	active := catalog[document.ActiveModel]
+	if active.Model.Adapter != AdapterDeepSeek || active.Model.ContextWindow != 128000 {
+		t.Fatalf("active alias metadata changed: %#v", active)
 	}
 }
 
@@ -225,8 +300,11 @@ func TestEnsureSchemaUpdatesChangedContentAndSkipsMatchingContent(t *testing.T) 
 		t.Fatal("changed schema was not updated")
 	}
 	info, err := os.Stat(paths.Schema)
-	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("updated schema mode=%v err=%v", info.Mode().Perm(), err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("updated schema mode=%v", info.Mode().Perm())
 	}
 
 	if err := os.Chmod(paths.Schema, 0o644); err != nil {
@@ -236,7 +314,10 @@ func TestEnsureSchemaUpdatesChangedContentAndSkipsMatchingContent(t *testing.T) 
 		t.Fatal(err)
 	}
 	info, err = os.Stat(paths.Schema)
-	if err != nil || info.Mode().Perm() != 0o644 {
-		t.Fatalf("matching schema was unexpectedly rewritten: mode=%v err=%v", info.Mode().Perm(), err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("matching schema was unexpectedly rewritten: mode=%v", info.Mode().Perm())
 	}
 }

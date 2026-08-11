@@ -135,6 +135,44 @@ func TestFirstRunPAWModelWins(t *testing.T) {
 	}
 }
 
+func TestDocumentForPresetClonesBuiltinState(t *testing.T) {
+	const id = "clone-test"
+	discoveryEnabled := true
+	modelStream := false
+	builtinPresets[id] = Preset{
+		ID: id,
+		Provider: Provider{
+			Discovery: &DiscoveryConfig{Enabled: &discoveryEnabled, Include: []string{"chat-*"}},
+		},
+		DefaultModelID: id + "/default",
+		DefaultModel: Model{
+			Provider: id,
+			Name:     "default",
+			Stream:   &modelStream,
+			Parameters: map[string]any{
+				"nested": map[string]any{"enabled": true},
+			},
+		},
+	}
+	t.Cleanup(func() { delete(builtinPresets, id) })
+
+	document := documentForPreset(id)
+	provider := document.Providers[id]
+	*provider.Discovery.Enabled = false
+	provider.Discovery.Include[0] = "changed-*"
+	configuredModel := document.Models[id+"/default"]
+	*configuredModel.Stream = true
+	configuredModel.Parameters["nested"].(map[string]any)["enabled"] = false
+
+	preset := builtinPresets[id]
+	if preset.Provider.Discovery == nil || preset.Provider.Discovery.Enabled == nil || !*preset.Provider.Discovery.Enabled || preset.Provider.Discovery.Include[0] != "chat-*" {
+		t.Fatalf("preset provider was aliased: %#v", preset.Provider.Discovery)
+	}
+	if preset.DefaultModel.Stream == nil || *preset.DefaultModel.Stream || preset.DefaultModel.Parameters["nested"].(map[string]any)["enabled"] != true {
+		t.Fatalf("preset default model was aliased: %#v", preset.DefaultModel)
+	}
+}
+
 func TestJSONCTargetedUpdatePreservesCommentsUnknownFieldsAndTrailingComma(t *testing.T) {
 	clearDetectionEnv(t)
 	paths := isolatedPaths(t, false)
@@ -179,6 +217,51 @@ func TestJSONCTargetedUpdatePreservesCommentsUnknownFieldsAndTrailingComma(t *te
 	}
 	if _, err := manager.Update(context.Background(), before.Revision, []Operation{SetActiveModel("local/one")}); !errors.Is(err, ErrRevisionConflict) {
 		t.Fatalf("stale update error = %v", err)
+	}
+}
+
+func TestUpsertProviderAddsAndRemovesDiscovery(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, false)
+	if err := os.MkdirAll(paths.Home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	provider := Provider{Transport: TransportOpenAICompatible, Endpoint: "http://127.0.0.1:1234/v1"}
+	document := emptyDocument()
+	document.Providers["local"] = provider
+	document.Models["local/model"] = Model{Provider: "local", Name: "model"}
+	document.ActiveModel = "local/model"
+	raw, _ := marshalStarter(document, "provider discovery update")
+	if err := os.WriteFile(paths.GlobalConfig, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := openTestManager(t, paths, &FakeCredentialStore{Unavailable: true}, false)
+
+	enabled := true
+	provider.Discovery = &DiscoveryConfig{Enabled: &enabled, Path: "models", Format: DiscoveryFormatOpenAIList, Include: []string{"chat-*"}}
+	withDiscovery, err := manager.Update(context.Background(), manager.Snapshot().Revision, []Operation{UpsertProvider("local", provider)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := withDiscovery.Document.Providers["local"].Discovery
+	if got == nil || got.Enabled == nil || !*got.Enabled || got.Path != "models" || len(got.Include) != 1 || got.Include[0] != "chat-*" {
+		t.Fatalf("discovery was not added: %#v", got)
+	}
+
+	provider.Discovery = nil
+	withoutDiscovery, err := manager.Update(context.Background(), withDiscovery.Revision, []Operation{UpsertProvider("local", provider)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := withoutDiscovery.Document.Providers["local"].Discovery; got != nil {
+		t.Fatalf("discovery was not removed: %#v", got)
+	}
+	written, err := os.ReadFile(paths.GlobalConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(written), `"discovery"`) {
+		t.Fatalf("discovery block remained in config:\n%s", written)
 	}
 }
 

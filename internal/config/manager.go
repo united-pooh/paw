@@ -163,9 +163,10 @@ func emptyDocument() Document {
 
 func documentForPreset(id string) Document {
 	preset := builtinPresets[id]
-	provider := preset.Provider
+	provider := cloneProvider(preset.Provider)
 	provider.Preset = id
-	return Document{Schema: "./schemas/config-v2.schema.json", SchemaVersion: SchemaVersion, ActiveModel: preset.DefaultModelID, Providers: map[string]Provider{id: provider}, Models: map[string]Model{preset.DefaultModelID: preset.DefaultModel}}
+	defaultModel := cloneModel(preset.DefaultModel)
+	return Document{Schema: "./schemas/config-v2.schema.json", SchemaVersion: SchemaVersion, ActiveModel: preset.DefaultModelID, Providers: map[string]Provider{id: provider}, Models: map[string]Model{preset.DefaultModelID: defaultModel}}
 }
 
 func documentForRequestedModel(id string) (Document, bool) {
@@ -178,11 +179,9 @@ func documentForRequestedModel(id string) (Document, bool) {
 		return Document{}, false
 	}
 	document := documentForPreset(parts[0])
+	configuredModel := document.Models[preset.DefaultModelID]
 	delete(document.Models, preset.DefaultModelID)
-	configuredModel := preset.DefaultModel
-	if id == preset.DefaultModelID {
-		configuredModel = preset.DefaultModel
-	} else {
+	if id != preset.DefaultModelID {
 		configuredModel.Name = parts[1]
 	}
 	document.Models[id] = configuredModel
@@ -433,7 +432,7 @@ func (m *Manager) Update(ctx context.Context, expectedRevision uint64, operation
 		case OperationSetActiveModel:
 			raw, err = patchJSONCMember(raw, nil, "activeModel", operation.Value, false)
 		case OperationUpsertProvider:
-			raw, err = patchJSONCObjectMemberFields(raw, []string{"providers"}, operation.ID, operation.Value, []string{"preset", "transport", "endpoint", "apiPath", "auth", "headers", "body", "timeoutSeconds", "retries", "stream"})
+			raw, err = patchJSONCObjectMemberFields(raw, []string{"providers"}, operation.ID, operation.Value, []string{"preset", "transport", "endpoint", "apiPath", "auth", "headers", "body", "timeoutSeconds", "retries", "stream", "discovery"})
 		case OperationDeleteProvider:
 			raw, err = patchJSONCMember(raw, []string{"providers"}, operation.ID, nil, true)
 		case OperationUpsertModel:
