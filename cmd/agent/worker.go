@@ -20,31 +20,19 @@ import (
 
 func runSubagentWorkerMode(ctx context.Context, input io.Reader, output io.Writer, allowOutsideRead bool) error {
 	decoder := json.NewDecoder(input)
-	var start subagent.WorkerMessage
-	if err := decoder.Decode(&start); err != nil {
-		return fmt.Errorf("decode subagent worker.start: %w", err)
-	}
-	if start.Type != subagent.WorkerMessageStart {
-		return fmt.Errorf("subagent worker.start is required")
-	}
-	req := start.Request()
-	if strings.TrimSpace(req.SessionID) == "" {
-		return fmt.Errorf("subagent worker session_id is required")
+	start, req, subCtx, err := readSubagentWorkerStart(decoder)
+	if err != nil {
+		return err
 	}
 
 	workerCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	broker := newWorkerMCPBroker(workerCtx, start.Snapshot, output)
+	subCtx.mcpBroker = broker
 	workerDone := make(chan subagent.WorkerResult, 1)
 	go func() {
 		workerUI := &workerUsageUI{UI: headless.New(io.Discard)}
-		runner, sessionID, _, configController, _, _, _, _, err := buildRunnerWithSubagentContext(workerCtx, req.SessionID, workerUI, allowOutsideRead, false, subagentRuntimeContext{
-			depth:           req.Depth,
-			maxDepth:        req.MaxDepth,
-			parentTaskID:    req.TaskID,
-			mcpBroker:       broker,
-			disableMainTodo: true,
-		})
+		runner, sessionID, _, configController, _, _, _, _, err := buildRunnerWithSubagentContext(workerCtx, req.SessionID, workerUI, allowOutsideRead, false, subCtx)
 		result := subagent.WorkerResult{TaskID: req.TaskID, SessionID: sessionID, ExitCode: 0}
 		if err != nil {
 			result.Error = err.Error()
@@ -109,6 +97,33 @@ func runSubagentWorkerMode(ctx context.Context, input io.Reader, output io.Write
 			return fmt.Errorf("read subagent worker input: %w", err)
 		}
 	}
+}
+
+func readSubagentWorkerStart(decoder *json.Decoder) (subagent.WorkerMessage, subagent.WorkerRequest, subagentRuntimeContext, error) {
+	var start subagent.WorkerMessage
+	if err := decoder.Decode(&start); err != nil {
+		return subagent.WorkerMessage{}, subagent.WorkerRequest{}, subagentRuntimeContext{}, fmt.Errorf("decode subagent worker.start: %w", err)
+	}
+	if start.Type != subagent.WorkerMessageStart {
+		return subagent.WorkerMessage{}, subagent.WorkerRequest{}, subagentRuntimeContext{}, fmt.Errorf("subagent worker.start is required")
+	}
+	req := start.Request()
+	if strings.TrimSpace(req.SessionID) == "" {
+		return subagent.WorkerMessage{}, subagent.WorkerRequest{}, subagentRuntimeContext{}, fmt.Errorf("subagent worker session_id is required")
+	}
+	if req.MaxDepth < 1 {
+		return subagent.WorkerMessage{}, subagent.WorkerRequest{}, subagentRuntimeContext{}, fmt.Errorf("subagent worker max_depth must be at least 1: %d", req.MaxDepth)
+	}
+	if req.Depth < 1 || req.Depth > req.MaxDepth {
+		return subagent.WorkerMessage{}, subagent.WorkerRequest{}, subagentRuntimeContext{}, fmt.Errorf("subagent worker depth must satisfy 1 <= depth <= max_depth: depth=%d max_depth=%d", req.Depth, req.MaxDepth)
+	}
+	return start, req, subagentRuntimeContext{
+		workerMode:      true,
+		depth:           req.Depth,
+		maxDepth:        req.MaxDepth,
+		parentTaskID:    req.TaskID,
+		disableMainTodo: true,
+	}, nil
 }
 
 type workerMCPBroker struct {

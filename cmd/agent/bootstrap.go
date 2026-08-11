@@ -18,6 +18,7 @@ import (
 )
 
 type subagentRuntimeContext struct {
+	workerMode      bool
 	depth           int
 	maxDepth        int
 	parentTaskID    string
@@ -28,7 +29,7 @@ type subagentRuntimeContext struct {
 func configOpenOptions(paths configv2.Paths, subCtx subagentRuntimeContext) configv2.Options {
 	return configv2.Options{
 		Paths:                 paths,
-		DisableModelDiscovery: subCtx.depth > 0,
+		DisableModelDiscovery: subCtx.workerMode,
 	}
 }
 
