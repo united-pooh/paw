@@ -25,6 +25,13 @@ type subagentRuntimeContext struct {
 	disableMainTodo bool
 }
 
+func configOpenOptions(paths configv2.Paths, subCtx subagentRuntimeContext) configv2.Options {
+	return configv2.Options{
+		Paths:                 paths,
+		DisableModelDiscovery: subCtx.depth > 0,
+	}
+}
+
 type runnerToolConfigurator func(*tool.Registry) error
 
 func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI, allowOutsideRead bool, allowIncompleteConfig bool, configurators ...runnerToolConfigurator) (*loop.Runner, string, *model.Client, *configv2.Controller, *settings.Controller, *subagent.Manager, *session.JSONLStore, *coremcp.Manager, error) {
@@ -40,7 +47,7 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 	if err != nil {
 		return nil, "", nil, nil, nil, nil, nil, nil, err
 	}
-	configManager, err := configv2.Open(ctx, configv2.Options{Paths: paths})
+	configManager, err := configv2.Open(ctx, configOpenOptions(paths, subCtx))
 	if err != nil {
 		return nil, "", nil, nil, nil, nil, nil, nil, err
 	}
