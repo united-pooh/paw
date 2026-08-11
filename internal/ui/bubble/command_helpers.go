@@ -27,17 +27,24 @@ func (m *appModel) handleModelCommand(invocation string) tea.Cmd {
 	case "status":
 		cfg := m.currentModelConfig()
 		stableID := ""
+		body := ""
 		if m.configCenterController != nil {
-			stableID = m.configCenterController.Snapshot().ActiveModelID
+			snapshot := m.configCenterController.Snapshot()
+			stableID = snapshot.ActiveModelID
+			body = fmt.Sprintf("\ncatalog registered=%d effective=%d\n%s", len(snapshot.Document.Models), len(snapshot.EffectiveModels), discoveryStatusSummary(snapshot.Discovery, time.Now()))
 		}
 		m.addEntry(transcriptEntry{
 			kind:  entrySystem,
 			title: "model",
-			body:  fmt.Sprintf("id=%s provider=%s base=%s path=%s model=%s models=%s context=%d retries=%d key=%s", stableID, cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, strings.Join(model.AvailableModels(cfg), ","), model.EffectiveContextLimitTokens(cfg), cfg.RetryCount, cfg.APIKeyEnvName),
+			body:  fmt.Sprintf("id=%s provider=%s base=%s path=%s model=%s models=%s context=%d retries=%d key=%s", stableID, cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, strings.Join(model.AvailableModels(cfg), ","), model.EffectiveContextLimitTokens(cfg), cfg.RetryCount, cfg.APIKeyEnvName) + body,
 		})
 	default:
 		if m.configCenterController != nil {
-			if _, ok := m.configCenterController.Snapshot().Document.Models[args]; ok {
+			snapshot := m.configCenterController.Snapshot()
+			if _, ok := snapshot.EffectiveModels[args]; ok {
+				// A direct textual command resolves and activates one immediate
+				// current-snapshot ID. Interactive selectors use the stronger
+				// revision-and-identity-pinned ActivateCatalogSelection path.
 				if err := m.configCenterController.SetActiveModelID(args); err != nil {
 					m.addEntry(transcriptEntry{kind: entryError, title: "model", body: err.Error()})
 					return nil

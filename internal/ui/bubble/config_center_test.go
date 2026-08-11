@@ -16,7 +16,25 @@ import (
 	modelcfg "paw/internal/model"
 )
 
+type fakeConfigCenterDiscoverer struct {
+	models []configv2.DiscoveredModel
+}
+
+func (d *fakeConfigCenterDiscoverer) Discover(_ context.Context, _ string, _ configv2.Provider, _ string) ([]configv2.DiscoveredModel, error) {
+	return append([]configv2.DiscoveredModel(nil), d.models...), nil
+}
+
 func newConfigCenterHarness(t *testing.T) (*configv2.Controller, *modelcfg.Client) {
+	t.Helper()
+	return newConfigCenterHarnessWithOptions(t, nil, false)
+}
+
+func newConfigCenterHarnessWithDiscovery(t *testing.T, discovered []configv2.DiscoveredModel) (*configv2.Controller, *modelcfg.Client) {
+	t.Helper()
+	return newConfigCenterHarnessWithOptions(t, discovered, true)
+}
+
+func newConfigCenterHarnessWithOptions(t *testing.T, discovered []configv2.DiscoveredModel, discoveryEnabled bool) (*configv2.Controller, *modelcfg.Client) {
 	t.Helper()
 	for _, name := range []string{"PAW_MODEL", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "OLLAMA_HOST", "OLLAMA_MODEL"} {
 		t.Setenv(name, "")
@@ -29,10 +47,14 @@ func newConfigCenterHarness(t *testing.T) (*configv2.Controller, *modelcfg.Clien
 	if err := os.MkdirAll(paths.Home, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	provider := `{"transport":"openai-compatible","endpoint":"http://127.0.0.1:1234/v1"}`
+	if discoveryEnabled {
+		provider = `{"transport":"openai-compatible","endpoint":"http://127.0.0.1:1234/v1","discovery":{"enabled":true,"path":"models","format":"openai-list"}}`
+	}
 	raw := []byte(`{
   "schemaVersion": 2,
   "activeModel": "local/one",
-  "providers": {"local":{"transport":"openai-compatible","endpoint":"http://127.0.0.1:1234/v1"}},
+  "providers": {"local":` + provider + `},
   "models": {
     "local/one":{"provider":"local","name":"one"},
     "local/two":{"provider":"local","name":"two"}
@@ -41,7 +63,16 @@ func newConfigCenterHarness(t *testing.T) (*configv2.Controller, *modelcfg.Clien
 	if err := os.WriteFile(paths.GlobalConfig, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	manager, err := configv2.Open(context.Background(), configv2.Options{Paths: paths, Credentials: &configv2.FakeCredentialStore{Values: map[string]string{}}, DisableWatch: true})
+	options := configv2.Options{
+		Paths:                 paths,
+		Credentials:           &configv2.FakeCredentialStore{Values: map[string]string{}},
+		DisableWatch:          true,
+		DisableModelDiscovery: !discoveryEnabled,
+	}
+	if discoveryEnabled {
+		options.Discoverer = &fakeConfigCenterDiscoverer{models: discovered}
+	}
+	manager, err := configv2.Open(context.Background(), options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,9 +145,10 @@ func TestConfigCenterDiagnosticsWrapLongMigrationError(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager, err := configv2.Open(context.Background(), configv2.Options{
-		Paths:        paths,
-		Credentials:  &configv2.FakeCredentialStore{Unavailable: true},
-		DisableWatch: true,
+		Paths:                 paths,
+		Credentials:           &configv2.FakeCredentialStore{Unavailable: true},
+		DisableWatch:          true,
+		DisableModelDiscovery: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -160,7 +192,7 @@ func TestIncompleteFirstRunOpensProviderThenCredentialSetup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err := configv2.Open(context.Background(), configv2.Options{Paths: paths, Credentials: &configv2.FakeCredentialStore{Values: map[string]string{}}, DisableWatch: true})
+	manager, err := configv2.Open(context.Background(), configv2.Options{Paths: paths, Credentials: &configv2.FakeCredentialStore{Values: map[string]string{}}, DisableWatch: true, DisableModelDiscovery: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -379,5 +411,224 @@ func TestConfigCenterRequiresDeleteConfirmation(t *testing.T) {
 	model.advanceModelAction(controller.Snapshot())
 	if _, exists := controller.Snapshot().Document.Models["local/two"]; exists {
 		t.Fatal("confirmed delete did not remove the model")
+	}
+}
+
+type recordingCatalogController struct {
+	*configv2.Controller
+	setActiveCalls []string
+	selections     []configv2.CatalogSelection
+}
+
+func (c *recordingCatalogController) SetActiveModelID(id string) error {
+	c.setActiveCalls = append(c.setActiveCalls, id)
+	return c.Controller.SetActiveModelID(id)
+}
+
+func (c *recordingCatalogController) ActivateCatalogSelection(selection configv2.CatalogSelection) error {
+	c.selections = append(c.selections, selection)
+	return c.Controller.ActivateCatalogSelection(selection)
+}
+
+func TestConfigCenterModelsAndActiveShowEffectiveCatalogSourcesAndCounts(t *testing.T) {
+	controller, _ := newConfigCenterHarnessWithDiscovery(t, []configv2.DiscoveredModel{{ProviderID: "local", Name: "live"}})
+	app := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	app.configCenterController = controller
+	app.ready = true
+	app.width = 100
+	app.height = 30
+	app.relayout()
+	app.openConfigCenter()
+
+	home := ansi.Strip(app.renderConfigCenterBox())
+	if !strings.Contains(home, "registered=2 effective=3") {
+		t.Fatalf("home=%q", home)
+	}
+
+	app.configCenter.page = configCenterModels
+	models := ansi.Strip(app.renderConfigCenterBox())
+	for _, want := range []string{"local/one", "configured", "local/live", "discovered"} {
+		if !strings.Contains(models, want) {
+			t.Fatalf("models page missing %q: %q", want, models)
+		}
+	}
+
+	app.configCenter.page = configCenterActive
+	active := ansi.Strip(app.renderConfigCenterBox())
+	for _, want := range []string{"local/one", "configured", "local/live", "discovered"} {
+		if !strings.Contains(active, want) {
+			t.Fatalf("active page missing %q: %q", want, active)
+		}
+	}
+}
+
+func TestConfigCenterActiveDiscoveredSelectionUsesObservedCatalogIdentity(t *testing.T) {
+	controller, _ := newConfigCenterHarnessWithDiscovery(t, []configv2.DiscoveredModel{{ProviderID: "local", Name: "live"}})
+	recorder := &recordingCatalogController{Controller: controller}
+	app := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	app.configCenterController = recorder
+	app.openConfigCenter()
+	app.configCenter.page = configCenterActive
+	app.configCenter.selected = sortedIndex(sortedCatalogModelIDs(controller.Snapshot().EffectiveModels), "local/live")
+	_ = app.configCenterOptions()
+	observed := controller.Snapshot()
+
+	app = app.advanceConfigCenter()
+
+	if len(recorder.setActiveCalls) != 0 {
+		t.Fatalf("Active page used SetActiveModelID: %#v", recorder.setActiveCalls)
+	}
+	if len(recorder.selections) != 1 {
+		t.Fatalf("catalog selections=%#v", recorder.selections)
+	}
+	selection := recorder.selections[0]
+	if selection.Revision != observed.Revision || selection.ID != "local/live" || selection.ProviderKey != "local" || selection.ModelName != "live" || selection.Source != configv2.ModelSourceDiscovered {
+		t.Fatalf("selection=%#v observed revision=%d", selection, observed.Revision)
+	}
+	updated := controller.Snapshot()
+	if updated.ActiveModelID != "local/live" || updated.Document.Models["local/live"].Name != "live" {
+		t.Fatalf("discovered selection was not activated and registered: %#v", updated)
+	}
+}
+
+func TestConfigCenterActiveRejectsCatalogSelectionThatChangedAfterDisplay(t *testing.T) {
+	controller, _ := newConfigCenterHarnessWithDiscovery(t, []configv2.DiscoveredModel{{ProviderID: "local", Name: "live"}})
+	app := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	app.configCenterController = controller
+	app.openConfigCenter()
+	app.configCenter.page = configCenterActive
+	app.configCenter.selected = sortedIndex(sortedCatalogModelIDs(controller.Snapshot().EffectiveModels), "local/live")
+	_ = app.configCenterOptions()
+
+	before := controller.Snapshot()
+	occupant := configv2.Model{Provider: "local", Name: "replacement"}
+	if _, err := controller.UpdateConfig(context.Background(), before.Revision, []configv2.Operation{configv2.UpsertModel("local/live", occupant)}); err != nil {
+		t.Fatal(err)
+	}
+
+	app = app.advanceConfigCenter()
+
+	if !strings.Contains(app.configCenter.err, "revision conflict") {
+		t.Fatalf("stale selection error=%q", app.configCenter.err)
+	}
+	if got := controller.Snapshot().ActiveModelID; got != "local/one" {
+		t.Fatalf("stale selection activated %q", got)
+	}
+}
+
+func TestConfigCenterDiscoveredModelActionsOnlyActivateAndRegister(t *testing.T) {
+	controller, _ := newConfigCenterHarnessWithDiscovery(t, []configv2.DiscoveredModel{{ProviderID: "local", Name: "live"}})
+	recorder := &recordingCatalogController{Controller: controller}
+	app := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	app.configCenterController = recorder
+	app.openConfigCenter()
+	app.configCenter.page = configCenterModels
+	app.configCenter.selected = sortedIndex(sortedCatalogModelIDs(controller.Snapshot().EffectiveModels), "local/live")
+
+	app = app.advanceConfigCenter()
+	options := app.configCenterOptions()
+	if len(options) != 1 || options[0].label != "Activate and register" {
+		t.Fatalf("discovered actions=%#v", options)
+	}
+
+	app = app.advanceConfigCenter()
+	if len(recorder.selections) != 1 || len(recorder.setActiveCalls) != 0 {
+		t.Fatalf("activation calls: selections=%#v setActive=%#v", recorder.selections, recorder.setActiveCalls)
+	}
+	if app.configCenter.page != configCenterModels || controller.Snapshot().Document.Models["local/live"].Name != "live" {
+		t.Fatalf("post-activation state=%#v snapshot=%#v", app.configCenter, controller.Snapshot())
+	}
+
+	app.configCenter.targetID = "local/one"
+	app.configCenter.page = configCenterModelActions
+	if got := len(app.configCenterOptions()); got != 11 {
+		t.Fatalf("configured model actions=%d, want 11", got)
+	}
+}
+
+func TestModelCommandAcceptsDiscoveredCatalogIDAndShowsDiscoveryStatus(t *testing.T) {
+	controller, client := newConfigCenterHarnessWithDiscovery(t, []configv2.DiscoveredModel{{ProviderID: "local", Name: "live"}})
+	app := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	app.configCenterController = controller
+
+	handled, cmd := app.handleCommand("/model local/live")
+	if !handled || cmd != nil {
+		t.Fatal("discovered /model command was not handled")
+	}
+	if got := controller.Snapshot().ActiveModelID; got != "local/live" {
+		t.Fatalf("active ID=%q", got)
+	}
+	if got := client.CurrentModelConfig().Model; got != "live" {
+		t.Fatalf("runtime model=%q", got)
+	}
+	if got := controller.Snapshot().EffectiveModels["local/live"].Source; got != configv2.ModelSourceConfigured {
+		t.Fatalf("registered source=%q", got)
+	}
+
+	app.handleCommand("/model status")
+	status := app.transcript[len(app.transcript)-1].body
+	for _, want := range []string{"registered=3 effective=3", "discovery source=live", "provider=local", "discovered=1", "filtered=0", "cache=updated", "discoveredAt=", "age="} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("model status missing %q: %q", want, status)
+		}
+	}
+}
+
+func TestConfigStatusAndDiagnosticsShowSanitizedDiscoveryStatus(t *testing.T) {
+	controller, _ := newConfigCenterHarnessWithDiscovery(t, []configv2.DiscoveredModel{{ProviderID: "local", Name: "live"}})
+	app := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	app.configCenterController = controller
+	app.ready = true
+	app.width = 120
+	app.height = 40
+	app.relayout()
+
+	app.handleCommand("/config status")
+	status := app.transcript[len(app.transcript)-1].body
+	for _, want := range []string{"registered=2 effective=3", "discovery source=live", "provider=local", "discovered=1", "filtered=0", "cache=updated", "attemptedAt=", "succeededAt=", "discoveredAt=", "age=", "skip=(none)", "error=(none)"} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("config status missing %q: %q", want, status)
+		}
+	}
+
+	app.openConfigCenter()
+	app.configCenter.page = configCenterDiagnostics
+	diagnostics := ansi.Strip(app.renderConfigCenterBox())
+	compactDiagnostics := strings.NewReplacer(" ", "", "\n", "", "│", "").Replace(diagnostics)
+	for _, want := range []string{"discoverysource=live", "provider=local", "discovered=1", "effective=3", "cache=updated", "age="} {
+		if !strings.Contains(compactDiagnostics, want) {
+			t.Fatalf("diagnostics missing %q: %q", want, diagnostics)
+		}
+	}
+	for _, forbidden := range []string{"http://127.0.0.1:1234/v1", "Authorization", "credential", "headers", "response body"} {
+		if strings.Contains(diagnostics, forbidden) || strings.Contains(status, forbidden) {
+			t.Fatalf("discovery status leaked %q: status=%q diagnostics=%q", forbidden, status, diagnostics)
+		}
+	}
+}
+
+func TestDiscoveryStatusSummaryIncludesSafeSkipAndError(t *testing.T) {
+	now := time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC)
+	status := configv2.DiscoveryStatus{
+		Attempted:       true,
+		ProviderID:      "local",
+		Source:          "cache",
+		AttemptedAt:     now.Add(-3 * time.Minute),
+		SucceededAt:     now.Add(-2 * time.Minute),
+		DiscoveredAt:    now.Add(-90 * time.Second),
+		DiscoveredCount: 12,
+		FilteredCount:   3,
+		EffectiveCount:  14,
+		CacheProviders:  2,
+		CacheState:      "matched",
+		SkippedReason:   "disabled",
+		LastError:       "model discovery failed: kind=auth_failed status=401: provider authentication failed",
+	}
+
+	summary := discoveryStatusSummary(status, now)
+	for _, want := range []string{"attempted=true", "source=cache", "provider=local", "discovered=12", "filtered=3", "effective=14", "cache=matched", "cacheProviders=2", "attemptedAt=2026-08-11T11:57:00Z", "succeededAt=2026-08-11T11:58:00Z", "discoveredAt=2026-08-11T11:58:30Z", "age=1m30s", "skip=disabled", "error=model discovery failed: kind=auth_failed status=401: provider authentication failed"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q: %q", want, summary)
+		}
 	}
 }

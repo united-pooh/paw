@@ -54,21 +54,25 @@ const (
 )
 
 type configCenterState struct {
-	page            configCenterPage
-	selected        int
-	revision        uint64
-	err             string
-	notice          string
-	noticeSequence  uint64
-	targetID        string
-	editKind        configEditKind
-	editValue       string
-	draftProviderID string
-	draftProvider   configv2.Provider
-	draftModelID    string
-	draftModel      configv2.Model
-	credentialID    string
-	confirmAction   string
+	page              configCenterPage
+	selected          int
+	revision          uint64
+	err               string
+	notice            string
+	noticeSequence    uint64
+	targetID          string
+	targetSelection   configv2.CatalogSelection
+	catalogPage       configCenterPage
+	catalogSelections []configv2.CatalogSelection
+	catalogLoaded     bool
+	editKind          configEditKind
+	editValue         string
+	draftProviderID   string
+	draftProvider     configv2.Provider
+	draftModelID      string
+	draftModel        configv2.Model
+	credentialID      string
+	confirmAction     string
 }
 
 type configCenterOption struct {
@@ -111,7 +115,7 @@ func (m *appModel) openConfigCenter() {
 			page = configCenterDiagnostics
 		case len(snapshot.Document.Providers) == 0:
 			page = configCenterAddProvider
-		case len(snapshot.Document.Models) == 0:
+		case len(snapshot.EffectiveModels) == 0:
 			page = configCenterAddModelProvider
 		case snapshot.ActiveModelID == "":
 			page = configCenterActive
@@ -153,7 +157,72 @@ func configStatusSummary(snapshot configv2.Snapshot) string {
 	if snapshot.Ready {
 		state = "ready"
 	}
-	return fmt.Sprintf("state=%s\nrevision=%d\nactiveModel=%s\nproviders=%d models=%d\ndiagnostics=%d", state, snapshot.Revision, emptyLabel(snapshot.ActiveModelID), len(snapshot.Document.Providers), len(snapshot.Document.Models), len(snapshot.Diagnostics))
+	return fmt.Sprintf(
+		"state=%s\nrevision=%d\nactiveModel=%s\nproviders=%d models=%d registered=%d effective=%d\ndiagnostics=%d\n%s",
+		state,
+		snapshot.Revision,
+		emptyLabel(snapshot.ActiveModelID),
+		len(snapshot.Document.Providers),
+		len(snapshot.Document.Models),
+		len(snapshot.Document.Models),
+		len(snapshot.EffectiveModels),
+		len(snapshot.Diagnostics),
+		discoveryStatusSummary(snapshot.Discovery, time.Now()),
+	)
+}
+
+func discoveryStatusSummary(status configv2.DiscoveryStatus, now time.Time) string {
+	return fmt.Sprintf(
+		"discovery source=%s provider=%s discovered=%d filtered=%d effective=%d cache=%s attempted=%t cacheProviders=%d attemptedAt=%s succeededAt=%s discoveredAt=%s age=%s skip=%s error=%s",
+		emptyLabel(status.Source),
+		emptyLabel(status.ProviderID),
+		status.DiscoveredCount,
+		status.FilteredCount,
+		status.EffectiveCount,
+		emptyLabel(status.CacheState),
+		status.Attempted,
+		status.CacheProviders,
+		discoveryTimeLabel(status.AttemptedAt),
+		discoveryTimeLabel(status.SucceededAt),
+		discoveryTimeLabel(status.DiscoveredAt),
+		discoveryAgeLabel(status.DiscoveredAt, now),
+		safeDiscoveryStatusLabel(status.SkippedReason),
+		safeDiscoveryStatusLabel(status.LastError),
+	)
+}
+
+func discoveryTimeLabel(value time.Time) string {
+	if value.IsZero() {
+		return "(none)"
+	}
+	return value.UTC().Format(time.RFC3339)
+}
+
+func discoveryAgeLabel(discoveredAt, now time.Time) string {
+	if discoveredAt.IsZero() {
+		return "(none)"
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	age := now.Sub(discoveredAt)
+	if age < 0 {
+		age = 0
+	}
+	return age.Round(time.Second).String()
+}
+
+func safeDiscoveryStatusLabel(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	if value == "" {
+		return "(none)"
+	}
+	const maximumRunes = 240
+	runes := []rune(value)
+	if len(runes) > maximumRunes {
+		value = string(runes[:maximumRunes-1]) + "…"
+	}
+	return value
 }
 
 func emptyLabel(value string) string {
@@ -214,6 +283,9 @@ func (m *appModel) configCenterBack() {
 		m.configCenter.page = configCenterModels
 	case configCenterCredentialActions:
 		m.configCenter.page = configCenterCredentials
+	case configCenterModels, configCenterActive:
+		m.configCenter.invalidateCatalog()
+		m.configCenter.page = configCenterHome
 	default:
 		m.configCenter.page = configCenterHome
 	}
@@ -245,8 +317,10 @@ func (m appModel) advanceConfigCenter() appModel {
 		case 1:
 			state.page = configCenterProviders
 		case 2:
+			state.invalidateCatalog()
 			state.page = configCenterModels
 		case 3:
+			state.invalidateCatalog()
 			state.page = configCenterActive
 		case 4:
 			state.page = configCenterCredentials
@@ -276,12 +350,13 @@ func (m appModel) advanceConfigCenter() appModel {
 	case configCenterProviderActions:
 		m.advanceProviderAction(snapshot)
 	case configCenterModels:
-		ids := sortedModelRegistryIDs(snapshot.Document.Models)
-		if state.selected == len(ids) {
+		selections := state.catalogSelections
+		if state.selected == len(selections) {
 			state.page = configCenterAddModelProvider
 			state.selected = 0
-		} else {
-			state.targetID = ids[state.selected]
+		} else if state.selected < len(selections) {
+			state.targetSelection = selections[state.selected]
+			state.targetID = state.targetSelection.ID
 			state.page = configCenterModelActions
 			state.selected = 0
 		}
@@ -294,12 +369,8 @@ func (m appModel) advanceConfigCenter() appModel {
 	case configCenterModelActions:
 		m.advanceModelAction(snapshot)
 	case configCenterActive:
-		ids := sortedModelRegistryIDs(snapshot.Document.Models)
-		if len(ids) > 0 {
-			m.applyConfigOperations(configv2.SetActiveModel(ids[state.selected]))
-			if state.err == "" {
-				state.revision = m.configCenterController.Snapshot().Revision
-			}
+		if state.selected < len(state.catalogSelections) {
+			m.activateConfigCenterCatalogSelection(state.catalogSelections[state.selected])
 		}
 	case configCenterCredentials:
 		ids := sortedProviderIDs(snapshot.Document.Providers)
@@ -388,6 +459,26 @@ func (m *appModel) advanceProviderAction(snapshot configv2.Snapshot) {
 
 func (m *appModel) advanceModelAction(snapshot configv2.Snapshot) {
 	state := m.configCenter
+	selection := state.targetSelection
+	if selection.ID == "" || selection.ID != state.targetID {
+		var err error
+		selection, err = snapshot.CatalogSelection(state.targetID)
+		if err != nil {
+			state.err = "model changed externally; reopen the page"
+			return
+		}
+		state.targetSelection = selection
+	}
+	if selection.Source == configv2.ModelSourceDiscovered {
+		if state.selected == 0 {
+			m.activateConfigCenterCatalogSelection(selection)
+			if state.err == "" {
+				state.page = configCenterModels
+				state.selected = 0
+			}
+		}
+		return
+	}
 	configuredModel, ok := snapshot.Document.Models[state.targetID]
 	if !ok {
 		state.err = "model changed externally; reopen the page"
@@ -395,7 +486,7 @@ func (m *appModel) advanceModelAction(snapshot configv2.Snapshot) {
 	}
 	switch state.selected {
 	case 0:
-		m.applyConfigOperations(configv2.SetActiveModel(state.targetID))
+		m.activateConfigCenterCatalogSelection(selection)
 	case 1:
 		m.openConfigEdit(configEditModelName, configuredModel.Name, "Upstream model name")
 	case 2:
@@ -807,6 +898,61 @@ func (m *appModel) applyConfigOperations(operations ...configv2.Operation) {
 	}
 	state.revision = snapshot.Revision
 	state.err = ""
+	if refreshed, err := snapshot.CatalogSelection(state.targetID); err == nil {
+		state.targetSelection = refreshed
+	} else {
+		state.targetSelection = configv2.CatalogSelection{}
+	}
+	state.invalidateCatalog()
+}
+
+func (m *appModel) activateConfigCenterCatalogSelection(selection configv2.CatalogSelection) {
+	state := m.configCenter
+	if state == nil {
+		return
+	}
+	if err := m.configCenterController.ActivateCatalogSelection(selection); err != nil {
+		state.err = err.Error()
+		return
+	}
+	updated := m.configCenterController.Snapshot()
+	state.revision = updated.Revision
+	state.err = ""
+	state.invalidateCatalog()
+	if refreshed, err := updated.CatalogSelection(selection.ID); err == nil {
+		state.targetSelection = refreshed
+	}
+	m.syncRunnerModelContextLimit(m.currentModelConfig())
+}
+
+func (state *configCenterState) invalidateCatalog() {
+	if state == nil {
+		return
+	}
+	state.catalogLoaded = false
+	state.catalogSelections = nil
+}
+
+func (m appModel) configCenterCatalogSelections(snapshot configv2.Snapshot) []configv2.CatalogSelection {
+	state := m.configCenter
+	if state == nil {
+		return nil
+	}
+	if state.catalogLoaded && state.catalogPage == state.page {
+		return state.catalogSelections
+	}
+	ids := sortedCatalogModelIDs(snapshot.EffectiveModels)
+	selections := make([]configv2.CatalogSelection, 0, len(ids))
+	for _, id := range ids {
+		selection, err := snapshot.CatalogSelection(id)
+		if err == nil {
+			selections = append(selections, selection)
+		}
+	}
+	state.catalogPage = state.page
+	state.catalogSelections = selections
+	state.catalogLoaded = true
+	return state.catalogSelections
 }
 
 func (m appModel) configCenterOptions() []configCenterOption {
@@ -817,7 +963,7 @@ func (m appModel) configCenterOptions() []configCenterOption {
 	snapshot := m.configCenterController.Snapshot()
 	switch state.page {
 	case configCenterHome:
-		return []configCenterOption{{"General settings", "UI and subagent defaults"}, {"Providers", fmt.Sprintf("%d configured", len(snapshot.Document.Providers))}, {"Models", fmt.Sprintf("%d registered", len(snapshot.Document.Models))}, {"Active model", emptyLabel(snapshot.ActiveModelID)}, {"Credentials", "system keyring and env fallback"}, {"Diagnostics", fmt.Sprintf("revision %d · %d messages", snapshot.Revision, len(snapshot.Diagnostics))}}
+		return []configCenterOption{{"General settings", "UI and subagent defaults"}, {"Providers", fmt.Sprintf("%d configured", len(snapshot.Document.Providers))}, {"Models", fmt.Sprintf("registered=%d effective=%d", len(snapshot.Document.Models), len(snapshot.EffectiveModels))}, {"Active model", emptyLabel(snapshot.ActiveModelID)}, {"Credentials", "system keyring and env fallback"}, {"Diagnostics", fmt.Sprintf("revision %d · %d messages", snapshot.Revision, len(snapshot.Diagnostics))}}
 	case configCenterProviders:
 		ids := sortedProviderIDs(snapshot.Document.Providers)
 		result := make([]configCenterOption, 0, len(ids)+1)
@@ -838,18 +984,25 @@ func (m appModel) configCenterOptions() []configCenterOption {
 		}
 		return append(result, configCenterOption{"Custom", "OpenAI-compatible endpoint"})
 	case configCenterModels:
-		ids := sortedModelRegistryIDs(snapshot.Document.Models)
-		result := make([]configCenterOption, 0, len(ids)+1)
-		for _, id := range ids {
-			v := snapshot.Document.Models[id]
+		selections := m.configCenterCatalogSelections(snapshot)
+		result := make([]configCenterOption, 0, len(selections)+1)
+		for _, selection := range selections {
 			marker := ""
-			if id == snapshot.ActiveModelID {
+			if selection.ID == snapshot.ActiveModelID {
 				marker = "active · "
 			}
-			result = append(result, configCenterOption{id, marker + v.Provider + " → " + v.Name})
+			description := fmt.Sprintf("%s%s · %s → %s", marker, selection.Source, selection.ProviderKey, selection.ModelName)
+			result = append(result, configCenterOption{selection.ID, description})
 		}
 		return append(result, configCenterOption{"+ Add model", "choose provider, ID and upstream name"})
 	case configCenterModelActions:
+		selection := state.targetSelection
+		if selection.ID == "" || selection.ID != state.targetID {
+			selection, _ = snapshot.CatalogSelection(state.targetID)
+		}
+		if selection.Source == configv2.ModelSourceDiscovered {
+			return []configCenterOption{{"Activate and register", state.targetID}}
+		}
 		v := snapshot.Document.Models[state.targetID]
 		return []configCenterOption{{"Activate", state.targetID}, {"Edit upstream name", v.Name}, {"Cycle adapter", emptyLabel(v.Adapter)}, {"Edit context window", optionalIntLabel(v.ContextWindow, "inherit/default")}, {"Cycle stream", optionalBoolLabel(v.Stream)}, {"Cycle tools", optionalBoolLabel(v.Capabilities.Tools)}, {"Cycle vision", optionalBoolLabel(v.Capabilities.Vision)}, {"Cycle reasoning", optionalBoolLabel(v.Capabilities.Reasoning)}, {"Cycle attachments", optionalBoolLabel(v.Capabilities.Attachment)}, {"Edit parameters", "advanced JSONC"}, {"Delete model", v.Provider}}
 	case configCenterAddModelProvider:
@@ -860,14 +1013,14 @@ func (m appModel) configCenterOptions() []configCenterOption {
 		}
 		return result
 	case configCenterActive:
-		ids := sortedModelRegistryIDs(snapshot.Document.Models)
-		result := make([]configCenterOption, 0, len(ids))
-		for _, id := range ids {
-			description := snapshot.Document.Models[id].Name
-			if id == snapshot.ActiveModelID {
+		selections := m.configCenterCatalogSelections(snapshot)
+		result := make([]configCenterOption, 0, len(selections))
+		for _, selection := range selections {
+			description := fmt.Sprintf("%s · %s", selection.Source, selection.ModelName)
+			if selection.ID == snapshot.ActiveModelID {
 				description = "active · " + description
 			}
-			result = append(result, configCenterOption{id, description})
+			result = append(result, configCenterOption{selection.ID, description})
 		}
 		return result
 	case configCenterCredentials:
@@ -942,7 +1095,7 @@ func (m appModel) renderConfigCenterBox() string {
 	if state.page == configCenterDiagnostics {
 		snapshot := m.configCenterController.Snapshot()
 		bodyWidth := m.modalPanelBodyWidth()
-		lines = append(lines, wrapStyledCellText(fmt.Sprintf("path: %s\nrevision: %d  ready: %v", m.configCenterController.ConfigPath(), snapshot.Revision, snapshot.Ready), bodyWidth)...)
+		lines = append(lines, wrapStyledCellText(fmt.Sprintf("path: %s\nrevision: %d  ready: %v\nregistered=%d effective=%d\n%s", m.configCenterController.ConfigPath(), snapshot.Revision, snapshot.Ready, len(snapshot.Document.Models), len(snapshot.EffectiveModels), discoveryStatusSummary(snapshot.Discovery, time.Now())), bodyWidth)...)
 		for _, diagnostic := range snapshot.Diagnostics {
 			lines = append(lines, wrapStyledCellText(fmt.Sprintf("[%s] %s %s", diagnostic.Severity, diagnostic.Field, diagnostic.Message), bodyWidth)...)
 		}
@@ -994,6 +1147,14 @@ func sortedProviderIDs(values map[string]configv2.Provider) []string {
 	return ids
 }
 func sortedModelRegistryIDs(values map[string]configv2.Model) []string {
+	ids := make([]string, 0, len(values))
+	for id := range values {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+func sortedCatalogModelIDs(values map[string]configv2.CatalogModel) []string {
 	ids := make([]string, 0, len(values))
 	for id := range values {
 		ids = append(ids, id)
