@@ -24,32 +24,56 @@ func (m appModel) configForProfile(profile model.Profile) model.Config {
 }
 
 // prepareModelWizardStep resolves the selected provider and creates the model
-// list for the second step of /model. The list comes from the persisted
-// profile configuration, so each configured endpoint can expose any model names.
+// list for the second step of /model. Config-v2 wizards use only the immutable
+// catalog selections captured when the wizard opened; legacy controllers keep
+// using their configured profile model names.
 func (m *appModel) prepareModelWizardStep() {
 	if m == nil || m.modelWizard == nil {
 		return
 	}
-	option := m.modelWizard.selectedProvider()
+	wizard := m.modelWizard
+	option := wizard.selectedProvider()
 	cfg := m.configForProfile(option.profile)
-	m.modelWizard.modelOptions = model.AvailableModels(cfg)
-	if len(m.modelWizard.modelOptions) == 0 && strings.TrimSpace(cfg.Model) != "" {
-		m.modelWizard.modelOptions = []string{cfg.Model}
+	wizard.modelOptions = nil
+	wizard.modelSelections = nil
+	if wizard.catalogBound {
+		for _, selection := range wizard.catalogSelections {
+			if selection.ProviderKey != option.id && selection.ProviderKey != option.profile.Provider {
+				continue
+			}
+			wizard.modelOptions = append(wizard.modelOptions, selection.ModelName)
+			wizard.modelSelections = append(wizard.modelSelections, selection)
+		}
+	} else {
+		wizard.modelOptions = model.AvailableModels(cfg)
+		if len(wizard.modelOptions) == 0 && strings.TrimSpace(cfg.Model) != "" {
+			wizard.modelOptions = []string{cfg.Model}
+		}
 	}
-	m.modelWizard.selectedModel = 0
-	for index, name := range m.modelWizard.modelOptions {
-		if name == cfg.Model {
-			m.modelWizard.selectedModel = index
+	wizard.selectedModel = 0
+	selectedActive := false
+	for index, selection := range wizard.modelSelections {
+		if selection.ID == wizard.catalogActiveID {
+			wizard.selectedModel = index
+			selectedActive = true
 			break
 		}
 	}
-	m.modelWizard.err = ""
+	if !selectedActive {
+		for index, name := range wizard.modelOptions {
+			if name == cfg.Model {
+				wizard.selectedModel = index
+				break
+			}
+		}
+	}
+	wizard.err = ""
 	// A profile with one available model does not need an extra stop. Profiles
-	// with multiple persisted models use the explicit second step.
-	if len(m.modelWizard.modelOptions) > 1 {
-		m.modelWizard.step = modelWizardModel
+	// with multiple models use the explicit second step.
+	if len(wizard.modelOptions) > 1 {
+		wizard.step = modelWizardModel
 	} else {
-		m.modelWizard.step = modelWizardConfirm
+		wizard.step = modelWizardConfirm
 	}
 }
 
@@ -132,29 +156,56 @@ func (m appModel) handleModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// applyModelWizardSelection 持久化并应用当前选中的 provider 配置。
+// applyModelWizardSelection persists and applies the selected model. A
+// config-v2 wizard activates the exact origin-bound catalog selection captured
+// for the displayed row; it never re-resolves provider/model text at confirm.
 func (m appModel) applyModelWizardSelection() appModel {
 	if m.modelWizard == nil {
 		return m
 	}
+	wizard := m.modelWizard
+	if wizard.catalogBound {
+		selection, ok := wizard.selectedCatalogSelection()
+		if !ok {
+			wizard.err = "selected model is unavailable"
+			return m
+		}
+		if m.configCenterController == nil {
+			wizard.err = "config-v2 controller is unavailable"
+			return m
+		}
+		if err := m.configCenterController.ActivateCatalogSelection(selection); err != nil {
+			wizard.err = err.Error()
+			return m
+		}
+		cfg := m.currentModelConfig()
+		m.syncRunnerModelContextLimit(cfg)
+		m.modelWizard = nil
+		m.addEntry(transcriptEntry{
+			kind:  entrySystem,
+			title: "model",
+			body:  fmt.Sprintf("id=%s provider=%s base=%s path=%s model=%s context=%d retries=%d key=%s", selection.ID, cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, model.EffectiveContextLimitTokens(cfg), cfg.RetryCount, cfg.APIKeyEnvName),
+		})
+		return m
+	}
 	if m.modelConfig == nil {
-		m.modelWizard.err = "model config controller is unavailable"
+		wizard.err = "model config controller is unavailable"
 		return m
 	}
 
-	option := m.modelWizard.selectedProvider()
+	option := wizard.selectedProvider()
 	cfg := m.configForProfile(option.profile)
-	if selected := m.modelWizard.selectedModelName(); selected != "" {
+	if selected := wizard.selectedModelName(); selected != "" {
 		cfg.Model = selected
 	}
 	if saver, ok := m.modelConfig.(ModelConfigSaver); ok {
 		if err := saver.SaveModelConfig(cfg); err != nil {
-			m.modelWizard.err = err.Error()
+			wizard.err = err.Error()
 			return m
 		}
 	}
 	if err := m.modelConfig.ApplyModelConfig(cfg); err != nil {
-		m.modelWizard.err = err.Error()
+		wizard.err = err.Error()
 		return m
 	}
 	m.syncRunnerModelContextLimit(cfg)

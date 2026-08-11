@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/charmbracelet/bubbles/textarea"
+	configv2 "paw/internal/config"
 	"paw/internal/loop"
 	"paw/internal/model"
 	"paw/internal/session"
@@ -245,12 +246,16 @@ type modelProviderOption struct {
 
 // modelWizard 保存 /model 交互向导的临时 UI 状态。
 type modelWizard struct {
-	step            modelWizardStep
-	providerOptions []modelProviderOption
-	selectedIndex   int
-	selectedModel   int
-	modelOptions    []string
-	err             string
+	step              modelWizardStep
+	providerOptions   []modelProviderOption
+	selectedIndex     int
+	selectedModel     int
+	modelOptions      []string
+	modelSelections   []configv2.CatalogSelection
+	catalogSelections []configv2.CatalogSelection
+	catalogActiveID   string
+	catalogBound      bool
+	err               string
 }
 
 type settingWizardStep int
@@ -292,7 +297,9 @@ type contextMeterAnimation struct {
 }
 
 // newModelWizard 根据当前配置创建 provider 选择向导，并默认选中当前 provider。
-func newModelWizard(current model.Config) *modelWizard {
+// When a config-v2 Snapshot is supplied, the wizard pins every displayed model
+// to the exact catalog identity, source, and revision observed at open time.
+func newModelWizard(current model.Config, snapshots ...configv2.Snapshot) *modelWizard {
 	options := modelProviderOptionsForConfig(current)
 	selected := 0
 	for i, option := range options {
@@ -301,11 +308,24 @@ func newModelWizard(current model.Config) *modelWizard {
 			break
 		}
 	}
-	return &modelWizard{
+	wizard := &modelWizard{
 		step:            modelWizardProvider,
 		providerOptions: options,
 		selectedIndex:   selected,
 	}
+	if len(snapshots) == 0 {
+		return wizard
+	}
+	snapshot := snapshots[0]
+	wizard.catalogBound = true
+	wizard.catalogActiveID = snapshot.ActiveModelID
+	for _, id := range sortedCatalogModelIDs(snapshot.EffectiveModels) {
+		selection, err := snapshot.CatalogSelection(id)
+		if err == nil {
+			wizard.catalogSelections = append(wizard.catalogSelections, selection)
+		}
+	}
+	return wizard
 }
 
 func modelProviderOptionsForConfig(current model.Config) []modelProviderOption {
@@ -352,6 +372,14 @@ func (w *modelWizard) selectedModelName() string {
 		return ""
 	}
 	return w.modelOptions[w.selectedModel]
+}
+
+func (w *modelWizard) selectedCatalogSelection() (configv2.CatalogSelection, bool) {
+	if w == nil || w.selectedModel < 0 || w.selectedModel >= len(w.modelSelections) {
+		return configv2.CatalogSelection{}, false
+	}
+	selection := w.modelSelections[w.selectedModel]
+	return selection, selection.ID != ""
 }
 
 func (w *modelWizard) selectedModelNameOr(fallback string) string {

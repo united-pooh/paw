@@ -516,6 +516,65 @@ func TestConfigCenterActiveRejectsCatalogSelectionThatChangedAfterDisplay(t *tes
 	}
 }
 
+func TestConfigCenterRecoversFromStaleModelActionAfterBackRefresh(t *testing.T) {
+	controller, _ := newConfigCenterHarnessWithDiscovery(t, []configv2.DiscoveredModel{{ProviderID: "local", Name: "live"}})
+	app := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	app.configCenterController = controller
+	app.openConfigCenter()
+	app.configCenter.page = configCenterModels
+	app.configCenter.selected = sortedIndex(sortedCatalogModelIDs(controller.Snapshot().EffectiveModels), "local/live")
+	_ = app.configCenterOptions()
+	app = app.advanceConfigCenter()
+	if app.configCenter.page != configCenterModelActions || app.configCenter.targetSelection.Source != configv2.ModelSourceDiscovered {
+		t.Fatalf("initial discovered action state=%#v", app.configCenter)
+	}
+
+	before := controller.Snapshot()
+	if _, err := controller.UpdateConfig(context.Background(), before.Revision, []configv2.Operation{
+		configv2.UpsertModel("local/live", configv2.Model{Provider: "local", Name: "replacement"}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	current := controller.Snapshot()
+
+	app = app.advanceConfigCenter()
+	if !strings.Contains(app.configCenter.err, "revision conflict") {
+		t.Fatalf("stale action error=%q", app.configCenter.err)
+	}
+
+	app.configCenterBack()
+	if app.configCenter.page != configCenterModels || app.configCenter.revision != current.Revision {
+		t.Fatalf("back refresh state=%#v current revision=%d", app.configCenter, current.Revision)
+	}
+	options := app.configCenterOptions()
+	freshIndex := sortedIndex(sortedCatalogModelIDs(current.EffectiveModels), "local/live")
+	if freshIndex >= len(options) || !strings.Contains(options[freshIndex].description, "configured") || !strings.Contains(options[freshIndex].description, "replacement") {
+		t.Fatalf("refreshed catalog options=%#v", options)
+	}
+
+	app.configCenter.selected = freshIndex
+	app = app.advanceConfigCenter()
+	app.configCenter.selected = 1
+	app = app.advanceConfigCenter()
+	if app.configCenter.page != configCenterEdit {
+		t.Fatalf("fresh edit did not open: %#v", app.configCenter)
+	}
+	app.configCenter.editValue = "replacement-edited"
+	app.finishConfigEdit(true)
+	if app.configCenter.err != "" {
+		t.Fatalf("fresh edit failed after recovery: %#v", app.configCenter)
+	}
+	if got := controller.Snapshot().Document.Models["local/live"].Name; got != "replacement-edited" {
+		t.Fatalf("edited model name=%q", got)
+	}
+
+	app.configCenter.selected = 0
+	app = app.advanceConfigCenter()
+	if app.configCenter.err != "" || controller.Snapshot().ActiveModelID != "local/live" {
+		t.Fatalf("fresh activation failed: state=%#v active=%q", app.configCenter, controller.Snapshot().ActiveModelID)
+	}
+}
+
 func TestConfigCenterDiscoveredModelActionsOnlyActivateAndRegister(t *testing.T) {
 	controller, _ := newConfigCenterHarnessWithDiscovery(t, []configv2.DiscoveredModel{{ProviderID: "local", Name: "live"}})
 	recorder := &recordingCatalogController{Controller: controller}
@@ -604,6 +663,87 @@ func TestConfigStatusAndDiagnosticsShowSanitizedDiscoveryStatus(t *testing.T) {
 		if strings.Contains(diagnostics, forbidden) || strings.Contains(status, forbidden) {
 			t.Fatalf("discovery status leaked %q: status=%q diagnostics=%q", forbidden, status, diagnostics)
 		}
+	}
+}
+
+type fixedSnapshotConfigCenterController struct {
+	ConfigCenterController
+	snapshot configv2.Snapshot
+}
+
+func (c *fixedSnapshotConfigCenterController) Snapshot() configv2.Snapshot {
+	return c.snapshot.Clone()
+}
+
+func TestDiscoveryStatusSanitizesAllTextFieldsAndTruncatesByCells(t *testing.T) {
+	controller, _ := newConfigCenterHarness(t)
+	snapshot := controller.Snapshot()
+	snapshot.Discovery = configv2.DiscoveryStatus{
+		Source:        "li\x1b[2Jve\nSOURCE_LINE",
+		ProviderID:    "loc\x1b]0;owned\x07al\nPROVIDER_LINE",
+		CacheState:    "mat\u009b2Jched\r\nCACHE_LINE",
+		SkippedReason: "dis\x00abled\tSKIP_LINE",
+		LastError:     "bad\x1bPignored\x1b\\\nERROR_LINE\x07",
+	}
+	wrapped := &fixedSnapshotConfigCenterController{ConfigCenterController: controller, snapshot: snapshot}
+	app := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	app.configCenterController = wrapped
+	app.ready = true
+	app.width = 160
+	app.height = 40
+	app.relayout()
+
+	app.handleCommand("/config status")
+	status := app.transcript[len(app.transcript)-1].body
+	if got := strings.Count(status, "\n"); got != 5 {
+		t.Fatalf("status contains injected lines (%d newlines): %q", got, status)
+	}
+	for _, want := range []string{
+		"source=live SOURCE_LINE",
+		"provider=local PROVIDER_LINE",
+		"cache=matched CACHE_LINE",
+		"skip=disabled SKIP_LINE",
+		"error=bad ERROR_LINE",
+	} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("sanitized status missing %q: %q", want, status)
+		}
+	}
+	for _, r := range status {
+		if r == '\n' {
+			continue
+		}
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+			t.Fatalf("status retained control %U: %q", r, status)
+		}
+	}
+	for _, forbidden := range []string{"\x1b[2J", "\x1b]", "\x1bP", "\x07", "\u009b", "\x00"} {
+		if strings.Contains(status, forbidden) {
+			t.Fatalf("status retained control sequence %q: %q", forbidden, status)
+		}
+	}
+
+	app.openConfigCenter()
+	app.configCenter.page = configCenterDiagnostics
+	rendered := app.renderConfigCenterBox()
+	for _, forbidden := range []string{"\x1b[2J", "\x1b]", "\x1bP", "\x07", "\u009b", "\x00"} {
+		if strings.Contains(rendered, forbidden) {
+			t.Fatalf("rendered diagnostics retained injected sequence %q: %q", forbidden, rendered)
+		}
+	}
+	plain := ansi.Strip(rendered)
+	for _, r := range plain {
+		if r == '\n' {
+			continue
+		}
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+			t.Fatalf("rendered diagnostics retained control %U: %q", r, plain)
+		}
+	}
+
+	wide := safeDiscoveryStatusLabel(strings.Repeat("界", 130))
+	if width := terminalCellWidth(wide); width > 240 || !strings.HasSuffix(wide, "…") {
+		t.Fatalf("cell-truncated label width=%d value=%q", width, wide)
 	}
 }
 

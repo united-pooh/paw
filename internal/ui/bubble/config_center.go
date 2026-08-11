@@ -174,12 +174,12 @@ func configStatusSummary(snapshot configv2.Snapshot) string {
 func discoveryStatusSummary(status configv2.DiscoveryStatus, now time.Time) string {
 	return fmt.Sprintf(
 		"discovery source=%s provider=%s discovered=%d filtered=%d effective=%d cache=%s attempted=%t cacheProviders=%d attemptedAt=%s succeededAt=%s discoveredAt=%s age=%s skip=%s error=%s",
-		emptyLabel(status.Source),
-		emptyLabel(status.ProviderID),
+		safeDiscoveryStatusLabel(status.Source),
+		safeDiscoveryStatusLabel(status.ProviderID),
 		status.DiscoveredCount,
 		status.FilteredCount,
 		status.EffectiveCount,
-		emptyLabel(status.CacheState),
+		safeDiscoveryStatusLabel(status.CacheState),
 		status.Attempted,
 		status.CacheProviders,
 		discoveryTimeLabel(status.AttemptedAt),
@@ -213,16 +213,12 @@ func discoveryAgeLabel(discoveredAt, now time.Time) string {
 }
 
 func safeDiscoveryStatusLabel(value string) string {
-	value = strings.Join(strings.Fields(value), " ")
+	value = strings.Join(strings.Fields(sanitizeTerminalText(value)), " ")
 	if value == "" {
 		return "(none)"
 	}
-	const maximumRunes = 240
-	runes := []rune(value)
-	if len(runes) > maximumRunes {
-		value = string(runes[:maximumRunes-1]) + "…"
-	}
-	return value
+	const maximumCells = 240
+	return truncateStyledCellLine(value, maximumCells)
 }
 
 func emptyLabel(value string) string {
@@ -280,7 +276,7 @@ func (m *appModel) configCenterBack() {
 	case configCenterProviderActions, configCenterAddProvider:
 		m.configCenter.page = configCenterProviders
 	case configCenterModelActions, configCenterAddModelProvider:
-		m.configCenter.page = configCenterModels
+		m.refreshConfigCenterCatalog(configCenterModels)
 	case configCenterCredentialActions:
 		m.configCenter.page = configCenterCredentials
 	case configCenterModels, configCenterActive:
@@ -317,11 +313,9 @@ func (m appModel) advanceConfigCenter() appModel {
 		case 1:
 			state.page = configCenterProviders
 		case 2:
-			state.invalidateCatalog()
-			state.page = configCenterModels
+			m.refreshConfigCenterCatalog(configCenterModels)
 		case 3:
-			state.invalidateCatalog()
-			state.page = configCenterActive
+			m.refreshConfigCenterCatalog(configCenterActive)
 		case 4:
 			state.page = configCenterCredentials
 		case 5:
@@ -931,6 +925,23 @@ func (state *configCenterState) invalidateCatalog() {
 	}
 	state.catalogLoaded = false
 	state.catalogSelections = nil
+}
+
+// refreshConfigCenterCatalog re-enters a top-level catalog page from a fresh
+// controller Snapshot. This is the normal recovery path after an optimistic
+// concurrency rejection: stale row identities are discarded and subsequent
+// edits use the current revision without closing the Configuration Center.
+func (m *appModel) refreshConfigCenterCatalog(page configCenterPage) {
+	state := m.configCenter
+	if state == nil || m.configCenterController == nil {
+		return
+	}
+	snapshot := m.configCenterController.Snapshot()
+	state.revision = snapshot.Revision
+	state.page = page
+	state.targetSelection = configv2.CatalogSelection{}
+	state.invalidateCatalog()
+	state.catalogSelections = m.configCenterCatalogSelections(snapshot)
 }
 
 func (m appModel) configCenterCatalogSelections(snapshot configv2.Snapshot) []configv2.CatalogSelection {

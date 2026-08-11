@@ -22,7 +22,11 @@ func (m *appModel) handleModelCommand(invocation string) tea.Cmd {
 	args := strings.TrimSpace(commandArgs(invocation))
 	switch args {
 	case "":
-		m.modelWizard = newModelWizard(m.currentModelConfig())
+		if m.configCenterController != nil {
+			m.modelWizard = newModelWizard(m.currentModelConfig(), m.configCenterController.Snapshot())
+		} else {
+			m.modelWizard = newModelWizard(m.currentModelConfig())
+		}
 		m.pending = nil
 	case "status":
 		cfg := m.currentModelConfig()

@@ -3,9 +3,11 @@ package bubble
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	configv2 "paw/internal/config"
 	modelcfg "paw/internal/model"
 )
 
@@ -106,5 +108,47 @@ func TestModelWizardAppliesCurrentModelMissingFromModels(t *testing.T) {
 	}
 	if got := controller.applied[0]; got.Model != "orphan-model" || !reflect.DeepEqual(got.ExtraBody, orphanExtra) || !reflect.DeepEqual(got.ModelExtraBody, orphanModelExtra) {
 		t.Fatalf("applied config = %#v", got)
+	}
+}
+
+func TestModelWizardRejectsDiscoveredSelectionRemappedBeforeConfirmation(t *testing.T) {
+	controller, _ := newConfigCenterHarnessWithDiscovery(t, []configv2.DiscoveredModel{{ProviderID: "local", Name: "live"}})
+	recorder := &recordingCatalogController{Controller: controller}
+	app := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	app.configCenterController = recorder
+
+	app.handleCommand("/model")
+	if app.modelWizard == nil {
+		t.Fatal("/model did not open the wizard")
+	}
+	app = advanceModelWizard(t, app, tea.KeyMsg{Type: tea.KeyEnter})
+	liveIndex := sortedIndex(app.modelWizard.modelOptions, "live")
+	if liveIndex >= len(app.modelWizard.modelOptions) || app.modelWizard.modelOptions[liveIndex] != "live" {
+		t.Fatalf("displayed model options=%#v", app.modelWizard.modelOptions)
+	}
+	app.modelWizard.selectedModel = liveIndex
+	app = advanceModelWizard(t, app, tea.KeyMsg{Type: tea.KeyEnter})
+	observed := controller.Snapshot()
+
+	if _, err := controller.UpdateConfig(context.Background(), observed.Revision, []configv2.Operation{
+		configv2.UpsertModel("local/remapped", configv2.Model{Provider: "local", Name: "live"}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	app = advanceModelWizard(t, app, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if app.modelWizard == nil || !strings.Contains(app.modelWizard.err, "revision conflict") {
+		t.Fatalf("wizard stale-selection state=%#v", app.modelWizard)
+	}
+	if len(recorder.selections) != 1 {
+		t.Fatalf("activation selections=%#v", recorder.selections)
+	}
+	selection := recorder.selections[0]
+	if selection.Revision != observed.Revision || selection.ID != "local/live" || selection.ProviderKey != "local" || selection.ModelName != "live" || selection.Source != configv2.ModelSourceDiscovered {
+		t.Fatalf("activation selection=%#v observed revision=%d", selection, observed.Revision)
+	}
+	if got := controller.Snapshot().ActiveModelID; got != "local/one" {
+		t.Fatalf("stale wizard silently activated %q", got)
 	}
 }
