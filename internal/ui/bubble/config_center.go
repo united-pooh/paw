@@ -899,9 +899,10 @@ func (m appModel) renderConfigCenterBox() string {
 	}
 	if state.page == configCenterDiagnostics {
 		snapshot := m.configCenterController.Snapshot()
-		lines = append(lines, fmt.Sprintf("path: %s\nrevision: %d  ready: %v", m.configCenterController.ConfigPath(), snapshot.Revision, snapshot.Ready))
+		bodyWidth := m.modalPanelBodyWidth()
+		lines = append(lines, wrapStyledCellText(fmt.Sprintf("path: %s\nrevision: %d  ready: %v", m.configCenterController.ConfigPath(), snapshot.Revision, snapshot.Ready), bodyWidth)...)
 		for _, diagnostic := range snapshot.Diagnostics {
-			lines = append(lines, fmt.Sprintf("[%s] %s %s", diagnostic.Severity, diagnostic.Field, diagnostic.Message))
+			lines = append(lines, wrapStyledCellText(fmt.Sprintf("[%s] %s %s", diagnostic.Severity, diagnostic.Field, diagnostic.Message), bodyWidth)...)
 		}
 	}
 	if state.err != "" {

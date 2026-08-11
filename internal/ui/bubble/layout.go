@@ -337,14 +337,25 @@ func widestStyledLine(text string) int {
 }
 
 // renderModalPanel 将 modal 限制在 transcript 区域内，内容过长时进行显示层裁剪。
-func (m appModel) renderModalPanel(body string) string {
+func (m appModel) modalPanelWidth() int {
 	layout := m.currentLayout()
 	availableWidth := maxInt(1, layout.contentWidth-4)
-	availableHeight := maxInt(1, layout.transcriptHeight-2)
 	panelWidth := minInt(80, availableWidth)
 	if availableWidth >= 32 {
 		panelWidth = maxInt(32, panelWidth)
 	}
+	return panelWidth
+}
+
+func (m appModel) modalPanelBodyWidth() int {
+	styleWidth := maxInt(1, m.modalPanelWidth()-wizardPanelStyle.GetHorizontalBorderSize())
+	return maxInt(1, styleWidth-wizardPanelStyle.GetHorizontalPadding())
+}
+
+func (m appModel) renderModalPanel(body string) string {
+	layout := m.currentLayout()
+	availableHeight := maxInt(1, layout.transcriptHeight-2)
+	panelWidth := m.modalPanelWidth()
 	naturalHeight := lipgloss.Height(body) + modalPanelVerticalFrame
 	panelHeight := minInt(availableHeight, maxInt(modalPanelVerticalFrame+1, naturalHeight))
 	return renderFixedStyledPanel(wizardPanelStyle, panelWidth, panelHeight, body)

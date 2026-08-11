@@ -133,7 +133,7 @@ Paw/
 1. `auth.credential` 指向的系统凭据库；
 2. `auth.env` 中第一个非空环境变量。
 
-Windows 使用 Credential Manager。没有可用 Secret Service 的 Linux 环境只使用 env。配置、界面和日志不会写入或回显完整密钥。
+macOS 使用 Security.framework Keychain；`CGO_ENABLED=0` 的 macOS 构建回退为 env。Windows 使用 Credential Manager。没有可用 Secret Service 的 Linux 环境只使用 env。配置、界面和日志不会写入或回显完整密钥。
 
 可以在 `/config` → Credentials 中写入、替换或删除 keyring 项。删除活动 Provider 的最后一个凭据前，需要先切换模型或配置有效的 env fallback，避免运行时继续依赖已经撤销的连接。
 

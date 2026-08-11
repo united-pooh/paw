@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+
 	configv2 "paw/internal/config"
 	modelcfg "paw/internal/model"
 )
@@ -86,6 +89,64 @@ func TestConfigCenterBackFromHomeClosesWithoutPanic(t *testing.T) {
 
 	if model.configCenter != nil {
 		t.Fatalf("config center remained open: %#v", model.configCenter)
+	}
+}
+
+func TestConfigCenterDiagnosticsWrapLongMigrationError(t *testing.T) {
+	for _, name := range []string{"PAW_MODEL", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "OLLAMA_HOST", "OLLAMA_MODEL"} {
+		t.Setenv(name, "")
+	}
+	root := t.TempDir()
+	paths, err := configv2.ResolvePaths(configv2.PathOptions{
+		ConfigHome:    filepath.Join(root, "Paw"),
+		UserHomeDir:   filepath.Join(root, "home"),
+		WorkspaceRoot: filepath.Join(root, "work"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(paths.LegacyHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"schemaVersion":1,"modelProfiles":[{"id":"deepseek","provider":"deepseek","apiKey":"fixture-secret","models":["deepseek-chat"]}]}`
+	if err := os.WriteFile(paths.LegacyConfig, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := configv2.Open(context.Background(), configv2.Options{
+		Paths:        paths,
+		Credentials:  &configv2.FakeCredentialStore{Unavailable: true},
+		DisableWatch: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := modelcfg.NewClient(manager.Snapshot().Active)
+	controller := configv2.NewController(manager, client)
+	t.Cleanup(func() { _ = controller.Close() })
+
+	model := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	model.configCenterController = controller
+	model.ready = true
+	model.width = 100
+	model.height = 30
+	model.relayout()
+	model.openConfigCenter()
+	if model.configCenter.page != configCenterDiagnostics {
+		t.Fatalf("page=%v, want diagnostics", model.configCenter.page)
+	}
+
+	rendered := ansi.Strip(model.renderConfigCenterBox())
+	if strings.Contains(rendered, "fixture-secret") {
+		t.Fatalf("diagnostics leaked credential: %q", rendered)
+	}
+	compact := strings.NewReplacer(" ", "", "\n", "", "│", "").Replace(rendered)
+	if !strings.Contains(compact, "configureanenvironmentvariableandretry") {
+		t.Fatalf("diagnostic tail was clipped:\n%s", rendered)
+	}
+	for index, line := range strings.Split(rendered, "\n") {
+		if got := lipgloss.Width(line); got > 80 {
+			t.Fatalf("line %d width=%d, want <=80: %q", index+1, got, line)
+		}
 	}
 }
 
