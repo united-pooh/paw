@@ -35,3 +35,15 @@ func TestResolvePathsUsesInjectedUserConfigDirectory(t *testing.T) {
 		t.Fatalf("config=%q want=%q", paths.GlobalConfig, want)
 	}
 }
+
+func TestResolvePathsIncludesModelDiscoveryCache(t *testing.T) {
+	root := t.TempDir()
+	paths, err := ResolvePaths(PathOptions{ConfigHome: root, UserHomeDir: filepath.Join(root, "home")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(root, "model-discovery-cache.json")
+	if paths.ModelDiscoveryCache != want {
+		t.Fatalf("model discovery cache=%q want=%q", paths.ModelDiscoveryCache, want)
+	}
+}

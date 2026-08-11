@@ -8,18 +8,19 @@ import (
 )
 
 type Paths struct {
-	Home            string
-	GlobalConfig    string
-	Settings        string
-	MCP             string
-	Skills          string
-	Schemas         string
-	Schema          string
-	MigrationMarker string
-	LegacyHome      string
-	LegacyConfig    string
-	WorkspaceRoot   string
-	WorkspaceConfig string
+	Home                string
+	GlobalConfig        string
+	Settings            string
+	MCP                 string
+	Skills              string
+	Schemas             string
+	Schema              string
+	MigrationMarker     string
+	ModelDiscoveryCache string
+	LegacyHome          string
+	LegacyConfig        string
+	WorkspaceRoot       string
+	WorkspaceConfig     string
 }
 
 // PathOptions makes path behavior deterministic in tests and keeps callers
@@ -61,16 +62,17 @@ func ResolvePaths(options PathOptions) (Paths, error) {
 	}
 	legacyHome := filepath.Join(userHome, ".paw")
 	paths := Paths{
-		Home:            root,
-		GlobalConfig:    filepath.Join(root, "config.jsonc"),
-		Settings:        filepath.Join(root, "settings.json"),
-		MCP:             filepath.Join(root, "mcp.toml"),
-		Skills:          filepath.Join(root, "skills"),
-		Schemas:         filepath.Join(root, "schemas"),
-		Schema:          filepath.Join(root, "schemas", "config-v2.schema.json"),
-		MigrationMarker: filepath.Join(root, ".migration-v2.json"),
-		LegacyHome:      legacyHome,
-		LegacyConfig:    filepath.Join(legacyHome, "config.json"),
+		Home:                root,
+		GlobalConfig:        filepath.Join(root, "config.jsonc"),
+		Settings:            filepath.Join(root, "settings.json"),
+		MCP:                 filepath.Join(root, "mcp.toml"),
+		Skills:              filepath.Join(root, "skills"),
+		Schemas:             filepath.Join(root, "schemas"),
+		Schema:              filepath.Join(root, "schemas", "config-v2.schema.json"),
+		MigrationMarker:     filepath.Join(root, ".migration-v2.json"),
+		ModelDiscoveryCache: filepath.Join(root, "model-discovery-cache.json"),
+		LegacyHome:          legacyHome,
+		LegacyConfig:        filepath.Join(legacyHome, "config.json"),
 	}
 	if work := strings.TrimSpace(options.WorkspaceRoot); work != "" {
 		work, err = filepath.Abs(work)
