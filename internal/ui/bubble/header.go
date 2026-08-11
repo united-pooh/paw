@@ -9,7 +9,6 @@
 package bubble
 
 import (
-	"fmt"
 	"strings"
 	"time"
 )
@@ -54,16 +53,12 @@ func renderHeader(s headerSnapshot, width int) string {
 }
 
 // formatTurnTimer 把轮次耗时格式化为 header 用字符串。
-// 运行中的短任务显示秒数，超过一分钟显示 mm:ss。
+// 不足一分钟显示秒数，不足一小时显示 MmSSs，更长任务显示 HhMMmSSs。
 func formatTurnTimer(startedAt, now time.Time) string {
 	if startedAt.IsZero() || now.Before(startedAt) {
 		return "0s"
 	}
-	seconds := int(now.Sub(startedAt) / time.Second)
-	if seconds < 60 {
-		return fmt.Sprintf("%ds", seconds)
-	}
-	return fmt.Sprintf("%dm%02ds", seconds/60, seconds%60)
+	return formatTurnSeconds(int64(now.Sub(startedAt) / time.Second))
 }
 
 // collectHeaderData 从现有 provider 读出 header 数据快照。这是 UI 与数据源的

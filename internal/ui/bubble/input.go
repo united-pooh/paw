@@ -271,7 +271,8 @@ func (m appModel) submitGoal(line string) (tea.Model, tea.Cmd) {
 		m.addEntry(transcriptEntry{kind: entryError, title: "goal", body: err.Error()})
 		return m, nil
 	}
-	m.addEntry(transcriptEntry{kind: entrySystem, title: "goal", body: "started " + id + "\nobjective: " + line})
+	m.addEntry(m.userTranscriptEntry("you (goal)", line))
+	m.addEntry(transcriptEntry{kind: entrySystem, title: "goal", body: "started " + id})
 	m.inputSource = inputSourceFresh
 	m.goalWorking = true
 	m.turnStartedAt = time.Now()

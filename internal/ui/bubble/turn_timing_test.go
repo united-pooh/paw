@@ -48,6 +48,38 @@ func TestFormatTurnFooter(t *testing.T) {
 	}
 }
 
+func TestFormatTurnDurationHourBoundaries(t *testing.T) {
+	tests := []struct {
+		name       string
+		durationMS int64
+		want       string
+	}{
+		{name: "before hour", durationMS: 3_599_000, want: "59m59s"},
+		{name: "one hour", durationMS: 3_600_000, want: "1h00m00s"},
+		{name: "nine hours", durationMS: int64((9*time.Hour + 5*time.Minute + 7*time.Second) / time.Millisecond), want: "9h05m07s"},
+		{name: "beyond one day", durationMS: int64((27*time.Hour + 5*time.Minute + 7*time.Second) / time.Millisecond), want: "27h05m07s"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := formatTurnDuration(test.durationMS); got != test.want {
+				t.Fatalf("formatTurnDuration(%d) = %q, want %q", test.durationMS, got, test.want)
+			}
+		})
+	}
+}
+
+func TestFormatTurnFooterSupportsNineHours(t *testing.T) {
+	response := time.Date(2026, 7, 30, 23, 47, 47, 0, time.UTC)
+	got := formatTurnFooter(session.TurnMetadata{
+		DurationMS: int64(9 * time.Hour / time.Millisecond),
+		ResponseAt: &response,
+	})
+	want := "9h00m00s  " + response.Local().Format("03:04:05 PM")
+	if got != want {
+		t.Fatalf("formatTurnFooter() = %q, want %q", got, want)
+	}
+}
+
 func TestRenderAssistantTurnFooter(t *testing.T) {
 	rebuildLegacyStyles()
 	response := time.Date(2026, 7, 30, 23, 47, 47, 0, time.UTC)

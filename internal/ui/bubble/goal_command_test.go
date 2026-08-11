@@ -2,11 +2,15 @@ package bubble
 
 import (
 	"context"
-	"paw/internal/subagent"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
+
+	"paw/internal/subagent"
 )
 
 type fakeGoalController struct {
@@ -99,6 +103,105 @@ func TestGoalCommandRejectsEmptyStart(t *testing.T) {
 	}
 	if len(model.transcript) <= before {
 		t.Fatal("expected usage feedback")
+	}
+}
+
+func TestGoalModeSubmitPreservesTokenizedTranscript(t *testing.T) {
+	tests := []struct {
+		name  string
+		raw   string
+		kind  inputTokenKind
+		start int
+		label string
+	}{
+		{name: "command", raw: "/help", kind: inputTokenCommand, start: 0, label: "help"},
+		{name: "file", raw: "read @README.md", kind: inputTokenFile, start: len([]rune("read ")), label: "README.md"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			model := newTestModel(&fakeRunner{})
+			model.ready = true
+			model.width = 80
+			model.height = 20
+			model.goalMode = true
+			controller := &fakeGoalController{}
+			model.goalController = controller
+			model.input.SetValue(test.raw)
+			model.inputTokens = []inputToken{{
+				Kind:  test.kind,
+				Start: test.start,
+				End:   len([]rune(test.raw)),
+				Label: test.label,
+			}}
+
+			next, _ := model.handleSubmit()
+			model = next.(appModel)
+			if len(controller.started) != 1 || controller.started[0] != test.raw {
+				t.Fatalf("controller.started = %#v, want raw objective %q", controller.started, test.raw)
+			}
+			if model.input.Value() != "" || len(model.inputTokens) != 0 {
+				t.Fatalf("submitted input retained state: value=%q tokens=%#v", model.input.Value(), model.inputTokens)
+			}
+			if len(model.transcript) < 2 {
+				t.Fatalf("transcript = %#v, want objective and start confirmation", model.transcript)
+			}
+			objective := model.transcript[len(model.transcript)-2]
+			confirmation := model.transcript[len(model.transcript)-1]
+			if objective.kind != entryUser || objective.title != "you (goal)" || objective.body != test.raw {
+				t.Fatalf("goal objective entry = %#v", objective)
+			}
+			if len(objective.inputTokens) != 1 {
+				t.Fatalf("goal objective tokens = %#v, want one token", objective.inputTokens)
+			}
+			token := objective.inputTokens[0]
+			if token.Kind != test.kind || token.Start != test.start || token.End != len([]rune(test.raw)) || token.Label != test.label {
+				t.Fatalf("goal objective token = %#v", token)
+			}
+			rendered := renderEntry(objective, 80)
+			plain := ansi.Strip(rendered)
+			if !strings.Contains(plain, test.label) || strings.Contains(plain, test.raw) {
+				t.Fatalf("rendered goal objective = %q, want label without raw syntax %q", plain, test.raw)
+			}
+			if !strings.Contains(rendered, inputTokenStyleFor(test.kind).Render(test.label)) {
+				t.Fatalf("rendered goal objective missed token style: %q", rendered)
+			}
+			if confirmation.kind != entrySystem || confirmation.title != "goal" || confirmation.body != "started goal-1" {
+				t.Fatalf("goal confirmation entry = %#v", confirmation)
+			}
+			if strings.Contains(confirmation.body, "objective:") || strings.Contains(confirmation.body, test.raw) {
+				t.Fatalf("goal confirmation leaked objective: %q", confirmation.body)
+			}
+			if !model.goalWorking || model.turnStartedAt.IsZero() || model.turnID != "goal-1" {
+				t.Fatalf("goal state = working:%v started:%v turnID:%q", model.goalWorking, model.turnStartedAt, model.turnID)
+			}
+		})
+	}
+}
+
+func TestGoalModeSubmitFailureDoesNotRecordSuccessfulObjective(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.goalMode = true
+	controller := &fakeGoalController{err: errors.New("start failed")}
+	model.goalController = controller
+	model.input.SetValue("read @README.md")
+	model.inputTokens = []inputToken{{Kind: inputTokenFile, Start: len([]rune("read ")), End: len([]rune("read @README.md")), Label: "README.md"}}
+
+	next, _ := model.handleSubmit()
+	model = next.(appModel)
+	if len(controller.started) != 1 || controller.started[0] != "read @README.md" {
+		t.Fatalf("controller.started = %#v", controller.started)
+	}
+	for _, entry := range model.transcript {
+		if entry.kind == entryUser && entry.title == "you (goal)" {
+			t.Fatalf("failure recorded successful goal objective: %#v", entry)
+		}
+		if entry.kind == entrySystem && strings.HasPrefix(entry.body, "started ") {
+			t.Fatalf("failure recorded start confirmation: %#v", entry)
+		}
+	}
+	if model.goalWorking || !model.turnStartedAt.IsZero() || model.turnID != "" {
+		t.Fatalf("failure entered working state: working=%v started=%v turnID=%q", model.goalWorking, model.turnStartedAt, model.turnID)
 	}
 }
 
