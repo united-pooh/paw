@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -139,7 +140,12 @@ func migrateLegacy(ctx context.Context, paths Paths, store CredentialStore) (boo
 	if err != nil {
 		return false, nil, err
 	}
-	if err := atomicWriteFile(paths.GlobalConfig, encoded, 0o600); err != nil {
+	if err := atomicWriteNewConfigFile(paths.GlobalConfig, encoded, 0o600); err != nil {
+		if errors.Is(err, ErrRevisionConflict) {
+			if _, statErr := os.Stat(paths.GlobalConfig); statErr == nil {
+				return false, nil, nil
+			}
+		}
 		return false, nil, err
 	}
 	if err := atomicWriteFile(filepath.Join(paths.Home, "config-v1.backup.json"), raw, 0o600); err != nil {

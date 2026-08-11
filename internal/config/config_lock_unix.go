@@ -1,0 +1,34 @@
+//go:build darwin || dragonfly || freebsd || linux || netbsd || openbsd || solaris
+
+package config
+
+import (
+	"os"
+
+	"golang.org/x/sys/unix"
+)
+
+func acquireConfigWriteLock(configPath string) (func(), error) {
+	lockFile, err := os.OpenFile(configPath+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := lockFile.Chmod(0o600); err != nil {
+		_ = lockFile.Close()
+		return nil, err
+	}
+	for {
+		err = unix.Flock(int(lockFile.Fd()), unix.LOCK_EX)
+		if err != unix.EINTR {
+			break
+		}
+	}
+	if err != nil {
+		_ = lockFile.Close()
+		return nil, err
+	}
+	return func() {
+		_ = unix.Flock(int(lockFile.Fd()), unix.LOCK_UN)
+		_ = lockFile.Close()
+	}, nil
+}

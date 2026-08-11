@@ -66,7 +66,8 @@ type Manager struct {
 	debounce                    time.Duration
 	discoverer                  ModelDiscoverer
 	discoveryCacheWriter        func(string, discoveryCacheFile) error
-	configWriter                func(string, []byte, os.FileMode) error
+	configWriter                configCASWriter
+	configWriteHook             func() error
 	disableModelDiscovery       bool
 	retainedDiscoveries         map[string]retainedDiscovery
 	pendingDiscovery            *pendingDiscovery
@@ -139,8 +140,13 @@ func openManager(ctx context.Context, options Options, cacheWriter func(string, 
 		if err != nil {
 			return nil, err
 		}
-		if err := atomicWriteFile(paths.GlobalConfig, raw, 0o600); err != nil {
-			return nil, fmt.Errorf("create starter config: %w", err)
+		if err := atomicWriteNewConfigFile(paths.GlobalConfig, raw, 0o600); err != nil {
+			if !errors.Is(err, ErrRevisionConflict) {
+				return nil, fmt.Errorf("create starter config: %w", err)
+			}
+			if _, statErr := os.Stat(paths.GlobalConfig); statErr != nil {
+				return nil, fmt.Errorf("create starter config: %w", err)
+			}
 		}
 	} else if err != nil && !os.IsNotExist(err) {
 		return nil, err
@@ -152,7 +158,7 @@ func openManager(ctx context.Context, options Options, cacheWriter func(string, 
 		debounce:              options.Debounce,
 		discoverer:            options.Discoverer,
 		discoveryCacheWriter:  cacheWriter,
-		configWriter:          atomicWriteFile,
+		configWriter:          atomicWriteConfigFileCAS,
 		disableModelDiscovery: options.DisableModelDiscovery,
 		retainedDiscoveries:   map[string]retainedDiscovery{},
 		discoveryCache:        emptyDiscoveryCache(),
@@ -1177,9 +1183,20 @@ func (m *Manager) commitUpdate(ctx context.Context, expectedRevision uint64, ope
 	}
 	writer := m.configWriter
 	if writer == nil {
-		writer = atomicWriteFile
+		writer = atomicWriteConfigFileCAS
 	}
-	if err := writer(m.paths.GlobalConfig, raw, 0o600); err != nil {
+	expectedGlobal := configFileState{exists: base.globalConfigExists, raw: append([]byte(nil), base.Raw...)}
+	if err := writer(configCASWriteRequest{
+		path:           m.paths.GlobalConfig,
+		data:           raw,
+		mode:           0o600,
+		expectedGlobal: expectedGlobal,
+		validateFileStates: func() error {
+			_, err := m.verifyConfigFilesUnchanged(base)
+			return err
+		},
+		beforeFinalValidation: m.configWriteHook,
+	}); err != nil {
 		return Snapshot{}, err
 	}
 	m.publish(candidate)

@@ -297,6 +297,17 @@ func assertControllerRuntimeRestored(t *testing.T, harness controllerTestHarness
 	}
 }
 
+func assertNoPendingConfigTemps(t *testing.T, configPath string) {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(configPath), ".paw-config-*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary config files survived failed CAS commit: %#v", matches)
+	}
+}
+
 func TestControllerRejectsModelsOutsideEffectiveCatalogWithoutSideEffects(t *testing.T) {
 	t.Run("unknown ID", func(t *testing.T) {
 		harness := newControllerTestHarness(t, controllerDiscoveryDocument(Auth{}), []DiscoveredModel{{ProviderID: "local", Name: "a"}}, nil)
@@ -345,7 +356,7 @@ func TestControllerActivationValidationFailureLeavesStateUnchanged(t *testing.T)
 func TestControllerActivationWriteFailureRollsBackRuntime(t *testing.T) {
 	harness := newControllerTestHarness(t, controllerDiscoveryDocument(Auth{}), []DiscoveredModel{{ProviderID: "local", Name: "a"}}, nil)
 	before := captureControllerState(t, harness)
-	harness.manager.configWriter = func(string, []byte, os.FileMode) error {
+	harness.manager.configWriter = func(configCASWriteRequest) error {
 		return errors.New("forced config write failure")
 	}
 
@@ -401,12 +412,9 @@ func TestControllerExternalGlobalEditBeforeCommitSurvivesAndRollsBackRuntime(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	harness.runtime.setApplyHook(func(cfg model.Config) error {
-		if cfg.Model != "a" {
-			return nil
-		}
+	harness.manager.configWriteHook = func() error {
 		return atomicWriteFile(harness.paths.GlobalConfig, externalRaw, 0o600)
-	})
+	}
 
 	err = harness.controller.SetActiveModelID("local/a")
 	if !errors.Is(err, ErrRevisionConflict) {
@@ -422,6 +430,7 @@ func TestControllerExternalGlobalEditBeforeCommitSurvivesAndRollsBackRuntime(t *
 	if !bytes.Equal(written, externalRaw) {
 		t.Fatalf("external config bytes were overwritten:\nwant=%s\ngot=%s", externalRaw, written)
 	}
+	assertNoPendingConfigTemps(t, harness.paths.GlobalConfig)
 	assertControllerRuntimeRestored(t, harness, before)
 
 	if err := harness.manager.Reload(); err != nil {
@@ -446,12 +455,9 @@ func TestControllerExternalWorkspaceEditBeforeCommitSurvivesAndRollsBackRuntime(
 	harness := openControllerTestHarness(t, paths, []DiscoveredModel{{ProviderID: "local", Name: "a"}}, nil)
 	before := captureControllerState(t, harness)
 	externalWorkspace := []byte(`{"schemaVersion":2,"models":{"local/configured":{"stream":false}}}`)
-	harness.runtime.setApplyHook(func(cfg model.Config) error {
-		if cfg.Model != "a" {
-			return nil
-		}
+	harness.manager.configWriteHook = func() error {
 		return atomicWriteFile(paths.WorkspaceConfig, externalWorkspace, 0o600)
-	})
+	}
 
 	err := harness.controller.SetActiveModelID("local/a")
 	if !errors.Is(err, ErrRevisionConflict) {
@@ -465,6 +471,7 @@ func TestControllerExternalWorkspaceEditBeforeCommitSurvivesAndRollsBackRuntime(
 	if !bytes.Equal(written, externalWorkspace) {
 		t.Fatalf("external workspace bytes were overwritten:\nwant=%s\ngot=%s", externalWorkspace, written)
 	}
+	assertNoPendingConfigTemps(t, harness.paths.GlobalConfig)
 	assertControllerRuntimeRestored(t, harness, before)
 
 	if err := harness.manager.Reload(); err != nil {

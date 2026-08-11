@@ -1637,6 +1637,43 @@ func assertNoWarningDiagnostic(t *testing.T, snapshot Snapshot, substring string
 	}
 }
 
+func TestAtomicWriteNewConfigFilePreservesExistingWinner(t *testing.T) {
+	paths := isolatedPaths(t, false)
+	if err := os.MkdirAll(paths.Home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	external := []byte("external config winner\n")
+	if err := os.WriteFile(paths.GlobalConfig, external, 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	err := atomicWriteNewConfigFile(paths.GlobalConfig, []byte("losing starter\n"), 0o600)
+	if !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("initial config write error = %v, want revision conflict", err)
+	}
+	written, err := os.ReadFile(paths.GlobalConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(written, external) {
+		t.Fatalf("existing config winner was overwritten: got=%q want=%q", written, external)
+	}
+	info, err := os.Stat(paths.GlobalConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o640 {
+		t.Fatalf("existing winner mode changed = %v, want 0640", info.Mode().Perm())
+	}
+	matches, err := filepath.Glob(filepath.Join(paths.Home, ".paw-config-*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary config files survived initial CAS conflict: %#v", matches)
+	}
+}
+
 func TestFirstRunCreatesStarterWithoutTouchingUserHome(t *testing.T) {
 	clearDetectionEnv(t)
 	paths := isolatedPaths(t, false)
@@ -2381,6 +2418,122 @@ func TestConcurrentUpdatesUseOptimisticRevision(t *testing.T) {
 	}
 	if conflicts != 1 {
 		t.Fatalf("revision conflicts=%d want=1", conflicts)
+	}
+}
+
+func TestConcurrentManagersCASAllowsExactlyOneCommit(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, false)
+	document := emptyDocument()
+	document.Providers["local"] = Provider{Transport: TransportOpenAICompatible, Endpoint: "http://127.0.0.1:1234/v1"}
+	document.Models["local/one"] = Model{Provider: "local", Name: "one"}
+	document.Models["local/two"] = Model{Provider: "local", Name: "two"}
+	document.Models["local/three"] = Model{Provider: "local", Name: "three"}
+	document.ActiveModel = "local/one"
+	writeManagerDocument(t, paths, document)
+
+	first := openTestManager(t, paths, &FakeCredentialStore{Unavailable: true}, false)
+	second := openTestManager(t, paths, &FakeCredentialStore{Unavailable: true}, false)
+	firstBase := first.Snapshot()
+	secondBase := second.Snapshot()
+	if firstBase.Revision != secondBase.Revision || firstBase.ContentHash != secondBase.ContentHash {
+		t.Fatalf("manager baselines differ: first=%d/%s second=%d/%s", firstBase.Revision, firstBase.ContentHash, secondBase.Revision, secondBase.ContentHash)
+	}
+
+	ready := make(chan struct{}, 2)
+	release := make(chan struct{})
+	hook := func() error {
+		ready <- struct{}{}
+		<-release
+		return nil
+	}
+	first.configWriteHook = hook
+	second.configWriteHook = hook
+
+	type updateResult struct {
+		manager *Manager
+		wanted  string
+		value   Snapshot
+		err     error
+	}
+	results := make(chan updateResult, 2)
+	for manager, wanted := range map[*Manager]string{first: "local/two", second: "local/three"} {
+		go func(manager *Manager, wanted string) {
+			value, err := manager.Update(context.Background(), firstBase.Revision, []Operation{SetActiveModel(wanted)})
+			results <- updateResult{manager: manager, wanted: wanted, value: value, err: err}
+		}(manager, wanted)
+	}
+	for range 2 {
+		select {
+		case <-ready:
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for both managers to prepare CAS temporary files")
+		}
+	}
+	close(release)
+
+	var winner updateResult
+	conflicts := 0
+	for range 2 {
+		select {
+		case result := <-results:
+			switch {
+			case result.err == nil:
+				if winner.manager != nil {
+					t.Fatalf("both manager commits succeeded: first winner=%q second winner=%q", winner.wanted, result.wanted)
+				}
+				winner = result
+			case errors.Is(result.err, ErrRevisionConflict):
+				conflicts++
+				loserSnapshot := result.manager.Snapshot()
+				if loserSnapshot.Revision != firstBase.Revision || loserSnapshot.ActiveModelID != "local/one" {
+					t.Fatalf("losing manager published candidate: revision=%d active=%q", loserSnapshot.Revision, loserSnapshot.ActiveModelID)
+				}
+			default:
+				t.Fatalf("manager update failed unexpectedly: %v", result.err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for concurrent manager commits")
+		}
+	}
+	if winner.manager == nil || conflicts != 1 {
+		t.Fatalf("winner=%v conflicts=%d, want one success and one conflict", winner.manager != nil, conflicts)
+	}
+	if winner.value.ActiveModelID != winner.wanted || winner.manager.Snapshot().ActiveModelID != winner.wanted {
+		t.Fatalf("winning manager did not publish winner %q: result=%q snapshot=%q", winner.wanted, winner.value.ActiveModelID, winner.manager.Snapshot().ActiveModelID)
+	}
+
+	raw, err := os.ReadFile(paths.GlobalConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	written, _, err := parseAndValidateGlobal(raw, paths.GlobalConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written.ActiveModel != winner.wanted {
+		t.Fatalf("disk active model = %q, want winning commit %q", written.ActiveModel, winner.wanted)
+	}
+	info, err := os.Stat(paths.GlobalConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("CAS config mode = %v, want 0600", info.Mode().Perm())
+	}
+	lockInfo, err := os.Stat(paths.GlobalConfig + ".lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lockInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("config lock mode = %v, want 0600", lockInfo.Mode().Perm())
+	}
+	matches, err := filepath.Glob(filepath.Join(paths.Home, ".paw-config-*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary config files survived concurrent CAS commits: %#v", matches)
 	}
 }
 
