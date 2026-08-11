@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
@@ -220,6 +221,63 @@ func TestCredentialEditorNeverRendersSecret(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "••••") {
 		t.Fatalf("masked credential missing: %q", rendered)
+	}
+}
+
+func TestConfigCenterCtrlSSavesAndExpiresNotice(t *testing.T) {
+	controller, _ := newConfigCenterHarness(t)
+	model := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	model.configCenterController = controller
+	model.ready = true
+	model.width = 80
+	model.height = 24
+	model.relayout()
+	model.openConfigCenter()
+	model.configCenter.page = configCenterProviderActions
+	model.configCenter.targetID = "local"
+	model.openConfigEdit(configEditProviderEndpoint, "http://saved.invalid/v1", "Endpoint")
+
+	next, cmd := model.handleConfigCenterKey(tea.KeyMsg{Type: tea.KeyCtrlS})
+	saved := next.(appModel)
+	if cmd == nil {
+		t.Fatal("Ctrl+S did not schedule Saved notice expiry")
+	}
+	if got := controller.Snapshot().Document.Providers["local"].Endpoint; got != "http://saved.invalid/v1" {
+		t.Fatalf("endpoint=%q", got)
+	}
+	if saved.configCenter.page != configCenterProviderActions || saved.configCenter.notice != "Saved" {
+		t.Fatalf("saved state=%#v", saved.configCenter)
+	}
+	if rendered := ansi.Strip(saved.renderConfigCenterBox()); !strings.Contains(rendered, "Saved") {
+		t.Fatalf("Saved notice missing from render: %q", rendered)
+	}
+	if configCenterSavedNoticeDuration != 3*time.Second {
+		t.Fatalf("notice duration=%s", configCenterSavedNoticeDuration)
+	}
+
+	sequence := saved.configCenter.noticeSequence
+	expired, _ := saved.Update(configCenterSavedExpiredMsg{state: saved.configCenter, sequence: sequence})
+	if got := expired.(appModel).configCenter.notice; got != "" {
+		t.Fatalf("notice remained after expiry: %q", got)
+	}
+}
+
+func TestConfigCenterSaveFailureDoesNotShowSavedNotice(t *testing.T) {
+	controller, _ := newConfigCenterHarness(t)
+	model := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	model.configCenterController = controller
+	model.openConfigCenter()
+	model.configCenter.page = configCenterProviderActions
+	model.configCenter.targetID = "local"
+	model.openConfigEdit(configEditProviderTimeout, "invalid", "Timeout seconds")
+
+	next, cmd := model.handleConfigCenterKey(tea.KeyMsg{Type: tea.KeyCtrlS})
+	failed := next.(appModel)
+	if cmd != nil {
+		t.Fatal("failed save scheduled a success notice")
+	}
+	if failed.configCenter.notice != "" || !strings.Contains(failed.configCenter.err, "timeout must be an integer") {
+		t.Fatalf("failed save state=%#v", failed.configCenter)
 	}
 }
 

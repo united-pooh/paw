@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -57,6 +58,8 @@ type configCenterState struct {
 	selected        int
 	revision        uint64
 	err             string
+	notice          string
+	noticeSequence  uint64
 	targetID        string
 	editKind        configEditKind
 	editValue       string
@@ -71,6 +74,25 @@ type configCenterState struct {
 type configCenterOption struct {
 	label       string
 	description string
+}
+
+const configCenterSavedNoticeDuration = 3 * time.Second
+
+type configCenterSavedExpiredMsg struct {
+	state    *configCenterState
+	sequence uint64
+}
+
+func (state *configCenterState) showSavedNotice() tea.Cmd {
+	if state == nil {
+		return nil
+	}
+	state.notice = "Saved"
+	state.noticeSequence++
+	sequence := state.noticeSequence
+	return tea.Tick(configCenterSavedNoticeDuration, func(time.Time) tea.Msg {
+		return configCenterSavedExpiredMsg{state: state, sequence: sequence}
+	})
 }
 
 func (m *appModel) openConfigCenter() {
@@ -148,7 +170,7 @@ func (m appModel) handleConfigCenterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	state.err = ""
 	if state.page == configCenterEdit {
-		return m.handleConfigEditKey(msg), nil
+		return m.handleConfigEditKey(msg)
 	}
 	switch msg.String() {
 	case "ctrl+c", "esc":
@@ -525,29 +547,46 @@ func (m *appModel) openConfigEdit(kind configEditKind, value, label string) {
 	state.err = label
 }
 
-func (m appModel) handleConfigEditKey(msg tea.KeyMsg) appModel {
+func (m appModel) handleConfigEditKey(msg tea.KeyMsg) (appModel, tea.Cmd) {
 	state := m.configCenter
 	if state == nil {
-		return m
+		return m, nil
 	}
 	switch msg.String() {
 	case "ctrl+c", "esc":
 		m.finishConfigEdit(false)
-		return m
-	case "enter":
-		m.finishConfigEdit(true)
-		return m
+		return m, nil
+	case "enter", "ctrl+s", "cmd+s", "command+s", "super+s":
+		return m, m.saveConfigEdit()
 	case "backspace":
 		if len(state.editValue) > 0 {
 			r := []rune(state.editValue)
 			state.editValue = string(r[:len(r)-1])
 		}
-		return m
+		return m, nil
 	}
 	if len(msg.Runes) > 0 && !msg.Alt {
 		state.editValue += string(msg.Runes)
 	}
-	return m
+	return m, nil
+}
+
+func (m *appModel) saveConfigEdit() tea.Cmd {
+	state := m.configCenter
+	if state == nil {
+		return nil
+	}
+	kind := state.editKind
+	beforeRevision := m.configCenterController.Snapshot().Revision
+	m.finishConfigEdit(true)
+	if state.err != "" || state.page == configCenterEdit {
+		return nil
+	}
+	afterRevision := m.configCenterController.Snapshot().Revision
+	if afterRevision == beforeRevision && kind != configEditCredential {
+		return nil
+	}
+	return state.showSavedNotice()
 }
 
 func (m *appModel) finishConfigEdit(save bool) {
@@ -873,7 +912,10 @@ func (m appModel) renderConfigCenterBox() string {
 		if snapshot := m.configCenterController.Snapshot(); snapshot.Revision != state.revision {
 			lines = append(lines, labelErrorStyle.Render(fmt.Sprintf("Draft is stale (opened at revision %d, current %d). Reload before saving.", state.revision, snapshot.Revision)))
 		}
-		lines = append(lines, "Enter save, esc cancel.")
+		if state.notice != "" {
+			lines = append(lines, m.styles.StatusSuccess.Bold(true).Render("✓ "+state.notice))
+		}
+		lines = append(lines, "Ctrl+S or Enter save, esc cancel.")
 		return m.renderModalPanel(strings.Join(lines, "\n"))
 	}
 	lines = append(lines, wizardTitleStyle.Render(configCenterTitle(state.page, state.targetID)))
@@ -907,6 +949,9 @@ func (m appModel) renderConfigCenterBox() string {
 	}
 	if state.err != "" {
 		lines = append(lines, labelErrorStyle.Render(state.err))
+	}
+	if state.notice != "" {
+		lines = append(lines, m.styles.StatusSuccess.Bold(true).Render("✓ "+state.notice))
 	}
 	lines = append(lines, "Enter select, b back, esc close.")
 	return m.renderModalPanel(strings.Join(lines, "\n"))

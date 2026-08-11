@@ -587,11 +587,20 @@ func renderMarkdownHeading(level int, text string, width int) string {
 	return markdownHeadingStyle.Render(text)
 }
 
-// markdownListItem 解析无序、有序和任务列表项，并统一转换为终端 bullet。
+// markdownListItem 解析无序、有序和任务列表项：普通列表使用醒目的实心圆，
+// 未完成与已完成任务保留各自的状态符号。
 func markdownListItem(line string) (string, string, bool) {
 	for _, prefix := range []string{"- ", "* "} {
 		if text, ok := strings.CutPrefix(line, prefix); ok {
 			return markdownTaskMarker(text)
+		}
+	}
+	// 容忍模型省略列表符号和任务标记之间的空格，例如 -[] 和 -[x]。
+	for _, prefix := range []string{"-", "*"} {
+		if text, ok := strings.CutPrefix(line, prefix); ok {
+			if marker, taskText, task := markdownTaskText(text); task {
+				return marker, taskText, true
+			}
 		}
 	}
 	dot := strings.Index(line, ". ")
@@ -606,9 +615,17 @@ func markdownListItem(line string) (string, string, bool) {
 	return markdownTaskMarker(line[dot+2:])
 }
 
-// markdownTaskMarker 将 Markdown task-list 的方括号转换为终端可读的状态符号，
-// 避免把 [ ]/[x] 当成普通正文渲染成截图中的“• ]”。
+// markdownTaskMarker 将 Markdown task-list 的方括号转换为终端可读的状态符号；
+// 普通列表使用比 bullet 更大、更醒目的实心圆。
 func markdownTaskMarker(text string) (string, string, bool) {
+	text = strings.TrimSpace(text)
+	if marker, taskText, ok := markdownTaskText(text); ok {
+		return marker, taskText, true
+	}
+	return "●", text, true
+}
+
+func markdownTaskText(text string) (string, string, bool) {
 	text = strings.TrimSpace(text)
 	if strings.HasPrefix(text, "[]") {
 		return "○", strings.TrimSpace(text[2:]), true
@@ -621,7 +638,7 @@ func markdownTaskMarker(text string) (string, string, bool) {
 			return "✓", strings.TrimSpace(text[3:]), true
 		}
 	}
-	return "•", text, true
+	return "", "", false
 }
 
 // renderInlineMarkdown 渲染行内 Markdown。代码、粗体、斜体和高亮标记

@@ -4867,7 +4867,7 @@ func TestAssistantEntryRendersMarkdown(t *testing.T) {
 		body:  "## Title\n\n- one with `code`\n- **bold item**\n\n> quoted **bold quote**\n\n```go\nfmt.Println(\"hi\")\n```",
 	}, 80)
 
-	for _, want := range []string{"✦", "Title", "•", "one", "code", "bold item", "│", "quoted", "bold quote", "go", "fmt.Println"} {
+	for _, want := range []string{"✦", "Title", "●", "one", "code", "bold item", "│", "quoted", "bold quote", "go", "fmt.Println"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered markdown = %q, want %q", rendered, want)
 		}

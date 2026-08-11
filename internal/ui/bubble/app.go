@@ -574,6 +574,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 复制反馈到期：清除状态栏 toast，触发一次重绘。
 		m.copyToast = ""
 		return m, nil
+	case configCenterSavedExpiredMsg:
+		if m.configCenter == msg.state && m.configCenter != nil && m.configCenter.noticeSequence == msg.sequence {
+			m.configCenter.notice = ""
+		}
+		return m, nil
 	case translateResultMsg:
 		// 过期响应（面板已切换/关闭）直接丢弃；否则按结果更新面板。
 		if msg.seq != m.translateSeq || m.translatePanel == nil || m.translatePanel.word != msg.word {

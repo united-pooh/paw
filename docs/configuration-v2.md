@@ -92,7 +92,7 @@ Paw/
 - `transport`：`openai-responses`、`openai-compatible` 或 `anthropic-compatible`。
 - `endpoint` / `apiPath`：连接地址与可选路径；未写 `apiPath` 时按 transport 补默认值。
 - `auth.credential`：系统凭据库中的稳定 ID。
-- `auth.env`：按顺序尝试的环境变量名。
+- `auth.env`：按顺序尝试的环境变量名；填写 `DEEPSEEK_API_KEY` 这类变量名，不使用 `${DEEPSEEK_API_KEY}` 插值语法。
 - `headers`：附加的非敏感请求头。`Authorization`、`X-Api-Key` 等认证头必须通过 `auth` 配置。
 - `body`：Provider 级附加请求参数；不能覆盖 `model`、`messages`、`input`、`stream` 等受保护字段。
 - `timeoutSeconds`、`retries`、`stream`：Provider 默认请求策略。`retries: 0` 和 `stream: false` 都是有效的显式设置。
@@ -158,7 +158,7 @@ macOS 使用 Security.framework Keychain；`CGO_ENABLED=0` 的 macOS 构建回�
 - Credentials
 - Diagnostics
 
-Provider 和 Model 支持添加、编辑、删除；删除 Provider、Model 或凭据需要二次确认。timeout、retries、stream、context window 与 capabilities 可直接编辑，headers、body、parameters 使用即时 JSONC 校验的高级编辑器。凭据输入始终显示为掩码。
+Provider 和 Model 支持添加、编辑、删除；删除 Provider、Model 或凭据需要二次确认。timeout、retries、stream、context window 与 capabilities 可直接编辑，headers、body、parameters 使用即时 JSONC 校验的高级编辑器。编辑页可按 `Ctrl+S` 或 `Enter` 显式保存，成功后显示 3 秒 `Saved` 提示；凭据输入始终显示为掩码。
 
 辅助命令：
 
