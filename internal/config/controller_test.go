@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -77,6 +79,11 @@ func newControllerTestHarness(t *testing.T, document Document, discovered []Disc
 	clearDetectionEnv(t)
 	paths := isolatedPaths(t, false)
 	writeManagerDocument(t, paths, document)
+	return openControllerTestHarness(t, paths, discovered, store)
+}
+
+func openControllerTestHarness(t *testing.T, paths Paths, discovered []DiscoveredModel, store CredentialStore) controllerTestHarness {
+	t.Helper()
 	if store == nil {
 		store = &FakeCredentialStore{Unavailable: true}
 	}
@@ -383,6 +390,146 @@ func TestControllerProspectiveRuntimeDriftBeforeCommitRollsBack(t *testing.T) {
 	}
 	assertControllerPersistenceUnchanged(t, harness, before)
 	assertControllerRuntimeRestored(t, harness, before)
+}
+
+func TestControllerExternalGlobalEditBeforeCommitSurvivesAndRollsBackRuntime(t *testing.T) {
+	harness := newControllerTestHarness(t, controllerDiscoveryDocument(Auth{}), []DiscoveredModel{{ProviderID: "local", Name: "a"}}, nil)
+	before := captureControllerState(t, harness)
+	externalDocument := cloneDocument(before.snapshot.Document)
+	externalDocument.ActiveModel = "local/configured"
+	externalRaw, err := marshalStarter(externalDocument, "external editor wins")
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness.runtime.setApplyHook(func(cfg model.Config) error {
+		if cfg.Model != "a" {
+			return nil
+		}
+		return atomicWriteFile(harness.paths.GlobalConfig, externalRaw, 0o600)
+	})
+
+	err = harness.controller.SetActiveModelID("local/a")
+	if !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("activation error = %v, want external-edit revision conflict", err)
+	}
+	if after := harness.manager.Snapshot(); !reflect.DeepEqual(after, before.snapshot) {
+		t.Fatalf("manager snapshot changed before reload:\nbefore=%#v\nafter=%#v", before.snapshot, after)
+	}
+	written, readErr := os.ReadFile(harness.paths.GlobalConfig)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(written, externalRaw) {
+		t.Fatalf("external config bytes were overwritten:\nwant=%s\ngot=%s", externalRaw, written)
+	}
+	assertControllerRuntimeRestored(t, harness, before)
+
+	if err := harness.manager.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if got := harness.manager.Snapshot().ActiveModelID; got != "local/configured" {
+		t.Fatalf("reloaded active model = %q, want external edit", got)
+	}
+}
+
+func TestControllerExternalWorkspaceEditBeforeCommitSurvivesAndRollsBackRuntime(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, true)
+	writeManagerDocument(t, paths, controllerDiscoveryDocument(Auth{}))
+	if err := os.MkdirAll(filepath.Dir(paths.WorkspaceConfig), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	initialWorkspace := []byte(`{"schemaVersion":2}`)
+	if err := os.WriteFile(paths.WorkspaceConfig, initialWorkspace, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	harness := openControllerTestHarness(t, paths, []DiscoveredModel{{ProviderID: "local", Name: "a"}}, nil)
+	before := captureControllerState(t, harness)
+	externalWorkspace := []byte(`{"schemaVersion":2,"models":{"local/configured":{"stream":false}}}`)
+	harness.runtime.setApplyHook(func(cfg model.Config) error {
+		if cfg.Model != "a" {
+			return nil
+		}
+		return atomicWriteFile(paths.WorkspaceConfig, externalWorkspace, 0o600)
+	})
+
+	err := harness.controller.SetActiveModelID("local/a")
+	if !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("activation error = %v, want workspace-edit revision conflict", err)
+	}
+	assertControllerPersistenceUnchanged(t, harness, before)
+	written, readErr := os.ReadFile(paths.WorkspaceConfig)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(written, externalWorkspace) {
+		t.Fatalf("external workspace bytes were overwritten:\nwant=%s\ngot=%s", externalWorkspace, written)
+	}
+	assertControllerRuntimeRestored(t, harness, before)
+
+	if err := harness.manager.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := harness.manager.Snapshot().Workspace.Models["local/configured"]; !ok {
+		t.Fatalf("reloaded workspace did not observe external edit: %#v", harness.manager.Snapshot().Workspace)
+	}
+}
+
+func TestControllerCatalogActivationRejectsEffectiveActiveModelOverrides(t *testing.T) {
+	tests := []struct {
+		name          string
+		selectionID   string
+		discovered    []DiscoveredModel
+		override      string
+		wantErrorText string
+	}{
+		{name: "configured workspace override", selectionID: "local/configured", override: "workspace", wantErrorText: "workspace activeModel"},
+		{name: "discovered workspace override", selectionID: "local/a", discovered: []DiscoveredModel{{ProviderID: "local", Name: "a"}}, override: "workspace", wantErrorText: "workspace activeModel"},
+		{name: "configured environment override", selectionID: "local/configured", override: "environment", wantErrorText: "PAW_MODEL"},
+		{name: "discovered environment override", selectionID: "local/a", discovered: []DiscoveredModel{{ProviderID: "local", Name: "a"}}, override: "environment", wantErrorText: "PAW_MODEL"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clearDetectionEnv(t)
+			paths := isolatedPaths(t, test.override == "workspace")
+			writeManagerDocument(t, paths, controllerDiscoveryDocument(Auth{}))
+			if test.override == "workspace" {
+				if err := os.MkdirAll(filepath.Dir(paths.WorkspaceConfig), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(paths.WorkspaceConfig, []byte(`{"schemaVersion":2,"activeModel":"local/manual"}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			harness := openControllerTestHarness(t, paths, test.discovered, nil)
+			before := captureControllerState(t, harness)
+			if test.override == "environment" {
+				t.Setenv("PAW_MODEL", "local/manual")
+			}
+			selection, err := harness.manager.Snapshot().CatalogSelection(test.selectionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = harness.controller.ActivateCatalogSelection(selection)
+			if err == nil || !strings.Contains(err.Error(), test.wantErrorText) || !strings.Contains(err.Error(), "remove") {
+				t.Fatalf("activation error = %v, want actionable %q override error", err, test.wantErrorText)
+			}
+			assertControllerStateUnchanged(t, harness, before)
+			if selection.Source == ModelSourceDiscovered {
+				if _, ok := harness.manager.Snapshot().Document.Models[selection.ID]; ok {
+					t.Fatalf("discovered model %q was pinned despite override", selection.ID)
+				}
+				written, readErr := os.ReadFile(paths.GlobalConfig)
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				if strings.Contains(string(written), `"`+selection.ID+`"`) {
+					t.Fatalf("discovered model %q was written despite override:\n%s", selection.ID, written)
+				}
+			}
+		})
+	}
 }
 
 func TestControllerUpdateConfigRuntimeFailureLeavesPersistenceCoherent(t *testing.T) {

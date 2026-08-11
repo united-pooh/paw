@@ -2,6 +2,7 @@ package config
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -175,10 +176,14 @@ func TestFilterDiscoveredModelsIncludeRestoresAndExcludeWins(t *testing.T) {
 	}
 }
 
-func TestFilterDiscoveredModelsRejectsUnsafeUniqueNames(t *testing.T) {
+func TestFilterDiscoveredModelsRejectsUnsafeRawNamesBeforeTrimAndDedup(t *testing.T) {
 	oversized := strings.Repeat("界", 171)
 	if len(oversized) <= 512 {
 		t.Fatalf("oversized test name is only %d bytes", len(oversized))
+	}
+	paddedOverlong := " " + strings.Repeat("x", 512) + " "
+	if len(paddedOverlong) <= 512 || len(strings.TrimSpace(paddedOverlong)) > 512 {
+		t.Fatalf("padded overlong test name lengths = raw %d trimmed %d", len(paddedOverlong), len(strings.TrimSpace(paddedOverlong)))
 	}
 	unicodeName := "模型/聊天-β"
 	got, filtered := filterDiscoveredModels([]string{
@@ -186,13 +191,15 @@ func TestFilterDiscoveredModelsRejectsUnsafeUniqueNames(t *testing.T) {
 		"\nchat-model",
 		oversized,
 		"bad\x1bmodel",
+		paddedOverlong,
+		"   ",
 		unicodeName,
 	}, DiscoveryConfig{})
 	if !slices.Equal([]string{unicodeName}, got) {
 		t.Fatalf("models=%q", got)
 	}
-	if filtered != 3 {
-		t.Fatalf("filtered=%d want=3", filtered)
+	if filtered != 6 {
+		t.Fatalf("filtered=%d want=6", filtered)
 	}
 }
 
@@ -236,6 +243,94 @@ func TestBuildEffectiveCatalogTrimsProviderIDsWithoutChangingDocumentIdentity(t 
 	wantCollisionID := fmt.Sprintf("local/chat~%x", hash[:4])
 	if got := stableDiscoveredModelID(providerKey, "chat", occupied); got != wantCollisionID {
 		t.Fatalf("trim-equivalent identity collision ID=%q want=%q", got, wantCollisionID)
+	}
+}
+
+func TestDiscoveryConfigPathPresenceSurvivesJSONCCloneMergeAndRoundTrip(t *testing.T) {
+	explicitRaw := []byte(`{
+		// Explicit empty path retains the provider endpoint path.
+		"schemaVersion": 2,
+		"providers": {
+			"openai": {
+				"preset": "openai",
+				"endpoint": "https://example.com/v1",
+				"discovery": {"path": "",},
+			},
+		},
+		"models": {},
+	}`)
+	explicit, _, err := parseAndValidateGlobal(explicitRaw, "config.jsonc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	explicitDiscovery := explicit.Providers["openai"].Discovery
+	if explicitDiscovery == nil || !explicitDiscovery.PathSet || explicitDiscovery.Path != "" {
+		t.Fatalf("explicit JSON path presence = %#v", explicitDiscovery)
+	}
+	cloned := cloneProvider(explicit.Providers["openai"])
+	if cloned.Discovery == nil || !cloned.Discovery.PathSet || cloned.Discovery.Path != "" {
+		t.Fatalf("clone lost explicit empty path: %#v", cloned.Discovery)
+	}
+	resolved := mergePreset("openai", explicit.Providers["openai"])
+	if resolved.Discovery == nil || !resolved.Discovery.PathSet || resolved.Discovery.Path != "" {
+		t.Fatalf("explicit empty path did not override preset: %#v", resolved.Discovery)
+	}
+	if got, err := discoveryURL(resolved.Endpoint, resolved.Discovery.Path); err != nil || got != "https://example.com/v1" {
+		t.Fatalf("explicit empty discovery URL = %q, err=%v", got, err)
+	}
+	roundTrip, err := json.Marshal(explicitDiscovery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(roundTrip), `"path":""`) {
+		t.Fatalf("explicit empty path was omitted: %s", roundTrip)
+	}
+	var decoded DiscoveryConfig
+	if err := json.Unmarshal(roundTrip, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.PathSet || decoded.Path != "" {
+		t.Fatalf("round trip lost explicit empty path: %#v", decoded)
+	}
+
+	omittedRaw := []byte(`{
+		"schemaVersion": 2,
+		"providers": {
+			"openai": {
+				"preset": "openai",
+				"endpoint": "https://example.com/v1",
+				"discovery": {"enabled": true},
+			}
+		},
+		"models": {}
+	}`)
+	omitted, _, err := parseAndValidateGlobal(omittedRaw, "config.jsonc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	omittedDiscovery := omitted.Providers["openai"].Discovery
+	if omittedDiscovery == nil || omittedDiscovery.PathSet {
+		t.Fatalf("omitted JSON path acquired presence: %#v", omittedDiscovery)
+	}
+	resolved = mergePreset("openai", omitted.Providers["openai"])
+	if resolved.Discovery == nil || !resolved.Discovery.PathSet || resolved.Discovery.Path != "models" {
+		t.Fatalf("omitted path did not inherit preset: %#v", resolved.Discovery)
+	}
+	roundTrip, err = json.Marshal(omittedDiscovery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(roundTrip), `"path"`) {
+		t.Fatalf("omitted path was serialized: %s", roundTrip)
+	}
+
+	programmatic := cloneDiscoveryConfig(&DiscoveryConfig{Path: "custom-models"})
+	if programmatic == nil || !programmatic.PathSet {
+		t.Fatalf("nonempty programmatic path did not count as present: %#v", programmatic)
+	}
+	preset := BuiltinPresets()["openai"].Provider.Discovery
+	if preset == nil || !preset.PathSet || preset.Path != "models" {
+		t.Fatalf("preset path did not count as present: %#v", preset)
 	}
 }
 

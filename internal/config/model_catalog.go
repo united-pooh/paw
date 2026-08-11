@@ -84,21 +84,19 @@ func buildEffectiveCatalog(document Document, discovered map[string][]Discovered
 }
 
 func filterDiscoveredModels(names []string, cfg DiscoveryConfig) ([]string, int) {
-	uniqueRaw := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		uniqueRaw[name] = struct{}{}
-	}
-	uniqueNormalized := make(map[string]struct{}, len(uniqueRaw))
+	uniqueNormalized := make(map[string]struct{}, len(names))
 	filtered := 0
-	for name := range uniqueRaw {
-		if unsafeDiscoveredModelName(name) {
+	for _, rawName := range names {
+		if unsafeDiscoveredModelName(rawName) {
 			filtered++
 			continue
 		}
-		name = strings.TrimSpace(name)
-		if name != "" {
-			uniqueNormalized[name] = struct{}{}
+		name := strings.TrimSpace(rawName)
+		if name == "" {
+			filtered++
+			continue
 		}
+		uniqueNormalized[name] = struct{}{}
 	}
 	normalized := make([]string, 0, len(uniqueNormalized))
 	for name := range uniqueNormalized {

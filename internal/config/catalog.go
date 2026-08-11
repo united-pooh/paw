@@ -15,7 +15,7 @@ type Preset struct {
 var builtinPresets = map[string]Preset{
 	"openai": {
 		ID: "openai", Name: "OpenAI", RequiresAuth: true,
-		Provider:       Provider{Transport: TransportOpenAIResponses, Endpoint: "https://api.openai.com/v1", Auth: Auth{Credential: "provider/openai", Env: []string{"OPENAI_API_KEY"}}, TimeoutSeconds: 60, Retries: intPointer(3), Discovery: &DiscoveryConfig{Enabled: boolPointer(true), Path: "models", Format: DiscoveryFormatOpenAIList}},
+		Provider:       Provider{Transport: TransportOpenAIResponses, Endpoint: "https://api.openai.com/v1", Auth: Auth{Credential: "provider/openai", Env: []string{"OPENAI_API_KEY"}}, TimeoutSeconds: 60, Retries: intPointer(3), Discovery: &DiscoveryConfig{Enabled: boolPointer(true), Path: "models", PathSet: true, Format: DiscoveryFormatOpenAIList}},
 		DefaultModelID: "openai/gpt-5", DefaultModel: Model{Provider: "openai", Name: "gpt-5", Adapter: AdapterGPT, ContextWindow: 400000},
 		DetectionEnv: []string{"OPENAI_API_KEY"},
 	},
@@ -27,19 +27,19 @@ var builtinPresets = map[string]Preset{
 	},
 	"deepseek": {
 		ID: "deepseek", Name: "DeepSeek", RequiresAuth: true,
-		Provider:       Provider{Transport: TransportOpenAICompatible, Endpoint: "https://api.deepseek.com", Auth: Auth{Credential: "provider/deepseek", Env: []string{"DEEPSEEK_API_KEY"}}, TimeoutSeconds: 60, Retries: intPointer(3), Discovery: &DiscoveryConfig{Enabled: boolPointer(true), Path: "models", Format: DiscoveryFormatOpenAIList}},
+		Provider:       Provider{Transport: TransportOpenAICompatible, Endpoint: "https://api.deepseek.com", Auth: Auth{Credential: "provider/deepseek", Env: []string{"DEEPSEEK_API_KEY"}}, TimeoutSeconds: 60, Retries: intPointer(3), Discovery: &DiscoveryConfig{Enabled: boolPointer(true), Path: "models", PathSet: true, Format: DiscoveryFormatOpenAIList}},
 		DefaultModelID: "deepseek/chat", DefaultModel: Model{Provider: "deepseek", Name: "deepseek-chat", Adapter: AdapterDeepSeek, ContextWindow: 128000},
 		DetectionEnv: []string{"DEEPSEEK_API_KEY"},
 	},
 	"openrouter": {
 		ID: "openrouter", Name: "OpenRouter", RequiresAuth: true,
-		Provider:       Provider{Transport: TransportOpenAICompatible, Endpoint: "https://openrouter.ai/api/v1", Auth: Auth{Credential: "provider/openrouter", Env: []string{"OPENROUTER_API_KEY"}}, TimeoutSeconds: 60, Retries: intPointer(3), Discovery: &DiscoveryConfig{Enabled: boolPointer(true), Path: "models", Format: DiscoveryFormatOpenAIList}},
+		Provider:       Provider{Transport: TransportOpenAICompatible, Endpoint: "https://openrouter.ai/api/v1", Auth: Auth{Credential: "provider/openrouter", Env: []string{"OPENROUTER_API_KEY"}}, TimeoutSeconds: 60, Retries: intPointer(3), Discovery: &DiscoveryConfig{Enabled: boolPointer(true), Path: "models", PathSet: true, Format: DiscoveryFormatOpenAIList}},
 		DefaultModelID: "openrouter/default", DefaultModel: Model{Provider: "openrouter", Name: "openai/gpt-5", Adapter: AdapterOpenAICompatible},
 		DetectionEnv: []string{"OPENROUTER_API_KEY"},
 	},
 	"ollama": {
 		ID: "ollama", Name: "Ollama", RequiresAuth: false,
-		Provider:       Provider{Transport: TransportOpenAICompatible, Endpoint: "http://127.0.0.1:11434/v1", TimeoutSeconds: 120, Retries: intPointer(1), Discovery: &DiscoveryConfig{Enabled: boolPointer(true), Path: "/api/tags", Format: DiscoveryFormatOllamaTags}},
+		Provider:       Provider{Transport: TransportOpenAICompatible, Endpoint: "http://127.0.0.1:11434/v1", TimeoutSeconds: 120, Retries: intPointer(1), Discovery: &DiscoveryConfig{Enabled: boolPointer(true), Path: "/api/tags", PathSet: true, Format: DiscoveryFormatOllamaTags}},
 		DefaultModelID: "ollama/default", DefaultModel: Model{Provider: "ollama", Name: "llama3.2", Adapter: AdapterOpenAICompatible},
 		DetectionEnv: []string{"OLLAMA_HOST", "OLLAMA_MODEL"},
 	},
@@ -110,8 +110,9 @@ func mergePreset(id string, configured Provider) Provider {
 		if configured.Discovery.Enabled != nil {
 			merged.Enabled = cloneBoolPointer(configured.Discovery.Enabled)
 		}
-		if configured.Discovery.Path != "" {
+		if configured.Discovery.PathSet || configured.Discovery.Path != "" {
 			merged.Path = configured.Discovery.Path
+			merged.PathSet = true
 		}
 		if configured.Discovery.Format != "" {
 			merged.Format = configured.Discovery.Format

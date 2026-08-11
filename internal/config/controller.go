@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 
@@ -169,7 +170,7 @@ func (c *Controller) activateCatalogSelectionLocked(ctx context.Context, selecti
 		operations = append(operations, UpsertModel(selection.ID, item.Model))
 	}
 	operations = append(operations, setActiveModelExact(selection.ID))
-	return c.commitOperationsLocked(ctx, selection.Revision, operations)
+	return c.commitCatalogSelectionLocked(ctx, selection, operations)
 }
 
 func (c *Controller) Manager() *Manager {
@@ -232,9 +233,33 @@ func (c *Controller) UpdateConfig(ctx context.Context, revision uint64, operatio
 // commit fails, the previous runtime config is restored before applyMu is
 // released.
 func (c *Controller) commitOperationsLocked(ctx context.Context, revision uint64, operations []Operation) (Snapshot, bool, error) {
+	return c.commitOperationsValidatedLocked(ctx, revision, operations, nil)
+}
+
+func (c *Controller) commitCatalogSelectionLocked(ctx context.Context, selection CatalogSelection, operations []Operation) (Snapshot, bool, error) {
+	return c.commitOperationsValidatedLocked(ctx, selection.Revision, operations, func(prospective Snapshot) error {
+		if prospective.ActiveModelID == selection.ID {
+			return nil
+		}
+		if override := strings.TrimSpace(os.Getenv("PAW_MODEL")); override != "" && prospective.ActiveModelID == override {
+			return fmt.Errorf("cannot activate model %q while PAW_MODEL=%q overrides activeModel; remove or unset PAW_MODEL and retry", selection.ID, override)
+		}
+		if override := prospective.Workspace.ActiveModel; override != "" && prospective.ActiveModelID == override {
+			return fmt.Errorf("cannot activate model %q while workspace activeModel %q in %s overrides the global selection; remove or change the workspace activeModel and retry", selection.ID, override, c.manager.Paths().WorkspaceConfig)
+		}
+		return fmt.Errorf("cannot activate model %q because the prospective active model is %q; remove the activeModel override and retry", selection.ID, prospective.ActiveModelID)
+	})
+}
+
+func (c *Controller) commitOperationsValidatedLocked(ctx context.Context, revision uint64, operations []Operation, validate func(Snapshot) error) (Snapshot, bool, error) {
 	prospective, err := c.manager.PreviewUpdate(ctx, revision, operations)
 	if err != nil {
 		return Snapshot{}, false, err
+	}
+	if validate != nil {
+		if err := validate(prospective); err != nil {
+			return Snapshot{}, false, err
+		}
 	}
 	if c.runtime == nil || !prospective.Ready {
 		committed, err := c.manager.Update(ctx, revision, operations)

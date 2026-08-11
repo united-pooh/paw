@@ -38,6 +38,7 @@ type retainedDiscovery struct {
 	Format              string
 	DiscoveredAt        time.Time
 	Origin              string
+	FilteredCount       int
 }
 
 type pendingDiscovery struct {
@@ -164,7 +165,13 @@ func openManager(ctx context.Context, options Options, cacheWriter func(string, 
 	if migrationErr != nil {
 		raw, _ := marshalStarter(emptyDocument(), "Migration is blocked until the legacy plaintext credential can be moved to a keyring")
 		hash := sha256.Sum256(raw)
-		candidate = Snapshot{Document: emptyDocument(), Revision: 1, ContentHash: hex.EncodeToString(hash[:]), Diagnostics: diagnostics, Ready: false, LoadedAt: time.Now(), Raw: raw}
+		files, _ := manager.readConfigFileStates()
+		candidate = Snapshot{
+			Document: emptyDocument(), Revision: 1, ContentHash: hex.EncodeToString(hash[:]),
+			Diagnostics: diagnostics, Ready: false, LoadedAt: time.Now(), Raw: raw,
+			globalConfigExists: files.global.exists, workspaceConfigExists: files.workspace.exists,
+			workspaceRaw: append([]byte(nil), files.workspace.raw...),
+		}
 		diagnostics = nil
 	} else {
 		document, activeID, err := manager.loadDiscoverySelection()
@@ -204,7 +211,14 @@ func openManager(ctx context.Context, options Options, cacheWriter func(string, 
 			return nil, loadErr
 		}
 		hash := sha256.Sum256(raw)
-		candidate = Snapshot{Document: emptyDocument(), Revision: 1, ContentHash: hex.EncodeToString(hash[:]), Diagnostics: []Diagnostic{{Severity: "error", File: paths.GlobalConfig, Message: loadErr.Error()}}, Ready: false, LoadedAt: time.Now(), Raw: raw}
+		files, _ := manager.readConfigFileStates()
+		candidate = Snapshot{
+			Document: emptyDocument(), Revision: 1, ContentHash: hex.EncodeToString(hash[:]),
+			Diagnostics: []Diagnostic{{Severity: "error", File: paths.GlobalConfig, Message: loadErr.Error()}},
+			Ready:       false, LoadedAt: time.Now(), Raw: raw,
+			globalConfigExists: files.global.exists, workspaceConfigExists: files.workspace.exists,
+			workspaceRaw: append([]byte(nil), files.workspace.raw...),
+		}
 	}
 	candidate.Diagnostics = append(diagnostics, candidate.Diagnostics...)
 	manager.snapshot = candidate
@@ -337,12 +351,49 @@ func (m *Manager) loadStartupCandidate(ctx context.Context, revision uint64) (Sn
 	return m.candidateFromParsed(ctx, raw, parsed, revision), nil
 }
 
+type configFileState struct {
+	exists bool
+	raw    []byte
+}
+
+type configFileStates struct {
+	global    configFileState
+	workspace configFileState
+}
+
 type parsedCandidate struct {
-	document     Document
-	workspace    WorkspaceDocument
-	workspaceRaw []byte
-	activeID     string
-	diagnostics  []Diagnostic
+	document        Document
+	workspace       WorkspaceDocument
+	workspaceRaw    []byte
+	workspaceExists bool
+	activeID        string
+	diagnostics     []Diagnostic
+}
+
+func readConfigFileState(path string) (configFileState, error) {
+	if strings.TrimSpace(path) == "" {
+		return configFileState{}, nil
+	}
+	raw, err := os.ReadFile(path)
+	if err == nil {
+		return configFileState{exists: true, raw: raw}, nil
+	}
+	if os.IsNotExist(err) {
+		return configFileState{}, nil
+	}
+	return configFileState{}, fmt.Errorf("read config file %s: %w", path, err)
+}
+
+func (m *Manager) readConfigFileStates() (configFileStates, error) {
+	global, err := readConfigFileState(m.paths.GlobalConfig)
+	if err != nil {
+		return configFileStates{}, err
+	}
+	workspace, err := readConfigFileState(m.paths.WorkspaceConfig)
+	if err != nil {
+		return configFileStates{}, err
+	}
+	return configFileStates{global: global, workspace: workspace}, nil
 }
 
 func (m *Manager) loadDiscoverySelection() (Document, string, error) {
@@ -358,20 +409,22 @@ func (m *Manager) loadDiscoverySelection() (Document, string, error) {
 }
 
 func (m *Manager) parseCandidate(raw []byte) (parsedCandidate, error) {
+	workspaceState, err := readConfigFileState(m.paths.WorkspaceConfig)
+	if err != nil {
+		return parsedCandidate{}, err
+	}
+	return m.parseCandidateWithWorkspace(raw, workspaceState)
+}
+
+func (m *Manager) parseCandidateWithWorkspace(raw []byte, workspaceState configFileState) (parsedCandidate, error) {
 	document, diagnostics, err := parseAndValidateGlobal(raw, m.paths.GlobalConfig)
 	if err != nil {
 		return parsedCandidate{}, err
 	}
 	workspace := WorkspaceDocument{}
-	workspaceRaw := []byte(nil)
-	if m.paths.WorkspaceConfig != "" {
-		workspaceRaw, err = os.ReadFile(m.paths.WorkspaceConfig)
-		if err == nil {
-			workspace, err = parseAndValidateWorkspace(workspaceRaw, m.paths.WorkspaceConfig, document)
-			if err != nil {
-				return parsedCandidate{}, err
-			}
-		} else if !os.IsNotExist(err) {
+	if workspaceState.exists {
+		workspace, err = parseAndValidateWorkspace(workspaceState.raw, m.paths.WorkspaceConfig, document)
+		if err != nil {
 			return parsedCandidate{}, err
 		}
 	}
@@ -386,11 +439,12 @@ func (m *Manager) parseCandidate(raw []byte) (parsedCandidate, error) {
 		activeID = override
 	}
 	return parsedCandidate{
-		document:     document,
-		workspace:    workspace,
-		workspaceRaw: workspaceRaw,
-		activeID:     activeID,
-		diagnostics:  diagnostics,
+		document:        document,
+		workspace:       workspace,
+		workspaceRaw:    append([]byte(nil), workspaceState.raw...),
+		workspaceExists: workspaceState.exists,
+		activeID:        activeID,
+		diagnostics:     diagnostics,
 	}, nil
 }
 
@@ -474,7 +528,7 @@ func (m *Manager) initializeModelDiscovery(ctx context.Context, document Documen
 		return
 	}
 
-	models, cacheNames := normalizeLiveDiscoveredModels(providerID, models)
+	models, cacheNames, filteredCount := normalizeLiveDiscoveredModels(providerID, models)
 	succeededAt := time.Now().UTC()
 	discovery := retainedDiscovery{
 		Models:              cloneDiscoveredModels(models),
@@ -482,6 +536,7 @@ func (m *Manager) initializeModelDiscovery(ctx context.Context, document Documen
 		Format:              format,
 		DiscoveredAt:        succeededAt,
 		Origin:              "live",
+		FilteredCount:       filteredCount,
 	}
 	m.pendingDiscovery = &pendingDiscovery{
 		ProviderID:  providerID,
@@ -683,30 +738,36 @@ func safeModelDiscoveryError(err error) string {
 	return "model discovery failed"
 }
 
-func normalizeLiveDiscoveredModels(providerID string, models []DiscoveredModel) ([]DiscoveredModel, []string) {
+func normalizeLiveDiscoveredModels(providerID string, models []DiscoveredModel) ([]DiscoveredModel, []string, int) {
 	normalizedProviderID := strings.TrimSpace(providerID)
-	normalized := make([]DiscoveredModel, 0, len(models))
-	cacheNames := make([]string, 0, len(models))
+	unique := make(map[string]struct{}, len(models))
+	filteredCount := 0
 	for _, discovered := range models {
 		candidateProviderID := strings.TrimSpace(discovered.ProviderID)
 		if candidateProviderID != "" && candidateProviderID != normalizedProviderID {
 			continue
 		}
-		discovered.ProviderID = providerID
-		normalized = append(normalized, discovered)
 		if unsafeDiscoveredModelName(discovered.Name) {
+			filteredCount++
 			continue
 		}
 		name := strings.TrimSpace(discovered.Name)
-		if name != "" {
-			cacheNames = append(cacheNames, name)
+		if name == "" {
+			filteredCount++
+			continue
 		}
+		unique[name] = struct{}{}
 	}
-	canonicalNames, err := canonicalDiscoveryCacheModels(cacheNames)
-	if err != nil {
-		canonicalNames = []string{}
+	cacheNames := make([]string, 0, len(unique))
+	for name := range unique {
+		cacheNames = append(cacheNames, name)
 	}
-	return normalized, canonicalNames
+	sort.Strings(cacheNames)
+	normalized := make([]DiscoveredModel, len(cacheNames))
+	for index, name := range cacheNames {
+		normalized[index] = DiscoveredModel{ProviderID: providerID, Name: name}
+	}
+	return normalized, append([]string{}, cacheNames...), filteredCount
 }
 
 func (m *Manager) matchingRetainedDiscoveries(document Document) (map[string][]DiscoveredModel, map[string]retainedDiscovery) {
@@ -848,6 +909,14 @@ func (m *Manager) candidateFromRaw(ctx context.Context, raw []byte, revision uin
 	return m.candidateFromParsed(ctx, raw, parsed, revision), nil
 }
 
+func (m *Manager) candidateFromRawWithWorkspace(ctx context.Context, raw []byte, workspaceState configFileState, revision uint64) (Snapshot, error) {
+	parsed, err := m.parseCandidateWithWorkspace(raw, workspaceState)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	return m.candidateFromParsed(ctx, raw, parsed, revision), nil
+}
+
 func (m *Manager) candidateFromParsed(ctx context.Context, raw []byte, parsed parsedCandidate, revision uint64) Snapshot {
 	discoveredModels, retainedProvenance := m.matchingRetainedDiscoveries(parsed.document)
 	catalog, stats := buildEffectiveCatalog(parsed.document, discoveredModels)
@@ -856,11 +925,22 @@ func (m *Manager) candidateFromParsed(ctx context.Context, raw []byte, parsed pa
 	diagnostics = append(diagnostics, m.applicableDiscoveryDiagnostics(parsed.document, parsed.activeID)...)
 	diagnostics = append(diagnostics, runtimeDiagnostics...)
 	discoveryStatus := m.discoveryStatusForDocument(parsed.document, parsed.activeID, retainedProvenance)
-	discoveryStatus.DiscoveredCount = stats.Discovered
-	discoveryStatus.FilteredCount = stats.Filtered
+	prefilteredCount := 0
+	for _, retained := range retainedProvenance {
+		prefilteredCount += retained.FilteredCount
+	}
+	discoveryStatus.DiscoveredCount = stats.Discovered + prefilteredCount
+	discoveryStatus.FilteredCount = stats.Filtered + prefilteredCount
 	discoveryStatus = withEffectiveCount(discoveryStatus, stats.Merged)
 	hash := sha256.Sum256(append(append(append([]byte(nil), raw...), 0), parsed.workspaceRaw...))
-	return Snapshot{Document: parsed.document, Workspace: parsed.workspace, Active: runtimeConfig, ActiveModelID: parsed.activeID, EffectiveModels: catalog, Discovery: discoveryStatus, Revision: revision, ContentHash: hex.EncodeToString(hash[:]), Diagnostics: diagnostics, Ready: ready, LoadedAt: time.Now(), Raw: raw}
+	return Snapshot{
+		Document: parsed.document, Workspace: parsed.workspace, Active: runtimeConfig,
+		ActiveModelID: parsed.activeID, EffectiveModels: catalog, Discovery: discoveryStatus,
+		Revision: revision, ContentHash: hex.EncodeToString(hash[:]), Diagnostics: diagnostics,
+		Ready: ready, LoadedAt: time.Now(), Raw: raw,
+		globalConfigExists: true, workspaceConfigExists: parsed.workspaceExists,
+		workspaceRaw: append([]byte(nil), parsed.workspaceRaw...),
+	}
 }
 
 func withEffectiveCount(status DiscoveryStatus, count int) DiscoveryStatus {
@@ -1040,12 +1120,32 @@ func (m *Manager) RequireReady() error {
 	return &SetupRequiredError{Path: m.paths.GlobalConfig, Reason: reason}
 }
 
+func sameConfigFileState(left, right configFileState) bool {
+	return left.exists == right.exists && bytes.Equal(left.raw, right.raw)
+}
+
+func (m *Manager) verifyConfigFilesUnchanged(base Snapshot) (configFileStates, error) {
+	current, err := m.readConfigFileStates()
+	if err != nil {
+		return configFileStates{}, fmt.Errorf("%w: could not verify configuration files: %v", ErrRevisionConflict, err)
+	}
+	expectedGlobal := configFileState{exists: base.globalConfigExists, raw: base.Raw}
+	if !sameConfigFileState(current.global, expectedGlobal) {
+		return configFileStates{}, fmt.Errorf("%w: global configuration changed outside the manager; reload and retry", ErrRevisionConflict)
+	}
+	expectedWorkspace := configFileState{exists: base.workspaceConfigExists, raw: base.workspaceRaw}
+	if !sameConfigFileState(current.workspace, expectedWorkspace) {
+		return configFileStates{}, fmt.Errorf("%w: workspace configuration changed outside the manager; reload and retry", ErrRevisionConflict)
+	}
+	return current, nil
+}
+
 // PreviewUpdate builds and validates the Snapshot produced by operations at an
 // expected revision without writing the config file or publishing the result.
 func (m *Manager) PreviewUpdate(ctx context.Context, expectedRevision uint64, operations []Operation) (Snapshot, error) {
 	m.updateMu.Lock()
 	defer m.updateMu.Unlock()
-	candidate, _, err := m.prepareUpdate(ctx, expectedRevision, operations)
+	candidate, _, _, err := m.prepareUpdate(ctx, expectedRevision, operations)
 	if err != nil {
 		return candidate, err
 	}
@@ -1065,12 +1165,15 @@ func (m *Manager) commitPreview(ctx context.Context, expectedRevision uint64, op
 func (m *Manager) commitUpdate(ctx context.Context, expectedRevision uint64, operations []Operation, preview *Snapshot) (Snapshot, error) {
 	m.updateMu.Lock()
 	defer m.updateMu.Unlock()
-	candidate, raw, err := m.prepareUpdate(ctx, expectedRevision, operations)
+	candidate, raw, base, err := m.prepareUpdate(ctx, expectedRevision, operations)
 	if err != nil {
 		return candidate, err
 	}
 	if preview != nil && !sameUpdatePreview(*preview, candidate) {
 		return m.Snapshot(), fmt.Errorf("%w: prospective configuration changed before commit", ErrRevisionConflict)
+	}
+	if _, err := m.verifyConfigFilesUnchanged(base); err != nil {
+		return m.Snapshot(), err
 	}
 	writer := m.configWriter
 	if writer == nil {
@@ -1091,6 +1194,9 @@ func sameUpdatePreview(left, right Snapshot) bool {
 		left.ActiveModelID == right.ActiveModelID &&
 		left.Ready == right.Ready &&
 		bytes.Equal(left.Raw, right.Raw) &&
+		left.globalConfigExists == right.globalConfigExists &&
+		left.workspaceConfigExists == right.workspaceConfigExists &&
+		bytes.Equal(left.workspaceRaw, right.workspaceRaw) &&
 		reflect.DeepEqual(left.Document, right.Document) &&
 		reflect.DeepEqual(left.Workspace, right.Workspace) &&
 		reflect.DeepEqual(left.EffectiveModels, right.EffectiveModels) &&
@@ -1098,23 +1204,27 @@ func sameUpdatePreview(left, right Snapshot) bool {
 }
 
 // prepareUpdate requires updateMu and is shared by preview and commit so both
-// paths apply identical optimistic-concurrency, patching, and validation rules.
-func (m *Manager) prepareUpdate(ctx context.Context, expectedRevision uint64, operations []Operation) (Snapshot, []byte, error) {
+// paths apply identical optimistic-concurrency, file-state, patching, and
+// validation rules.
+func (m *Manager) prepareUpdate(ctx context.Context, expectedRevision uint64, operations []Operation) (Snapshot, []byte, Snapshot, error) {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
-		return Snapshot{}, nil, errors.New("configuration manager is closed")
+		return Snapshot{}, nil, Snapshot{}, errors.New("configuration manager is closed")
 	}
 	if expectedRevision != m.snapshot.Revision {
 		current := m.snapshot.Clone()
 		m.mu.Unlock()
-		return current, nil, fmt.Errorf("%w: expected %d, current %d", ErrRevisionConflict, expectedRevision, current.Revision)
+		return current, nil, Snapshot{}, fmt.Errorf("%w: expected %d, current %d", ErrRevisionConflict, expectedRevision, current.Revision)
 	}
-	raw := append([]byte(nil), m.snapshot.Raw...)
-	currentRevision := m.snapshot.Revision
-	currentReady := m.snapshot.Ready
+	base := m.snapshot.Clone()
 	m.mu.Unlock()
-	var err error
+
+	files, err := m.verifyConfigFilesUnchanged(base)
+	if err != nil {
+		return base, nil, Snapshot{}, err
+	}
+	raw := append([]byte(nil), base.Raw...)
 	for _, operation := range operations {
 		switch operation.Kind {
 		case OperationSetActiveModel:
@@ -1131,20 +1241,20 @@ func (m *Manager) prepareUpdate(ctx context.Context, expectedRevision uint64, op
 			err = fmt.Errorf("unsupported config operation %q", operation.Kind)
 		}
 		if err != nil {
-			return Snapshot{}, nil, err
+			return Snapshot{}, nil, Snapshot{}, err
 		}
 	}
 	if _, _, err := parseAndValidateGlobal(raw, m.paths.GlobalConfig); err != nil {
-		return Snapshot{}, nil, err
+		return Snapshot{}, nil, Snapshot{}, err
 	}
-	candidate, err := m.candidateFromRaw(ctx, raw, currentRevision+1)
+	candidate, err := m.candidateFromRawWithWorkspace(ctx, raw, files.workspace, base.Revision+1)
 	if err != nil {
-		return Snapshot{}, nil, err
+		return Snapshot{}, nil, Snapshot{}, err
 	}
-	if !candidate.Ready && currentReady {
-		return Snapshot{}, nil, fmt.Errorf("updated configuration does not have a usable active credential")
+	if !candidate.Ready && base.Ready {
+		return Snapshot{}, nil, Snapshot{}, fmt.Errorf("updated configuration does not have a usable active credential")
 	}
-	return candidate, raw, nil
+	return candidate, raw, base, nil
 }
 
 func (m *Manager) Reload() error { return m.reload(context.Background(), true, true) }

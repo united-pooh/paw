@@ -1,7 +1,9 @@
 package config
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -523,6 +525,102 @@ func TestManagerDefaultDiscovererPerformsOneSafeHTTPRequest(t *testing.T) {
 	}
 	if _, ok := snapshot.EffectiveModels["local/live-default"]; !ok {
 		t.Fatalf("default discovery result missing: %#v", snapshot.EffectiveModels)
+	}
+}
+
+func TestManagerHTTPDiscoveryFiltersRawUnsafeNamesBeforeCatalogCacheAndSelectors(t *testing.T) {
+	paddedOverlong := " " + strings.Repeat("x", 512) + " "
+	tests := []struct {
+		name            string
+		rawNames        []string
+		wantCache       string
+		wantDiscovered  int
+		wantFiltered    int
+		wantCatalogSize int
+	}{
+		{
+			name:            "mixed safe and rejected",
+			rawNames:        []string{" safe ", "bad\x1bmodel", paddedOverlong, "   "},
+			wantCache:       "safe",
+			wantDiscovered:  4,
+			wantFiltered:    3,
+			wantCatalogSize: 2,
+		},
+		{
+			name:            "all rejected",
+			rawNames:        []string{"bad\nmodel", paddedOverlong, "\t"},
+			wantDiscovered:  3,
+			wantFiltered:    3,
+			wantCatalogSize: 1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clearDetectionEnv(t)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				items := make([]map[string]string, len(test.rawNames))
+				for index, name := range test.rawNames {
+					items[index] = map[string]string{"id": name}
+				}
+				if err := json.NewEncoder(w).Encode(map[string]any{"data": items}); err != nil {
+					t.Errorf("encode discovery response: %v", err)
+				}
+			}))
+			defer server.Close()
+
+			paths := isolatedPaths(t, false)
+			document := emptyDocument()
+			document.Providers["local"] = discoveryTestProvider(server.URL + "/v1")
+			document.Models["local/manual"] = Model{Provider: "local", Name: "manual"}
+			document.ActiveModel = "local/manual"
+			writeManagerDocument(t, paths, document)
+
+			manager, err := Open(context.Background(), Options{
+				Paths:        paths,
+				Credentials:  &FakeCredentialStore{Unavailable: true},
+				DisableWatch: true,
+				Discoverer:   NewHTTPModelDiscoverer(server.Client()),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = manager.Close() })
+
+			snapshot := manager.Snapshot()
+			if snapshot.Discovery.DiscoveredCount != test.wantDiscovered || snapshot.Discovery.FilteredCount != test.wantFiltered {
+				t.Fatalf("discovery counts = discovered %d filtered %d, want %d/%d", snapshot.Discovery.DiscoveredCount, snapshot.Discovery.FilteredCount, test.wantDiscovered, test.wantFiltered)
+			}
+			if len(snapshot.EffectiveModels) != test.wantCatalogSize {
+				t.Fatalf("effective catalog = %#v", snapshot.EffectiveModels)
+			}
+			if test.wantCache != "" {
+				if item, ok := snapshot.EffectiveModels["local/"+test.wantCache]; !ok || item.Model.Name != test.wantCache {
+					t.Fatalf("safe model missing from catalog: %#v", snapshot.EffectiveModels)
+				}
+			}
+			for _, rawName := range test.rawNames {
+				if rawName == " safe " {
+					continue
+				}
+				id := "local/" + strings.TrimSpace(rawName)
+				if _, err := snapshot.CatalogSelection(id); err == nil {
+					t.Fatalf("unsafe raw model became selectable as %q", id)
+				}
+			}
+			cache, err := readDiscoveryCache(paths.ModelDiscoveryCache)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entry := cache.Providers["local"]
+			if got := strings.Join(entry.Models, ","); got != test.wantCache {
+				t.Fatalf("cached models = %q, want %q", got, test.wantCache)
+			}
+			for _, cached := range entry.Models {
+				if unsafeDiscoveredModelName(cached) || strings.TrimSpace(cached) != cached {
+					t.Fatalf("unsafe model reached cache: %q", cached)
+				}
+			}
+		})
 	}
 }
 
@@ -1847,6 +1945,213 @@ func TestManagerPreviewUpdateDoesNotWritePublishOrMutate(t *testing.T) {
 	}
 }
 
+func TestManagerPreviewUpdateRejectsExternalGlobalAndWorkspaceStateChanges(t *testing.T) {
+	tests := []struct {
+		name               string
+		workspace          bool
+		workspaceInitially bool
+		mutate             func(t *testing.T, paths Paths, external []byte)
+		assertExternal     func(t *testing.T, paths Paths, external []byte)
+	}{
+		{
+			name: "global content replacement",
+			mutate: func(t *testing.T, paths Paths, external []byte) {
+				t.Helper()
+				if err := atomicWriteFile(paths.GlobalConfig, external, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			assertExternal: func(t *testing.T, paths Paths, external []byte) {
+				t.Helper()
+				got, err := os.ReadFile(paths.GlobalConfig)
+				if err != nil || !bytes.Equal(got, external) {
+					t.Fatalf("external global bytes changed: got=%s err=%v", got, err)
+				}
+			},
+		},
+		{
+			name: "global deletion",
+			mutate: func(t *testing.T, paths Paths, _ []byte) {
+				t.Helper()
+				if err := os.Remove(paths.GlobalConfig); err != nil {
+					t.Fatal(err)
+				}
+			},
+			assertExternal: func(t *testing.T, paths Paths, _ []byte) {
+				t.Helper()
+				if _, err := os.Stat(paths.GlobalConfig); !os.IsNotExist(err) {
+					t.Fatalf("deleted global config was recreated: %v", err)
+				}
+			},
+		},
+		{
+			name:               "workspace content replacement",
+			workspace:          true,
+			workspaceInitially: true,
+			mutate: func(t *testing.T, paths Paths, external []byte) {
+				t.Helper()
+				if err := atomicWriteFile(paths.WorkspaceConfig, external, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			assertExternal: func(t *testing.T, paths Paths, external []byte) {
+				t.Helper()
+				got, err := os.ReadFile(paths.WorkspaceConfig)
+				if err != nil || !bytes.Equal(got, external) {
+					t.Fatalf("external workspace bytes changed: got=%s err=%v", got, err)
+				}
+			},
+		},
+		{
+			name:               "workspace deletion",
+			workspace:          true,
+			workspaceInitially: true,
+			mutate: func(t *testing.T, paths Paths, _ []byte) {
+				t.Helper()
+				if err := os.Remove(paths.WorkspaceConfig); err != nil {
+					t.Fatal(err)
+				}
+			},
+			assertExternal: func(t *testing.T, paths Paths, _ []byte) {
+				t.Helper()
+				if _, err := os.Stat(paths.WorkspaceConfig); !os.IsNotExist(err) {
+					t.Fatalf("deleted workspace config was recreated: %v", err)
+				}
+			},
+		},
+		{
+			name:      "workspace creation",
+			workspace: true,
+			mutate: func(t *testing.T, paths Paths, external []byte) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Dir(paths.WorkspaceConfig), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(paths.WorkspaceConfig, external, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			assertExternal: func(t *testing.T, paths Paths, external []byte) {
+				t.Helper()
+				got, err := os.ReadFile(paths.WorkspaceConfig)
+				if err != nil || !bytes.Equal(got, external) {
+					t.Fatalf("created workspace bytes changed: got=%s err=%v", got, err)
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clearDetectionEnv(t)
+			paths := isolatedPaths(t, test.workspace)
+			document := emptyDocument()
+			document.Providers["local"] = Provider{Transport: TransportOpenAICompatible, Endpoint: "http://127.0.0.1:1234/v1"}
+			document.Models["local/one"] = Model{Provider: "local", Name: "one"}
+			document.Models["local/two"] = Model{Provider: "local", Name: "two"}
+			document.ActiveModel = "local/one"
+			writeManagerDocument(t, paths, document)
+			if test.workspaceInitially {
+				if err := os.MkdirAll(filepath.Dir(paths.WorkspaceConfig), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(paths.WorkspaceConfig, []byte(`{"schemaVersion":2}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			manager := openTestManager(t, paths, &FakeCredentialStore{Unavailable: true}, false)
+			before := manager.Snapshot()
+			external := []byte(`{"schemaVersion":2,"models":{"local/two":{"stream":false}}}`)
+			if !test.workspace {
+				externalDocument := cloneDocument(document)
+				externalDocument.ActiveModel = "local/two"
+				var err error
+				external, err = marshalStarter(externalDocument, "external editor")
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			test.mutate(t, paths, external)
+
+			_, err := manager.PreviewUpdate(context.Background(), before.Revision, []Operation{SetActiveModel("local/two")})
+			if !errors.Is(err, ErrRevisionConflict) {
+				t.Fatalf("preview error = %v, want external state conflict", err)
+			}
+			after := manager.Snapshot()
+			if after.Revision != before.Revision || after.ContentHash != before.ContentHash || !bytes.Equal(after.Raw, before.Raw) {
+				t.Fatalf("preview conflict changed manager snapshot: before=%#v after=%#v", before, after)
+			}
+			test.assertExternal(t, paths, external)
+		})
+	}
+}
+
+func TestManagerCommitRereadsFileStateImmediatelyBeforeWrite(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, false)
+	document := emptyDocument()
+	document.Providers["local"] = Provider{
+		Transport: TransportOpenAICompatible,
+		Endpoint:  "http://127.0.0.1:1234/v1",
+		Auth:      Auth{Credential: "provider/local"},
+	}
+	document.Models["local/one"] = Model{Provider: "local", Name: "one"}
+	document.Models["local/two"] = Model{Provider: "local", Name: "two"}
+	document.ActiveModel = "local/one"
+	writeManagerDocument(t, paths, document)
+	store := &blockingCredentialStore{
+		inner:   &FakeCredentialStore{Values: map[string]string{"provider/local": "secret"}},
+		blockOn: 3,
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	t.Cleanup(func() {
+		select {
+		case <-store.release:
+		default:
+			close(store.release)
+		}
+	})
+	manager := openTestManager(t, paths, store, false)
+	before := manager.Snapshot()
+	externalRaw, err := marshalStarter(document, "external edit during commit validation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := manager.Update(context.Background(), before.Revision, []Operation{SetActiveModel("local/two")})
+		result <- err
+	}()
+
+	select {
+	case <-store.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for candidate construction")
+	}
+	if err := atomicWriteFile(paths.GlobalConfig, externalRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	close(store.release)
+	select {
+	case err := <-result:
+		if !errors.Is(err, ErrRevisionConflict) {
+			t.Fatalf("update error = %v, want final file-state conflict", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for conflicted update")
+	}
+	written, err := os.ReadFile(paths.GlobalConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(written, externalRaw) {
+		t.Fatalf("external bytes were overwritten:\nwant=%s\ngot=%s", externalRaw, written)
+	}
+	if after := manager.Snapshot(); after.Revision != before.Revision || after.ActiveModelID != before.ActiveModelID {
+		t.Fatalf("manager snapshot changed after final conflict: before=%#v after=%#v", before, after)
+	}
+}
+
 func TestJSONCTargetedUpdatePreservesCommentsUnknownFieldsAndTrailingComma(t *testing.T) {
 	clearDetectionEnv(t)
 	paths := isolatedPaths(t, false)
@@ -1982,6 +2287,63 @@ func TestUpsertProviderPreservesNilAndExplicitEmptyDiscoveryFilters(t *testing.T
 	}
 	if strings.Contains(string(written), `"include"`) || !strings.Contains(string(written), `"exclude": []`) {
 		t.Fatalf("upsert did not preserve explicit empty exclude in JSONC:\n%s", written)
+	}
+}
+
+func TestUpsertProviderPreservesExplicitEmptyDiscoveryPathRoundTrip(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, false)
+	document := emptyDocument()
+	provider := Provider{Preset: "ollama", Endpoint: "http://127.0.0.1:11434/v1"}
+	document.Providers["ollama"] = provider
+	document.Models["ollama/manual"] = Model{Provider: "ollama", Name: "manual"}
+	document.ActiveModel = "ollama/manual"
+	writeManagerDocument(t, paths, document)
+	manager := openTestManager(t, paths, &FakeCredentialStore{Unavailable: true}, false)
+
+	provider.Discovery = &DiscoveryConfig{Enabled: boolPointer(true), PathSet: true}
+	explicitEmpty, err := manager.Update(context.Background(), manager.Snapshot().Revision, []Operation{UpsertProvider("ollama", provider)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	configured := explicitEmpty.Document.Providers["ollama"].Discovery
+	if configured == nil || !configured.PathSet || configured.Path != "" {
+		t.Fatalf("explicit empty path presence was lost: %#v", configured)
+	}
+	resolved := mergePreset("ollama", explicitEmpty.Document.Providers["ollama"])
+	if resolved.Discovery == nil || resolved.Discovery.Path != "" || !resolved.Discovery.PathSet {
+		t.Fatalf("explicit empty path did not override preset: %#v", resolved.Discovery)
+	}
+	if got, err := discoveryURL(resolved.Endpoint, resolved.Discovery.Path); err != nil || got != resolved.Endpoint {
+		t.Fatalf("explicit empty path URL = %q, err=%v, want endpoint %q", got, err, resolved.Endpoint)
+	}
+	written, err := os.ReadFile(paths.GlobalConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(written), `"path": ""`) {
+		t.Fatalf("explicit empty path was omitted from JSONC:\n%s", written)
+	}
+	if err := manager.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	roundTripped := manager.Snapshot().Document.Providers["ollama"].Discovery
+	if roundTripped == nil || !roundTripped.PathSet || roundTripped.Path != "" {
+		t.Fatalf("explicit empty path was lost after reload: %#v", roundTripped)
+	}
+
+	provider.Discovery = &DiscoveryConfig{Enabled: boolPointer(true)}
+	omitted, err := manager.Update(context.Background(), manager.Snapshot().Revision, []Operation{UpsertProvider("ollama", provider)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	configured = omitted.Document.Providers["ollama"].Discovery
+	if configured == nil || configured.PathSet {
+		t.Fatalf("omitted path acquired presence: %#v", configured)
+	}
+	resolved = mergePreset("ollama", omitted.Document.Providers["ollama"])
+	if resolved.Discovery == nil || resolved.Discovery.Path != "/api/tags" || !resolved.Discovery.PathSet {
+		t.Fatalf("omitted path did not inherit preset: %#v", resolved.Discovery)
 	}
 }
 

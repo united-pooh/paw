@@ -41,7 +41,13 @@ func TestHTTPModelDiscovererOpenAIList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []DiscoveredModel{{ProviderID: "local", Name: "a"}, {ProviderID: "local", Name: "b"}}
+	want := []DiscoveredModel{
+		{ProviderID: "local", Name: " b "},
+		{ProviderID: "local", Name: "a"},
+		{ProviderID: "local", Name: "a"},
+		{ProviderID: "local", Name: ""},
+		{ProviderID: "local", Name: "   "},
+	}
 	if !slices.Equal(want, got) {
 		t.Fatalf("models=%#v", got)
 	}
@@ -66,7 +72,11 @@ func TestHTTPModelDiscovererOllamaTagsUsesOriginRelativePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []DiscoveredModel{{ProviderID: "ollama", Name: "llama3"}, {ProviderID: "ollama", Name: "qwen:latest"}}
+	want := []DiscoveredModel{
+		{ProviderID: "ollama", Name: "qwen:latest"},
+		{ProviderID: "ollama", Name: " llama3 "},
+		{ProviderID: "ollama", Name: "qwen:latest"},
+	}
 	if !slices.Equal(want, got) {
 		t.Fatalf("models=%#v", got)
 	}

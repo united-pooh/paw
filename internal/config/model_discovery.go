@@ -339,18 +339,9 @@ func parseDiscoveredModelNames(format string, body []byte) ([]string, error) {
 		}
 	}
 
-	unique := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		name = strings.TrimSpace(name)
-		if name != "" {
-			unique[name] = struct{}{}
-		}
-	}
-	names = names[:0]
-	for name := range unique {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	// Preserve decoded names exactly. Manager owns the trust boundary and must
+	// reject controls and overlong UTF-8 byte sequences before trim or dedup so
+	// filtering remains observable in DiscoveryStatus.
 	return names, nil
 }
 

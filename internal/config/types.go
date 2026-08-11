@@ -60,6 +60,7 @@ type Provider struct {
 type DiscoveryConfig struct {
 	Enabled        *bool    `json:"enabled,omitempty"`
 	Path           string   `json:"path,omitempty"`
+	PathSet        bool     `json:"-"`
 	Format         string   `json:"format,omitempty"`
 	TimeoutSeconds int      `json:"timeoutSeconds,omitempty"`
 	Include        []string `json:"include,omitempty"`
@@ -69,7 +70,7 @@ type DiscoveryConfig struct {
 func (value DiscoveryConfig) MarshalJSON() ([]byte, error) {
 	type encodedDiscoveryConfig struct {
 		Enabled        *bool     `json:"enabled,omitempty"`
-		Path           string    `json:"path,omitempty"`
+		Path           *string   `json:"path,omitempty"`
 		Format         string    `json:"format,omitempty"`
 		TimeoutSeconds int       `json:"timeoutSeconds,omitempty"`
 		Include        *[]string `json:"include,omitempty"`
@@ -77,9 +78,12 @@ func (value DiscoveryConfig) MarshalJSON() ([]byte, error) {
 	}
 	encoded := encodedDiscoveryConfig{
 		Enabled:        value.Enabled,
-		Path:           value.Path,
 		Format:         value.Format,
 		TimeoutSeconds: value.TimeoutSeconds,
+	}
+	if value.PathSet || value.Path != "" {
+		path := value.Path
+		encoded.Path = &path
 	}
 	if value.Include != nil {
 		include := cloneStringSlice(value.Include)
@@ -90,6 +94,43 @@ func (value DiscoveryConfig) MarshalJSON() ([]byte, error) {
 		encoded.Exclude = &exclude
 	}
 	return json.Marshal(encoded)
+}
+
+func (value *DiscoveryConfig) UnmarshalJSON(raw []byte) error {
+	type encodedDiscoveryConfig struct {
+		Enabled        *bool           `json:"enabled,omitempty"`
+		Path           json.RawMessage `json:"path"`
+		Format         string          `json:"format,omitempty"`
+		TimeoutSeconds int             `json:"timeoutSeconds,omitempty"`
+		Include        *[]string       `json:"include,omitempty"`
+		Exclude        *[]string       `json:"exclude,omitempty"`
+	}
+	var encoded encodedDiscoveryConfig
+	if err := json.Unmarshal(raw, &encoded); err != nil {
+		return err
+	}
+	decoded := DiscoveryConfig{
+		Enabled:        cloneBoolPointer(encoded.Enabled),
+		Format:         encoded.Format,
+		TimeoutSeconds: encoded.TimeoutSeconds,
+	}
+	if len(encoded.Path) != 0 {
+		if strings.TrimSpace(string(encoded.Path)) == "null" {
+			return errors.New("discovery path must be a string")
+		}
+		if err := json.Unmarshal(encoded.Path, &decoded.Path); err != nil {
+			return err
+		}
+		decoded.PathSet = true
+	}
+	if encoded.Include != nil {
+		decoded.Include = cloneStringSlice(*encoded.Include)
+	}
+	if encoded.Exclude != nil {
+		decoded.Exclude = cloneStringSlice(*encoded.Exclude)
+	}
+	*value = decoded
+	return nil
 }
 
 type Auth struct {
@@ -187,6 +228,10 @@ type Snapshot struct {
 	Ready           bool
 	LoadedAt        time.Time
 	Raw             []byte
+
+	globalConfigExists    bool
+	workspaceConfigExists bool
+	workspaceRaw          []byte
 }
 
 func (s Snapshot) Clone() Snapshot {
@@ -196,6 +241,7 @@ func (s Snapshot) Clone() Snapshot {
 	s.EffectiveModels = cloneCatalog(s.EffectiveModels)
 	s.Diagnostics = append([]Diagnostic(nil), s.Diagnostics...)
 	s.Raw = append([]byte(nil), s.Raw...)
+	s.workspaceRaw = append([]byte(nil), s.workspaceRaw...)
 	return s
 }
 
@@ -338,6 +384,7 @@ func cloneDiscoveryConfig(value *DiscoveryConfig) *DiscoveryConfig {
 	}
 	cloned := *value
 	cloned.Enabled = cloneBoolPointer(value.Enabled)
+	cloned.PathSet = value.PathSet || value.Path != ""
 	cloned.Include = cloneStringSlice(value.Include)
 	cloned.Exclude = cloneStringSlice(value.Exclude)
 	return &cloned
