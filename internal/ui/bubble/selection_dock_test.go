@@ -733,3 +733,30 @@ func TestSelectionDockVisibleRangeRequiresCompleteOption(t *testing.T) {
 		t.Fatalf("complete option range=%d,%d", start, end)
 	}
 }
+
+func TestSelectionDockMultilinePromptKeepsAnswersAndActionsVisible(t *testing.T) {
+	r := selecttool.Request{
+		ID:     "review",
+		Prompt: "设计第 4–5 节：错误处理与测试\n\n错误处理：模型发现失败不阻断启动。\n\n测试分层：\n1. discovery\n2. catalog\n3. cache\n\n是否批准完整设计？",
+		Mode:   selecttool.ModeSingle,
+		Options: []selecttool.Option{
+			{ID: "approve", Label: "批准设计", Description: "开始编写规格文档"},
+			{ID: "revise", Label: "需要修改", Description: "暂停并调整设计"},
+		},
+		InitialSelectedIDs: []string{"approve"},
+		MinSelect:          1,
+		MaxSelect:          1,
+	}
+	m := newModel(context.Background(), &fakeRunner{}, "", nil, nil, nil, nil, nil)
+	m.ready = true
+	m.width = 84
+	m.height = 20
+	m.selectionDock = newSelectionDock(r)
+	m.relayout()
+	plain := ansi.Strip(m.View())
+	for _, want := range []string{"批准设计", "需要修改", "Custom option", "Chat about this", "enter submit"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("multiline prompt hid %q in %q", want, plain)
+		}
+	}
+}

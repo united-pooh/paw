@@ -14,7 +14,7 @@ func (d *selectionDock) preferredHeight(width int) int {
 		return inputMinVisibleLines
 	}
 	width = maxInt(1, width)
-	promptLines := wrapStyledCellLine(sanitizeTerminalText(d.request.Prompt), width)
+	promptLines := wrapStyledCellText(sanitizeTerminalText(d.request.Prompt), width)
 	promptHeight := minInt(3, maxInt(1, len(promptLines)))
 	_, answerHeights := selectionAnswerRows(d, width)
 	answerHeight := 0
@@ -95,7 +95,7 @@ func limitedWrappedLines(text string, width, budget int) []string {
 	if budget <= 0 {
 		return nil
 	}
-	lines := wrapStyledCellLine(text, maxInt(1, width))
+	lines := wrapStyledCellText(text, maxInt(1, width))
 	if len(lines) == 0 {
 		return []string{""}
 	}
