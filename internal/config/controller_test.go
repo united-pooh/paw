@@ -385,12 +385,12 @@ func TestControllerActivationRuntimeFailureLeavesPersistenceCoherent(t *testing.
 }
 
 func TestControllerProspectiveRuntimeDriftBeforeCommitRollsBack(t *testing.T) {
-	store := &FakeCredentialStore{Values: map[string]string{"local-key": "old-secret"}}
-	harness := newControllerTestHarness(t, controllerDiscoveryDocument(Auth{Credential: "local-key"}), []DiscoveredModel{{ProviderID: "local", Name: "a"}}, store)
+	t.Setenv("PAW_TEST_LOCAL_KEY", "old-secret")
+	harness := newControllerTestHarness(t, controllerDiscoveryDocument(Auth{Env: []string{"PAW_TEST_LOCAL_KEY"}}), []DiscoveredModel{{ProviderID: "local", Name: "a"}}, nil)
 	before := captureControllerState(t, harness)
 	harness.runtime.setApplyHook(func(cfg model.Config) error {
 		if cfg.Model == "a" {
-			return store.Set(context.Background(), "local-key", "new-secret")
+			return os.Setenv("PAW_TEST_LOCAL_KEY", "new-secret")
 		}
 		return nil
 	})

@@ -8,7 +8,20 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
+
+// waitReady blocks until the manager's background startup has settled, so
+// tests observe deterministic terminal state instead of racing the
+// asynchronous Start.
+func waitReady(t *testing.T, m *Manager) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := m.WaitReady(ctx); err != nil {
+		t.Fatalf("WaitReady() error = %v", err)
+	}
+}
 
 func TestManagerStartsDiscoversPaginatedCapabilitiesAndCalls(t *testing.T) {
 	manager, err := Start(context.Background(), Config{
@@ -28,6 +41,7 @@ func TestManagerStartsDiscoversPaginatedCapabilitiesAndCalls(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+	waitReady(t, manager)
 
 	snapshot := manager.Snapshot()
 	if len(snapshot.Tools) != 7 {
@@ -76,6 +90,7 @@ func TestManagerBlocksSensitiveMCPToolsWithoutHidingOthers(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+	waitReady(t, manager)
 	if snapshotHasTool(manager.Snapshot(), "jina__show_api_key") {
 		t.Fatalf("sensitive tool leaked into snapshot: %#v", manager.Snapshot().Tools)
 	}
@@ -99,6 +114,7 @@ func TestManagerKeepsDisabledServerWithoutLaunchingIt(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+	waitReady(t, manager)
 	statuses := manager.Status()
 	if len(statuses) != 1 || statuses[0].State != "disabled" {
 		t.Fatalf("statuses=%#v", statuses)
@@ -118,6 +134,7 @@ func TestManagerKeepsStartingWhenEnabledServerIsUnavailable(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+	waitReady(t, manager)
 
 	if tools := manager.Snapshot().Tools; len(tools) != 0 {
 		t.Fatalf("tools=%#v, want none from unavailable server", tools)
@@ -152,6 +169,7 @@ func TestManagerRetainsHealthyServersWhenAnotherIsUnavailable(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+	waitReady(t, manager)
 
 	snapshot := manager.Snapshot()
 	if !snapshotHasTool(snapshot, "codegraph__explore") {
@@ -187,6 +205,7 @@ func TestCodeGraphSmokeWhenEnabled(t *testing.T) {
 		t.Fatalf("CodeGraph Start() error = %v", err)
 	}
 	defer func() { _ = manager.Close(context.Background()) }()
+	waitReady(t, manager)
 	var explore bool
 	for _, item := range manager.Snapshot().Tools {
 		if item.Name == "codegraph__codegraph_explore" {
@@ -248,7 +267,7 @@ func TestReplaceServerToolsRejectsIncompatibleSchemaAtomically(t *testing.T) {
 	}
 }
 
-func TestManagerStartRejectsIncompatibleSchema(t *testing.T) {
+func TestManagerMarksInvalidSchemaServerUnavailable(t *testing.T) {
 	manager, err := Start(context.Background(), Config{
 		Path: "/tmp/mcp.toml",
 		Servers: map[string]ServerConfig{
@@ -265,12 +284,110 @@ func TestManagerStartRejectsIncompatibleSchema(t *testing.T) {
 			},
 		},
 	})
-	if err == nil {
-		_ = manager.Close(context.Background())
-		t.Fatal("Start() accepted incompatible MCP tool schema")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "codegraph__explore") || !strings.Contains(err.Error(), `type must be "object"`) {
-		t.Fatalf("Start() error = %v, want tool name and reason", err)
+	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+	waitReady(t, manager)
+
+	statuses := manager.Status()
+	if len(statuses) != 1 || statuses[0].State != "unavailable" {
+		t.Fatalf("statuses=%#v", statuses)
+	}
+	if !strings.Contains(statuses[0].LastError, "codegraph__explore") || !strings.Contains(statuses[0].LastError, `type must be "object"`) {
+		t.Fatalf("LastError=%q, want tool name and reason", statuses[0].LastError)
+	}
+	if tools := manager.Snapshot().Tools; len(tools) != 0 {
+		t.Fatalf("invalid-schema server exposed tools: %#v", tools)
+	}
+}
+
+func TestManagerStartReturnsBeforeSlowServerReady(t *testing.T) {
+	started := time.Now()
+	manager, err := Start(context.Background(), Config{
+		Servers: map[string]ServerConfig{
+			"slow": {
+				Name:    "slow",
+				Command: os.Args[0],
+				Args:    []string{"-test.run=TestMCPManagerHelper"},
+				WorkDir: t.TempDir(),
+				Enabled: true,
+				Env: map[string]string{
+					"GO_WANT_MCP_MANAGER_HELPER": "1",
+					"GO_WANT_MCP_MANAGER_SLOW":   "1",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+	elapsed := time.Since(started)
+	// The helper blocks for 2s before answering initialize; a synchronous
+	// Start would take at least that long. Keep the bound generous to avoid
+	// flakes on loaded CI machines.
+	if elapsed > 800*time.Millisecond {
+		t.Fatalf("Start() blocked for %v, want async return", elapsed)
+	}
+	waitReady(t, manager)
+	if !snapshotHasTool(manager.Snapshot(), "slow__explore") {
+		t.Fatalf("slow server tools missing after WaitReady: %#v", manager.Snapshot().Tools)
+	}
+	status := manager.Status()
+	if len(status) != 1 || status[0].State != "running" {
+		t.Fatalf("status=%#v", status)
+	}
+}
+
+func TestManagerCloseDuringStartupIsSafe(t *testing.T) {
+	manager, err := Start(context.Background(), Config{
+		Servers: map[string]ServerConfig{
+			"slow": {
+				Name:    "slow",
+				Command: os.Args[0],
+				Args:    []string{"-test.run=TestMCPManagerHelper"},
+				WorkDir: t.TempDir(),
+				Enabled: true,
+				Env: map[string]string{
+					"GO_WANT_MCP_MANAGER_HELPER": "1",
+					"GO_WANT_MCP_MANAGER_SLOW":   "1",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	// Close while the server is still starting; this must neither hang nor
+	// leak the spawned process.
+	done := make(chan error, 1)
+	go func() {
+		done <- manager.Close(context.Background())
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close() hung during startup")
+	}
+	// WaitReady must return (not block forever) after Close.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := manager.WaitReady(ctx); err != nil {
+		t.Fatalf("WaitReady() after Close() error = %v", err)
+	}
+	// The server was adopted if startup won the race, otherwise it stayed
+	// "starting"; either is valid, but it must never be registered as running
+	// after Close (its session would have leaked).
+	status := manager.Status()
+	if len(status) != 1 || status[0].State != "starting" && status[0].State != "running" {
+		t.Fatalf("status=%#v", status)
+	}
+	if manager.Ready() != true {
+		t.Fatal("Ready() = false after background startup finished")
 	}
 }
 
@@ -303,6 +420,9 @@ func managerHelperResult(method string, params json.RawMessage) (json.RawMessage
 	}
 	switch method {
 	case "initialize":
+		if os.Getenv("GO_WANT_MCP_MANAGER_SLOW") == "1" {
+			time.Sleep(2 * time.Second)
+		}
 		return json.RawMessage(`{"protocolVersion":"2025-06-18","capabilities":{"tools":{},"resources":{},"prompts":{}},"serverInfo":{"name":"helper","version":"1"}}`), nil
 	case "tools/list":
 		if os.Getenv("GO_WANT_MCP_MANAGER_SENSITIVE") == "1" {

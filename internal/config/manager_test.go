@@ -98,34 +98,6 @@ func (s *countingCredentialStore) Delete(ctx context.Context, id string) error {
 	return s.inner.Delete(ctx, id)
 }
 
-type blockingCredentialStore struct {
-	inner   *FakeCredentialStore
-	blockOn int32
-	gets    atomic.Int32
-	started chan struct{}
-	release chan struct{}
-}
-
-func (s *blockingCredentialStore) Get(ctx context.Context, id string) (string, error) {
-	if s.gets.Add(1) == s.blockOn {
-		close(s.started)
-		select {
-		case <-s.release:
-		case <-ctx.Done():
-			return "", ctx.Err()
-		}
-	}
-	return s.inner.Get(ctx, id)
-}
-
-func (s *blockingCredentialStore) Set(ctx context.Context, id, secret string) error {
-	return s.inner.Set(ctx, id, secret)
-}
-
-func (s *blockingCredentialStore) Delete(ctx context.Context, id string) error {
-	return s.inner.Delete(ctx, id)
-}
-
 type credentialObservingDiscoverer struct {
 	store          *countingCredentialStore
 	calls          atomic.Int32
@@ -832,9 +804,10 @@ func TestManagerDiscoveryPersistsLiveOnlyAfterFinalDocumentConfirmsProvenance(t 
 
 func TestManagerDiscoveryWatcherClosesPostReadRegistrationGap(t *testing.T) {
 	clearDetectionEnv(t)
+	t.Setenv("PAW_TEST_LOCAL", "secret")
 	paths := isolatedPaths(t, true)
 	provider := discoveryTestProvider("http://127.0.0.1:1234/v1")
-	provider.Auth = Auth{Credential: "provider/local"}
+	provider.Auth = Auth{Env: []string{"PAW_TEST_LOCAL"}}
 	initial := emptyDocument()
 	initial.Providers["local"] = provider
 	initial.Models["local/one"] = Model{Provider: "local", Name: "one"}
@@ -847,20 +820,18 @@ func TestManagerDiscoveryWatcherClosesPostReadRegistrationGap(t *testing.T) {
 	if err := os.WriteFile(paths.WorkspaceConfig, []byte(`{"schemaVersion":2,"activeModel":"local/one"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	store := &blockingCredentialStore{
-		inner:   &FakeCredentialStore{Values: map[string]string{"provider/local": "secret"}},
-		blockOn: 2,
+	discoverer := &blockingModelDiscoverer{
 		started: make(chan struct{}),
 		release: make(chan struct{}),
+		models:  []DiscoveredModel{{Name: "old-live"}},
 	}
 	t.Cleanup(func() {
 		select {
-		case <-store.release:
+		case <-discoverer.release:
 		default:
-			close(store.release)
+			close(discoverer.release)
 		}
 	})
-	discoverer := &fakeModelDiscoverer{models: []DiscoveredModel{{Name: "old-live"}}}
 	type openResult struct {
 		manager *Manager
 		err     error
@@ -869,7 +840,7 @@ func TestManagerDiscoveryWatcherClosesPostReadRegistrationGap(t *testing.T) {
 	go func() {
 		manager, err := Open(context.Background(), Options{
 			Paths:       paths,
-			Credentials: store,
+			Credentials: &FakeCredentialStore{Unavailable: true},
 			Discoverer:  discoverer,
 			Debounce:    20 * time.Millisecond,
 		})
@@ -877,9 +848,9 @@ func TestManagerDiscoveryWatcherClosesPostReadRegistrationGap(t *testing.T) {
 	}()
 
 	select {
-	case <-store.started:
+	case <-discoverer.started:
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for final runtime credential resolution")
+		t.Fatal("timed out waiting for startup discovery")
 	}
 	finalProvider := cloneProvider(provider)
 	finalProvider.Endpoint = "http://127.0.0.1:5678/v1"
@@ -890,7 +861,7 @@ func TestManagerDiscoveryWatcherClosesPostReadRegistrationGap(t *testing.T) {
 	if err := atomicWriteFile(paths.WorkspaceConfig, []byte(`{"schemaVersion":2,"activeModel":"local/two","models":{"local/two":{"stream":false}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	close(store.release)
+	close(discoverer.release)
 
 	var result openResult
 	select {
@@ -917,8 +888,8 @@ func TestManagerDiscoveryWatcherClosesPostReadRegistrationGap(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if len(discoverer.calls) != 1 {
-		t.Fatalf("discovery calls after queued watcher reload = %#v", discoverer.calls)
+	if got := discoverer.calls.Load(); got != 1 {
+		t.Fatalf("discovery calls after queued watcher reload = %d", got)
 	}
 }
 
@@ -1037,17 +1008,18 @@ func TestManagerDiscoveryMismatchedThenMatchingReloadUsesLoadedCacheWithoutReque
 	}
 }
 
-func TestManagerDiscoveryCredentialResolutionSkipsInitialRuntimePass(t *testing.T) {
+func TestManagerDiscoveryCredentialResolutionUsesEnvironmentOnly(t *testing.T) {
 	clearDetectionEnv(t)
+	t.Setenv("PAW_TEST_LOCAL", "secret")
 	paths := isolatedPaths(t, false)
 	provider := discoveryTestProvider("http://127.0.0.1:1234/v1")
-	provider.Auth = Auth{Credential: "provider/local"}
+	provider.Auth = Auth{Env: []string{"PAW_TEST_LOCAL"}}
 	document := emptyDocument()
 	document.Providers["local"] = provider
 	document.Models["local/manual"] = Model{Provider: "local", Name: "manual"}
 	document.ActiveModel = "local/manual"
 	writeManagerDocument(t, paths, document)
-	store := &countingCredentialStore{inner: &FakeCredentialStore{Values: map[string]string{"provider/local": "secret"}}}
+	store := &countingCredentialStore{inner: &FakeCredentialStore{Values: map[string]string{"provider/local": "keyring-secret"}}}
 	discoverer := &credentialObservingDiscoverer{store: store}
 
 	manager, err := Open(context.Background(), Options{Paths: paths, Credentials: store, DisableWatch: true, Discoverer: discoverer})
@@ -1058,11 +1030,8 @@ func TestManagerDiscoveryCredentialResolutionSkipsInitialRuntimePass(t *testing.
 	if got := discoverer.calls.Load(); got != 1 {
 		t.Fatalf("discovery calls = %d, want 1", got)
 	}
-	if got := discoverer.getsAtDiscover.Load(); got != 1 {
-		t.Fatalf("credential reads before discovery = %d, want only the discovery credential read", got)
-	}
-	if got := store.gets.Load(); got != 3 {
-		t.Fatalf("total credential reads = %d, want discovery plus one final runtime/profile pass", got)
+	if got := store.gets.Load(); got != 0 {
+		t.Fatalf("keyring was consulted %d times; secrets must come from env only", got)
 	}
 	if discoverer.credential != "secret" || manager.Snapshot().Active.APIKey != "secret" {
 		t.Fatalf("credential was not propagated safely: discovery=%q runtime=%q", discoverer.credential, manager.Snapshot().Active.APIKey)
@@ -2129,30 +2098,23 @@ func TestManagerCommitRereadsFileStateImmediatelyBeforeWrite(t *testing.T) {
 	document.Providers["local"] = Provider{
 		Transport: TransportOpenAICompatible,
 		Endpoint:  "http://127.0.0.1:1234/v1",
-		Auth:      Auth{Credential: "provider/local"},
 	}
 	document.Models["local/one"] = Model{Provider: "local", Name: "one"}
 	document.Models["local/two"] = Model{Provider: "local", Name: "two"}
 	document.ActiveModel = "local/one"
 	writeManagerDocument(t, paths, document)
-	store := &blockingCredentialStore{
-		inner:   &FakeCredentialStore{Values: map[string]string{"provider/local": "secret"}},
-		blockOn: 3,
-		started: make(chan struct{}),
-		release: make(chan struct{}),
-	}
-	t.Cleanup(func() {
-		select {
-		case <-store.release:
-		default:
-			close(store.release)
-		}
-	})
-	manager := openTestManager(t, paths, store, false)
+	manager := openTestManager(t, paths, &FakeCredentialStore{Unavailable: true}, false)
 	before := manager.Snapshot()
 	externalRaw, err := marshalStarter(document, "external edit during commit validation")
 	if err != nil {
 		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	manager.configWriteHook = func() error {
+		close(started)
+		<-release
+		return nil
 	}
 	result := make(chan error, 1)
 	go func() {
@@ -2161,14 +2123,14 @@ func TestManagerCommitRereadsFileStateImmediatelyBeforeWrite(t *testing.T) {
 	}()
 
 	select {
-	case <-store.started:
+	case <-started:
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for candidate construction")
 	}
 	if err := atomicWriteFile(paths.GlobalConfig, externalRaw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	close(store.release)
+	close(release)
 	select {
 	case err := <-result:
 		if !errors.Is(err, ErrRevisionConflict) {
@@ -2636,24 +2598,26 @@ func TestInvalidReloadAndDeletionKeepLastKnownGood(t *testing.T) {
 	}
 }
 
-func TestExplicitReloadReResolvesCredentialWhenFileHashIsUnchanged(t *testing.T) {
+func TestExplicitReloadReResolvesCredentialFromEnvironmentWhenFileHashIsUnchanged(t *testing.T) {
 	clearDetectionEnv(t)
+	t.Setenv("PAW_TEST_PRIVATE", "old-secret")
 	paths := isolatedPaths(t, false)
 	if err := os.MkdirAll(paths.Home, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	document := emptyDocument()
-	document.Providers["private"] = Provider{Transport: TransportOpenAICompatible, Endpoint: "http://127.0.0.1:1234/v1", Auth: Auth{Credential: "provider/private"}}
+	document.Providers["private"] = Provider{Transport: TransportOpenAICompatible, Endpoint: "http://127.0.0.1:1234/v1", Auth: Auth{Env: []string{"PAW_TEST_PRIVATE"}}}
 	document.Models["private/model"] = Model{Provider: "private", Name: "model"}
 	document.ActiveModel = "private/model"
 	raw, _ := marshalStarter(document, "credential reload")
 	if err := os.WriteFile(paths.GlobalConfig, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	store := &FakeCredentialStore{Values: map[string]string{"provider/private": "old-secret"}}
-	manager := openTestManager(t, paths, store, false)
+	manager := openTestManager(t, paths, &FakeCredentialStore{Unavailable: true}, false)
 	before := manager.Snapshot()
-	store.Values["provider/private"] = "new-secret"
+	if err := os.Setenv("PAW_TEST_PRIVATE", "new-secret"); err != nil {
+		t.Fatal(err)
+	}
 	if err := manager.Reload(); err != nil {
 		t.Fatal(err)
 	}
@@ -2699,6 +2663,7 @@ func TestWatcherObservesAtomicReplacement(t *testing.T) {
 
 func TestLegacyMigrationIsIdempotentAndImportsPlaintextCredential(t *testing.T) {
 	clearDetectionEnv(t)
+	t.Setenv("DEEPSEEK_API_KEY", "legacy-secret")
 	paths := isolatedPaths(t, false)
 	if err := os.MkdirAll(paths.LegacyHome, 0o700); err != nil {
 		t.Fatal(err)

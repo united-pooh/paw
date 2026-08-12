@@ -4,9 +4,18 @@ import (
 	"context"
 	"log"
 	"os"
+
+	"paw/internal/model"
 )
 
 func main() {
+	// Load .env/.env.local before any mode so provider auth configured via
+	// auth.env resolves from the project environment instead of prompting
+	// for the macOS keychain on every startup.
+	if _, err := model.LoadOptionalEnvFiles(); err != nil {
+		log.Printf("warning: load .env/.env.local: %v", err)
+	}
+
 	opts := parseOptions()
 	ctx := context.Background()
 

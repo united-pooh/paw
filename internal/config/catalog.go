@@ -79,7 +79,10 @@ func mergePreset(id string, configured Provider) Provider {
 	if configured.APIPath != "" {
 		base.APIPath = configured.APIPath
 	}
-	if configured.Auth.Credential != "" {
+	// An explicitly configured credential — including an explicit empty
+	// string that clears the preset's keyring reference — always wins.
+	// An unset field inherits the preset's credential.
+	if configured.Auth.CredentialSet || configured.Auth.Credential != "" {
 		base.Auth.Credential = configured.Auth.Credential
 	}
 	if len(configured.Auth.Env) > 0 {

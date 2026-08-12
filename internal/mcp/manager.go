@@ -32,8 +32,12 @@ type Manager struct {
 	tools     map[string]ToolSpec
 	snapshot  Snapshot
 	subs      map[chan Snapshot]struct{}
+	closed    bool
 	closeOnce sync.Once
 	closeErr  error
+
+	ready     chan struct{}
+	readyOnce sync.Once
 }
 
 type managedServer struct {
@@ -44,8 +48,15 @@ type managedServer struct {
 	status       ServerStatus
 }
 
-// Start launches every enabled configured MCP server, initializes it, and
-// discovers all initial capabilities before returning.
+// Start launches every enabled configured MCP server asynchronously and
+// returns immediately; it does not block on server startup. Servers initialize
+// in the background: as each one becomes ready its tools are registered and
+// subscribers are notified through Subscribe, so fast servers surface their
+// capabilities while slow or unreachable ones are still starting. A server
+// that fails to start (or whose capabilities fail validation) is marked
+// unavailable with a diagnostic LastError instead of blocking or failing the
+// startup of the rest. WaitReady blocks until every enabled server has
+// reached a terminal state (running or unavailable).
 func Start(ctx context.Context, config Config) (*Manager, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -58,6 +69,7 @@ func Start(ctx context.Context, config Config) (*Manager, error) {
 		servers: make(map[string]*managedServer, len(config.Servers)),
 		tools:   make(map[string]ToolSpec),
 		subs:    make(map[chan Snapshot]struct{}),
+		ready:   make(chan struct{}),
 	}
 
 	names := make([]string, 0, len(config.Servers))
@@ -81,20 +93,33 @@ func Start(ctx context.Context, config Config) (*Manager, error) {
 	}
 	sort.Strings(names)
 
-	type startupResult struct {
-		name         string
-		session      *processSession
-		capabilities map[string]any
-		tools        []ToolSpec
-		counts       capabilityCounts
-		err          error
-	}
+	go func() {
+		defer m.readyOnce.Do(func() { close(m.ready) })
+		m.startServers(names)
+	}()
+	go func() {
+		<-managerCtx.Done()
+		_ = m.Close(context.Background())
+	}()
+	return m, nil
+}
+
+type startupResult struct {
+	name         string
+	session      *processSession
+	capabilities map[string]any
+	tools        []ToolSpec
+	counts       capabilityCounts
+	err          error
+}
+
+func (m *Manager) startServers(names []string) {
 	results := make(chan startupResult, len(names))
 	for _, name := range names {
 		server := m.servers[name]
 		go func() {
 			result := startupResult{name: name}
-			startupCtx, cancelStartup := context.WithTimeout(managerCtx, startupTimeout)
+			startupCtx, cancelStartup := context.WithTimeout(m.ctx, startupTimeout)
 			defer cancelStartup()
 			session, err := startSession(context.Background(), server.config)
 			if err != nil {
@@ -110,21 +135,18 @@ func Start(ctx context.Context, config Config) (*Manager, error) {
 			results <- result
 		}()
 	}
-
+	// Apply results as they arrive so a fast server's tools are registered and
+	// published before slower servers finish.
 	for range names {
-		result := <-results
-		server := m.servers[result.name]
-		if result.err != nil {
-			server.status.State = "unavailable"
-			server.status.LastError = truncateDiagnostic(result.err.Error())
-			if result.session != nil {
-				server.status.PID = result.session.PID()
-				closeCtx, cancelClose := context.WithTimeout(context.Background(), closeTimeout)
-				_ = result.session.Close(closeCtx)
-				cancelClose()
-			}
-			continue
-		}
+		m.applyStartupResult(<-results)
+	}
+}
+
+func (m *Manager) applyStartupResult(result startupResult) {
+	m.mu.Lock()
+	server := m.servers[result.name]
+	closed := m.closed
+	if !closed && result.err == nil {
 		server.session = result.session
 		server.capabilities = cloneCapabilities(result.capabilities)
 		server.tools = result.tools
@@ -136,28 +158,76 @@ func Start(ctx context.Context, config Config) (*Manager, error) {
 		server.status.Prompts = result.counts.prompts
 		server.status.BlockedTools = result.counts.blockedTools
 	}
-	for _, name := range names {
-		server := m.servers[name]
-		if server.status.State != "running" {
-			continue
+	m.mu.Unlock()
+
+	if closed {
+		// The manager was closed while this server was starting; never adopt
+		// the session or leak its process.
+		if result.session != nil {
+			closeCtx, cancelClose := context.WithTimeout(context.Background(), closeTimeout)
+			_ = result.session.Close(closeCtx)
+			cancelClose()
 		}
-		if err := m.replaceServerTools(name, server.tools); err != nil {
-			_ = m.Close(context.Background())
-			return nil, err
-		}
+		return
 	}
-	for _, name := range names {
-		server := m.servers[name]
-		if server.status.State == "running" {
-			m.watchServer(name, server)
-		}
+	if result.err != nil {
+		m.markStartupFailed(server, result.err.Error(), result.session)
+		return
 	}
-	go func() {
-		<-managerCtx.Done()
-		_ = m.Close(context.Background())
-	}()
+	if err := m.replaceServerTools(result.name, result.tools); err != nil {
+		// Invalid capability data for one server must not take down the
+		// manager; mark the server unavailable and surface the diagnostic.
+		m.markStartupFailed(server, err.Error(), result.session)
+		return
+	}
+	m.watchServer(result.name, server)
 	m.publishSnapshot()
-	return m, nil
+}
+
+func (m *Manager) markStartupFailed(server *managedServer, message string, session *processSession) {
+	m.mu.Lock()
+	server.status.State = "unavailable"
+	server.status.LastError = truncateDiagnostic(message)
+	m.mu.Unlock()
+	if session != nil {
+		closeCtx, cancelClose := context.WithTimeout(context.Background(), closeTimeout)
+		_ = session.Close(closeCtx)
+		cancelClose()
+	}
+	m.publishSnapshot()
+}
+
+// WaitReady blocks until every enabled server has reached a terminal startup
+// state (running or unavailable), or until ctx is done. Disabled servers are
+// not waited on. WaitReady returns nil immediately after background startup
+// has completed or the manager has been closed.
+func (m *Manager) WaitReady(ctx context.Context) error {
+	if m == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-m.ready:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Ready reports whether background startup has completed for every enabled
+// server.
+func (m *Manager) Ready() bool {
+	if m == nil {
+		return true
+	}
+	select {
+	case <-m.ready:
+		return true
+	default:
+		return false
+	}
 }
 
 func initializeAndDiscover(ctx context.Context, config ServerConfig, session *processSession) ([]ToolSpec, capabilityCounts, map[string]any, error) {
@@ -780,12 +850,13 @@ func (m *Manager) Close(ctx context.Context) error {
 	}
 	m.closeOnce.Do(func() {
 		m.cancel()
-		m.mu.RLock()
+		m.mu.Lock()
+		m.closed = true
 		servers := make([]*managedServer, 0, len(m.servers))
 		for _, server := range m.servers {
 			servers = append(servers, server)
 		}
-		m.mu.RUnlock()
+		m.mu.Unlock()
 		closeCtx, cancel := context.WithTimeout(ctx, closeTimeout)
 		defer cancel()
 		for _, server := range servers {

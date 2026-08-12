@@ -133,9 +133,48 @@ func (value *DiscoveryConfig) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
+// Auth declares where a provider secret comes from: a named entry in the
+// platform credential store (Credential) and/or environment variables (Env).
+// Env variables are resolved first; Credential is the keyring fallback.
+// CredentialSet records whether the JSON document explicitly set credential,
+// including an explicit empty string that clears a preset's keyring reference.
 type Auth struct {
-	Credential string   `json:"credential,omitempty"`
-	Env        []string `json:"env,omitempty"`
+	Credential    string   `json:"credential,omitempty"`
+	CredentialSet bool     `json:"-"`
+	Env           []string `json:"env,omitempty"`
+}
+
+func (value *Auth) UnmarshalJSON(raw []byte) error {
+	type encodedAuth struct {
+		Credential *string  `json:"credential"`
+		Env        []string `json:"env"`
+	}
+	var encoded encodedAuth
+	if err := json.Unmarshal(raw, &encoded); err != nil {
+		return err
+	}
+	value.CredentialSet = encoded.Credential != nil
+	value.Credential = ""
+	if encoded.Credential != nil {
+		value.Credential = *encoded.Credential
+	}
+	value.Env = append([]string(nil), encoded.Env...)
+	return nil
+}
+
+func (value Auth) MarshalJSON() ([]byte, error) {
+	type encodedAuth struct {
+		Credential *string  `json:"credential,omitempty"`
+		Env        []string `json:"env,omitempty"`
+	}
+	encoded := encodedAuth{Env: value.Env}
+	// Emit credential when it was explicitly configured (even as an empty
+	// clear marker) or when a non-empty value was set programmatically.
+	if value.CredentialSet || value.Credential != "" {
+		credential := value.Credential
+		encoded.Credential = &credential
+	}
+	return json.Marshal(encoded)
 }
 
 type Model struct {

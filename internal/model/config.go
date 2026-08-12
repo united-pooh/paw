@@ -722,6 +722,14 @@ func loadAPIKeyByEnvName(primary string, values map[string]string) string {
 	return ""
 }
 
+// LoadOptionalEnvFiles loads key=value pairs from .env and .env.local in the
+// current working directory into the process environment (missing files are
+// not errors). It is called once at process startup so provider auth declared
+// via auth.env can resolve without touching the system keyring.
+func LoadOptionalEnvFiles() (map[string]string, error) {
+	return loadOptionalEnvFiles(".env", ".env.local")
+}
+
 func loadOptionalEnvFiles(paths ...string) (map[string]string, error) {
 	loaded := make(map[string]string)
 	for _, path := range paths {

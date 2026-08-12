@@ -2,7 +2,6 @@ package config
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -43,16 +42,15 @@ type CredentialSource struct {
 	Name string
 }
 
-func resolveCredential(ctx context.Context, store CredentialStore, auth Auth) (string, CredentialSource, error) {
-	if id := strings.TrimSpace(auth.Credential); id != "" && store != nil {
-		value, err := store.Get(ctx, id)
-		if err == nil && strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value), CredentialSource{Kind: "keyring", Name: id}, nil
-		}
-		if err != nil && !errorsIsCredentialMiss(err) {
-			return "", CredentialSource{}, fmt.Errorf("read credential %q: %w", id, err)
-		}
-	}
+// resolveCredential resolves a provider secret from environment variables
+// only. The platform credential store (macOS keychain / Windows Credential
+// Manager) is intentionally never consulted: locally-built binaries fail
+// keychain ACL checks — the binary's cdhash changes with every rebuild — which
+// makes macOS prompt for the keychain password on every startup. Secrets
+// therefore come exclusively from auth.env variables; the keyring remains
+// available for explicit Set/Delete through /config but is never read
+// automatically.
+func resolveCredential(_ context.Context, _ CredentialStore, auth Auth) (string, CredentialSource, error) {
 	for _, name := range auth.Env {
 		name = strings.TrimSpace(name)
 		if name == "" {
@@ -63,10 +61,6 @@ func resolveCredential(ctx context.Context, store CredentialStore, auth Auth) (s
 		}
 	}
 	return "", CredentialSource{}, ErrCredentialNotFound
-}
-
-func errorsIsCredentialMiss(err error) bool {
-	return err == ErrCredentialNotFound || err == ErrCredentialStoreUnavailable
 }
 
 // FakeCredentialStore is exported for integration tests and embedders.
