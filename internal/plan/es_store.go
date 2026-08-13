@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -38,10 +39,16 @@ type EventStore struct {
 	events   *es.JSONLStore
 	registry *es.Registry
 	loader   *es.Loader
+	// beforeProjectedWrite 仅测试用：原子投影写前回调（锁内），模拟并发外部编辑。
+	beforeProjectedWrite func()
 }
 
 var _ DocStore = (*EventStore)(nil)
 var _ SessionStatusRecorder = (*EventStore)(nil)
+
+// ErrExternalEditConflict 表示 plan 投影文件被用户外部编辑，而调用方基于
+// 过期状态发起 Update。重新 Get（读磁盘最新）后再 Update 即可采纳编辑。
+var ErrExternalEditConflict = errors.New("plan: external edit conflict")
 
 // NewEventStore 构造 plan 事件溯源存储。docDir 是 .md 投影文件目录；
 // eventsDir 是事件库根目录（plan 流位于 <eventsDir>/plans/）。
@@ -95,6 +102,8 @@ func (s *EventStore) loadState(ctx context.Context, id PlanID) (esState, bool, e
 }
 
 // Create 追加 plan.created 事件并将文档投影为 .md 文件。
+// 先写投影、后追加事件：投影写失败不会留下已提交事件；事件追加失败时
+// 投影领先，下一次 Update 会按外部编辑采纳自愈。
 func (s *EventStore) Create(ctx context.Context, doc PlanDoc) error {
 	if err := contextErr(ctx); err != nil {
 		return err
@@ -109,15 +118,27 @@ func (s *EventStore) Create(ctx context.Context, doc PlanDoc) error {
 	if err != nil {
 		return err
 	}
+	if _, statErr := os.Stat(path); statErr == nil {
+		return fmt.Errorf("plan %q already exists", doc.ID)
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return statErr
+	}
+	exists, err := s.streamExists(doc.ID)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return fmt.Errorf("plan %q already exists", doc.ID)
+	}
 	if doc.CreatedAt.IsZero() {
 		doc.CreatedAt = s.now()
 	}
 	doc.UpdatedAt = doc.CreatedAt
 	doc.Path = path
-	if err := s.appendCreated(ctx, EventCreated, doc); err != nil {
+	if err := s.projectedCreate(doc); err != nil {
 		return err
 	}
-	return s.projectedCreate(doc)
+	return s.appendCreated(ctx, EventCreated, doc)
 }
 
 // ImportBaseline 迁移导入：把已有文档写为 plan.baseline 事件并投影文件。
@@ -137,10 +158,17 @@ func (s *EventStore) ImportBaseline(ctx context.Context, doc PlanDoc) error {
 		return err
 	}
 	doc.Path = path
-	if err := s.appendCreated(ctx, EventBaseline, doc); err != nil {
+	exists, err := s.streamExists(doc.ID)
+	if err != nil {
 		return err
 	}
-	return s.projectedCreate(doc)
+	if exists {
+		return fmt.Errorf("plan %q already exists", doc.ID)
+	}
+	if err := s.projectedCreate(doc); err != nil {
+		return err
+	}
+	return s.appendCreated(ctx, EventBaseline, doc)
 }
 
 func (s *EventStore) appendCreated(ctx context.Context, typ string, doc PlanDoc) error {
@@ -190,6 +218,11 @@ func (s *EventStore) projectedCreate(doc PlanDoc) error {
 // Update diff 文档内容变化产出 plan.doc_updated 事件，再投影覆盖文件。
 // 文档可能由 agent 直接写文件、首次经 Finalize 持久化：事件流不存在但
 // 投影文件存在时自动基线导入（plan.baseline），保证外部写入兼容。
+//
+// 外部编辑冲突：磁盘投影与事件流不一致且调用方不是基于磁盘最新内容时
+// 返回 ErrExternalEditConflict；基于磁盘最新（FileStore.Get 后 Update）
+// 则采纳用户编辑进事件流。投影写入使用原子替换 + 字节 CAS + 跨进程锁，
+// 先投影后事件：投影冲突或缺失时事件未提交，不产生部分提交。
 func (s *EventStore) Update(ctx context.Context, doc PlanDoc) error {
 	if err := contextErr(ctx); err != nil {
 		return err
@@ -216,6 +249,25 @@ func (s *EventStore) Update(ctx context.Context, doc PlanDoc) error {
 		if err != nil {
 			return err
 		}
+	} else {
+		diskDoc, diskOK, derr := s.FileStore.Get(ctx, doc.ID)
+		if derr != nil {
+			return derr
+		}
+		if !diskOK {
+			// 投影缺失但事件流存在：拒绝更新，避免事件提交后投影写入失败
+			// 造成事件流与文件分裂。
+			return ErrExternalEditConflict
+		}
+		if !planDocContentEqual(diskDoc, current.Doc) && !planDocContentEqual(doc, diskDoc) {
+			return ErrExternalEditConflict
+		}
+	}
+	// created_at 是事件流事实，文件 front matter 不含它：磁盘来源的 doc
+	// （decodeDoc）恒为零值，一律继承流值；非零必须与流一致，防止绕过
+	// 不可变校验。
+	if doc.CreatedAt.IsZero() {
+		doc.CreatedAt = current.Doc.CreatedAt
 	}
 	if doc.CreatedAt != current.Doc.CreatedAt {
 		return fmt.Errorf("plan: created_at is immutable")
@@ -225,7 +277,7 @@ func (s *EventStore) Update(ctx context.Context, doc PlanDoc) error {
 		now = s.now()
 	}
 	var events []es.Envelope
-	if doc.Title != current.Doc.Title || doc.Content != current.Doc.Content {
+	if doc.Title != current.Doc.Title || !planContentEqual(doc.Content, current.Doc.Content) {
 		raw, err := json.Marshal(docUpdatedPayload{
 			Title:     doc.Title,
 			Path:      current.Doc.Path,
@@ -251,32 +303,91 @@ func (s *EventStore) Update(ctx context.Context, doc PlanDoc) error {
 	if len(events) == 0 {
 		return nil
 	}
-	if err := s.appendEvents(ctx, doc.ID, events); err != nil {
-		return err
-	}
 	projected := current.Doc
 	projected.Title = doc.Title
 	projected.Content = doc.Content
 	projected.Status = doc.Status
 	projected.UpdatedAt = now
-	return s.projectedUpdate(projected)
+	// 先投影后事件：投影 CAS 失败（并发外部编辑）时事件未提交；事件追加
+	// 失败时投影领先，下一次 Update 按外部编辑采纳自愈。
+	if err := s.writeProjectedAtomic(projected); err != nil {
+		return err
+	}
+	return s.appendEvents(ctx, doc.ID, events)
 }
 
-// projectedUpdate 覆盖投影文件（与 FileStore.Update 一致：保留 front matter id）。
-func (s *EventStore) projectedUpdate(doc PlanDoc) error {
+// planContentEqual 比较文档内容，容忍 encodeDoc 强制文件尾 \n 引入的差异
+// （事件流内 Content 原样保存；文件往返会补/去一个尾部换行）。用于抑制
+// 无实质变化的 no-op doc_updated 事件。
+func planContentEqual(a, b string) bool {
+	return a == b || a+"\n" == b || a == b+"\n"
+}
+
+// planDocContentEqual 比较投影文件内容级字段（用户可见部分）。CreatedAt/
+// UpdatedAt/Path 等元数据不参与比较（文件 front matter 不含 created_at）。
+func planDocContentEqual(a, b PlanDoc) bool {
+	if a.Title != b.Title || a.Status != b.Status {
+		return false
+	}
+	return planContentEqual(a.Content, b.Content)
+}
+
+// writeProjectedAtomic 原子写投影：temp + fsync + rename，rename 前重读
+// 磁盘字节并与锁外读取的基线比较，不一致说明并发外部编辑，返回
+// ErrExternalEditConflict 且不覆盖。跨进程写由 <doc>.md.lock 独占锁串行化
+// （跟随 internal/config CAS writer 模式）；基线在锁外读取，保证先取得锁
+// 的并发写入者被检测为冲突而不是被覆盖。
+func (s *EventStore) writeProjectedAtomic(doc PlanDoc) error {
 	path, err := s.pathFor(doc.ID)
 	if err != nil {
 		return err
 	}
-	if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
-		return errPlanNotFound
+	baseline, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return errPlanNotFound
+		}
+		return err
 	}
-	doc.UpdatedAt = s.now()
+	release, err := acquirePlanProjectionLock(path)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if s.beforeProjectedWrite != nil {
+		s.beforeProjectedWrite()
+	}
+	cur, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(cur, baseline) {
+		return ErrExternalEditConflict
+	}
 	doc.Path = path
-	return os.WriteFile(path, []byte(encodeDoc(doc)), 0o644)
+	doc.UpdatedAt = s.now()
+	tmp, err := os.CreateTemp(s.dir, ".plan-proj-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	if _, err := tmp.Write([]byte(encodeDoc(doc))); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // MarkApproved 追加 status_changed(approved) 事件并投影 approved 文件。
+// 与 Update 一致：先投影后事件，投影写失败不产生部分提交。
 func (s *EventStore) MarkApproved(ctx context.Context, id PlanID) (PlanDoc, error) {
 	st, ok, err := s.loadState(ctx, id)
 	if err != nil {
@@ -294,12 +405,12 @@ func (s *EventStore) MarkApproved(ctx context.Context, id PlanID) (PlanDoc, erro
 		return PlanDoc{}, fmt.Errorf("plan: encode status payload: %w", err)
 	}
 	env := es.Envelope{Type: EventStatusChanged, OccurredAt: now, SchemaVersion: 1, Payload: raw}
-	if err := s.appendEvents(ctx, id, []es.Envelope{env}); err != nil {
-		return PlanDoc{}, err
-	}
 	st.Doc.Status = PlanApproved
 	st.Doc.UpdatedAt = now
-	if err := s.projectedUpdate(st.Doc); err != nil {
+	if err := s.writeProjectedAtomic(st.Doc); err != nil {
+		return PlanDoc{}, err
+	}
+	if err := s.appendEvents(ctx, id, []es.Envelope{env}); err != nil {
 		return PlanDoc{}, err
 	}
 	return st.Doc, nil
