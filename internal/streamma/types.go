@@ -55,6 +55,11 @@ type GraphSpec struct {
 	StepPolicy StepPolicy  `json:"step_policy,omitempty"`
 	Agents     []AgentSpec `json:"agents"`
 	Edges      []EdgeSpec  `json:"edges,omitempty"`
+	// MaxInvocationsPerAgent 限制每个 agent 的调用次数（每次调用都会
+	// 启动一个新的子智能体会话）。0 表示使用默认值
+	// （defaultMaxInvocationsPerAgent）。防止模型单次 invocation 产出
+	// 大量 step、经 arrival 策略链式放大成无界的子智能体数量。
+	MaxInvocationsPerAgent int `json:"max_invocations_per_agent,omitempty"`
 }
 
 type StepPolicy struct {
@@ -95,12 +100,13 @@ type RunResult struct {
 type EventType string
 
 const (
-	EventProblem       EventType = "problem"
-	EventStepCommitted EventType = "agent.step.committed"
-	EventAgentRetry    EventType = "agent.retry"
-	EventUpstreamEOF   EventType = "control.upstream_eof"
-	EventFinalAnswer   EventType = "agent.final"
-	EventRunFailed     EventType = "run.failed"
+	EventProblem        EventType = "problem"
+	EventStepCommitted  EventType = "agent.step.committed"
+	EventAgentRetry     EventType = "agent.retry"
+	EventUpstreamEOF    EventType = "control.upstream_eof"
+	EventFinalAnswer    EventType = "agent.final"
+	EventIterationLimit EventType = "agent.iteration_limit"
+	EventRunFailed      EventType = "run.failed"
 )
 
 type Event struct {
@@ -232,17 +238,18 @@ type PromptSegment struct {
 }
 
 type compiledGraph struct {
-	runID           string
-	boundary        string
-	maxStepBytes    int
-	requireBoundary bool
-	maxAttempts     int
-	agents          map[string]AgentSpec
-	agentOrder      []string
-	predecessors    map[string][]string
-	successors      map[string][]string
-	edgeIDs         map[string]string
-	sources         []string
+	runID                  string
+	boundary               string
+	maxStepBytes           int
+	requireBoundary        bool
+	maxAttempts            int
+	maxInvocationsPerAgent int
+	agents                 map[string]AgentSpec
+	agentOrder             []string
+	predecessors           map[string][]string
+	successors             map[string][]string
+	edgeIDs                map[string]string
+	sources                []string
 }
 
 func compileGraph(spec GraphSpec) (*compiledGraph, error) {
@@ -266,18 +273,22 @@ func compileGraph(spec GraphSpec) (*compiledGraph, error) {
 	}
 
 	graph := &compiledGraph{
-		runID:           runID,
-		boundary:        boundary,
-		maxStepBytes:    spec.StepPolicy.MaxStepBytes,
-		requireBoundary: spec.StepPolicy.RequireBoundary,
-		maxAttempts:     spec.StepPolicy.MaxAttempts,
-		agents:          map[string]AgentSpec{},
-		predecessors:    map[string][]string{},
-		successors:      map[string][]string{},
-		edgeIDs:         map[string]string{},
+		runID:                  runID,
+		boundary:               boundary,
+		maxStepBytes:           spec.StepPolicy.MaxStepBytes,
+		requireBoundary:        spec.StepPolicy.RequireBoundary,
+		maxAttempts:            spec.StepPolicy.MaxAttempts,
+		maxInvocationsPerAgent: spec.MaxInvocationsPerAgent,
+		agents:                 map[string]AgentSpec{},
+		predecessors:           map[string][]string{},
+		successors:             map[string][]string{},
+		edgeIDs:                map[string]string{},
 	}
 	if graph.maxAttempts < 1 {
 		graph.maxAttempts = 1
+	}
+	if graph.maxInvocationsPerAgent < 1 {
+		graph.maxInvocationsPerAgent = defaultMaxInvocationsPerAgent
 	}
 	for _, agent := range spec.Agents {
 		agent.ID = strings.TrimSpace(agent.ID)

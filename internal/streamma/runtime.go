@@ -9,6 +9,13 @@ import (
 	"time"
 )
 
+// defaultMaxInvocationsPerAgent 是每个 agent 的默认调用次数上限。
+// 每次调用都会启动一个新的子智能体会话；模型单次 invocation 可以产出
+// 任意多个 step，经 arrival 策略链式放大（每个 step 触发下游一次新
+// 调用）会变成无界的子智能体数量。达到上限后该 agent 以最后一次输出
+// 收尾（complete），多余输入记录在 agent.iteration_limit 事件中。
+const defaultMaxInvocationsPerAgent = 4
+
 type RuntimeConfig struct {
 	Graph     GraphSpec
 	Model     ModelStreamer
@@ -210,6 +217,16 @@ func (r *Runtime) advance(ctx context.Context, signals chan<- runtimeSignal) boo
 					}
 				}
 			}
+			if !state.completed && !state.active && state.invocations >= r.graph.maxInvocationsPerAgent && len(state.pendingInputEvents) > 0 {
+				// 达到调用上限：丢弃剩余输入并以最后一次输出收尾，
+				// 防止 EOF 策略下 pending 输入导致无法 complete。
+				dropped := len(state.pendingInputEvents)
+				state.pendingInputEvents = nil
+				r.emitIterationLimit(agentID, dropped)
+				progress = true
+				madeProgress = true
+				r.completeAgent(agentID)
+			}
 			if !state.completed && r.canInvokeEOFTriggered(agentID) {
 				progress = true
 				madeProgress = true
@@ -267,6 +284,18 @@ func (r *Runtime) invokeAgent(ctx context.Context, agentID string, inputEvents [
 	}
 	if attempt < 1 {
 		attempt = 1
+	}
+	if state.invocations >= r.graph.maxInvocationsPerAgent {
+		// 达到调用上限：不再启动新的子智能体会话，以最后一次输出收尾。
+		// 超限后到达的输入不再处理（事件中记录数量）。
+		dropped := len(inputEvents)
+		if len(state.pendingInputEvents) > 0 {
+			dropped += len(state.pendingInputEvents)
+			state.pendingInputEvents = nil
+		}
+		r.emitIterationLimit(agentID, dropped)
+		r.completeAgent(agentID)
+		return nil
 	}
 	state.invocations++
 	agent := r.graph.agents[agentID]
@@ -421,6 +450,9 @@ func (r *Runtime) canInvokeEOFTriggered(agentID string) bool {
 	if state == nil || state.completed || state.active {
 		return false
 	}
+	if state.invocations >= r.graph.maxInvocationsPerAgent {
+		return false
+	}
 	if r.graph.invokePolicy(agentID) != InvokeOnEOF {
 		return false
 	}
@@ -428,6 +460,23 @@ func (r *Runtime) canInvokeEOFTriggered(agentID string) bool {
 		return false
 	}
 	return r.broker.QueueLen(agentID) == 0 && r.broker.AllPredecessorsEOF(agentID)
+}
+
+func (r *Runtime) emitIterationLimit(agentID string, dropped int) {
+	state := r.states[agentID]
+	if state == nil {
+		return
+	}
+	r.appendEvent(Event{
+		RunID:           r.graph.runID,
+		Type:            EventIterationLimit,
+		ProducerAgentID: agentID,
+		Trace: map[string]string{
+			"limit":          strconv.Itoa(r.graph.maxInvocationsPerAgent),
+			"invocations":    strconv.Itoa(state.invocations),
+			"dropped_inputs": strconv.Itoa(dropped),
+		},
+	})
 }
 
 func (r *Runtime) completeAgent(agentID string) {

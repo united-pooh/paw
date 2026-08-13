@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestRuntimeCallsModelWithoutToolsAndIgnoresToolEvents(t *testing.T) {
@@ -251,5 +252,97 @@ func TestRuntimeRetriesParserFatalBeforeFirstStep(t *testing.T) {
 	}
 	if committedStep == nil || committedStep.Attempt != 2 {
 		t.Fatalf("committed step = %#v, want attempt 2", committedStep)
+	}
+}
+
+// TestRuntimeStopsAtInvocationLimit 覆盖：arrival 策略下模型单次 invocation
+// 产出大量 step，每个 step 触发下游一次新调用（子智能体）——调用上限
+// 保证总调用数有界，超限后以最后一次输出收尾，不无限放大。
+func TestRuntimeStopsAtInvocationLimit(t *testing.T) {
+	spec := GraphSpec{
+		RunID:  "run-invocation-limit",
+		Agents: []AgentSpec{{ID: "a"}, {ID: "b"}},
+		Edges:  []EdgeSpec{{From: "a", To: "b"}},
+	}
+	model := newFakeModel(fakeResponse{events: []model.StreamEvent{
+		{Delta: "step one\nEND_STEP\n"},
+		{Delta: "step two\nEND_STEP\n"},
+		{Delta: "step three\nEND_STEP\n"},
+		{Delta: "step four\nEND_STEP\n"},
+		{Delta: "step five\nEND_STEP\n"},
+		{Delta: "step six\nEND_STEP\n"},
+		{Done: true},
+	}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := RunGraph(ctx, spec, model, "problem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != RunCompleted {
+		t.Fatalf("status = %s, want completed (err=%s)", result.Status, result.Error)
+	}
+	// 下游 b 每收到一个 step 尝试一次新调用，上限 4 次后收尾。
+	bSteps := 0
+	limitEvents := 0
+	for _, event := range result.Events {
+		if event.Type == EventStepCommitted && event.ProducerAgentID == "b" {
+			bSteps++
+		}
+		if event.Type == EventIterationLimit && event.ProducerAgentID == "b" {
+			limitEvents++
+			if event.Trace["limit"] != "4" {
+				t.Fatalf("iteration limit trace = %v, want limit=4", event.Trace)
+			}
+		}
+	}
+	if bSteps != defaultMaxInvocationsPerAgent {
+		t.Fatalf("agent b produced %d steps, want %d (invocation limit)", bSteps, defaultMaxInvocationsPerAgent)
+	}
+	if limitEvents != 1 {
+		t.Fatalf("iteration_limit events = %d, want 1", limitEvents)
+	}
+	// 超限后不再开新调用：总调用数有界。
+	if calls := model.Calls(); len(calls) != 1+defaultMaxInvocationsPerAgent {
+		t.Fatalf("total model calls = %d, want %d", len(calls), 1+defaultMaxInvocationsPerAgent)
+	}
+	if result.Final == nil {
+		t.Fatal("final answer missing after hitting invocation limit")
+	}
+}
+
+// TestRuntimeEOFBatchesPendingInputs 覆盖：EOF 策略的 agent 把前置的所有
+// step 合并成一次调用（pending 累积），不受调用上限影响。
+func TestRuntimeEOFBatchesPendingInputs(t *testing.T) {
+	spec := GraphSpec{
+		RunID:  "run-eof-batch",
+		Agents: []AgentSpec{{ID: "a"}, {ID: "b", InvokePolicy: string(InvokeOnEOF)}},
+		Edges:  []EdgeSpec{{From: "a", To: "b"}},
+	}
+	model := newFakeModel(fakeResponse{events: []model.StreamEvent{
+		{Delta: "step one\nEND_STEP\n"},
+		{Delta: "step two\nEND_STEP\n"},
+		{Delta: "step three\nEND_STEP\n"},
+		{Done: true},
+	}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := RunGraph(ctx, spec, model, "problem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != RunCompleted {
+		t.Fatalf("status = %s, want completed (err=%s)", result.Status, result.Error)
+	}
+	// a 产出 3 个 step；b 把 3 个输入合并为一次调用（不受上限影响）。
+	if calls := model.Calls(); len(calls) != 2 {
+		t.Fatalf("total model calls = %d, want 2 (a once, b once batched)", len(calls))
+	}
+	for _, event := range result.Events {
+		if event.Type == EventIterationLimit {
+			t.Fatalf("unexpected iteration_limit event: %+v", event)
+		}
 	}
 }

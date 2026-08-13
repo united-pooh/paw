@@ -21,3 +21,8 @@
 - [x] EffectiveContextLimitTokens: metadata layer; default 256k -> 128k.
 - [x] Tests: llm_metadata_test.go, config_test.go, bubble_test.go assertion.
 - [x] Full `go build ./...` and `go test ./...` verification green.
+- [x] 刷新状态文件（压缩后恢复依据） <!-- todo:1 -->
+- [x] 调研 deepseek-reasonix 与 deepseek-harness（本地 clone / GitHub） <!-- todo:2 -->
+- [x] 对比 Paw 架构/功能差距，严苛审查分级 <!-- todo:3 -->
+- [x] 输出审查结论（含 top actions） <!-- todo:4 -->
+- [x] 新增 B 模式 snip 档测试 + 全量回归验证 <!-- todo:5 -->
