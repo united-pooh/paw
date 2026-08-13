@@ -28,18 +28,25 @@ func newSessionGoalController(sessionID string, runner *loop.Runner, broker *tod
 		source = broker.Latest
 	}
 	c := &sessionGoalController{sessionID: sessionID}
-	// 事件溯源存储：goal 状态持久化到 <store>/goals/ 事件流；store 为 nil 时
-	// 回退到内存存储（headless 无持久化场景）。
+	// 事件溯源存储：goal 状态（含 evidence/checkpoint 子状态）持久化到
+	// <store>/goals/ 事件流；store 为 nil 时回退到内存存储（headless 无持久化
+	// 场景，evidence/checkpoint 保持 nil 即不启用）。
 	var docStore goal.GoalStore
+	var evidenceStore goal.EvidenceStore
+	var checkpointStore goal.CheckpointStore
 	if store != nil {
 		if esStore, err := goal.NewEventStore(store.Dir()); err == nil {
 			docStore = esStore
+			evidenceStore = esStore.EvidenceStore()
+			checkpointStore = esStore.CheckpointStore()
 		}
 	}
 	c.runtime = goal.NewRuntime(goal.RuntimeConfig{
-		Store:    docStore,
-		Executor: runner.GoalTurnExecutor(),
-		Todo:     source,
+		Store:       docStore,
+		Executor:    runner.GoalTurnExecutor(),
+		Todo:        source,
+		Evidence:    evidenceStore,
+		Checkpoints: checkpointStore,
 		Events: func(e goal.Event) {
 			switch e.Type {
 			// 会话结束（完成/失败/取消）或暂停：goal 不再占用前台工作态，
