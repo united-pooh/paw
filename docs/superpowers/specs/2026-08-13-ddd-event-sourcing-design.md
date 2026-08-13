@@ -1,6 +1,6 @@
 # DDD Event Sourcing 设计（核心运行时）
 
-**状态：** 已批准（2026-08-13）
+**状态：** 已实现（2026-08-13，Task 0-9 完成）
 **配套计划：** `docs/superpowers/plans/2026-08-13-ddd-event-sourcing-plan.md`
 **范围：** Goal、Plan、Session/Turn、Tool 调用、Todo
 
@@ -253,8 +253,12 @@ agg.Apply(events...)                                    // 状态前进
 |---|---|---|---|
 | D1 | `session.tool_call` 独立事件不引入 | tool call 保留在 `assistant_message` payload 内，避免新增写入 API 与读取投影改动；与现有 `JournalKind` 一一对应 | 已定（4.3.3 注） |
 | D2 | session 流 seq 保持 **0 基线**（历史语义，fork 依赖），`es.Envelope.Validate` 放宽为 `seq >= 0`；es 自身流仍从 1 分配 | 现有测试断言 seq 从 0 开始，改基线破坏兼容 | 已定 |
-| D3 | `todo.upserted` 存储 API（`AppendTodoSnapshot`）已就绪；loop 层接线推迟到 Task 7 | todo 工具层无 sessionID，接线点在 loop 工具执行后处理（消费者适配） | Task 7 完成 |
-| D4 | session 写入未强制 8 MiB payload 上限（保持现有行为） | 强制上限可能拒绝现有合法大 tool result；统一上限与拒绝策略待 Task 9 评审 | 待定 |
+| D3 | `todo.upserted` 存储 API（`AppendTodoSnapshot`）已就绪；loop 层接线推迟到 Task 7 | todo 工具层无 sessionID，接线点在 loop 工具执行后处理（消费者适配） | **已完成**（`wireTodoEvents`，best-effort 不失败工具） |
+| D4 | session 写入未强制 8 MiB payload 上限（保持现有行为） | 强制上限可能拒绝现有合法大 tool result；es 事件流保留 8 MiB 上限 | **已定**：保持现状，es 流上限为准 |
+| D5 | plan 文档被用户外部编辑：下次 Update 时投影覆盖（与现状 FileStore 行为一致）；文档首次经 Finalize 持久化时自动基线导入 | 事件流不存在但投影文件存在 → 读文件写 `plan.baseline` 再 diff 应用 | **已定**（自动导入已实现，Task 8 dry-run 验证） |
+| D6 | plan Finalize 会产生两条 approved 记录（Update diff 的 status_changed + storeSession 的 RecordSessionStatus） | 幂等无害（Apply 后状态已 approved，重复事件不改变状态） | 已接受 |
+| D7 | goal 聚合不持久化纯进度事件（turn.completed/continued/task.started/compacted 仅走 EventSink）；evidence/checkpoint 保持独立 store | 符合 4.7 原则（纯通知不入库）；独立 store 无状态落点 | 已定 |
+| D8 | 崩溃恢复：torn 尾部（无换行、最后一行解析失败）在 Append 前**物理截断**（es + session 双处） | 否则 O_APPEND 会把新事件拼进损坏行，后续记录全部丢失（Task 8 发现并修复） | **已修复**（`64ad871`） |
 
 ## 7. 风险与开放问题
 
