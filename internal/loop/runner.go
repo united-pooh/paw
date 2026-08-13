@@ -112,6 +112,10 @@ type Runner struct {
 	nowFn                  func() time.Time
 	autoContinueConfig     AutoContinueConfig
 	todoBroker             *todo.Broker
+	stateBlockProvider     StateBlockProvider
+	contextMode            string
+	recentTurns            int
+	stateCompactionRatio   float64
 	lastProgressHash       string
 	activeTool             activeToolState
 	activeTurnCancel       context.CancelFunc
@@ -312,6 +316,53 @@ func (runner *Runner) SetYoloModeHandler(handler func(bool)) {
 	runner.mu.Lock()
 	runner.yoloModeHandler = handler
 	runner.mu.Unlock()
+}
+
+// SetStateBlockProvider 挂载模式 B 恢复用的状态块提供者（cmd/agent 实现）。
+func (runner *Runner) SetStateBlockProvider(provider StateBlockProvider) {
+	if runner == nil {
+		return
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	runner.stateBlockProvider = provider
+}
+
+// SetContextMode 设置上下文压缩模式："summary"（对话摘要，现状）或
+// "state"（状态压缩）。空值视为 summary。
+func (runner *Runner) SetContextMode(mode string) {
+	if runner == nil {
+		return
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if mode == "state" || mode == "summary" {
+		runner.contextMode = mode
+	}
+}
+
+// contextModeState 返回是否处于状态压缩模式。
+func (runner *Runner) contextModeState() bool {
+	if runner == nil {
+		return false
+	}
+	runner.mu.RLock()
+	defer runner.mu.RUnlock()
+	return runner.contextMode == "state"
+}
+
+// buildStateContext 通过 provider 获取状态块（模式 B 恢复/压缩用）。
+func (runner *Runner) buildStateContext(ctx context.Context) (string, error) {
+	if runner == nil {
+		return "", nil
+	}
+	runner.mu.RLock()
+	provider := runner.stateBlockProvider
+	runner.mu.RUnlock()
+	if provider == nil {
+		return "", nil
+	}
+	return provider.BuildStateContext(ctx)
 }
 
 // SetTurnToolFilter scopes the tool set for subsequent turns. A nil filter

@@ -1,0 +1,187 @@
+package loop
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"paw/internal/message"
+	"paw/internal/session"
+)
+
+// StateBlockProvider 提供模式 B（状态压缩）恢复用的结构化状态块。
+// 实现方（cmd/agent）负责读取 plan/todo/memory/ariadne 并组装为
+// 字节稳定、带时间戳标注的文本（设计文档 D9/D12）。
+// 返回空字符串表示无可用状态（不注入）。
+type StateBlockProvider interface {
+	BuildStateContext(ctx context.Context) (string, error)
+}
+
+// stateBlockHeader 是状态块消息的固定前缀（字节稳定，D9）。
+const stateBlockHeader = "[工作状态（State Context）——由系统在恢复时注入，反映 plan/todo/memory/ariadne 的最新状态；对话细节可用 search_transcript 按需取回]\n\n"
+
+// recentTurnsLoader 是 session.JSONLStore 的清洗最近轮次读取能力。
+type recentTurnsLoader interface {
+	LoadRecentTurns(ctx context.Context, sessionID string, n int) ([]message.Message, error)
+}
+
+// loadStateModeHistory 实现模式 B 恢复：状态块 + 最近 N 轮清洗对话
+// （验证实验 v2 结论），替代全量历史。返回 (messages, recovery, error)；
+// 不支持清洗读取或读取失败时返回错误，由调用方降级全量恢复。
+func (runner *Runner) loadStateModeHistory(ctx context.Context) ([]message.Message, *session.RecoveryState, error) {
+	journal := runner.turnJournal()
+	if journal == nil {
+		return nil, nil, nil
+	}
+	loader, ok := journal.(recentTurnsLoader)
+	if !ok {
+		return nil, nil, nil
+	}
+
+	stateBlock, sbErr := runner.buildStateContext(ctx)
+	if sbErr != nil {
+		runner.notifySystem("state-context", "state block unavailable: "+sbErr.Error())
+	}
+	var messages []message.Message
+	if strings.TrimSpace(stateBlock) != "" {
+		messages = append(messages, message.Message{Role: message.RoleUser, Content: stateBlockHeader + stateBlock})
+	}
+	recent, rErr := loader.LoadRecentTurns(ctx, runner.sessionID, runner.resumeRecentTurns())
+	if rErr != nil {
+		return nil, nil, rErr
+	}
+	messages = append(messages, recent...)
+
+	var recovery *session.RecoveryState
+	if snapshot, snapErr := journal.LoadSnapshot(ctx, runner.sessionID); snapErr == nil {
+		recovery = snapshot.Recovery
+	}
+	return messages, recovery, nil
+}
+
+// resumeRecentTurns 返回恢复时保留的完整轮数（settings resumeRecentTurns）。
+func (runner *Runner) resumeRecentTurns() int {
+	if runner == nil {
+		return 3
+	}
+	runner.mu.RLock()
+	defer runner.mu.RUnlock()
+	if runner.recentTurns <= 0 {
+		return 3
+	}
+	return runner.recentTurns
+}
+
+// SetStateCompactionRatio 设置模式 B 压缩触发阈值（0~1，默认 0.9）。
+func (runner *Runner) SetStateCompactionRatio(ratio float64) {
+	if runner == nil || ratio <= 0 || ratio >= 1 {
+		return
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	runner.stateCompactionRatio = ratio
+}
+
+// SetResumeRecentTurns 设置恢复时保留的完整轮数（T5 由 settings 接入）。
+func (runner *Runner) SetResumeRecentTurns(n int) {
+	if runner == nil || n <= 0 {
+		return
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	runner.recentTurns = n
+}
+
+// stateRefreshInstruction 是状态压缩触发时注入的刷新指令（随下一轮请求
+// 发送，不单独调用模型）。
+const stateRefreshInstruction = "[系统] 上下文接近上限，已执行状态压缩：较早的对话已归档（可用 search_transcript 取回细节）。请先调用 update_todo / update_memory / update_ariadne 刷新状态文件（使后续恢复有最新依据），再继续当前工作。"
+
+// maintainStateProjection 实现模式 B 的运行时上下文维护（设计文档 §6）：
+// 对话全量保留（缓存稳定），直到估算达到 stateCompactionRatio（默认
+// 0.9）阈值才触发状态压缩——状态块 + 最近 N 轮（清洗）+ 刷新指令替换
+// 整个历史，不调用摘要模型。压缩后仍超窗口（极端）时降级模式 A 摘要。
+func (runner *Runner) maintainStateProjection(ctx context.Context, history []message.Message) (contextMaintenanceResult, error) {
+	result := contextMaintenanceResult{history: history}
+	if runner == nil || len(history) == 0 {
+		return result, nil
+	}
+	runner.mu.RLock()
+	limit := runner.contextLimitTokens
+	ratio := runner.stateCompactionRatio
+	turns := runner.recentTurns
+	runner.mu.RUnlock()
+	if limit <= 0 {
+		return result, nil
+	}
+	if ratio <= 0 {
+		ratio = 0.9
+	}
+	if turns <= 0 {
+		turns = 3
+	}
+	if estimateMessageTokens(history) < int(float64(limit)*ratio) {
+		return result, nil
+	}
+
+	// 状态压缩：状态块 + 最近 N 轮 + 刷新指令。
+	journal := runner.turnJournal()
+	loader, _ := journal.(recentTurnsLoader)
+	if journal == nil || loader == nil {
+		// 无可靠 turn 边界：降级模式 A 摘要。
+		return runner.compactStateFallback(ctx, history)
+	}
+	stateBlock, sbErr := runner.buildStateContext(ctx)
+	if sbErr != nil {
+		runner.notifySystem("state-context", "state block unavailable: "+sbErr.Error())
+	}
+	var compacted []message.Message
+	if strings.TrimSpace(stateBlock) != "" {
+		compacted = append(compacted, message.Message{Role: message.RoleUser, Content: stateBlockHeader + stateBlock})
+	}
+	recent, rErr := loader.LoadRecentTurns(ctx, runner.sessionID, turns)
+	if rErr != nil {
+		return runner.compactStateFallback(ctx, history)
+	}
+	compacted = append(compacted, recent...)
+	compacted = append(compacted, message.Message{Role: message.RoleUser, Content: stateRefreshInstruction})
+
+	// 极端兜底：状态块 + N 轮 + 指令仍超阈值（几乎不可能）→ 模式 A 摘要。
+	if estimateMessageTokens(compacted) >= int(float64(limit)*ratio) {
+		return runner.compactStateFallback(ctx, history)
+	}
+
+	before := len(history)
+	runner.recordStateCompaction(ctx, before, len(compacted), ratio)
+	result.history = compacted
+	result.estimatedTokensSaved = maxInt(0, estimateMessageTokens(history)-estimateMessageTokens(compacted))
+	return result, nil
+}
+
+// compactStateFallback 降级模式 A（摘要压缩，现状路径）。
+func (runner *Runner) compactStateFallback(ctx context.Context, history []message.Message) (contextMaintenanceResult, error) {
+	compacted, compaction, err := runner.compactHistory(ctx, history, "", true)
+	if err != nil {
+		return contextMaintenanceResult{history: history}, err
+	}
+	result := contextMaintenanceResult{history: compacted}
+	if compaction != nil {
+		result.compaction = compaction
+		result.estimatedTokensSaved = compaction.EstimatedTokensSaved
+	}
+	return result, nil
+}
+
+// recordStateCompaction 记录状态压缩审计事件（best-effort）。
+func (runner *Runner) recordStateCompaction(ctx context.Context, before, after int, ratio float64) {
+	journal := runner.turnJournal()
+	recorder, ok := journal.(interface {
+		AppendStateEvent(ctx context.Context, sessionID string, kind session.StateEventKind, summary string) (int64, error)
+	})
+	if !ok {
+		return
+	}
+	summary := fmt.Sprintf("kept_turns=%d dropped_messages=%d ratio=%.2f", runner.resumeRecentTurns(), before-after, ratio)
+	if _, err := recorder.AppendStateEvent(ctx, runner.sessionID, session.StateEventCompacted, summary); err != nil {
+		runner.notifySystem("state-context", "state compaction event failed: "+err.Error())
+	}
+}

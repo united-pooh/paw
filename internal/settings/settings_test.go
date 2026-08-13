@@ -324,3 +324,56 @@ func TestSaveCreatesPrivateFile(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultCompressionConfig(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.ContextCompression.Mode != CompressionModeState {
+		t.Fatalf("default mode must be state, got %q", cfg.ContextCompression.Mode)
+	}
+	if cfg.ContextCompression.ResumeRecentTurns != 3 {
+		t.Fatalf("default resume turns: %d", cfg.ContextCompression.ResumeRecentTurns)
+	}
+	if cfg.ContextCompression.StateCompactionRatio != 0.9 {
+		t.Fatalf("default ratio: %v", cfg.ContextCompression.StateCompactionRatio)
+	}
+}
+
+func TestCompressionNormalizeAndValidate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	if err := Save(path, Config{ContextCompression: ContextCompressionConfig{
+		Mode:              "bogus",
+		ResumeRecentTurns: 0,
+	}}); err != nil {
+		t.Fatalf("save must normalize: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.ContextCompression.Mode != CompressionModeState {
+		t.Fatalf("bogus mode must normalize to state: %q", cfg.ContextCompression.Mode)
+	}
+	if cfg.ContextCompression.ResumeRecentTurns != 3 {
+		t.Fatalf("zero turns must normalize to 3: %d", cfg.ContextCompression.ResumeRecentTurns)
+	}
+
+	// summary 合法保留。
+	if err := Save(path, Config{ContextCompression: ContextCompressionConfig{
+		Mode: "summary", ResumeRecentTurns: 5, StateCompactionRatio: 0.8,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ = Load(path)
+	if cfg.ContextCompression.Mode != CompressionModeSummary || cfg.ContextCompression.ResumeRecentTurns != 5 {
+		t.Fatalf("summary mode must survive: %+v", cfg.ContextCompression)
+	}
+
+	// 非法 ratio 拒绝。
+	bad := Config{ContextCompression: ContextCompressionConfig{
+		Mode: CompressionModeState, ResumeRecentTurns: 3, StateCompactionRatio: 1.5,
+	}}
+	if err := Validate(bad); err == nil {
+		t.Fatal("ratio >= 1 must be rejected")
+	}
+}

@@ -25,6 +25,9 @@ func (runner *Runner) maintainContextProjection(ctx context.Context, history []m
 	if runner == nil || len(history) == 0 {
 		return result, nil
 	}
+	if runner.contextModeState() {
+		return runner.maintainStateProjection(ctx, history)
+	}
 
 	runner.mu.RLock()
 	limit := runner.contextLimitTokens

@@ -31,10 +31,26 @@ type RunMode string
 type MeterLocation string
 type HomeDirFunc func() (string, error)
 
+type CompressionMode string
+
+const (
+	CompressionModeSummary CompressionMode = "summary"
+	CompressionModeState   CompressionMode = "state"
+)
+
 type Config struct {
 	Subagent           SubagentConfig           `json:"subagent"`
 	UI                 UIConfig                 `json:"ui"`
 	ContextMaintenance ContextMaintenanceConfig `json:"context_maintenance"`
+	ContextCompression ContextCompressionConfig `json:"context_compression"`
+}
+
+// ContextCompressionConfig 是状态压缩（模式 B）配置：模式切换、恢复保留
+// 轮数、运行时压缩触发阈值（切片 3 使用）。
+type ContextCompressionConfig struct {
+	Mode                 CompressionMode `json:"mode"`
+	ResumeRecentTurns    int             `json:"resume_recent_turns"`
+	StateCompactionRatio float64         `json:"state_compaction_ratio"`
 }
 
 type ContextMaintenanceConfig struct {
@@ -69,11 +85,34 @@ type Controller struct {
 	cfg  Config
 }
 
+const (
+	DefaultResumeRecentTurns    = 3
+	DefaultStateCompactionRatio = 0.9
+)
+
 func DefaultConfig() Config {
 	return Config{
 		Subagent:           SubagentConfig{DefaultContextMode: ContextModeEmpty, DefaultRunMode: RunModeBackground, WaitTimeoutMs: DefaultSubagentWaitTimeoutMs},
 		UI:                 UIConfig{Theme: theme.Default, ContextLimitTokens: DefaultContextLimitTokens, ContextMeterLocation: MeterLocationInputAbove},
 		ContextMaintenance: DefaultContextMaintenanceConfig(),
+		ContextCompression: DefaultContextCompressionConfig(),
+	}
+}
+
+func DefaultContextCompressionConfig() ContextCompressionConfig {
+	return ContextCompressionConfig{
+		Mode:                 CompressionModeState,
+		ResumeRecentTurns:    DefaultResumeRecentTurns,
+		StateCompactionRatio: DefaultStateCompactionRatio,
+	}
+}
+
+func NormalizeCompressionMode(mode CompressionMode) CompressionMode {
+	switch CompressionMode(strings.ToLower(strings.TrimSpace(string(mode)))) {
+	case CompressionModeSummary:
+		return CompressionModeSummary
+	default:
+		return CompressionModeState
 	}
 }
 
@@ -181,6 +220,16 @@ func Normalize(cfg Config) Config {
 	if cfg.ContextMaintenance == (ContextMaintenanceConfig{}) {
 		cfg.ContextMaintenance = DefaultContextMaintenanceConfig()
 	}
+	if cfg.ContextCompression == (ContextCompressionConfig{}) {
+		cfg.ContextCompression = DefaultContextCompressionConfig()
+	}
+	cfg.ContextCompression.Mode = NormalizeCompressionMode(cfg.ContextCompression.Mode)
+	if cfg.ContextCompression.ResumeRecentTurns <= 0 {
+		cfg.ContextCompression.ResumeRecentTurns = DefaultResumeRecentTurns
+	}
+	if cfg.ContextCompression.StateCompactionRatio <= 0 || cfg.ContextCompression.StateCompactionRatio >= 1 {
+		cfg.ContextCompression.StateCompactionRatio = DefaultStateCompactionRatio
+	}
 	return cfg
 }
 
@@ -200,6 +249,9 @@ func Validate(cfg Config) error {
 	}
 	if c.TailTokens <= 0 || c.MinToolResultBytes <= 0 {
 		return fmt.Errorf("context_maintenance token and byte budgets must be positive")
+	}
+	if cc := cfg.ContextCompression; cc.ResumeRecentTurns <= 0 || cc.StateCompactionRatio <= 0 || cc.StateCompactionRatio >= 1 {
+		return fmt.Errorf("context_compression resume_recent_turns must be > 0 and state_compaction_ratio in (0,1)")
 	}
 	return nil
 }

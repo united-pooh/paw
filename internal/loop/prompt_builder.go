@@ -71,6 +71,12 @@ func (b *PromptBuilder) Build(toolDescriptions []string) string {
 		prompt.WriteString("- Use normal assistant text only for genuinely open-ended questions or when the user must provide free-form information.\n")
 		prompt.WriteString("- Do not ask the user if the answer can be safely inferred from the repository, existing context, or a reasonable default.\n")
 	}
+	if hasToolDescription(toolDescriptions, "update_todo") {
+		prompt.WriteString("Progress tracking policy:\n")
+		prompt.WriteString("- For complex multi-step work, call update_todo before substantial execution to establish a todo snapshot, and update it whenever the plan or status materially changes.\n")
+		prompt.WriteString("- update_todo is the progress-tracking mechanism for this session; progress-tracking instructions from agent.md files (e.g. memory/*.md checklists) complement it and do not replace it.\n")
+		prompt.WriteString("- Do not call update_todo for simple questions or one-step edits.\n")
+	}
 	prompt.WriteString("When you need one tool, respond with ONLY a JSON object in this format:\n")
 	prompt.WriteString(`{"type":"tool_use","id":"call_1","name":"tool_name","input":{}}`)
 	prompt.WriteByte('\n')

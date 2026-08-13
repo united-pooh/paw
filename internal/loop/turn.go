@@ -68,12 +68,25 @@ func (runner *Runner) runSingleTurnWithTiming(ctx context.Context, userInput mes
 		var messages []message.Message
 		var recovery *session.RecoveryState
 		if journal := runner.turnJournal(); journal != nil {
-			snapshot, snapshotErr := journal.LoadSnapshot(ctx, runner.sessionID)
-			if snapshotErr == nil {
-				messages = snapshot.ActiveHistory
-				recovery = snapshot.Recovery
-			} else {
-				err = snapshotErr
+			if runner.contextModeState() {
+				// 模式 B：状态块 + 最近 N 轮清洗对话，不送全量历史。
+				stateMessages, stateRecovery, stateErr := runner.loadStateModeHistory(ctx)
+				if stateErr == nil && stateMessages != nil {
+					messages = stateMessages
+					recovery = stateRecovery
+				} else if stateErr != nil {
+					err = stateErr
+				}
+				// stateMessages == nil（无 LoadRecentTurns 支持）时回退全量。
+			}
+			if messages == nil && err == nil {
+				snapshot, snapshotErr := journal.LoadSnapshot(ctx, runner.sessionID)
+				if snapshotErr == nil {
+					messages = snapshot.ActiveHistory
+					recovery = snapshot.Recovery
+				} else {
+					err = snapshotErr
+				}
 			}
 		} else {
 			messages, err = runner.store.LoadResolvedHistory(ctx, runner.sessionID)
@@ -93,12 +106,15 @@ func (runner *Runner) runSingleTurnWithTiming(ctx context.Context, userInput mes
 				return execution, err
 			}
 		} else {
-			maintenance, maintenanceErr := runner.maintainContextProjection(ctx, messages, true)
-			if maintenanceErr != nil {
-				runner.notifySystem("context-compaction", "cold-resume context cleanup skipped: "+maintenanceErr.Error())
-			} else {
-				messages = maintenance.history
-				runner.notifyContextMaintenance(maintenance)
+			// 模式 B 恢复的历史（状态块 + 最近 N 轮）小而稳定，无需上下文维护。
+			if !runner.contextModeState() {
+				maintenance, maintenanceErr := runner.maintainContextProjection(ctx, messages, true)
+				if maintenanceErr != nil {
+					runner.notifySystem("context-compaction", "cold-resume context cleanup skipped: "+maintenanceErr.Error())
+				} else {
+					messages = maintenance.history
+					runner.notifyContextMaintenance(maintenance)
+				}
 			}
 			runner.setHistoryIfNil(messages)
 			runner.syncContextUsageFromHistory(messages)

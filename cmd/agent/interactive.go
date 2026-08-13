@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"paw/internal/loop"
 	"paw/internal/plan"
+	"paw/internal/session"
+	"paw/internal/settings"
 	"paw/internal/todo"
 	"paw/internal/tokentracer"
 	"paw/internal/tool"
@@ -26,7 +28,7 @@ func runSingleTurnMode(ctx context.Context, opts options) error {
 	output := headless.New(os.Stdout)
 	todoBroker := todo.NewBroker()
 	defer todoBroker.Close()
-	runner, sessionID, _, configController, _, _, store, mcpManager, err := buildRunner(ctx, opts.sessionID, output, opts.allowOutsideRead, false, func(registry *tool.Registry) error {
+	runner, sessionID, _, configController, settingsController, _, store, mcpManager, err := buildRunner(ctx, opts.sessionID, output, opts.allowOutsideRead, false, func(registry *tool.Registry) error {
 		return registerMainAgentTools(registry, todoBroker)
 	})
 	if err != nil {
@@ -34,7 +36,11 @@ func runSingleTurnMode(ctx context.Context, opts options) error {
 	}
 	defer func() { _ = configController.Close() }()
 	wireTodoEvents(store, sessionID)
+	wireSearchTranscript(store, sessionID)
+	wireStateTools(store, sessionID)
 	runner.SetTodoBroker(todoBroker)
+	runner.SetStateBlockProvider(stateBlockProviderFor(sessionID, store, todoBroker, plansDir(runner)))
+	applyCompressionSettings(runner, settingsController)
 	if mcpManager != nil {
 		defer func() { _ = mcpManager.Close(context.Background()) }()
 	}
@@ -70,7 +76,11 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	}
 	defer func() { _ = configController.Close() }()
 	wireTodoEvents(store, sessionID)
+	wireSearchTranscript(store, sessionID)
+	wireStateTools(store, sessionID)
 	runner.SetTodoBroker(todoBroker)
+	runner.SetStateBlockProvider(stateBlockProviderFor(sessionID, store, todoBroker, plansDir(runner)))
+	applyCompressionSettings(runner, settingsController)
 	if mcpManager != nil {
 		defer func() { _ = mcpManager.Close(context.Background()) }()
 	}
@@ -122,6 +132,33 @@ func plansDir(runner *loop.Runner) string {
 		root = "."
 	}
 	return filepath.Join(root, "docs", "superpowers", "plans")
+}
+
+// applyCompressionSettings 把 settings 的 context_compression 应用到 runner。
+func applyCompressionSettings(runner *loop.Runner, settingsController *settings.Controller) {
+	if runner == nil || settingsController == nil {
+		return
+	}
+	cfg := settingsController.CurrentSettings()
+	runner.SetContextMode(string(cfg.ContextCompression.Mode))
+	runner.SetResumeRecentTurns(cfg.ContextCompression.ResumeRecentTurns)
+	runner.SetStateCompactionRatio(cfg.ContextCompression.StateCompactionRatio)
+}
+
+// stateBlockProviderFor 构建模式 B 状态块提供者。组件级容错：
+// plan 事件库不可用/会话存储缺失时对应组件跳过。
+func stateBlockProviderFor(sessionID string, store *session.JSONLStore, broker *todo.Broker, plansDir string) *stateBlockProvider {
+	var docStore plan.DocStore
+	var sessionBase string
+	if store != nil {
+		sessionBase = store.Dir()
+		if esStore, err := plan.NewEventStore(plansDir, store.Dir()); err == nil {
+			docStore = esStore
+		}
+	}
+	home, _ := os.UserHomeDir()
+	memoryPath := filepath.Join(home, ".paw", "memory.md")
+	return newStateBlockProvider(docStore, broker, sessionID, sessionBase, memoryPath)
 }
 
 func startTokenTracer(ctx context.Context, sessionID string, opts options) (*tokentracer.Tracer, *tokentracer.Server, error) {

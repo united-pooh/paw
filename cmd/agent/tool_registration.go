@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	coremcp "paw/internal/mcp"
 	"paw/internal/session"
 	"paw/internal/subagent"
@@ -11,7 +13,9 @@ import (
 	toolexec "paw/internal/tool/exec"
 	toolfile "paw/internal/tool/file"
 	toolmcp "paw/internal/tool/mcp"
+	"paw/internal/tool/memory"
 	selecttool "paw/internal/tool/select"
+	transcripttool "paw/internal/tool/transcript"
 	toolwebfetch "paw/internal/tool/webfetch"
 )
 
@@ -19,12 +23,27 @@ import (
 // 返回后才可用，故事件接线延迟到 wireTodoEvents。
 var mainTodoTool *todo.Tool
 
+// mainSearchTranscriptTool 是主 agent 注册的 search_transcript 工具实例。
+// store/sessionID 在 buildRunner 返回后才可用，延迟到 wireSearchTranscript。
+var mainSearchTranscriptTool *transcripttool.Tool
+
+// mainMemoryTool / mainAriadneTool 是状态文件工具。store/sessionID 在
+// buildRunner 返回后才可用，延迟到 wireStateTools 绑定路径与事件。
+var mainMemoryTool *memory.UpdateMemoryTool
+var mainAriadneTool *memory.UpdateAriadneTool
+
 func registerMainAgentTools(registry *tool.Registry, broker *todo.Broker) error {
 	if registry == nil {
 		return fmt.Errorf("tool registry is nil")
 	}
 	mainTodoTool = todo.NewTool(broker)
 	registry.Register(mainTodoTool)
+	mainSearchTranscriptTool = transcripttool.New(nil, "")
+	registry.Register(mainSearchTranscriptTool)
+	mainMemoryTool = memory.NewUpdateMemory("", nil)
+	registry.Register(mainMemoryTool)
+	mainAriadneTool = memory.NewUpdateAriadne("", nil)
+	registry.Register(mainAriadneTool)
 	return nil
 }
 
@@ -37,6 +56,36 @@ func wireTodoEvents(store *session.JSONLStore, sessionID string) {
 	mainTodoTool.OnUpsert = func(ctx context.Context, snapshot todo.Snapshot) error {
 		_, err := store.AppendTodoSnapshot(ctx, sessionID, snapshot)
 		return err
+	}
+}
+
+// wireSearchTranscript 在 session store 与 sessionID 就绪后，把检索工具
+// 绑定到当前会话（best-effort）。
+func wireSearchTranscript(store *session.JSONLStore, sessionID string) {
+	if mainSearchTranscriptTool == nil || store == nil {
+		return
+	}
+	mainSearchTranscriptTool.Bind(store, sessionID)
+}
+
+// wireStateTools 绑定状态文件工具：memory.md 全局路径、ariadne.md 会话
+// 路径、审计事件（session.memory_updated / ariadne_updated）。
+func wireStateTools(store *session.JSONLStore, sessionID string) {
+	if store == nil {
+		return
+	}
+	home, _ := os.UserHomeDir()
+	memoryPath := filepath.Join(home, ".paw", "memory.md")
+	ariadnePath := filepath.Join(store.Dir(), "sessions", sessionID, "ariadne.md")
+	record := func(ctx context.Context, kind session.StateEventKind, summary string) error {
+		_, err := store.AppendStateEvent(ctx, sessionID, kind, summary)
+		return err
+	}
+	if mainMemoryTool != nil {
+		mainMemoryTool.Bind(memoryPath, record)
+	}
+	if mainAriadneTool != nil {
+		mainAriadneTool.Bind(ariadnePath, record)
 	}
 }
 

@@ -99,3 +99,28 @@ func TestPromptBuilderOrdersGlobalBeforeProject(t *testing.T) {
 		t.Fatalf("section order default/global/project/tools = %d/%d/%d/%d in %q", defaultIndex, globalIndex, projectIndex, toolIndex, prompt)
 	}
 }
+
+func TestPromptBuilderWithUpdateTodoAddsProgressPolicy(t *testing.T) {
+	prompt := NewPromptBuilder(nil).Build([]string{
+		"Read: read files",
+		"update_todo: Maintain a full todo snapshot for complex multi-step work.",
+	})
+	for _, want := range []string{
+		"Progress tracking policy:",
+		"call update_todo before substantial execution",
+		"update_todo is the progress-tracking mechanism for this session",
+		"memory/*.md checklists",
+		"Do not call update_todo for simple questions or one-step edits",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt = %q, want %q", prompt, want)
+		}
+	}
+}
+
+func TestPromptBuilderWithoutUpdateTodoOmitsProgressPolicy(t *testing.T) {
+	prompt := NewPromptBuilder(nil).Build([]string{"Read: read files"})
+	if strings.Contains(prompt, "Progress tracking policy:") || strings.Contains(prompt, "call update_todo") {
+		t.Fatalf("prompt contains progress policy without update_todo tool: %q", prompt)
+	}
+}
