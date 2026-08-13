@@ -20,7 +20,7 @@ import (
 // implements loop.ToolFilterApplier (the runner's turn executor does), the
 // runtime scopes tools and injects plan instructions for its own turns.
 type RuntimeConfig struct {
-	Store            *FileStore
+	Store            DocStore
 	Executor         loop.TurnExecutor
 	Events           EventSink
 	Now              func() time.Time
@@ -40,7 +40,7 @@ var (
 )
 
 type Runtime struct {
-	store       *FileStore
+	store       DocStore
 	executor    loop.TurnExecutor
 	events      EventSink
 	now         func() time.Time

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -97,13 +98,13 @@ func TestRunFinalizesWhenDocApproved(t *testing.T) {
 	dir := store.Dir()
 	ctx := context.Background()
 
-	var finalized *PlanDoc
+	var finalized atomic.Pointer[PlanDoc]
 	executor := &fakeExecutor{}
 	runtime := NewRuntime(RuntimeConfig{
 		Store:       store,
 		Executor:    executor,
 		Filter:      ModeFilter(dir),
-		OnFinalized: func(doc PlanDoc) { finalized = &doc },
+		OnFinalized: func(doc PlanDoc) { finalized.Store(&doc) },
 	})
 	// Deterministic approval: the executor finalizes during its turn, exactly
 	// like the real plan_finalize tool call inside the runner tool loop. The
@@ -131,18 +132,18 @@ func TestRunFinalizesWhenDocApproved(t *testing.T) {
 	_ = session
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if finalized != nil {
+		if finalized.Load() != nil {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if finalized == nil {
+	if finalized.Load() == nil {
 		t.Fatal("OnFinalized not invoked after approval")
 	}
-	if finalized.Status != PlanApproved {
-		t.Fatalf("finalized status = %s", finalized.Status)
+	if finalized.Load().Status != PlanApproved {
+		t.Fatalf("finalized status = %s", finalized.Load().Status)
 	}
-	doc, ok, err := store.Get(ctx, finalized.ID)
+	doc, ok, err := store.Get(ctx, finalized.Load().ID)
 	if err != nil || !ok {
 		t.Fatalf("doc = ok:%v err:%v", ok, err)
 	}
