@@ -34,6 +34,28 @@
 
 > 范围说明：`internal/subagent`、`internal/loop/task_orchestrator`、`internal/streamma` 为执行层状态机，**本次迁移范围外**（保持现有枚举，由上层聚合驱动）；未来可按需扩展事件域（如 `task.*`）。
 
+### 2.1.1 执行层状态机保留论证（决策留痕，2026-08-13 研判）
+
+对「执行层无状态化（事件溯源化）」提案的严格研判结论：**保留状态机**。三处本质不同，逐一取证：
+
+| 状态机 | 状态 | 持久化现状 | 消费者 | 本质 |
+|---|---|---|---|---|
+| `loop/task_orchestrator` | running/completed/paused/failed | 纯内存，注释明说 `deliberately contains no persistence concerns`；已有 `TaskEvent` + `TaskEventSink`（预留 future durable log） | turn 循环控制（completion 决策） | **控制流状态机**（写模型控制柄） |
+| `subagent/manager` | running/completed/failed/stopped/not_found | 已磁盘持久化（`taskRegistry` JSON 元数据 + TTL 缓存）；真实状态在独立进程，manager 是观察者 | TUI `ListTasks`、`SubagentStatus` 工具、`SubagentWait` | **外部实体生命周期投影** |
+| `streamma` | completed/failed（二态终值） | `EventLog` 已 append-only 事件式（RunID/Seq/EventID/Timestamp + Replay）；`RunResult` 带 events 返回；RunLogger 落盘仅性能摘要 | 调用方消费 `RunResult` | **编排运行时终态** |
+
+致命缺陷论证（对无状态化提案）：
+
+- **FF1 控制流状态机无法事件化（本质矛盾）**：`Task` 承载 turn 间执行上下文（`ContinuationUsed`/`NoProgressCount`/`Turns`），是驱动下次执行的写模型控制柄，不是可重放的应用状态。事件化 = 重写核心执行循环，收益为零。
+- **FF2 观察者不能 ES 被观察者**：subagent 真实状态由独立进程决定（pid/退出码），manager 只是投影器；重放只能重建「观察记录」，无法重建真实执行。审计轨迹用普通日志即可（Fowler：audit 不必上 ES 接口）。
+- **FF3 违反 D7 原则**：执行层事件率比核心域高 1-2 个数量级且 99% 为纯进度；ES 化与「纯进度事件不入库」直接冲突。
+- **FF4 无消费者、无 return**：streamma `RunResult` 已交付调用方，无「谁、何时、为何重放」的答案（Fowler when-to-use：须有明确回报才用 ES）。
+
+Backlog（当前不做，触发条件明确后再实施）：
+
+- `subagent`：若未来 TUI 需要「任务历史时间线」，给 `taskRegistry` 增加 append-only `task.lifecycle.*` 审计记录（普通 JSONL，**不引入 `internal/es`**）；现状快照 + `StartedAt`/`FinishedAt` 已够用。
+- `task_orchestrator`：`TaskEventSink` 接口已预留，未来接日志/事件零成本。
+
 ### 2.2 存储现状
 
 | 域 | 现状 | 影响 |
@@ -144,10 +166,6 @@ EventStore（internal/es，追加 JSONL，seq 连续，fsync）
 |---|---|---|
 | `goal.created` | `{goal_id, objective, budget}` | 新增（内存态无对应） |
 | `goal.started` | `{task_id?}` | `EventStarted` |
-| `goal.task.started` | `{task_id}` | `EventTaskStarted` |
-| `goal.turn.completed` | `{turn_number}` | `EventTurnDone`（影响 no_progress 推导，持久化） |
-| `goal.continued` | `{turn_number}` | `EventContinued` |
-| `goal.compacted` | `{summary?, kept_events?}` | `EventCompacted` |
 | `goal.paused` | `{reason}` | `EventPaused` + `PauseReason`（8 种） |
 | `goal.blocked` | `{reason}` | `EventBlocked` |
 | `goal.resumed` | `{}` | `EventResumed` |
@@ -159,7 +177,7 @@ EventStore（internal/es，追加 JSONL，seq 连续，fsync）
 | `goal.checkpoint.saved` | `{checkpoint}` | `EventCheckpointSaved` |
 | `goal.checkpoint.deleted` | `{}` | 新增（清空该 goal 全部 checkpoint；`MemoryCheckpointStore.Delete` 语义） |
 
-不持久化的运行时通知（仅 EventSink，不改变聚合状态）：`goal.input.received`。
+不持久化的运行时通知（仅 EventSink，不改变聚合状态）：`goal.input.received`、`goal.task.started`、`goal.turn.completed`、`goal.continued`、`goal.compacted`（纯进度，D7；no-progress 计数经 `goal.stats.updated` 落盘，见 4.5.1）。
 
 **Plan 域**（对照 `SessionStatus` + `PlanStatus`）：
 
@@ -200,7 +218,7 @@ agg.Apply(events...)                                    // 状态前进
 
 - 状态机：现有 `CanTransition` 规则表**原样保留**（`draft → planning → running ⇄ replanning / paused / blocked → completed / failed / cancelled`，终态不可再转移）；
 - `Transition(to, reason)` 语义变化：校验 → 产出对应 `goal.*` 事件（reason 入 payload）→ 追加 → 状态前进；
-- 推导量（由事件重放计算，非持久化字段）：`Status`、`NoProgressCount`（由 `goal.turn.completed` 计数）、`ContinuationUsed`、`Evidence` 列表、预算消耗；
+- 推导量（由事件重放计算，非持久化字段）：`Status`、`ContinuationUsed`、`Evidence` 列表、预算消耗；`NoProgressCount` 由 `goal.stats.updated` 事件携带（loop 层统计后经命令落盘，非 turn 级事件推导）
 - 命令集：`Create / Start / Pause(reason) / Resume / Replan / Block(reason) / Complete / Fail(reason) / Cancel / AddEvidence / SaveCheckpoint`；
 - 现有 `store_memory.go` 的 `Create/Get/Update` 接口保留签名，内部改走事件流（`Update` 语义拆为具体命令，禁止裸状态覆盖）。
 
