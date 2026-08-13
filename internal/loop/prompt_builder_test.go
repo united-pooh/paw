@@ -108,8 +108,8 @@ func TestPromptBuilderWithUpdateTodoAddsProgressPolicy(t *testing.T) {
 	for _, want := range []string{
 		"Progress tracking policy:",
 		"call update_todo before substantial execution",
-		"update_todo is the progress-tracking mechanism for this session",
-		"memory/*.md checklists",
+		"update_todo is the in-session tracking mechanism",
+		"cross-session archive",
 		"Do not call update_todo for simple questions or one-step edits",
 	} {
 		if !strings.Contains(prompt, want) {

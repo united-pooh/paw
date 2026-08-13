@@ -74,7 +74,7 @@ func (b *PromptBuilder) Build(toolDescriptions []string) string {
 	if hasToolDescription(toolDescriptions, "update_todo") {
 		prompt.WriteString("Progress tracking policy:\n")
 		prompt.WriteString("- For complex multi-step work, call update_todo before substantial execution to establish a todo snapshot, and update it whenever the plan or status materially changes.\n")
-		prompt.WriteString("- update_todo is the progress-tracking mechanism for this session; progress-tracking instructions from agent.md files (e.g. memory/*.md checklists) complement it and do not replace it.\n")
+		prompt.WriteString("- update_todo is the in-session tracking mechanism: track live task steps with it. agent.md memory/*.md files are the cross-session archive: do not duplicate live steps there; instead write milestone results, lessons, and completed records to memory/*.md when a stage finishes.\n")
 		prompt.WriteString("- Do not call update_todo for simple questions or one-step edits.\n")
 	}
 	prompt.WriteString("When you need one tool, respond with ONLY a JSON object in this format:\n")
