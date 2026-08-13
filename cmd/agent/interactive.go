@@ -124,7 +124,7 @@ func wireSessionTools(runner *loop.Runner, store *session.JSONLStore, todoBroker
 	if runner == nil || store == nil {
 		return
 	}
-	wireTodoEvents(store, sessionID)
+	wireTodoEvents(store, sessionID, filepath.Join(runner.WorkspaceRoot(), "memory", "progress.md"))
 	wireSearchTranscript(store, sessionID)
 	wireStateTools(store, sessionID)
 	runner.SetTodoBroker(todoBroker)

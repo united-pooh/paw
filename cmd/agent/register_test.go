@@ -166,7 +166,7 @@ func TestWireTodoEventsPersistsSessionEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	wireTodoEvents(store, "s1")
+	wireTodoEvents(store, "s1", "")
 
 	todoTool, ok := registry.Get("update_todo")
 	if !ok {

@@ -17,6 +17,7 @@ import (
 	selecttool "paw/internal/tool/select"
 	transcripttool "paw/internal/tool/transcript"
 	toolwebfetch "paw/internal/tool/webfetch"
+	"strings"
 )
 
 // mainTodoTool 是主 agent 注册的 update_todo 工具实例。store 在 buildRunner
@@ -48,12 +49,20 @@ func registerMainAgentTools(registry *tool.Registry, broker *todo.Broker) error 
 }
 
 // wireTodoEvents 在 session store 与 sessionID 就绪后，把 todo 快照更新
-// 接线为 session.todo_upserted 事件（best-effort：事件失败不影响工具结果）。
-func wireTodoEvents(store *session.JSONLStore, sessionID string) {
+// 接线为 session.todo_upserted 事件（best-effort：事件失败不影响工具结果），
+// 并把已完成条目沉淀到 memory/progress.md（跨会话档案，幂等去重）。
+func wireTodoEvents(store *session.JSONLStore, sessionID, progressPath string) {
 	if mainTodoTool == nil || store == nil {
 		return
 	}
+	var archive *todo.ArchiveWriter
+	if strings.TrimSpace(progressPath) != "" {
+		archive, _ = todo.NewArchiveWriter(progressPath)
+	}
 	mainTodoTool.OnUpsert = func(ctx context.Context, snapshot todo.Snapshot) error {
+		if archive != nil {
+			_, _ = archive.ArchiveCompleted(ctx, snapshot)
+		}
 		_, err := store.AppendTodoSnapshot(ctx, sessionID, snapshot)
 		return err
 	}

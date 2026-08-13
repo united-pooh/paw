@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"paw/internal/loop"
@@ -97,5 +99,55 @@ func TestResumeRebindsStateTools(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("session-b must contain ariadne_updated after resume, got %+v", recsB)
+	}
+}
+
+func TestTodoArchiveWritesProgressFile(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateRoot(ctx, session.CreateRootRequest{SessionID: "session-a"}); err != nil {
+		t.Fatal(err)
+	}
+
+	registry := tool.NewRegistry()
+	broker := todo.NewBroker()
+	defer broker.Close()
+	if err := registerMainAgentTools(registry, broker); err != nil {
+		t.Fatal(err)
+	}
+	runner := loop.NewRunnerWithInstructionRoot(&resumeTestModel{}, headless.New(io.Discard), registry, store, "session-a", root)
+	wireSessionTools(runner, store, broker, "session-a")
+
+	snap := `{"explanation":"archive test","items":[{"id":"1","content":"done item","status":"completed"},{"id":"2","content":"pending item","status":"pending"}]}`
+	if out, err := mainTodoTool.Run(ctx, json.RawMessage(snap)); err != nil {
+		t.Fatalf("update_todo: %v", err)
+	} else if !strings.Contains(out, `"accepted":true`) {
+		t.Fatalf("unexpected result: %s", out)
+	}
+
+	progress := filepath.Join(root, "memory", "progress.md")
+	data, err := os.ReadFile(progress)
+	if err != nil {
+		t.Fatalf("read progress.md: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "- [x] done item <!-- todo:1 -->") {
+		t.Fatalf("progress.md missing archived line: %q", got)
+	}
+	if strings.Contains(got, "pending item") {
+		t.Fatalf("progress.md must not contain pending item: %q", got)
+	}
+
+	// 同一快照重复提交：幂等，不重复追加。
+	if _, err := mainTodoTool.Run(ctx, json.RawMessage(snap)); err != nil {
+		t.Fatal(err)
+	}
+	data2, _ := os.ReadFile(progress)
+	if strings.Count(string(data2), "<!-- todo:1 -->") != 1 {
+		t.Fatalf("archived twice after re-submit: %q", data2)
 	}
 }
