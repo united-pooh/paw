@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"paw/internal/goal"
 	"paw/internal/loop"
+	"paw/internal/session"
 	"paw/internal/todo"
 	"strings"
 	"sync"
@@ -21,13 +22,22 @@ type sessionGoalController struct {
 	stopped   func(reason string)
 }
 
-func newSessionGoalController(sessionID string, runner *loop.Runner, broker *todo.Broker) *sessionGoalController {
+func newSessionGoalController(sessionID string, runner *loop.Runner, broker *todo.Broker, store *session.JSONLStore) *sessionGoalController {
 	var source goal.TodoSource
 	if broker != nil {
 		source = broker.Latest
 	}
 	c := &sessionGoalController{sessionID: sessionID}
+	// 事件溯源存储：goal 状态持久化到 <store>/goals/ 事件流；store 为 nil 时
+	// 回退到内存存储（headless 无持久化场景）。
+	var docStore goal.GoalStore
+	if store != nil {
+		if esStore, err := goal.NewEventStore(store.Dir()); err == nil {
+			docStore = esStore
+		}
+	}
 	c.runtime = goal.NewRuntime(goal.RuntimeConfig{
+		Store:    docStore,
 		Executor: runner.GoalTurnExecutor(),
 		Todo:     source,
 		Events: func(e goal.Event) {

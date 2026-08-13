@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"paw/internal/loop"
 	"paw/internal/plan"
+	"paw/internal/session"
 	"strings"
 	"sync"
 )
@@ -21,10 +22,18 @@ type sessionPlanController struct {
 	stopped   func(reason string)
 }
 
-func newSessionPlanController(sessionID string, runner *loop.Runner, plansDir string) *sessionPlanController {
+func newSessionPlanController(sessionID string, runner *loop.Runner, plansDir string, store *session.JSONLStore) *sessionPlanController {
 	c := &sessionPlanController{sessionID: sessionID}
+	// 事件溯源存储：文档变更走 plan 事件流（<store>/plans/），.md 文件保持
+	// 为投影产物；store 为 nil 时回退到纯文件存储。
+	var docStore plan.DocStore = plan.NewFileStore(plansDir)
+	if store != nil {
+		if esStore, err := plan.NewEventStore(plansDir, store.Dir()); err == nil {
+			docStore = esStore
+		}
+	}
 	c.runtime = plan.NewRuntime(plan.RuntimeConfig{
-		Store:    plan.NewFileStore(plansDir),
+		Store:    docStore,
 		Executor: runner.GoalTurnExecutor(),
 		Filter:   plan.ModeFilter(plansDir),
 		Events: func(e plan.Event) {

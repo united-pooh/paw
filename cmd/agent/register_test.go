@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	"paw/internal/model"
+	"paw/internal/session"
 	"paw/internal/todo"
 	"paw/internal/tool"
 	toolfile "paw/internal/tool/file"
@@ -152,5 +154,40 @@ func TestRegisterToolsEnablesOutsideReadInDangerousMode(t *testing.T) {
 	}
 	if !readTool.AllowOutsideRoot {
 		t.Fatal("Read tool outside-root access is disabled")
+	}
+}
+
+func TestWireTodoEventsPersistsSessionEvent(t *testing.T) {
+	registry := tool.NewRegistry()
+	if err := registerMainAgentTools(registry, nil); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	wireTodoEvents(store, "s1")
+
+	todoTool, ok := registry.Get("update_todo")
+	if !ok {
+		t.Fatal("update_todo not registered")
+	}
+	tt, ok := todoTool.(*todo.Tool)
+	if !ok {
+		t.Fatalf("unexpected tool type %T", todoTool)
+	}
+	out, err := tt.Run(context.Background(), json.RawMessage(`{"items":[{"id":"a","content":"do it","status":"in_progress"}]}`))
+	if err != nil || !strings.Contains(out, `"accepted":true`) {
+		t.Fatalf("run = %q, %v", out, err)
+	}
+	raw, err := store.LoadResolvedJournalRecords(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("load records: %v", err)
+	}
+	if len(raw) != 1 || raw[0].Kind != session.JournalTodoSnapshot {
+		t.Fatalf("expected one todo_snapshot record, got %+v", raw)
+	}
+	if raw[0].TodoSnapshot == nil || raw[0].TodoSnapshot.Items[0].ID != "a" {
+		t.Fatalf("todo snapshot mismatch: %+v", raw[0])
 	}
 }

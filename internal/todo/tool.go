@@ -32,6 +32,9 @@ const updateTodoInputSchema = `{
 type Tool struct {
 	broker *Broker
 	nowFn  func() time.Time
+	// OnUpsert 在快照发布后调用（事件溯源接线：写入 session.todo_upserted
+	// 事件）。nil 时跳过；错误由调用方决定处理（接线侧 best-effort）。
+	OnUpsert func(ctx context.Context, snapshot Snapshot) error
 }
 
 func NewTool(broker *Broker) *Tool {
@@ -72,6 +75,9 @@ func (t *Tool) Run(ctx context.Context, raw json.RawMessage) (string, error) {
 	}
 	if t != nil && t.broker != nil {
 		t.broker.Publish(snapshot)
+	}
+	if t != nil && t.OnUpsert != nil {
+		_ = t.OnUpsert(ctx, snapshot)
 	}
 	data, err := json.Marshal(UpdateResult{Accepted: true, Snapshot: snapshot})
 	if err != nil {

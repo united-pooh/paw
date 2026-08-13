@@ -15,12 +15,29 @@ import (
 	toolwebfetch "paw/internal/tool/webfetch"
 )
 
+// mainTodoTool 是主 agent 注册的 update_todo 工具实例。store 在 buildRunner
+// 返回后才可用，故事件接线延迟到 wireTodoEvents。
+var mainTodoTool *todo.Tool
+
 func registerMainAgentTools(registry *tool.Registry, broker *todo.Broker) error {
 	if registry == nil {
 		return fmt.Errorf("tool registry is nil")
 	}
-	registry.Register(todo.NewTool(broker))
+	mainTodoTool = todo.NewTool(broker)
+	registry.Register(mainTodoTool)
 	return nil
+}
+
+// wireTodoEvents 在 session store 与 sessionID 就绪后，把 todo 快照更新
+// 接线为 session.todo_upserted 事件（best-effort：事件失败不影响工具结果）。
+func wireTodoEvents(store *session.JSONLStore, sessionID string) {
+	if mainTodoTool == nil || store == nil {
+		return
+	}
+	mainTodoTool.OnUpsert = func(ctx context.Context, snapshot todo.Snapshot) error {
+		_, err := store.AppendTodoSnapshot(ctx, sessionID, snapshot)
+		return err
+	}
 }
 
 func registerInteractiveTools(registry *tool.Registry, broker *selecttool.Broker) error {

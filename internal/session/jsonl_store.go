@@ -807,6 +807,11 @@ func (s *JSONLStore) TranscriptPath(sessionID string) string {
 	return s.transcriptPath(sessionID)
 }
 
+// Dir 返回存储根目录（sessions/ 等子目录位于其下）。
+func (s *JSONLStore) Dir() string {
+	return s.baseDir
+}
+
 // TurnMetadataPath returns the sidecar path used for persisted turn timing.
 func (s *JSONLStore) TurnMetadataPath(sessionID string) string {
 	return s.turnMetadataPath(sessionID)

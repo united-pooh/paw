@@ -26,13 +26,14 @@ func runSingleTurnMode(ctx context.Context, opts options) error {
 	output := headless.New(os.Stdout)
 	todoBroker := todo.NewBroker()
 	defer todoBroker.Close()
-	runner, sessionID, _, configController, _, _, _, mcpManager, err := buildRunner(ctx, opts.sessionID, output, opts.allowOutsideRead, false, func(registry *tool.Registry) error {
+	runner, sessionID, _, configController, _, _, store, mcpManager, err := buildRunner(ctx, opts.sessionID, output, opts.allowOutsideRead, false, func(registry *tool.Registry) error {
 		return registerMainAgentTools(registry, todoBroker)
 	})
 	if err != nil {
 		return err
 	}
 	defer func() { _ = configController.Close() }()
+	wireTodoEvents(store, sessionID)
 	runner.SetTodoBroker(todoBroker)
 	if mcpManager != nil {
 		defer func() { _ = mcpManager.Close(context.Background()) }()
@@ -68,6 +69,7 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 		return err
 	}
 	defer func() { _ = configController.Close() }()
+	wireTodoEvents(store, sessionID)
 	runner.SetTodoBroker(todoBroker)
 	if mcpManager != nil {
 		defer func() { _ = mcpManager.Close(context.Background()) }()
@@ -93,12 +95,12 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	output.SetSubagentController(subagentManager)
 	output.SetSessionStore(store)
 	output.SetMCPStatusController(mcpManager)
-	goalController := newSessionGoalController(sessionID, runner, todoBroker)
+	goalController := newSessionGoalController(sessionID, runner, todoBroker, store)
 	goalController.SetStopped(func(reason string) {
 		_ = output.NotifyGoalStopped(reason)
 	})
 	output.SetGoalController(goalController)
-	planController := newSessionPlanController(sessionID, runner, plansDir(runner))
+	planController := newSessionPlanController(sessionID, runner, plansDir(runner), store)
 	planController.SetNotify(func(doc plan.PlanDoc) {
 		_ = output.NotifyPlanFinalized(doc.Path)
 	})

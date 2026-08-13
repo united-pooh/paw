@@ -123,3 +123,30 @@ func TestToolRejectsModelSuppliedTimestamp(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 }
+
+func TestToolRunInvokesOnUpsert(t *testing.T) {
+	var got *Snapshot
+	tool := NewTool(nil)
+	tool.OnUpsert = func(ctx context.Context, snapshot Snapshot) error {
+		copy := snapshot.Clone()
+		got = &copy
+		return nil
+	}
+	out, err := tool.Run(context.Background(), json.RawMessage(`{"explanation":"e","items":[{"id":"a","content":"c","status":"in_progress"}]}`))
+	if err != nil || !strings.Contains(out, `"accepted":true`) {
+		t.Fatalf("Run() = %q, %v", out, err)
+	}
+	if got == nil || got.Explanation != "e" || len(got.Items) != 1 || got.Items[0].Status != StatusInProgress {
+		t.Fatalf("OnUpsert snapshot = %+v", got)
+	}
+}
+
+func TestToolRunOnUpsertErrorDoesNotFailTool(t *testing.T) {
+	tool := NewTool(nil)
+	tool.OnUpsert = func(ctx context.Context, snapshot Snapshot) error {
+		return errors.New("event store down")
+	}
+	if _, err := tool.Run(context.Background(), json.RawMessage(`{"items":[]}`)); err != nil {
+		t.Fatalf("event failure must not fail the tool: %v", err)
+	}
+}
