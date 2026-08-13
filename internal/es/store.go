@@ -275,3 +275,8 @@ func (s *JSONLStore) StreamPath(aggregateID string) (string, error) {
 	}
 	return s.streamPath(aggregateID), nil
 }
+
+// Dir returns the store root directory; kind subdirectories live beneath it.
+func (s *JSONLStore) Dir() string {
+	return s.baseDir
+}

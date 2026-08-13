@@ -77,6 +77,9 @@ type Goal struct {
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 	Revision           uint64
+
+	// deleted 标记 goal.deleted 墓碑已重放（事件溯源专用，不序列化）。
+	deleted bool
 }
 
 type GoalSnapshot struct {
