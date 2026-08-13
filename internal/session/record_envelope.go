@@ -21,6 +21,9 @@ const (
 	EventTurnFailed       = "session.turn_failed"
 	EventTurnStopped      = "session.turn_stopped"
 	EventTodoUpserted     = "session.todo_upserted"
+	EventMemoryUpdated    = "session.memory_updated"
+	EventAriadneUpdated   = "session.ariadne_updated"
+	EventStateCompacted   = "session.state_compacted"
 )
 
 // sessionEventPayload 是 session 域事件的统一 payload。字段与 Record 一一
@@ -32,6 +35,7 @@ type sessionEventPayload struct {
 	ToolResult *message.ToolResult `json:"tool_result,omitempty"`
 	Error      string              `json:"error,omitempty"`
 	Snapshot   *todo.Snapshot      `json:"snapshot,omitempty"`
+	StateEvent *StateEventRecord   `json:"state_event,omitempty"`
 }
 
 var kindToEvent = map[JournalKind]string{
@@ -43,6 +47,9 @@ var kindToEvent = map[JournalKind]string{
 	JournalTurnCompleted:    EventTurnCompleted,
 	JournalTurnFailed:       EventTurnFailed,
 	JournalTodoSnapshot:     EventTodoUpserted,
+	JournalMemoryUpdated:    EventMemoryUpdated,
+	JournalAriadneUpdated:   EventAriadneUpdated,
+	JournalStateCompacted:   EventStateCompacted,
 }
 
 var eventToKind = map[string]JournalKind{
@@ -54,6 +61,9 @@ var eventToKind = map[string]JournalKind{
 	EventTurnCompleted:    JournalTurnCompleted,
 	EventTurnFailed:       JournalTurnFailed,
 	EventTodoUpserted:     JournalTodoSnapshot,
+	EventMemoryUpdated:    JournalMemoryUpdated,
+	EventAriadneUpdated:   JournalAriadneUpdated,
+	EventStateCompacted:   JournalStateCompacted,
 }
 
 // recordToEnvelope 将一条 Record 映射为统一信封。seq 与 created_at 由调用方
@@ -70,6 +80,7 @@ func recordToEnvelope(rec Record) (es.Envelope, error) {
 		ToolResult: rec.ToolResult,
 		Error:      rec.Error,
 		Snapshot:   rec.TodoSnapshot,
+		StateEvent: rec.StateEvent,
 	}
 	if rec.Kind == JournalMessage || rec.Kind == JournalAssistant || rec.Kind == JournalAssistantPartial || rec.Kind == JournalToolResult {
 		msg := rec.Message
@@ -107,6 +118,7 @@ func envelopeToRecord(env es.Envelope) (Record, error) {
 		ToolResult:   payload.ToolResult,
 		Error:        payload.Error,
 		TodoSnapshot: payload.Snapshot,
+		StateEvent:   payload.StateEvent,
 		CreatedAt:    env.OccurredAt,
 	}
 	if payload.Message != nil {

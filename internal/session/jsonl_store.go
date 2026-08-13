@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -31,6 +32,7 @@ type Record struct {
 	ToolResult   *message.ToolResult `json:"tool_result,omitempty"`
 	Error        string              `json:"error,omitempty"`
 	TodoSnapshot *todo.Snapshot      `json:"todo_snapshot,omitempty"`
+	StateEvent   *StateEventRecord   `json:"state_event,omitempty"`
 	CreatedAt    time.Time           `json:"created_at"`
 }
 
@@ -57,8 +59,13 @@ const (
 )
 
 type JSONLStore struct {
+	// baseDir 是全局项目布局根目录（~/.paw/projects/<项目名>），
+	// 会话数据位于 <baseDir>/sessions/<sessionID>/。
 	baseDir string
-	nowFn   func() time.Time
+	// legacyBaseDir 是旧工作区布局根目录（<cwd>/.paw），只读 fallback：
+	// 未迁移的旧会话从这里读取；新数据一律写全局（baseDir）。
+	legacyBaseDir string
+	nowFn         func() time.Time
 	// mu 只保护 session state 元数据（journal 缓存、sessionLocks 与 lastSync），
 	// 不再覆盖文件 I/O、JSON 编码和 f.Sync()。不同 session 的追加可以并行，
 	// 同一 session 的追加由 sessionLock 串行化，保证 sequence 连续。
@@ -120,16 +127,46 @@ func (s *JSONLStore) sessionLock(sessionID string) *sync.Mutex {
 	return l
 }
 
-// NewJSONLStoreInCwd 以当前工作目录作为 baseDir 创建存储，
-// 会话数据存放在 .paw/ 子目录下。
-// 调用方不需要感知路径细节。
+// NewJSONLStoreInCwd 创建全局项目布局的会话存储：
+// 新数据写入 ~/.paw/projects/<项目名>/sessions/，旧工作区
+// <cwd>/.paw/sessions/ 作为只读 fallback（未迁移会话懒迁移到全局）。
 func NewJSONLStoreInCwd() (*JSONLStore, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("获取当前目录失败: %w", err)
 	}
-	baseDir := filepath.Join(cwd, ".paw")
-	return NewJSONLStore(baseDir)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("获取用户主目录失败: %w", err)
+	}
+	projectDir := filepath.Join(home, ".paw", "projects", projectNameFor(cwd))
+	store, err := NewJSONLStore(projectDir)
+	if err != nil {
+		return nil, err
+	}
+	store.legacyBaseDir = filepath.Join(cwd, ".paw")
+	return store, nil
+}
+
+// projectNameFor 生成稳定的项目目录名：cwd basename（slug 化）+ 路径哈希
+// 前 8 位，避免同名目录冲突。同一 cwd 每次启动生成相同名称。
+func projectNameFor(cwd string) string {
+	base := filepath.Base(cwd)
+	var slug strings.Builder
+	for _, r := range base {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			slug.WriteRune(r)
+		default:
+			slug.WriteByte('-')
+		}
+	}
+	name := strings.Trim(slug.String(), "-")
+	if name == "" {
+		name = "project"
+	}
+	sum := sha256.Sum256([]byte(cwd))
+	return fmt.Sprintf("%s-%x", name, sum[:4])
 }
 
 func (s *JSONLStore) CreateRoot(ctx context.Context, request CreateRootRequest) (Meta, error) {
@@ -218,7 +255,7 @@ func (s *JSONLStore) GetMeta(ctx context.Context, sessionID string) (Meta, error
 		return Meta{}, fmt.Errorf("sessionID 不能为空")
 	}
 
-	data, err := os.ReadFile(s.metaPath(sessionID))
+	data, err := os.ReadFile(s.readMetaPath(sessionID))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return Meta{}, fmt.Errorf("session 不存在: %s", sessionID)
@@ -244,7 +281,7 @@ func (s *JSONLStore) Exists(ctx context.Context, sessionID string) (bool, error)
 		return false, fmt.Errorf("sessionID 不能为空")
 	}
 
-	_, err := os.Stat(s.metaPath(sessionID))
+	_, err := os.Stat(s.readMetaPath(sessionID))
 	if err == nil {
 		return true, nil
 	}
@@ -284,6 +321,11 @@ func (s *JSONLStore) appendRecords(ctx context.Context, sessionID string, record
 	lock := s.sessionLock(sessionID)
 	lock.Lock()
 	defer lock.Unlock()
+
+	// 懒迁移：legacy 会话首次写入前复制到全局，避免新旧数据分裂。
+	if _, err := s.ensureWritableSession(sessionID); err != nil {
+		return firstSeq, lastSeq, err
+	}
 
 	exists, err := s.Exists(ctx, sessionID)
 	if err != nil {
@@ -517,6 +559,36 @@ func (s *JSONLStore) AppendTodoSnapshot(ctx context.Context, sessionID string, s
 	return lastSeq, err
 }
 
+// AppendStateEvent 追加状态文件更新事件（memory/ariadne 审计留痕，
+// best-effort 语义与 AppendTodoSnapshot 一致）。
+func (s *JSONLStore) AppendStateEvent(ctx context.Context, sessionID string, kind StateEventKind, summary string) (int64, error) {
+	if kind != StateEventMemory && kind != StateEventAriadne && kind != StateEventCompacted {
+		return 0, fmt.Errorf("unknown state event kind %q", kind)
+	}
+	if len(summary) > 600 {
+		summary = string([]rune(summary)[:600])
+	}
+	now := s.nowFn().UTC()
+	rec := Record{
+		Kind:      JournalMemoryUpdated,
+		CreatedAt: now,
+		StateEvent: &StateEventRecord{
+			Kind:      kind,
+			Summary:   summary,
+			UpdatedAt: now,
+		},
+	}
+	switch kind {
+	case StateEventAriadne:
+		rec.Kind = JournalAriadneUpdated
+	case StateEventCompacted:
+		rec.Kind = JournalStateCompacted
+	}
+	// 新 kind 不匹配任何投影 switch 的 case（无 default），不影响消息派生。
+	_, lastSeq, err := s.appendRecords(ctx, sessionID, []Record{rec})
+	return lastSeq, err
+}
+
 func (s *JSONLStore) LoadResolvedHistory(ctx context.Context, sessionID string) ([]message.Message, error) {
 	records, err := s.LoadResolvedRecords(ctx, sessionID)
 	if err != nil {
@@ -731,7 +803,7 @@ func (s *JSONLStore) readOwnRecords(ctx context.Context, sessionID string) ([]Re
 		return nil, err
 	}
 
-	path := s.transcriptPath(sessionID)
+	path := s.readTranscriptPath(sessionID)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -794,7 +866,7 @@ func (s *JSONLStore) readOwnRecords(ctx context.Context, sessionID string) ([]Re
 // repairTornTail 物理截掉崩溃留下的未完成尾部（无换行结尾且最后一行解析
 // 失败）。完整但无换行的最后一行保留；中部损坏报错。
 func (s *JSONLStore) repairTornTail(sessionID string) error {
-	path := s.transcriptPath(sessionID)
+	path := s.readTranscriptPath(sessionID)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -837,8 +909,175 @@ func (s *JSONLStore) repairTornTail(sessionID string) error {
 	return nil
 }
 
+// LoadRecentTurns 返回最近 n 个轮次的清洗消息（模式 B 恢复用，验证实验
+// v2 结论）：工具调用省略 input 参数（保留工具名/ID/结果截断），文本
+// 消息原样保留。清洗后恢复上下文小而信息密度高。
+func (s *JSONLStore) LoadRecentTurns(ctx context.Context, sessionID string, n int) ([]message.Message, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if n <= 0 {
+		return nil, nil
+	}
+	records, err := s.readOwnRecords(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	// 按出现顺序取最后 n 个不同 turn。
+	order := make([]string, 0, 8)
+	for _, r := range records {
+		if r.TurnID == "" {
+			continue
+		}
+		seen := false
+		for _, tid := range order {
+			if tid == r.TurnID {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			order = append(order, r.TurnID)
+		}
+	}
+	start := len(order) - n
+	if start < 0 {
+		start = 0
+	}
+	keep := make(map[string]bool, n)
+	for _, tid := range order[start:] {
+		keep[tid] = true
+	}
+
+	msgs := make([]message.Message, 0, 32)
+	for _, r := range records {
+		if r.TurnID != "" && !keep[r.TurnID] {
+			continue
+		}
+		switch r.Kind {
+		case "", JournalMessage, JournalAssistant:
+			msgs = append(msgs, cleanMessageForRecovery(r.Message))
+		case JournalToolResult:
+			if r.ToolResult != nil {
+				tr := *r.ToolResult
+				tr.Content = truncateForRecovery(tr.Content)
+				msgs = append(msgs, message.Message{Role: message.RoleUser, ToolResult: &tr})
+			}
+		}
+	}
+	return msgs, nil
+}
+
+// recoveryResultCap 是恢复上下文中单条工具结果的最大字符数（rune）。
+const recoveryResultCap = 400
+
+// cleanMessageForRecovery 清洗单条消息：附件细节（Parts）省略、工具调用
+// input 置空、工具结果内容截断。
+func cleanMessageForRecovery(msg message.Message) message.Message {
+	msg.Parts = nil
+	if msg.ToolUse != nil {
+		c := *msg.ToolUse
+		c.Input = json.RawMessage("{}")
+		msg.ToolUse = &c
+	}
+	for i := range msg.ToolUses {
+		msg.ToolUses[i].Input = json.RawMessage("{}")
+	}
+	if msg.ToolResult != nil {
+		tr := *msg.ToolResult
+		tr.Content = truncateForRecovery(tr.Content)
+		msg.ToolResult = &tr
+	}
+	for i := range msg.ToolResults {
+		msg.ToolResults[i].Content = truncateForRecovery(msg.ToolResults[i].Content)
+	}
+	return msg
+}
+
+func truncateForRecovery(s string) string {
+	runes := []rune(s)
+	if len(runes) <= recoveryResultCap {
+		return s
+	}
+	return string(runes[:recoveryResultCap]) + "…[truncated]"
+}
+
 func (s *JSONLStore) sessionDir(sessionID string) string {
 	return filepath.Join(s.baseDir, defaultSessionsDir, sessionID)
+}
+
+func (s *JSONLStore) legacySessionDir(sessionID string) string {
+	if s.legacyBaseDir == "" {
+		return ""
+	}
+	return filepath.Join(s.legacyBaseDir, defaultSessionsDir, sessionID)
+}
+
+// resolveSessionDir 返回会话实际所在目录（读路径）：全局优先，
+// 不存在则回退 legacy 工作区布局；两者都没有时返回全局（写路径将创建）。
+func (s *JSONLStore) resolveSessionDir(sessionID string) string {
+	global := s.sessionDir(sessionID)
+	if _, err := os.Stat(filepath.Join(global, "meta.json")); err == nil {
+		return global
+	}
+	if legacy := s.legacySessionDir(sessionID); legacy != "" {
+		if _, err := os.Stat(filepath.Join(legacy, "meta.json")); err == nil {
+			return legacy
+		}
+	}
+	return global
+}
+
+// ensureWritableSession 保证会话可写（懒迁移）：全局存在则不动；
+// 仅 legacy 存在则把 legacy 会话目录复制到全局（meta + transcript +
+// turns 侧车），使后续写入落在全局、旧数据不丢。两者都不存在返回 false，
+// 由调用方走新建流程。
+func (s *JSONLStore) ensureWritableSession(sessionID string) (bool, error) {
+	global := s.sessionDir(sessionID)
+	if _, err := os.Stat(filepath.Join(global, "meta.json")); err == nil {
+		return true, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	legacy := s.legacySessionDir(sessionID)
+	if legacy == "" {
+		return false, nil
+	}
+	if _, err := os.Stat(filepath.Join(legacy, "meta.json")); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	// 复制到临时目录再 rename，避免半成品会话目录。
+	if err := os.MkdirAll(filepath.Dir(global), 0o755); err != nil {
+		return false, err
+	}
+	tmpDir, err := os.MkdirTemp(filepath.Dir(global), ".migrate-*")
+	if err != nil {
+		return false, fmt.Errorf("创建迁移临时目录失败: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+	for _, name := range []string{"meta.json", "transcript.jsonl", "turns.jsonl"} {
+		src := filepath.Join(legacy, name)
+		data, err := os.ReadFile(src)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return false, fmt.Errorf("读取 legacy %s 失败: %w", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(tmpDir, name), data, 0o644); err != nil {
+			return false, fmt.Errorf("复制 %s 失败: %w", name, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(global), 0o755); err != nil {
+		return false, err
+	}
+	if err := os.Rename(tmpDir, global); err != nil {
+		return false, fmt.Errorf("迁移会话 %s 失败: %w", sessionID, err)
+	}
+	return true, nil
 }
 
 func (s *JSONLStore) metaPath(sessionID string) string {
@@ -851,6 +1090,20 @@ func (s *JSONLStore) transcriptPath(sessionID string) string {
 
 func (s *JSONLStore) turnMetadataPath(sessionID string) string {
 	return filepath.Join(s.sessionDir(sessionID), "turns.jsonl")
+}
+
+// readMetaPath / readTranscriptPath / readTurnMetadataPath 是读路径版本：
+// 通过 resolveSessionDir 支持 legacy fallback。
+func (s *JSONLStore) readMetaPath(sessionID string) string {
+	return filepath.Join(s.resolveSessionDir(sessionID), "meta.json")
+}
+
+func (s *JSONLStore) readTranscriptPath(sessionID string) string {
+	return filepath.Join(s.resolveSessionDir(sessionID), "transcript.jsonl")
+}
+
+func (s *JSONLStore) readTurnMetadataPath(sessionID string) string {
+	return filepath.Join(s.resolveSessionDir(sessionID), "turns.jsonl")
 }
 
 // TranscriptPath 返回指定 session 的 transcript 文件路径。
@@ -880,6 +1133,9 @@ func (s *JSONLStore) AppendTurnMetadata(ctx context.Context, sessionID string, m
 	lock := s.sessionLock(sessionID)
 	lock.Lock()
 	defer lock.Unlock()
+	if _, err := s.ensureWritableSession(sessionID); err != nil {
+		return err
+	}
 	exists, err := s.Exists(ctx, sessionID)
 	if err != nil {
 		return err
@@ -915,7 +1171,7 @@ func (s *JSONLStore) LoadTurnMetadata(ctx context.Context, sessionID string) ([]
 	if strings.TrimSpace(sessionID) == "" {
 		return nil, fmt.Errorf("sessionID 不能为空")
 	}
-	f, err := os.Open(s.turnMetadataPath(sessionID))
+	f, err := os.Open(s.readTurnMetadataPath(sessionID))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
@@ -968,12 +1224,14 @@ func (s *JSONLStore) OpenOrCreate(ctx context.Context, key string) (string, erro
 	}
 
 	// 用 key 的哈希作为索引文件名，避免 key 中包含路径分隔符等特殊字符。
+	// 全局索引 miss 时回退 legacy 索引（旧工作区会话恢复入口）。
 	indexPath := s.keyIndexPath(key)
-
-	// 如果索引文件存在，说明该 key 已经绑定了一个 session。
-	existingID, err := os.ReadFile(indexPath)
-	if err == nil {
-		sessionID := strings.TrimSpace(string(existingID))
+	existingID, err := s.readKeyIndex(key)
+	if err != nil {
+		return "", err
+	}
+	if existingID != "" {
+		sessionID := existingID
 		// 再确认 session 目录本身也存在（防止文件被手动删除的情况）。
 		exists, existsErr := s.Exists(ctx, sessionID)
 		if existsErr != nil {
@@ -983,9 +1241,6 @@ func (s *JSONLStore) OpenOrCreate(ctx context.Context, key string) (string, erro
 			return sessionID, nil
 		}
 		// session 目录不存在了，索引失效，重新创建。
-	}
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("读取 session 索引失败: %w", err)
 	}
 
 	// 生成新 session ID 并创建会话。
@@ -1019,6 +1274,26 @@ func (s *JSONLStore) keyIndexPath(key string) string {
 	return filepath.Join(s.baseDir, "index", safe)
 }
 
+// readKeyIndex 读取 key 的会话索引：全局优先，legacy 索引 fallback。
+// 返回 "" 表示无绑定。
+func (s *JSONLStore) readKeyIndex(key string) (string, error) {
+	indexPath := s.keyIndexPath(key)
+	if data, err := os.ReadFile(indexPath); err == nil {
+		return strings.TrimSpace(string(data)), nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("读取 session 索引失败: %w", err)
+	}
+	if s.legacyBaseDir != "" {
+		legacy := filepath.Join(s.legacyBaseDir, "index", filepath.Base(indexPath))
+		if data, err := os.ReadFile(legacy); err == nil {
+			return strings.TrimSpace(string(data)), nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("读取 legacy session 索引失败: %w", err)
+		}
+	}
+	return "", nil
+}
+
 // SessionSummary 是 ListSessions 返回的会话摘要信息。
 type SessionSummary struct {
 	SessionID      string
@@ -1039,74 +1314,77 @@ func (s *JSONLStore) TouchSession(ctx context.Context, sessionID string) error {
 		return err
 	}
 	now := s.nowFn().UTC()
-	if err := os.Chtimes(s.metaPath(sessionID), now, now); err != nil {
+	if err := os.Chtimes(s.readMetaPath(sessionID), now, now); err != nil {
 		return fmt.Errorf("更新 session 最近使用时间失败: %w", err)
 	}
 	return nil
 }
 
 // ListSessions 枚举所有可恢复的前台会话，按最近使用时间倒序返回。
-// subagent 会话及读取失败的会话会被跳过。
+// 全局布局与 legacy 工作区布局合并（同 ID 取全局）；subagent 会话及
+// 读取失败的会话会被跳过。
 func (s *JSONLStore) ListSessions(ctx context.Context) ([]SessionSummary, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	sessionsDir := filepath.Join(s.baseDir, defaultSessionsDir)
-	entries, err := os.ReadDir(sessionsDir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
-	}
-
+	seen := make(map[string]bool)
 	var summaries []SessionSummary
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		if err := ctx.Err(); err != nil {
+	for _, dir := range s.sessionRoots() {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
 			return nil, err
 		}
-		sessionID := entry.Name()
-		meta, err := s.GetMeta(ctx, sessionID)
-		if err != nil {
-			continue // 跳过读取失败的会话
-		}
-		if meta.Subagent || s.isLegacySubagentSession(sessionID) {
-			continue
-		}
+		for _, entry := range entries {
+			if !entry.IsDir() || seen[entry.Name()] {
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			sessionID := entry.Name()
+			meta, err := s.GetMeta(ctx, sessionID)
+			if err != nil {
+				continue // 跳过读取失败的会话
+			}
+			if meta.Subagent || s.isLegacySubagentSession(sessionID) {
+				continue
+			}
+			seen[sessionID] = true
 
-		lastUsedAt := meta.CreatedAt
-		if info, statErr := os.Stat(s.metaPath(sessionID)); statErr == nil && info.ModTime().After(lastUsedAt) {
-			lastUsedAt = info.ModTime()
-		}
-		summary := SessionSummary{
-			SessionID:  meta.SessionID,
-			CreatedAt:  meta.CreatedAt,
-			LastUsedAt: lastUsedAt,
-		}
+			lastUsedAt := meta.CreatedAt
+			if info, statErr := os.Stat(s.readMetaPath(sessionID)); statErr == nil && info.ModTime().After(lastUsedAt) {
+				lastUsedAt = info.ModTime()
+			}
+			summary := SessionSummary{
+				SessionID:  meta.SessionID,
+				CreatedAt:  meta.CreatedAt,
+				LastUsedAt: lastUsedAt,
+			}
 
-		// 尝试读取第一条用户消息和 transcript 文件大小
-		if fi, err := os.Stat(s.transcriptPath(sessionID)); err == nil {
-			summary.TranscriptSize = fi.Size()
-		}
-		records, err := s.readOwnRecords(ctx, sessionID)
-		if err == nil {
-			for _, rec := range records {
-				if rec.Message.Role == "user" && rec.Message.Content != "" {
-					msg := rec.Message.Content
-					if len(msg) > 80 {
-						msg = msg[:80]
+			// 尝试读取第一条用户消息和 transcript 文件大小
+			if fi, err := os.Stat(s.readTranscriptPath(sessionID)); err == nil {
+				summary.TranscriptSize = fi.Size()
+			}
+			records, err := s.readOwnRecords(ctx, sessionID)
+			if err == nil {
+				for _, rec := range records {
+					if rec.Message.Role == "user" && rec.Message.Content != "" {
+						msg := rec.Message.Content
+						if len(msg) > 80 {
+							msg = msg[:80]
+						}
+						summary.FirstMessage = msg
+						break
 					}
-					summary.FirstMessage = msg
-					break
 				}
 			}
-		}
 
-		summaries = append(summaries, summary)
+			summaries = append(summaries, summary)
+		}
 	}
 
 	// LRU 顺序：最近使用的会话在前；时间相同时用 session ID 保证稳定顺序。
@@ -1120,7 +1398,98 @@ func (s *JSONLStore) ListSessions(ctx context.Context) ([]SessionSummary, error)
 	return summaries, nil
 }
 
+// sessionRoots 返回会话枚举根目录列表（全局优先，legacy 其次）。
+func (s *JSONLStore) sessionRoots() []string {
+	roots := []string{filepath.Join(s.baseDir, defaultSessionsDir)}
+	if s.legacyBaseDir != "" {
+		roots = append(roots, filepath.Join(s.legacyBaseDir, defaultSessionsDir))
+	}
+	return roots
+}
+
 func (s *JSONLStore) isLegacySubagentSession(sessionID string) bool {
-	_, err := os.Stat(filepath.Join(s.baseDir, "tasks", sessionID, "meta.json"))
-	return err == nil
+	for _, root := range []string{s.baseDir, s.legacyBaseDir} {
+		if root == "" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(root, "tasks", sessionID, "meta.json")); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// TranscriptHit 是 search_transcript 的单条命中（D11）。
+type TranscriptHit struct {
+	Seq     int64     `json:"seq"`
+	TurnID  string    `json:"turn_id,omitempty"`
+	Role    string    `json:"role,omitempty"`
+	Content string    `json:"content"`
+	Time    time.Time `json:"time"`
+}
+
+// SearchTranscript 在 transcript 中按关键字检索（大小写不敏感，顺序扫描）。
+// 匹配范围：user/assistant 文本、工具调用名、工具结果内容。
+// 返回命中摘要 + 可检索记录总数（D11 显式范围约定）。
+func (s *JSONLStore) SearchTranscript(ctx context.Context, sessionID, query string, limit int) ([]TranscriptHit, int, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return nil, 0, nil
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	records, err := s.readOwnRecords(ctx, sessionID)
+	if err != nil {
+		return nil, 0, err
+	}
+	searched := len(records)
+	hits := make([]TranscriptHit, 0, limit)
+	for _, r := range records {
+		if err := ctx.Err(); err != nil {
+			return nil, 0, err
+		}
+		var role string
+		var text string
+		switch r.Kind {
+		case "", JournalMessage, JournalAssistant, JournalAssistantPartial:
+			role = string(r.Message.Role)
+			text = r.Message.Content
+			for _, tu := range toolCallsFromRecord(r) {
+				text += " " + tu.Name
+			}
+		case JournalToolResult:
+			role = "tool_result"
+			if r.ToolResult != nil {
+				text = r.ToolResult.Content
+			}
+		case JournalTodoSnapshot:
+			continue
+		}
+		if strings.Contains(strings.ToLower(text), q) {
+			hits = append(hits, TranscriptHit{
+				Seq:     r.Seq,
+				TurnID:  r.TurnID,
+				Role:    role,
+				Content: truncateForRecovery(text),
+				Time:    r.CreatedAt,
+			})
+			if len(hits) >= limit {
+				break
+			}
+		}
+	}
+	return hits, searched, nil
+}
+
+func toolCallsFromRecord(r Record) []message.ToolCall {
+	var out []message.ToolCall
+	if r.Message.ToolUse != nil {
+		out = append(out, *r.Message.ToolUse)
+	}
+	out = append(out, r.Message.ToolUses...)
+	return out
 }

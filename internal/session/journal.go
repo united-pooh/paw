@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"paw/internal/message"
 	"strings"
+	"time"
 )
 
 // JournalKind identifies an append-only transcript record. Empty Kind is
@@ -20,7 +21,27 @@ const (
 	JournalTurnCompleted    JournalKind = "turn_completed"
 	JournalTurnFailed       JournalKind = "turn_failed"
 	JournalTodoSnapshot     JournalKind = "todo_snapshot"
+	JournalMemoryUpdated    JournalKind = "memory_updated"
+	JournalAriadneUpdated   JournalKind = "ariadne_updated"
+	JournalStateCompacted   JournalKind = "state_compacted"
 )
+
+// StateEventKind 区分状态文件更新事件的种类（memory/ariadne）。
+type StateEventKind string
+
+const (
+	StateEventMemory    StateEventKind = "memory"
+	StateEventAriadne   StateEventKind = "ariadne"
+	StateEventCompacted StateEventKind = "compacted"
+)
+
+// StateEventRecord 是状态文件更新事件的载荷（内容在文件，事件只留审计
+// 摘要，设计文档 §8）。
+type StateEventRecord struct {
+	Kind      StateEventKind `json:"kind"`
+	Summary   string         `json:"summary"`
+	UpdatedAt time.Time      `json:"updated_at"`
+}
 
 // RecoveryState describes the latest turn that was not completed normally.
 // It is local recovery metadata and is never sent to the model directly.
