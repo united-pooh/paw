@@ -1,6 +1,6 @@
 # DDD Event Sourcing 迁移计划（完成记录）
 
-**状态：** 全部任务完成（Task 0-9），实现基线 `64ad871`，最终文档提交见末尾。
+**状态：** 全部任务完成（Task 0-10），实现基线 `64ad871`，Task 10 提交见末尾。
 **日期：** 2026-08-13
 **范围：** Paw 核心运行时 —— Goal、Plan、Session/Turn、Tool 调用、Todo
 **设计文档：** `docs/superpowers/specs/2026-08-13-ddd-event-sourcing-design.md`
@@ -25,6 +25,7 @@
 - `internal/es`（新包）：统一事件信封（seq/type/occurred_at/schema_version/payload）、类型注册表（payload 解码 + 校验、未知类型拒绝）、append-only JSONL EventStore（seq 连续校验、尾部 torn 物理截断修复、8 MiB payload 上限、快照读写）、聚合加载管道（快照 + 尾部重放）与命令管线（加载 → 校验 → 追加 → 应用）。
 - **Session 域**：`session.JSONLStore` 写入升级为统一信封（`session.*` 事件，与 `JournalKind` 一一对应），读取兼容 legacy Record（`schema_version=0` 语义，双格式检测）；seq 保持 0 基线（历史语义）；新增 `session.todo_upserted` 事件 + `AppendTodoSnapshot`；torn 尾部写入前物理截断。
 - **Goal 域**：`goal.EventStore` 实现 `GoalStore`（Create/Get/Update/List/Delete），事件流 `goals/<id>.events.jsonl`；`CanTransition` 规则表原样保留为 Update diff 的命令校验；Update 通过字段 diff 产出领域事件（`goal.created/started/paused/blocked/resumed/replanned/completed/failed/cancelled/deleted/stats.updated`），不可变字段变更拒绝、revision 乐观锁保留；`goal.deleted` 墓碑；纯进度通知仅走运行时 `EventSink`（不入库）；goal 由纯内存变为**事件溯源持久化**。
+- **Goal 子状态（Task 10）**：evidence/checkpoint 由独立内存 store 改为 goal 聚合子状态，随聚合流持久化（`goal.evidence.added` / `goal.evidence.stale_marked` / `goal.checkpoint.saved` / `goal.checkpoint.deleted`）；`EventStore` 经 `EvidenceStore()`/`CheckpointStore()` 适配接口注入 goal runtime；快照升级为 `{goal, evidence, checkpoints}` 新格式，旧格式快照检测后删缓存全量重放（D9/D10）。
 - **Plan 域**：`plan.EventStore` 实现 `DocStore`（组合 FileStore 作投影写入端），事件流 `plans/<id>.events.jsonl`；`.md` 文件保持为投影产物（front matter 格式不变，git-friendly）；文档首次经 Finalize 持久化时自动基线导入（`plan.baseline`）；`MarkApproved`/`RecordSessionStatus` 产出 `plan.status_changed`；`SessionStatus` 状态机保留。
 - **接线**：`cmd/agent` 的 goal/plan controller 使用事件溯源存储（store 为 nil 时回退内存/纯文件）；`wireTodoEvents` 把 todo 快照更新接线为 `session.todo_upserted` 事件（best-effort，失败不影响工具结果）。
 
@@ -37,7 +38,7 @@
 - `internal/es/store.go` + `store_test.go`
 - `internal/es/aggregate.go` + `aggregate_test.go`
 - `internal/session/record_envelope.go` + `record_envelope_test.go`
-- `internal/goal/es_events.go`、`es_state.go`、`es_store.go`、`es_store_test.go`、`es_recovery_test.go`
+- `internal/goal/es_events.go`、`es_state.go`、`es_store.go`、`es_store_test.go`、`es_recovery_test.go`、`es_evidence_checkpoint_test.go`
 - `internal/plan/es_events.go`、`es_state.go`、`es_store.go`、`es_store_test.go`、`es_migration_test.go`
 - `docs/superpowers/specs/2026-08-13-ddd-event-sourcing-design.md`
 
@@ -105,6 +106,16 @@
 - [x] `go build ./...`、`go test ./... -count=1`、`go test -race`（es/session/goal/plan/cmd.agent/todo）、`go vet ./...`、`gofmt -l` 全绿。
 - [x] 设计文档偏差表定稿（D1-D8）；本计划文档转为完成记录。
 
+### Task 10 — goal evidence/checkpoint 事件化（follow-up）
+- [x] 事件类型：`goal.evidence.added`（含 evidence_id/goal_id/kind/status/scope/digest 等完整字段）、`goal.evidence.stale_marked`（声明式 `{changed_files}`，Apply 按 scope 匹配，重放幂等）、`goal.checkpoint.saved`（完整可恢复状态，含 TodoSnapshot/NextInput）、`goal.checkpoint.deleted`（清空语义）；注册表 Validate 与既有模式一致。
+- [x] 聚合状态：`goalESState` 扩展 evidence map + checkpoints 列表；Apply 处理新事件（其余委托 Goal.Apply）；快照升级为 `{goal, evidence, checkpoints}` 新格式。
+- [x] **快照格式兼容（D10）**：旧快照（裸 Goal JSON）Restore 检测返回 `errLegacySnapshot` → `loadState` 删除缓存并全量重放（快照是缓存非事实，不丢数据）。
+- [x] 存储方法：`AddEvidence`（goal 必须存在、重复 id 拒绝）、`GetEvidence`（跨流枚举）、`ListEvidenceByGoal`（CreatedAt 排序）、`MarkEvidenceStaleByChangedFiles`（枚举全部 goal 流按 scope 命中追加事件）、`SaveCheckpoint`（ID 缺省生成、goal 必须存在）、`LoadCheckpoint`/`LatestCheckpoint`（deleted 清空后重新累积）、`DeleteCheckpoints`。
+- [x] 接口适配：`EvidenceStore()`/`CheckpointStore()` 返回适配器（方法名与 EventStore 既有 Get/Delete 冲突，不直接实现接口）；`cmd/agent/goal_controller.go` 把 esStore 同时注入 `RuntimeConfig.Evidence`/`Checkpoints`（store nil 时保持不启用）。
+- [x] 测试：13 个新测试覆盖持久化/重启恢复/stale 标记跨 goal/Delete 后重生/快照往返（含子状态）/legacy 快照全量重放/适配器冒烟。
+- 提交：`599f0ca0` `feat(goal): event-source evidence and checkpoints`
+- 验证：focused 13 测试 + `internal/goal` + `cmd/agent` 全绿。
+
 ## 最终验证
 
 - `go build ./...` — PASS。
@@ -116,4 +127,4 @@
 
 ## 设计偏差（详见设计文档 5.1）
 
-D1 `session.tool_call` 不引入（保留在 assistant_message 内）；D2 session seq 0 基线（es 信封校验放宽，es 流仍从 1）；D3 todo 事件接线 best-effort；D4 session 写入不强制 8 MiB（es 流为准）；D5 plan 外部编辑由下次投影覆盖（与现状一致）+ 首次 Finalize 自动基线导入；D6 plan Finalize 双 approved 记录（幂等）；D7 goal 纯进度事件不入库、evidence/checkpoint 独立 store；D8 torn 尾部物理截断修复（es + session）。
+D1 `session.tool_call` 不引入（保留在 assistant_message 内）；D2 session seq 0 基线（es 信封校验放宽，es 流仍从 1）；D3 todo 事件接线 best-effort；D4 session 写入不强制 8 MiB（es 流为准）；D5 plan 外部编辑由下次投影覆盖（与现状一致）+ 首次 Finalize 自动基线导入；D6 plan Finalize 双 approved 记录（幂等）；D7 goal 纯进度事件不入库；D8 torn 尾部物理截断修复（es + session）；D9 evidence/checkpoint 事件化（Task 10）；D10 goal 快照格式升级 + legacy 快照删缓存全量重放（Task 10）。

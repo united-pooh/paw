@@ -1,6 +1,6 @@
 # DDD Event Sourcing 设计（核心运行时）
 
-**状态：** 已实现（2026-08-13，Task 0-9 完成）
+**状态：** 已实现（2026-08-13，Task 0-9 完成；Task 10 evidence/checkpoint 事件化完成）
 **配套计划：** `docs/superpowers/plans/2026-08-13-ddd-event-sourcing-plan.md`
 **范围：** Goal、Plan、Session/Turn、Tool 调用、Todo
 
@@ -154,8 +154,10 @@ EventStore（internal/es，追加 JSONL，seq 连续，fsync）
 | `goal.completed` | `{}` | `EventCompleted` |
 | `goal.failed` | `{reason}` | `EventFailed` |
 | `goal.cancelled` | `{}` | `EventCancelled` |
-| `goal.evidence.added` | `{kind, status, detail}` | `EventEvidenceAdded` + `EvidenceKind/Status` |
+| `goal.evidence.added` | `{evidence_id, goal_id, kind, status, summary, scope, digest, created_at}` | `EventEvidenceAdded` + `EvidenceKind/Status` |
+| `goal.evidence.stale_marked` | `{changed_files}` | 新增（`MarkStaleByChangedFiles`；声明式，Apply 按 scope 匹配，重放幂等） |
 | `goal.checkpoint.saved` | `{checkpoint}` | `EventCheckpointSaved` |
+| `goal.checkpoint.deleted` | `{}` | 新增（清空该 goal 全部 checkpoint；`MemoryCheckpointStore.Delete` 语义） |
 
 不持久化的运行时通知（仅 EventSink，不改变聚合状态）：`goal.input.received`。
 
@@ -257,7 +259,9 @@ agg.Apply(events...)                                    // 状态前进
 | D4 | session 写入未强制 8 MiB payload 上限（保持现有行为） | 强制上限可能拒绝现有合法大 tool result；es 事件流保留 8 MiB 上限 | **已定**：保持现状，es 流上限为准 |
 | D5 | plan 文档被用户外部编辑：下次 Update 时投影覆盖（与现状 FileStore 行为一致）；文档首次经 Finalize 持久化时自动基线导入 | 事件流不存在但投影文件存在 → 读文件写 `plan.baseline` 再 diff 应用 | **已定**（自动导入已实现，Task 8 dry-run 验证） |
 | D6 | plan Finalize 会产生两条 approved 记录（Update diff 的 status_changed + storeSession 的 RecordSessionStatus） | 幂等无害（Apply 后状态已 approved，重复事件不改变状态） | 已接受 |
-| D7 | goal 聚合不持久化纯进度事件（turn.completed/continued/task.started/compacted 仅走 EventSink）；evidence/checkpoint 保持独立 store | 符合 4.7 原则（纯通知不入库）；独立 store 无状态落点 | 已定 |
+| D7 | goal 聚合不持久化纯进度事件（turn.completed/continued/task.started/compacted 仅走 EventSink） | 符合 4.7 原则（纯通知不入库） | 已定；evidence/checkpoint 在 Task 10 已事件化（见下） |
+| D9 | evidence/checkpoint 由独立 store 改为 goal 聚合子状态，随聚合流持久化（`goal.evidence.added` / `goal.evidence.stale_marked` / `goal.checkpoint.saved` / `goal.checkpoint.deleted`）；`MarkStaleByChangedFiles` 无 goalID 参数，写端枚举全部 goal 流按 scope 匹配追加事件 | 消除「有状态但无落点」的独立存储；跨流一致性与 goal 状态事务化；事件声明式重放幂等 | **已完成**（Task 10） |
+| D10 | 快照格式演进：goal 快照由裸 Goal JSON 升级为 `{goal, evidence, checkpoints}`；旧格式快照在 loadState 时检测（Restore 返回 `errLegacySnapshot`）→ 删除缓存 → 全量重放 | 快照是缓存非事实；旧快照缺 evidence/checkpoints 子状态，直接恢复会丢数据 | **已完成**（Task 10） |
 | D8 | 崩溃恢复：torn 尾部（无换行、最后一行解析失败）在 Append 前**物理截断**（es + session 双处） | 否则 O_APPEND 会把新事件拼进损坏行，后续记录全部丢失（Task 8 发现并修复） | **已修复**（`64ad871`） |
 
 ## 7. 风险与开放问题
