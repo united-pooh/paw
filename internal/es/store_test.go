@@ -352,3 +352,77 @@ func TestFilesHaveExpectedPermissions(t *testing.T) {
 		t.Fatalf("stream mode = %o, want 600", info.Mode().Perm())
 	}
 }
+
+func TestAppendAfterTornTailRepairsStream(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if _, _, err := s.Append(ctx, "g1", []Envelope{env(0, "goal.created", `{}`), env(0, "goal.started", `{}`)}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	// 模拟崩溃：无换行结尾的 torn 行
+	path, err := s.StreamPath("g1")
+	if err != nil {
+		t.Fatalf("path: %v", err)
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := f.WriteString(`{"seq":9,"type":"goal.paused","paylo`); err != nil {
+		f.Close()
+		t.Fatalf("write torn: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	// 再次 append：torn 尾部必须先被物理截断，新事件完整落盘
+	first, last, err := s.Append(ctx, "g1", []Envelope{env(0, "goal.paused", `{"reason":"x"}`)})
+	if err != nil {
+		t.Fatalf("append after torn: %v", err)
+	}
+	if first != 3 || last != 3 {
+		t.Fatalf("seq = %d..%d, want 3..3", first, last)
+	}
+	got, truncated, err := s.Load(ctx, "g1")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if truncated {
+		t.Fatal("stream must be intact after repair")
+	}
+	if len(got) != 3 || got[2].Type != "goal.paused" {
+		t.Fatalf("loaded %d events, want 3 intact: %+v", len(got), got)
+	}
+}
+
+func TestAppendAfterTornTailNewStoreInstance(t *testing.T) {
+	dir := t.TempDir()
+	s1, err := NewJSONLStore(dir, "goals")
+	if err != nil {
+		t.Fatalf("store 1: %v", err)
+	}
+	ctx := context.Background()
+	if _, _, err := s1.Append(ctx, "g1", []Envelope{env(0, "goal.created", `{}`)}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	path, _ := s1.StreamPath("g1")
+	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	f.WriteString(`{"seq":9,"type":"goal.`) // 无换行：崩溃部分写入
+	f.Close()
+	// 新实例（模拟重启）：缓存为空，repair + seq 从完好前缀继续
+	s2, err := NewJSONLStore(dir, "goals")
+	if err != nil {
+		t.Fatalf("store 2: %v", err)
+	}
+	first, last, err := s2.Append(ctx, "g1", []Envelope{env(0, "goal.started", `{}`)})
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if first != 2 || last != 2 {
+		t.Fatalf("seq = %d..%d, want 2..2", first, last)
+	}
+	got, truncated, err := s2.Load(ctx, "g1")
+	if err != nil || truncated || len(got) != 2 {
+		t.Fatalf("load = %d events trunc=%v err=%v, want 2 intact", len(got), truncated, err)
+	}
+}

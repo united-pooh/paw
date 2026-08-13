@@ -151,6 +151,15 @@ func (s *EventStore) appendCreated(ctx context.Context, typ string, doc PlanDoc)
 	if exists {
 		return fmt.Errorf("plan %q already exists", doc.ID)
 	}
+	// 旧文件 front matter 不含 created_at：导入时用投影文件 mtime 兜底。
+	if doc.CreatedAt.IsZero() {
+		if fi, statErr := os.Stat(doc.Path); statErr == nil {
+			doc.CreatedAt = fi.ModTime()
+		} else {
+			doc.CreatedAt = s.now()
+		}
+		doc.UpdatedAt = doc.CreatedAt
+	}
 	raw, err := json.Marshal(createdPayload{
 		PlanID:    string(doc.ID),
 		Title:     doc.Title,

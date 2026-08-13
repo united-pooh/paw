@@ -301,6 +301,11 @@ func (s *JSONLStore) appendRecords(ctx context.Context, sessionID string, record
 	if err != nil {
 		return firstSeq, lastSeq, err
 	}
+	// 崩溃可能留下无换行结尾的 torn 行：物理截掉，否则 O_APPEND 会把新
+	// 记录拼进损坏行（该行将永远无法解析，后续记录全部丢失）。
+	if err := s.repairTornTail(sessionID); err != nil {
+		return -1, -1, err
+	}
 	firstSeq = nextSeq
 	lastSeq = nextSeq + int64(len(records)) - 1
 
@@ -784,6 +789,52 @@ func (s *JSONLStore) readOwnRecords(ctx context.Context, sessionID string) ([]Re
 		records = append(records, rec)
 	}
 	return records, nil
+}
+
+// repairTornTail 物理截掉崩溃留下的未完成尾部（无换行结尾且最后一行解析
+// 失败）。完整但无换行的最后一行保留；中部损坏报错。
+func (s *JSONLStore) repairTornTail(sessionID string) error {
+	path := s.transcriptPath(sessionID)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("读取 transcript 失败(%s): %w", path, err)
+	}
+	if len(data) == 0 || bytes.HasSuffix(data, []byte{'\n'}) {
+		return nil
+	}
+	lines := bytes.Split(data, []byte{'\n'})
+	offset := 0
+	for i, line := range lines {
+		trimmed := bytes.TrimSpace(line)
+		if len(trimmed) == 0 {
+			offset += len(line) + 1
+			continue
+		}
+		parsed := false
+		if isEnvelopeLine(trimmed) {
+			var env es.Envelope
+			if err := json.Unmarshal(trimmed, &env); err == nil && env.Validate() == nil {
+				parsed = true
+			}
+		} else {
+			var rec Record
+			parsed = json.Unmarshal(trimmed, &rec) == nil
+		}
+		if !parsed {
+			if i == len(lines)-1 {
+				if err := os.Truncate(path, int64(offset)); err != nil {
+					return fmt.Errorf("截断 transcript 失败(%s): %w", path, err)
+				}
+				return nil
+			}
+			return fmt.Errorf("解析 transcript 失败(%s): 中部损坏 offset %d", path, offset)
+		}
+		offset += len(line) + 1
+	}
+	return nil
 }
 
 func (s *JSONLStore) sessionDir(sessionID string) string {

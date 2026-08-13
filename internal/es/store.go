@@ -92,6 +92,12 @@ func (s *JSONLStore) Append(ctx context.Context, aggregateID string, events []En
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// 崩溃可能在行中间截断文件（无换行结尾）。物理截掉 torn 尾部，
+	// 否则后续 O_APPEND 会把新事件拼进损坏行。
+	if err := s.repairTornTail(aggregateID); err != nil {
+		return 0, 0, err
+	}
+
 	next := s.nextSeqLocked(ctx, aggregateID)
 	assigned := make([]Envelope, len(events))
 	for i, e := range events {
@@ -145,6 +151,44 @@ func (s *JSONLStore) nextSeqLocked(ctx context.Context, id string) int64 {
 	n := last[len(last)-1].Seq
 	s.lastSeq[id] = n
 	return n
+}
+
+// repairTornTail 物理截掉崩溃留下的未完成尾部。仅当文件末尾没有换行且
+// 最后一行解析失败时截断（完整但无换行的最后一行被保留）；中部损坏报错。
+func (s *JSONLStore) repairTornTail(aggregateID string) error {
+	path := s.streamPath(aggregateID)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("es: read stream for repair: %w", err)
+	}
+	if len(data) == 0 || bytes.HasSuffix(data, []byte{'\n'}) {
+		return nil
+	}
+	lines := bytes.Split(data, []byte{'\n'})
+	offset := 0
+	for i, line := range lines {
+		trimmed := bytes.TrimSpace(line)
+		if len(trimmed) == 0 {
+			offset += len(line) + 1
+			continue
+		}
+		var env Envelope
+		if err := json.Unmarshal(trimmed, &env); err != nil {
+			if i == len(lines)-1 {
+				// torn 尾部：截到该行起始
+				if err := os.Truncate(path, int64(offset)); err != nil {
+					return fmt.Errorf("es: truncate torn tail: %w", err)
+				}
+				return nil
+			}
+			return fmt.Errorf("es: mid-stream corruption at offset %d: %w", offset, err)
+		}
+		offset += len(line) + 1
+	}
+	return nil
 }
 
 // Load returns the intact event prefix of a stream. A malformed or truncated
