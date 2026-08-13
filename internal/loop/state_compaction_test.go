@@ -2,10 +2,12 @@ package loop
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"paw/internal/message"
 	"paw/internal/model"
 	"paw/internal/session"
 	"paw/internal/tool"
@@ -152,5 +154,82 @@ func TestStateCompactionSummaryModeUnchanged(t *testing.T) {
 	prompt := promptTextForTest(modelClient.calls[0])
 	if strings.Contains(prompt, stateRefreshInstruction[:40]) {
 		t.Fatal("summary mode must not use state refresh instruction")
+	}
+}
+
+// TestStateModeSnipsToolResultsBelowCompactionRatio 覆盖：模式 B 接入 4 级
+// 压力后，snip 档（soft < 压力 < stateCompactionRatio）对工具结果做
+// 头尾裁剪，历史结构保留，不触发状态压缩（工具结果处理策略与模式 A 一致）。
+func TestStateModeSnipsToolResultsBelowCompactionRatio(t *testing.T) {
+	history := []message.Message{
+		{Role: message.RoleUser, Content: "task"},
+		buildAssistantToolCallMessage([]message.ToolCall{{ID: "old1", Name: "Read"}}),
+		buildToolResultMessage("old1", strings.Repeat("large stale result\n", 1500), false),
+		{Role: message.RoleAssistant, Content: "recent answer"},
+		{Role: message.RoleUser, Content: "continue"},
+	}
+	estimated := estimateMessageTokens(history)
+	modelClient := &fakeModel{}
+	// 压力 ≈ 0.65 × limit：落在 snip 档（0.6 与 0.9 之间）。
+	limit := int(float64(estimated) / 0.65)
+	runner := newPressureTestRunner(t, modelClient, limit)
+	runner.SetContextMode("state")
+	runner.SetStateCompactionRatio(0.9)
+
+	got, err := runner.maintainStateProjection(context.Background(), history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.snippedResults != 1 {
+		t.Fatalf("snippedResults = %d, want 1", got.snippedResults)
+	}
+	if got.prunedResults != 0 || got.compaction != nil {
+		t.Fatalf("snip band must not prune or compact: %+v", got)
+	}
+	if len(got.history) != len(history) {
+		t.Fatalf("message structure must be preserved in snip band: %d → %d messages", len(history), len(got.history))
+	}
+	snipped := false
+	checkResult := func(content string) {
+		if strings.Contains(content, stateRefreshInstruction[:40]) {
+			t.Fatal("state compaction must not trigger in snip band")
+		}
+		if strings.Contains(content, snippedToolResultMarker) {
+			snipped = true
+		}
+	}
+	for _, msg := range got.history {
+		if msg.ToolResult != nil {
+			checkResult(msg.ToolResult.Content)
+		}
+		for _, tr := range msg.ToolResults {
+			checkResult(tr.Content)
+		}
+	}
+	if !snipped {
+		t.Fatal("tool result must be snipped with head+tail marker")
+	}
+}
+
+// TestStateModePruneArchivesBeforeCompaction 覆盖：模式 B compact 档先
+// 归档旧工具结果（prune 前置保真），再执行状态压缩。
+func TestStateModePruneArchivesBeforeCompaction(t *testing.T) {
+	runner, modelClient, store, sessionID := newStateCompactionRunner(t)
+	snapshot, err := store.LoadSnapshot(context.Background(), sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.setHistory(snapshot.ActiveHistory)
+
+	if _, err := runner.RunTurn(context.Background(), "继续"); err != nil {
+		t.Fatal(err)
+	}
+	if len(modelClient.calls) != 1 {
+		t.Fatalf("model calls = %d, want 1 (no summarizer call)", len(modelClient.calls))
+	}
+	archiveDir := filepath.Join(runner.workRoot, ".paw", "sessions", sessionID, "compactions")
+	entries, err := os.ReadDir(archiveDir)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("compaction archive must be written before state compression: %v, entries=%d", err, len(entries))
 	}
 }

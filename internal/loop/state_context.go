@@ -97,9 +97,14 @@ func (runner *Runner) SetResumeRecentTurns(n int) {
 const stateRefreshInstruction = "[系统] 上下文接近上限，已执行状态压缩：较早的对话已归档（可用 search_transcript 取回细节）。请先调用 update_todo / update_memory / update_ariadne 刷新状态文件（使后续恢复有最新依据），再继续当前工作。"
 
 // maintainStateProjection 实现模式 B 的运行时上下文维护（设计文档 §6）：
-// 对话全量保留（缓存稳定），直到估算达到 stateCompactionRatio（默认
-// 0.9）阈值才触发状态压缩——状态块 + 最近 N 轮（清洗）+ 刷新指令替换
-// 整个历史，不调用摘要模型。压缩后仍超窗口（极端）时降级模式 A 摘要。
+// 与模式 A 共享同样的 4 级压力响应（soft → snip → compact → force），
+// 工具结果处理策略跨链路一致：
+//   - soft 档以下：对话全量保留（缓存稳定）
+//   - snip 档：工具结果头尾裁剪（保留 head+tail），历史结构不动
+//   - compact 档（stateCompactionRatio，默认 0.9）：工具结果归档
+//     （prune 前置保真）后执行状态压缩——状态块 + 最近 N 轮（清洗）+
+//     刷新指令替换整个历史，不调用摘要模型
+//   - force 档：状态压缩后仍超窗口（极端）降级模式 A 摘要
 func (runner *Runner) maintainStateProjection(ctx context.Context, history []message.Message) (contextMaintenanceResult, error) {
 	result := contextMaintenanceResult{history: history}
 	if runner == nil || len(history) == 0 {
@@ -109,6 +114,7 @@ func (runner *Runner) maintainStateProjection(ctx context.Context, history []mes
 	limit := runner.contextLimitTokens
 	ratio := runner.stateCompactionRatio
 	turns := runner.recentTurns
+	cfg := runner.contextMaintenance
 	runner.mu.RUnlock()
 	if limit <= 0 {
 		return result, nil
@@ -119,11 +125,31 @@ func (runner *Runner) maintainStateProjection(ctx context.Context, history []mes
 	if turns <= 0 {
 		turns = 3
 	}
-	if estimateMessageTokens(history) < int(float64(limit)*ratio) {
+	if cfg.compactRatio == 0 {
+		cfg = defaultContextMaintenanceConfig()
+	}
+	compactThreshold := pressureThreshold(limit, ratio)
+
+	outcome, err := runner.maintainToolResultsByPressure(ctx, history, limit, compactThreshold, cfg)
+	if err != nil {
+		return result, err
+	}
+	if outcome.rewritten == nil {
 		return result, nil
 	}
+	result.history = outcome.rewritten
+	result.archivePaths = append(result.archivePaths, outcome.archivePaths...)
+	result.estimatedTokensSaved = outcome.estimatedTokensSaved
+	if outcome.mode == maintenanceSnip {
+		result.snippedResults = outcome.snippedResults
+		return result, nil
+	}
+	result.prunedResults = outcome.prunedResults
+	history = outcome.rewritten
 
-	// 状态压缩：状态块 + 最近 N 轮 + 刷新指令。
+	// compact 档：状态压缩（prune 已前置归档原始工具结果）。
+	// 状态压缩不调模型（本地组装状态块），prune 后无需像模式 A 一样
+	// 做经济性检查——达到阈值即压缩。
 	journal := runner.turnJournal()
 	loader, _ := journal.(recentTurnsLoader)
 	if journal == nil || loader == nil {
@@ -145,15 +171,15 @@ func (runner *Runner) maintainStateProjection(ctx context.Context, history []mes
 	compacted = append(compacted, recent...)
 	compacted = append(compacted, message.Message{Role: message.RoleUser, Content: stateRefreshInstruction})
 
-	// 极端兜底：状态块 + N 轮 + 指令仍超阈值（几乎不可能）→ 模式 A 摘要。
-	if estimateMessageTokens(compacted) >= int(float64(limit)*ratio) {
+	// force 档兜底：状态块 + N 轮 + 指令仍超阈值（几乎不可能）→ 模式 A 摘要。
+	if estimateMessageTokens(compacted) >= compactThreshold {
 		return runner.compactStateFallback(ctx, history)
 	}
 
 	before := len(history)
 	runner.recordStateCompaction(ctx, before, len(compacted), ratio)
 	result.history = compacted
-	result.estimatedTokensSaved = maxInt(0, estimateMessageTokens(history)-estimateMessageTokens(compacted))
+	result.estimatedTokensSaved += maxInt(0, estimateMessageTokens(history)-estimateMessageTokens(compacted))
 	return result, nil
 }
 

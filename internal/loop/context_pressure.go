@@ -31,11 +31,7 @@ func (runner *Runner) maintainContextProjection(ctx context.Context, history []m
 
 	runner.mu.RLock()
 	limit := runner.contextLimitTokens
-	usage := runner.usage
-	usageKnown := runner.usageKnown
 	cfg := runner.contextMaintenance
-	archive := runner.compactionArchive
-	registry := runner.registry
 	runner.mu.RUnlock()
 	if limit <= 0 {
 		return result, nil
@@ -44,65 +40,24 @@ func (runner *Runner) maintainContextProjection(ctx context.Context, history []m
 		cfg = defaultContextMaintenanceConfig()
 	}
 
-	estimated := estimateMessageTokens(history)
-	promptTokens := estimated
-	if usageKnown && usage.PromptTokenCount() > promptTokens {
-		promptTokens = usage.PromptTokenCount()
-	}
-	soft := pressureThreshold(limit, cfg.softCompactRatio)
-	snip := pressureThreshold(limit, cfg.toolResultSnipRatio)
-	compact := pressureThreshold(limit, cfg.compactRatio)
-	force := pressureThreshold(limit, cfg.compactForceRatio)
-
-	if promptTokens < soft {
-		runner.recordAutomaticCompaction(false, true)
-		return result, nil
-	}
-	if promptTokens < snip {
-		if runner.markSoftContextPressure() {
-			runner.notifySystem("context-compaction", fmt.Sprintf("context pressure reached %.0f%%; preserving the cache-stable prefix until cleanup is needed", cfg.softCompactRatio*100))
-		}
-		return result, nil
-	}
-
-	head, tail := planHistoryCompactionWithConfig(history, limit, cfg)
-	_ = head
-	mode := maintenanceSnip
-	if promptTokens >= compact {
-		mode = maintenancePrune
-	}
-	if archive == nil {
-		var err error
-		archive, err = newCompactionArchive(runner.workRoot, runner.sessionID, cfg.archiveEnabled)
-		if err != nil {
-			return result, err
-		}
-	}
-	rewritten, stats, err := maintainToolResults(history, maintenanceRequest{
-		mode:      mode,
-		tailStart: tail,
-		minBytes:  cfg.minToolResultBytes,
-		policy: keepPolicy{
-			errors:     cfg.keepErrors,
-			userMarked: cfg.keepUserMarked,
-		},
-		archive:  archive,
-		registry: registry,
-	})
+	outcome, err := runner.maintainToolResultsByPressure(ctx, history, limit, pressureThreshold(limit, cfg.compactRatio), cfg)
 	if err != nil {
 		return result, err
 	}
-	result.history = rewritten
-	result.archivePaths = append(result.archivePaths, stats.archives...)
-	result.estimatedTokensSaved = estimatedTokenSavings(stats.savedChars)
-	if mode == maintenanceSnip {
-		result.snippedResults = stats.results
+	if outcome.rewritten == nil {
 		return result, nil
 	}
-	result.prunedResults = stats.results
-
-	postTokens := estimateMessageTokens(rewritten)
-	forced := promptTokens >= force
+	result.history = outcome.rewritten
+	result.archivePaths = append(result.archivePaths, outcome.archivePaths...)
+	result.estimatedTokensSaved = outcome.estimatedTokensSaved
+	if outcome.mode == maintenanceSnip {
+		result.snippedResults = outcome.snippedResults
+		return result, nil
+	}
+	result.prunedResults = outcome.prunedResults
+	postTokens := outcome.postTokens
+	compact := pressureThreshold(limit, cfg.compactRatio)
+	forced := outcome.promptTokens >= pressureThreshold(limit, cfg.compactForceRatio)
 	if !allowSummary || (!forced && postTokens < compact) {
 		runner.recordAutomaticCompaction(false, postTokens < compact)
 		return result, nil
@@ -110,11 +65,11 @@ func (runner *Runner) maintainContextProjection(ctx context.Context, history []m
 	if !runner.automaticSummaryAllowed() {
 		return result, nil
 	}
-	if !forced && !foldEconomicsForHistory(rewritten, limit, cfg) {
+	if !forced && !foldEconomicsForHistory(outcome.rewritten, limit, cfg) {
 		return result, nil
 	}
 
-	compacted, compaction, err := runner.compactHistory(ctx, rewritten, "", forced)
+	compacted, compaction, err := runner.compactHistory(ctx, outcome.rewritten, "", forced)
 	if err != nil {
 		return result, err
 	}
@@ -134,6 +89,113 @@ func (runner *Runner) maintainContextProjection(ctx context.Context, history []m
 		runner.notifySystem("context-compaction", "automatic summary compaction paused after two consecutive folds; tool-result pruning remains active")
 	}
 	return result, nil
+}
+
+// toolMaintenanceOutcome 是两条压缩链路共享的工具结果维护结果。
+// rewritten == nil 表示未达 snip 档（压力过低，历史全量保留）。
+type toolMaintenanceOutcome struct {
+	rewritten            []message.Message
+	mode                 maintenanceMode
+	snippedResults       int
+	prunedResults        int
+	estimatedTokensSaved int
+	archivePaths         []string
+	promptTokens         int
+	postTokens           int
+}
+
+// maintainToolResultsByPressure 按压力档位维护工具结果（模式 A/B 共用，
+// 工具结果处理策略跨链路一致）：
+//
+//   - < soft：仅复位自动压缩状态，历史不动（缓存稳定）
+//   - < snip：标记软压力，历史不动
+//   - < compactThreshold：头尾裁剪（snip，保留 head+tail）
+//   - ≥ compactThreshold：归档并替换为 elided marker（prune）
+//
+// compactThreshold 由调用方传入：模式 A 用 cfg.compactRatio，模式 B 用
+// 状态压缩阈值（stateCompactionRatio）。soft/snip 档被钳制到不超过
+// compactThreshold，保证档位单调。
+func (runner *Runner) maintainToolResultsByPressure(ctx context.Context, history []message.Message, limit, compactThreshold int, cfg contextMaintenanceConfig) (toolMaintenanceOutcome, error) {
+	var outcome toolMaintenanceOutcome
+	if limit <= 0 {
+		return outcome, nil
+	}
+	if cfg.compactRatio == 0 {
+		cfg = defaultContextMaintenanceConfig()
+	}
+
+	runner.mu.RLock()
+	usage := runner.usage
+	usageKnown := runner.usageKnown
+	archive := runner.compactionArchive
+	registry := runner.registry
+	runner.mu.RUnlock()
+
+	estimated := estimateMessageTokens(history)
+	promptTokens := estimated
+	if usageKnown && usage.PromptTokenCount() > promptTokens {
+		promptTokens = usage.PromptTokenCount()
+	}
+	outcome.promptTokens = promptTokens
+
+	soft := pressureThreshold(limit, cfg.softCompactRatio)
+	snip := pressureThreshold(limit, cfg.toolResultSnipRatio)
+	if soft > compactThreshold {
+		soft = compactThreshold
+	}
+	if snip > compactThreshold {
+		snip = compactThreshold
+	}
+
+	if promptTokens < soft {
+		runner.recordAutomaticCompaction(false, true)
+		return outcome, nil
+	}
+	if promptTokens < snip {
+		if runner.markSoftContextPressure() {
+			runner.notifySystem("context-compaction", fmt.Sprintf("context pressure reached %.0f%%; preserving the cache-stable prefix until cleanup is needed", cfg.softCompactRatio*100))
+		}
+		return outcome, nil
+	}
+
+	head, tail := planHistoryCompactionWithConfig(history, limit, cfg)
+	_ = head
+	mode := maintenanceSnip
+	if promptTokens >= compactThreshold {
+		mode = maintenancePrune
+	}
+	if archive == nil {
+		var err error
+		archive, err = newCompactionArchive(runner.workRoot, runner.sessionID, cfg.archiveEnabled)
+		if err != nil {
+			return outcome, err
+		}
+	}
+	rewritten, stats, err := maintainToolResults(history, maintenanceRequest{
+		mode:      mode,
+		tailStart: tail,
+		minBytes:  cfg.minToolResultBytes,
+		policy: keepPolicy{
+			errors:     cfg.keepErrors,
+			userMarked: cfg.keepUserMarked,
+		},
+		archive:  archive,
+		registry: registry,
+	})
+	if err != nil {
+		return outcome, err
+	}
+	outcome.rewritten = rewritten
+	outcome.mode = mode
+	if mode == maintenanceSnip {
+		outcome.snippedResults = stats.results
+	} else {
+		outcome.prunedResults = stats.results
+	}
+	outcome.estimatedTokensSaved = estimatedTokenSavings(stats.savedChars)
+	outcome.archivePaths = stats.archives
+	outcome.postTokens = estimateMessageTokens(rewritten)
+	return outcome, nil
 }
 
 func (runner *Runner) notifyContextMaintenance(result contextMaintenanceResult) {
