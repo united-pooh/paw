@@ -1,6 +1,6 @@
 # Token Tracer 高密度 Docking Workspace 规格
 
-**状态：** Draft
+**状态：** Approved
 
 **日期：** 2026-08-13
 

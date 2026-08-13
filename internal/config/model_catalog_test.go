@@ -392,6 +392,7 @@ func TestValidateProviderDiscovery(t *testing.T) {
 		want string
 	}{
 		{name: "format", cfg: DiscoveryConfig{Format: "xml"}, want: "format is unsupported"},
+		{name: "mode", cfg: DiscoveryConfig{Mode: "mirror"}, want: "mode is unsupported"},
 		{name: "negative timeout", cfg: DiscoveryConfig{TimeoutSeconds: -1}, want: "between 1 and 10"},
 		{name: "large timeout", cfg: DiscoveryConfig{TimeoutSeconds: 11}, want: "between 1 and 10"},
 		{name: "absolute URL", cfg: DiscoveryConfig{Path: "https://evil.invalid/models"}, want: "same-origin path"},
@@ -610,5 +611,147 @@ func TestEnsureSchemaUpdatesChangedContentAndSkipsMatchingContent(t *testing.T) 
 	}
 	if info.Mode().Perm() != 0o644 {
 		t.Fatalf("matching schema was unexpectedly rewritten: mode=%v", info.Mode().Perm())
+	}
+}
+
+func TestBuildEffectiveCatalogReplaceSupersedesManualWithMetadata(t *testing.T) {
+	enabled := true
+	stream := false
+	document := Document{
+		Providers: map[string]Provider{
+			"local": {Discovery: &DiscoveryConfig{Enabled: &enabled, Mode: DiscoveryModeReplace}},
+		},
+		Models: map[string]Model{
+			"manual-chat": {
+				Provider: "local", Name: "chat-model",
+				Adapter: AdapterDeepSeek, ContextWindow: 128000, Stream: &stream,
+				Capabilities: Capabilities{Vision: boolPointer(true)},
+				Parameters:   map[string]any{"reasoning": map[string]any{"effort": "max"}},
+			},
+			"manual-retired": {Provider: "local", Name: "retired-model"},
+		},
+	}
+	discovered := map[string][]DiscoveredModel{
+		"local": {{ProviderID: "local", Name: "chat-model"}, {ProviderID: "local", Name: "fresh-model"}},
+	}
+
+	catalog, stats := buildEffectiveCatalog(document, discovered)
+
+	if len(catalog) != 2 || stats.Merged != 2 {
+		t.Fatalf("catalog=%#v stats=%#v", catalog, stats)
+	}
+	if _, ok := catalog["manual-chat"]; ok {
+		t.Fatalf("manual model retained in replace mode: %#v", catalog["manual-chat"])
+	}
+	if _, ok := catalog["manual-retired"]; ok {
+		t.Fatalf("retired manual model retained in replace mode: %#v", catalog["manual-retired"])
+	}
+	chat, ok := catalog["local/chat-model"]
+	if !ok {
+		t.Fatalf("catalog=%#v, missing discovered chat-model", catalog)
+	}
+	if chat.Source != ModelSourceDiscovered {
+		t.Fatalf("chat-model source=%v want discovered", chat.Source)
+	}
+	if chat.Model.Adapter != AdapterDeepSeek || chat.Model.ContextWindow != 128000 {
+		t.Fatalf("metadata not inherited: %#v", chat.Model)
+	}
+	if chat.Model.Stream == nil || *chat.Model.Stream {
+		t.Fatalf("stream not inherited: %#v", chat.Model.Stream)
+	}
+	if chat.Model.Capabilities.Vision == nil || !*chat.Model.Capabilities.Vision {
+		t.Fatalf("capabilities not inherited: %#v", chat.Model.Capabilities)
+	}
+	if chat.Model.Parameters == nil {
+		t.Fatalf("parameters not inherited: %#v", chat.Model.Parameters)
+	}
+	if fresh, ok := catalog["local/fresh-model"]; !ok || fresh.Source != ModelSourceDiscovered {
+		t.Fatalf("fresh-model=%#v present=%v", fresh, ok)
+	}
+}
+
+func TestBuildEffectiveCatalogReplaceFallsBackToManualWhenNoDiscovery(t *testing.T) {
+	enabled := true
+	document := Document{
+		Providers: map[string]Provider{
+			"local": {Discovery: &DiscoveryConfig{Enabled: &enabled, Mode: DiscoveryModeReplace}},
+		},
+		Models: map[string]Model{
+			"manual-chat": {Provider: "local", Name: "chat-model"},
+		},
+	}
+
+	for _, discovered := range []map[string][]DiscoveredModel{
+		{},
+		{"local": {}},
+	} {
+		catalog, _ := buildEffectiveCatalog(document, discovered)
+		got, ok := catalog["manual-chat"]
+		if !ok || got.Source != ModelSourceConfigured {
+			t.Fatalf("manual fallback lost for discovered=%#v: %#v present=%v", discovered, got, ok)
+		}
+	}
+}
+
+func TestBuildEffectiveCatalogReplaceFilteredEmptySupersedesManual(t *testing.T) {
+	enabled := true
+	document := Document{
+		Providers: map[string]Provider{
+			"local": {Discovery: &DiscoveryConfig{Enabled: &enabled, Mode: DiscoveryModeReplace, Include: []string{"nothing-*"}}},
+		},
+		Models: map[string]Model{
+			"manual-chat": {Provider: "local", Name: "chat-model"},
+		},
+	}
+	discovered := map[string][]DiscoveredModel{
+		"local": {{ProviderID: "local", Name: "chat-model"}},
+	}
+
+	catalog, stats := buildEffectiveCatalog(document, discovered)
+
+	if len(catalog) != 0 || stats.Merged != 0 {
+		t.Fatalf("replace with fully filtered discovery should supersede manual: catalog=%#v stats=%#v", catalog, stats)
+	}
+	if stats.Discovered != 1 || stats.Filtered != 1 {
+		t.Fatalf("stats=%#v", stats)
+	}
+}
+
+func TestDiscoveryConfigModeRoundTripAndValidation(t *testing.T) {
+	raw := []byte(`{"schemaVersion":2,"providers":{"local":{"transport":"openai-compatible","endpoint":"http://127.0.0.1:1234/v1","discovery":{"enabled":true,"mode":"replace"}}},"models":{}}`)
+	doc, _, err := parseAndValidateGlobal(raw, "config.jsonc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	discovery := doc.Providers["local"].Discovery
+	if discovery == nil || discovery.Mode != DiscoveryModeReplace {
+		t.Fatalf("mode=%#v", discovery)
+	}
+	roundTrip, err := json.Marshal(discovery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(roundTrip), `"mode":"replace"`) {
+		t.Fatalf("mode omitted: %s", roundTrip)
+	}
+
+	invalid := []byte(`{"schemaVersion":2,"providers":{"local":{"transport":"openai-compatible","endpoint":"http://127.0.0.1:1234/v1","discovery":{"enabled":true,"mode":"mirror"}}},"models":{}}`)
+	if _, _, err := parseAndValidateGlobal(invalid, "config.jsonc"); err == nil {
+		t.Fatal("unsupported discovery mode was accepted")
+	}
+}
+
+func TestMergePresetDiscoveryModeDefaultsAndOverrides(t *testing.T) {
+	resolved := mergePreset("openai", Provider{})
+	if resolved.Discovery == nil || resolved.Discovery.Mode != "" {
+		t.Fatalf("openai discovery mode default=%#v", resolved.Discovery)
+	}
+
+	resolved = mergePreset("openai", Provider{Discovery: &DiscoveryConfig{Mode: DiscoveryModeReplace}})
+	if resolved.Discovery == nil || resolved.Discovery.Mode != DiscoveryModeReplace {
+		t.Fatalf("mode override lost: %#v", resolved.Discovery)
+	}
+	if resolved.Discovery.Path != "models" || resolved.Discovery.Format != DiscoveryFormatOpenAIList {
+		t.Fatalf("preset fields lost during mode override: %#v", resolved.Discovery)
 	}
 }

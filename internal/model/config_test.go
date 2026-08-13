@@ -546,8 +546,14 @@ func TestModelContextLimitConfigurationAndDefault(t *testing.T) {
 	if got := EffectiveContextLimitTokens(cfg); got != 200000 {
 		t.Fatalf("model-c limit = %d, want profile fallback 200000", got)
 	}
-	if got := EffectiveContextLimitTokens(Config{Model: "unconfigured"}); got != 256*1024 {
-		t.Fatalf("default limit = %d, want 256 Ki tokens", got)
+	if got := EffectiveContextLimitTokens(Config{Model: "unconfigured"}); got != 128*1024 {
+		t.Fatalf("default limit = %d, want 128 Ki tokens", got)
+	}
+	if got := EffectiveContextLimitTokens(Config{Model: "deepseek-v4-flash"}); got != 1_000_000 {
+		t.Fatalf("metadata fallback limit = %d, want 1000000 from llm-metadata", got)
+	}
+	if got := EffectiveContextLimitTokens(Config{ContextLimitTokens: 200000, Model: "deepseek-v4-flash"}); got != 200000 {
+		t.Fatalf("explicit profile limit must beat metadata, got %d", got)
 	}
 }
 

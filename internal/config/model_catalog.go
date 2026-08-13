@@ -29,17 +29,39 @@ func buildEffectiveCatalog(document Document, discovered map[string][]Discovered
 	catalog := make(map[string]CatalogModel, len(document.Models))
 	occupied := make(map[string]CatalogModel, len(document.Models))
 	configuredIdentities := make(map[modelIdentity]struct{}, len(document.Models))
+	manualModels := make(map[modelIdentity]Model, len(document.Models))
+
 	manualIDs := make([]string, 0, len(document.Models))
 	for id := range document.Models {
 		manualIDs = append(manualIDs, id)
 	}
 	sort.Strings(manualIDs)
+
+	// replaceMode marks providers whose successful discovery supersedes their
+	// hand-written model list. Manual models then serve only as an offline
+	// fallback when discovery has never produced a result.
+	replaceMode := make(map[string]bool)
+	for providerID, provider := range document.Providers {
+		resolved := mergePreset(providerID, provider)
+		if resolved.Discovery == nil || resolved.Discovery.Enabled == nil || !*resolved.Discovery.Enabled {
+			continue
+		}
+		if resolved.Discovery.Mode == DiscoveryModeReplace && len(discovered[providerID]) > 0 {
+			replaceMode[strings.TrimSpace(providerID)] = true
+		}
+	}
+
 	for _, id := range manualIDs {
 		configured := cloneModel(document.Models[id])
+		identity := identityForModel(configured)
+		configuredIdentities[identity] = struct{}{}
+		manualModels[identity] = configured
+		if replaceMode[strings.TrimSpace(configured.Provider)] {
+			continue
+		}
 		item := CatalogModel{ID: id, Model: configured, Source: ModelSourceConfigured}
 		catalog[id] = item
 		occupied[id] = item
-		configuredIdentities[identityForModel(configured)] = struct{}{}
 	}
 
 	providerIDs := make([]string, 0, len(document.Providers))
@@ -56,6 +78,7 @@ func buildEffectiveCatalog(document Document, discovered map[string][]Discovered
 		}
 		cfg := *cloneDiscoveryConfig(resolved.Discovery)
 		normalizedProviderID := strings.TrimSpace(providerID)
+		supersedes := replaceMode[normalizedProviderID]
 		names := make([]string, 0, len(discovered[providerID]))
 		for _, candidate := range discovered[providerID] {
 			candidateProviderID := strings.TrimSpace(candidate.ProviderID)
@@ -69,8 +92,14 @@ func buildEffectiveCatalog(document Document, discovered map[string][]Discovered
 		stats.Filtered += filtered
 		for _, name := range filteredNames {
 			model := builtinDiscoveredModel(providerID, name, resolved)
-			if _, manuallyConfigured := configuredIdentities[identityForModel(model)]; manuallyConfigured {
-				continue
+			identity := identityForModel(model)
+			if manual, ok := manualModels[identity]; ok {
+				model = inheritDiscoveredModelMetadata(model, manual)
+			}
+			if !supersedes {
+				if _, manuallyConfigured := configuredIdentities[identity]; manuallyConfigured {
+					continue
+				}
 			}
 			id := stableDiscoveredModelID(providerID, name, occupied)
 			item := CatalogModel{ID: id, Model: model, Source: ModelSourceDiscovered}
@@ -81,6 +110,38 @@ func buildEffectiveCatalog(document Document, discovered map[string][]Discovered
 
 	stats.Merged = len(catalog)
 	return catalog, stats
+}
+
+// inheritDiscoveredModelMetadata carries the metadata a user attached to a
+// hand-written model over to its discovered counterpart. In replace mode the
+// discovered list owns the model names, but the user's parameters, context
+// window, capabilities, and adapter are still honored.
+func inheritDiscoveredModelMetadata(discovered, manual Model) Model {
+	if manual.Adapter != "" {
+		discovered.Adapter = manual.Adapter
+	}
+	if discovered.ContextWindow == 0 {
+		discovered.ContextWindow = manual.ContextWindow
+	}
+	if discovered.Stream == nil {
+		discovered.Stream = cloneBoolPointer(manual.Stream)
+	}
+	if discovered.Capabilities.Tools == nil {
+		discovered.Capabilities.Tools = cloneBoolPointer(manual.Capabilities.Tools)
+	}
+	if discovered.Capabilities.Vision == nil {
+		discovered.Capabilities.Vision = cloneBoolPointer(manual.Capabilities.Vision)
+	}
+	if discovered.Capabilities.Reasoning == nil {
+		discovered.Capabilities.Reasoning = cloneBoolPointer(manual.Capabilities.Reasoning)
+	}
+	if discovered.Capabilities.Attachment == nil {
+		discovered.Capabilities.Attachment = cloneBoolPointer(manual.Capabilities.Attachment)
+	}
+	if discovered.Parameters == nil {
+		discovered.Parameters = cloneAnyMap(manual.Parameters)
+	}
+	return discovered
 }
 
 func filterDiscoveredModels(names []string, cfg DiscoveryConfig) ([]string, int) {

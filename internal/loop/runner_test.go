@@ -1388,7 +1388,7 @@ func TestRunTurnCreatesLazySessionOnCommit(t *testing.T) {
 
 func TestRunTurnUsesPromptBuilderWithProjectInstructions(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, projectInstructionFile), []byte("prefer concise answers"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, projectInstructionFileName), []byte("prefer concise answers"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	ui := &fakeUI{}
@@ -1414,7 +1414,7 @@ func TestRunTurnUsesPromptBuilderWithProjectInstructions(t *testing.T) {
 	if system.Role != message.RoleSystem {
 		t.Fatalf("first role = %q, want system", system.Role)
 	}
-	for _, want := range []string{"Project instructions from AGENTS.md", "prefer concise answers", "Answer with plain text."} {
+	for _, want := range []string{"Project instructions from agent.md", "prefer concise answers", "Answer with plain text."} {
 		if !strings.Contains(system.Content, want) {
 			t.Fatalf("system prompt = %q, want %q", system.Content, want)
 		}

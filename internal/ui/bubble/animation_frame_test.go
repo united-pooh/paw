@@ -33,7 +33,7 @@ func TestCursorFrameStopsWhenIdle(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.uiAnimationFrameScheduled = true
 	model.waveAmpStartedAt = time.Time{}
-	model.tokenRippleHideAt = time.Time{}
+	model.tokenRippleExitAt = time.Time{}
 	model.transcriptRefreshPending = false
 
 	at := time.Unix(100, 0)
@@ -133,7 +133,7 @@ func TestTurnCompletionKeepsFramesAliveForRippleExit(t *testing.T) {
 	next, _ := model.Update(turnFinishedMsg{})
 	model = next.(appModel)
 
-	if model.tokenRippleHideAt.IsZero() {
+	if model.tokenRippleExitAt.IsZero() {
 		t.Fatal("turn completion should record a ripple exit deadline")
 	}
 	if !model.uiAnimationFrameScheduled {
@@ -145,9 +145,12 @@ func TestRippleExitFrameStopsAfterDeadline(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.uiAnimationFrameScheduled = true
 	model.waveAmpStartedAt = time.Time{}
-	model.tokenRippleHideAt = time.Unix(500, 0)
+	model.width = 80
+	model.tokenRippleExitAt = time.Unix(500, 0)
 
-	next, _ := model.Update(cursorFrameMsg(model.tokenRippleHideAt))
+	deadline := model.tokenRippleExitAt.Add(time.Duration(80+tokenRippleTail) * tokenRippleSpeed)
+
+	next, _ := model.Update(cursorFrameMsg(deadline))
 	model = next.(appModel)
 
 	// Ignore the unrelated one-shot pipeline poll command; only the scheduler
@@ -185,7 +188,7 @@ func TestTurnOutcomesWakeRippleExit(t *testing.T) {
 			if !model.uiAnimationFrameScheduled {
 				t.Fatal("turn outcome should wake ripple exit animation")
 			}
-			if model.tokenRippleHideAt.IsZero() {
+			if model.tokenRippleExitAt.IsZero() {
 				t.Fatal("turn outcome should set ripple exit deadline")
 			}
 		})
@@ -288,7 +291,7 @@ func TestIdleMinuteClockKeepsAdvancing(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.uiAnimationFrameScheduled = true
 	model.waveAmpStartedAt = time.Time{}
-	model.tokenRippleHideAt = time.Time{}
+	model.tokenRippleExitAt = time.Time{}
 	model.transcriptRefreshPending = false
 
 	t0 := time.Date(2026, 8, 8, 10, 59, 30, 0, time.Local)

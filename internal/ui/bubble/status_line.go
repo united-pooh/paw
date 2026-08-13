@@ -31,20 +31,27 @@ func (m appModel) isAgentWorking() bool {
 	return m.isGenerating || m.isModelWorkRunning() || m.goalWorking || m.planWorking
 }
 
-// startTokenRippleExit 保留当前 Ripple 周期的剩余部分，让回答结束时波纹
-// 继续向右移动并淡出，而不是随 working 状态切换瞬间消失。
+// startTokenRippleExit 记录任务结束时刻，让波纹继续保持固定速度向右越界
+// 退出（不再循环），而不是随 working 状态切换瞬间消失。
 func (m *appModel) startTokenRippleExit(now time.Time) {
 	if m == nil || now.IsZero() {
 		return
 	}
-	m.tokenRippleHideAt = now.Add(tokenRippleRemainingUntilExit(now))
+	m.tokenRippleExitAt = now
 }
 
 func (m appModel) tokenRippleActive(now time.Time) bool {
 	if m.isAgentWorking() {
 		return true
 	}
-	return !m.tokenRippleHideAt.IsZero() && now.Before(m.tokenRippleHideAt)
+	if m.tokenRippleExitAt.IsZero() {
+		return false
+	}
+	// 退场：波纹头从当前位置走到完全越过右边界（+tail）的最长耗时。
+	// 用 m.width 作保守上限（真实 bar 宽 ≤ m.width），渲染层在 head 越界后
+	// 自然渲染为空，多续几帧无害。
+	maxExit := time.Duration(maxInt(0, m.width+tokenRippleTail)) * tokenRippleSpeed
+	return now.Sub(m.tokenRippleExitAt) < maxExit
 }
 
 // updateWaveAmp 在 cursorFrameMsg 每帧推进振幅过渡（指针接收者，写持久模型）。
@@ -84,10 +91,17 @@ func spinnerFrame(idx int) string {
 }
 
 const (
-	tokenRippleTravel = 3 * time.Second
-	tokenRippleExit   = 600 * time.Millisecond
-	tokenRippleCycle  = tokenRippleTravel + tokenRippleExit
-	tokenRippleTail   = 14
+	// tokenRippleSpeed 是波纹固定速度：每格耗时。循环态按此速度首尾相接
+	// 循环；退场态按此速度向右越界退出。
+	tokenRippleSpeed = 40 * time.Millisecond
+	tokenRippleTail  = 14
+
+	// token frontier 三段 glyph：free 最淡点状、cache 中等点状、used 实心，
+	// 比细线 ━/─ 更醒目。波纹块用 used 段同款实心 glyph。
+	tokenFreeGlyph   = "░"
+	tokenCacheGlyph  = "▒"
+	tokenUsedGlyph   = "█"
+	tokenRippleGlyph = "█"
 )
 
 // renderDockStatusLine 渲染输入区上边框：复制反馈 toast + 模式指示 + token
@@ -101,6 +115,7 @@ func (m appModel) renderDockStatusLine(width int) string {
 	stats := m.contextStats()
 	limit := maxInt(1, stats.LimitTokens)
 	used := clampInt(stats.UsedTokens, 0, limit)
+	cache := clampInt(stats.CacheTokens, 0, used)
 	modeHex := m.currentModeHex()
 	sepW := terminalCellWidth(statusSegmentSeparator)
 	left = truncateStyledCellLine(left, minInt(18, width))
@@ -119,7 +134,7 @@ func (m appModel) renderDockStatusLine(width int) string {
 	}
 	fixed += (parts - 1) * sepW
 	barBudget := maxInt(1, width-fixed)
-	bar := m.renderTokenFrontierWith(barBudget, used, limit, modeHex)
+	bar := m.renderTokenFrontierWith(barBudget, used, cache, limit, modeHex)
 	statusParts := []string{}
 	if left != "" {
 		statusParts = append(statusParts, left)
@@ -198,33 +213,43 @@ func (m appModel) copyToastAt(now time.Time) string {
 	return ""
 }
 
-func (m appModel) renderTokenFrontier(width, used, limit int) string {
-	return m.renderTokenFrontierWith(width, used, limit, "")
+func (m appModel) renderTokenFrontier(width, used, cache, limit int) string {
+	return m.renderTokenFrontierWith(width, used, cache, limit, "")
 }
 
-// renderTokenFrontierWith 渲染 token 进度细线。modeHex 非空时（plan/goal
-// agentmode）整条线使用强调色：已用段加粗 ━、空闲段淡化 ─；否则保持默认
-// context 双色。ripple 波纹同样跟随该颜色。
-func (m appModel) renderTokenFrontierWith(width, used, limit int, modeHex string) string {
+// renderTokenFrontierWith 渲染 token 进度条，三段：cache 段（最左，主题
+// cache 色加深）+ used 段 + free 段。modeHex 非空时（plan/goal agentmode）
+// 整条线使用强调色。波纹为固定速度实心块：循环态首尾相接，退场态向右越界，
+// 波纹头颜色与 used（非 cache）段一致。
+func (m appModel) renderTokenFrontierWith(width, used, cache, limit int, modeHex string) string {
 	width = maxInt(1, width)
 	limit = maxInt(1, limit)
 	used = clampInt(used, 0, limit)
+	cache = clampInt(cache, 0, used)
 	usedCells := int(float64(width) * float64(used) / float64(limit))
 	usedCells = clampInt(usedCells, 0, width)
+	cacheCells := int(float64(width) * float64(cache) / float64(limit))
+	cacheCells = clampInt(cacheCells, 0, usedCells)
+
 	usedStyle := contextUsedStyle
+	cacheStyle := contextCacheStyle
 	freeStyle := contextFreeStyle
-	signalHex := colorManager.Hex(colorSignal)
+	rippleHex := colorManager.Hex(colorContextUsed)
 	if modeHex != "" {
 		usedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(modeHex)).Bold(true)
+		cacheStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(interpolateHexColor(colorManager.Hex(colorTerminalBackground), modeHex, 0.9))).Bold(true)
 		freeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(interpolateHexColor(colorManager.Hex(colorTerminalBackground), modeHex, 0.45)))
-		signalHex = modeHex
+		rippleHex = modeHex
 	}
 	cells := make([]string, width)
 	for i := range cells {
-		if i < usedCells {
-			cells[i] = usedStyle.Render("━")
-		} else {
-			cells[i] = freeStyle.Render("─")
+		switch {
+		case i < cacheCells:
+			cells[i] = cacheStyle.Render(tokenCacheGlyph)
+		case i < usedCells:
+			cells[i] = usedStyle.Render(tokenUsedGlyph)
+		default:
+			cells[i] = freeStyle.Render(tokenFreeGlyph)
 		}
 	}
 	if usedCells >= width {
@@ -235,93 +260,59 @@ func (m appModel) renderTokenFrontierWith(width, used, limit int, modeHex string
 	if !m.tokenRippleActive(now) {
 		return strings.Join(cells, "")
 	}
-	phase := tokenRipplePhase(now)
-	fade := tokenRippleFade(phase)
 	background := colorManager.Hex(colorTerminalBackground)
 	freeCells := width - usedCells
-	if freeCells < tokenRippleTail {
-		// A narrow free span is a window into one uncompressed cyclic ripple.
-		// The next head waits for the previous tail to pass instead of crowding it.
-		for offset, distance := range tokenRippleNarrowDistances(freeCells, phase) {
-			cells[usedCells+offset] = renderTokenRippleCell(distance, fade, background, signalHex)
+	looping := m.isAgentWorking()
+	head := m.tokenRippleHead(usedCells, freeCells, now)
+
+	if looping && freeCells < tokenRippleTail {
+		// 窄 free 区：波纹块比 free 区长，整个 free 区都是波纹。
+		for offset := 0; offset < freeCells; offset++ {
+			distance := positiveModulo(head-usedCells-offset, tokenRippleTail)
+			cells[usedCells+offset] = renderTokenRippleCell(distance, background, rippleHex)
 		}
 		return strings.Join(cells, "")
 	}
 
-	head := tokenRippleHead(usedCells, width, phase)
-	for i := maxInt(usedCells, head-tokenRippleTail+1); i <= head && i < width; i++ {
-		cells[i] = renderTokenRippleCell(head-i, fade, background, signalHex)
+	// 宽 free 区（或退场态）：波纹块 = head 及之前 tail-1 格。
+	// 循环态跨边界时绕回 free 区首部；退场态单调越界、不绕回。
+	for i := head - tokenRippleTail + 1; i <= head; i++ {
+		cell := i
+		if looping && cell < usedCells {
+			cell += freeCells
+		}
+		if cell < usedCells || cell >= width {
+			continue
+		}
+		cells[cell] = renderTokenRippleCell(head-i, background, rippleHex)
 	}
 	return strings.Join(cells, "")
 }
 
-func tokenRipplePhase(now time.Time) time.Duration {
-	phase := now.Sub(time.Unix(0, 0)) % tokenRippleCycle
-	if phase < 0 {
-		phase += tokenRippleCycle
-	}
-	return phase
-}
-
-// tokenRippleRemainingUntilExit returns the time until the active cycle's head
-// and complete tail have passed the context meter's right edge.
-func tokenRippleRemainingUntilExit(now time.Time) time.Duration {
-	remaining := tokenRippleCycle - tokenRipplePhase(now)
-	if remaining <= 0 {
-		return tokenRippleCycle
-	}
-	return remaining
-}
-
-func tokenRippleHead(usedCells, width int, phase time.Duration) int {
-	lastVisible := maxInt(usedCells, width-1)
-	if phase <= tokenRippleTravel {
-		progress := clamp01(float64(phase) / float64(tokenRippleTravel))
-		return usedCells + int(float64(lastVisible-usedCells)*progress+0.5)
-	}
-	exitProgress := clamp01(float64(phase-tokenRippleTravel) / float64(tokenRippleExit))
-	return lastVisible + int(float64(tokenRippleTail)*exitProgress+0.5)
-}
-
-func tokenRippleFade(phase time.Duration) float64 {
-	if phase <= tokenRippleTravel {
-		return 1
-	}
-	return 1 - clamp01(float64(phase-tokenRippleTravel)/float64(tokenRippleExit))
-}
-
-// tokenRippleNarrowDistances returns a contiguous window into the full ripple
-// sequence. Distances wrap only after the complete tail has passed, so a new
-// head never overwrites or compresses the previous tail in a narrow free span.
-func tokenRippleNarrowDistances(freeCells int, phase time.Duration) []int {
-	return tokenRippleNarrowDistancesAtHead(freeCells, tokenRippleHead(0, freeCells, phase))
-}
-
-func tokenRippleNarrowDistancesAtHead(freeCells, virtualHead int) []int {
+// tokenRippleHead 返回当前波纹头 cell 索引。循环态在 free 区内首尾相接；
+// 退场态从退场开始时刻的循环头位置起，按固定速度向右越界。
+func (m appModel) tokenRippleHead(usedCells, freeCells int, now time.Time) int {
 	if freeCells <= 0 {
-		return nil
+		return usedCells
 	}
-	distances := make([]int, freeCells)
-	for offset := range distances {
-		distances[offset] = positiveModulo(virtualHead-offset, tokenRippleTail)
+	loopOffset := func(at time.Time) int {
+		return int(time.Duration(at.UnixNano())/tokenRippleSpeed) % freeCells
 	}
-	return distances
+	if m.isAgentWorking() {
+		return usedCells + loopOffset(now)
+	}
+	if m.tokenRippleExitAt.IsZero() {
+		return usedCells
+	}
+	exitHead := usedCells + loopOffset(m.tokenRippleExitAt)
+	return exitHead + int(now.Sub(m.tokenRippleExitAt)/tokenRippleSpeed)
 }
 
-func renderTokenRippleCell(distance int, fade float64, background, signalHex string) string {
+func renderTokenRippleCell(distance int, background, rippleHex string) string {
 	alpha := float64(tokenRippleTail-distance) / float64(tokenRippleTail)
-	alpha = clamp01(alpha) * fade
-	glyph := "░"
-	switch distance {
-	case 0:
-		glyph = "█"
-	case 1:
-		glyph = "▓"
-	case 2:
-		glyph = "▒"
-	}
-	color := interpolateHexColor(background, signalHex, alpha)
-	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(glyph)
+	alpha = clamp01(alpha)
+	color := interpolateHexColor(background, rippleHex, alpha)
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(tokenRippleGlyph)
 }
 
 func positiveModulo(value, modulus int) int {

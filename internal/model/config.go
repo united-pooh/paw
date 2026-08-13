@@ -13,7 +13,7 @@ import (
 const (
 	defaultTimeoutSeconds     = 60
 	defaultRetryCountValue    = 3
-	DefaultContextLimitTokens = 256 * 1024
+	DefaultContextLimitTokens = 128 * 1024
 	modelConfigDirName        = ".paw"
 	modelConfigFileName       = "config.json"
 )
@@ -606,6 +606,9 @@ func EffectiveContextLimitTokens(cfg Config) int {
 	}
 	if cfg.ContextLimitTokens > 0 {
 		return cfg.ContextLimitTokens
+	}
+	if limit := MetadataContextLimit(cfg.Provider, cfg.Model); limit > 0 {
+		return limit
 	}
 	return DefaultContextLimitTokens
 }

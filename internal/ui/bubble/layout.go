@@ -148,25 +148,45 @@ func (m appModel) View() string {
 
 func paintStyledBackground(text string, width, height int, style lipgloss.Style, background string) string {
 	text = fitStyledRect(text, width, height)
+	foreground := ""
+	if fg, ok := style.GetForeground().(lipgloss.Color); ok {
+		foreground = string(fg)
+	}
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
 		painted := style.Width(width).Render(fitStyledCellLine(line, width))
-		lines[i] = restoreBackgroundAfterANSIReset(painted, background)
+		lines[i] = restoreBackgroundAfterANSIReset(painted, background, foreground)
 	}
 	return strings.Join(lines, "\n")
 }
 
-// restoreBackgroundAfterANSIReset keeps the application canvas opaque when a
-// nested style (Markdown, code, selection, etc.) emits an SGR reset. Without
-// this, the reset also clears the outer frame background and exposes the
-// terminal's own background color between styled spans.
-func restoreBackgroundAfterANSIReset(text, background string) string {
-	r, g, b := parseHexColor(background)
-	backgroundSGR := fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r, g, b)
-	text = strings.ReplaceAll(text, "\x1b[0m", "\x1b[0m"+backgroundSGR)
-	text = strings.ReplaceAll(text, "\x1b[m", "\x1b[m"+backgroundSGR)
-	text = strings.ReplaceAll(text, "\x1b[49m", "\x1b[49m"+backgroundSGR)
-	return backgroundSGR + text + "\x1b[0m"
+// restoreBackgroundAfterANSIReset keeps the application canvas opaque and
+// consistently colored when a nested style (Markdown, code, selection, etc.)
+// emits an SGR reset. Without this, the reset also clears the outer frame's
+// foreground and background and exposes the terminal's own defaults between
+// styled spans.
+func restoreBackgroundAfterANSIReset(text, background, foreground string) string {
+	restore := backgroundSGR(background) + foregroundSGR(foreground)
+	text = strings.ReplaceAll(text, "\x1b[0m", "\x1b[0m"+restore)
+	text = strings.ReplaceAll(text, "\x1b[m", "\x1b[m"+restore)
+	text = strings.ReplaceAll(text, "\x1b[49m", "\x1b[49m"+restore)
+	return backgroundSGR(background) + text + "\x1b[0m"
+}
+
+func backgroundSGR(hex string) string {
+	if !strings.HasPrefix(hex, "#") {
+		return ""
+	}
+	r, g, b := parseHexColor(hex)
+	return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r, g, b)
+}
+
+func foregroundSGR(hex string) string {
+	if !strings.HasPrefix(hex, "#") {
+		return ""
+	}
+	r, g, b := parseHexColor(hex)
+	return fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r, g, b)
 }
 
 func renderHairlineFrame(inner string, width, height int) string {

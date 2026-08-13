@@ -1,0 +1,21 @@
+:root {
+  color-scheme: light;
+  --bg-0: #f6f4ee;
+  --bg-1: #f3f3ec;
+  --surface: #fffdf8;
+  --surface-raised: #fffdf8;
+  --line: #dddcd5;
+  --line-active: #c86b4d;
+  --text: #30332f;
+  --muted: #70746c;
+  --input: #8f3e29;
+  --cache-read: #3f6f4d;
+  --cache-create: #c08a2e;
+  --output: #c86b4d;
+  --failed: #a12d21;
+  --selected: #9e452f;
+  --panel-radius: 10px;
+  --row-height: 24px;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-variant-numeric: tabular-nums;
+}

@@ -14,7 +14,10 @@
 tmp/
 .superpowers/
 node_modules/
+.pnpm-store/
 .next/
+*.tsbuildinfo
+test-results/
 *.png
 *.jpg
 *.jpeg
@@ -43,6 +46,8 @@ node_modules/
 
 # Docs / misc artifacts
 index.html
+!internal/tokentracer/dashboard/index.html
+!internal/tokentracer/dashboard/dist/index.html
 qa-report.json
 diff-demo.md
 .worktrees/

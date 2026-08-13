@@ -1,0 +1,249 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg-0);
+  color: var(--text);
+  font-size: 13px;
+  overflow: hidden;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.app-topbar {
+  flex: 0 0 auto;
+  z-index: 10;
+}
+
+.app-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+}
+
+/* ---- TopBar ---- */
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  padding: 10px 16px;
+  background: linear-gradient(180deg, var(--bg-1), var(--bg-0));
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.topbar-title {
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.topbar-pipeline {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+.topbar-kpis {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.kpi {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.kpi b {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.conn-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.conn-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.conn-dot.live {
+  background: var(--cache-read);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.conn-dot.reconnecting {
+  background: var(--cache-create);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.conn-dot.error {
+  background: var(--failed);
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.topbar select,
+.topbar button {
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+
+.topbar button:hover,
+.topbar select:hover {
+  border-color: var(--line-active);
+}
+
+.topbar button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.topbar button[aria-pressed="true"] {
+  border-color: var(--line-active);
+  color: var(--selected);
+}
+
+/* ---- Empty states / loading / error ---- */
+.loading-state,
+.error-state,
+.empty-state {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--muted);
+  text-align: center;
+  padding: 24px;
+}
+
+.error-state .error-summary {
+  max-width: 520px;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.error-state button {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-active);
+  border-radius: 7px;
+  padding: 5px 14px;
+  cursor: pointer;
+}
+
+/* ---- Narrow tablist ---- */
+.narrow-tabs {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.narrow-tablist {
+  display: flex;
+  gap: 2px;
+  padding: 6px 8px 0;
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+  overflow-x: auto;
+}
+
+.narrow-tablist button {
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  padding: 6px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.narrow-tablist button[aria-selected="true"] {
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--line);
+}
+
+.narrow-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conn-dot.live,
+  .conn-dot.reconnecting {
+    animation: none;
+  }
+
+  * {
+    transition: none !important;
+  }
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}

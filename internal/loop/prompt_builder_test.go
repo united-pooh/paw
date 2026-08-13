@@ -56,7 +56,7 @@ func TestPromptBuilderWithoutSelectOmitsStructuredQuestionPolicy(t *testing.T) {
 
 func TestPromptBuilderOrdersDefaultProjectAndTools(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, projectInstructionFile), []byte("project-only rule"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, projectInstructionFileName), []byte("project-only rule"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	prompt := NewPromptBuilder(NewInstructionManager(root)).Build([]string{"LS: list files"})
@@ -68,5 +68,34 @@ func TestPromptBuilderOrdersDefaultProjectAndTools(t *testing.T) {
 	}
 	if !(defaultIndex < projectIndex && projectIndex < toolIndex) {
 		t.Fatalf("section order default/project/tools = %d/%d/%d in %q", defaultIndex, projectIndex, toolIndex, prompt)
+	}
+}
+
+func TestPromptBuilderOrdersGlobalBeforeProject(t *testing.T) {
+	home := t.TempDir()
+	pawDir := filepath.Join(home, globalInstructionDir)
+	if err := os.MkdirAll(pawDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pawDir, "AGENT.md"), []byte("global-only rule"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "Agent.md"), []byte("project-only rule"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := NewInstructionManager(root)
+	manager.homeDir = home
+	prompt := NewPromptBuilder(manager).Build([]string{"LS: list files"})
+	defaultIndex := strings.Index(prompt, defaultSystemPrompt)
+	globalIndex := strings.Index(prompt, "global-only rule")
+	projectIndex := strings.Index(prompt, "project-only rule")
+	toolIndex := strings.Index(prompt, "Available tools:")
+	if defaultIndex == -1 || globalIndex == -1 || projectIndex == -1 || toolIndex == -1 {
+		t.Fatalf("prompt missing sections: %q", prompt)
+	}
+	if !(defaultIndex < globalIndex && globalIndex < projectIndex && projectIndex < toolIndex) {
+		t.Fatalf("section order default/global/project/tools = %d/%d/%d/%d in %q", defaultIndex, globalIndex, projectIndex, toolIndex, prompt)
 	}
 }

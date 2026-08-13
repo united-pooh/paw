@@ -143,6 +143,9 @@ func validateDiscoveryConfig(providerID string, cfg DiscoveryConfig) error {
 	if cfg.Format != "" && cfg.Format != DiscoveryFormatOpenAIList && cfg.Format != DiscoveryFormatOllamaTags {
 		return fmt.Errorf("providers.%s.discovery.format is unsupported", providerID)
 	}
+	if cfg.Mode != "" && cfg.Mode != DiscoveryModeMerge && cfg.Mode != DiscoveryModeReplace {
+		return fmt.Errorf("providers.%s.discovery.mode is unsupported", providerID)
+	}
 	if cfg.TimeoutSeconds < 0 || cfg.TimeoutSeconds > 10 {
 		return fmt.Errorf("providers.%s.discovery.timeoutSeconds must be between 1 and 10", providerID)
 	}

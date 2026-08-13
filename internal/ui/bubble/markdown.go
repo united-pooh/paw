@@ -3,6 +3,7 @@ package bubble
 
 import (
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"unicode"
@@ -679,7 +680,9 @@ func renderInlineMarkdown(line string) string {
 }
 
 // nextInlineMarkdownSpan 返回最靠前且可识别的行内标记。双字符标记优先，
-// 避免 ** 被误识别为两个斜体标记；代码优先于其它格式。
+// 避免 ** 被误识别为两个斜体标记；代码优先于其它格式。单字符强调标记
+// （* / _）还要满足 CommonMark 的 intraword 规则：两侧都是词字符时不开启
+// 强调，避免文件路径/URL 中的下划线（如 /Users/a_b/c_d.md）被拆成斜体。
 func nextInlineMarkdownSpan(line string) (int, string, lipgloss.Style, bool) {
 	markers := []string{"`", "**", "__", "==", "*", "_"}
 	best := -1
@@ -687,7 +690,8 @@ func nextInlineMarkdownSpan(line string) (int, string, lipgloss.Style, bool) {
 	for _, marker := range markers {
 		index := strings.Index(line, marker)
 		if index < 0 || (marker == "*" && index+1 < len(line) && line[index+1] == '*') ||
-			(marker == "_" && index+1 < len(line) && line[index+1] == '_') {
+			(marker == "_" && index+1 < len(line) && line[index+1] == '_') ||
+			(marker == "*" || marker == "_") && !emphasisMarkerCanOpen(line, index, marker) {
 			continue
 		}
 		if best < 0 || index < best || (index == best && len(marker) > len(bestMarker)) {
@@ -701,8 +705,26 @@ func nextInlineMarkdownSpan(line string) (int, string, lipgloss.Style, bool) {
 	return best, bestMarker, lipgloss.Style{}, true
 }
 
-// renderTerminalLinks 将裸 http(s) URL 和 Markdown 链接转换为 OSC 8 终端超链接。
-// URL 的可见文本使用独立颜色、粗体和下划线；代码片段不会调用此函数。
+// emphasisMarkerCanOpen 报告单字符强调标记（* / _）在该位置是否可开启强调。
+// CommonMark 规定两侧都是词字符的 intraword 标记不构成强调，例如
+// united_pooh 里的下划线；路径中常见这类写法，误判会把链接目标拆开。
+func emphasisMarkerCanOpen(line string, index int, marker string) bool {
+	if marker != "*" && marker != "_" {
+		return true
+	}
+	prev, _ := utf8.DecodeLastRuneInString(line[:index])
+	next, _ := utf8.DecodeRuneInString(line[index+len(marker):])
+	return !(isEmphasisWordRune(prev) && isEmphasisWordRune(next))
+}
+
+func isEmphasisWordRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
+}
+
+// renderTerminalLinks 将裸 http(s)/file URL 和 Markdown 链接转换为 OSC 8
+// 终端超链接。目标可以是网页 URL、file:// URL 或本地绝对路径
+// （[label](/abs/path)），点击后打开浏览器或系统默认程序打开该文件。
+// 可见文本使用独立颜色、粗体和下划线；代码片段不会调用此函数。
 func renderTerminalLinks(text string) string {
 	return renderTerminalLinksWithStyle(text, lipgloss.NewStyle())
 }
@@ -732,9 +754,9 @@ func renderTerminalLinksWithStyle(text string, textStyle lipgloss.Style) string 
 			}
 		}
 
-		if hasHTTPURLPrefix(text[index:]) {
+		if hasTerminalTargetPrefix(text[index:]) {
 			target := terminalURLCandidate(text[index:])
-			if isClickableTerminalURL(target) {
+			if isClickableTerminalTarget(target) {
 				flushPlain(index)
 				rendered.WriteString(renderTerminalHyperlink(target, target))
 				index += len(target)
@@ -785,7 +807,7 @@ func parseMarkdownTerminalLink(text string) (label, target string, consumed int,
 			if strings.HasPrefix(target, "<") && strings.HasSuffix(target, ">") {
 				target = strings.TrimSpace(target[1 : len(target)-1])
 			}
-			if !isClickableTerminalURL(target) {
+			if !isClickableTerminalTarget(target) {
 				return "", "", 0, false
 			}
 			return label, target, targetStart + offset + 1, true
@@ -796,6 +818,12 @@ func parseMarkdownTerminalLink(text string) (label, target string, consumed int,
 
 func hasHTTPURLPrefix(text string) bool {
 	return strings.HasPrefix(text, "https://") || strings.HasPrefix(text, "http://")
+}
+
+// hasTerminalTargetPrefix 报告文本是否以可点击目标的裸前缀开头：
+// http(s) URL 或 file:// URL。
+func hasTerminalTargetPrefix(text string) bool {
+	return hasHTTPURLPrefix(text) || strings.HasPrefix(text, "file://")
 }
 
 func terminalURLCandidate(text string) string {
@@ -854,6 +882,22 @@ func isClickableTerminalURL(target string) bool {
 		return false
 	}
 	return parsed.Scheme == "https" || parsed.Scheme == "http"
+}
+
+// isClickableTerminalTarget 报告该目标是否可以渲染为可点击的终端超链接：
+// 网页 URL（http/https）、file:// URL 或本地绝对路径。相对路径（如
+// docs/notes.md）与裸文本不做链接，避免把正文里无意的 [x](y) 变成链接。
+func isClickableTerminalTarget(target string) bool {
+	if target == "" || strings.IndexFunc(target, unicode.IsControl) >= 0 {
+		return false
+	}
+	if isClickableTerminalURL(target) {
+		return true
+	}
+	if parsed, err := url.Parse(target); err == nil && parsed.Scheme == "file" {
+		return parsed.Path != "" || parsed.Opaque != ""
+	}
+	return filepath.IsAbs(target)
 }
 
 // compactBlankLines 合并连续空行，避免终端历史区出现过大的空洞。

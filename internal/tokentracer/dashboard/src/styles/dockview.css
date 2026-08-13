@@ -1,0 +1,106 @@
+.dv-theme-tokentracer {
+  --dv-group-view-background-color: transparent;
+  --dv-tabs-and-actions-container-background-color: transparent;
+  --dv-tab-background-color: transparent;
+  --dv-tab-active-background-color: var(--surface-raised);
+  --dv-tab-inactive-background-color: transparent;
+  --dv-tab-active-border-bottom-color: var(--selected);
+  --dv-tab-divider-color: transparent;
+  --dv-tab-text-color: var(--muted);
+  --dv-tab-active-text-color: var(--text);
+  --dv-tab-inactive-text-color: var(--muted);
+  --dv-tab-close-icon-color: var(--muted);
+  --dv-activegroup-ungrouped-background-color: transparent;
+  --dv-group-background-color: transparent;
+  --dv-separator-border: var(--line);
+  --dv-separator-handle-background-color: transparent;
+  --dv-drag-over-background-color: rgba(158, 69, 47, 0.1);
+  --dv-drag-over-border-color: var(--line-active);
+  --dv-overlay-grid-color: transparent;
+  --dv-empty-group-visible-border-color: transparent;
+  --dv-floating-box-shadow: 0 18px 48px rgba(48, 51, 47, 0.16);
+  --dv-floating-border: 1px solid var(--line);
+}
+
+.dv-theme-tokentracer .dv-groupview {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--panel-radius);
+  overflow: hidden;
+}
+
+.dv-theme-tokentracer .dv-tabs-and-actions-container {
+  padding: 0 4px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--line);
+}
+
+.dv-theme-tokentracer .dv-tab {
+  border-radius: 8px 8px 0 0;
+  font-size: 12px;
+}
+
+.dv-theme-tokentracer .dv-tab:hover {
+  background: rgba(48, 51, 47, 0.05);
+}
+
+.dv-theme-tokentracer .dv-tab.dv-active-tab {
+  background: var(--surface-raised);
+}
+
+.dv-theme-tokentracer .dv-sash:hover,
+.dv-theme-tokentracer .dv-sash:focus,
+.dv-theme-tokentracer .dv-sash:active {
+  background: var(--line-active);
+}
+
+.dv-theme-tokentracer .dv-sash {
+  transition: background 120ms ease;
+}
+
+.dv-theme-tokentracer .dv-sash.dv-sash-dragging {
+  background: var(--line-active);
+}
+
+.dv-theme-tokentracer .dv-content-container {
+  background: var(--bg-0);
+}
+
+.dv-theme-tokentracer .dv-content-container > .dv-view {
+  padding: 6px;
+}
+
+.dv-theme-tokentracer .dv-drop-overlay {
+  border-radius: var(--panel-radius);
+}
+
+.dv-theme-tokentracer .dv-groupview.dv-drag-over {
+  background: rgba(158, 69, 47, 0.08);
+}
+
+.dv-theme-tokentracer .dv-floatinggroup {
+  background: var(--surface-raised);
+  border-radius: var(--panel-radius);
+  backdrop-filter: blur(10px);
+}
+
+.dv-theme-tokentracer .dv-active-group {
+  outline: 1px solid var(--line-active);
+  outline-offset: -1px;
+}
+
+.dv-theme-tokentracer .dv-tab.dv-active-tab .dv-default-tab {
+  color: var(--text);
+}
+
+.dv-theme-tokentracer .dv-default-tab {
+  color: var(--muted);
+}
+
+.dv-theme-tokentracer .dv-tabs-and-actions-container .dv-tabs-container {
+  min-width: 0;
+}
+
+.dv-theme-tokentracer .dv-right-actions-container {
+  overflow: hidden;
+}

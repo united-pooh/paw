@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -4289,12 +4288,6 @@ func TestRenderInputBoxShowsPureTextarea(t *testing.T) {
 			t.Fatalf("input box = %q, should not contain %q", rendered, unwanted)
 		}
 	}
-	meter := model.contextMeterLine(maxInt(28, model.width-2))
-	for _, want := range []string{"0↑", "free(100%)"} {
-		if !strings.Contains(meter, want) {
-			t.Fatalf("context meter line = %q, want %q", meter, want)
-		}
-	}
 
 	model.pending = []inputDraft{{Text: "first"}}
 	rendered = model.renderInputBox()
@@ -4473,144 +4466,6 @@ func TestFoldedPasteUnfoldsWhenCursorMovesIntoHiddenMiddle(t *testing.T) {
 		}
 	}
 }
-
-// TestContextMeterUsesDefaultLimitAndStableSegments verifies default limit, colors, and bar math.
-func TestContextMeterUsesDefaultLimitAndStableSegments(t *testing.T) {
-	runner := &fakeRunner{
-		stats: loop.ContextStats{
-			UsedTokens:  modelcfg.DefaultContextLimitTokens / 4,
-			CacheTokens: modelcfg.DefaultContextLimitTokens / 10,
-		},
-	}
-	model := newTestModel(runner)
-	model.input.SetValue("draft prompt")
-
-	title := model.contextMeterTitle()
-	if runner.lastLimit != modelcfg.DefaultContextLimitTokens {
-		t.Fatalf("lastLimit = %d, want %d", runner.lastLimit, modelcfg.DefaultContextLimitTokens)
-	}
-	if runner.lastDraft != "draft prompt" {
-		t.Fatalf("lastDraft = %q, want draft prompt", runner.lastDraft)
-	}
-	for _, want := range []string{"65.5k↑", "25%(10%)", "free(75%)"} {
-		if !strings.Contains(title, want) {
-			t.Fatalf("contextMeterTitle() = %q, want %q", title, want)
-		}
-	}
-	bar := renderContextBar(runner.stats.UsedTokens, runner.stats.CacheTokens, modelcfg.DefaultContextLimitTokens, 40, "")
-	if strings.Count(bar, "▰") != 10 || strings.Count(bar, "▱") != 30 {
-		t.Fatalf("renderContextBar() = %q, want 10 filled and 30 free cells", bar)
-	}
-	for role, want := range map[string]string{
-		fmt.Sprint(contextCacheStyle.GetForeground()): colorManager.Hex(colorContextCache),
-		fmt.Sprint(contextUsedStyle.GetForeground()):  colorManager.Hex(colorContextUsed),
-		fmt.Sprint(contextFreeStyle.GetForeground()):  colorManager.Hex(colorContextFree),
-	} {
-		if role != want {
-			t.Fatalf("context style foreground = %q, want %q", role, want)
-		}
-	}
-}
-
-func TestContextMeterShowsCurrentContextSize(t *testing.T) {
-	runner := &fakeRunner{
-		stats: loop.ContextStats{
-			UsedTokens:  800,
-			CacheTokens: 100,
-			LimitTokens: 1000,
-		},
-	}
-	model := newTestModel(runner)
-
-	meter := model.contextMeterLine(48)
-	for _, want := range []string{"800↑", "80%(10%)", "free(20%)"} {
-		if !strings.Contains(meter, want) {
-			t.Fatalf("meter = %q, want %q", meter, want)
-		}
-	}
-}
-
-func TestContextCardCompactsStatusAndWorkCounts(t *testing.T) {
-	runner := &fakeRunner{
-		stats: loop.ContextStats{
-			UsedTokens:  250,
-			CacheTokens: 50,
-			LimitTokens: 1000,
-		},
-		supplements: []string{"extra"},
-	}
-	model := newTestModel(runner)
-	model.transcript = []transcriptEntry{
-		{kind: entryUser, title: "you", body: "first turn"},
-		{kind: entryUser, title: "you (supplement)", body: "extra"},
-		{kind: entryUser, title: "you (queued)", body: "later"},
-	}
-	model.chatQueue.Enqueue("later")
-
-	card := ansi.Strip(model.renderContextCardContent(48))
-	lines := strings.Split(card, "\n")
-	if len(lines) != 3 {
-		t.Fatalf("context card lines = %#v, want token/bar/work", lines)
-	}
-	topLine := lines[0]
-	for _, want := range []string{"cache 20%", "free(75%)"} {
-		if !strings.Contains(topLine, want) {
-			t.Fatalf("top line = %q, want %q", topLine, want)
-		}
-	}
-	work := lines[2]
-	for _, want := range []string{"supplements 1", "queued 1"} {
-		if !strings.Contains(work, want) {
-			t.Fatalf("work line = %q, want %q", work, want)
-		}
-	}
-}
-
-func TestContextCardStatusStaysOneLineWhenNarrow(t *testing.T) {
-	runner := &fakeRunner{
-		stats: loop.ContextStats{
-			UsedTokens:  0,
-			CacheTokens: 0,
-			LimitTokens: 1000,
-		},
-	}
-	model := newTestModel(runner)
-
-	card := ansi.Strip(model.renderContextCardContent(20))
-	lines := strings.Split(card, "\n")
-	if len(lines) != 2 {
-		t.Fatalf("context card lines = %#v, want token/bar only", lines)
-	}
-	topLine := lines[0]
-	for _, want := range []string{"cache 0%", "free(100%)"} {
-		if !strings.Contains(topLine, want) {
-			t.Fatalf("top line = %q, want %q", topLine, want)
-		}
-	}
-}
-
-func TestContextMeterLineStretchesAndAlignsLabels(t *testing.T) {
-	runner := &fakeRunner{
-		stats: loop.ContextStats{
-			UsedTokens:  settings.DefaultContextLimitTokens / 4,
-			CacheTokens: 0,
-		},
-	}
-	model := newTestModel(runner)
-	model.width = 64
-
-	width := maxInt(28, model.width-2)
-	meter := model.contextMeterLine(width)
-	if got, want := lipgloss.Width(meter), width; got != want {
-		t.Fatalf("meter width = %d, want %d: %q", got, want, meter)
-	}
-	usedIndex := strings.Index(meter, "↑")
-	freeIndex := strings.LastIndex(meter, "free(")
-	if usedIndex == -1 || freeIndex == -1 || usedIndex > freeIndex {
-		t.Fatalf("meter = %q, want used token label before free token label", meter)
-	}
-}
-
 func TestFormatCompactTokenCountUsesThreeDigitsAndUnits(t *testing.T) {
 	tests := map[int]string{
 		0:       "0",
@@ -4627,206 +4482,6 @@ func TestFormatCompactTokenCountUsesThreeDigitsAndUnits(t *testing.T) {
 		if got := formatCompactTokenCount(value); got != want {
 			t.Fatalf("formatCompactTokenCount(%d) = %q, want %q", value, got, want)
 		}
-	}
-}
-
-// TestContextMeterAnimatesBarAndLabels 验证进度条和数字标签在动画过程中都呈插值变化。
-func TestContextMeterAnimatesBarAndLabels(t *testing.T) {
-	started := time.Unix(30, 0)
-	runner := &fakeRunner{
-		stats: loop.ContextStats{
-			LimitTokens: 1000,
-			UsedTokens:  100,
-			CacheTokens: 0,
-		},
-	}
-	model := newTestModel(runner)
-	model.cursorFrameAt = started
-	model.updateContextMeterAnimation()
-
-	runner.stats.UsedTokens = 400
-	model.cursorFrameAt = started.Add(100 * time.Millisecond)
-	model.updateContextMeterAnimation()
-
-	// 260ms：动画进行中，进度条和标签都应显示中间插值，而非立即跳到 400
-	model.cursorFrameAt = started.Add(260 * time.Millisecond)
-	animatedUsed, _, phase := model.animatedContextTokens(1000)
-	if animatedUsed <= 100 || animatedUsed > 400 {
-		t.Fatalf("animatedUsed = %d, want value between 100 and 400 (bar animating)", animatedUsed)
-	}
-	if phase < 0 {
-		t.Fatalf("phase = %d, want active flow phase during animation", phase)
-	}
-	// 第二次 updateContextMeterAnimation 在 started+100ms 重置起点，
-	// 260ms 时 elapsed = 160ms → phase = int(160ms/100ms) = 1。
-	if wantPhase := int(160 * time.Millisecond / (100 * time.Millisecond)); phase != wantPhase {
-		t.Fatalf("phase = %d, want %d at 260ms (elapsed from restart / 100ms)", phase, wantPhase)
-	}
-	meter := model.contextMeterLine(48)
-	// 标签数字应也在动画中：不等于旧值 100↑，也不等于新值 400↑
-	if strings.Contains(meter, "100↑") {
-		t.Fatalf("meter = %q, label should have advanced past old value 100↑", meter)
-	}
-	if strings.Contains(meter, "400↑") {
-		t.Fatalf("meter = %q, label should not jump to final value 400↑ yet", meter)
-	}
-
-	// 动画结束（1s 后）：进度条和标签都应到达目标值，流动熄灭
-	model.cursorFrameAt = started.Add(time.Second)
-	animatedUsed, _, phase = model.animatedContextTokens(1000)
-	if animatedUsed != 400 || phase != -1 {
-		t.Fatalf("animation end = used %d phase %d, want target 400 and no flow (-1)", animatedUsed, phase)
-	}
-	finalMeter := model.contextMeterLine(48)
-	if !strings.Contains(finalMeter, "400↑") {
-		t.Fatalf("finalMeter = %q, want 400↑ after animation completes", finalMeter)
-	}
-}
-
-// TestContextFlowBrightnessSequence 验证流动光带：固定 contextFlowLength=14 格，
-// 前沿最亮（=14）向后逐级递减到 1，phase 每 +1 整体右移一格（环形）；
-// used 区不足 14 格时截断为 usedCells 全条发光；phase<0 或 usedCells<=0 全熄灭；
-// 每帧亮度总和守恒（1+2+…+flowLen）。
-func TestContextFlowBrightnessSequence(t *testing.T) {
-	// usedCells=6 < 14：全条发光，序列环形右移
-	const usedCells = 6
-	got := func(phase int) []int {
-		row := make([]int, usedCells)
-		for index := 0; index < usedCells; index++ {
-			row[index] = contextFlowBrightness(phase, index, usedCells)
-		}
-		return row
-	}
-	if row := got(0); !reflect.DeepEqual(row, []int{1, 2, 3, 4, 5, 6}) {
-		t.Fatalf("usedCells=6 phase 0 = %v, want [1 2 3 4 5 6]", row)
-	}
-	if row := got(1); !reflect.DeepEqual(row, []int{2, 3, 4, 5, 6, 1}) {
-		t.Fatalf("usedCells=6 phase 1 = %v, want [2 3 4 5 6 1]", row)
-	}
-	if row := got(2); !reflect.DeepEqual(row, []int{3, 4, 5, 6, 1, 2}) {
-		t.Fatalf("usedCells=6 phase 2 = %v, want [3 4 5 6 1 2]", row)
-	}
-	if row := got(6); !reflect.DeepEqual(row, got(0)) {
-		t.Fatalf("phase 6 should repeat phase 0, got %v", row)
-	}
-	sum := 0
-	for index := 0; index < usedCells; index++ {
-		sum += got(3)[index]
-	}
-	if sum != usedCells*(usedCells+1)/2 {
-		t.Fatalf("usedCells=6 phase 3 sum = %d, want %d (brightness conserved)", sum, usedCells*(usedCells+1)/2)
-	}
-
-	// usedCells=20 > 14：光带固定 14 格，其余为 0，亮度 1..14 且总和守恒
-	const wide = 20
-	row := make([]int, wide)
-	for index := 0; index < wide; index++ {
-		row[index] = contextFlowBrightness(0, index, wide)
-	}
-	want := make([]int, wide)
-	for index := 0; index < wide; index++ {
-		switch {
-		case index >= 6 && index <= 19:
-			want[index] = index - 5 // 尾部 index=6 → 1，前沿 index=19 → 14
-		default:
-			want[index] = 0
-		}
-	}
-	if !reflect.DeepEqual(row, want) {
-		t.Fatalf("usedCells=20 phase 0 = %v, want %v", row, want)
-	}
-	// phase=1 时整体右移一格：光带落在 index 5..18
-	row = make([]int, wide)
-	for index := 0; index < wide; index++ {
-		row[index] = contextFlowBrightness(1, index, wide)
-	}
-	if row[18] != 14 || row[5] != 1 || row[19] != 0 || row[4] != 0 {
-		t.Fatalf("usedCells=20 phase 1 shifted wrong: %v", row)
-	}
-	flowSum := 0
-	for _, phase := range []int{0, 3, 7} {
-		flowSum = 0
-		for index := 0; index < wide; index++ {
-			b := contextFlowBrightness(phase, index, wide)
-			if b < 0 || b > contextFlowLength {
-				t.Fatalf("phase %d brightness %d out of range 0-%d", phase, b, contextFlowLength)
-			}
-			flowSum += b
-		}
-		if flowSum != contextFlowLength*(contextFlowLength+1)/2 {
-			t.Fatalf("phase %d brightness sum = %d, want %d (1+2+…+14 conserved)", phase, flowSum, contextFlowLength*(contextFlowLength+1)/2)
-		}
-	}
-
-	// 边界：无动画相位或空 used 区全部熄灭。
-	for _, index := range []int{0, 5, 9, 19} {
-		if b := contextFlowBrightness(-1, index, wide); b != 0 {
-			t.Fatalf("phase -1 brightness at %d = %d, want 0", index, b)
-		}
-	}
-	for _, phase := range []int{-1, 0, 1, 2, 3} {
-		if b := contextFlowBrightness(phase, 0, 0); b != 0 {
-			t.Fatalf("usedCells 0 brightness = %d, want 0", b)
-		}
-	}
-}
-
-// TestContextUsedFlowStyleColorGradient 验证流动光带是纯颜色渐变：不加额外
-// 加粗（Bold 与进度条本体一致），前沿 = markdown.heading 最亮，尾部停在
-// contextFlowTailAmount 处（比 context.used 明显亮、肉眼可见），保证环形
-// 流动跨边界时"头"与"尾"同时在进度条两端可见。
-func TestContextUsedFlowStyleColorGradient(t *testing.T) {
-	headingHex := colorManager.Hex(colorMarkdownHeading)
-	usedHex := colorManager.Hex(colorContextUsed)
-	const usedCells = 20
-	front := contextUsedFlowStyle(0, 19, usedCells)
-	if front.GetBold() != contextUsedStyle.GetBold() {
-		t.Fatalf("front bold = %v, want same as used style %v (纯颜色渐变，不额外加粗)", front.GetBold(), contextUsedStyle.GetBold())
-	}
-	if got := fmt.Sprint(front.GetForeground()); got != headingHex {
-		t.Fatalf("front foreground = %s, want heading %s", got, headingHex)
-	}
-	tail := contextUsedFlowStyle(0, 6, usedCells)
-	wantTail := interpolateHexColor(headingHex, usedHex, contextFlowTailAmount)
-	if got := fmt.Sprint(tail.GetForeground()); got != wantTail {
-		t.Fatalf("tail foreground = %s, want %s", got, wantTail)
-	}
-	// 尾部必须与普通 used 格有明显色差（尾部可见，头尾同时存在）。
-	if tail.GetForeground() == contextUsedStyle.GetForeground() {
-		t.Fatalf("tail foreground = %s, want visibly brighter than used %s", tail.GetForeground(), contextUsedStyle.GetForeground())
-	}
-	// 光带外格子与普通样式一致（无前景色覆盖）
-	plain := contextUsedFlowStyle(0, 0, usedCells)
-	if got := fmt.Sprint(plain.GetForeground()); got != fmt.Sprint(contextUsedStyle.GetForeground()) {
-		t.Fatalf("off-band foreground = %s, want plain used %s", got, contextUsedStyle.GetForeground())
-	}
-}
-
-func TestContextMeterShowsThinkingTimerCenteredInLine(t *testing.T) {
-	model := newTestModel(&fakeRunner{})
-	model.width = 80
-	model.running = true
-	model.runningTerminal = false
-	model.turnStartedAt = time.Unix(10, 0)
-	model.cursorFrameAt = time.Unix(11, 500*int64(time.Millisecond))
-
-	width := maxInt(28, model.width-2)
-	meter := model.contextMeterLine(width)
-	if !strings.Contains(meter, "<thinking 1s>") {
-		t.Fatalf("meter = %q, want thinking timer", meter)
-	}
-	thinkingIndex := strings.Index(meter, "<thinking 1s>")
-	usedIndex := strings.Index(meter, "↑")
-	freeIndex := strings.LastIndex(meter, "free(")
-	if thinkingIndex == -1 || usedIndex == -1 || freeIndex == -1 || thinkingIndex < usedIndex || thinkingIndex > freeIndex {
-		t.Fatalf("meter = %q, want thinking timer between token labels", meter)
-	}
-	plain := ansi.Strip(meter)
-	thinkingLeft := strings.Index(plain, "<thinking 1s>")
-	thinkingCenter := lipgloss.Width(plain[:thinkingLeft]) + lipgloss.Width("<thinking 1s>")/2
-	lineCenter := lipgloss.Width(plain) / 2
-	if delta := thinkingCenter - lineCenter; delta < -1 || delta > 1 {
-		t.Fatalf("meter = %q, want thinking timer centered in line", meter)
 	}
 }
 
@@ -5447,64 +5102,6 @@ func TestAnchoredOutputRestoresBeforeNextWrite(t *testing.T) {
 	want := "frame1\r" + activate1 + restore1 + "frame2\r" + activate2
 	if got := string(data); got != want {
 		t.Fatalf("anchored output = %q, want %q", got, want)
-	}
-}
-
-// TestContextMeter_空闲时显示上箭头 验证 isGenerating=false 时标签含 ↑ 不含 ↓。
-func TestContextMeter_空闲时显示上箭头(t *testing.T) {
-	label := formatContextUsageLabel(1000, 0, 200000, false)
-	if !strings.Contains(label, "↑") {
-		t.Errorf("空闲时标签应含 ↑，实际: %q", label)
-	}
-	if strings.Contains(label, "↓") {
-		t.Errorf("空闲时标签不应含 ↓，实际: %q", label)
-	}
-}
-
-// TestContextMeter_推理输出时显示下箭头 验证 isGenerating=true（thinking/文本输出）时标签含 ↓ 不含 ↑。
-func TestContextMeter_推理输出时显示下箭头(t *testing.T) {
-	label := formatContextUsageLabel(1000, 0, 200000, true)
-	if !strings.Contains(label, "↓") {
-		t.Errorf("推理/输出时标签应含 ↓，实际: %q", label)
-	}
-	if strings.Contains(label, "↑") {
-		t.Errorf("推理/输出时标签不应含 ↑，实际: %q", label)
-	}
-}
-
-// TestContextMeter_工具调用后恢复上箭头 验证 isGenerating 清零后标签恢复 ↑。
-func TestContextMeter_工具调用后恢复上箭头(t *testing.T) {
-	// 先模拟推理阶段
-	labelDuring := formatContextUsageLabel(1200, 0, 200000, true)
-	if !strings.Contains(labelDuring, "↓") {
-		t.Errorf("推理时标签应含 ↓，实际: %q", labelDuring)
-	}
-	// 工具调用后 isGenerating 被清零
-	labelAfter := formatContextUsageLabel(1200, 0, 200000, false)
-	if !strings.Contains(labelAfter, "↑") {
-		t.Errorf("工具调用后标签应含 ↑，实际: %q", labelAfter)
-	}
-}
-
-// TestContextMeter_零token时不崩溃 验证 UsedTokens=0 时安全返回 "0↑"。
-func TestContextMeter_零token时不崩溃(t *testing.T) {
-	label := formatContextUsageLabel(0, 0, 200000, false)
-	if !strings.Contains(label, "0↑") {
-		t.Errorf("零 token 标签应含 0↑，实际: %q", label)
-	}
-}
-
-// TestContextMeter_多轮后数字只反映当前context 验证数字等于 UsedTokens 而非 session 累加。
-func TestContextMeter_多轮后数字只反映当前context(t *testing.T) {
-	// 第 3 轮结束，当前 context = 2000，不是 3 轮累加值 6000
-	runner := &fakeRunner{stats: loop.ContextStats{UsedTokens: 2000, LimitTokens: 200000}}
-	model := newTestModel(runner)
-	meter := model.contextMeterLine(60)
-	if !strings.Contains(meter, "2k↑") {
-		t.Errorf("多轮后 meter 应含当前 context 大小 2k↑，实际: %q", meter)
-	}
-	if strings.Contains(meter, "6k") {
-		t.Errorf("meter 不应出现 session 累加值 6k，实际: %q", meter)
 	}
 }
 
@@ -7054,14 +6651,14 @@ func TestRenderDockStatusLine_ContainsModelTokenAndFree(t *testing.T) {
 	if strings.Contains(dock, "5k / 100k") {
 		t.Errorf("status dock = %q, token count should live in the bottom border", dock)
 	}
-	if !strings.ContainsAny(dock, "━─") {
+	if !strings.ContainsAny(dock, "░▒█") {
 		t.Errorf("status dock = %q, want frontier progress glyphs", dock)
 	}
 	bottom := model.renderBottomDockLine(98)
 	if !strings.Contains(bottom, "5k / 100k") {
 		t.Errorf("bottom border = %q, want token count", bottom)
 	}
-	if !strings.ContainsAny(bottom, "━─") {
+	if !strings.ContainsAny(bottom, "─") {
 		t.Errorf("bottom border = %q, want embedded hairline rule", bottom)
 	}
 	// 模型名现在在 header，不在 dock。
@@ -7370,7 +6967,7 @@ func TestFullLayout_StatusDockVisibleWithoutSidebar(t *testing.T) {
 	model.relayout()
 
 	view := model.View()
-	if !strings.Contains(view, "0 / 262k") {
+	if !strings.Contains(view, "0 / 131k") {
 		t.Errorf("View() = %q, want bottom token status", view)
 	}
 	if strings.Contains(view, "subagents") {

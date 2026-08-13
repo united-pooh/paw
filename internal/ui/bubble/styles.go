@@ -62,7 +62,6 @@ var (
 	contextCacheStyle            lipgloss.Style
 	contextUsedStyle             lipgloss.Style
 	contextFreeStyle             lipgloss.Style
-	contextThinkingStyle         lipgloss.Style
 	terminalInputLabelStyle      lipgloss.Style
 	terminalInputTextStyle       lipgloss.Style
 	generatingStatusStyle        lipgloss.Style
@@ -272,9 +271,6 @@ func rebuildLegacyStyles() {
 		Bold(true)
 	contextFreeStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorContextFree))
-	contextThinkingStyle = lipgloss.NewStyle().
-		Foreground(colorManager.LipglossColor(colorBody)).
-		Bold(true)
 	terminalInputLabelStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorInputTerminal)).
 		Bold(true)
@@ -435,8 +431,6 @@ const (
 	cursorHiddenThreshold          = 0.03
 	inputMinVisibleLines           = 1
 	inputMaxVisibleLines           = 10
-	contextMeterDefaultWidth       = 80
-	contextMeterMinimumBarCells    = 1
 	transcriptPanelHorizontalFrame = 4
 	transcriptPanelVerticalFrame   = 2
 	modalPanelVerticalFrame        = 2

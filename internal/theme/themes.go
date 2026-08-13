@@ -18,7 +18,7 @@ func palette(bg, surface, fg, muted, primary, secondary, cyan, green, yellow, re
 		// markdown 高亮 / diff 背景等语义色不冲突（见 docs/mouse-selection-research.md §4）。
 		// 浅色主题（TokyoNightLight）与 Default 在 init() 中用手工特例覆盖。
 		SelectionBackground: blendHex(bg, fg, 0.30), SelectionForeground: fg,
-		ContextCache: yellow, ContextUsed: cyan, ContextFree: muted, Signal: primary,
+		ContextCache: "#81a1f1", ContextUsed: cyan, ContextFree: muted, Signal: primary,
 		WorktreeBackground: surface, WorktreeBorder: muted, WorktreeClean: green, WorktreeDirty: yellow, WorktreeConflict: red,
 		CursorNormalBright: green, CursorTerminalBright: secondary,
 		DiffAddedForeground: green, DiffAddedBackground: diffAddedBackground, DiffDeletedForeground: red, DiffDeletedBackground: diffDeletedBackground,
@@ -63,5 +63,4 @@ func init() {
 	// 因此用 25% 混合：#515254，文字 4.43:1、与正文 1.79:1。
 	p.SelectionBackground = blendHex("#292c33", "#c9c2b7", 0.25)
 	p.SelectionForeground = "#eeeeee"
-	p.ContextCache = "#ffaf00"
 }

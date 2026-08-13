@@ -24,6 +24,8 @@ const (
 	AdapterOpenAICompatible      = "openai-compatible"
 	DiscoveryFormatOpenAIList    = "openai-list"
 	DiscoveryFormatOllamaTags    = "ollama-tags"
+	DiscoveryModeMerge           = "merge"
+	DiscoveryModeReplace         = "replace"
 )
 
 var (
@@ -65,6 +67,7 @@ type DiscoveryConfig struct {
 	TimeoutSeconds int      `json:"timeoutSeconds,omitempty"`
 	Include        []string `json:"include,omitempty"`
 	Exclude        []string `json:"exclude,omitempty"`
+	Mode           string   `json:"mode,omitempty"`
 }
 
 func (value DiscoveryConfig) MarshalJSON() ([]byte, error) {
@@ -75,11 +78,13 @@ func (value DiscoveryConfig) MarshalJSON() ([]byte, error) {
 		TimeoutSeconds int       `json:"timeoutSeconds,omitempty"`
 		Include        *[]string `json:"include,omitempty"`
 		Exclude        *[]string `json:"exclude,omitempty"`
+		Mode           string    `json:"mode,omitempty"`
 	}
 	encoded := encodedDiscoveryConfig{
 		Enabled:        value.Enabled,
 		Format:         value.Format,
 		TimeoutSeconds: value.TimeoutSeconds,
+		Mode:           value.Mode,
 	}
 	if value.PathSet || value.Path != "" {
 		path := value.Path
@@ -104,6 +109,7 @@ func (value *DiscoveryConfig) UnmarshalJSON(raw []byte) error {
 		TimeoutSeconds int             `json:"timeoutSeconds,omitempty"`
 		Include        *[]string       `json:"include,omitempty"`
 		Exclude        *[]string       `json:"exclude,omitempty"`
+		Mode           string          `json:"mode,omitempty"`
 	}
 	var encoded encodedDiscoveryConfig
 	if err := json.Unmarshal(raw, &encoded); err != nil {
@@ -113,6 +119,7 @@ func (value *DiscoveryConfig) UnmarshalJSON(raw []byte) error {
 		Enabled:        cloneBoolPointer(encoded.Enabled),
 		Format:         encoded.Format,
 		TimeoutSeconds: encoded.TimeoutSeconds,
+		Mode:           encoded.Mode,
 	}
 	if len(encoded.Path) != 0 {
 		if strings.TrimSpace(string(encoded.Path)) == "null" {

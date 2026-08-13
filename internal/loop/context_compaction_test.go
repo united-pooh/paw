@@ -204,6 +204,9 @@ func TestCompactContextSynchronizesCurrentContextUsage(t *testing.T) {
 		{Done: true},
 	}}}}
 	runner := NewRunner(modelClient, &fakeUI{}, tool.NewRegistry(), nil, "manual-usage")
+	instructions := NewInstructionManager(t.TempDir())
+	instructions.homeDir = t.TempDir()
+	runner.prompt = NewPromptBuilder(instructions)
 	runner.setHistory(original)
 	runner.usage = model.Usage{TotalTokens: 9000, PromptCacheHitTokens: 4000}
 	runner.usageKnown = true

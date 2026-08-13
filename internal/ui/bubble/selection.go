@@ -624,7 +624,7 @@ func terminalHyperlinkAtPoint(content string, point selectionPoint) string {
 
 		graphemeWidth := maxInt(1, width)
 		if row == point.row && point.col >= cell && point.col < cell+graphemeWidth {
-			if isClickableTerminalURL(activeTarget) {
+			if isClickableTerminalTarget(activeTarget) {
 				return activeTarget
 			}
 			return ""

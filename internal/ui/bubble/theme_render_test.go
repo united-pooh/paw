@@ -47,16 +47,29 @@ func TestThemeSwitchChangesWholeFrameBackground(t *testing.T) {
 
 func TestRestoreBackgroundAfterANSIResetReappliesThemeCanvas(t *testing.T) {
 	const background = "#1a1b26"
+	const foreground = "#c0caf5"
 	input := "before\x1b[0mafter\x1b[49mtail\x1b[mend"
-	got := restoreBackgroundAfterANSIReset(input, background)
-	wantBackground := "\x1b[48;2;26;27;38m"
+	got := restoreBackgroundAfterANSIReset(input, background, foreground)
+	wantRestore := "\x1b[48;2;26;27;38m\x1b[38;2;192;202;245m"
 	for _, reset := range []string{"\x1b[0m", "\x1b[49m", "\x1b[m"} {
-		if !strings.Contains(got, reset+wantBackground) {
-			t.Fatalf("restored output = %q, want %q followed by theme background", got, reset)
+		if !strings.Contains(got, reset+wantRestore) {
+			t.Fatalf("restored output = %q, want %q followed by theme canvas colors", got, reset)
 		}
 	}
-	if !strings.HasPrefix(got, wantBackground) {
+	if !strings.HasPrefix(got, "\x1b[48;2;26;27;38m") {
 		t.Fatalf("restored output = %q, want theme background prefix", got)
+	}
+}
+
+func TestRestoreAfterANSIResetSkipsNonHexForeground(t *testing.T) {
+	const background = "#1a1b26"
+	input := "x\x1b[0my"
+	got := restoreBackgroundAfterANSIReset(input, background, "116")
+	if strings.Contains(got, "\x1b[38") {
+		t.Fatalf("restored output = %q, want no foreground SGR for non-hex color", got)
+	}
+	if !strings.Contains(got, "\x1b[0m\x1b[48;2;26;27;38m") {
+		t.Fatalf("restored output = %q, want background restored after reset", got)
 	}
 }
 

@@ -65,11 +65,6 @@ type SupplementSubmitter interface {
 	SubmitSupplement(input string) bool
 }
 
-// SupplementStatsProvider exposes pending supplement counts for status UI.
-type SupplementStatsProvider interface {
-	PendingSupplementCount() int
-}
-
 // SessionStore 描述 TUI 列举和管理会话所需的最小接口。
 type SessionStore interface {
 	ListSessions(ctx context.Context) ([]session.SessionSummary, error)

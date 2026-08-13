@@ -199,7 +199,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cursorFrameAt = time.Time(msg)
 		m.spinnerFrameIdx++
 		m.applyCursorAnimation()
-		m.updateContextMeterAnimation()
 		m.updateWaveAmp(time.Time(msg))
 		m.refreshActivityFromTasks(time.Time(msg))
 		m.refreshRunningToolProgress(time.Time(msg))

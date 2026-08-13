@@ -286,16 +286,6 @@ type settingWizard struct {
 	sessionOnly bool
 }
 
-// contextMeterAnimation 记录 context 进度条从旧 token 用量跳到新用量的短时动画。
-type contextMeterAnimation struct {
-	initialized bool
-	startedAt   time.Time
-	fromUsed    float64
-	fromCache   float64
-	targetUsed  int
-	targetCache int
-}
-
 // newModelWizard 根据当前配置创建 provider 选择向导，并默认选中当前 provider。
 // When a config-v2 Snapshot is supplied, the wizard pins every displayed model
 // to the exact catalog identity, source, and revision observed at open time.
@@ -520,7 +510,6 @@ type appModel struct {
 	turnID                     string
 	goalWorking                bool
 	planWorking                bool
-	contextMeter               contextMeterAnimation
 	pending                    []inputDraft
 	inputTokens                []inputToken
 	submittedDraft             inputDraft
@@ -584,7 +573,7 @@ type appModel struct {
 	waveAmpStartedAt           time.Time // 振幅目标态确立时刻，用于缓动进度
 	waveAmpFrom                float64   // 过渡起点振幅，反向退场时从此值缓降
 	waveAmpCurrent             float64   // 当前振幅（cursorFrameMsg 每帧更新，渲染只读）
-	tokenRippleHideAt          time.Time // 回答完成后 Ripple 退场的截止时刻
+	tokenRippleExitAt          time.Time // 任务结束后 Ripple 越界退场的起始时刻
 	worktreeCWD                string
 	worktree                   worktreeSnapshot
 	worktreeReader             worktreeStatusReader
