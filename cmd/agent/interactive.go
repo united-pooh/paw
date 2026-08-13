@@ -35,11 +35,7 @@ func runSingleTurnMode(ctx context.Context, opts options) error {
 		return err
 	}
 	defer func() { _ = configController.Close() }()
-	wireTodoEvents(store, sessionID)
-	wireSearchTranscript(store, sessionID)
-	wireStateTools(store, sessionID)
-	runner.SetTodoBroker(todoBroker)
-	runner.SetStateBlockProvider(stateBlockProviderFor(sessionID, store, todoBroker, plansDir(runner)))
+	wireSessionTools(runner, store, todoBroker, sessionID)
 	applyCompressionSettings(runner, settingsController)
 	if mcpManager != nil {
 		defer func() { _ = mcpManager.Close(context.Background()) }()
@@ -75,11 +71,11 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 		return err
 	}
 	defer func() { _ = configController.Close() }()
-	wireTodoEvents(store, sessionID)
-	wireSearchTranscript(store, sessionID)
-	wireStateTools(store, sessionID)
-	runner.SetTodoBroker(todoBroker)
-	runner.SetStateBlockProvider(stateBlockProviderFor(sessionID, store, todoBroker, plansDir(runner)))
+	wireSessionTools(runner, store, todoBroker, sessionID)
+	runner.SetSessionLoadedHook(func(sid string) {
+		// /resume 切换会话后：会话相关工具、todo 事件、状态块全部跟随新会话。
+		wireSessionTools(runner, store, todoBroker, sid)
+	})
 	applyCompressionSettings(runner, settingsController)
 	if mcpManager != nil {
 		defer func() { _ = mcpManager.Close(context.Background()) }()
@@ -120,6 +116,19 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	output.SetPlanController(planController)
 	finalizeTool.SetHook(planController.Finalize)
 	return output.Run(ctx, runner, sessionID)
+}
+
+// wireSessionTools 把会话相关工具与状态块绑定到指定 sessionID。
+// 启动时绑定一次，/resume 切换会话后经 SessionLoadedHook 重新绑定。
+func wireSessionTools(runner *loop.Runner, store *session.JSONLStore, todoBroker *todo.Broker, sessionID string) {
+	if runner == nil || store == nil {
+		return
+	}
+	wireTodoEvents(store, sessionID)
+	wireSearchTranscript(store, sessionID)
+	wireStateTools(store, sessionID)
+	runner.SetTodoBroker(todoBroker)
+	runner.SetStateBlockProvider(stateBlockProviderFor(sessionID, store, todoBroker, plansDir(runner)))
 }
 
 // plansDir resolves the plan document directory under the workspace root.

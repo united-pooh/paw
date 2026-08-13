@@ -358,6 +358,12 @@ func (runner *Runner) LoadSession(ctx context.Context, sessionID string) (Sessio
 	runner.recovery = copyRecoveryState(result.Recovery)
 	runner.mu.Unlock()
 	runner.syncContextUsageFromHistory(activeHistory)
+	runner.mu.RLock()
+	hooks := append([]SessionLoadedHook(nil), runner.sessionLoadedHooks...)
+	runner.mu.RUnlock()
+	for _, hook := range hooks {
+		hook(sessionID)
+	}
 	return result, nil
 }
 

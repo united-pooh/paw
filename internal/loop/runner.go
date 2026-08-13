@@ -116,6 +116,7 @@ type Runner struct {
 	contextMode            string
 	recentTurns            int
 	stateCompactionRatio   float64
+	sessionLoadedHooks     []SessionLoadedHook
 	lastProgressHash       string
 	activeTool             activeToolState
 	activeTurnCancel       context.CancelFunc
@@ -319,6 +320,20 @@ func (runner *Runner) SetYoloModeHandler(handler func(bool)) {
 }
 
 // SetStateBlockProvider 挂载模式 B 恢复用的状态块提供者（cmd/agent 实现）。
+// SessionLoadedHook 在 LoadSession 切换会话后回调（cmd/agent 用它重绑
+// 会话相关工具：/resume 切换后 wire* 与状态文件跟随新会话）。
+type SessionLoadedHook func(sessionID string)
+
+// SetSessionLoadedHook 注册会话切换回调（可多次调用，全部执行）。
+func (runner *Runner) SetSessionLoadedHook(hook SessionLoadedHook) {
+	if runner == nil || hook == nil {
+		return
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	runner.sessionLoadedHooks = append(runner.sessionLoadedHooks, hook)
+}
+
 func (runner *Runner) SetStateBlockProvider(provider StateBlockProvider) {
 	if runner == nil {
 		return

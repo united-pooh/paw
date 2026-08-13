@@ -3032,3 +3032,30 @@ func TestToolCallConcurrencySafetyAndRunUseResolvedTool(t *testing.T) {
 		t.Fatalf("replacement ran with input %s", replacement.input)
 	}
 }
+
+func TestLoadSessionTriggersSessionLoadedHooks(t *testing.T) {
+	history := []message.Message{{Role: message.RoleUser, Content: "hi"}}
+	store := &fakeStore{history: history}
+	runner := NewRunner(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), store, "old-session")
+
+	var got []string
+	runner.SetSessionLoadedHook(func(sid string) { got = append(got, sid) })
+	runner.SetSessionLoadedHook(func(sid string) { got = append(got, "second:"+sid) })
+
+	if _, err := runner.LoadSession(context.Background(), "resumed-session"); err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+	want := []string{"resumed-session", "second:resumed-session"}
+	if len(got) != len(want) {
+		t.Fatalf("hooks called = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("hook[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+	// runner 内部 sessionID 同步切换。
+	if runner.sessionID != "resumed-session" {
+		t.Fatalf("runner.sessionID = %q, want resumed-session", runner.sessionID)
+	}
+}
