@@ -19,6 +19,7 @@ const (
 	JournalToolResult       JournalKind = "tool_result"
 	JournalTurnCompleted    JournalKind = "turn_completed"
 	JournalTurnFailed       JournalKind = "turn_failed"
+	JournalTodoSnapshot     JournalKind = "todo_snapshot"
 )
 
 // RecoveryState describes the latest turn that was not completed normally.

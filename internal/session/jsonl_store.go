@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"paw/internal/es"
 	"paw/internal/message"
+	"paw/internal/todo"
 	"sort"
 	"strings"
 	"sync"
@@ -21,14 +23,15 @@ import (
 const defaultSessionsDir = "sessions"
 
 type Record struct {
-	Seq        int64               `json:"seq"`
-	Kind       JournalKind         `json:"kind,omitempty"`
-	TurnID     string              `json:"turn_id,omitempty"`
-	CallIndex  *int                `json:"call_index,omitempty"`
-	Message    message.Message     `json:"message"`
-	ToolResult *message.ToolResult `json:"tool_result,omitempty"`
-	Error      string              `json:"error,omitempty"`
-	CreatedAt  time.Time           `json:"created_at"`
+	Seq          int64               `json:"seq"`
+	Kind         JournalKind         `json:"kind,omitempty"`
+	TurnID       string              `json:"turn_id,omitempty"`
+	CallIndex    *int                `json:"call_index,omitempty"`
+	Message      message.Message     `json:"message"`
+	ToolResult   *message.ToolResult `json:"tool_result,omitempty"`
+	Error        string              `json:"error,omitempty"`
+	TodoSnapshot *todo.Snapshot      `json:"todo_snapshot,omitempty"`
+	CreatedAt    time.Time           `json:"created_at"`
 }
 
 // journalState 缓存单个 session 的追加序列状态，避免每次 append 都重新扫描
@@ -318,7 +321,11 @@ func (s *JSONLStore) appendRecords(ctx context.Context, sessionID string, record
 		}
 		records[i].Seq = nextSeq
 		records[i].CreatedAt = now
-		if err := enc.Encode(records[i]); err != nil {
+		env, err := recordToEnvelope(records[i])
+		if err != nil {
+			return -1, -1, err
+		}
+		if err := enc.Encode(env); err != nil {
 			return -1, -1, err
 		}
 		nextSeq++
@@ -486,6 +493,23 @@ func (s *JSONLStore) FailTurn(ctx context.Context, sessionID, turnID string, tur
 	record.Error = journalError(turnErr)
 	_, _, err := s.appendRecords(ctx, sessionID, []Record{record})
 	return err
+}
+
+// AppendTodoSnapshot 将一次 todo 快照更新作为事件追加到 session 流。
+// 返回分配的事件 seq。todo 记录不出现在消息投影中，但参与 seq 连续性。
+func (s *JSONLStore) AppendTodoSnapshot(ctx context.Context, sessionID string, snapshot todo.Snapshot) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return -1, err
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		return -1, fmt.Errorf("sessionID 不能为空")
+	}
+	snap := snapshot.Clone()
+	_, lastSeq, err := s.appendRecords(ctx, sessionID, []Record{{
+		Kind:         JournalTodoSnapshot,
+		TodoSnapshot: &snap,
+	}})
+	return lastSeq, err
 }
 
 func (s *JSONLStore) LoadResolvedHistory(ctx context.Context, sessionID string) ([]message.Message, error) {
@@ -720,17 +744,42 @@ func (s *JSONLStore) readOwnRecords(ctx context.Context, sessionID string) ([]Re
 		if line == "" {
 			continue
 		}
+		lineBytes := []byte(line)
 		var rec Record
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			if lineIndex == len(lines)-1 && !bytes.HasSuffix(data, []byte{'\n'}) {
-				// The final line may have been torn during a process crash. All
-				// preceding newline-terminated records are still durable.
-				break
+		if isEnvelopeLine(lineBytes) {
+			var env es.Envelope
+			if err := json.Unmarshal(lineBytes, &env); err != nil {
+				if lineIndex == len(lines)-1 && !bytes.HasSuffix(data, []byte{'\n'}) {
+					break
+				}
+				return nil, fmt.Errorf("解析 transcript 失败(%s): %w", path, err)
 			}
-			return nil, fmt.Errorf("解析 transcript 失败(%s): %w", path, err)
-		}
-		if rec.Kind == "" {
-			rec.Kind = JournalMessage
+			if err := env.Validate(); err != nil {
+				if lineIndex == len(lines)-1 && !bytes.HasSuffix(data, []byte{'\n'}) {
+					break
+				}
+				return nil, fmt.Errorf("解析 transcript 失败(%s): %w", path, err)
+			}
+			var convErr error
+			rec, convErr = envelopeToRecord(env)
+			if convErr != nil {
+				if lineIndex == len(lines)-1 && !bytes.HasSuffix(data, []byte{'\n'}) {
+					break
+				}
+				return nil, fmt.Errorf("解析 transcript 失败(%s): %w", path, convErr)
+			}
+		} else {
+			if err := json.Unmarshal(lineBytes, &rec); err != nil {
+				if lineIndex == len(lines)-1 && !bytes.HasSuffix(data, []byte{'\n'}) {
+					// The final line may have been torn during a process crash. All
+					// preceding newline-terminated records are still durable.
+					break
+				}
+				return nil, fmt.Errorf("解析 transcript 失败(%s): %w", path, err)
+			}
+			if rec.Kind == "" {
+				rec.Kind = JournalMessage
+			}
 		}
 		records = append(records, rec)
 	}

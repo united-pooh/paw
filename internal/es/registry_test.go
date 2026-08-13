@@ -113,7 +113,6 @@ func TestDecodeEnvelopeInvalid(t *testing.T) {
 		env  Envelope
 	}{
 		{"empty type", Envelope{Seq: 1, Type: "", OccurredAt: time.Now(), SchemaVersion: 1, Payload: json.RawMessage(`{}`)}},
-		{"zero seq", Envelope{Seq: 0, Type: "goal.paused", OccurredAt: time.Now(), SchemaVersion: 1, Payload: json.RawMessage(`{}`)}},
 		{"negative seq", Envelope{Seq: -1, Type: "goal.paused", OccurredAt: time.Now(), SchemaVersion: 1, Payload: json.RawMessage(`{}`)}},
 		{"missing occurred_at for v1", Envelope{Seq: 1, Type: "goal.paused", OccurredAt: time.Time{}, SchemaVersion: 1, Payload: json.RawMessage(`{}`)}},
 		{"negative schema version", Envelope{Seq: 1, Type: "goal.paused", OccurredAt: time.Now(), SchemaVersion: -1, Payload: json.RawMessage(`{}`)}},
@@ -137,6 +136,14 @@ func TestDecodeEnvelopeLegacyZeroOccurredAt(t *testing.T) {
 	}
 }
 
+func TestDecodeEnvelopeZeroSeqAllowed(t *testing.T) {
+	// 0 基线的流（session 域历史语义）合法；连续性由流加载器校验。
+	env := Envelope{Seq: 0, Type: "session.user_message", OccurredAt: time.Now(), SchemaVersion: 1, Payload: json.RawMessage(`{}`)}
+	if err := env.Validate(); err != nil {
+		t.Fatalf("zero seq must be accepted: %v", err)
+	}
+}
+
 func TestDecodeEnvelopeAllowed(t *testing.T) {
 	env := Envelope{Seq: 1, Type: "goal.paused", OccurredAt: time.Now(), SchemaVersion: 1, Payload: json.RawMessage(`{}`)}
 	if err := env.Validate(); err != nil {
@@ -150,7 +157,7 @@ func TestRegistryDecodeRejectsInvalidEnvelope(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 	env := testEnvelope(1, "goal.paused", `{"reason":"no_progress"}`)
-	env.Seq = 0
+	env.Seq = -1
 	if _, err := r.Decode(env); err == nil {
 		t.Fatal("invalid envelope must be rejected before payload decode")
 	}

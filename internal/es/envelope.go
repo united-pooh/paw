@@ -16,11 +16,12 @@ type Envelope struct {
 	Payload       json.RawMessage `json:"payload"`
 }
 
-// Validate 校验信封结构。schema_version=0 表示 legacy 记录，允许零值
-// occurred_at；新事件（schema_version>0）必须携带时间戳。
+// Validate 校验信封结构。seq 允许 0 基线（session 域历史流从 0 开始）；
+// schema_version=0 表示 legacy 记录，允许零值 occurred_at；新事件
+// （schema_version>0）必须携带时间戳。
 func (e Envelope) Validate() error {
-	if e.Seq < 1 {
-		return fmt.Errorf("es: seq must be >= 1, got %d", e.Seq)
+	if e.Seq < 0 {
+		return fmt.Errorf("es: seq must not be negative, got %d", e.Seq)
 	}
 	if e.Type == "" {
 		return fmt.Errorf("es: type is required")
