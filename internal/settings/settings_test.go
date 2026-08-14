@@ -182,9 +182,11 @@ func TestSaveLoadAndControllerRoundTrip(t *testing.T) {
 		WaitTimeoutMs:      DefaultSubagentWaitTimeoutMs,
 	}
 	want.UI = UIConfig{
-		Theme:                theme.Default,
-		ContextLimitTokens:   200000,
-		ContextMeterLocation: MeterLocationInputAbove,
+		Theme:                  theme.Default,
+		ContextLimitTokens:     200000,
+		ContextMeterLocation:   MeterLocationInputAbove,
+		TranscriptOutputMode:   TranscriptOutputModeLine,
+		TranscriptRenderEffect: TranscriptRenderEffectNormal,
 	}
 
 	if err := Save(path, want); err != nil {
@@ -214,9 +216,11 @@ func TestSaveLoadAndControllerRoundTrip(t *testing.T) {
 		WaitTimeoutMs:      DefaultSubagentWaitTimeoutMs,
 	}
 	next.UI = UIConfig{
-		Theme:                theme.Default,
-		ContextLimitTokens:   DefaultContextLimitTokens,
-		ContextMeterLocation: MeterLocationInputAbove,
+		Theme:                  theme.Default,
+		ContextLimitTokens:     DefaultContextLimitTokens,
+		ContextMeterLocation:   MeterLocationInputAbove,
+		TranscriptOutputMode:   TranscriptOutputModeLine,
+		TranscriptRenderEffect: TranscriptRenderEffectNormal,
 	}
 	if err := controller.SaveSettings(next); err != nil {
 		t.Fatalf("SaveSettings() error = %v", err)
@@ -325,6 +329,54 @@ func TestSaveCreatesPrivateFile(t *testing.T) {
 	}
 }
 
+func TestTranscriptAnimationSettingsDefaultsNormalizeAndRoundTrip(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.UI.TranscriptOutputMode != TranscriptOutputModeLine {
+		t.Fatalf("default output mode = %q, want %q", cfg.UI.TranscriptOutputMode, TranscriptOutputModeLine)
+	}
+	if cfg.UI.TranscriptRenderEffect != TranscriptRenderEffectNormal {
+		t.Fatalf("default render effect = %q, want %q", cfg.UI.TranscriptRenderEffect, TranscriptRenderEffectNormal)
+	}
+	cfg.UI.TranscriptOutputMode = " CHAR "
+	cfg.UI.TranscriptRenderEffect = " reveal "
+	cfg = Normalize(cfg)
+	if cfg.UI.TranscriptOutputMode != TranscriptOutputModeChar || cfg.UI.TranscriptRenderEffect != TranscriptRenderEffectReveal {
+		t.Fatalf("normalized transcript settings = %+v", cfg.UI)
+	}
+	cfg.UI.TranscriptOutputMode = "invalid"
+	cfg.UI.TranscriptRenderEffect = "invalid"
+	cfg = Normalize(cfg)
+	if cfg.UI.TranscriptOutputMode != TranscriptOutputModeLine || cfg.UI.TranscriptRenderEffect != TranscriptRenderEffectNormal {
+		t.Fatalf("invalid transcript settings = %+v", cfg.UI)
+	}
+
+	path := filepath.Join(t.TempDir(), "settings.json")
+	want := DefaultConfig()
+	want.UI.TranscriptOutputMode = TranscriptOutputModeChar
+	want.UI.TranscriptRenderEffect = TranscriptRenderEffectNoise
+	if err := Save(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.UI.TranscriptOutputMode != want.UI.TranscriptOutputMode || got.UI.TranscriptRenderEffect != want.UI.TranscriptRenderEffect {
+		t.Fatalf("round trip transcript settings = %+v, want %+v", got.UI, want.UI)
+	}
+
+	legacyPath := filepath.Join(t.TempDir(), "legacy.json")
+	if err := os.WriteFile(legacyPath, []byte(`{"ui":{"theme":"default"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := Load(legacyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.UI.TranscriptOutputMode != TranscriptOutputModeLine || legacy.UI.TranscriptRenderEffect != TranscriptRenderEffectNormal {
+		t.Fatalf("legacy transcript settings = %+v", legacy.UI)
+	}
+}
 func TestDefaultCompressionConfig(t *testing.T) {
 	cfg := DefaultConfig()
 	if cfg.ContextCompression.Mode != CompressionModeState {
