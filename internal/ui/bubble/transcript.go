@@ -76,16 +76,54 @@ type transcriptRenderCacheKey struct {
 
 func (m *appModel) ensureAssistantStreamEntry() {
 	if m.activeAssistant < 0 || m.activeAssistant >= len(m.transcript) || m.transcript[m.activeAssistant].kind != entryAssistant {
+		mode, effect := m.captureTranscriptAnimationConfig()
 		m.transcript = append(m.transcript, transcriptEntry{
-			kind:      entryAssistant,
-			title:     "assistant",
-			citations: m.consumePendingToolCitations(),
-			createdAt: m.animationNow(),
+			kind:            entryAssistant,
+			title:           "assistant",
+			citations:       m.consumePendingToolCitations(),
+			createdAt:       m.animationNow(),
+			animationMode:   mode,
+			animationEffect: effect,
 		})
 		m.activeAssistant = len(m.transcript) - 1
 	} else if len(m.pendingToolCites) > 0 {
 		m.transcript[m.activeAssistant].citations = append(m.transcript[m.activeAssistant].citations, m.consumePendingToolCitations()...)
 	}
+}
+
+// captureTranscriptAnimationConfig snapshots the settings for one assistant
+// reply. JSON decoding keeps this lifecycle code independent of the settings
+// package's concrete field declarations while preserving the stable JSON seam.
+func (m *appModel) captureTranscriptAnimationConfig() (transcriptAnimationMode, transcriptRenderEffect) {
+	mode := transcriptAnimationModeLine
+	effect := transcriptRenderEffectNormal
+	if m == nil || m.settingsConfig == nil {
+		return mode, effect
+	}
+	data, err := json.Marshal(m.settingsConfig.CurrentSettings())
+	if err != nil {
+		return mode, effect
+	}
+	var payload struct {
+		UI struct {
+			OutputMode string `json:"transcript_output_mode"`
+			Effect     string `json:"transcript_render_effect"`
+		} `json:"ui"`
+	}
+	if json.Unmarshal(data, &payload) != nil {
+		return mode, effect
+	}
+	switch transcriptAnimationMode(strings.ToLower(strings.TrimSpace(payload.UI.OutputMode))) {
+	case transcriptAnimationModeChar:
+		mode = transcriptAnimationModeChar
+	}
+	switch transcriptRenderEffect(strings.ToLower(strings.TrimSpace(payload.UI.Effect))) {
+	case transcriptRenderEffectNoise:
+		effect = transcriptRenderEffectNoise
+	case transcriptRenderEffectReveal:
+		effect = transcriptRenderEffectReveal
+	}
+	return mode, effect
 }
 
 // appendAssistantDelta 将经过流隔离器确认的稳定文本逐行追加到当前 assistant 消息。
@@ -101,10 +139,26 @@ func (m *appModel) appendAssistantDelta(delta string) {
 	for _, line := range strings.SplitAfter(delta, "\n") {
 		m.ensureAssistantStreamEntry()
 		m.transcript[m.activeAssistant].body += line
+		m.registerAssistantAnimationLine(line, strings.HasSuffix(line, "\n"))
 		touchTranscriptEntry(&m.transcript[m.activeAssistant])
 		m.recordAssistantActivity(m.activeAssistant)
 	}
 	m.refreshViewportForStreaming()
+}
+
+func (m *appModel) registerAssistantAnimationLine(text string, complete bool) {
+	if !complete || strings.TrimSuffix(text, "\n") == "" {
+		return
+	}
+	if m.activeAssistant < 0 || m.activeAssistant >= len(m.transcript) {
+		return
+	}
+	m.transcriptAnimationNextID++
+	entry := &m.transcript[m.activeAssistant]
+	entry.animationLines = append(entry.animationLines, transcriptAnimationLine{
+		ID:        m.transcriptAnimationNextID,
+		StartedAt: m.animationNow(),
+	})
 }
 
 func (m *appModel) ensureThinkingStreamEntry() {
@@ -164,7 +218,15 @@ func (m *appModel) finalizeAssistantStream() int {
 	if hadContent {
 		m.ensureAssistantStreamEntry()
 	}
-	m.appendAssistantDelta(committed)
+	if committed != "" {
+		m.appendAssistantDelta(committed)
+		if !strings.HasSuffix(committed, "\n") && m.activeAssistant >= 0 && m.activeAssistant < len(m.transcript) {
+			m.registerAssistantAnimationLine(committed, true)
+			touchTranscriptEntry(&m.transcript[m.activeAssistant])
+		}
+	} else if hadContent {
+		m.refreshViewportForStreaming()
+	}
 	finalized := m.activeAssistant
 	m.activeAssistant = -1
 	return finalized
