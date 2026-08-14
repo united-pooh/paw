@@ -130,8 +130,8 @@ func TestPlanModeDoesNotAddInputFrame(t *testing.T) {
 			t.Fatalf("plan input = %q, contains nested frame corner %q", input, corner)
 		}
 	}
-	status := ansi.Strip(model.renderDockStatusLine(80))
-	if !strings.Contains(status, "plan") {
-		t.Fatalf("status = %q, want plan indicator", status)
+	bottom := ansi.Strip(model.renderBottomDockLine(80))
+	if !strings.Contains(bottom, "plan") {
+		t.Fatalf("bottom border = %q, want plan indicator", bottom)
 	}
 }

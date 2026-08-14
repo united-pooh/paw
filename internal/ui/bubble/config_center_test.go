@@ -111,7 +111,7 @@ func TestSettingAndConfigShareUnifiedCenter(t *testing.T) {
 	}
 }
 
-func TestConfigCenterBackFromHomeClosesWithoutPanic(t *testing.T) {
+func TestConfigCenterBackFromTopLevelClosesWithoutPanic(t *testing.T) {
 	controller, _ := newConfigCenterHarness(t)
 	model := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
 	model.configCenterController = controller
@@ -182,6 +182,27 @@ func TestConfigCenterDiagnosticsWrapLongMigrationError(t *testing.T) {
 		if got := lipgloss.Width(line); got > 100 {
 			t.Fatalf("line %d width=%d, want <=100 (full screen): %q", index+1, got, line)
 		}
+	}
+}
+
+func TestConfigCenterWithoutActiveModelOpensMergedModelsPage(t *testing.T) {
+	controller, _ := newConfigCenterHarness(t)
+	snapshot := controller.Snapshot()
+	snapshot.Document.ActiveModel = ""
+	snapshot.ActiveModelID = ""
+	snapshot.Ready = false
+	wrapped := &fixedSnapshotConfigCenterController{ConfigCenterController: controller, snapshot: snapshot}
+	app := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	app.configCenterController = wrapped
+
+	app.openConfigCenter()
+
+	if app.configCenter.page != configCenterModels {
+		t.Fatalf("first-run page=%v, want merged Models page", app.configCenter.page)
+	}
+	options := app.configCenterOptions()
+	if len(options) != 3 || options[0].label != "local/one" || options[1].label != "local/two" || options[2].label != "+ 添加模型" {
+		t.Fatalf("model options=%#v", options)
 	}
 }
 
@@ -384,6 +405,14 @@ func TestConfigCenterEditsModelRuntimeFields(t *testing.T) {
 	model.advanceModelAction(controller.Snapshot())
 	model.configCenter.selected = 5
 	model.advanceModelAction(controller.Snapshot())
+	model.configCenter.selected = 9
+	model.advanceModelAction(controller.Snapshot())
+	if model.configCenter.editKind != configEditModelParameters {
+		t.Fatalf("model parameters action remained at index 9: %#v", model.configCenter)
+	}
+	model.configCenter.page = configCenterModelActions
+	model.configCenter.editKind = configEditNone
+	model.configCenter.selected = 10
 
 	configured := controller.Snapshot().Document.Models["local/one"]
 	if configured.ContextWindow != 131072 || configured.Stream == nil || !*configured.Stream {
@@ -391,6 +420,24 @@ func TestConfigCenterEditsModelRuntimeFields(t *testing.T) {
 	}
 	if configured.Capabilities.Tools == nil || !*configured.Capabilities.Tools {
 		t.Fatalf("tools capability=%v", configured.Capabilities.Tools)
+	}
+}
+
+func TestConfigCenterSpaceMatchesEnter(t *testing.T) {
+	controller, _ := newConfigCenterHarness(t)
+	model := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	model.configCenterController = controller
+	model.openConfigCenter()
+	model.configCenter.page = configCenterModelActions
+	model.configCenter.targetID = "local/one"
+	model.configCenter.selected = 1
+
+	next, cmd := model.handleConfigCenterKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	if cmd != nil {
+		t.Fatal("space key returned an unexpected command")
+	}
+	if next.(appModel).configCenter.page != configCenterEdit {
+		t.Fatalf("space key did not activate the selected action: %#v", next.(appModel).configCenter)
 	}
 }
 
@@ -432,8 +479,22 @@ func (c *recordingCatalogController) ActivateCatalogSelection(selection configv2
 	return c.Controller.ActivateCatalogSelection(selection)
 }
 
-func TestConfigCenterModelsAndActiveShowEffectiveCatalogSourcesAndCounts(t *testing.T) {
+func configCenterOptionIndex(t *testing.T, app appModel, label string) int {
+	t.Helper()
+	for index, option := range app.configCenterOptions() {
+		if option.label == label {
+			return index
+		}
+	}
+	t.Fatalf("config center option %q not found: %#v", label, app.configCenterOptions())
+	return -1
+}
+
+func TestConfigCenterModelsShowEffectiveCatalogSourcesAndCurrentState(t *testing.T) {
 	controller, _ := newConfigCenterHarnessWithDiscovery(t, []configv2.DiscoveredModel{{ProviderID: "local", Name: "live"}})
+	if err := controller.SetActiveModelID("local/two"); err != nil {
+		t.Fatal(err)
+	}
 	app := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
 	app.configCenterController = controller
 	app.ready = true
@@ -445,41 +506,95 @@ func TestConfigCenterModelsAndActiveShowEffectiveCatalogSourcesAndCounts(t *test
 		t.Fatalf("config center should open directly on General, got page=%v", app.configCenter.page)
 	}
 
+	general := ansi.Strip(app.renderConfigCenterBox())
+	for _, want := range []string{"推理开关", "推理强度"} {
+		if !strings.Contains(general, want) {
+			t.Fatalf("general page missing %q: %q", want, general)
+		}
+	}
+
 	app.configCenter.page = configCenterModels
+	options := app.configCenterOptions()
+	if len(options) != 4 {
+		t.Fatalf("model options=%#v, want three catalog models plus add", options)
+	}
+	if options[0].label != "local/two" || !strings.Contains(options[0].description, "当前") {
+		t.Fatalf("current model is not first and marked: %#v", options)
+	}
 	models := ansi.Strip(app.renderConfigCenterBox())
-	for _, want := range []string{"local/one", "configured", "local/live", "discovered"} {
+	for _, want := range []string{"local/two", "当前", "configured", "local/live", "discovered"} {
 		if !strings.Contains(models, want) {
 			t.Fatalf("models page missing %q: %q", want, models)
 		}
 	}
+}
 
-	app.configCenter.page = configCenterActive
-	active := ansi.Strip(app.renderConfigCenterBox())
-	for _, want := range []string{"local/one", "configured", "local/live", "discovered"} {
-		if !strings.Contains(active, want) {
-			t.Fatalf("active page missing %q: %q", want, active)
-		}
+func TestConfigCenterEnterActivatesConfiguredModelFromMergedList(t *testing.T) {
+	controller, _ := newConfigCenterHarness(t)
+	recorder := &recordingCatalogController{Controller: controller}
+	app := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	app.configCenterController = recorder
+	app.openConfigCenter()
+	app.configCenter.page = configCenterModels
+	app.configCenter.selected = configCenterOptionIndex(t, app, "local/two")
+
+	next, cmd := app.handleConfigCenterKey(tea.KeyMsg{Type: tea.KeyEnter})
+	app = next.(appModel)
+
+	if cmd != nil {
+		t.Fatal("model activation returned an unexpected command")
+	}
+	if app.configCenter.page != configCenterModels {
+		t.Fatalf("model activation left merged list: %#v", app.configCenter)
+	}
+	if len(recorder.selections) != 1 || recorder.selections[0].ID != "local/two" {
+		t.Fatalf("catalog selections=%#v", recorder.selections)
+	}
+	if got := controller.Snapshot().ActiveModelID; got != "local/two" {
+		t.Fatalf("active model=%q", got)
 	}
 }
 
-func TestConfigCenterActiveDiscoveredSelectionUsesObservedCatalogIdentity(t *testing.T) {
+func TestConfigCenterSpaceOpensModelManagement(t *testing.T) {
+	controller, _ := newConfigCenterHarness(t)
+	app := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	app.configCenterController = controller
+	app.openConfigCenter()
+	app.configCenter.page = configCenterModels
+	app.configCenter.selected = configCenterOptionIndex(t, app, "local/two")
+
+	next, cmd := app.handleConfigCenterKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	app = next.(appModel)
+
+	if cmd != nil {
+		t.Fatal("model management returned an unexpected command")
+	}
+	if app.configCenter.page != configCenterModelActions || app.configCenter.targetID != "local/two" {
+		t.Fatalf("space did not open model management: %#v", app.configCenter)
+	}
+}
+
+func TestConfigCenterEnterActivatesDiscoveredModelFromMergedList(t *testing.T) {
 	controller, _ := newConfigCenterHarnessWithDiscovery(t, []configv2.DiscoveredModel{{ProviderID: "local", Name: "live"}})
 	recorder := &recordingCatalogController{Controller: controller}
 	app := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
 	app.configCenterController = recorder
 	app.openConfigCenter()
-	app.configCenter.page = configCenterActive
-	app.configCenter.selected = sortedIndex(sortedCatalogModelIDs(controller.Snapshot().EffectiveModels), "local/live")
-	_ = app.configCenterOptions()
+	app.configCenter.page = configCenterModels
+	app.configCenter.selected = configCenterOptionIndex(t, app, "local/live")
 	observed := controller.Snapshot()
 
-	app = app.advanceConfigCenter()
+	next, cmd := app.handleConfigCenterKey(tea.KeyMsg{Type: tea.KeyEnter})
+	app = next.(appModel)
 
-	if len(recorder.setActiveCalls) != 0 {
-		t.Fatalf("Active page used SetActiveModelID: %#v", recorder.setActiveCalls)
+	if cmd != nil {
+		t.Fatal("discovered model activation returned an unexpected command")
 	}
-	if len(recorder.selections) != 1 {
-		t.Fatalf("catalog selections=%#v", recorder.selections)
+	if app.configCenter.page != configCenterModels {
+		t.Fatalf("discovered model activation left merged list: %#v", app.configCenter)
+	}
+	if len(recorder.setActiveCalls) != 0 || len(recorder.selections) != 1 {
+		t.Fatalf("activation calls: selections=%#v setActive=%#v", recorder.selections, recorder.setActiveCalls)
 	}
 	selection := recorder.selections[0]
 	if selection.Revision != observed.Revision || selection.ID != "local/live" || selection.ProviderKey != "local" || selection.ModelName != "live" || selection.Source != configv2.ModelSourceDiscovered {
@@ -491,14 +606,115 @@ func TestConfigCenterActiveDiscoveredSelectionUsesObservedCatalogIdentity(t *tes
 	}
 }
 
-func TestConfigCenterActiveRejectsCatalogSelectionThatChangedAfterDisplay(t *testing.T) {
+func TestConfigCenterEnterRejectsStaleMergedModelSelection(t *testing.T) {
 	controller, _ := newConfigCenterHarnessWithDiscovery(t, []configv2.DiscoveredModel{{ProviderID: "local", Name: "live"}})
 	app := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
 	app.configCenterController = controller
 	app.openConfigCenter()
-	app.configCenter.page = configCenterActive
-	app.configCenter.selected = sortedIndex(sortedCatalogModelIDs(controller.Snapshot().EffectiveModels), "local/live")
-	_ = app.configCenterOptions()
+	app.configCenter.page = configCenterModels
+	app.configCenter.selected = configCenterOptionIndex(t, app, "local/live")
+
+	before := controller.Snapshot()
+	occupant := configv2.Model{Provider: "local", Name: "replacement"}
+	if _, err := controller.UpdateConfig(context.Background(), before.Revision, []configv2.Operation{configv2.UpsertModel("local/live", occupant)}); err != nil {
+		t.Fatal(err)
+	}
+
+	next, _ := app.handleConfigCenterKey(tea.KeyMsg{Type: tea.KeyEnter})
+	app = next.(appModel)
+
+	if !strings.Contains(app.configCenter.err, "revision conflict") {
+		t.Fatalf("stale selection error=%q", app.configCenter.err)
+	}
+	if got := controller.Snapshot().ActiveModelID; got != "local/one" {
+		t.Fatalf("stale selection activated %q", got)
+	}
+}
+
+func TestConfigCenterFilteredModelKeysKeepOriginalSelection(t *testing.T) {
+	controller, _ := newConfigCenterHarness(t)
+	recorder := &recordingCatalogController{Controller: controller}
+	app := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	app.configCenterController = recorder
+	app.openConfigCenter()
+	app.configCenter.page = configCenterModels
+	app.configCenter.search = "local/two"
+	app.resetConfigCenterSelectionForSearch()
+
+	next, _ := app.handleConfigCenterKey(tea.KeyMsg{Type: tea.KeyEnter})
+	app = next.(appModel)
+	if len(recorder.selections) != 1 || recorder.selections[0].ID != "local/two" {
+		t.Fatalf("filtered Enter activated wrong model: %#v", recorder.selections)
+	}
+
+	app.configCenter.search = "local/one"
+	app.resetConfigCenterSelectionForSearch()
+	next, _ = app.handleConfigCenterKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	app = next.(appModel)
+	if app.configCenter.page != configCenterModelActions || app.configCenter.targetID != "local/one" {
+		t.Fatalf("filtered Space opened wrong model management page: %#v", app.configCenter)
+	}
+}
+
+func TestConfigCenterAddModelWorksWithEnterAndSpace(t *testing.T) {
+	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyEnter},
+		{Type: tea.KeyRunes, Runes: []rune{' '}},
+	} {
+		controller, _ := newConfigCenterHarness(t)
+		app := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+		app.configCenterController = controller
+		app.openConfigCenter()
+		app.configCenter.page = configCenterModels
+		app.configCenter.search = "添加模型"
+		app.resetConfigCenterSelectionForSearch()
+
+		next, _ := app.handleConfigCenterKey(key)
+		app = next.(appModel)
+		if app.configCenter.page != configCenterAddModelProvider {
+			t.Fatalf("key %q opened page %v, want AddModelProvider", key.String(), app.configCenter.page)
+		}
+		if app.configCenter.search != "" {
+			t.Fatalf("key %q kept stale model search %q on AddModelProvider", key.String(), app.configCenter.search)
+		}
+	}
+}
+
+func TestConfigCenterConfiguredModelCanBeActivatedFromModelActions(t *testing.T) {
+	controller, _ := newConfigCenterHarness(t)
+	recorder := &recordingCatalogController{Controller: controller}
+	app := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	app.configCenterController = recorder
+	app.openConfigCenter()
+	app.configCenter.page = configCenterModels
+	app.configCenter.selected = configCenterOptionIndex(t, app, "local/two")
+
+	app = app.advanceConfigCenter()
+	if app.configCenter.page != configCenterModelActions {
+		t.Fatalf("model selection did not open actions: %#v", app.configCenter)
+	}
+	app.configCenter.selected = 0
+	app = app.advanceConfigCenter()
+
+	if len(recorder.setActiveCalls) != 0 {
+		t.Fatalf("model actions used SetActiveModelID: %#v", recorder.setActiveCalls)
+	}
+	if len(recorder.selections) != 1 || recorder.selections[0].ID != "local/two" {
+		t.Fatalf("catalog selections=%#v", recorder.selections)
+	}
+	if got := controller.Snapshot().ActiveModelID; got != "local/two" {
+		t.Fatalf("active model=%q", got)
+	}
+}
+
+func TestConfigCenterModelActionRejectsCatalogSelectionThatChangedAfterDisplay(t *testing.T) {
+	controller, _ := newConfigCenterHarnessWithDiscovery(t, []configv2.DiscoveredModel{{ProviderID: "local", Name: "live"}})
+	app := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	app.configCenterController = controller
+	app.openConfigCenter()
+	app.configCenter.page = configCenterModels
+	app.configCenter.selected = configCenterOptionIndex(t, app, "local/live")
+	app = app.advanceConfigCenter()
 
 	before := controller.Snapshot()
 	occupant := configv2.Model{Provider: "local", Name: "replacement"}
@@ -522,7 +738,7 @@ func TestConfigCenterRecoversFromStaleModelActionAfterBackRefresh(t *testing.T) 
 	app.configCenterController = controller
 	app.openConfigCenter()
 	app.configCenter.page = configCenterModels
-	app.configCenter.selected = sortedIndex(sortedCatalogModelIDs(controller.Snapshot().EffectiveModels), "local/live")
+	app.configCenter.selected = configCenterOptionIndex(t, app, "local/live")
 	_ = app.configCenterOptions()
 	app = app.advanceConfigCenter()
 	if app.configCenter.page != configCenterModelActions || app.configCenter.targetSelection.Source != configv2.ModelSourceDiscovered {
@@ -547,7 +763,7 @@ func TestConfigCenterRecoversFromStaleModelActionAfterBackRefresh(t *testing.T) 
 		t.Fatalf("back refresh state=%#v current revision=%d", app.configCenter, current.Revision)
 	}
 	options := app.configCenterOptions()
-	freshIndex := sortedIndex(sortedCatalogModelIDs(current.EffectiveModels), "local/live")
+	freshIndex := configCenterOptionIndex(t, app, "local/live")
 	if freshIndex >= len(options) || !strings.Contains(options[freshIndex].description, "configured") || !strings.Contains(options[freshIndex].description, "replacement") {
 		t.Fatalf("refreshed catalog options=%#v", options)
 	}
@@ -582,11 +798,11 @@ func TestConfigCenterDiscoveredModelActionsOnlyActivateAndRegister(t *testing.T)
 	app.configCenterController = recorder
 	app.openConfigCenter()
 	app.configCenter.page = configCenterModels
-	app.configCenter.selected = sortedIndex(sortedCatalogModelIDs(controller.Snapshot().EffectiveModels), "local/live")
+	app.configCenter.selected = configCenterOptionIndex(t, app, "local/live")
 
 	app = app.advanceConfigCenter()
 	options := app.configCenterOptions()
-	if len(options) != 1 || options[0].label != "激活并注册" {
+	if len(options) != 1 || options[0].label != "设为当前并注册" {
 		t.Fatalf("discovered actions=%#v", options)
 	}
 

@@ -310,14 +310,18 @@ func TestDockStatusLineFitsNarrowWidths(t *testing.T) {
 		}
 	}
 
-	// 状态行按信息优先级排列：chat  token info，无 ready/working 状态词。
-	line := ansi.Strip(model.renderDockStatusLine(80))
-	if chat := strings.Index(line, "chat"); chat < 0 {
-		t.Fatalf("status order = %q, want chat indicator", line)
+	// 输入区上方只保留完整 context progress bar；模式位于下边框左侧。
+	top := ansi.Strip(model.renderDockStatusLine(80))
+	if strings.Contains(top, "chat") || strings.Trim(top, tokenFreeGlyph+tokenCacheGlyph+tokenUsedGlyph) != "" {
+		t.Fatalf("top context bar = %q, want only progress glyphs", top)
+	}
+	bottom := ansi.Strip(model.renderBottomDockLine(80))
+	if !strings.Contains(bottom, "chat") {
+		t.Fatalf("bottom border = %q, want chat indicator", bottom)
 	}
 	for _, unwanted := range []string{"ready", "working", "generating"} {
-		if strings.Contains(line, unwanted) {
-			t.Fatalf("status line = %q, should not contain %q", line, unwanted)
+		if strings.Contains(top, unwanted) || strings.Contains(bottom, unwanted) {
+			t.Fatalf("dock lines should not contain %q: top=%q bottom=%q", unwanted, top, bottom)
 		}
 	}
 }

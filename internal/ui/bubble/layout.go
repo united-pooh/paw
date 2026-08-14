@@ -138,8 +138,8 @@ func (m appModel) View() string {
 	}
 
 	inner := fitStyledRect(strings.Join(parts, "\n"), layout.contentWidth, layout.contentHeight)
-	// 顶边框线嵌入 header（模型名/状态/时间），底边框线嵌入 token 用量与
-	// 工作树 chip；上下边框颜色随 agentmode（plan/goal）变化。
+	// 顶边框线嵌入 header（模型名/状态/时间）；底边框左侧嵌入输入模式，
+	// 中间按空间显示工作树，右侧嵌入 token usage。边框颜色随 agentmode 变化。
 	view := renderDockedFrame(
 		inner,
 		m.renderHeaderEmbedded(layout.contentWidth),
@@ -148,7 +148,14 @@ func (m appModel) View() string {
 		layout.frameHeight,
 	)
 	if layout.queueInlineHeight > 0 {
-		view = renderQueueInlineBottomBorder(view, layout.frameWidth, m.queuePanelContent(layout.frameWidth), m.currentModeHex())
+		view = renderQueueInlineBottomBorder(
+			view,
+			layout.frameWidth,
+			m.queuePanelContent(layout.frameWidth),
+			m.currentModeHex(),
+			terminalCellWidth(m.renderModeIndicator())+2,
+			terminalCellWidth(m.renderBottomDockUsage())+2,
+		)
 	}
 	view = paintStyledBackground(view, layout.frameWidth, layout.frameHeight, m.styles.Frame, m.theme.Colors.TerminalBackground)
 	m.updateTerminalCursorAnchor(layout)
@@ -208,9 +215,8 @@ func renderHairlineFrame(inner string, width, height int) string {
 	return strings.Repeat("─", width) + "\n" + inner + "\n" + strings.Repeat("─", width)
 }
 
-// renderDockedFrame 渲染主界面固定外框：顶部 ─ 线嵌入 header（模型名/状态/
-// 时间），底部 ─ 线嵌入 dock 元数据（token 用量/工作树）。线色由各内容自带
-// （modeHex 通过 embedHairlineContent 的 lineColor 参数控制）。
+// renderDockedFrame 渲染主界面固定外框：顶部 ─ 线嵌入 header，底部 ─ 线
+// 接收已完成左右锚定的 dock 内容。各段自行携带颜色与样式。
 func renderDockedFrame(inner, topContent, bottomContent string, width, height int) string {
 	width = maxInt(1, width)
 	height = maxInt(1, height)

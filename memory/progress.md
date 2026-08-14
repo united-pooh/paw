@@ -67,3 +67,21 @@
 - [x] 确认逐字模式的实际提交粒度与刷新链路 <!-- todo:investigate-char-render -->
 - [x] 根据事实修复整行显示问题并补充回归测试 <!-- todo:fix-char-render -->
 - [x] 运行 gofmt、go build ./...、go test ./... 与 git diff --check <!-- todo:verify-char-render -->
+- [x] 调查 config UI 面板、命令注册、配置模型及相关设计文档 <!-- todo:task-1 -->
+- [x] 实现推理强度 low/medium/high/xhigh/max 的配置与 UI 指令 <!-- todo:task-2 -->
+- [x] 补充或更新测试并执行 go build ./... 与 go test ./... <!-- todo:task-3 -->
+- [x] 沉淀阶段结果到项目记忆并汇报 <!-- todo:task-4 -->
+- [x] 修复 config_center_test.go 中删除确认测试缺失的函数声明 <!-- todo:fix-test-syntax -->
+- [x] 检查配置中心推理开关、推理强度和空格行为实现及测试 <!-- todo:review-config-center -->
+- [x] 运行 gofmt、go build ./... 和 go test ./... <!-- todo:verify-go -->
+- [x] 核对“模型”和“当前模型”的现有职责及刚完成的推理设置改动 <!-- todo:inspect-overlap -->
+- [x] 将推理开关与推理强度移入“通用”第一页，并恢复“当前模型”原有列表行为 <!-- todo:move-reasoning-general -->
+- [x] 更新回归测试并执行 go build ./...、go test ./...、git diff --check <!-- todo:verify-general-reasoning -->
+- [x] 检查配置中心模型管理、当前模型切换、顶部 Tab 与相关设计文档/测试 <!-- todo:inspect-model-merge -->
+- [x] 设计并实现“当前模型”能力并入“模型”页，移除“当前模型”一级 Tab <!-- todo:implement-model-merge -->
+- [x] 补充合并后的导航、渲染、激活与管理回归测试 <!-- todo:test-model-merge -->
+- [x] 清理孤立 Home/Compression 死路径并加强当前项置顶、推理强度循环回归 <!-- todo:review-fixes -->
+- [x] 执行 gofmt、go build ./...、go test ./...、git diff --check 并完成视觉复核 <!-- todo:verify-model-merge -->
+- [x] 定位输入框边框、Chat 标签、Token Usage 和 Context Process Bar 的渲染逻辑与现有测试 <!-- todo:locate -->
+- [x] 新增或调整布局测试，覆盖新的上下边框位置 <!-- todo:tests -->
+- [x] 实现输入框边框布局调整 <!-- todo:implement -->

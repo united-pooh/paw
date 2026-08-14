@@ -14,25 +14,21 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	configv2 "paw/internal/config"
-	"paw/internal/settings"
 )
 
 type configCenterPage int
 
 const (
-	configCenterHome configCenterPage = iota
-	configCenterGeneral
+	configCenterGeneral configCenterPage = iota
 	configCenterProviders
 	configCenterProviderActions
 	configCenterAddProvider
 	configCenterModels
 	configCenterModelActions
 	configCenterAddModelProvider
-	configCenterActive
 	configCenterCredentials
 	configCenterCredentialActions
 	configCenterDiagnostics
-	configCenterCompression
 	configCenterEdit
 )
 
@@ -126,7 +122,7 @@ func (m *appModel) openConfigCenter() {
 		case len(snapshot.EffectiveModels) == 0:
 			page = configCenterAddModelProvider
 		case snapshot.ActiveModelID == "":
-			page = configCenterActive
+			page = configCenterModels
 		default:
 			page = configCenterCredentials
 			active := snapshot.Document.Models[snapshot.ActiveModelID]
@@ -269,6 +265,11 @@ func (m appModel) handleConfigCenterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveConfigCenterSelection(1)
 		return m, nil
 	case "enter":
+		if state.page == configCenterModels {
+			return m.activateSelectedConfigCenterModel(), nil
+		}
+		return m.advanceConfigCenter(), nil
+	case " ":
 		return m.advanceConfigCenter(), nil
 	case "backspace":
 		// 搜索非空时退格删字符，否则回退一页。
@@ -342,10 +343,7 @@ func (m *appModel) configCenterBack() {
 		return
 	}
 	switch m.configCenter.page {
-	case configCenterHome:
-		m.configCenter = nil
-		return
-	case configCenterGeneral, configCenterProviders, configCenterModels, configCenterActive, configCenterCredentials, configCenterDiagnostics:
+	case configCenterGeneral, configCenterProviders, configCenterModels, configCenterCredentials, configCenterDiagnostics:
 		m.configCenter = nil
 		return
 	case configCenterProviderActions, configCenterAddProvider:
@@ -361,6 +359,53 @@ func (m *appModel) configCenterBack() {
 	m.configCenter.selected = 0
 	m.configCenter.err = ""
 	m.configCenter.confirmAction = ""
+}
+
+func (m appModel) activateSelectedConfigCenterModel() appModel {
+	state := m.configCenter
+	if state == nil || state.page != configCenterModels {
+		return m
+	}
+	options := m.configCenterOptions()
+	if len(options) == 0 {
+		return m
+	}
+	if state.search != "" {
+		matches := m.configCenterDisplayedOptions()
+		if len(matches) == 0 {
+			return m
+		}
+		found := false
+		for _, match := range matches {
+			if match.index == state.selected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			state.selected = matches[0].index
+		}
+	}
+	if state.selected < 0 || state.selected >= len(options) {
+		state.selected = 0
+	}
+	if state.selected == len(state.catalogSelections) {
+		state.page = configCenterAddModelProvider
+		state.selected = 0
+		state.search = ""
+		return m
+	}
+	if state.selected >= len(state.catalogSelections) {
+		return m
+	}
+	selection := state.catalogSelections[state.selected]
+	state.targetSelection = selection
+	state.targetID = selection.ID
+	m.activateConfigCenterCatalogSelection(selection)
+	if state.err == "" {
+		state.selected = 0
+	}
+	return m
 }
 
 func (m appModel) advanceConfigCenter() appModel {
@@ -398,26 +443,6 @@ func (m appModel) advanceConfigCenter() appModel {
 	}
 	snapshot := m.configCenterController.Snapshot()
 	switch state.page {
-	case configCenterHome:
-		switch state.selected {
-		case 0:
-			// General settings 进入新的扁平键值列表（向导退场，压缩并入此列）。
-			state.page = configCenterGeneral
-		case 1:
-			state.page = configCenterProviders
-		case 2:
-			m.refreshConfigCenterCatalog(configCenterModels)
-		case 3:
-			m.refreshConfigCenterCatalog(configCenterActive)
-		case 4:
-			state.page = configCenterCredentials
-		case 5:
-			state.page = configCenterDiagnostics
-		case 6:
-			state.page = configCenterCompression
-		}
-		state.selected = 0
-		state.search = ""
 	case configCenterGeneral:
 		m.advanceGeneralEdit()
 	case configCenterProviders:
@@ -446,11 +471,13 @@ func (m appModel) advanceConfigCenter() appModel {
 		if state.selected == len(selections) {
 			state.page = configCenterAddModelProvider
 			state.selected = 0
+			state.search = ""
 		} else if state.selected < len(selections) {
 			state.targetSelection = selections[state.selected]
 			state.targetID = state.targetSelection.ID
 			state.page = configCenterModelActions
 			state.selected = 0
+			state.search = ""
 		}
 	case configCenterAddModelProvider:
 		ids := sortedProviderIDs(snapshot.Document.Providers)
@@ -460,10 +487,6 @@ func (m appModel) advanceConfigCenter() appModel {
 		}
 	case configCenterModelActions:
 		m.advanceModelAction(snapshot)
-	case configCenterActive:
-		if state.selected < len(state.catalogSelections) {
-			m.activateConfigCenterCatalogSelection(state.catalogSelections[state.selected])
-		}
 	case configCenterCredentials:
 		ids := sortedProviderIDs(snapshot.Document.Providers)
 		if len(ids) > 0 {
@@ -477,20 +500,6 @@ func (m appModel) advanceConfigCenter() appModel {
 		state.page = configCenterGeneral
 		state.selected = 0
 		state.search = ""
-	case configCenterCompression:
-		modes := []settings.CompressionMode{settings.CompressionModeState, settings.CompressionModeSummary}
-		if state.selected >= 0 && state.selected < len(modes) {
-			cfg := m.currentSettings()
-			cfg.ContextCompression.Mode = modes[state.selected]
-			if m.settingsConfig != nil {
-				if err := m.settingsConfig.SaveSettings(cfg); err != nil {
-					state.err = err.Error()
-					return m
-				}
-			}
-			m.syncRunnerCompression(cfg)
-			state.err = ""
-		}
 	}
 	return m
 }
@@ -1090,6 +1099,11 @@ func (m appModel) configCenterCatalogSelections(snapshot configv2.Snapshot) []co
 		return state.catalogSelections
 	}
 	ids := sortedCatalogModelIDs(snapshot.EffectiveModels)
+	if active := snapshot.ActiveModelID; active != "" {
+		if index := sortedIndex(ids, active); index > 0 && index < len(ids) && ids[index] == active {
+			ids = append([]string{active}, append(ids[:index], ids[index+1:]...)...)
+		}
+	}
 	selections := make([]configv2.CatalogSelection, 0, len(ids))
 	for _, id := range ids {
 		selection, err := snapshot.CatalogSelection(id)
@@ -1110,9 +1124,6 @@ func (m appModel) configCenterOptions() []configCenterOption {
 	}
 	snapshot := m.configCenterController.Snapshot()
 	switch state.page {
-	case configCenterHome:
-		mode := string(settings.NormalizeCompressionMode(m.currentSettings().ContextCompression.Mode))
-		return []configCenterOption{{"通用设置", "settings.json 的全部字段"}, {"服务商", fmt.Sprintf("已配置 %d 个", len(snapshot.Document.Providers))}, {"模型", fmt.Sprintf("已注册=%d 可用=%d", len(snapshot.Document.Models), len(snapshot.EffectiveModels))}, {"当前模型", emptyLabel(snapshot.ActiveModelID)}, {"凭据", "系统钥匙串与环境变量回退"}, {"诊断", fmt.Sprintf("版本 %d · %d 条消息", snapshot.Revision, len(snapshot.Diagnostics))}, {"压缩", "模式=" + configGeneralDisplayValue("compression.mode", mode)}}
 	case configCenterProviders:
 		ids := sortedProviderIDs(snapshot.Document.Providers)
 		result := make([]configCenterOption, 0, len(ids)+1)
@@ -1150,26 +1161,15 @@ func (m appModel) configCenterOptions() []configCenterOption {
 			selection, _ = snapshot.CatalogSelection(state.targetID)
 		}
 		if selection.Source == configv2.ModelSourceDiscovered {
-			return []configCenterOption{{"激活并注册", state.targetID}}
+			return []configCenterOption{{"设为当前并注册", state.targetID}}
 		}
 		v := snapshot.Document.Models[state.targetID]
-		return []configCenterOption{{"激活", state.targetID}, {"编辑上游名称", v.Name}, {"切换适配器", emptyLabel(v.Adapter)}, {"编辑上下文窗口", optionalIntLabel(v.ContextWindow, "继承/默认")}, {"切换流式输出", optionalBoolLabel(v.Stream)}, {"切换工具能力", optionalBoolLabel(v.Capabilities.Tools)}, {"切换视觉能力", optionalBoolLabel(v.Capabilities.Vision)}, {"切换推理能力", optionalBoolLabel(v.Capabilities.Reasoning)}, {"切换附件能力", optionalBoolLabel(v.Capabilities.Attachment)}, {"编辑参数", "高级 JSONC"}, {"删除模型", v.Provider}}
+		return []configCenterOption{{"设为当前模型", state.targetID}, {"编辑上游名称", v.Name}, {"切换适配器", emptyLabel(v.Adapter)}, {"编辑上下文窗口", optionalIntLabel(v.ContextWindow, "继承/默认")}, {"切换流式输出", optionalBoolLabel(v.Stream)}, {"切换工具能力", optionalBoolLabel(v.Capabilities.Tools)}, {"切换视觉能力", optionalBoolLabel(v.Capabilities.Vision)}, {"切换推理能力", optionalBoolLabel(v.Capabilities.Reasoning)}, {"切换附件能力", optionalBoolLabel(v.Capabilities.Attachment)}, {"编辑参数", "高级 JSONC"}, {"删除模型", v.Provider}}
 	case configCenterAddModelProvider:
 		ids := sortedProviderIDs(snapshot.Document.Providers)
 		result := make([]configCenterOption, 0, len(ids))
 		for _, id := range ids {
 			result = append(result, configCenterOption{id, "模型服务商"})
-		}
-		return result
-	case configCenterActive:
-		selections := m.configCenterCatalogSelections(snapshot)
-		result := make([]configCenterOption, 0, len(selections))
-		for _, selection := range selections {
-			description := fmt.Sprintf("%s · %s", selection.Source, selection.ModelName)
-			if selection.ID == snapshot.ActiveModelID {
-				description = "当前 · " + description
-			}
-			result = append(result, configCenterOption{selection.ID, description})
 		}
 		return result
 	case configCenterCredentials:
@@ -1191,23 +1191,6 @@ func (m appModel) configCenterOptions() []configCenterOption {
 		return []configCenterOption{{"设置或替换", "密钥始终保持隐藏"}, {"删除", "从系统钥匙串中移除"}}
 	case configCenterDiagnostics:
 		return []configCenterOption{{"返回", "下方显示版本和校验详情"}}
-	case configCenterCompression:
-		current := string(settings.NormalizeCompressionMode(m.currentSettings().ContextCompression.Mode))
-		opts := []struct {
-			mode, desc string
-		}{
-			{string(settings.CompressionModeState), "状态快照 + 最近对话"},
-			{string(settings.CompressionModeSummary), "LLM 摘要压缩"},
-		}
-		result := make([]configCenterOption, 0, len(opts))
-		for _, o := range opts {
-			desc := o.desc
-			if o.mode == current {
-				desc = "当前 · " + o.desc
-			}
-			result = append(result, configCenterOption{configGeneralDisplayValue("compression.mode", o.mode), desc})
-		}
-		return result
 	}
 	return nil
 }
@@ -1309,7 +1292,7 @@ func (m appModel) renderConfigCenterBox() string {
 // 顶层页已经由反色 tab 表达当前位置，再重复一行标题只会制造视觉噪音。
 func configCenterShowsPageTitle(page configCenterPage) bool {
 	switch page {
-	case configCenterGeneral, configCenterProviders, configCenterModels, configCenterActive, configCenterCredentials, configCenterDiagnostics:
+	case configCenterGeneral, configCenterProviders, configCenterModels, configCenterCredentials, configCenterDiagnostics:
 		return false
 	default:
 		return true
@@ -1318,8 +1301,6 @@ func configCenterShowsPageTitle(page configCenterPage) bool {
 
 func configCenterTitle(page configCenterPage, target string) string {
 	switch page {
-	case configCenterHome:
-		return "Paw 配置"
 	case configCenterGeneral:
 		return "通用"
 	case configCenterProviders:
@@ -1334,16 +1315,12 @@ func configCenterTitle(page configCenterPage, target string) string {
 		return "模型 · " + target
 	case configCenterAddModelProvider:
 		return "选择模型服务商"
-	case configCenterActive:
-		return "当前模型"
 	case configCenterCredentials:
 		return "凭据"
 	case configCenterCredentialActions:
 		return "凭据 · " + target
 	case configCenterDiagnostics:
 		return "诊断"
-	case configCenterCompression:
-		return "压缩"
 	}
 	return "Paw 配置"
 }
@@ -1436,6 +1413,55 @@ func cycleOptionalBool(value *bool) *bool {
 		return &next
 	}
 	return nil
+}
+
+func nextThinkingConfig(parameters map[string]any) map[string]any {
+	current := "enabled"
+	if thinking, ok := parameters["thinking"].(map[string]any); ok {
+		if value, ok := thinking["type"].(string); ok && value == "disabled" {
+			current = "disabled"
+		}
+	}
+	if current == "enabled" {
+		return map[string]any{"type": "disabled"}
+	}
+	return map[string]any{"type": "enabled"}
+}
+
+func thinkingLabel(parameters map[string]any) string {
+	thinking, ok := parameters["thinking"].(map[string]any)
+	if !ok {
+		return "开启"
+	}
+	value, ok := thinking["type"].(string)
+	if !ok || value == "enabled" {
+		return "开启"
+	}
+	if value == "disabled" {
+		return "关闭"
+	}
+	return value
+}
+
+func nextReasoningEffort(parameters map[string]any) string {
+	const defaultEffort = "low"
+	const key = "reasoning_effort"
+	efforts := []string{"low", "medium", "high", "xhigh", "max"}
+	current, _ := parameters[key].(string)
+	for index, effort := range efforts {
+		if effort == current {
+			return efforts[(index+1)%len(efforts)]
+		}
+	}
+	return defaultEffort
+}
+
+func reasoningEffortLabel(parameters map[string]any) string {
+	value, ok := parameters["reasoning_effort"].(string)
+	if !ok || strings.TrimSpace(value) == "" {
+		return "未设置"
+	}
+	return value
 }
 
 func optionalBoolLabel(value *bool) string {

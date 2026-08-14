@@ -101,7 +101,7 @@ func (m appModel) renderQueuePanel(width, height int) string {
 	return fitStyledRect(m.queuePanelContent(width), width, height)
 }
 
-func renderQueueInlineBottomBorder(view string, width int, summary, lineColor string) string {
+func renderQueueInlineBottomBorder(view string, width int, summary, lineColor string, leftInset, rightInset int) string {
 	if width <= 0 {
 		return ""
 	}
@@ -109,23 +109,34 @@ func renderQueueInlineBottomBorder(view string, width int, summary, lineColor st
 	if len(lines) > 0 {
 		summary = lines[0]
 	}
-	maxSummaryWidth := maxInt(1, width-2)
-	summary = truncateStyledCellLine(summary, maxSummaryWidth)
-	summaryWidth := terminalCellWidth(summary)
-	leftWidth := maxInt(1, (width-summaryWidth)/2)
-	if leftWidth+summaryWidth > width {
-		leftWidth = maxInt(0, width-summaryWidth)
+	leftInset = clampInt(leftInset, 0, width)
+	rightInset = clampInt(rightInset, 0, width-leftInset)
+	availableWidth := width - leftInset - rightInset
+	if availableWidth <= 0 {
+		return view
 	}
+	maxSummaryWidth := maxInt(1, availableWidth)
+	if availableWidth >= 3 {
+		maxSummaryWidth = availableWidth - 2
+	}
+	summary = truncateStyledCellLine(summary, maxSummaryWidth)
+	if availableWidth >= terminalCellWidth(summary)+2 {
+		summary = " " + summary + " "
+	}
+	summaryWidth := terminalCellWidth(summary)
+	summaryLeft := maxInt(0, (availableWidth-summaryWidth)/2)
 	lineStyle := lipgloss.NewStyle()
 	if lineColor != "" {
 		lineStyle = lineStyle.Foreground(lipgloss.Color(lineColor))
 	}
-	line := lineStyle.Render(strings.Repeat("─", leftWidth)) + summary + lineStyle.Render(strings.Repeat("─", maxInt(0, width-leftWidth-summaryWidth)))
+	middle := lineStyle.Render(strings.Repeat("─", summaryLeft)) +
+		summary +
+		lineStyle.Render(strings.Repeat("─", maxInt(0, availableWidth-summaryLeft-summaryWidth)))
 	viewLines := strings.Split(view, "\n")
 	if len(viewLines) == 0 {
-		return fitStyledRect(line, width, 1)
+		return fitStyledRect(middle, width, 1)
 	}
-	viewLines[len(viewLines)-1] = fitStyledCellLine(line, width)
+	viewLines[len(viewLines)-1] = composeStyledCellOverlay(viewLines[len(viewLines)-1], middle, leftInset, width)
 	return strings.Join(viewLines, "\n")
 }
 

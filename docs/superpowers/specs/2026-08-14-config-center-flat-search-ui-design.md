@@ -12,7 +12,7 @@
 ```
 屏幕宽 W。页面 gutter = clamp(W/40, 2, 6)，内容宽 = W - 2×gutter。
 ╭─ Paw ─(全屏)──────────────────────────────────────────────────╮
-│  Settings  [ General ]  Providers  Models  Active  Cred  Diag    │ ← 反色激活
+│  Settings  [ General ]  Providers  Models  Cred  Diag           │ ← 反色激活
 │                                                                   │
 │  ╭─────────────────────────────────────────────────────────────╮  │
 │  │ ⌕ Search settings…                                         │  │ ← 近全宽搜索框
@@ -38,7 +38,7 @@
 - 深色终端：沿用现有 `m.styles`（theme），不硬编码 #282C33。
 
 ## Tab 结构（复用现有 config center 顶层区）
-General / Providers / Models / Active / Credentials / Diagnostics。
+General / Providers / Models / Credentials / Diagnostics。
 - **General**（新）：扁平键值列表，列 settings.json 所有扁平字段。
 - 其余 tab：沿用各自现有页面内容（Providers 列表 / Model actions / Credentials /
   Diagnostics），统一使用全屏小 gutter 与固定双列样式。本轮不改这些页的动作流程。

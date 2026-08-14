@@ -9,6 +9,29 @@ import (
 	"paw/internal/loop"
 )
 
+func TestDockBorderLayoutUsesFullProgressTopAndAnchoredBottomMetadata(t *testing.T) {
+	model := newTestModel(&fakeRunner{stats: loop.ContextStats{UsedTokens: 12000, LimitTokens: 128000}})
+	model.cursorFrameAt = time.Unix(0, 0)
+
+	top := ansi.Strip(model.renderDockStatusLine(80))
+	if got := terminalCellWidth(top); got != 80 {
+		t.Fatalf("top context bar width = %d, want 80: %q", got, top)
+	}
+	if strings.Trim(top, tokenFreeGlyph+tokenCacheGlyph+tokenUsedGlyph) != "" {
+		t.Fatalf("top context bar = %q, want only context progress glyphs", top)
+	}
+
+	bottom := ansi.Strip(model.renderBottomDockLine(80))
+	modeAt := strings.Index(bottom, "chat")
+	usageAt := strings.Index(bottom, "12k / 128k")
+	if modeAt < 0 || modeAt > 3 {
+		t.Fatalf("bottom border = %q, want chat anchored near the left edge", bottom)
+	}
+	if usageAt < 80-terminalCellWidth("12k / 128k")-3 {
+		t.Fatalf("bottom border = %q, want token usage anchored near the right edge", bottom)
+	}
+}
+
 func TestStatusLineExactWidthAcrossWidths(t *testing.T) {
 	model := newTestModel(&fakeRunner{stats: loop.ContextStats{UsedTokens: 45000, LimitTokens: 100000}})
 	model.cursorFrameAt = time.Date(2026, 7, 28, 15, 42, 0, 0, time.UTC)
@@ -20,15 +43,15 @@ func TestStatusLineExactWidthAcrossWidths(t *testing.T) {
 	}
 }
 
-func TestStatusLineModeIndicator(t *testing.T) {
+func TestBottomDockModeIndicator(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.cursorFrameAt = time.Now()
-	if dock := ansi.Strip(model.renderDockStatusLine(80)); !strings.Contains(dock, "chat") {
-		t.Fatalf("default mode = %q, want chat", dock)
+	if bottom := ansi.Strip(model.renderBottomDockLine(80)); !strings.Contains(bottom, "chat") {
+		t.Fatalf("default mode = %q, want chat", bottom)
 	}
 	model.input.SetValue("!ls")
-	if dock := ansi.Strip(model.renderDockStatusLine(80)); !strings.Contains(dock, "!shell") {
-		t.Fatalf("bang mode = %q, want !shell", dock)
+	if bottom := ansi.Strip(model.renderBottomDockLine(80)); !strings.Contains(bottom, "!shell") {
+		t.Fatalf("bang mode = %q, want !shell", bottom)
 	}
 }
 
@@ -66,13 +89,13 @@ func TestGoalInputUsesModeIndicatorWithoutStatusOrPurpleBody(t *testing.T) {
 	}
 
 	model.goalMode = true
-	dock := ansi.Strip(model.renderDockStatusLine(100))
-	if !strings.Contains(dock, "goal") {
-		t.Fatalf("goal mode indicator missing: %q", dock)
+	bottom := ansi.Strip(model.renderBottomDockLine(100))
+	if !strings.Contains(bottom, "goal") {
+		t.Fatalf("goal mode indicator missing from bottom border: %q", bottom)
 	}
 	for _, unwanted := range []string{"ready", "working", "generating"} {
-		if strings.Contains(dock, unwanted) {
-			t.Fatalf("goal status line contains %q: %q", unwanted, dock)
+		if strings.Contains(bottom, unwanted) {
+			t.Fatalf("goal bottom border contains %q: %q", unwanted, bottom)
 		}
 	}
 	if strings.Contains(ansi.Strip(goalContent), "goal") {
@@ -127,20 +150,21 @@ func TestTokenFrontierRippleSurvivesTurnCompletion(t *testing.T) {
 	}
 }
 
-func TestStatusLineHasNoStatusWordDuringToolCall(t *testing.T) {
+func TestDockLinesHaveNoStatusWordDuringToolCall(t *testing.T) {
 	model := newTestModel(&fakeRunner{stats: loop.ContextStats{UsedTokens: 45000, LimitTokens: 100000}})
 	if !model.queryGuard.StartModel() {
 		t.Fatal("StartModel failed")
 	}
 	model.syncRunningFlags()
-	dock := ansi.Strip(model.renderDockStatusLine(80))
+	top := ansi.Strip(model.renderDockStatusLine(80))
+	bottom := ansi.Strip(model.renderBottomDockLine(80))
 	for _, unwanted := range []string{"ready", "working", "generating"} {
-		if strings.Contains(dock, unwanted) {
-			t.Fatalf("tool-call dock = %q, should not contain %q", dock, unwanted)
+		if strings.Contains(top, unwanted) || strings.Contains(bottom, unwanted) {
+			t.Fatalf("tool-call dock should not contain %q: top=%q bottom=%q", unwanted, top, bottom)
 		}
 	}
-	if !strings.Contains(dock, "chat") {
-		t.Fatalf("tool-call dock = %q, want chat mode indicator", dock)
+	if !strings.Contains(bottom, "chat") {
+		t.Fatalf("tool-call bottom border = %q, want chat mode indicator", bottom)
 	}
 }
 
@@ -165,5 +189,26 @@ func TestTokenRippleExitRemainsActiveUntilTailCompletes(t *testing.T) {
 	deadline := now.Add(time.Duration(100+tokenRippleTail) * tokenRippleSpeed)
 	if model.tokenRippleActive(deadline) {
 		t.Fatal("ripple should stop when the full tail has exited")
+	}
+}
+
+func TestBottomDockShowsCacheHitRatioWhenCachePresent(t *testing.T) {
+	model := newTestModel(&fakeRunner{stats: loop.ContextStats{UsedTokens: 12000, CacheTokens: 11000, LimitTokens: 128000}})
+	model.cursorFrameAt = time.Unix(0, 0)
+	bottom := ansi.Strip(model.renderBottomDockLine(100))
+	if !strings.Contains(bottom, "12k / 128k") {
+		t.Fatalf("bottom border = %q, want token count", bottom)
+	}
+	if !strings.Contains(bottom, "ⓒ91%") {
+		t.Fatalf("bottom border = %q, want cache hit ratio ⓒ91%%", bottom)
+	}
+}
+
+func TestBottomDockOmitsCacheHitRatioWhenZero(t *testing.T) {
+	model := newTestModel(&fakeRunner{stats: loop.ContextStats{UsedTokens: 12000, CacheTokens: 0, LimitTokens: 128000}})
+	model.cursorFrameAt = time.Unix(0, 0)
+	bottom := ansi.Strip(model.renderBottomDockLine(100))
+	if strings.Contains(bottom, "ⓒ") {
+		t.Fatalf("bottom border = %q, must not show cache ratio when cache is zero", bottom)
 	}
 }

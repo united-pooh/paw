@@ -44,8 +44,8 @@ func TestConfigCenterRendersFullscreenPage(t *testing.T) {
 			if !strings.HasPrefix(line, prefix+"设置") {
 				t.Fatalf("tabs not aligned to page gutter %d: %q", leftMargin, line)
 			}
-			if !strings.Contains(line, "当前模型") {
-				t.Fatalf("tab row was truncated: %q", line)
+			if strings.Contains(line, "当前模型") {
+				t.Fatalf("duplicate current-model tab is still rendered: %q", line)
 			}
 			foundTabs = true
 		}
@@ -58,6 +58,12 @@ func TestConfigCenterRendersFullscreenPage(t *testing.T) {
 	}
 	if !foundTabs || !foundSearch {
 		t.Fatalf("tabs/search not found in render:\n%s", plain)
+	}
+	if !strings.Contains(plain, "设置项") || !strings.Contains(plain, "压缩模式") {
+		t.Fatalf("General page content missing:\n%s", plain)
+	}
+	if strings.Contains(plain, "Paw 配置") || strings.Contains(plain, "通用设置") {
+		t.Fatalf("detached Home page was rendered instead of General:\n%s", plain)
 	}
 	if !strings.Contains(lines[len(lines)-2], "输入筛选") {
 		t.Fatalf("footer is not fixed above bottom border: %q", lines[len(lines)-2])

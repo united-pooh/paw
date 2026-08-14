@@ -269,7 +269,7 @@ type CatalogSelection struct {
 
 ## UI 与终端安全
 
-- `/model` wizard、Configuration Center Models/Active 页面读取 `EffectiveModels`，显示 configured/discovered source。
+- `/model` wizard 与 Configuration Center 的 Models 页面读取 `EffectiveModels`，显示 configured/discovered source，并在同一页面进入激活或管理动作。
 - 交互式行保存 `CatalogSelection` 并调用 `ActivateCatalogSelection`；stale conflict 后刷新 Snapshot、清除过期 target，配置中心保持打开并可继续操作。
 - 直接文本 `/model <id>` 仍是当前 Snapshot 的即时精确 ID 操作，通过 `SetActiveModelID` 包装为当前 selection。
 - `/model status`、`/config status` 和 Diagnostics 显示 discovery source、Provider、计数、cache、时间/年龄、skip 和安全错误。

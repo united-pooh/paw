@@ -6,21 +6,20 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	configv2 "paw/internal/config"
 	"paw/internal/settings"
 	"paw/internal/theme"
 )
 
 // configCenterTabLabels 是顶部 tab 行的顺序（通用 / 服务商 / 模型 /
-// 当前模型 / 凭据 / 诊断）。Home 与各子页不直接
-// 对应某个 tab：Home 无激活 tab，子页归属其顶层 tab。
-var configCenterTabLabels = []string{"通用", "服务商", "模型", "当前模型", "凭据", "诊断"}
+// 凭据 / 诊断）。各子页归属其对应的顶层 tab。
+var configCenterTabLabels = []string{"通用", "服务商", "模型", "凭据", "诊断"}
 
 // configCenterTabPages 是每个 tab 切换后落入的顶层页。
 var configCenterTabPages = []configCenterPage{
 	configCenterGeneral,
 	configCenterProviders,
 	configCenterModels,
-	configCenterActive,
 	configCenterCredentials,
 	configCenterDiagnostics,
 }
@@ -60,22 +59,19 @@ func (m *appModel) resetConfigCenterSelectionForSearch() {
 	m.configCenter.selected = matches[0].index
 }
 
-// configCenterTabForPage 把当前页映射到所属 tab 索引；无归属（Home / Edit）
-// 返回 -1。Compression 归入 General（已折叠进 General 列表）。
+// configCenterTabForPage 把当前页映射到所属 tab 索引；Edit 无归属，返回 -1。
 func configCenterTabForPage(page configCenterPage) int {
 	switch page {
-	case configCenterGeneral, configCenterCompression:
+	case configCenterGeneral:
 		return 0
 	case configCenterProviders, configCenterProviderActions, configCenterAddProvider:
 		return 1
 	case configCenterModels, configCenterModelActions, configCenterAddModelProvider:
 		return 2
-	case configCenterActive:
-		return 3
 	case configCenterCredentials, configCenterCredentialActions:
-		return 4
+		return 3
 	case configCenterDiagnostics:
-		return 5
+		return 4
 	}
 	return -1
 }
@@ -102,7 +98,7 @@ func (m *appModel) switchConfigCenterTab(key string) {
 	state.search = ""
 	state.err = ""
 	state.confirmAction = ""
-	if target == configCenterModels || target == configCenterActive {
+	if target == configCenterModels {
 		m.refreshConfigCenterCatalog(target)
 	} else {
 		state.invalidateCatalog()
@@ -131,7 +127,7 @@ func (m appModel) renderConfigCenterTabs(contentWidth int) string {
 	if terminalCellWidth(row) <= contentWidth {
 		return row
 	}
-	row = render([]string{"通用", "服务", "模型", "当前", "凭据", "诊断"}, " ")
+	row = render([]string{"通用", "服务", "模型", "凭据", "诊断"}, " ")
 	return truncateStyledCellLine(row, contentWidth)
 }
 
@@ -157,24 +153,33 @@ func (m appModel) renderConfigCenterSearch(contentWidth int) string {
 // configCenterHintBar 返回底部常驻 hint。通用页使用“编辑”，其余 tab 使用
 // “选择”（Enter 是选中/激活而非编辑）。
 func (m appModel) configCenterHintBar() string {
-	if m.configCenter.page == configCenterGeneral {
+	switch m.configCenter.page {
+	case configCenterGeneral:
 		return m.styles.StatusMuted.Render("输入筛选 · Enter 编辑 · ↑/↓ 选择 · Tab/←/→ 切换 · Esc 清除/关闭")
+	case configCenterModels:
+		return m.styles.StatusMuted.Render("输入筛选 · Enter 设为当前 · Space 管理 · ↑/↓ 选择 · Tab/←/→ 切换 · Esc 清除/关闭")
+	default:
+		return m.styles.StatusMuted.Render("输入筛选 · Enter 选择 · ↑/↓ 选择 · Tab/←/→ 切换 · b 返回 · Esc 清除/关闭")
 	}
-	return m.styles.StatusMuted.Render("输入筛选 · Enter 选择 · ↑/↓ 选择 · Tab/←/→ 切换 · b 返回 · Esc 清除/关闭")
 }
 
 // configGeneralKind 描述 General 扁平列表中一个字段的编辑方式。
 type configGeneralKind int
 
 const (
-	configGeneralEnum  configGeneralKind = iota // 枚举/布尔：Enter 循环到下一个值
-	configGeneralInt                            // 整数：Enter 内联输入
-	configGeneralFloat                          // 浮点：Enter 内联输入
+	configGeneralEnum           configGeneralKind = iota // 枚举/布尔：Enter 循环到下一个值
+	configGeneralInt                                     // 整数：Enter 内联输入
+	configGeneralFloat                                   // 浮点：Enter 内联输入
+	configGeneralModelParameter                          // 当前激活模型参数：Enter 循环并写回 config-v2
 )
 
-// configGeneralField 描述 settings.json 的一个扁平字段：显示 key、当前值、
-// 编辑方式（enum 循环 / int·float 内联）及对应的读写闭包。bool 用
-// configGeneralEnum + options ["false","true"] 表达（循环即切换）。
+const (
+	configGeneralThinkingKey        = "model.thinking"
+	configGeneralReasoningEffortKey = "model.reasoning_effort"
+)
+
+// configGeneralField 描述 General 页的一个扁平字段：显示 key、当前值和编辑方式。
+// settings.json 字段使用 get/set/parse；当前模型参数由专用分支读写 config-v2。
 type configGeneralField struct {
 	key     string
 	kind    configGeneralKind
@@ -204,9 +209,18 @@ func meterLocationOptions() []string {
 	}
 }
 
-// configGeneralFields 按 spec 表顺序返回所有 settings.json 扁平字段（≈20）。
+// configGeneralFields 按界面顺序返回 General 页字段。当前模型的常用推理参数
+// 放在最前，其余字段保持 settings.json 的 spec 表顺序。
 func configGeneralFields() []configGeneralField {
 	return []configGeneralField{
+		{
+			key:  configGeneralThinkingKey,
+			kind: configGeneralModelParameter,
+		},
+		{
+			key:  configGeneralReasoningEffortKey,
+			kind: configGeneralModelParameter,
+		},
 		{
 			key:     "compression.mode",
 			kind:    configGeneralEnum,
@@ -406,6 +420,14 @@ type configGeneralPresentation struct {
 // configGeneralPresentations 只负责显示层。持久化 key 和枚举值保持不变，
 // 避免中文界面影响 settings.json 兼容性及运行时热更新。
 var configGeneralPresentations = map[string]configGeneralPresentation{
+	configGeneralThinkingKey: {
+		label:       "推理开关",
+		description: "控制当前模型是否启用推理过程",
+	},
+	configGeneralReasoningEffortKey: {
+		label:       "推理强度",
+		description: "设置当前模型的推理投入等级",
+	},
 	"compression.mode": {
 		label:       "压缩模式",
 		description: "选择状态快照压缩或 LLM 摘要压缩",
@@ -583,6 +605,31 @@ func lookupConfigGeneralField(key string) *configGeneralField {
 	return nil
 }
 
+// configGeneralRawValue 返回 General 行的底层当前值。settings 字段从
+// settings.Config 读取；推理字段读取当前激活模型的 config-v2 parameters。
+func (m appModel) configGeneralRawValue(field configGeneralField, cfg settings.Config) string {
+	switch field.key {
+	case configGeneralThinkingKey, configGeneralReasoningEffortKey:
+		if m.configCenterController == nil {
+			return "不可用"
+		}
+		snapshot := m.configCenterController.Snapshot()
+		activeModel, ok := snapshot.Document.Models[snapshot.ActiveModelID]
+		if !ok {
+			return "不可用"
+		}
+		if field.key == configGeneralThinkingKey {
+			return thinkingLabel(activeModel.Parameters)
+		}
+		return reasoningEffortLabel(activeModel.Parameters)
+	default:
+		if field.get == nil {
+			return ""
+		}
+		return field.get(cfg)
+	}
+}
+
 // configGeneralDisplayedFields 返回按搜索过滤后的 General 字段。中文名称、
 // 中文说明、显示值和原始 key/value 都可搜索，便于熟悉旧配置名的用户定位。
 func (m appModel) configGeneralDisplayedFields() []configGeneralField {
@@ -594,7 +641,7 @@ func (m appModel) configGeneralDisplayedFields() []configGeneralField {
 	cfg := m.currentSettings()
 	out := make([]configGeneralField, 0, len(all))
 	for _, f := range all {
-		rawValue := f.get(cfg)
+		rawValue := m.configGeneralRawValue(f, cfg)
 		searchText := strings.Join([]string{
 			configGeneralLabel(f.key),
 			configGeneralDescription(f.key),
@@ -690,6 +737,10 @@ func (m *appModel) advanceGeneralEdit() {
 		state.selected = selected
 	}
 	field := displayed[selected]
+	if field.kind == configGeneralModelParameter {
+		m.advanceGeneralModelParameter(field.key)
+		return
+	}
 	cfg := m.currentSettings()
 	switch field.kind {
 	case configGeneralEnum:
@@ -715,6 +766,31 @@ func (m *appModel) advanceGeneralEdit() {
 		state.targetID = field.key
 		m.openConfigEdit(configEditGeneralFloat, field.get(cfg), field.key)
 	}
+}
+
+func (m *appModel) advanceGeneralModelParameter(key string) {
+	state := m.configCenter
+	if state == nil || m.configCenterController == nil {
+		return
+	}
+	snapshot := m.configCenterController.Snapshot()
+	activeModel, ok := snapshot.Document.Models[snapshot.ActiveModelID]
+	if !ok {
+		state.err = "当前模型不存在，无法修改推理设置"
+		return
+	}
+	if activeModel.Parameters == nil {
+		activeModel.Parameters = map[string]any{}
+	}
+	switch key {
+	case configGeneralThinkingKey:
+		activeModel.Parameters["thinking"] = nextThinkingConfig(activeModel.Parameters)
+	case configGeneralReasoningEffortKey:
+		activeModel.Parameters["reasoning_effort"] = nextReasoningEffort(activeModel.Parameters)
+	default:
+		return
+	}
+	m.applyConfigOperations(configv2.UpsertModel(snapshot.ActiveModelID, activeModel))
 }
 
 // saveAndApplyGeneral 持久化 General 字段改动并热应用到 runner。保存失败置
@@ -762,7 +838,7 @@ func (m appModel) renderConfigCenterGeneral(contentWidth, maxRows int) []string 
 	}
 	for i := start; i < end; i++ {
 		f := displayed[i]
-		rawValue := f.get(cfg)
+		rawValue := m.configGeneralRawValue(f, cfg)
 		row := formatConfigGeneralRow(
 			configGeneralLabel(f.key),
 			configGeneralDisplayValue(f.key, rawValue),

@@ -1,20 +1,20 @@
-// 底部 status 行渲染层（方案 B  细线分隔）。
+// 底部 dock 渲染层。
 //
-// 布局：[toast?]  [模式]  [token ripple]  [token count]  [工作树]
-// ready/working/generating 状态词只保留在 header；输入 dock 仅在有复制反馈
-// toast 时显示左段，其余空间让给 token 进度条。
-// 遵循 UI/数据隔离：各段从 appModel accessor 读数据，按 cell 预算截断，整体
-// 严格等于 width 个 cell，数据内容绝不破坏布局。
+// 布局：输入区上方整行是 context progress bar；最下方边框左侧显示输入模式，
+// 中间按空间显示复制反馈或工作树，右侧显示 token usage。
+// ready/working/generating 状态词只保留在 header。所有内容按 terminal cell
+// 预算截断，整体严格等于目标宽度，数据内容绝不破坏布局。
 package bubble
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
-// statusSegmentSeparator 是 B 布局各段之间的点号分隔符（轻盈）。
+// statusSegmentSeparator separates compact metadata inside token usage.
 const statusSegmentSeparator = "  "
 
 // spinnerFrames 是 braille 旋转 spinner 帧序列，生成态前导。
@@ -104,79 +104,100 @@ const (
 	tokenRippleGlyph = "█"
 )
 
-// renderDockStatusLine 渲染输入区上边框：复制反馈 toast + 模式指示 + token
-// frontier 细线。模式指示（plan/goal）为背景高亮块；plan/goal 时整条线使用
-// agentmode 强调色。token 用量与工作树 chip 已移至下边框（renderBottomDockLine）。
+// renderDockStatusLine 渲染输入区上方完整的 context progress bar。
+// 模式、token 数值和工作树都位于最下方边框，避免切断进度条。
 func (m appModel) renderDockStatusLine(width int) string {
 	width = maxInt(1, width)
-
-	left := m.renderStatusLeftSegment()
-	mode := m.renderModeIndicator()
 	stats := m.contextStats()
 	limit := maxInt(1, stats.LimitTokens)
 	used := clampInt(stats.UsedTokens, 0, limit)
 	cache := clampInt(stats.CacheTokens, 0, used)
-	modeHex := m.currentModeHex()
-	sepW := terminalCellWidth(statusSegmentSeparator)
-	left = truncateStyledCellLine(left, minInt(18, width))
-
-	// toast 优先级最低：空间不足时先隐藏，mode 与 frontier 始终保留。
-	if left != "" && terminalCellWidth(left)+terminalCellWidth(mode)+sepW >= width {
-		left = ""
-	}
-	fixed := terminalCellWidth(left) + terminalCellWidth(mode)
-	parts := 1
-	if left != "" {
-		parts++
-	}
-	if mode != "" {
-		parts++
-	}
-	fixed += (parts - 1) * sepW
-	barBudget := maxInt(1, width-fixed)
-	bar := m.renderTokenFrontierWith(barBudget, used, cache, limit, modeHex)
-	statusParts := []string{}
-	if left != "" {
-		statusParts = append(statusParts, left)
-	}
-	statusParts = append(statusParts, mode)
-	statusParts = append(statusParts, bar)
-	return fitStyledCellLine(strings.Join(statusParts, statusSegmentSeparator), width)
+	return m.renderTokenFrontierWith(width, used, cache, limit, m.currentModeHex())
 }
 
-// renderBottomDockLine 渲染输入区下边框：token 用量与工作树 chip 居中嵌入
-// ─ 底线，线色随 agentmode（plan/goal）变化。
+// renderBottomDockLine 渲染最下方边框：模式靠左，token usage 靠右；中间剩余
+// 空间优先显示复制反馈，其次显示工作树 chip。线色随 agentmode 变化。
 func (m appModel) renderBottomDockLine(width int) string {
-	return embedHairlineContent(m.renderBottomDockContent(width), width, m.currentModeHex())
+	width = maxInt(1, width)
+	lineStyle := lipgloss.NewStyle()
+	if modeHex := m.currentModeHex(); modeHex != "" {
+		lineStyle = lineStyle.Foreground(lipgloss.Color(modeHex))
+	}
+	line := lineStyle.Render(strings.Repeat("─", width))
+
+	left := m.renderModeIndicator()
+	right := m.renderBottomDockUsage()
+	left = truncateStyledCellLine(left, maxInt(0, width-2))
+	leftWidth := terminalCellWidth(left)
+	leftAt := 0
+	if leftWidth > 0 && width-leftWidth >= 2 {
+		leftAt = 1
+	}
+	leftEnd := leftAt + leftWidth
+
+	// Keep at least one rule cell between the mode and usage plus one at the
+	// outer right edge. On very narrow terminals, usage truncates before it can
+	// overlap the mode.
+	right = truncateStyledCellLine(right, maxInt(0, width-leftEnd-2))
+	rightWidth := terminalCellWidth(right)
+	rightAt := width
+	if rightWidth > 0 {
+		rightAt = maxInt(leftEnd, width-rightWidth-1)
+	}
+
+	if leftWidth > 0 {
+		line = composeStyledCellOverlay(line, left, leftAt, width)
+	}
+	if rightWidth > 0 {
+		line = composeStyledCellOverlay(line, right, rightAt, width)
+	}
+
+	middleLeft := minInt(width, leftEnd+1)
+	middleRight := maxInt(middleLeft, width-1)
+	if rightWidth > 0 {
+		middleRight = maxInt(middleLeft, rightAt-1)
+	}
+	if middleRight > middleLeft {
+		middle := m.renderBottomDockMiddle(middleRight-middleLeft, width)
+		if middle != "" {
+			middleWidth := terminalCellWidth(middle)
+			middleAt := middleLeft + maxInt(0, (middleRight-middleLeft-middleWidth)/2)
+			line = composeStyledCellOverlay(line, middle, middleAt, width)
+		}
+	}
+	return fitStyledCellLine(line, width)
 }
 
-// renderBottomDockContent 返回下边框的文本内容（不含 ─ 线），供嵌入与测试。
-// 宽度不足时按优先级丢弃 worktree、再丢 count，最终允许为空（纯线）。
-func (m appModel) renderBottomDockContent(width int) string {
-	width = maxInt(1, width)
+func (m appModel) renderBottomDockUsage() string {
 	stats := m.contextStats()
 	limit := maxInt(1, stats.LimitTokens)
 	used := clampInt(stats.UsedTokens, 0, limit)
+	cache := clampInt(stats.CacheTokens, 0, used)
 	countStyle := contextUsedStyle
 	if modeHex := m.currentModeHex(); modeHex != "" {
 		countStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(modeHex)).Bold(true)
 	}
-	count := countStyle.Render(formatCompactTokenCount(used) + " / " + formatCompactTokenCount(limit))
-	worktree := ""
-	if width >= worktreeInlineMinimumWidth {
-		worktree = m.renderWorktreeChip(minInt(28, maxInt(1, width/3)))
+	usage := countStyle.Render(formatCompactTokenCount(used) + " / " + formatCompactTokenCount(limit))
+	if cache > 0 {
+		ratio := int(float64(cache) * 100 / float64(maxInt(1, used)))
+		if ratio >= 1 {
+			usage += statusSegmentSeparator + countStyle.Render(fmt.Sprintf("ⓒ%d%%", ratio))
+		}
 	}
-	content := count
-	if worktree != "" {
-		content += statusSegmentSeparator + worktree
+	return usage
+}
+
+func (m appModel) renderBottomDockMiddle(width, totalWidth int) string {
+	if width <= 0 {
+		return ""
 	}
-	if terminalCellWidth(content) > maxInt(1, width-2) {
-		content = count
+	if toast := m.renderStatusLeftSegment(); toast != "" {
+		return truncateStyledCellLine(toast, width)
 	}
-	if terminalCellWidth(content) > maxInt(1, width-2) {
-		content = ""
+	if totalWidth < worktreeInlineMinimumWidth {
+		return ""
 	}
-	return content
+	return m.renderWorktreeChip(width)
 }
 
 // currentModeHex 返回 agentmode（plan/goal）的强调色 hex；chat/shell/
@@ -192,7 +213,7 @@ func (m appModel) currentModeHex() string {
 	}
 }
 
-// renderStatusLeftSegment 返回左段：仅复制反馈 toast。状态词
+// renderStatusLeftSegment 返回短暂的复制反馈。状态词
 // （ready/working/generating）已移入 header，输入 dock 不再显示。
 func (m appModel) renderStatusLeftSegment() string {
 	if m.isGoalInputActive() {

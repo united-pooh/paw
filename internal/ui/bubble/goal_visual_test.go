@@ -58,26 +58,26 @@ func TestGoalModeKeepsSingleInputFrameAndModeIndicator(t *testing.T) {
 		t.Fatalf("goal input = %q, contains a nested rounded input frame", plainInput)
 	}
 
-	status := ansi.Strip(model.renderDockStatusLine(80))
-	if !strings.Contains(status, "goal") {
-		t.Fatalf("goal status line = %q, want goal mode indicator", status)
+	bottom := ansi.Strip(model.renderBottomDockLine(80))
+	if !strings.Contains(bottom, "goal") {
+		t.Fatalf("goal bottom border = %q, want goal mode indicator", bottom)
 	}
 	for _, unwanted := range []string{"ready", "working", "generating"} {
-		if strings.Contains(status, unwanted) {
-			t.Fatalf("goal status line = %q, should not contain %q", status, unwanted)
+		if strings.Contains(bottom, unwanted) {
+			t.Fatalf("goal bottom border = %q, should not contain %q", bottom, unwanted)
 		}
 	}
 }
 
 func TestChatModeKeepsChatIndicatorWithoutStatusWord(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	status := ansi.Strip(model.renderDockStatusLine(80))
-	if !strings.Contains(status, "chat") {
-		t.Fatalf("chat status line = %q, want chat indicator", status)
+	bottom := ansi.Strip(model.renderBottomDockLine(80))
+	if !strings.Contains(bottom, "chat") {
+		t.Fatalf("chat bottom border = %q, want chat indicator", bottom)
 	}
 	for _, unwanted := range []string{"ready", "working", "generating"} {
-		if strings.Contains(status, unwanted) {
-			t.Fatalf("chat status line = %q, should not contain %q", status, unwanted)
+		if strings.Contains(bottom, unwanted) {
+			t.Fatalf("chat bottom border = %q, should not contain %q", bottom, unwanted)
 		}
 	}
 }

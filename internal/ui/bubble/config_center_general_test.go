@@ -36,10 +36,22 @@ func press(m appModel, msg tea.KeyMsg) appModel {
 	return next.(appModel)
 }
 
+func generalFieldIndex(t *testing.T, model appModel, key string) int {
+	t.Helper()
+	for index, field := range model.configGeneralDisplayedFields() {
+		if field.key == key {
+			return index
+		}
+	}
+	t.Fatalf("General field %q not found", key)
+	return -1
+}
+
 func TestConfigCenterGeneralFlatListShowsAllFields(t *testing.T) {
 	model, _, _ := openGeneralCenter(t)
 	rendered := ansi.Strip(model.renderConfigCenterBox())
 	for _, label := range []string{
+		"推理开关", "推理强度",
 		"压缩模式", "保留最近对话轮数", "状态压缩触发比例",
 		"子智能体上下文模式", "子智能体运行模式", "子智能体等待超时",
 		"界面主题", "上下文 Token 上限", "上下文用量显示位置", "助手输出节奏", "双击翻译",
@@ -204,15 +216,45 @@ func TestConfigCenterTabSwitchCyclesTabs(t *testing.T) {
 	if model.configCenter.page != configCenterModels {
 		t.Fatalf("after Right page = %v, want Models", model.configCenter.page)
 	}
+	model = press(model, tea.KeyMsg{Type: tea.KeyRight})
+	if model.configCenter.page != configCenterCredentials {
+		t.Fatalf("after Models page = %v, want Credentials", model.configCenter.page)
+	}
 	model = press(model, tea.KeyMsg{Type: tea.KeyLeft})
-	if model.configCenter.page != configCenterProviders {
-		t.Fatalf("after Left page = %v, want Providers", model.configCenter.page)
+	if model.configCenter.page != configCenterModels {
+		t.Fatalf("after Left page = %v, want Models", model.configCenter.page)
+	}
+}
+
+func TestConfigCenterGeneralReasoningControlsUpdateCurrentModel(t *testing.T) {
+	model, settingsController, _ := openGeneralCenter(t)
+
+	model.configCenter.selected = generalFieldIndex(t, model, configGeneralThinkingKey)
+	model = press(model, tea.KeyMsg{Type: tea.KeyEnter})
+	configured := model.configCenterController.Snapshot().Document.Models["local/one"]
+	if got := thinkingLabel(configured.Parameters); got != "关闭" {
+		t.Fatalf("thinking=%q parameters=%#v", got, configured.Parameters)
+	}
+
+	model.configCenter.selected = generalFieldIndex(t, model, configGeneralReasoningEffortKey)
+	for _, want := range []string{"low", "medium", "high", "xhigh", "max", "low"} {
+		model = press(model, tea.KeyMsg{Type: tea.KeyEnter})
+		configured = model.configCenterController.Snapshot().Document.Models["local/one"]
+		if got := reasoningEffortLabel(configured.Parameters); got != want {
+			t.Fatalf("reasoning effort=%q, want %q parameters=%#v", got, want, configured.Parameters)
+		}
+	}
+	if model.configCenter.page != configCenterGeneral {
+		t.Fatalf("reasoning control left General tab: %#v", model.configCenter)
+	}
+	if len(settingsController.saved) != 0 {
+		t.Fatalf("model parameters were incorrectly persisted to settings.json: %#v", settingsController.saved)
 	}
 }
 
 func TestConfigCenterGeneralEditCompressionHotToggle(t *testing.T) {
 	model, settingsController, runner := openGeneralCenter(t)
-	model.configCenter.selected = 0 // compression.mode，默认 state。
+	model.configCenter.selected = generalFieldIndex(t, model, "compression.mode")
 	model = press(model, tea.KeyMsg{Type: tea.KeyEnter})
 	if len(settingsController.saved) != 1 {
 		t.Fatalf("saved settings = %#v", settingsController.saved)
@@ -227,8 +269,7 @@ func TestConfigCenterGeneralEditCompressionHotToggle(t *testing.T) {
 
 func TestConfigCenterGeneralEditBoolToggle(t *testing.T) {
 	model, settingsController, _ := openGeneralCenter(t)
-	// ui.translate_on_double_click 在 idx 10（默认 false）。Enter 切换为 true。
-	model.configCenter.selected = 10
+	model.configCenter.selected = generalFieldIndex(t, model, "ui.translate_on_double_click")
 	model = press(model, tea.KeyMsg{Type: tea.KeyEnter})
 	if len(settingsController.saved) != 1 {
 		t.Fatalf("saved settings = %#v", settingsController.saved)
@@ -240,8 +281,7 @@ func TestConfigCenterGeneralEditBoolToggle(t *testing.T) {
 
 func TestConfigCenterGeneralEditIntInline(t *testing.T) {
 	model, settingsController, _ := openGeneralCenter(t)
-	// compression.resume_recent_turns 在 idx 1（默认 3）。Enter → 内联编辑。
-	model.configCenter.selected = 1
+	model.configCenter.selected = generalFieldIndex(t, model, "compression.resume_recent_turns")
 	model = press(model, tea.KeyMsg{Type: tea.KeyEnter})
 	if model.configCenter.page != configCenterEdit || model.configCenter.editKind != configEditGeneralInt {
 		t.Fatalf("int edit did not open: %#v", model.configCenter)
@@ -265,8 +305,7 @@ func TestConfigCenterGeneralEditIntInline(t *testing.T) {
 
 func TestConfigCenterGeneralEditFloatInline(t *testing.T) {
 	model, settingsController, _ := openGeneralCenter(t)
-	// compression.state_compaction_ratio 在 idx 2（默认 0.9）。Enter → 内联编辑。
-	model.configCenter.selected = 2
+	model.configCenter.selected = generalFieldIndex(t, model, "compression.state_compaction_ratio")
 	model = press(model, tea.KeyMsg{Type: tea.KeyEnter})
 	if model.configCenter.editKind != configEditGeneralFloat {
 		t.Fatalf("float edit did not open: %#v", model.configCenter)

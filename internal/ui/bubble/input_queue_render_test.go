@@ -7,7 +7,51 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"paw/internal/loop"
 )
+
+func TestQueueSummaryKeepsBottomDockAnchors(t *testing.T) {
+	model := newTestModel(&fakeRunner{stats: loop.ContextStats{UsedTokens: 12000, LimitTokens: 128000}})
+	model.ready = true
+	model.width = 80
+	model.height = 24
+	model.chatQueue.Enqueue("queued draft")
+	model.relayout()
+
+	lines := strings.Split(ansi.Strip(model.View()), "\n")
+	bottom := lines[len(lines)-1]
+	for _, want := range []string{"chat", "1 个任务排队中", "12k / 128k"} {
+		if !strings.Contains(bottom, want) {
+			t.Fatalf("bottom border = %q, want %q", bottom, want)
+		}
+	}
+}
+
+func TestQueueSummaryClearsWorktreeFromReservedMiddle(t *testing.T) {
+	model := newTestModel(&fakeRunner{stats: loop.ContextStats{UsedTokens: 12000, LimitTokens: 128000}})
+	model.ready = true
+	model.width = 120
+	model.height = 24
+	model.worktree = worktreeSnapshot{
+		name:  "worktree-marker-" + strings.Repeat("x", 48),
+		ref:   "feature/long-branch",
+		state: worktreeDirty,
+		isGit: true,
+	}
+	model.chatQueue.Enqueue("queued draft")
+	model.relayout()
+
+	lines := strings.Split(ansi.Strip(model.View()), "\n")
+	bottom := lines[len(lines)-1]
+	if strings.Contains(bottom, "worktree-marker") {
+		t.Fatalf("bottom border = %q, queue summary should replace the reserved middle region", bottom)
+	}
+	for _, want := range []string{"chat", "1 个任务排队中", "12k / 128k"} {
+		if !strings.Contains(bottom, want) {
+			t.Fatalf("bottom border = %q, want %q", bottom, want)
+		}
+	}
+}
 
 func TestQueuePanelIsRenderedBelowInputPanel(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
