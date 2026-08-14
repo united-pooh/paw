@@ -100,10 +100,26 @@ func (m *appModel) scheduleClockTick() tea.Cmd {
 	return clockTickCmd()
 }
 
-// needsUIAnimationFrames reports whether non-cursor TUI elements still require
+func (m appModel) hasActiveTranscriptAnimations(now time.Time) bool {
+	for _, entry := range m.transcript {
+		if entry.kind != entryAssistant || entry.animationEffect == transcriptRenderEffectNormal || len(entry.animationLines) == 0 {
+			continue
+		}
+		for _, line := range entry.animationLines {
+			if now.Before(line.StartedAt.Add(transcriptAnimationDuration)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Bubble Tea redraws. Cursor color itself is animated directly by anchoredOutput.
 func (m appModel) needsUIAnimationFrames(now time.Time) bool {
 	if m.isWorkRunning() || m.isGenerating || m.transcriptRefreshPending {
+		return true
+	}
+	if m.hasActiveTranscriptAnimations(now) {
 		return true
 	}
 	if m.tokenRippleActive(now) {

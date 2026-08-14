@@ -72,6 +72,9 @@ type transcriptRenderCacheKey struct {
 	toolFinishedAtUnixNS int64
 	toolElapsedSecond    int64
 	turnMetadata         string
+	animationMode        transcriptAnimationMode
+	animationEffect      transcriptRenderEffect
+	animationFrame       int64
 }
 
 func (m *appModel) ensureAssistantStreamEntry() {
@@ -159,6 +162,83 @@ func (m *appModel) registerAssistantAnimationLine(text string, complete bool) {
 		ID:        m.transcriptAnimationNextID,
 		StartedAt: m.animationNow(),
 	})
+}
+
+// animateAssistantTranscriptEntry applies the post-render transform only to
+// newly completed assistant lines. The canonical entry body remains unchanged.
+func animateAssistantTranscriptEntry(entry transcriptEntry, rendered string, now time.Time) string {
+	if rendered == "" || entry.kind != entryAssistant || entry.animationEffect == transcriptRenderEffectNormal || len(entry.animationLines) == 0 {
+		return rendered
+	}
+	parts := strings.SplitAfter(rendered, "\n")
+	var out strings.Builder
+	for index, part := range parts {
+		if part == "" {
+			continue
+		}
+		if index >= len(entry.animationLines) {
+			out.WriteString(part)
+			continue
+		}
+		newline := ""
+		content := part
+		if strings.HasSuffix(content, "\n") {
+			content = strings.TrimSuffix(content, "\n")
+			newline = "\n"
+		}
+		out.WriteString(animateStyledTranscriptText(content, entry.animationMode, entry.animationEffect, entry.animationLines[index], now, transcriptAnimationDuration))
+		out.WriteString(newline)
+	}
+	return out.String()
+}
+
+// transcriptAnimationFrame is a shared coarse frame bucket for cache invalidation.
+func transcriptAnimationFrame(entry transcriptEntry, now time.Time) int64 {
+	if entry.kind != entryAssistant || len(entry.animationLines) == 0 || now.IsZero() {
+		return 0
+	}
+	for _, line := range entry.animationLines {
+		if !line.StartedAt.IsZero() && now.Before(line.StartedAt.Add(transcriptAnimationDuration)) {
+			return now.UnixNano() / int64(cursorFrameInterval)
+		}
+	}
+	return 0
+}
+
+func transcriptAnimationEnumHash(value string) uint64 {
+	var h uint64 = 1469598103934665603
+	for i := 0; i < len(value); i++ {
+		h ^= uint64(value[i])
+		h *= 1099511628211
+	}
+	return h
+}
+
+// expireTranscriptAnimations removes completed transient line metadata. This
+// leaves the canonical body intact and lets the renderer settle on its normal
+// post-animation cache entry.
+func (m *appModel) expireTranscriptAnimations(now time.Time) bool {
+	if m == nil {
+		return false
+	}
+	changed := false
+	for index := range m.transcript {
+		entry := &m.transcript[index]
+		if entry.kind != entryAssistant || len(entry.animationLines) == 0 {
+			continue
+		}
+		active := entry.animationLines[:0]
+		for _, line := range entry.animationLines {
+			if !line.StartedAt.IsZero() && now.Before(line.StartedAt.Add(transcriptAnimationDuration)) {
+				active = append(active, line)
+			}
+		}
+		if len(active) != len(entry.animationLines) {
+			entry.animationLines = active
+			changed = true
+		}
+	}
+	return changed
 }
 
 func (m *appModel) ensureThinkingStreamEntry() {
@@ -842,7 +922,7 @@ func (m *appModel) ensureTranscriptLinesAt(width int, showThinking bool, at time
 		m.transcriptRenderCache = next
 	}
 	if m.transcriptLinesValid && m.transcriptContentCached {
-		sig := transcriptRenderSignature(m.transcript, width, showThinking, m.toolGroupExpanded, m.toolGroupFullResult)
+		sig := transcriptRenderSignature(m.transcript, width, showThinking, m.toolGroupExpanded, m.toolGroupFullResult, at)
 		if sig == m.transcriptRenderSignature {
 			return false, -1, nil
 		}
@@ -858,7 +938,7 @@ func (m *appModel) ensureTranscriptLinesAt(width int, showThinking bool, at time
 		m.transcriptEntrySpans = nil
 		m.transcriptLinesValid = true
 		m.transcriptContentCached = true
-		m.transcriptRenderSignature = transcriptRenderSignature(m.transcript, width, showThinking, m.toolGroupExpanded, m.toolGroupFullResult)
+		m.transcriptRenderSignature = transcriptRenderSignature(m.transcript, width, showThinking, m.toolGroupExpanded, m.toolGroupFullResult, at)
 		return true, -1, nil
 	}
 
@@ -868,7 +948,7 @@ func (m *appModel) ensureTranscriptLinesAt(width int, showThinking bool, at time
 		m.transcriptEntrySpans = spans
 		m.transcriptLinesValid = true
 		m.transcriptContentCached = true
-		m.transcriptRenderSignature = transcriptRenderSignature(m.transcript, width, showThinking, m.toolGroupExpanded, m.toolGroupFullResult)
+		m.transcriptRenderSignature = transcriptRenderSignature(m.transcript, width, showThinking, m.toolGroupExpanded, m.toolGroupFullResult, at)
 		return true, -1, nil
 	}
 	// 条目追加后对齐 spans 长度（新条目的 span 无效，firstChanged 会从新条目
@@ -891,7 +971,7 @@ func (m *appModel) ensureTranscriptLinesAt(width int, showThinking bool, at time
 		m.transcriptLines = transcriptSegmentLines(segment)
 		m.transcriptEntrySpans = spans
 		m.transcriptContentCached = true
-		m.transcriptRenderSignature = transcriptRenderSignature(m.transcript, width, showThinking, m.toolGroupExpanded, m.toolGroupFullResult)
+		m.transcriptRenderSignature = transcriptRenderSignature(m.transcript, width, showThinking, m.toolGroupExpanded, m.toolGroupFullResult, at)
 		return true, -1, nil
 	}
 	startRow = 0
@@ -924,7 +1004,7 @@ func (m *appModel) ensureTranscriptLinesAt(width int, showThinking bool, at time
 		m.transcriptLines = append(m.transcriptLines[:replaceStart], newLines...)
 	}
 	m.transcriptContentCached = true
-	m.transcriptRenderSignature = transcriptRenderSignature(m.transcript, width, showThinking, m.toolGroupExpanded, m.toolGroupFullResult)
+	m.transcriptRenderSignature = transcriptRenderSignature(m.transcript, width, showThinking, m.toolGroupExpanded, m.toolGroupFullResult, at)
 	return true, replaceStart, newLines
 }
 
@@ -1083,6 +1163,7 @@ func (m *appModel) renderTranscriptEntriesFrom(startIdx int, width int, showThin
 				m.storeTranscriptRenderCacheEntry(idx, key, renderedEntry, transcriptEntrySignature(entry), entry.version)
 			}
 		}
+		renderedEntry = animateAssistantTranscriptEntry(entry, renderedEntry, at)
 		renderedEntry = strings.TrimRight(renderedEntry, "\n")
 		if renderedEntry == "" {
 			continue
@@ -1276,7 +1357,7 @@ func (m *appModel) renderTranscriptContent() string {
 // transcript into a cheap scalar. Per-entry body/tool/status fields are
 // captured through the version counter (touchTranscriptEntry bumps it on every
 // mutation); the remaining inputs are explicit parameters.
-func transcriptRenderSignature(entries []transcriptEntry, width int, showThinking, groupExpanded, fullResult bool) uint64 {
+func transcriptRenderSignature(entries []transcriptEntry, width int, showThinking, groupExpanded, fullResult bool, at time.Time) uint64 {
 	var h uint64 = 1469598103934665603 // FNV-1a offset
 	mix := func(v uint64) {
 		h ^= v
@@ -1300,6 +1381,11 @@ func transcriptRenderSignature(entries []transcriptEntry, width int, showThinkin
 		mix(uint64(len(entry.body)))
 		mix(uint64(len(entry.toolResult)))
 		mix(uint64(len(entry.citations)))
+		if entry.kind == entryAssistant {
+			mix(transcriptAnimationEnumHash(string(entry.animationMode)))
+			mix(transcriptAnimationEnumHash(string(entry.animationEffect)))
+			mix(uint64(transcriptAnimationFrame(entry, at)))
+		}
 	}
 	return h
 }
@@ -1346,6 +1432,11 @@ func transcriptRenderKey(entry transcriptEntry, width int, at time.Time) transcr
 		toolStartedAtUnixNS:  entry.toolStartedAt.UnixNano(),
 		toolFinishedAtUnixNS: entry.toolFinishedAt.UnixNano(),
 		turnMetadata:         transcriptTurnMetadataSnapshot(entry.turnMetadata),
+		animationMode:        entry.animationMode,
+		animationEffect:      entry.animationEffect,
+	}
+	if entry.kind == entryAssistant {
+		key.animationFrame = transcriptAnimationFrame(entry, at)
 	}
 	if toolEntryStatus(entry) == "running" {
 		key.toolElapsedSecond = toolElapsedSeconds(entry, at)
