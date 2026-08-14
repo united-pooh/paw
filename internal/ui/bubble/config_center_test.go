@@ -176,9 +176,11 @@ func TestConfigCenterDiagnosticsWrapLongMigrationError(t *testing.T) {
 	if !strings.Contains(compact, "configureanenvironmentvariableandretry") {
 		t.Fatalf("diagnostic tail was clipped:\n%s", rendered)
 	}
+	// 配置中心已全屏化并使用小页面 gutter，整页行宽等于终端宽 100；诊断
+	// 正文按页面内容宽换行，长迁移错误应被完整显示、不越界、不泄露凭证。
 	for index, line := range strings.Split(rendered, "\n") {
-		if got := lipgloss.Width(line); got > 80 {
-			t.Fatalf("line %d width=%d, want <=80: %q", index+1, got, line)
+		if got := lipgloss.Width(line); got > 100 {
+			t.Fatalf("line %d width=%d, want <=100 (full screen): %q", index+1, got, line)
 		}
 	}
 }
@@ -277,10 +279,10 @@ func TestConfigCenterCtrlSSavesAndExpiresNotice(t *testing.T) {
 	if got := controller.Snapshot().Document.Providers["local"].Endpoint; got != "http://saved.invalid/v1" {
 		t.Fatalf("endpoint=%q", got)
 	}
-	if saved.configCenter.page != configCenterProviderActions || saved.configCenter.notice != "Saved" {
+	if saved.configCenter.page != configCenterProviderActions || saved.configCenter.notice != "已保存" {
 		t.Fatalf("saved state=%#v", saved.configCenter)
 	}
-	if rendered := ansi.Strip(saved.renderConfigCenterBox()); !strings.Contains(rendered, "Saved") {
+	if rendered := ansi.Strip(saved.renderConfigCenterBox()); !strings.Contains(rendered, "已保存") {
 		t.Fatalf("Saved notice missing from render: %q", rendered)
 	}
 	if configCenterSavedNoticeDuration != 3*time.Second {
@@ -405,7 +407,7 @@ func TestConfigCenterRequiresDeleteConfirmation(t *testing.T) {
 	if _, exists := controller.Snapshot().Document.Models["local/two"]; !exists {
 		t.Fatal("first delete activation removed the model without confirmation")
 	}
-	if !strings.Contains(model.configCenter.err, "Press Enter again") {
+	if !strings.Contains(model.configCenter.err, "再次按 Enter") {
 		t.Fatalf("confirmation message=%q", model.configCenter.err)
 	}
 	model.advanceModelAction(controller.Snapshot())
@@ -439,10 +441,8 @@ func TestConfigCenterModelsAndActiveShowEffectiveCatalogSourcesAndCounts(t *test
 	app.height = 30
 	app.relayout()
 	app.openConfigCenter()
-
-	home := ansi.Strip(app.renderConfigCenterBox())
-	if !strings.Contains(home, "registered=2 effective=3") {
-		t.Fatalf("home=%q", home)
+	if app.configCenter.page != configCenterGeneral {
+		t.Fatalf("config center should open directly on General, got page=%v", app.configCenter.page)
 	}
 
 	app.configCenter.page = configCenterModels
@@ -586,7 +586,7 @@ func TestConfigCenterDiscoveredModelActionsOnlyActivateAndRegister(t *testing.T)
 
 	app = app.advanceConfigCenter()
 	options := app.configCenterOptions()
-	if len(options) != 1 || options[0].label != "Activate and register" {
+	if len(options) != 1 || options[0].label != "激活并注册" {
 		t.Fatalf("discovered actions=%#v", options)
 	}
 

@@ -58,9 +58,8 @@ func TestViewFrameInvariantAcrossContentAndOverlays(t *testing.T) {
 	assertFixedFrame(t, model.View(), 80, 24)
 	model.modelWizard = nil
 
-	model.settingWizard = newSettingWizard(settings.DefaultConfig())
-	assertFixedFrame(t, model.View(), 80, 24)
-	model.settingWizard = nil
+	// /setting 向导已全屏化（与 /config 一致），不再作为 docked frame 上的 overlay，
+	// 因此不参与 frame-invariant 断言；见 TestConfigCenterSettingWizardRoutesFullscreen。
 
 	model.sessionPicker = newSessionPicker()
 	assertFixedFrame(t, model.View(), 80, 24)

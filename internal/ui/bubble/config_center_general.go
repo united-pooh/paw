@@ -296,17 +296,6 @@ func configGeneralFields() []configGeneralField {
 			},
 		},
 		{
-			key:     "ui.transcript_render_effect",
-			kind:    configGeneralEnum,
-			options: []string{string(settings.TranscriptRenderEffectNormal), string(settings.TranscriptRenderEffectNoise), string(settings.TranscriptRenderEffectReveal)},
-			get: func(cfg settings.Config) string {
-				return string(settings.NormalizeTranscriptRenderEffect(cfg.UI.TranscriptRenderEffect))
-			},
-			set: func(cfg *settings.Config, value string) {
-				cfg.UI.TranscriptRenderEffect = settings.TranscriptRenderEffect(value)
-			},
-		},
-		{
 			key:     "ui.translate_on_double_click",
 			kind:    configGeneralEnum,
 			options: []string{"false", "true"},
@@ -457,10 +446,6 @@ var configGeneralPresentations = map[string]configGeneralPresentation{
 		label:       "助手输出节奏",
 		description: "按完整行或逐字显示已缓冲的助手回复",
 	},
-	"ui.transcript_render_effect": {
-		label:       "助手渲染效果",
-		description: "新助手内容的视觉效果：正常、乱码或浮现",
-	},
 	"ui.translate_on_double_click": {
 		label:       "双击翻译",
 		description: "双击单词时是否调用翻译功能",
@@ -542,12 +527,6 @@ func configGeneralDisplayValue(key, value string) string {
 		return "逐行"
 	case "ui.transcript_output_mode\x00char":
 		return "逐字"
-	case "ui.transcript_render_effect\x00normal":
-		return "正常"
-	case "ui.transcript_render_effect\x00noise":
-		return "乱码"
-	case "ui.transcript_render_effect\x00reveal":
-		return "浮现"
 	case "ui.context_meter_location\x00input-above":
 		return "输入框上方"
 	case "ui.context_meter_location\x00input-title":

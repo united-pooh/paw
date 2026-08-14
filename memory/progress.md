@@ -26,3 +26,44 @@
 - [x] 对比 Paw 架构/功能差距，严苛审查分级 <!-- todo:3 -->
 - [x] 输出审查结论（含 top actions） <!-- todo:4 -->
 - [x] 新增 B 模式 snip 档测试 + 全量回归验证 <!-- todo:5 -->
+- [x] 调查现有 transcript 流式渲染、动画帧、配置与 config 面板结构，以及 docs/ 设计文档和近期提交 <!-- todo:ctx -->
+- [x] 逐项澄清输出节奏与两种渲染效果的行为、默认值和边界 <!-- todo:clarify -->
+- [x] 提出 2-3 种实现方案及取舍 <!-- todo:approaches -->
+- [x] 分段呈现设计并等待用户批准 <!-- todo:design -->
+- [x] 编写并自检设计文档，提交后请用户审核 <!-- todo:spec -->
+- [x] 读取 writing-plans 规范并检查已提交 spec 与当前工作树状态 <!-- todo:plan_ctx -->
+- [x] 编写详细 implementation plan，按功能拆分并标注 subagent 并行边界 <!-- todo:plan_write -->
+- [x] 自检 plan 的依赖、冲突、验证命令与 subagent 分工 <!-- todo:plan_review -->
+- [x] 将 plan 提交并交付用户审核 <!-- todo:plan_commit -->
+- [x] 实现 assistant 行级动画状态与流生命周期（Subagent B） <!-- todo:impl_stream -->
+- [x] 实现 post-render 乱码/浮现变换（Subagent C） <!-- todo:impl_transform -->
+- [x] 完成基础功能批次：设置/UI、流生命周期、post-render 变换 <!-- todo:impl_foundation -->
+- [x] 实现设置与 General UI 功能 <!-- todo:impl_settings -->
+- [x] 集成渲染、缓存失效与帧调度 <!-- todo:impl_integration -->
+- [x] 跨功能验收、修复并运行 go build/go test <!-- todo:impl_verify -->
+- [x] 定位引用文件选择框及隐藏文件过滤逻辑 <!-- todo:inspect -->
+- [x] 实现隐藏目录可搜索修复并补充/调整测试 <!-- todo:fix -->
+- [x] 运行 go build ./... 与 go test ./... 验证 <!-- todo:verify -->
+- [x] 复现问题并补充最小回归测试 <!-- todo:repro -->
+- [x] 检查 noise + line 动画实现及现有测试 <!-- todo:inspect-noise-line -->
+- [x] 补充回归测试并在必要时修复 <!-- todo:fix-noise-line -->
+- [x] 运行 go build ./...、go test ./... 与 git diff --check <!-- todo:verify-noise-line -->
+- [x] 检查 noise 动画实现、帧调度与 transcript 缓存失效链路 <!-- todo:inspect-noise-freeze -->
+- [x] 复现定格并补充中间帧变化/完成恢复回归测试 <!-- todo:repro-noise-freeze -->
+- [x] 修复动画定格问题并保留无关工作区改动 <!-- todo:fix-noise-freeze -->
+- [x] 运行 go build ./...、go test ./... 与 git diff --check <!-- todo:verify-noise-freeze -->
+- [x] 检查 reveal 动画实现、帧调度与现有测试 <!-- todo:inspect-reveal-freeze -->
+- [x] 必要时补充回归测试并修复 reveal 定格问题 <!-- todo:fix-reveal-freeze -->
+- [x] 运行 go build ./...、go test ./... 与 git diff --check <!-- todo:verify-reveal-freeze -->
+- [x] 检查 transcript 动画、设置项、配置持久化和测试涉及范围 <!-- todo:inspect-transcript-effects -->
+- [x] 移除渲染效果及其帧刷新集成，清理相关测试与配置 <!-- todo:remove-transcript-effects -->
+- [x] 运行 gofmt、go build ./...、go test ./... 与 git diff --check <!-- todo:verify-removal -->
+- [x] 检查逐字输出配置的定义、读取和 transcript 流程 <!-- todo:inspect-char-mode -->
+- [x] 定位并修复逐字输出未生效的原因 <!-- todo:fix-char-mode -->
+- [x] 运行 gofmt、go build ./...、go test ./... 与 git diff --check <!-- todo:verify-char-mode -->
+- [x] 检查逐字模式下 Markdown 增量追加和引用渲染链路 <!-- todo:inspect-markdown-char -->
+- [x] 修复引用或其他 Markdown 结构被逐字渲染打乱的问题 <!-- todo:fix-markdown-char -->
+- [x] 运行 gofmt、go build ./...、go test ./... 与 git diff --check <!-- todo:verify-markdown-char -->
+- [x] 确认逐字模式的实际提交粒度与刷新链路 <!-- todo:investigate-char-render -->
+- [x] 根据事实修复整行显示问题并补充回归测试 <!-- todo:fix-char-render -->
+- [x] 运行 gofmt、go build ./...、go test ./... 与 git diff --check <!-- todo:verify-char-render -->

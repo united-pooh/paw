@@ -42,7 +42,7 @@ func TestConfigCenterGeneralFlatListShowsAllFields(t *testing.T) {
 	for _, label := range []string{
 		"压缩模式", "保留最近对话轮数", "状态压缩触发比例",
 		"子智能体上下文模式", "子智能体运行模式", "子智能体等待超时",
-		"界面主题", "上下文 Token 上限", "上下文用量显示位置", "助手输出节奏", "助手渲染效果", "双击翻译",
+		"界面主题", "上下文 Token 上限", "上下文用量显示位置", "助手输出节奏", "双击翻译",
 		"温和压缩触发比例", "工具结果裁剪比例", "常规压缩触发比例", "强制压缩触发比例",
 		"压缩目标比例", "尾部保留 Token", "工具结果最小保留字节", "保留错误信息",
 		"保留用户标记内容", "启用压缩归档",
@@ -227,8 +227,8 @@ func TestConfigCenterGeneralEditCompressionHotToggle(t *testing.T) {
 
 func TestConfigCenterGeneralEditBoolToggle(t *testing.T) {
 	model, settingsController, _ := openGeneralCenter(t)
-	// ui.translate_on_double_click 在 idx 11（默认 false）。Enter 切换为 true。
-	model.configCenter.selected = 11
+	// ui.translate_on_double_click 在 idx 10（默认 false）。Enter 切换为 true。
+	model.configCenter.selected = 10
 	model = press(model, tea.KeyMsg{Type: tea.KeyEnter})
 	if len(settingsController.saved) != 1 {
 		t.Fatalf("saved settings = %#v", settingsController.saved)

@@ -444,3 +444,34 @@ func (m *appModel) syncRunnerModelContextLimit(cfg model.Config) {
 		setter.SetContextLimitTokens(model.EffectiveContextLimitTokens(cfg))
 	}
 }
+
+// syncRunnerCompression 把 context_compression.mode 热应用到 runner：
+// 通过可选接口断言调用 SetContextMode，下一轮 maintainContextProjection 即按新
+// mode 分流（state→状态压缩，summary→LLM 摘要）。未实现该接口的 runner 静默跳过。
+func (m *appModel) syncRunnerCompression(cfg settings.Config) {
+	if setter, ok := m.runner.(interface{ SetContextMode(string) }); ok {
+		setter.SetContextMode(string(settings.NormalizeCompressionMode(cfg.ContextCompression.Mode)))
+	}
+}
+
+// syncRunnerSettings 把 General 扁平列表里改动的 settings.json 字段热应用到
+// runner：compression.mode/resume_recent_turns/state_compaction_ratio、
+// context_maintenance.*，以及 ui.context_limit_tokens（经模型配置路径）。
+// compression.mode 复用 syncRunnerCompression（SetContextMode）；其余通过可选
+// 接口断言调用对应 setter，未实现某接口的 runner 静默跳过。
+func (m *appModel) syncRunnerSettings(cfg settings.Config) {
+	m.syncRunnerCompression(cfg)
+	if setter, ok := m.runner.(interface{ SetResumeRecentTurns(int) }); ok {
+		setter.SetResumeRecentTurns(cfg.ContextCompression.ResumeRecentTurns)
+	}
+	if setter, ok := m.runner.(interface{ SetStateCompactionRatio(float64) }); ok {
+		setter.SetStateCompactionRatio(cfg.ContextCompression.StateCompactionRatio)
+	}
+	if setter, ok := m.runner.(interface {
+		SetContextMaintenanceConfig(settings.ContextMaintenanceConfig) error
+	}); ok {
+		_ = setter.SetContextMaintenanceConfig(cfg.ContextMaintenance)
+	}
+	// ui 字段经模型配置路径（context_limit 经 syncRunnerModelContextLimit）。
+	m.syncRunnerModelContextLimit(m.currentModelConfig())
+}

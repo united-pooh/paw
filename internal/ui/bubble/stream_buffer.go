@@ -177,6 +177,10 @@ type streamLineBuffer struct {
 	column      int
 	width       int
 	hasContent  bool
+	// characterQueue stores complete display tokens received in char output mode
+	// but not yet released to the transcript. The queue is the complete buffered
+	// canonical stream; rendering advances it one grapheme at a time.
+	characterQueue []displayToken
 }
 
 func (b *streamLineBuffer) Push(delta string, width int) string {
@@ -195,6 +199,67 @@ func (b *streamLineBuffer) Push(delta string, width int) string {
 	return out.String()
 }
 
+func (b *streamLineBuffer) PushCharacters(delta string) string {
+	width := maxInt(1, b.width)
+	b.width = width
+	safe := b.sanitizer.Push(delta)
+	if safe == "" {
+		return ""
+	}
+	b.hasContent = true
+	tokens := displayTokens(b.clusterTail + safe)
+	b.clusterTail = ""
+	if len(tokens) > 0 && tokens[len(tokens)-1].kind == displayTokenText {
+		b.clusterTail = tokens[len(tokens)-1].text
+		tokens = tokens[:len(tokens)-1]
+	}
+	b.characterQueue = append(b.characterQueue, tokens...)
+	return ""
+}
+
+// ReleaseCharacters releases at most count complete display tokens. Tokens stay
+// grouped by grapheme, so Unicode combining marks and joined emoji are never
+// split. Unreleased tokens remain buffered for subsequent cursor frames.
+func (b *streamLineBuffer) ReleaseCharacters(count int) string {
+	if count <= 0 || len(b.characterQueue) == 0 {
+		return ""
+	}
+	if count > len(b.characterQueue) {
+		count = len(b.characterQueue)
+	}
+	var out strings.Builder
+	for _, token := range b.characterQueue[:count] {
+		switch token.kind {
+		case displayTokenNewline:
+			out.WriteByte('\n')
+		case displayTokenTab:
+			out.WriteByte('\t')
+		default:
+			out.WriteString(token.text)
+		}
+	}
+	b.characterQueue = b.characterQueue[count:]
+	return out.String()
+}
+
+func (b *streamLineBuffer) HasPendingCharacters() bool {
+	return len(b.characterQueue) > 0
+}
+
+func (b *streamLineBuffer) FlushCharacters(width int) string {
+	width = maxInt(1, width)
+	b.width = width
+	safe := b.sanitizer.Flush()
+	if safe != "" {
+		b.characterQueue = append(b.characterQueue, displayTokens(b.clusterTail+safe)...)
+	} else if b.clusterTail != "" {
+		b.characterQueue = append(b.characterQueue, displayTokens(b.clusterTail)...)
+	}
+	b.clusterTail = ""
+	out := b.ReleaseCharacters(len(b.characterQueue))
+	b.Reset()
+	return out
+}
 func (b *streamLineBuffer) Resize(width int) string {
 	width = maxInt(1, width)
 	b.width = width
@@ -236,6 +301,7 @@ func (b *streamLineBuffer) Reset() {
 	b.column = 0
 	b.width = 0
 	b.hasContent = false
+	b.characterQueue = nil
 }
 
 func (b *streamLineBuffer) HasContent() bool {

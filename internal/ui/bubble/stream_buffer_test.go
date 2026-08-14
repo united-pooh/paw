@@ -5,12 +5,96 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"paw/internal/settings"
 	"paw/internal/ui"
 )
 
+func TestStreamLineBufferCharModeQueuesCompleteDisplayTokens(t *testing.T) {
+	var buffer streamLineBuffer
+	if got := buffer.PushCharacters("a你🙂b"); got != "" {
+		t.Fatalf("PushCharacters = %q, want no immediate playback", got)
+	}
+	if !buffer.HasPendingCharacters() {
+		t.Fatal("char-mode buffer has no pending display tokens")
+	}
+	if got := buffer.ReleaseCharacters(1); got != "a" {
+		t.Fatalf("first release = %q, want a", got)
+	}
+	if got := buffer.ReleaseCharacters(1); got != "你" {
+		t.Fatalf("second release = %q, want 你", got)
+	}
+	if got := buffer.ReleaseCharacters(1); got != "🙂" {
+		t.Fatalf("third release = %q, want 🙂", got)
+	}
+	if got := buffer.FlushCharacters(20); got != "b" {
+		t.Fatalf("final flush = %q, want b", got)
+	}
+	if buffer.HasPendingCharacters() {
+		t.Fatal("char-mode buffer retained released tokens")
+	}
+}
+
+func TestAssistantCharModeReleasesLargeDeltaAcrossCursorFrames(t *testing.T) {
+	settingsController := &fakeSettingsController{current: settings.Config{
+		UI: settings.UIConfig{TranscriptOutputMode: settings.TranscriptOutputModeChar},
+	}}
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, settingsController, nil, nil, newTerminalCursorAnchor())
+	model.ready = true
+	model.width = 80
+	model.height = 20
+	model.relayout()
+
+	next, _ := model.Update(assistantDeltaMsg("你好🙂 **bold**\n"))
+	model = next.(appModel)
+	if len(model.transcript) != 1 {
+		t.Fatalf("transcript len = %d, want one buffered assistant entry", len(model.transcript))
+	}
+	if got := model.transcript[0].body; got != "" {
+		t.Fatalf("body after large delta = %q, want no immediate character commit", got)
+	}
+	if !model.assistantStream.HasPendingCharacters() {
+		t.Fatal("large delta was not retained for frame playback")
+	}
+
+	frame := time.Unix(100, 0)
+	for index, want := range []string{"你", "你好", "你好🙂"} {
+		next, _ = model.Update(cursorFrameMsg(frame.Add(time.Duration(index+1) * cursorFrameInterval)))
+		model = next.(appModel)
+		if got := model.transcript[0].body; !strings.HasPrefix(got, want) {
+			t.Fatalf("frame %d body = %q, want prefix %q", index+1, got, want)
+		}
+	}
+	if got := model.transcript[0].body; got == "你好🙂 **bold**\n" {
+		t.Fatal("large delta was committed completely before finalization")
+	}
+
+	next, _ = model.Update(doneMsg{})
+	model = next.(appModel)
+	if got := model.transcript[0].body; got != "你好🙂 **bold**\n" {
+		t.Fatalf("final body = %q, want canonical complete input", got)
+	}
+	if model.assistantStream.HasPendingCharacters() || model.assistantStream.HasContent() {
+		t.Fatal("assistant char buffer was not fully flushed")
+	}
+}
+
+func TestAssistantLineModeStillCommitsStableDeltaNormally(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 20
+	model.relayout()
+
+	next, _ := model.Update(assistantDeltaMsg("line mode\n"))
+	model = next.(appModel)
+	if got := model.transcript[len(model.transcript)-1].body; got != "line mode\n" {
+		t.Fatalf("line-mode body = %q, want complete line", got)
+	}
+}
 func TestStreamLineBufferCommitsOnlyCompleteLines(t *testing.T) {
 	var buffer streamLineBuffer
 	if got := buffer.Push("hel", 5); got != "" {

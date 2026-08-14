@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"paw/internal/session"
+	"paw/internal/settings"
 	"paw/internal/ui"
 )
 
@@ -72,61 +73,20 @@ type transcriptRenderCacheKey struct {
 	toolFinishedAtUnixNS int64
 	toolElapsedSecond    int64
 	turnMetadata         string
-	animationMode        transcriptAnimationMode
-	animationEffect      transcriptRenderEffect
-	animationFrame       int64
 }
 
 func (m *appModel) ensureAssistantStreamEntry() {
 	if m.activeAssistant < 0 || m.activeAssistant >= len(m.transcript) || m.transcript[m.activeAssistant].kind != entryAssistant {
-		mode, effect := m.captureTranscriptAnimationConfig()
 		m.transcript = append(m.transcript, transcriptEntry{
-			kind:            entryAssistant,
-			title:           "assistant",
-			citations:       m.consumePendingToolCitations(),
-			createdAt:       m.animationNow(),
-			animationMode:   mode,
-			animationEffect: effect,
+			kind:      entryAssistant,
+			title:     "assistant",
+			citations: m.consumePendingToolCitations(),
+			createdAt: m.animationNow(),
 		})
 		m.activeAssistant = len(m.transcript) - 1
 	} else if len(m.pendingToolCites) > 0 {
 		m.transcript[m.activeAssistant].citations = append(m.transcript[m.activeAssistant].citations, m.consumePendingToolCitations()...)
 	}
-}
-
-// captureTranscriptAnimationConfig snapshots the settings for one assistant
-// reply. JSON decoding keeps this lifecycle code independent of the settings
-// package's concrete field declarations while preserving the stable JSON seam.
-func (m *appModel) captureTranscriptAnimationConfig() (transcriptAnimationMode, transcriptRenderEffect) {
-	mode := transcriptAnimationModeLine
-	effect := transcriptRenderEffectNormal
-	if m == nil || m.settingsConfig == nil {
-		return mode, effect
-	}
-	data, err := json.Marshal(m.settingsConfig.CurrentSettings())
-	if err != nil {
-		return mode, effect
-	}
-	var payload struct {
-		UI struct {
-			OutputMode string `json:"transcript_output_mode"`
-			Effect     string `json:"transcript_render_effect"`
-		} `json:"ui"`
-	}
-	if json.Unmarshal(data, &payload) != nil {
-		return mode, effect
-	}
-	switch transcriptAnimationMode(strings.ToLower(strings.TrimSpace(payload.UI.OutputMode))) {
-	case transcriptAnimationModeChar:
-		mode = transcriptAnimationModeChar
-	}
-	switch transcriptRenderEffect(strings.ToLower(strings.TrimSpace(payload.UI.Effect))) {
-	case transcriptRenderEffectNoise:
-		effect = transcriptRenderEffectNoise
-	case transcriptRenderEffectReveal:
-		effect = transcriptRenderEffectReveal
-	}
-	return mode, effect
 }
 
 // appendAssistantDelta 将经过流隔离器确认的稳定文本逐行追加到当前 assistant 消息。
@@ -142,103 +102,10 @@ func (m *appModel) appendAssistantDelta(delta string) {
 	for _, line := range strings.SplitAfter(delta, "\n") {
 		m.ensureAssistantStreamEntry()
 		m.transcript[m.activeAssistant].body += line
-		m.registerAssistantAnimationLine(line, strings.HasSuffix(line, "\n"))
 		touchTranscriptEntry(&m.transcript[m.activeAssistant])
 		m.recordAssistantActivity(m.activeAssistant)
 	}
 	m.refreshViewportForStreaming()
-}
-
-func (m *appModel) registerAssistantAnimationLine(text string, complete bool) {
-	if !complete || strings.TrimSuffix(text, "\n") == "" {
-		return
-	}
-	if m.activeAssistant < 0 || m.activeAssistant >= len(m.transcript) {
-		return
-	}
-	m.transcriptAnimationNextID++
-	entry := &m.transcript[m.activeAssistant]
-	entry.animationLines = append(entry.animationLines, transcriptAnimationLine{
-		ID:        m.transcriptAnimationNextID,
-		StartedAt: m.animationNow(),
-	})
-}
-
-// animateAssistantTranscriptEntry applies the post-render transform only to
-// newly completed assistant lines. The canonical entry body remains unchanged.
-func animateAssistantTranscriptEntry(entry transcriptEntry, rendered string, now time.Time) string {
-	if rendered == "" || entry.kind != entryAssistant || entry.animationEffect == transcriptRenderEffectNormal || len(entry.animationLines) == 0 {
-		return rendered
-	}
-	parts := strings.SplitAfter(rendered, "\n")
-	var out strings.Builder
-	for index, part := range parts {
-		if part == "" {
-			continue
-		}
-		if index >= len(entry.animationLines) {
-			out.WriteString(part)
-			continue
-		}
-		newline := ""
-		content := part
-		if strings.HasSuffix(content, "\n") {
-			content = strings.TrimSuffix(content, "\n")
-			newline = "\n"
-		}
-		out.WriteString(animateStyledTranscriptText(content, entry.animationMode, entry.animationEffect, entry.animationLines[index], now, transcriptAnimationDuration))
-		out.WriteString(newline)
-	}
-	return out.String()
-}
-
-// transcriptAnimationFrame is a shared coarse frame bucket for cache invalidation.
-func transcriptAnimationFrame(entry transcriptEntry, now time.Time) int64 {
-	if entry.kind != entryAssistant || len(entry.animationLines) == 0 || now.IsZero() {
-		return 0
-	}
-	for _, line := range entry.animationLines {
-		if !line.StartedAt.IsZero() && now.Before(line.StartedAt.Add(transcriptAnimationDuration)) {
-			return now.UnixNano() / int64(cursorFrameInterval)
-		}
-	}
-	return 0
-}
-
-func transcriptAnimationEnumHash(value string) uint64 {
-	var h uint64 = 1469598103934665603
-	for i := 0; i < len(value); i++ {
-		h ^= uint64(value[i])
-		h *= 1099511628211
-	}
-	return h
-}
-
-// expireTranscriptAnimations removes completed transient line metadata. This
-// leaves the canonical body intact and lets the renderer settle on its normal
-// post-animation cache entry.
-func (m *appModel) expireTranscriptAnimations(now time.Time) bool {
-	if m == nil {
-		return false
-	}
-	changed := false
-	for index := range m.transcript {
-		entry := &m.transcript[index]
-		if entry.kind != entryAssistant || len(entry.animationLines) == 0 {
-			continue
-		}
-		active := entry.animationLines[:0]
-		for _, line := range entry.animationLines {
-			if !line.StartedAt.IsZero() && now.Before(line.StartedAt.Add(transcriptAnimationDuration)) {
-				active = append(active, line)
-			}
-		}
-		if len(active) != len(entry.animationLines) {
-			entry.animationLines = active
-			changed = true
-		}
-	}
-	return changed
 }
 
 func (m *appModel) ensureThinkingStreamEntry() {
@@ -271,11 +138,29 @@ func (m *appModel) consumeAssistantStreamDelta(delta string) {
 	if m.thinkingStream.HasContent() {
 		m.finalizeThinkingStream()
 	}
-	committed := m.assistantStream.Push(delta, m.streamingBodyWidth())
+	var committed string
+	if m.currentSettings().UI.TranscriptOutputMode == settings.TranscriptOutputModeChar {
+		committed = m.assistantStream.PushCharacters(delta)
+	} else {
+		committed = m.assistantStream.Push(delta, m.streamingBodyWidth())
+	}
 	if m.assistantStream.HasContent() {
 		m.ensureAssistantStreamEntry()
 	}
 	m.appendAssistantDelta(committed)
+}
+
+// releaseAssistantCharacters advances char-mode playback by one complete display
+// token. The stream buffer retains every unreleased token, so a large upstream
+// delta is never lost or appended to the transcript in one operation.
+func (m *appModel) releaseAssistantCharacters() {
+	if m == nil || m.currentSettings().UI.TranscriptOutputMode != settings.TranscriptOutputModeChar {
+		return
+	}
+	if committed := m.assistantStream.ReleaseCharacters(1); committed != "" {
+		m.ensureAssistantStreamEntry()
+		m.appendAssistantDelta(committed)
+	}
 }
 
 func (m *appModel) consumeThinkingStreamDelta(delta string) {
@@ -294,16 +179,17 @@ func (m *appModel) consumeThinkingStreamDelta(delta string) {
 
 func (m *appModel) finalizeAssistantStream() int {
 	hadContent := m.assistantStream.HasContent()
-	committed := m.assistantStream.Flush(m.streamingBodyWidth())
+	var committed string
+	if m.currentSettings().UI.TranscriptOutputMode == settings.TranscriptOutputModeChar {
+		committed = m.assistantStream.FlushCharacters(m.streamingBodyWidth())
+	} else {
+		committed = m.assistantStream.Flush(m.streamingBodyWidth())
+	}
 	if hadContent {
 		m.ensureAssistantStreamEntry()
 	}
 	if committed != "" {
 		m.appendAssistantDelta(committed)
-		if !strings.HasSuffix(committed, "\n") && m.activeAssistant >= 0 && m.activeAssistant < len(m.transcript) {
-			m.registerAssistantAnimationLine(committed, true)
-			touchTranscriptEntry(&m.transcript[m.activeAssistant])
-		}
 	} else if hadContent {
 		m.refreshViewportForStreaming()
 	}
@@ -1163,7 +1049,6 @@ func (m *appModel) renderTranscriptEntriesFrom(startIdx int, width int, showThin
 				m.storeTranscriptRenderCacheEntry(idx, key, renderedEntry, transcriptEntrySignature(entry), entry.version)
 			}
 		}
-		renderedEntry = animateAssistantTranscriptEntry(entry, renderedEntry, at)
 		renderedEntry = strings.TrimRight(renderedEntry, "\n")
 		if renderedEntry == "" {
 			continue
@@ -1381,11 +1266,6 @@ func transcriptRenderSignature(entries []transcriptEntry, width int, showThinkin
 		mix(uint64(len(entry.body)))
 		mix(uint64(len(entry.toolResult)))
 		mix(uint64(len(entry.citations)))
-		if entry.kind == entryAssistant {
-			mix(transcriptAnimationEnumHash(string(entry.animationMode)))
-			mix(transcriptAnimationEnumHash(string(entry.animationEffect)))
-			mix(uint64(transcriptAnimationFrame(entry, at)))
-		}
 	}
 	return h
 }
@@ -1432,11 +1312,6 @@ func transcriptRenderKey(entry transcriptEntry, width int, at time.Time) transcr
 		toolStartedAtUnixNS:  entry.toolStartedAt.UnixNano(),
 		toolFinishedAtUnixNS: entry.toolFinishedAt.UnixNano(),
 		turnMetadata:         transcriptTurnMetadataSnapshot(entry.turnMetadata),
-		animationMode:        entry.animationMode,
-		animationEffect:      entry.animationEffect,
-	}
-	if entry.kind == entryAssistant {
-		key.animationFrame = transcriptAnimationFrame(entry, at)
 	}
 	if toolEntryStatus(entry) == "running" {
 		key.toolElapsedSecond = toolElapsedSeconds(entry, at)

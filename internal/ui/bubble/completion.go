@@ -336,9 +336,10 @@ const maxFileCompletionEntries = 2000
 const maxCompletionDepth = 8
 
 // completionSkipDirs 是递归遍历时整棵跳过的目录名。
-// 隐藏目录（.git、.paw 等）另行按 . 前缀跳过；这里处理的是名字不以点开头
-// 但体积巨大且几乎不是搜索目标的家目录/系统噪音目录，避免 @~、@/ 的
-// 遍历被它们耗尽条目配额。
+// 以点开头的隐藏目录不在这里过滤：它们可能包含用户希望引用的配置
+// （例如 .claude、.codex），应当与普通目录一样参与搜索。
+// 这里处理的是名字不以点开头但体积巨大且几乎不是搜索目标的家目录/系统
+// 噪音目录，避免 @~、@/ 的遍历被它们耗尽条目配额。
 var completionSkipDirs = map[string]bool{
 	"node_modules": true, // 依赖目录
 	"Library":      true, // macOS ~/Library、/Library
@@ -353,7 +354,8 @@ func skipCompletionDir(name string) bool {
 
 // listFilesRecursive 递归列出 searchDir 目录树下的全部条目（不含 searchDir 本身）。
 // 条目为相对 searchDir 的路径，目录以 / 结尾；隐藏条目、completionSkipDirs
-// 中的目录以及超过 maxCompletionDepth 的子树被跳过。
+// 中的目录以及超过 maxCompletionDepth 的子树被跳过。隐藏条目不会被跳过，
+// 因为 .claude、.codex 等隐藏目录也可能是用户需要引用的工作区文件。
 //
 // 遍历采用逐层（BFS）方式：先收集完整的第 1 层，再第 2 层，依此类推，
 // 达到 maxFileCompletionEntries 条后停止。相比深度优先遍历，BFS 保证浅层
@@ -382,9 +384,6 @@ func listFilesRecursive(searchDir string) ([]string, error) {
 				break
 			}
 			name := e.Name()
-			if strings.HasPrefix(name, ".") {
-				continue // 隐藏条目
-			}
 			child := filepath.Join(cur.dir, name)
 			if e.IsDir() {
 				if skipCompletionDir(name) || cur.depth+1 > maxCompletionDepth {

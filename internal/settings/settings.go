@@ -27,17 +27,12 @@ const (
 
 	TranscriptOutputModeLine TranscriptOutputMode = "line"
 	TranscriptOutputModeChar TranscriptOutputMode = "char"
-
-	TranscriptRenderEffectNormal TranscriptRenderEffect = "normal"
-	TranscriptRenderEffectNoise  TranscriptRenderEffect = "noise"
-	TranscriptRenderEffectReveal TranscriptRenderEffect = "reveal"
 )
 
 type ContextMode string
 type RunMode string
 type MeterLocation string
 type TranscriptOutputMode string
-type TranscriptRenderEffect string
 type HomeDirFunc func() (string, error)
 
 type CompressionMode string
@@ -82,12 +77,11 @@ type SubagentConfig struct {
 }
 
 type UIConfig struct {
-	Theme                  theme.ThemeID          `json:"theme"`
-	ContextLimitTokens     int                    `json:"context_limit_tokens"`
-	ContextMeterLocation   MeterLocation          `json:"context_meter_location"`
-	TranslateOnDoubleClick bool                   `json:"translate_on_double_click"`
-	TranscriptOutputMode   TranscriptOutputMode   `json:"transcript_output_mode"`
-	TranscriptRenderEffect TranscriptRenderEffect `json:"transcript_render_effect"`
+	Theme                  theme.ThemeID        `json:"theme"`
+	ContextLimitTokens     int                  `json:"context_limit_tokens"`
+	ContextMeterLocation   MeterLocation        `json:"context_meter_location"`
+	TranslateOnDoubleClick bool                 `json:"translate_on_double_click"`
+	TranscriptOutputMode   TranscriptOutputMode `json:"transcript_output_mode"`
 }
 
 type Controller struct {
@@ -104,7 +98,7 @@ const (
 func DefaultConfig() Config {
 	return Config{
 		Subagent:           SubagentConfig{DefaultContextMode: ContextModeEmpty, DefaultRunMode: RunModeBackground, WaitTimeoutMs: DefaultSubagentWaitTimeoutMs},
-		UI:                 UIConfig{Theme: theme.Default, ContextLimitTokens: DefaultContextLimitTokens, ContextMeterLocation: MeterLocationInputAbove, TranscriptOutputMode: TranscriptOutputModeLine, TranscriptRenderEffect: TranscriptRenderEffectNormal},
+		UI:                 UIConfig{Theme: theme.Default, ContextLimitTokens: DefaultContextLimitTokens, ContextMeterLocation: MeterLocationInputAbove, TranscriptOutputMode: TranscriptOutputModeLine},
 		ContextMaintenance: DefaultContextMaintenanceConfig(),
 		ContextCompression: DefaultContextCompressionConfig(),
 	}
@@ -226,7 +220,6 @@ func Normalize(cfg Config) Config {
 	cfg.UI.Theme = theme.NormalizeID(string(cfg.UI.Theme))
 	cfg.UI.ContextMeterLocation = NormalizeMeterLocation(cfg.UI.ContextMeterLocation)
 	cfg.UI.TranscriptOutputMode = NormalizeTranscriptOutputMode(cfg.UI.TranscriptOutputMode)
-	cfg.UI.TranscriptRenderEffect = NormalizeTranscriptRenderEffect(cfg.UI.TranscriptRenderEffect)
 	if cfg.UI.ContextLimitTokens <= 0 {
 		cfg.UI.ContextLimitTokens = DefaultContextLimitTokens
 	}
@@ -297,17 +290,6 @@ func NormalizeTranscriptOutputMode(mode TranscriptOutputMode) TranscriptOutputMo
 		return TranscriptOutputModeChar
 	default:
 		return TranscriptOutputModeLine
-	}
-}
-
-func NormalizeTranscriptRenderEffect(effect TranscriptRenderEffect) TranscriptRenderEffect {
-	switch TranscriptRenderEffect(strings.ToLower(strings.TrimSpace(string(effect)))) {
-	case TranscriptRenderEffectNoise:
-		return TranscriptRenderEffectNoise
-	case TranscriptRenderEffectReveal:
-		return TranscriptRenderEffectReveal
-	default:
-		return TranscriptRenderEffectNormal
 	}
 }
 

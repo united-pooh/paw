@@ -14,12 +14,14 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	configv2 "paw/internal/config"
+	"paw/internal/settings"
 )
 
 type configCenterPage int
 
 const (
 	configCenterHome configCenterPage = iota
+	configCenterGeneral
 	configCenterProviders
 	configCenterProviderActions
 	configCenterAddProvider
@@ -30,6 +32,7 @@ const (
 	configCenterCredentials
 	configCenterCredentialActions
 	configCenterDiagnostics
+	configCenterCompression
 	configCenterEdit
 )
 
@@ -51,6 +54,8 @@ const (
 	configEditNewModelID
 	configEditNewModelName
 	configEditCredential
+	configEditGeneralInt
+	configEditGeneralFloat
 )
 
 type configCenterState struct {
@@ -73,6 +78,7 @@ type configCenterState struct {
 	draftModel        configv2.Model
 	credentialID      string
 	confirmAction     string
+	search            string
 }
 
 type configCenterOption struct {
@@ -91,7 +97,7 @@ func (state *configCenterState) showSavedNotice() tea.Cmd {
 	if state == nil {
 		return nil
 	}
-	state.notice = "Saved"
+	state.notice = "已保存"
 	state.noticeSequence++
 	sequence := state.noticeSequence
 	return tea.Tick(configCenterSavedNoticeDuration, func(time.Time) tea.Msg {
@@ -107,7 +113,9 @@ func (m *appModel) openConfigCenter() {
 	snapshot := m.configCenterController.Snapshot()
 	m.settingWizard = nil
 	m.modelWizard = nil
-	page := configCenterHome
+	// 已完成配置时直接进入 General：顶部 tab 本身就是一级导航，不再先展示
+	// 一张重复的 Home 菜单。未完成配置仍按诊断结果进入对应修复页。
+	page := configCenterGeneral
 	selected := 0
 	if !snapshot.Ready {
 		switch {
@@ -237,31 +245,95 @@ func (m appModel) handleConfigCenterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if state.page == configCenterEdit {
 		return m.handleConfigEditKey(msg)
 	}
+	searching := state.search != ""
 	switch msg.String() {
-	case "ctrl+c", "esc":
+	case "ctrl+c":
 		m.configCenter = nil
 		return m, nil
-	case "b", "backspace":
-		m.configCenterBack()
+	case "esc":
+		// 搜索非空时 Esc 清搜索，否则关闭配置中心。
+		if searching {
+			state.search = ""
+			m.resetConfigCenterSelectionForSearch()
+			return m, nil
+		}
+		m.configCenter = nil
 		return m, nil
-	case "up", "k":
+	case "tab", "left", "right":
+		m.switchConfigCenterTab(msg.String())
+		return m, nil
+	case "up":
 		m.moveConfigCenterSelection(-1)
 		return m, nil
-	case "down", "j":
+	case "down":
 		m.moveConfigCenterSelection(1)
 		return m, nil
 	case "enter":
 		return m.advanceConfigCenter(), nil
+	case "backspace":
+		// 搜索非空时退格删字符，否则回退一页。
+		if searching {
+			r := []rune(state.search)
+			if len(r) > 0 {
+				state.search = string(r[:len(r)-1])
+				m.resetConfigCenterSelectionForSearch()
+			}
+			return m, nil
+		}
+		m.configCenterBack()
+		return m, nil
+	}
+	// 搜索态下 b/k/j 作为输入；非搜索态下 b 回退、k/j 上下（沿用既有 vim 风格）。
+	if searching {
+		if len(msg.Runes) > 0 && !msg.Alt {
+			state.search += string(msg.Runes)
+			m.resetConfigCenterSelectionForSearch()
+		}
+		return m, nil
+	}
+	switch msg.String() {
+	case "b":
+		m.configCenterBack()
+		return m, nil
+	case "k":
+		m.moveConfigCenterSelection(-1)
+		return m, nil
+	case "j":
+		m.moveConfigCenterSelection(1)
+		return m, nil
+	}
+	// 其余可见字符开启搜索。
+	if len(msg.Runes) > 0 && !msg.Alt {
+		state.search += string(msg.Runes)
+		m.resetConfigCenterSelectionForSearch()
 	}
 	return m, nil
 }
 
 func (m *appModel) moveConfigCenterSelection(delta int) {
-	options := m.configCenterOptions()
-	if len(options) == 0 {
+	// General 扁平列表按搜索过滤后的字段数上下移动。
+	if m.configCenter.page == configCenterGeneral {
+		n := len(m.configGeneralDisplayedFields())
+		if n == 0 {
+			return
+		}
+		m.configCenter.selected = (m.configCenter.selected + delta + n) % n
+		m.configCenter.confirmAction = ""
 		return
 	}
-	m.configCenter.selected = (m.configCenter.selected + delta + len(options)) % len(options)
+	matches := m.configCenterDisplayedOptions()
+	if len(matches) == 0 {
+		return
+	}
+	position := 0
+	for i, match := range matches {
+		if match.index == m.configCenter.selected {
+			position = i
+			break
+		}
+	}
+	position = (position + delta + len(matches)) % len(matches)
+	m.configCenter.selected = matches[position].index
 	m.configCenter.confirmAction = ""
 }
 
@@ -273,17 +345,18 @@ func (m *appModel) configCenterBack() {
 	case configCenterHome:
 		m.configCenter = nil
 		return
+	case configCenterGeneral, configCenterProviders, configCenterModels, configCenterActive, configCenterCredentials, configCenterDiagnostics:
+		m.configCenter = nil
+		return
 	case configCenterProviderActions, configCenterAddProvider:
 		m.configCenter.page = configCenterProviders
 	case configCenterModelActions, configCenterAddModelProvider:
 		m.refreshConfigCenterCatalog(configCenterModels)
 	case configCenterCredentialActions:
 		m.configCenter.page = configCenterCredentials
-	case configCenterModels, configCenterActive:
-		m.configCenter.invalidateCatalog()
-		m.configCenter.page = configCenterHome
 	default:
-		m.configCenter.page = configCenterHome
+		m.configCenter = nil
+		return
 	}
 	m.configCenter.selected = 0
 	m.configCenter.err = ""
@@ -295,9 +368,30 @@ func (m appModel) advanceConfigCenter() appModel {
 	if state == nil {
 		return m
 	}
+	// General 扁平列表不走 configCenterOptions（按搜索过滤后的字段数索引）。
+	if state.page == configCenterGeneral {
+		m.advanceGeneralEdit()
+		return m
+	}
 	options := m.configCenterOptions()
 	if len(options) == 0 {
 		return m
+	}
+	if state.search != "" {
+		matches := m.configCenterDisplayedOptions()
+		if len(matches) == 0 {
+			return m
+		}
+		found := false
+		for _, match := range matches {
+			if match.index == state.selected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			state.selected = matches[0].index
+		}
 	}
 	if state.selected < 0 || state.selected >= len(options) {
 		state.selected = 0
@@ -307,9 +401,8 @@ func (m appModel) advanceConfigCenter() appModel {
 	case configCenterHome:
 		switch state.selected {
 		case 0:
-			m.configCenter = nil
-			m.settingWizard = newSettingWizard(m.currentSettings())
-			return m
+			// General settings 进入新的扁平键值列表（向导退场，压缩并入此列）。
+			state.page = configCenterGeneral
 		case 1:
 			state.page = configCenterProviders
 		case 2:
@@ -320,8 +413,13 @@ func (m appModel) advanceConfigCenter() appModel {
 			state.page = configCenterCredentials
 		case 5:
 			state.page = configCenterDiagnostics
+		case 6:
+			state.page = configCenterCompression
 		}
 		state.selected = 0
+		state.search = ""
+	case configCenterGeneral:
+		m.advanceGeneralEdit()
 	case configCenterProviders:
 		ids := sortedProviderIDs(snapshot.Document.Providers)
 		if state.selected == len(ids) {
@@ -376,8 +474,23 @@ func (m appModel) advanceConfigCenter() appModel {
 	case configCenterCredentialActions:
 		m.advanceCredentialAction(snapshot)
 	case configCenterDiagnostics:
-		state.page = configCenterHome
+		state.page = configCenterGeneral
 		state.selected = 0
+		state.search = ""
+	case configCenterCompression:
+		modes := []settings.CompressionMode{settings.CompressionModeState, settings.CompressionModeSummary}
+		if state.selected >= 0 && state.selected < len(modes) {
+			cfg := m.currentSettings()
+			cfg.ContextCompression.Mode = modes[state.selected]
+			if m.settingsConfig != nil {
+				if err := m.settingsConfig.SaveSettings(cfg); err != nil {
+					state.err = err.Error()
+					return m
+				}
+			}
+			m.syncRunnerCompression(cfg)
+			state.err = ""
+		}
 	}
 	return m
 }
@@ -392,7 +505,7 @@ func (m *appModel) advanceProviderAction(snapshot configv2.Snapshot) {
 	switch state.selected {
 	case 0:
 		resolved := provider
-		m.openConfigEdit(configEditProviderEndpoint, resolved.Endpoint, "Endpoint")
+		m.openConfigEdit(configEditProviderEndpoint, resolved.Endpoint, "端点地址")
 	case 1:
 		transports := []string{configv2.TransportOpenAIResponses, configv2.TransportOpenAICompatible, configv2.TransportAnthropicCompatible}
 		current := 0
@@ -408,24 +521,24 @@ func (m *appModel) advanceProviderAction(snapshot configv2.Snapshot) {
 		if provider.TimeoutSeconds > 0 {
 			value = strconv.Itoa(provider.TimeoutSeconds)
 		}
-		m.openConfigEdit(configEditProviderTimeout, value, "Timeout seconds (blank inherits preset)")
+		m.openConfigEdit(configEditProviderTimeout, value, "超时秒数（留空则继承预设）")
 	case 3:
 		value := ""
 		if provider.Retries != nil {
 			value = strconv.Itoa(*provider.Retries)
 		}
-		m.openConfigEdit(configEditProviderRetries, value, "Retries, 0-20 (blank inherits preset)")
+		m.openConfigEdit(configEditProviderRetries, value, "重试次数，0–20（留空则继承预设）")
 	case 4:
 		provider.Stream = cycleOptionalBool(provider.Stream)
 		m.applyConfigOperations(configv2.UpsertProvider(state.targetID, provider))
 	case 5:
-		m.openConfigEdit(configEditProviderEnv, strings.Join(provider.Auth.Env, ", "), "Credential env candidates (ordered, comma-separated)")
+		m.openConfigEdit(configEditProviderEnv, strings.Join(provider.Auth.Env, ", "), "凭据环境变量候选（按顺序、逗号分隔）")
 	case 6:
-		m.openConfigEdit(configEditProviderHeaders, marshalCompactObject(provider.Headers), "Headers JSONC")
+		m.openConfigEdit(configEditProviderHeaders, marshalCompactObject(provider.Headers), "请求头 JSONC")
 	case 7:
-		m.openConfigEdit(configEditProviderBody, marshalCompactObject(provider.Body), "Body JSONC")
+		m.openConfigEdit(configEditProviderBody, marshalCompactObject(provider.Body), "请求体 JSONC")
 	case 8:
-		if !state.confirmDestructive("delete-provider:"+state.targetID, "Press Enter again to delete this provider and all of its models") {
+		if !state.confirmDestructive("delete-provider:"+state.targetID, "再次按 Enter 删除该服务商及其全部模型") {
 			return
 		}
 		var operations []configv2.Operation
@@ -482,7 +595,7 @@ func (m *appModel) advanceModelAction(snapshot configv2.Snapshot) {
 	case 0:
 		m.activateConfigCenterCatalogSelection(selection)
 	case 1:
-		m.openConfigEdit(configEditModelName, configuredModel.Name, "Upstream model name")
+		m.openConfigEdit(configEditModelName, configuredModel.Name, "上游模型名称")
 	case 2:
 		adapters := []string{"", configv2.AdapterGPT, configv2.AdapterDeepSeek, configv2.AdapterOpenAICompatible}
 		current := 0
@@ -498,7 +611,7 @@ func (m *appModel) advanceModelAction(snapshot configv2.Snapshot) {
 		if configuredModel.ContextWindow > 0 {
 			value = strconv.Itoa(configuredModel.ContextWindow)
 		}
-		m.openConfigEdit(configEditModelContextWindow, value, "Context window (blank inherits/defaults)")
+		m.openConfigEdit(configEditModelContextWindow, value, "上下文窗口（留空则继承或使用默认值）")
 	case 4:
 		configuredModel.Stream = cycleOptionalBool(configuredModel.Stream)
 		m.applyConfigOperations(configv2.UpsertModel(state.targetID, configuredModel))
@@ -515,9 +628,9 @@ func (m *appModel) advanceModelAction(snapshot configv2.Snapshot) {
 		configuredModel.Capabilities.Attachment = cycleOptionalBool(configuredModel.Capabilities.Attachment)
 		m.applyConfigOperations(configv2.UpsertModel(state.targetID, configuredModel))
 	case 9:
-		m.openConfigEdit(configEditModelParameters, marshalCompactObject(configuredModel.Parameters), "Parameters JSONC")
+		m.openConfigEdit(configEditModelParameters, marshalCompactObject(configuredModel.Parameters), "参数 JSONC")
 	case 10:
-		if !state.confirmDestructive("delete-model:"+state.targetID, "Press Enter again to delete this model") {
+		if !state.confirmDestructive("delete-model:"+state.targetID, "再次按 Enter 删除该模型") {
 			return
 		}
 		remaining := ""
@@ -555,9 +668,9 @@ func (m *appModel) advanceCredentialAction(snapshot configv2.Snapshot) {
 	state.credentialID = resolvedCredential
 	switch state.selected {
 	case 0:
-		m.openConfigEdit(configEditCredential, "", "API key (masked)")
+		m.openConfigEdit(configEditCredential, "", "API 密钥（已隐藏）")
 	case 1:
-		if !state.confirmDestructive("delete-credential:"+state.targetID, "Press Enter again to delete this keyring credential") {
+		if !state.confirmDestructive("delete-credential:"+state.targetID, "再次按 Enter 删除钥匙串中的该凭据") {
 			return
 		}
 		store := m.configCenterController.CredentialStore()
@@ -692,6 +805,8 @@ func (m *appModel) finishConfigEdit(save bool) {
 			state.page = configCenterModelActions
 		case configEditCredential:
 			state.page = configCenterCredentialActions
+		case configEditGeneralInt, configEditGeneralFloat:
+			state.page = configCenterGeneral
 		default:
 			state.page = configCenterModels
 		}
@@ -784,7 +899,7 @@ func (m *appModel) finishConfigEdit(save bool) {
 			return
 		}
 		state.draftProviderID = value
-		m.openConfigEdit(configEditCustomProviderEndpoint, state.draftProvider.Endpoint, "Endpoint")
+		m.openConfigEdit(configEditCustomProviderEndpoint, state.draftProvider.Endpoint, "端点地址")
 	case configEditCustomProviderEndpoint:
 		state.draftProvider.Endpoint = value
 		m.applyConfigOperations(configv2.UpsertProvider(state.draftProviderID, state.draftProvider))
@@ -836,7 +951,7 @@ func (m *appModel) finishConfigEdit(save bool) {
 			return
 		}
 		state.draftModelID = value
-		m.openConfigEdit(configEditNewModelName, "", "Upstream model name")
+		m.openConfigEdit(configEditNewModelName, "", "上游模型名称")
 	case configEditNewModelName:
 		if value == "" {
 			state.err = "model name cannot be empty"
@@ -876,6 +991,28 @@ func (m *appModel) finishConfigEdit(save bool) {
 			}
 			state.revision = m.configCenterController.Snapshot().Revision
 		}
+		back()
+	case configEditGeneralInt, configEditGeneralFloat:
+		// General 扁平列表内联编辑：按 key 查字段，校验归一化后写回 settings。
+		field := lookupConfigGeneralField(state.targetID)
+		if field == nil || field.parse == nil {
+			state.err = "setting is not editable here"
+			return
+		}
+		canonical, err := field.parse(value)
+		if err != nil {
+			state.err = fmt.Sprintf("%s: %s", field.key, err.Error())
+			return
+		}
+		cfg := m.currentSettings()
+		field.set(&cfg, canonical)
+		if m.settingsConfig != nil {
+			if saveErr := m.settingsConfig.SaveSettings(cfg); saveErr != nil {
+				state.err = saveErr.Error()
+				return
+			}
+		}
+		m.syncRunnerSettings(cfg)
 		back()
 	}
 }
@@ -974,7 +1111,8 @@ func (m appModel) configCenterOptions() []configCenterOption {
 	snapshot := m.configCenterController.Snapshot()
 	switch state.page {
 	case configCenterHome:
-		return []configCenterOption{{"General settings", "UI and subagent defaults"}, {"Providers", fmt.Sprintf("%d configured", len(snapshot.Document.Providers))}, {"Models", fmt.Sprintf("registered=%d effective=%d", len(snapshot.Document.Models), len(snapshot.EffectiveModels))}, {"Active model", emptyLabel(snapshot.ActiveModelID)}, {"Credentials", "system keyring and env fallback"}, {"Diagnostics", fmt.Sprintf("revision %d · %d messages", snapshot.Revision, len(snapshot.Diagnostics))}}
+		mode := string(settings.NormalizeCompressionMode(m.currentSettings().ContextCompression.Mode))
+		return []configCenterOption{{"通用设置", "settings.json 的全部字段"}, {"服务商", fmt.Sprintf("已配置 %d 个", len(snapshot.Document.Providers))}, {"模型", fmt.Sprintf("已注册=%d 可用=%d", len(snapshot.Document.Models), len(snapshot.EffectiveModels))}, {"当前模型", emptyLabel(snapshot.ActiveModelID)}, {"凭据", "系统钥匙串与环境变量回退"}, {"诊断", fmt.Sprintf("版本 %d · %d 条消息", snapshot.Revision, len(snapshot.Diagnostics))}, {"压缩", "模式=" + configGeneralDisplayValue("compression.mode", mode)}}
 	case configCenterProviders:
 		ids := sortedProviderIDs(snapshot.Document.Providers)
 		result := make([]configCenterOption, 0, len(ids)+1)
@@ -982,10 +1120,10 @@ func (m appModel) configCenterOptions() []configCenterOption {
 			p := snapshot.Document.Providers[id]
 			result = append(result, configCenterOption{id, firstNonEmptyUI(p.Preset, p.Transport, p.Endpoint)})
 		}
-		return append(result, configCenterOption{"+ Add provider", "preset or custom"})
+		return append(result, configCenterOption{"+ 添加服务商", "使用预设或自定义配置"})
 	case configCenterProviderActions:
 		p := snapshot.Document.Providers[state.targetID]
-		return []configCenterOption{{"Edit endpoint", firstNonEmptyUI(p.Endpoint, "preset default")}, {"Cycle transport", firstNonEmptyUI(p.Transport, "preset default")}, {"Edit timeout", optionalIntLabel(p.TimeoutSeconds, "inherit")}, {"Edit retries", optionalIntPointerLabel(p.Retries)}, {"Cycle stream", optionalBoolLabel(p.Stream)}, {"Edit credential env", firstNonEmptyUI(strings.Join(p.Auth.Env, ", "), "preset/inherit")}, {"Edit headers", "advanced JSONC"}, {"Edit body", "advanced JSONC"}, {"Delete provider", "also removes its models"}}
+		return []configCenterOption{{"编辑端点", firstNonEmptyUI(p.Endpoint, "使用预设默认值")}, {"切换传输协议", firstNonEmptyUI(p.Transport, "使用预设默认值")}, {"编辑超时", optionalIntLabel(p.TimeoutSeconds, "继承")}, {"编辑重试次数", optionalIntPointerLabel(p.Retries)}, {"切换流式输出", optionalBoolLabel(p.Stream)}, {"编辑凭据环境变量", firstNonEmptyUI(strings.Join(p.Auth.Env, ", "), "预设/继承")}, {"编辑请求头", "高级 JSONC"}, {"编辑请求体", "高级 JSONC"}, {"删除服务商", "同时删除其模型"}}
 	case configCenterAddProvider:
 		ids := sortedPresetIDs()
 		result := make([]configCenterOption, 0, len(ids)+1)
@@ -993,34 +1131,34 @@ func (m appModel) configCenterOptions() []configCenterOption {
 		for _, id := range ids {
 			result = append(result, configCenterOption{presets[id].Name, presets[id].Provider.Endpoint})
 		}
-		return append(result, configCenterOption{"Custom", "OpenAI-compatible endpoint"})
+		return append(result, configCenterOption{"自定义", "OpenAI 兼容端点"})
 	case configCenterModels:
 		selections := m.configCenterCatalogSelections(snapshot)
 		result := make([]configCenterOption, 0, len(selections)+1)
 		for _, selection := range selections {
 			marker := ""
 			if selection.ID == snapshot.ActiveModelID {
-				marker = "active · "
+				marker = "当前 · "
 			}
 			description := fmt.Sprintf("%s%s · %s → %s", marker, selection.Source, selection.ProviderKey, selection.ModelName)
 			result = append(result, configCenterOption{selection.ID, description})
 		}
-		return append(result, configCenterOption{"+ Add model", "choose provider, ID and upstream name"})
+		return append(result, configCenterOption{"+ 添加模型", "选择服务商、模型 ID 和上游名称"})
 	case configCenterModelActions:
 		selection := state.targetSelection
 		if selection.ID == "" || selection.ID != state.targetID {
 			selection, _ = snapshot.CatalogSelection(state.targetID)
 		}
 		if selection.Source == configv2.ModelSourceDiscovered {
-			return []configCenterOption{{"Activate and register", state.targetID}}
+			return []configCenterOption{{"激活并注册", state.targetID}}
 		}
 		v := snapshot.Document.Models[state.targetID]
-		return []configCenterOption{{"Activate", state.targetID}, {"Edit upstream name", v.Name}, {"Cycle adapter", emptyLabel(v.Adapter)}, {"Edit context window", optionalIntLabel(v.ContextWindow, "inherit/default")}, {"Cycle stream", optionalBoolLabel(v.Stream)}, {"Cycle tools", optionalBoolLabel(v.Capabilities.Tools)}, {"Cycle vision", optionalBoolLabel(v.Capabilities.Vision)}, {"Cycle reasoning", optionalBoolLabel(v.Capabilities.Reasoning)}, {"Cycle attachments", optionalBoolLabel(v.Capabilities.Attachment)}, {"Edit parameters", "advanced JSONC"}, {"Delete model", v.Provider}}
+		return []configCenterOption{{"激活", state.targetID}, {"编辑上游名称", v.Name}, {"切换适配器", emptyLabel(v.Adapter)}, {"编辑上下文窗口", optionalIntLabel(v.ContextWindow, "继承/默认")}, {"切换流式输出", optionalBoolLabel(v.Stream)}, {"切换工具能力", optionalBoolLabel(v.Capabilities.Tools)}, {"切换视觉能力", optionalBoolLabel(v.Capabilities.Vision)}, {"切换推理能力", optionalBoolLabel(v.Capabilities.Reasoning)}, {"切换附件能力", optionalBoolLabel(v.Capabilities.Attachment)}, {"编辑参数", "高级 JSONC"}, {"删除模型", v.Provider}}
 	case configCenterAddModelProvider:
 		ids := sortedProviderIDs(snapshot.Document.Providers)
 		result := make([]configCenterOption, 0, len(ids))
 		for _, id := range ids {
-			result = append(result, configCenterOption{id, "model provider"})
+			result = append(result, configCenterOption{id, "模型服务商"})
 		}
 		return result
 	case configCenterActive:
@@ -1029,7 +1167,7 @@ func (m appModel) configCenterOptions() []configCenterOption {
 		for _, selection := range selections {
 			description := fmt.Sprintf("%s · %s", selection.Source, selection.ModelName)
 			if selection.ID == snapshot.ActiveModelID {
-				description = "active · " + description
+				description = "当前 · " + description
 			}
 			result = append(result, configCenterOption{selection.ID, description})
 		}
@@ -1041,18 +1179,35 @@ func (m appModel) configCenterOptions() []configCenterOption {
 			p := snapshot.Document.Providers[id]
 			source := p.Auth.Credential
 			if source == "" && len(p.Auth.Env) > 0 {
-				source = "env: " + strings.Join(p.Auth.Env, ", ")
+				source = "环境变量: " + strings.Join(p.Auth.Env, ", ")
 			}
 			if source == "" {
-				source = "preset keyring/env"
+				source = "预设钥匙串/环境变量"
 			}
 			result = append(result, configCenterOption{id, source})
 		}
 		return result
 	case configCenterCredentialActions:
-		return []configCenterOption{{"Set or replace", "secret will stay masked"}, {"Delete", "remove from system keyring"}}
+		return []configCenterOption{{"设置或替换", "密钥始终保持隐藏"}, {"删除", "从系统钥匙串中移除"}}
 	case configCenterDiagnostics:
-		return []configCenterOption{{"Back", "revision and validation details are shown below"}}
+		return []configCenterOption{{"返回", "下方显示版本和校验详情"}}
+	case configCenterCompression:
+		current := string(settings.NormalizeCompressionMode(m.currentSettings().ContextCompression.Mode))
+		opts := []struct {
+			mode, desc string
+		}{
+			{string(settings.CompressionModeState), "状态快照 + 最近对话"},
+			{string(settings.CompressionModeSummary), "LLM 摘要压缩"},
+		}
+		result := make([]configCenterOption, 0, len(opts))
+		for _, o := range opts {
+			desc := o.desc
+			if o.mode == current {
+				desc = "当前 · " + o.desc
+			}
+			result = append(result, configCenterOption{configGeneralDisplayValue("compression.mode", o.mode), desc})
+		}
+		return result
 	}
 	return nil
 }
@@ -1064,7 +1219,7 @@ func (m appModel) renderConfigCenterBox() string {
 	}
 	var lines []string
 	if state.page == configCenterEdit {
-		label := "Edit value"
+		label := "编辑值"
 		if state.err != "" {
 			label = state.err
 		}
@@ -1074,41 +1229,71 @@ func (m appModel) renderConfigCenterBox() string {
 		}
 		lines = []string{wizardTitleStyle.Render(label), "> " + display}
 		if snapshot := m.configCenterController.Snapshot(); snapshot.Revision != state.revision {
-			lines = append(lines, labelErrorStyle.Render(fmt.Sprintf("Draft is stale (opened at revision %d, current %d). Reload before saving.", state.revision, snapshot.Revision)))
+			lines = append(lines, labelErrorStyle.Render(fmt.Sprintf("草稿已过期（打开时版本 %d，当前版本 %d），请重新加载后再保存。", state.revision, snapshot.Revision)))
 		}
 		if state.notice != "" {
 			lines = append(lines, m.styles.StatusSuccess.Bold(true).Render("✓ "+state.notice))
 		}
-		lines = append(lines, "Ctrl+S or Enter save, esc cancel.")
-		return m.renderModalPanel(strings.Join(lines, "\n"))
+		footer := m.styles.StatusMuted.Render("Ctrl+S/Enter 保存 · Esc 取消")
+		return m.renderFullscreenPanelWithFooter(strings.Join(lines, "\n"), footer)
 	}
-	lines = append(lines, wizardTitleStyle.Render(configCenterTitle(state.page, state.targetID)))
+	contentWidth := m.fullscreenContentWidth()
+	lines = append(lines, m.renderConfigCenterTabs(contentWidth), "")
+	lines = append(lines, m.renderConfigCenterSearch(contentWidth))
+	lines = append(lines, "")
+	if configCenterShowsPageTitle(state.page) {
+		lines = append(lines, wizardTitleStyle.Render(configCenterTitle(state.page, state.targetID)))
+	}
 	if snapshot := m.configCenterController.Snapshot(); snapshot.Revision != state.revision {
-		lines = append(lines, labelErrorStyle.Render(fmt.Sprintf("External change detected: revision %d → %d", state.revision, snapshot.Revision)))
+		lines = append(lines, labelErrorStyle.Render(fmt.Sprintf("检测到外部修改：版本 %d → %d", state.revision, snapshot.Revision)))
 	}
-	options := m.configCenterOptions()
-	selected := state.selected
-	if selected >= len(options) {
-		selected = maxInt(0, len(options)-1)
+	statusReserve := 0
+	if state.err != "" {
+		statusReserve++
 	}
-	maxItems := clampInt(m.currentLayout().transcriptHeight-8, 1, maxInt(1, len(options)))
-	start := maxInt(0, selected-maxItems+1)
-	end := minInt(len(options), start+maxItems)
-	for i := start; i < end; i++ {
-		text := "  " + options[i].label + "  " + options[i].description
-		if i == selected {
-			text = selectedProviderStyle.Render("> " + options[i].label + "  " + options[i].description)
-		} else {
-			text = unselectedProviderStyle.Render(text)
+	if state.notice != "" {
+		statusReserve++
+	}
+	// renderFullscreenPanelWithFooter 的可用 body 行数：上下边框 2、顶部
+	// padding 1、footer 与其上方空行 2。
+	rowBudget := maxInt(1, m.currentLayout().frameHeight-5-len(lines)-statusReserve)
+	if state.page == configCenterGeneral {
+		lines = append(lines, m.renderConfigCenterGeneral(contentWidth, rowBudget)...)
+	} else {
+		// 非 General tab 沿用既有交互，但视觉上同样使用固定双列，避免首页
+		// 截图中每一行 description 的起点随 label 长短左右跳动。
+		matches := m.configCenterDisplayedOptions()
+		if len(matches) == 0 {
+			lines = append(lines, m.styles.StatusMuted.Render("（没有匹配的项目）"))
+			matches = nil
 		}
-		lines = append(lines, text)
-	}
-	if state.page == configCenterDiagnostics {
-		snapshot := m.configCenterController.Snapshot()
-		bodyWidth := m.modalPanelBodyWidth()
-		lines = append(lines, wrapStyledCellText(fmt.Sprintf("path: %s\nrevision: %d  ready: %v\nregistered=%d effective=%d\n%s", m.configCenterController.ConfigPath(), snapshot.Revision, snapshot.Ready, len(snapshot.Document.Models), len(snapshot.EffectiveModels), discoveryStatusSummary(snapshot.Discovery, time.Now())), bodyWidth)...)
-		for _, diagnostic := range snapshot.Diagnostics {
-			lines = append(lines, wrapStyledCellText(fmt.Sprintf("[%s] %s %s", diagnostic.Severity, diagnostic.Field, diagnostic.Message), bodyWidth)...)
+		selectedPosition := 0
+		for i, match := range matches {
+			if match.index == state.selected {
+				selectedPosition = i
+				break
+			}
+		}
+		maxItems := clampInt(rowBudget, 1, maxInt(1, len(matches)))
+		start := maxInt(0, selectedPosition-maxItems+1)
+		end := minInt(len(matches), start+maxItems)
+		for i := start; i < end; i++ {
+			match := matches[i]
+			text := formatGeneralRow(match.option.label, match.option.description, contentWidth)
+			if match.index == state.selected {
+				text = m.styles.Selected.Render(text)
+			} else {
+				text = m.styles.Body.Copy().Bold(true).Render(text)
+			}
+			lines = append(lines, text)
+		}
+		if state.page == configCenterDiagnostics {
+			snapshot := m.configCenterController.Snapshot()
+			bodyWidth := m.fullscreenContentWidth()
+			lines = append(lines, wrapStyledCellText(fmt.Sprintf("路径: %s\n版本: %d  就绪: %v\n已注册=%d 可用=%d\n%s", m.configCenterController.ConfigPath(), snapshot.Revision, snapshot.Ready, len(snapshot.Document.Models), len(snapshot.EffectiveModels), discoveryStatusSummary(snapshot.Discovery, time.Now())), bodyWidth)...)
+			for _, diagnostic := range snapshot.Diagnostics {
+				lines = append(lines, wrapStyledCellText(fmt.Sprintf("[%s] %s %s", diagnostic.Severity, diagnostic.Field, diagnostic.Message), bodyWidth)...)
+			}
 		}
 	}
 	if state.err != "" {
@@ -1117,36 +1302,50 @@ func (m appModel) renderConfigCenterBox() string {
 	if state.notice != "" {
 		lines = append(lines, m.styles.StatusSuccess.Bold(true).Render("✓ "+state.notice))
 	}
-	lines = append(lines, "Enter select, b back, esc close.")
-	return m.renderModalPanel(strings.Join(lines, "\n"))
+	return m.renderFullscreenPanelWithFooter(strings.Join(lines, "\n"), m.configCenterHintBar())
+}
+
+// configCenterShowsPageTitle 只给二级动作页显示标题。General/Providers 等
+// 顶层页已经由反色 tab 表达当前位置，再重复一行标题只会制造视觉噪音。
+func configCenterShowsPageTitle(page configCenterPage) bool {
+	switch page {
+	case configCenterGeneral, configCenterProviders, configCenterModels, configCenterActive, configCenterCredentials, configCenterDiagnostics:
+		return false
+	default:
+		return true
+	}
 }
 
 func configCenterTitle(page configCenterPage, target string) string {
 	switch page {
 	case configCenterHome:
-		return "Paw configuration"
+		return "Paw 配置"
+	case configCenterGeneral:
+		return "通用"
 	case configCenterProviders:
-		return "Providers"
+		return "服务商"
 	case configCenterProviderActions:
-		return "Provider · " + target
+		return "服务商 · " + target
 	case configCenterAddProvider:
-		return "Add provider"
+		return "添加服务商"
 	case configCenterModels:
-		return "Models"
+		return "模型"
 	case configCenterModelActions:
-		return "Model · " + target
+		return "模型 · " + target
 	case configCenterAddModelProvider:
-		return "Choose model provider"
+		return "选择模型服务商"
 	case configCenterActive:
-		return "Active model"
+		return "当前模型"
 	case configCenterCredentials:
-		return "Credentials"
+		return "凭据"
 	case configCenterCredentialActions:
-		return "Credential · " + target
+		return "凭据 · " + target
 	case configCenterDiagnostics:
-		return "Diagnostics"
+		return "诊断"
+	case configCenterCompression:
+		return "压缩"
 	}
-	return "Paw configuration"
+	return "Paw 配置"
 }
 
 func sortedProviderIDs(values map[string]configv2.Provider) []string {
@@ -1241,12 +1440,12 @@ func cycleOptionalBool(value *bool) *bool {
 
 func optionalBoolLabel(value *bool) string {
 	if value == nil {
-		return "inherit"
+		return "继承"
 	}
 	if *value {
-		return "enabled"
+		return "开启"
 	}
-	return "disabled"
+	return "关闭"
 }
 
 func optionalIntLabel(value int, fallback string) string {
@@ -1258,7 +1457,7 @@ func optionalIntLabel(value int, fallback string) string {
 
 func optionalIntPointerLabel(value *int) string {
 	if value == nil {
-		return "inherit"
+		return "继承"
 	}
 	return strconv.Itoa(*value)
 }

@@ -41,6 +41,7 @@ type fakeRunner struct {
 	lastLimit        int
 	supplements      []string
 	contextLimits    []int
+	contextModes     []string
 	compactFocus     string
 	compactResult    loop.ContextCompactionResult
 	compactErr       error
@@ -101,6 +102,10 @@ func (r *fakeRunner) PendingSupplementCount() int {
 
 func (r *fakeRunner) SetContextLimitTokens(limit int) {
 	r.contextLimits = append(r.contextLimits, limit)
+}
+
+func (r *fakeRunner) SetContextMode(mode string) {
+	r.contextModes = append(r.contextModes, mode)
 }
 
 func (r *fakeRunner) CompactContext(ctx context.Context, focus string) (loop.ContextCompactionResult, error) {
@@ -802,6 +807,7 @@ func TestSettingCommandPersistsWizardSelections(t *testing.T) {
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
 
+	// translate → confirm，直接穿过到 confirm 并保存。
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
 
@@ -828,6 +834,90 @@ func TestSettingCommandPersistsWizardSelections(t *testing.T) {
 			t.Fatalf("settings summary = %q, want %q", body, want)
 		}
 	}
+}
+
+func pageOf(m appModel) configCenterPage {
+	if m.configCenter == nil {
+		return -1
+	}
+	return m.configCenter.page
+}
+
+// TestConfigCenterCompressionHotToggle 验证 /config 首页有顶层 Compression 页，
+// 选 summary 后既写配置文件（saved[0].Mode==summary）又热应用到 runner
+// （SetContextMode("summary")）。这是全局主对话压缩，与 subagent 无关。
+func TestConfigCenterCompressionHotToggle(t *testing.T) {
+	controller, _ := newConfigCenterHarness(t)
+	settingsController := &fakeSettingsController{current: settings.DefaultConfig()}
+	runner := &fakeRunner{}
+	model := newModel(context.Background(), runner, "session", controller, settingsController, nil, nil, newTerminalCursorAnchor())
+	model.configCenterController = controller
+
+	handled, _ := model.handleCommand("/config")
+	if !handled || model.configCenter == nil {
+		t.Fatalf("/config should open center: handled=%v center=%v", handled, model.configCenter)
+	}
+	model.configCenter.page = configCenterHome
+
+	homeOpts := model.configCenterOptions()
+	idx := -1
+	for i, o := range homeOpts {
+		if o.label == "压缩" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatalf("no 压缩 option on config center home: %v", labelsOf(homeOpts))
+	}
+	t.Logf("/config 首页选项:")
+	for i, o := range homeOpts {
+		marker := "  "
+		if i == idx {
+			marker = "> "
+		}
+		t.Logf("  %s%d. %s — %s", marker, i, o.label, o.description)
+	}
+	model.configCenter.selected = idx
+
+	enter := func(m appModel) appModel {
+		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		return next.(appModel)
+	}
+	model = enter(model) // home → configCenterCompression
+	if model.configCenter == nil || model.configCenter.page != configCenterCompression {
+		t.Fatalf("expected configCenterCompression page, got %v", pageOf(model))
+	}
+	t.Logf("Compression 页选项:")
+	for i, o := range model.configCenterOptions() {
+		t.Logf("  [%d] %s — %s", i, o.label, o.description)
+	}
+
+	// 选项 [state, summary]，默认 state(0)；向下一次选中 summary(1)。
+	down, _ := model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = down.(appModel)
+	if got := model.configCenter.selected; got != 1 {
+		t.Fatalf("compression selected = %d, want 1 (summary)", got)
+	}
+
+	model = enter(model) // apply summary → SaveSettings + SetContextMode
+	if len(settingsController.saved) != 1 {
+		t.Fatalf("saved settings = %#v", settingsController.saved)
+	}
+	if got := settingsController.saved[0].ContextCompression.Mode; got != settings.CompressionModeSummary {
+		t.Fatalf("saved compression mode = %v, want summary", got)
+	}
+	if len(runner.contextModes) != 1 || runner.contextModes[0] != "summary" {
+		t.Fatalf("runner.SetContextMode calls = %#v, want [summary]", runner.contextModes)
+	}
+}
+
+func labelsOf(opts []configCenterOption) []string {
+	out := make([]string, len(opts))
+	for i, o := range opts {
+		out[i] = o.label
+	}
+	return out
 }
 
 // TestSettingWizardTranslateSessionOnly 验证 /setting 面板里也能做「动态开关」：
@@ -862,7 +952,7 @@ func TestSettingWizardTranslateSessionOnly(t *testing.T) {
 		t.Fatalf("translate selected index = %d, want 2 (on session only)", got)
 	}
 
-	// confirm 步骤应提示 apply mode。
+	// translate → confirm（sessionOnly 仍由 translate 选项保持）。
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
 	if model.settingWizard.step != settingWizardConfirm || !model.settingWizard.sessionOnly {
@@ -6269,7 +6359,7 @@ func makeCompletionFixture(t *testing.T) string {
 }
 
 // TestListFilesRecursiveCollectsNestedAndSkipsNoise 验证递归收集：
-// 条目为相对路径、目录带 / 结尾、隐藏目录与 node_modules 被整棵跳过。
+// 条目为相对路径、目录带 / 结尾；隐藏目录也应被收集，node_modules 被整棵跳过。
 func TestListFilesRecursiveCollectsNestedAndSkipsNoise(t *testing.T) {
 	root := makeCompletionFixture(t)
 	got, err := listFilesRecursive(root)
@@ -6278,7 +6368,9 @@ func TestListFilesRecursiveCollectsNestedAndSkipsNoise(t *testing.T) {
 	}
 	want := []string{
 		"test.md",
+		".hidden/",
 		"docs/",
+		".hidden/hidden.txt",
 		"docs/guide.md",
 		"docs/test.md",
 		"docs/a/",

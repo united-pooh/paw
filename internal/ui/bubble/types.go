@@ -80,13 +80,7 @@ type transcriptEntry struct {
 	toolStartedAt       time.Time
 	toolFinishedAt      time.Time
 	turnMetadata        *session.TurnMetadata
-	// animation fields are transient render metadata. They are intentionally
-	// kept outside the canonical body/session payload so streaming animation
-	// never changes persisted or copied transcript text.
-	animationMode   transcriptAnimationMode
-	animationEffect transcriptRenderEffect
-	animationLines  []transcriptAnimationLine
-	version         int
+	version             int
 }
 
 type toolCitation struct {
@@ -556,7 +550,6 @@ type appModel struct {
 	activeThinking             int
 	activeTurnUserEntry        int
 	doneAssistant              int
-	transcriptAnimationNextID  uint64
 	assistantStream            streamLineBuffer
 	thinkingStream             streamLineBuffer
 	pendingToolCites           []toolCitation

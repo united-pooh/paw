@@ -153,6 +153,8 @@ func (m appModel) applySettingWizard() appModel {
 			return m
 		}
 	}
+	// compression.mode 已并入配置中心 General 扁平列表（syncRunnerSettings），
+	// 向导不再单独热切换压缩模式。
 	m.settingWizard = nil
 	body := renderSettingsSummary(cfg)
 	if sessionOnly {
@@ -177,14 +179,14 @@ func (m appModel) renderSettingWizardBox() string {
 	} else {
 		body = m.renderSettingChoiceStep()
 	}
-	return m.renderModalPanel(body)
+	return m.renderFullscreenPanel(body)
 }
 
 func (m appModel) renderSettingChoiceStep() string {
 	step := m.settingWizard.step
 	lines := []string{wizardTitleStyle.Render(settingStepTitle(step))}
 	options := settingOptions(step)
-	maxItems := clampInt(m.currentLayout().transcriptHeight-7, 1, len(options))
+	maxItems := clampInt(m.currentLayout().frameHeight-7, 1, len(options))
 	selected := m.settingWizard.selected[step]
 	start := maxInt(0, selected-maxItems+1)
 	end := minInt(len(options), start+maxItems)

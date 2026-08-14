@@ -202,8 +202,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateWaveAmp(time.Time(msg))
 		m.refreshActivityFromTasks(time.Time(msg))
 		m.refreshRunningToolProgress(time.Time(msg))
-		m.expireTranscriptAnimations(time.Time(msg))
-		m.flushTranscriptRefreshIfDue(time.Time(msg))
+		animationNow := time.Time(msg)
+		m.releaseAssistantCharacters()
+		m.flushTranscriptRefreshIfDue(animationNow)
 		var frameCmd tea.Cmd
 		if m.needsUIAnimationFrames(time.Time(msg)) {
 			frameCmd = m.scheduleUIAnimationFrame()

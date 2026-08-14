@@ -106,6 +106,15 @@ func (m appModel) View() string {
 		return "Starting Bubble Tea..."
 	}
 
+	// /config 与 /setting 走全屏覆盖：清屏后使用小页面 gutter 渲染，替代旧的
+	// 小居中 modal 盒。其余 modal（model 向导 / theme picker 等）仍走 overlay。
+	if m.configCenter != nil || m.settingWizard != nil {
+		if m.cursorAnchor != nil {
+			m.cursorAnchor.clear()
+		}
+		return m.renderFullscreenModal()
+	}
+
 	layout := m.currentLayout()
 	if m.todoPage != nil {
 		inner := fitStyledRect(m.renderTodoPage(layout.contentWidth, layout.contentHeight), layout.contentWidth, layout.contentHeight)
@@ -354,6 +363,81 @@ func widestStyledLine(text string) int {
 		width = maxInt(width, terminalCellWidth(line))
 	}
 	return width
+}
+
+// renderFullscreenModal 选择当前打开的全屏覆盖层（配置中心或 /setting 退回
+// 的向导），由 View 在它们打开时整页返回。
+func (m appModel) renderFullscreenModal() string {
+	if m.configCenter != nil {
+		return m.renderConfigCenterBox()
+	}
+	return m.renderSettingWizardBox()
+}
+
+// renderFullscreenPanel 渲染没有固定 footer 的全屏覆盖层。
+func (m appModel) renderFullscreenPanel(body string) string {
+	return m.renderFullscreenPanelWithFooter(body, "")
+}
+
+// renderFullscreenPanelWithFooter 渲染终端原生的全屏覆盖层。参考界面并不是
+// “窄内容列居中”，而是使用很小的页面 gutter：tab、搜索框和 footer 共用
+// 页面宽度，键值列表只占左侧自然宽度，从而把留白留在值列右侧。
+//
+// footer 固定在底部边框上一行；body 从顶部边框下空一行开始，内容变长时只
+// 裁剪 body，不会把快捷键提示顶离屏幕底部。
+func (m appModel) renderFullscreenPanelWithFooter(body, footer string) string {
+	layout := m.currentLayout()
+	width := maxInt(1, layout.frameWidth)
+	height := maxInt(1, layout.frameHeight)
+	contentWidth := m.fullscreenContentWidth()
+	leftMargin := m.fullscreenHorizontalMargin()
+
+	// 顶/底各占一行 hairline，内部保留一行 top padding。
+	innerHeight := maxInt(1, height-2)
+	topPadding := 0
+	if innerHeight >= 3 {
+		topPadding = 1
+	}
+	bodyHeight := maxInt(1, innerHeight-topPadding)
+	footerRow := -1
+	if footer != "" && innerHeight >= 2 {
+		footerRow = innerHeight - 1
+		// footer 上方保留一行呼吸空间。
+		bodyHeight = maxInt(1, footerRow-topPadding-1)
+	}
+	body = fitStyledRect(body, contentWidth, bodyHeight)
+	bodyLines := strings.Split(body, "\n")
+	lines := make([]string, innerHeight)
+	copy(lines[topPadding:], bodyLines)
+	if footerRow >= 0 {
+		lines[footerRow] = truncateStyledCellLine(footer, contentWidth)
+	}
+
+	prefix := strings.Repeat(" ", leftMargin)
+	for i, line := range lines {
+		lines[i] = prefix + fitStyledCellLine(line, contentWidth)
+	}
+	frameLine := m.styles.Frame.Render(strings.Repeat("─", width))
+	joined := frameLine + "\n" + strings.Join(lines, "\n") + "\n" + frameLine
+	return paintStyledBackground(joined, width, height, m.styles.Frame, m.theme.Colors.TerminalBackground)
+}
+
+// fullscreenHorizontalMargin 返回全屏页面的小 gutter。宽终端最多留 6 列，
+// 常见 100 列终端只留 2 列；避免旧实现左右各空 1/5 导致 tab 和搜索框过窄。
+func (m appModel) fullscreenHorizontalMargin() int {
+	width := maxInt(1, m.currentLayout().frameWidth)
+	if width < 12 {
+		return 0
+	}
+	return clampInt(width/40, 2, 6)
+}
+
+// fullscreenContentWidth 返回减去两侧小 gutter 后的页面宽度。
+func (m appModel) fullscreenContentWidth() int {
+	layout := m.currentLayout()
+	width := maxInt(1, layout.frameWidth)
+	margin := m.fullscreenHorizontalMargin()
+	return maxInt(1, width-2*margin)
 }
 
 // renderModalPanel 将 modal 限制在 transcript 区域内，内容过长时进行显示层裁剪。
