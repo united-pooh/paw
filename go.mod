@@ -13,6 +13,7 @@ require (
 	github.com/muesli/termenv v0.16.0
 	github.com/rivo/uniseg v0.4.7
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
+	github.com/sourcegraph/conc v0.3.0
 	golang.org/x/sys v0.43.0
 )
 
