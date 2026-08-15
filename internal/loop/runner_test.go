@@ -326,13 +326,17 @@ func TestRunToolCallWriteEmptySnapshotPreservesExistence(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
 			path := filepath.Join(root, "empty.txt")
+			readState := toolfile.NewReadStateStore()
 			if test.createBefore {
 				if err := os.WriteFile(path, nil, 0o644); err != nil {
 					t.Fatal(err)
 				}
+				if _, err := (&toolfile.ReadTool{Root: root, ReadState: readState}).Run(context.Background(), []byte(`{"file_path":"empty.txt"}`)); err != nil {
+					t.Fatal(err)
+				}
 			}
 			registry := tool.NewRegistry()
-			registry.Register(&toolfile.WriteTool{Root: root, ReadState: toolfile.NewReadStateStore()})
+			registry.Register(&toolfile.WriteTool{Root: root, ReadState: readState})
 			capture := &mutationCaptureUI{}
 			runner := &Runner{ui: capture, registry: registry, workRoot: root}
 
