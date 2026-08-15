@@ -65,3 +65,7 @@ examples/
 docs/codex/
 docs/superpowers/
 docs/mockups/
+memory.md
+memory/
+.agents/
+.agent/
