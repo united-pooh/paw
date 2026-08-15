@@ -11,7 +11,7 @@
 
 - **Plan 是独立于 Goal 的文档创作模式**：产出 `docs/superpowers/plans/YYYY-MM-DD-<slug>-plan.md` 规格文档，划定 spec/scope 与执行内容。
 - **Goal 回归长程自主任务**：agent 在 goal 内自行探索，不再追踪 PlanStep；goal 状态机保留 `planning/replanning` 作为内部阶段。
-- **交互流程**：用户提交需求 → agent 多轮 question/select 澄清 → 写文档 → 展示 → 最终 Select【执行/修改】→ 执行则定稿落盘并切回普通 chat 模式执行；修改则继续迭代。
+- **交互流程**：用户提交需求 → agent 多轮 question/select 澄清 → 写文档 → 展示 → 最终 question【执行/修改】→ 执行则定稿落盘并切回普通 chat 模式执行；修改则继续迭代。
 - **权限边界**：plan 轮中 agent 只读工作区 + Write 仅限 plans 目录，借鉴 OpenCode plan agent 的权限隔离。
 
 ## 2. 架构
@@ -67,9 +67,9 @@ clarifying → drafting → awaiting_approval → approved（终态）
                               ↘ drafting（用户选"修改"）
 ```
 
-- `clarifying`：agent 逐条提问澄清（Select/文本），直到需求明确。
+- `clarifying`：agent 逐条提问澄清（question/文本），直到需求明确。
 - `drafting`：agent 撰写文档（Write 到 plans 目录）。
-- `awaiting_approval`：agent 展示文档全文，调用 Select【执行/修改】。
+- `awaiting_approval`：agent 展示文档全文，调用 question【执行/修改】。
 - 用户选"修改" → `drafting`；选"执行" → agent 调用 `plan_finalize` → `approved`。
 
 ## 5. PlanRuntime
@@ -93,7 +93,7 @@ type ToolFilter func(name string, input json.RawMessage) error
 - `resolveToolCall`：执行前检查，拒绝返回 `"tool not allowed in plan mode: <name>"`。
 
 plan 轮允许集：
-- 只读：Read / Glob / Grep / LS / codegraph* / WebFetch / Select（提问）。
+- 只读：Read / Glob / Grep / LS / codegraph* / WebFetch / question（提问）。
 - 写：Write（路径必须落在 plans 目录内）。
 - 流程：plan_finalize。
 - 禁止：Bash / Edit / Subagent* / todo 等。

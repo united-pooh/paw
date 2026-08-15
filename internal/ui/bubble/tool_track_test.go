@@ -1494,8 +1494,8 @@ func lineContainingAfter(t *testing.T, lines []string, needle string, start int)
 
 func TestSelectToolTrackCollapsesToOneLineAndExpandsReadableDetail(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	input := json.RawMessage(`{"prompt":"Which animals are mammals?","mode":"multiple","options":[{"id":"whale","label":"Whale","description":"Breathes with lungs"},{"id":"shark","label":"Shark","description":"A fish"}]}`)
-	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{ID: "select-1", Name: "Select", Input: input}))
+	input := json.RawMessage(`{"questions":[{"prompt":"Which animals are mammals?","mode":"multiple","options":[{"id":"whale","label":"Whale","description":"Breathes with lungs"},{"id":"shark","label":"Shark","description":"A fish"}]}]}`)
+	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{ID: "select-1", Name: "question", Input: input}))
 	model = next.(appModel)
 	running := ansi.Strip(renderTranscript(model.transcript, 100, true))
 	if strings.Contains(running, "Which animals") || strings.Contains(running, "Whale") {
@@ -1503,8 +1503,8 @@ func TestSelectToolTrackCollapsesToOneLineAndExpandsReadableDetail(t *testing.T)
 	}
 	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{
 		ToolUseID: "select-1",
-		Name:      "Select",
-		Content:   `{"cancelled":false,"selected_options":[{"id":"whale","label":"Whale"},{"id":"custom_option","label":"Platypus"}]}`,
+		Name:      "question",
+		Content:   `{"results":[{"cancelled":false,"selected_options":[{"id":"whale","label":"Whale"},{"id":"custom_option","label":"Platypus"}]}]}`,
 	}))
 	model = next.(appModel)
 
@@ -1512,7 +1512,7 @@ func TestSelectToolTrackCollapsesToOneLineAndExpandsReadableDetail(t *testing.T)
 	if len(strings.Split(strings.TrimSpace(collapsed), "\n")) != 1 {
 		t.Fatalf("collapsed Select uses multiple rows:\n%s", collapsed)
 	}
-	if !strings.Contains(collapsed, "selected 2 options") || strings.Contains(collapsed, "Which animals") || strings.Contains(collapsed, "Whale") || strings.Contains(collapsed, "Platypus") {
+	if !strings.Contains(collapsed, "answered 1 question") || strings.Contains(collapsed, "Which animals") || strings.Contains(collapsed, "Whale") || strings.Contains(collapsed, "Platypus") {
 		t.Fatalf("collapsed Select=%q", collapsed)
 	}
 
@@ -1536,8 +1536,8 @@ func TestHistoricalSelectTransactionPreservesInputForReadableExpansion(t *testin
 	callEntries := transcriptEntriesFromMessage(message.Message{
 		Role: message.RoleAssistant,
 		ToolUses: []message.ToolCall{{
-			ID: "select-1", Name: "Select",
-			Input: json.RawMessage(`{"prompt":"Pick a signal","mode":"single","options":[{"id":"logs","label":"Logs","description":"Application logs"}]}`),
+			ID: "select-1", Name: "question",
+			Input: json.RawMessage(`{"questions":[{"prompt":"Pick a signal","mode":"single","options":[{"id":"logs","label":"Logs","description":"Application logs"}]}]}`),
 		}},
 	}, time.Now(), "")
 	if strings.Contains(callEntries[0].toolTarget, "Pick a signal") {
@@ -1547,11 +1547,11 @@ func TestHistoricalSelectTransactionPreservesInputForReadableExpansion(t *testin
 		Role: message.RoleUser,
 		ToolResults: []message.ToolResult{{
 			ToolUseID: "select-1",
-			Content:   `{"cancelled":false,"selected_options":[{"id":"logs","label":"Logs"}]}`,
+			Content:   `{"results":[{"cancelled":false,"selected_options":[{"id":"logs","label":"Logs"}]}]}`,
 		}},
 	}, time.Now(), "")
 	merged := mergeTranscriptToolEntries(append(callEntries, resultEntries...))
-	if len(merged) != 1 || string(merged[0].toolInput) == "" || merged[0].toolTarget != "selected 1 option" {
+	if len(merged) != 1 || string(merged[0].toolInput) == "" || merged[0].toolTarget != "answered 1 question" {
 		t.Fatalf("merged=%#v", merged)
 	}
 	collapsed := ansi.Strip(renderTranscript(merged, 100, true))
@@ -1567,8 +1567,8 @@ func TestHistoricalSelectTransactionPreservesInputForReadableExpansion(t *testin
 
 func TestSelectToolCallInputIsDeepCopiedAndMalformedFallsBackToRawResult(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	input := json.RawMessage(`{"prompt":"Pick","mode":"single","options":[{"id":"a","label":"A"}]}`)
-	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{ID: "select-copy", Name: "Select", Input: input}))
+	input := json.RawMessage(`{"questions":[{"prompt":"Pick","mode":"single","options":[{"id":"a","label":"A"}]}]}`)
+	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{ID: "select-copy", Name: "question", Input: input}))
 	model = next.(appModel)
 	input[0] = '['
 	if got := string(model.transcript[0].toolInput); !strings.HasPrefix(got, "{") {
@@ -1577,7 +1577,7 @@ func TestSelectToolCallInputIsDeepCopiedAndMalformedFallsBackToRawResult(t *test
 
 	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{
 		ToolUseID: "select-copy",
-		Name:      "Select",
+		Name:      "question",
 		Content:   `{"cancelled":false,"selected_options":null,"diagnostic":"raw fallback"}`,
 	}))
 	model = next.(appModel)

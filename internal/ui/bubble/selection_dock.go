@@ -28,8 +28,23 @@ type selectionFocus struct {
 	answerIndex int
 }
 
+type selectionPageState struct {
+	selected        map[string]bool
+	customLabel     string
+	customInput     textinput.Model
+	focus           selectionFocus
+	firstVisible    int
+	lastAnswerIndex int
+	errorText       string
+}
+
 type selectionDock struct {
 	request         selecttool.Request
+	questions       []selecttool.Question
+	questionStates  []selectionPageState
+	questionIndex   int
+	review          bool
+	reviewFocus     int
 	focus           selectionFocus
 	selected        map[string]bool
 	customLabel     string
@@ -41,30 +56,126 @@ type selectionDock struct {
 }
 
 func newSelectionDock(request selecttool.Request) *selectionDock {
-	selected := make(map[string]bool, len(request.InitialSelectedIDs))
-	for _, id := range request.InitialSelectedIDs {
-		selected[id] = true
-	}
-	customInput := textinput.New()
-	customInput.Prompt = ""
-	customInput.Placeholder = "Type a custom answer"
-	customInput.CharLimit = 0
-	customInput.Width = 40
-	d := &selectionDock{
-		request:     request.Clone(),
-		selected:    selected,
-		customInput: customInput,
-	}
-	if request.Mode == selecttool.ModeSingle && len(request.InitialSelectedIDs) > 0 {
-		for i, option := range request.Options {
-			if option.ID == request.InitialSelectedIDs[0] {
-				d.focus.answerIndex = i
-				d.lastAnswerIndex = i
-				break
+	questions := questionListForUI(request)
+	states := make([]selectionPageState, len(questions))
+	for i, question := range questions {
+		selected := make(map[string]bool, len(question.InitialSelectedIDs))
+		for _, id := range question.InitialSelectedIDs {
+			selected[id] = true
+		}
+		input := textinput.New()
+		input.Prompt = ""
+		input.Placeholder = "Type a custom answer"
+		input.CharLimit = 0
+		input.Width = 40
+		states[i] = selectionPageState{selected: selected, customInput: input}
+		if question.Mode == selecttool.ModeSingle && len(question.InitialSelectedIDs) > 0 {
+			for optionIndex, option := range question.Options {
+				if option.ID == question.InitialSelectedIDs[0] {
+					states[i].focus.answerIndex = optionIndex
+					states[i].lastAnswerIndex = optionIndex
+					break
+				}
 			}
 		}
 	}
+	d := &selectionDock{request: request.Clone(), questions: questions, questionStates: states}
+	d.loadQuestionState(0)
 	return d
+}
+
+func questionListForUI(r selecttool.Request) []selecttool.Question {
+	if len(r.Questions) > 0 {
+		return append([]selecttool.Question(nil), r.Questions...)
+	}
+	return []selecttool.Question{{Prompt: r.Prompt, Mode: r.Mode, Options: append([]selecttool.Option(nil), r.Options...), InitialSelectedIDs: append([]string(nil), r.InitialSelectedIDs...), MinSelect: r.MinSelect, MaxSelect: r.MaxSelect}}
+}
+
+func (d *selectionDock) loadQuestionState(index int) {
+	if d == nil || index < 0 || index >= len(d.questions) {
+		return
+	}
+	d.questionIndex = index
+	question := d.questions[index]
+	state := &d.questionStates[index]
+	d.request.Prompt = question.Prompt
+	d.request.Mode = question.Mode
+	d.request.Options = append([]selecttool.Option(nil), question.Options...)
+	d.request.InitialSelectedIDs = append([]string(nil), question.InitialSelectedIDs...)
+	d.request.MinSelect = question.MinSelect
+	d.request.MaxSelect = question.MaxSelect
+	d.selected = state.selected
+	d.customLabel = state.customLabel
+	d.customInput = state.customInput
+	d.focus = state.focus
+	d.firstVisible = state.firstVisible
+	d.lastAnswerIndex = state.lastAnswerIndex
+	d.errorText = state.errorText
+}
+
+func (d *selectionDock) saveQuestionState() {
+	if d == nil || d.questionIndex < 0 || d.questionIndex >= len(d.questionStates) {
+		return
+	}
+	state := &d.questionStates[d.questionIndex]
+	state.selected = d.selected
+	state.customLabel = d.customLabel
+	state.customInput = d.customInput
+	state.focus = d.focus
+	state.firstVisible = d.firstVisible
+	state.lastAnswerIndex = d.lastAnswerIndex
+	state.errorText = d.errorText
+}
+
+func (d *selectionDock) moveQuestion(delta int) {
+	if d == nil || d.review {
+		return
+	}
+	next := clampInt(d.questionIndex+delta, 0, len(d.questions)-1)
+	if next == d.questionIndex {
+		return
+	}
+	d.saveQuestionState()
+	d.loadQuestionState(next)
+}
+
+func (d *selectionDock) enterReview() {
+	if d == nil || len(d.questions) == 0 {
+		return
+	}
+	d.saveQuestionState()
+	d.review = true
+	d.reviewFocus = 0
+}
+
+func (d *selectionDock) leaveReview() {
+	if d == nil || !d.review || len(d.questions) == 0 {
+		return
+	}
+	d.review = false
+	d.loadQuestionState(len(d.questions) - 1)
+}
+
+func (d *selectionDock) reviewResults() []selecttool.Result {
+	if d == nil {
+		return nil
+	}
+	d.saveQuestionState()
+	results := make([]selecttool.Result, len(d.questionStates))
+	for i := range d.questionStates {
+		state := &d.questionStates[i]
+		options := make([]selecttool.SelectedOption, 0, len(state.selected)+1)
+		for _, option := range d.questions[i].Options {
+			if state.selected[option.ID] {
+				options = append(options, selecttool.SelectedOption{ID: option.ID, Label: option.Label})
+			}
+		}
+		if label := strings.TrimSpace(state.customLabel); label != "" {
+			options = append(options, selecttool.SelectedOption{ID: selecttool.CustomOptionID, Label: label})
+		}
+		results[i] = selecttool.Result{SelectedOptions: options}
+	}
+	return results
 }
 
 func (d *selectionDock) focusPosition() int {
@@ -298,25 +409,56 @@ func waitSelectionBrokerEventCmd(ctx context.Context, broker *selecttool.Broker)
 	}
 }
 
+func (d *selectionDock) reviewResult() selecttool.Result {
+	results := d.reviewResults()
+	return selecttool.Result{Results: results}
+}
+
+func (d *selectionDock) reviewCancel() selecttool.Result {
+	results := make([]selecttool.Result, len(d.questions))
+	for i := range results {
+		results[i] = selecttool.Result{Cancelled: true, SelectedOptions: []selecttool.SelectedOption{}}
+	}
+	return selecttool.Result{Cancelled: true, Results: results}
+}
+
 func (m appModel) handleSelectionDockKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.selectionDock.editingCustom {
+	d := m.selectionDock
+	if d.review {
+		var cmd tea.Cmd
+		switch msg.String() {
+		case "up", "k":
+			d.reviewFocus = 0
+		case "down", "j":
+			d.reviewFocus = 1
+		case "left", "h":
+			d.leaveReview()
+		case " ", "space", "enter":
+			if d.reviewFocus == 0 {
+				cmd = m.completeSelection(d.reviewResult())
+			} else {
+				cmd = m.completeSelection(d.reviewCancel())
+			}
+		case "esc", "ctrl+c":
+			cmd = m.completeSelection(d.reviewCancel())
+		}
+		m.relayout()
+		return m, cmd
+	}
+	if d.editingCustom {
 		switch msg.String() {
 		case "enter":
-			if result, complete := m.selectionDock.confirmCustom(); complete {
-				cmd := m.completeSelection(result)
-				m.relayout()
-				return m, cmd
-			}
+			d.confirmCustom()
 		case "esc":
-			m.selectionDock.cancelCustomEdit()
+			d.cancelCustomEdit()
 		case "ctrl+c":
-			cmd := m.completeSelection(m.selectionDock.cancel())
+			cmd := m.completeSelection(d.cancel())
 			m.relayout()
 			return m, cmd
 		default:
 			var inputCmd tea.Cmd
-			m.selectionDock.customInput, inputCmd = m.selectionDock.customInput.Update(msg)
-			m.selectionDock.errorText = ""
+			d.customInput, inputCmd = d.customInput.Update(msg)
+			d.errorText = ""
 			m.relayout()
 			return m, inputCmd
 		}
@@ -326,26 +468,38 @@ func (m appModel) handleSelectionDockKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	switch msg.String() {
-	case "up", "k":
-		m.selectionDock.move(-1)
-	case "down", "j":
-		m.selectionDock.move(1)
-	case "home":
-		m.selectionDock.home()
-	case "end":
-		m.selectionDock.end()
-	case " ", "space":
-		if m.selectionDock.focus.kind != selectionFocusChat {
-			m.selectionDock.activateFocused()
+	case "left", "h":
+		d.moveQuestion(-1)
+	case "right", "l":
+		if d.questionIndex == len(d.questions)-1 {
+			d.enterReview()
+		} else {
+			d.moveQuestion(1)
 		}
+	case "up", "k":
+		d.move(-1)
+	case "down", "j":
+		d.move(1)
+	case "home":
+		d.home()
+	case "end":
+		d.end()
+	case " ", "space":
+		d.activateFocused()
 	case "enter":
-		if m.selectionDock.focus.kind == selectionFocusChat {
-			cmd = m.completeSelection(m.selectionDock.cancel())
-		} else if result, complete := m.selectionDock.submit(); complete {
-			cmd = m.completeSelection(result)
+		if len(d.questions) == 1 {
+			if d.focus.kind == selectionFocusChat {
+				cmd = m.completeSelection(d.cancel())
+			} else if result, complete := d.submit(); complete {
+				cmd = m.completeSelection(result)
+			}
+		} else if d.focus.kind == selectionFocusChat {
+			cmd = m.completeSelection(d.cancel())
+		} else {
+			d.activateFocused()
 		}
 	case "esc", "ctrl+c":
-		cmd = m.completeSelection(m.selectionDock.cancel())
+		cmd = m.completeSelection(d.cancel())
 	}
 	m.relayout()
 	return m, cmd

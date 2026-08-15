@@ -28,6 +28,21 @@ func hasToolDescription(descriptions []string, name string) bool {
 	return false
 }
 
+// hasNamespacedTool 检测工具列表中是否存在命名空间（MCP）工具：描述以
+// "name: ..." 开头且 name 含 "__" 分隔符（如 quant-mcp__fetch_kline）。
+func hasNamespacedTool(descriptions []string) bool {
+	for _, description := range descriptions {
+		description = strings.TrimSpace(description)
+		if idx := strings.IndexByte(description, ':'); idx > 0 {
+			description = strings.TrimSpace(description[:idx])
+		}
+		if strings.Contains(description, "__") {
+			return true
+		}
+	}
+	return false
+}
+
 // Build returns the system prompt assembled from default instructions, global
 // instructions, project instructions, and tool usage guidance.
 func (b *PromptBuilder) Build(toolDescriptions []string) string {
@@ -64,18 +79,26 @@ func (b *PromptBuilder) Build(toolDescriptions []string) string {
 		prompt.WriteString(description)
 		prompt.WriteByte('\n')
 	}
-	if hasToolDescription(toolDescriptions, "Select") {
+	if hasToolDescription(toolDescriptions, "question") {
 		prompt.WriteString("User interaction policy:\n")
-		prompt.WriteString("- If progress requires the user to choose among two or more concrete options, call the Select tool instead of presenting an A/B/C list in assistant text.\n")
-		prompt.WriteString("- Do not ask a structured multiple-choice question in plain text when Select is available.\n")
+		prompt.WriteString("- If progress requires the user to choose among two or more concrete options, call the question tool instead of presenting an A/B/C list in assistant text.\n")
+		prompt.WriteString("- When multiple questions must be asked, pass them all in a single question call via the questions array; the UI shows them one at a time and the result is aligned with the input order.\n")
+		prompt.WriteString("- Do not ask a structured multiple-choice question in plain text when the question tool is available.\n")
 		prompt.WriteString("- Use normal assistant text only for genuinely open-ended questions or when the user must provide free-form information.\n")
 		prompt.WriteString("- Do not ask the user if the answer can be safely inferred from the repository, existing context, or a reasonable default.\n")
 	}
 	if hasToolDescription(toolDescriptions, "update_todo") {
 		prompt.WriteString("Progress tracking policy:\n")
 		prompt.WriteString("- For complex multi-step work, call update_todo before substantial execution to establish a todo snapshot, and update it whenever the plan or status materially changes.\n")
+		prompt.WriteString("- Mark items completed as soon as each milestone finishes; do not batch all status updates into one final call at the very end.\n")
 		prompt.WriteString("- update_todo is the in-session tracking mechanism: track live task steps with it. agent.md memory/*.md files are the cross-session archive: do not duplicate live steps there; instead write milestone results, lessons, and completed records to memory/*.md when a stage finishes.\n")
 		prompt.WriteString("- Do not call update_todo for simple questions or one-step edits.\n")
+	}
+	if hasNamespacedTool(toolDescriptions) {
+		prompt.WriteString("Namespaced (MCP) tool usage policy:\n")
+		prompt.WriteString("- Tools whose names contain \"__\" (e.g. quant-mcp__fetch_kline) are domain-specific MCP tools; the prefix before \"__\" is the server name.\n")
+		prompt.WriteString("- When a task matches a tool's domain, prefer that tool over ad-hoc Bash/WebFetch workarounds or silently ignoring it.\n")
+		prompt.WriteString("- Call them with the exact listed name and match parameters to the tool's input_schema.\n")
 	}
 	prompt.WriteString("When you need one tool, respond with ONLY a JSON object in this format:\n")
 	prompt.WriteString(`{"type":"tool_use","id":"call_1","name":"tool_name","input":{}}`)

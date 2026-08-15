@@ -328,7 +328,7 @@ func TestRenderSelectionDock(t *testing.T) {
 	m.selectionDock = newSelectionDock(selectionRequest("x", selecttool.ModeMultiple))
 	plain := ansi.Strip(m.renderSelectionDock(60, 14))
 	for _, want := range []string{
-		"SELECT  MULTIPLE",
+		"QUESTION  MULTIPLE",
 		"Choose signals",
 		"3 answers",
 		"Custom option",
@@ -344,6 +344,90 @@ func TestRenderSelectionDock(t *testing.T) {
 		t.Fatalf("ambiguous scroll text in %q", plain)
 	}
 }
+func TestRenderSelectionDockBatchProgress(t *testing.T) {
+	m := newModel(context.Background(), &fakeRunner{}, "", nil, nil, nil, nil, nil)
+	r := selectionRequest("x", selecttool.ModeSingle)
+	r.Questions = []selecttool.Question{
+		{Prompt: "First", Mode: selecttool.ModeSingle, Options: r.Options, MinSelect: 0, MaxSelect: 3},
+		{Prompt: "Second", Mode: selecttool.ModeSingle, Options: r.Options, MinSelect: 0, MaxSelect: 3},
+		{Prompt: "Third", Mode: selecttool.ModeSingle, Options: r.Options, MinSelect: 0, MaxSelect: 3},
+	}
+	m.selectionDock = newSelectionDock(r)
+	m.selectionDock.questionIndex = 1
+	m.selectionDock.loadQuestionState(1)
+	plain := ansi.Strip(m.renderSelectionDock(60, 14))
+	if !strings.Contains(plain, "QUESTION 2/3") {
+		t.Fatalf("missing batch progress in %q", plain)
+	}
+	m.selectionDock.questionIndex = 0
+	m.selectionDock.loadQuestionState(0)
+	plain = ansi.Strip(m.renderSelectionDock(60, 14))
+	if strings.Contains(plain, "QUESTION 0/") {
+		t.Fatalf("non-batch request rendered progress: %q", plain)
+	}
+}
+
+func TestSelectionDockBatchPagesPreserveIndependentSelectionsAndReview(t *testing.T) {
+	r := selecttool.Request{ID: "batch", Questions: []selecttool.Question{
+		{Prompt: "First", Mode: selecttool.ModeMultiple, Options: []selecttool.Option{{ID: "a", Label: "A"}}, MinSelect: 0, MaxSelect: 1},
+		{Prompt: "Second", Mode: selecttool.ModeSingle, Options: []selecttool.Option{{ID: "b", Label: "B"}}, MinSelect: 1, MaxSelect: 1},
+	}}
+	d := newSelectionDock(r)
+	if len(d.questions) != 2 || d.questionIndex != 0 || d.review {
+		t.Fatalf("initial page state=%#v", d)
+	}
+	d.activateFocused()
+	if !d.selected["a"] {
+		t.Fatal("first question selection was not recorded")
+	}
+	d.moveQuestion(1)
+	if d.questionIndex != 1 || d.selected["a"] {
+		t.Fatalf("question state leaked across pages: %#v", d)
+	}
+	d.activateFocused()
+	if !d.selected["b"] {
+		t.Fatal("second question selection was not recorded")
+	}
+	d.moveQuestion(-1)
+	if !d.selected["a"] || d.selected["b"] {
+		t.Fatalf("page selections were not restored: %#v", d)
+	}
+	d.enterReview()
+	if !d.review || d.reviewFocus != 0 {
+		t.Fatalf("review state=%#v", d)
+	}
+	results := d.reviewResult().Results
+	if len(results) != 2 || len(results[0].SelectedOptions) != 1 || results[0].SelectedOptions[0].ID != "a" {
+		t.Fatalf("review results=%#v", results)
+	}
+}
+
+func TestSelectionDockReviewNavigationAndAtomicCancel(t *testing.T) {
+	r := selecttool.Request{ID: "batch", Questions: []selecttool.Question{
+		{Prompt: "First", Mode: selecttool.ModeSingle, Options: []selecttool.Option{{ID: "a", Label: "A"}}, MinSelect: 1, MaxSelect: 1},
+		{Prompt: "Second", Mode: selecttool.ModeSingle, Options: []selecttool.Option{{ID: "b", Label: "B"}}, MinSelect: 1, MaxSelect: 1},
+	}}
+	d := newSelectionDock(r)
+	d.enterReview()
+	if d.reviewFocus != 0 {
+		t.Fatal("review did not default to submit")
+	}
+	d.reviewFocus = 1
+	cancelled := d.reviewCancel()
+	if !cancelled.Cancelled || len(cancelled.Results) != 2 {
+		t.Fatalf("cancel result=%#v", cancelled)
+	}
+	for i, result := range cancelled.Results {
+		if !result.Cancelled || result.SelectedOptions == nil {
+			t.Fatalf("cancelled result[%d]=%#v", i, result)
+		}
+	}
+	d.leaveReview()
+	if d.review || d.questionIndex != 1 {
+		t.Fatalf("review back state=%#v", d)
+	}
+}
+
 func TestCurrentLayoutUsesSelectionDock(t *testing.T) {
 	m := newModel(context.Background(), &fakeRunner{}, "", nil, nil, nil, nil, nil)
 	m.ready = true
@@ -708,7 +792,7 @@ func TestSelectionDockLongPromptAndDescriptionPreserveStructureAndExactRange(t *
 	m := newModel(context.Background(), &fakeRunner{}, "", nil, nil, nil, nil, nil)
 	m.selectionDock = newSelectionDock(r)
 	plain := ansi.Strip(m.renderSelectionDock(42, 16))
-	for _, want := range []string{"SELECT  MULTIPLE", "…", "3 answers  showing 1-", "› [ ] Logs", "↑ 0 answers above", "answers below", "Custom option", "Chat about this", "enter submit"} {
+	for _, want := range []string{"QUESTION  MULTIPLE", "…", "3 answers  showing 1-", "› [ ] Logs", "↑ 0 answers above", "answers below", "Custom option", "Chat about this", "enter submit"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("missing %q in %q", want, plain)
 		}

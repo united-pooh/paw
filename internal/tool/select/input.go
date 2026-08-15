@@ -7,6 +7,10 @@ import (
 )
 
 type toolInput struct {
+	Questions []toolQuestion `json:"questions"`
+}
+
+type toolQuestion struct {
 	Prompt             string    `json:"prompt"`
 	Mode               Mode      `json:"mode"`
 	Options            []Option  `json:"options"`
@@ -16,11 +20,26 @@ type toolInput struct {
 	MaxSelect          *int      `json:"max_select"`
 }
 
-func decodeInput(raw json.RawMessage) (Request, error) {
+func decodeInput(raw json.RawMessage) ([]Request, error) {
 	var in toolInput
 	if err := json.Unmarshal(raw, &in); err != nil {
-		return Request{}, fmt.Errorf("decode Select input: %w", err)
+		return nil, fmt.Errorf("decode question input: %w", err)
 	}
+	if len(in.Questions) == 0 {
+		return nil, fmt.Errorf("questions must contain at least one question")
+	}
+	requests := make([]Request, 0, len(in.Questions))
+	for i := range in.Questions {
+		request, err := decodeQuestion(in.Questions[i])
+		if err != nil {
+			return nil, fmt.Errorf("questions[%d]: %w", i, err)
+		}
+		requests = append(requests, request)
+	}
+	return requests, nil
+}
+
+func decodeQuestion(in toolQuestion) (Request, error) {
 	in.Prompt = strings.TrimSpace(in.Prompt)
 	if in.Prompt == "" {
 		return Request{}, fmt.Errorf("prompt is required")

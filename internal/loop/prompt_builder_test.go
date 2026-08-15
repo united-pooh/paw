@@ -28,15 +28,15 @@ func TestPromptBuilderWithToolsKeepsToolUseContract(t *testing.T) {
 	}
 }
 
-func TestPromptBuilderWithSelectAddsStructuredQuestionPolicy(t *testing.T) {
+func TestPromptBuilderWithQuestionAddsStructuredQuestionPolicy(t *testing.T) {
 	prompt := NewPromptBuilder(nil).Build([]string{
 		"Read: read files",
-		"Select: Ask the user a structured single- or multiple-choice question.",
+		"question: Ask the user one or more structured single- or multiple-choice questions.",
 	})
 	for _, want := range []string{
 		"User interaction policy:",
 		"two or more concrete options",
-		"call the Select tool",
+		"call the question tool",
 		"Do not ask a structured multiple-choice question in plain text",
 		"genuinely open-ended questions",
 		"repository, existing context, or a reasonable default",
@@ -47,10 +47,10 @@ func TestPromptBuilderWithSelectAddsStructuredQuestionPolicy(t *testing.T) {
 	}
 }
 
-func TestPromptBuilderWithoutSelectOmitsStructuredQuestionPolicy(t *testing.T) {
+func TestPromptBuilderWithoutQuestionOmitsStructuredQuestionPolicy(t *testing.T) {
 	prompt := NewPromptBuilder(nil).Build([]string{"Read: read files"})
-	if strings.Contains(prompt, "User interaction policy:") || strings.Contains(prompt, "call the Select tool") {
-		t.Fatalf("prompt contains Select policy without Select tool: %q", prompt)
+	if strings.Contains(prompt, "User interaction policy:") || strings.Contains(prompt, "call the question tool") {
+		t.Fatalf("prompt contains question policy without question tool: %q", prompt)
 	}
 }
 
@@ -122,5 +122,47 @@ func TestPromptBuilderWithoutUpdateTodoOmitsProgressPolicy(t *testing.T) {
 	prompt := NewPromptBuilder(nil).Build([]string{"Read: read files"})
 	if strings.Contains(prompt, "Progress tracking policy:") || strings.Contains(prompt, "call update_todo") {
 		t.Fatalf("prompt contains progress policy without update_todo tool: %q", prompt)
+	}
+}
+
+func TestPromptBuilderWithNamespacedToolAddsMCPPolicy(t *testing.T) {
+	prompt := NewPromptBuilder(nil).Build([]string{
+		"Read: read files",
+		"quant-mcp__fetch_kline: 获取 A 股 K 线行情",
+	})
+	for _, want := range []string{
+		"Namespaced (MCP) tool usage policy:",
+		"quant-mcp__fetch_kline",
+		"prefer that tool over ad-hoc Bash/WebFetch",
+		"exact listed name",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt = %q, want %q", prompt, want)
+		}
+	}
+}
+
+func TestPromptBuilderWithoutNamespacedToolOmitsMCPPolicy(t *testing.T) {
+	prompt := NewPromptBuilder(nil).Build([]string{"Read: read files", "Bash: run commands"})
+	if strings.Contains(prompt, "Namespaced (MCP) tool usage policy:") || strings.Contains(prompt, "ad-hoc Bash/WebFetch") {
+		t.Fatalf("prompt contains MCP policy without namespaced tools: %q", prompt)
+	}
+}
+
+func TestHasNamespacedTool(t *testing.T) {
+	cases := []struct {
+		descriptions []string
+		want         bool
+	}{
+		{[]string{"Read: read files"}, false},
+		{[]string{"quant-mcp__fetch_kline: fetch kline"}, true},
+		{[]string{"Bash: run", "codegraph__explore: explore"}, true},
+		{[]string{"plain-name-without-colon"}, false},
+		{[]string{"quant-mcp__fetch_kline"}, true},
+	}
+	for i, c := range cases {
+		if got := hasNamespacedTool(c.descriptions); got != c.want {
+			t.Fatalf("case %d: hasNamespacedTool(%v) = %v, want %v", i, c.descriptions, got, c.want)
+		}
 	}
 }

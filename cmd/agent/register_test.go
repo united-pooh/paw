@@ -15,15 +15,15 @@ import (
 	selecttool "paw/internal/tool/select"
 )
 
-func TestRegisterInteractiveToolsAddsSelect(t *testing.T) {
+func TestRegisterInteractiveToolsAddsQuestion(t *testing.T) {
 	registry := tool.NewRegistry()
 	broker := selecttool.NewBroker()
 	defer broker.Close()
 	if err := registerInteractiveTools(registry, broker); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := registry.Get("Select"); !ok {
-		t.Fatal("interactive registry missing Select")
+	if _, ok := registry.Get("question"); !ok {
+		t.Fatal("interactive registry missing question")
 	}
 }
 
@@ -63,13 +63,13 @@ func TestRegisterMainAgentToolsAddsHeadlessUpdateTodo(t *testing.T) {
 	}
 }
 
-func TestRegisterToolsDoesNotAddSelect(t *testing.T) {
+func TestRegisterToolsDoesNotAddQuestion(t *testing.T) {
 	registry := tool.NewRegistry()
 	if err := registerTools(registry, t.TempDir(), nil, nil, "", nil, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := registry.Get("Select"); ok {
-		t.Fatal("base registry unexpectedly contains Select")
+	if _, ok := registry.Get("question"); ok {
+		t.Fatal("base registry unexpectedly contains question")
 	}
 }
 

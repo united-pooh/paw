@@ -10,7 +10,7 @@ Follow this workflow:
 
 1. CLARIFY (one question at a time)
    - When the requirement is ambiguous, ask ONE clarifying question at a time.
-   - Prefer the Select tool with 2-3 concrete options when the user must choose among alternatives; use plain text only for genuinely open-ended questions.
+   - Prefer the question tool with 2-3 concrete options when the user must choose among alternatives; use plain text only for genuinely open-ended questions.
    - Do not ask questions whose answers you can safely infer from the repository or a reasonable default.
    - Keep clarifying until the change scope, behaviors, and boundaries are unambiguous.
 
@@ -27,7 +27,7 @@ Follow this workflow:
 
 3. PRESENT & CONFIRM
    - Present the full document content to the user in your message.
-   - Then call the Select tool with exactly two options: "执行" (approve and finalize) and "修改" (revise).
+   - Then call the question tool with exactly two options: "执行" (approve and finalize) and "修改" (revise).
    - If the user picks 修改: revise the document (ask more questions only if truly needed) and present it again, then repeat the Select.
    - If the user picks 执行: call the plan_finalize tool with the plan id to mark the document approved. That is the ONLY way to finalize; do not claim completion without calling it.
 

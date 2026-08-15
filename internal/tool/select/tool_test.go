@@ -10,11 +10,11 @@ import (
 )
 
 func validSingleInput() json.RawMessage {
-	return json.RawMessage(`{"prompt":"Pick","mode":"single","options":[{"id":"a","label":"A"}]}`)
+	return json.RawMessage(`{"questions":[{"prompt":"Pick","mode":"single","options":[{"id":"a","label":"A"}]}]}`)
 }
 func TestToolMetadata(t *testing.T) {
 	x := New(NewBroker())
-	if x.Name() != "Select" {
+	if x.Name() != "question" {
 		t.Fatalf("Name() = %q", x.Name())
 	}
 	for _, phrase := range []string{
@@ -23,6 +23,7 @@ func TestToolMetadata(t *testing.T) {
 		"A/B/C list",
 		"open-ended questions",
 		"determine yourself",
+		"questions array",
 	} {
 		if !strings.Contains(x.Description(), phrase) {
 			t.Fatalf("Description() missing %q: %q", phrase, x.Description())
@@ -38,13 +39,13 @@ func TestToolRunReturnsStableSubmittedJSON(t *testing.T) {
 	x := New(b)
 	go func() {
 		e, _ := b.NextEvent(context.Background())
-		b.Complete(e.Request.ID, Result{SelectedOptions: []SelectedOption{
+		b.Complete(e.Request.ID, Result{Results: []Result{{SelectedOptions: []SelectedOption{
 			{ID: "metrics", Label: "Metrics"},
 			{ID: "logs", Label: "Logs"},
-		}})
+		}}}})
 	}()
-	got, err := x.Run(context.Background(), json.RawMessage(`{"prompt":"Choose","mode":"multiple","options":[{"id":"logs","label":"Logs"},{"id":"metrics","label":"Metrics"}]}`))
-	if err != nil || got != `{"cancelled":false,"selected_options":[{"id":"metrics","label":"Metrics"},{"id":"logs","label":"Logs"}]}` {
+	got, err := x.Run(context.Background(), json.RawMessage(`{"questions":[{"prompt":"Choose","mode":"multiple","options":[{"id":"logs","label":"Logs"},{"id":"metrics","label":"Metrics"}]}]}`))
+	if err != nil || got != `{"results":[{"cancelled":false,"selected_options":[{"id":"metrics","label":"Metrics"},{"id":"logs","label":"Logs"}]}]}` {
 		t.Fatalf("got=%s err=%v", got, err)
 	}
 	if strings.Contains(got, "selected_ids") {
@@ -56,17 +57,50 @@ func TestToolRunReturnsCancellationJSON(t *testing.T) {
 	x := New(b)
 	go func() {
 		e, _ := b.NextEvent(context.Background())
-		b.Complete(e.Request.ID, Result{Cancelled: true})
+		b.Complete(e.Request.ID, Result{Results: []Result{{Cancelled: true}}})
 	}()
 	got, err := x.Run(context.Background(), validSingleInput())
-	if err != nil || got != `{"cancelled":true,"selected_options":[]}` {
+	if err != nil || got != `{"results":[{"cancelled":true,"selected_options":[]}]}` {
+		t.Fatalf("got=%s err=%v", got, err)
+	}
+}
+func TestToolRunBatchAnswersInOrder(t *testing.T) {
+	b := NewBroker()
+	x := New(b)
+	go func() {
+		e, _ := b.NextEvent(context.Background())
+		if len(e.Request.Questions) != 2 {
+			t.Errorf("question count=%d", len(e.Request.Questions))
+		}
+		b.Complete(e.Request.ID, Result{Results: []Result{
+			{SelectedOptions: []SelectedOption{{ID: "a", Label: "A"}}},
+			{SelectedOptions: []SelectedOption{{ID: "x", Label: "X"}, {ID: "y", Label: "Y"}}},
+		}})
+	}()
+	got, err := x.Run(context.Background(), json.RawMessage(`{"questions":[{"prompt":"First","mode":"single","options":[{"id":"a","label":"A"}]},{"prompt":"Second","mode":"multiple","options":[{"id":"x","label":"X"},{"id":"y","label":"Y"}]}]}`))
+	if err != nil || got != `{"results":[{"cancelled":false,"selected_options":[{"id":"a","label":"A"}]},{"cancelled":false,"selected_options":[{"id":"x","label":"X"},{"id":"y","label":"Y"}]}]}` {
+		t.Fatalf("got=%s err=%v", got, err)
+	}
+}
+func TestToolRunBatchCancelIsAtomic(t *testing.T) {
+	b := NewBroker()
+	x := New(b)
+	go func() {
+		e, _ := b.NextEvent(context.Background())
+		b.Complete(e.Request.ID, Result{Results: []Result{
+			{SelectedOptions: []SelectedOption{{ID: "a", Label: "A"}}},
+			{Cancelled: true, SelectedOptions: []SelectedOption{}},
+		}})
+	}()
+	got, err := x.Run(context.Background(), json.RawMessage(`{"questions":[{"prompt":"First","mode":"single","options":[{"id":"a","label":"A"}]},{"prompt":"Second","mode":"single","options":[{"id":"b","label":"B"}]}]}`))
+	if err != nil || got != `{"results":[{"cancelled":true,"selected_options":[]},{"cancelled":true,"selected_options":[]}]}` {
 		t.Fatalf("got=%s err=%v", got, err)
 	}
 }
 func TestToolRunDoesNotPublishInvalidInput(t *testing.T) {
 	b := NewBroker()
-	_, e := New(b).Run(context.Background(), json.RawMessage(`{"prompt":" ","mode":"single","options":[{"id":"a","label":"A"}]}`))
-	if e == nil || e.Error() != "prompt is required" {
+	_, e := New(b).Run(context.Background(), json.RawMessage(`{"questions":[{"prompt":" ","mode":"single","options":[{"id":"a","label":"A"}]}]}`))
+	if e == nil || e.Error() != "questions[0]: prompt is required" {
 		t.Fatal(e)
 	}
 	ctx, c := context.WithTimeout(context.Background(), 30*time.Millisecond)
@@ -92,9 +126,11 @@ func TestInputSchemaExcludesReservedCustomOptionID(t *testing.T) {
 	if err := json.Unmarshal(New(NewBroker()).InputSchema(), &schema); err != nil {
 		t.Fatal(err)
 	}
-	options := schema["properties"].(map[string]any)["options"].(map[string]any)
-	items := options["items"].(map[string]any)
-	id := items["properties"].(map[string]any)["id"].(map[string]any)
+	questions := schema["properties"].(map[string]any)["questions"].(map[string]any)
+	items := questions["items"].(map[string]any)
+	options := items["properties"].(map[string]any)["options"].(map[string]any)
+	optionItems := options["items"].(map[string]any)
+	id := optionItems["properties"].(map[string]any)["id"].(map[string]any)
 	not := id["not"].(map[string]any)
 	if not["const"] != CustomOptionID {
 		t.Fatalf("id schema = %#v", id)
@@ -149,7 +185,7 @@ func TestToolRunRejectsInvalidBrokerResult(t *testing.T) {
 		b.Complete(e.Request.ID, Result{})
 	}()
 	_, err := New(b).Run(context.Background(), validSingleInput())
-	if err == nil || !strings.Contains(err.Error(), "invalid Select broker result") {
+	if err == nil || !strings.Contains(err.Error(), "invalid question broker result") {
 		t.Fatalf("error=%v", err)
 	}
 }

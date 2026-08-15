@@ -20,7 +20,7 @@ func ModeFilter(plansDir string) loop.ToolFilter {
 		"Grep":          true,
 		"LS":            true,
 		"WebFetch":      true,
-		"Select":        true,
+		"question":      true,
 		"plan_finalize": true,
 	}
 	return func(name string, input json.RawMessage) error {

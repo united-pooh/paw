@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	selecttool "paw/internal/tool/select"
 )
 
@@ -32,6 +33,9 @@ func (m appModel) renderSelectionDock(width, height int) string {
 	}
 	width = maxInt(1, width)
 	height = maxInt(1, height)
+	if d.review {
+		return renderQuestionReview(m, d, width, height)
+	}
 
 	// Seven rows are structural: title, status, exact scroll counts, separator,
 	// Custom, Chat, and the hint. At normal dock heights reserve two more rows
@@ -51,7 +55,10 @@ func (m appModel) renderSelectionDock(width, height int) string {
 		start, end = focused, focused+1
 	}
 
-	title := "SELECT  " + strings.ToUpper(string(d.request.Mode))
+	title := "QUESTION  " + strings.ToUpper(string(d.request.Mode))
+	if len(d.questions) > 1 {
+		title = fmt.Sprintf("QUESTION %d/%d  %s", d.questionIndex+1, len(d.questions), strings.ToUpper(string(d.request.Mode)))
+	}
 	selectionSummary := fmt.Sprintf("selected %d / max %d", d.selectedCount(), d.request.MaxSelect)
 	title = alignSelectionDockEnds(title, selectionSummary, width)
 
@@ -67,10 +74,8 @@ func (m appModel) renderSelectionDock(width, height int) string {
 			if answerRowsUsed >= answerBudget {
 				break
 			}
-			style := m.styles.Unselected
-			if d.focus.kind == selectionFocusAnswer && d.focus.answerIndex == i {
-				style = m.styles.SelectionFocused
-			} else if rowIndex > 0 {
+			style := selectionItemStyle(m.styles, d.focus.kind == selectionFocusAnswer && d.focus.answerIndex == i, d.selected[d.request.Options[i].ID])
+			if rowIndex > 0 {
 				style = m.styles.StatusMuted
 			}
 			lines = append(lines, style.Render(truncateStyledCellLine(row, width)))
@@ -91,6 +96,63 @@ func (m appModel) renderSelectionDock(width, height int) string {
 	return fitStyledRect(strings.Join(lines, "\n"), width, height)
 }
 
+func renderQuestionReview(m appModel, d *selectionDock, width, height int) string {
+	lines := []string{m.styles.LabelTool.Render(truncateStyledCellLine("QUESTION REVIEW", width))}
+	budget := maxInt(1, height-5)
+	for i, question := range d.questions {
+		if budget <= 0 {
+			break
+		}
+		lines = append(lines, m.styles.Body.Render(truncateStyledCellLine(fmt.Sprintf("Q%d  %s", i+1, sanitizeTerminalText(question.Prompt)), width)))
+		budget--
+		state := &d.questionStates[i]
+		selected := 0
+		for _, option := range question.Options {
+			if state.selected[option.ID] && budget > 0 {
+				lines = append(lines, m.styles.SelectionSelected.Render(truncateStyledCellLine("    ✓ "+option.Label, width)))
+				budget--
+				selected++
+			}
+		}
+		if label := strings.TrimSpace(state.customLabel); label != "" && budget > 0 {
+			lines = append(lines, m.styles.SelectionSelected.Render(truncateStyledCellLine("    ✓ "+label, width)))
+			budget--
+			selected++
+		}
+		if selected == 0 && budget > 0 {
+			lines = append(lines, m.styles.StatusMuted.Render(truncateStyledCellLine("    (no selection)", width)))
+			budget--
+		}
+	}
+	if budget > 0 {
+		lines = append(lines, m.styles.StatusMuted.Render(strings.Repeat("─", width)))
+		budget--
+	}
+	for i, label := range []string{"Submit", "Cancel"} {
+		if budget <= 0 {
+			break
+		}
+		prefix := "  "
+		if d.reviewFocus == i {
+			prefix = "› "
+		}
+		style := m.styles.SelectionNormal
+		if d.reviewFocus == i {
+			style = m.styles.SelectionFocused
+		}
+		lines = append(lines, style.Render(truncateStyledCellLine(prefix+"[ "+label+" ]", width)))
+		budget--
+	}
+	hint := "↑↓ move  space/enter confirm  ← back"
+	if d.errorText != "" {
+		hint = d.errorText
+	}
+	if budget > 0 {
+		lines = append(lines, m.styles.InputHint.Render(truncateStyledCellLine(hint, width)))
+	}
+	return fitStyledRect(strings.Join(lines, "\n"), width, height)
+}
+
 func limitedWrappedLines(text string, width, budget int) []string {
 	if budget <= 0 {
 		return nil
@@ -105,6 +167,19 @@ func limitedWrappedLines(text string, width, budget int) []string {
 	lines = append([]string(nil), lines[:budget]...)
 	lines[budget-1] = truncateStyledCellLine(strings.TrimRight(lines[budget-1], " ")+" …", width)
 	return lines
+}
+
+func selectionItemStyle(styles StyleSet, focused, selected bool) lipgloss.Style {
+	if focused && selected {
+		return styles.SelectionFocusedSelected
+	}
+	if focused {
+		return styles.SelectionFocused
+	}
+	if selected {
+		return styles.SelectionSelected
+	}
+	return styles.SelectionNormal
 }
 
 func wrapSelectionDescription(text string, width int) []string {

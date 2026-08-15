@@ -11,7 +11,7 @@ func TestModeFilterAllowlist(t *testing.T) {
 	dir := t.TempDir()
 	filter := ModeFilter(dir)
 
-	for _, name := range []string{"Read", "Glob", "Grep", "LS", "WebFetch", "Select", "plan_finalize", "codegraph__search"} {
+	for _, name := range []string{"Read", "Glob", "Grep", "LS", "WebFetch", "question", "plan_finalize", "codegraph__search"} {
 		if err := filter(name, nil); err != nil {
 			t.Fatalf("read-only tool %q rejected: %v", name, err)
 		}

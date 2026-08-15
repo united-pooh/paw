@@ -234,9 +234,6 @@ func (m appModel) performTranscriptClick(point selectionPoint) (appModel, bool, 
 		m.refreshViewportPreservingOffset()
 		return m, true, openTerminalURLCmd(target)
 	}
-	if m.toggleTodoAtTranscriptRow(point.row) {
-		return m, true, nil
-	}
 	if index, header, ok := m.toolHitAtTranscriptRow(point.row); ok {
 		if m.toolInspectActive {
 			m.selectInspectedTool(index)

@@ -62,8 +62,8 @@ func formatToolCallBodyResolved(name string, input json.RawMessage, oldContent s
 		name = "tool"
 	}
 	fields := toolInputFields(input)
-	if strings.EqualFold(name, "Select") {
-		return formatSelectToolCallBody(name, fields)
+	if strings.EqualFold(name, "question") {
+		return formatQuestionToolCallBody(name, input)
 	}
 	if strings.EqualFold(name, "Subagent") {
 		return formatSubagentToolCallBody(name, fields)
@@ -82,58 +82,61 @@ func formatToolCallBodyResolved(name string, input json.RawMessage, oldContent s
 	return strings.Join(lines, "\n")
 }
 
-func formatSelectToolCallBody(name string, fields []toolDisplayField) string {
+func formatQuestionToolCallBody(name string, input json.RawMessage) string {
 	lines := []string{name}
-	if mode := fieldValue(fields, "mode"); mode != "" {
-		lines = append(lines, "mode  "+mode)
+	var payload struct {
+		Questions []json.RawMessage `json:"questions"`
 	}
-	if prompt := fieldValue(fields, "prompt"); prompt != "" {
-		lines = append(lines, "prompt  "+summarizeToolContent(prompt))
+	if json.Unmarshal(input, &payload) == nil && len(payload.Questions) > 0 {
+		noun := "questions"
+		if len(payload.Questions) == 1 {
+			noun = "question"
+		}
+		lines = append(lines, fmt.Sprintf("%d %s", len(payload.Questions), noun))
 	}
 	return strings.Join(lines, "\n")
 }
 
 func selectToolCallTarget(name string, input json.RawMessage) (string, bool) {
-	if !strings.EqualFold(strings.TrimSpace(name), "Select") {
+	if !strings.EqualFold(strings.TrimSpace(name), "question") {
 		return "", false
 	}
 	return "", true
 }
 
+func questionBatchSummary(content string) (string, bool) {
+	var batch selecttool.BatchResult
+	if json.Unmarshal([]byte(content), &batch) != nil || len(batch.Results) == 0 {
+		return "", false
+	}
+	for _, result := range batch.Results {
+		if result.Cancelled {
+			return "cancelled", true
+		}
+	}
+	noun := "questions"
+	if len(batch.Results) == 1 {
+		noun = "question"
+	}
+	return fmt.Sprintf("answered %d %s", len(batch.Results), noun), true
+}
+
 func selectToolResultTarget(name, status, content string) (string, bool) {
-	if !strings.EqualFold(strings.TrimSpace(name), "Select") || status != "ok" {
+	if !strings.EqualFold(strings.TrimSpace(name), "question") || status != "ok" {
 		return "", false
 	}
-	var result selecttool.Result
-	if json.Unmarshal([]byte(content), &result) != nil || result.SelectedOptions == nil {
-		return "", false
-	}
-	if result.Cancelled {
-		return "cancelled", true
-	}
-	noun := "options"
-	if len(result.SelectedOptions) == 1 {
-		noun = "option"
-	}
-	return fmt.Sprintf("selected %d %s", len(result.SelectedOptions), noun), true
+	return questionBatchSummary(content)
 }
 
 func completeToolCallBody(name, body, status, content string) string {
-	if !strings.EqualFold(strings.TrimSpace(name), "Select") || status != "ok" {
+	if !strings.EqualFold(strings.TrimSpace(name), "question") || status != "ok" {
 		return completeRunningToolCallBody(body, status)
 	}
-	var result selecttool.Result
-	if json.Unmarshal([]byte(content), &result) != nil {
+	summary, ok := questionBatchSummary(content)
+	if !ok {
 		return completeRunningToolCallBody(body, status)
 	}
-	summary := "Select  cancelled"
-	if !result.Cancelled {
-		noun := "options"
-		if len(result.SelectedOptions) == 1 {
-			noun = "option"
-		}
-		summary = fmt.Sprintf("Select  selected %d %s", len(result.SelectedOptions), noun)
-	}
+	summary = "question  " + summary
 	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
 	if len(lines) == 0 {
 		return summary
