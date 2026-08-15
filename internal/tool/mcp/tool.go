@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
+
 	coremcp "paw/internal/mcp"
 )
 
@@ -53,7 +55,14 @@ func (t *Tool) Description() string {
 	if t == nil {
 		return ""
 	}
-	return t.spec.Description
+	if desc := strings.TrimSpace(t.spec.Description); desc != "" {
+		return desc
+	}
+	server := strings.TrimSpace(t.spec.Server)
+	if server == "" {
+		server = t.spec.Name
+	}
+	return "领域工具，来自 MCP server " + server + "；需要时使用它而不是用脚本自行实现"
 }
 
 func (t *Tool) InputSchema() json.RawMessage {

@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"strings"
+
 	coremcp "paw/internal/mcp"
 	"testing"
 )
@@ -19,6 +21,28 @@ func (b *fakeBroker) Call(_ context.Context, name string, input json.RawMessage)
 	b.name = name
 	b.input = append(json.RawMessage(nil), input...)
 	return "ok", nil
+}
+
+func TestToolDescriptionFallsBackForEmptyServerDescription(t *testing.T) {
+	broker := &fakeBroker{snapshot: coremcp.Snapshot{Tools: []coremcp.ToolSpec{{
+		Name:        "quant-mcp__fetch_kline",
+		Description: "   ",
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+		Server:      "quant-mcp",
+		MCPName:     "fetch_kline",
+		Kind:        coremcp.KindTool,
+	}}}}
+	tools := NewTools(broker)
+	desc := tools[0].Description()
+	if !strings.Contains(desc, "quant-mcp") || !strings.Contains(desc, "MCP server") {
+		t.Fatalf("fallback description = %q", desc)
+	}
+
+	broker.snapshot.Tools[0].Description = "Fetch A-share klines"
+	tools = NewTools(broker)
+	if got := tools[0].Description(); got != "Fetch A-share klines" {
+		t.Fatalf("explicit description = %q", got)
+	}
 }
 
 func TestToolRoutesThroughBrokerAndPreservesSchema(t *testing.T) {
