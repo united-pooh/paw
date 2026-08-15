@@ -42,8 +42,8 @@ func (m appModel) openSubagentPicker() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m appModel) openPipelinePicker() (tea.Model, tea.Cmd) {
-	m.openActivity(activityTabPipeline)
+func (m appModel) openTodoPicker() (tea.Model, tea.Cmd) {
+	m.openActivity(activityTabTodo)
 	return m, nil
 }
 
@@ -71,7 +71,7 @@ func (m appModel) handleSubagentPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.relayout()
 		return m, m.input.Focus()
 	case "tab", "right", "l":
-		m.subagentPicker.tab = activityTabPipeline
+		m.subagentPicker.tab = activityTabTodo
 		return m, nil
 	case "shift+tab", "left", "h":
 		m.subagentPicker.tab = activityTabSubagents
@@ -179,12 +179,12 @@ func (m appModel) previewSubagentTranscript(task subagent.TaskSnapshot) (tea.Mod
 		parentTranscript: parentTranscript,
 		liveContent:      liveSubagentContent(task),
 	}
-	return m, loadSubagentTranscriptPreviewCmd(m.ctx, task, sessionID, preview, m.workspaceRoot)
+	return m, loadSubagentTranscriptPreviewCmd(m.ctx, m.sessionStore, task, sessionID, preview, m.workspaceRoot)
 }
 
-func loadSubagentTranscriptPreviewCmd(ctx context.Context, task subagent.TaskSnapshot, sessionID string, preview *subagentTranscriptPreview, workspaceRoot string) tea.Cmd {
+func loadSubagentTranscriptPreviewCmd(ctx context.Context, store SessionStore, task subagent.TaskSnapshot, sessionID string, preview *subagentTranscriptPreview, workspaceRoot string) tea.Cmd {
 	return func() tea.Msg {
-		entries, err := loadSubagentTranscriptEntries(ctx, task, time.Now(), workspaceRoot)
+		entries, err := loadSubagentTranscriptEntries(ctx, store, task, time.Now(), workspaceRoot)
 		if err != nil {
 			return sessionRestoredMsg{source: sessionRestoreSubagentEnter, subagentPreview: preview, err: err}
 		}
@@ -197,7 +197,19 @@ func loadSubagentTranscriptPreviewCmd(ctx context.Context, task subagent.TaskSna
 	}
 }
 
-func loadSubagentTranscriptEntries(ctx context.Context, task subagent.TaskSnapshot, at time.Time, workspaceRoot string) ([]transcriptEntry, error) {
+func loadSubagentTranscriptEntries(ctx context.Context, store SessionStore, task subagent.TaskSnapshot, at time.Time, workspaceRoot string) ([]transcriptEntry, error) {
+	// 优先走与 /resume 主会话恢复一致的 store 读取：统一信封与 legacy
+	// Record 双格式、fork 解析都由 store 内部处理。
+	if loader, ok := store.(ResolvedRecordLoader); ok {
+		sessionID := firstNonEmptyString(strings.TrimSpace(task.SessionID), strings.TrimSpace(task.ID))
+		if sessionID != "" {
+			if records, recordsErr := loader.LoadResolvedRecords(ctx, sessionID); recordsErr == nil {
+				if entries := transcriptEntriesFromRecords(records, nil, workspaceRoot); len(entries) > 0 {
+					return mergeTranscriptToolEntries(entries), nil
+				}
+			}
+		}
+	}
 	path := strings.TrimSpace(task.TranscriptPath)
 	if path == "" {
 		if content := strings.TrimSpace(task.Content); content != "" {
@@ -222,8 +234,8 @@ func loadSubagentTranscriptEntries(ctx context.Context, task subagent.TaskSnapsh
 		if line == "" {
 			continue
 		}
-		var record session.Record
-		if err := json.Unmarshal([]byte(line), &record); err != nil {
+		record, parseErr := session.ParseTranscriptLine([]byte(line))
+		if parseErr != nil {
 			continue
 		}
 		createdAt := record.CreatedAt
@@ -344,7 +356,7 @@ func mergeTranscriptToolEntries(entries []transcriptEntry) []transcriptEntry {
 				call.toolGroupOpen = false
 				call.toolResultOnly = false
 				call.body = completeToolCallBody(call.toolName, call.body, entry.toolStatus, entry.toolResult)
-				if strings.EqualFold(call.toolName, "Select") && strings.EqualFold(call.toolStatus, "ok") {
+				if strings.EqualFold(call.toolName, "question") && strings.EqualFold(call.toolStatus, "ok") {
 					if presentation, ok := parseSelectToolPresentation(call.toolInput, call.toolResult); ok {
 						call.toolTarget = presentation.target
 					}
@@ -538,10 +550,6 @@ func copyTranscriptEntries(entries []transcriptEntry) []transcriptEntry {
 	for i := range out {
 		out[i].citations = append([]toolCitation(nil), out[i].citations...)
 		out[i].inputTokens = cloneInputTokens(out[i].inputTokens)
-		if out[i].todoSnapshot != nil {
-			snapshot := out[i].todoSnapshot.Clone()
-			out[i].todoSnapshot = &snapshot
-		}
 		out[i].toolFocused = false
 		out[i].toolHovered = false
 	}
@@ -591,21 +599,12 @@ func (m *appModel) applySessionPickerRestore(msg sessionRestoredMsg) {
 	m.sessionPicker = nil
 	m.subagentPicker = nil
 	m.subagentPreview = nil
-	m.todoPage = nil
 	m.syncInputPlaceholder()
 	m.transcript = mergeTranscriptToolEntries(copyTranscriptEntries(msg.entries))
 	m.finalizeRestoredRunningTools()
 	m.currentTodo = msg.currentTodo.Clone()
 	m.hasCurrentTodo = msg.hasCurrentTodo
 	m.todoWasCleared = msg.todoWasCleared
-	m.latestTodoIndex = msg.latestTodoIndex
-	if m.latestTodoIndex < 0 || m.latestTodoIndex >= len(m.transcript) || m.transcript[m.latestTodoIndex].kind != entryTodo {
-		projection := todoProjectionFromEntries(m.transcript)
-		m.currentTodo = projection.Current.Clone()
-		m.hasCurrentTodo = projection.HasCurrent
-		m.todoWasCleared = projection.WasCleared
-		m.latestTodoIndex = projection.LatestIndex
-	}
 	m.inputHistory = inputHistoryFromTranscript(msg.entries)
 	m.resetHistoryNavigation()
 	m.addEntry(transcriptEntry{kind: entrySystem, title: "sessions", body: fmt.Sprintf("已切换到会话: %s", msg.sessionID)})

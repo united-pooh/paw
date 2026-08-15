@@ -23,18 +23,6 @@ import (
 	"paw/internal/ui/bubble/viewportx"
 )
 
-// pipelinePollCmd 异步检测 .pipeline-workspace/ 并返回 pipelineStateUpdatedMsg。
-func pipelinePollCmd(activeAfter time.Time) tea.Cmd {
-	return func() tea.Msg {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return pipelineStateUpdatedMsg{}
-		}
-		workspaceDir := filepath.Join(cwd, ".pipeline-workspace")
-		return pipelineStateUpdatedMsg{state: loadPipelineState(workspaceDir, activeAfter)}
-	}
-}
-
 // newModel 创建完整的 TUI 状态模型，并初始化输入框、滚动区和系统消息。
 func newModel(ctx context.Context, runner Runner, sessionID string, controller ModelConfigController, settingsController SettingsController, subagentController SubagentController, sessionStore SessionStore, anchor *terminalCursorAnchor) appModel {
 	now := time.Now()
@@ -99,7 +87,6 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 		viewport:                  vp,
 		cursorFrameAt:             now,
 		uiAnimationFrameScheduled: true,
-		pipelineActiveAfter:       now,
 		worktreeCWD:               skillRoot,
 		worktree:                  worktreeSnapshot{name: filepath.Base(filepath.Clean(skillRoot))},
 		worktreeReader:            readWorktreeStatus,
@@ -111,7 +98,6 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 		toolInspectIndex:          -1,
 		toolHoverIndex:            -1,
 		historyIndex:              -1,
-		latestTodoIndex:           -1,
 		transcript:                nil,
 	}
 	model.activateThemeStyles()
@@ -211,11 +197,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			frameCmd = m.scheduleClockTick() // 空闲：由低频率时钟链接手
 		}
-		pollCmd := pipelinePollCmd(m.pipelineActiveAfter)
-		if frameCmd == nil {
-			return m, pollCmd
+		if frameCmd != nil {
+			return m, frameCmd
 		}
-		return m, tea.Batch(frameCmd, pollCmd)
 	case clockTickMsg:
 		m.clockTickScheduled = false
 		now := time.Time(msg)
@@ -366,9 +350,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				touchTranscriptEntry(&m.transcript[assistantIndex])
 				m.refreshViewport()
 			}
-			if hadModelOutput && m.assistantFinalAnswerVisible(assistantIndex) {
-				m.foldCompletedTodoAfterFinalAnswer()
-			}
+			_ = hadModelOutput
+			_ = assistantIndex
 		}
 		m.doneAssistant = -1
 		m.isGenerating = false
@@ -546,9 +529,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.applyCursorAnimation()
 		return m, nil
-	case pipelineStateUpdatedMsg:
-		m.pipelineState = msg.state
-		return m, nil
 	case worktreeRefreshMsg:
 		if msg.err == nil && msg.snapshot.visible() {
 			m.worktree = msg.snapshot
@@ -638,9 +618,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.subagentPicker != nil {
 			return m.handleSubagentPickerKey(msg)
 		}
-		if m.todoPage != nil {
-			return m.handleTodoPageKey(msg)
-		}
 		if m.toolInspectActive {
 			return m.handleToolInspectKey(msg)
 		}
@@ -660,13 +637,18 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "ctrl+t" {
 			return m.openToolInspect()
 		}
-		if msg.String() == "ctrl+p" {
-			return m.openTodoPage()
-		}
+
 		if msg.String() == "ctrl+v" && !m.isTerminalWorkRunning() {
 			return m, clipboardPasteCmd(m.ctx, textareaAbsoluteCursor(m.input))
 		}
 		if msg.String() == "ctrl+g" {
+			// ctrl+g 是 subagent 面板的全局 toggle：面板打开时由
+			// handleSubagentPickerKey 拦截并关闭；subagent preview 中按下
+			// 视为收起面板，直接返回主 transcript；其余状态打开面板。
+			if m.subagentPreview != nil {
+				m.restoreMainTranscriptFromSubagentPreview()
+				return m, m.input.Focus()
+			}
 			return m.openSubagentPicker()
 		}
 		// 补全激活时：只拦截导航键和确认键，其余按键正常透传给输入框
@@ -823,9 +805,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Action == tea.MouseActionPress && m.clickActionPending {
 			m.clickActionPending = false
 			m.clickActionSeq++
-		}
-		if m.todoPage != nil {
-			return m.handleTodoPageMouse(msg)
 		}
 		if isHorizontalMouseWheel(msg) {
 			return m, nil

@@ -278,3 +278,33 @@ func TestEnvelopeTornTailStillTruncates(t *testing.T) {
 }
 
 var _ = filepath.Join
+
+func TestParseTranscriptLine(t *testing.T) {
+	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+
+	// 统一信封（新格式）
+	env, _ := recordToEnvelope(Record{Seq: 7, Kind: JournalMessage, Message: msg(message.RoleUser, "envelope msg"), CreatedAt: now})
+	envJSON, _ := json.Marshal(env)
+	rec, err := ParseTranscriptLine(envJSON)
+	if err != nil {
+		t.Fatalf("parse envelope: %v", err)
+	}
+	if rec.Kind != JournalMessage || rec.Message.Content != "envelope msg" || !rec.CreatedAt.Equal(now) {
+		t.Fatalf("envelope parse mismatch: %+v", rec)
+	}
+
+	// legacy Record（旧格式）
+	legacy, _ := json.Marshal(Record{Seq: 2, Kind: JournalAssistant, TurnID: "t1", Message: msg(message.RoleAssistant, "legacy msg"), CreatedAt: now})
+	rec, err = ParseTranscriptLine(legacy)
+	if err != nil {
+		t.Fatalf("parse legacy: %v", err)
+	}
+	if rec.Kind != JournalAssistant || rec.Message.Content != "legacy msg" || rec.TurnID != "t1" {
+		t.Fatalf("legacy parse mismatch: %+v", rec)
+	}
+
+	// 损坏行必须报错
+	if _, err := ParseTranscriptLine([]byte("not json")); err == nil {
+		t.Fatal("garbage line must error")
+	}
+}

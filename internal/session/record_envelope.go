@@ -137,3 +137,27 @@ func isEnvelopeLine(line []byte) bool {
 	}
 	return probe.Type != ""
 }
+
+// ParseTranscriptLine 解析一行 transcript，统一信封（新格式）与 legacy
+// Record（旧格式）都还原为 Record。语义与 store 内部读取（readOwnRecords）
+// 完全一致，供 UI 等外部读取方复用。
+func ParseTranscriptLine(line []byte) (Record, error) {
+	if isEnvelopeLine(line) {
+		var env es.Envelope
+		if err := json.Unmarshal(line, &env); err != nil {
+			return Record{}, err
+		}
+		if err := env.Validate(); err != nil {
+			return Record{}, err
+		}
+		return envelopeToRecord(env)
+	}
+	var rec Record
+	if err := json.Unmarshal(line, &rec); err != nil {
+		return Record{}, err
+	}
+	if rec.Kind == "" {
+		rec.Kind = JournalMessage
+	}
+	return rec, nil
+}

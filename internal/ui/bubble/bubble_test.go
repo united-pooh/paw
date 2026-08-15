@@ -5459,6 +5459,42 @@ func TestEscReturnsFromSubagentPreviewToMainTranscript(t *testing.T) {
 	}
 }
 
+// TestCtrlGTogglesSubagentPreviewClosed 验证 subagent preview 中按 ctrl+g
+// 直接收起面板并返回主 transcript（ctrl+g 全局 toggle 语义）。
+func TestCtrlGTogglesSubagentPreviewClosed(t *testing.T) {
+	mainTranscript := []transcriptEntry{{kind: entryUser, title: "you", body: "main message"}}
+	model := newTestModel(&fakeRunner{})
+	model.sessionID = "session-1"
+	model.viewport.Width = 80
+	model.viewport.Height = 2
+	model.subagentPreview = &subagentTranscriptPreview{
+		task:             subagent.TaskSnapshot{ID: "agent-2", SessionID: "agent-2"},
+		parentSessionID:  "session-1",
+		parentTranscript: copyTranscriptEntries(mainTranscript),
+	}
+	model.input.SetValue("main input")
+	model.transcript = []transcriptEntry{{kind: entryAssistant, title: "assistant", body: "subagent message"}}
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
+	model = next.(appModel)
+
+	if model.sessionID != "session-1" {
+		t.Fatalf("sessionID = %q, want session-1", model.sessionID)
+	}
+	if model.subagentPreview != nil {
+		t.Fatalf("subagentPreview = %#v, want nil after ctrl+g toggle", model.subagentPreview)
+	}
+	if model.subagentPicker != nil {
+		t.Fatalf("subagentPicker = %#v, want nil after ctrl+g toggle", model.subagentPicker)
+	}
+	if len(model.transcript) != 1 || model.transcript[0].body != "main message" {
+		t.Fatalf("transcript = %#v, want restored main transcript", model.transcript)
+	}
+	if got := model.input.Value(); got != "main input" {
+		t.Fatalf("input value = %q, want preserved", got)
+	}
+}
+
 // TestSlashPrefixTriggersCommandCompletion 验证输入 / 前缀触发命令补全。
 func TestSlashPrefixTriggersCommandCompletion(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
@@ -6757,194 +6793,6 @@ func TestRenderSubagentsCardContent_ClampsToHeight(t *testing.T) {
 	}
 }
 
-// TestRenderPipelineOrTasksContent_HidesTasksWhenNoPipeline 验证无 pipeline 时不显示空 tasks 小块。
-func TestRenderPipelineOrTasksContent_HidesTasksWhenNoPipeline(t *testing.T) {
-	model := newTestModel(&fakeRunner{})
-	model.pipelineState.detected = false
-	result := model.renderPipelineOrTasksContent(28, 10)
-	for _, hidden := range []string{"tasks", "idle", "no tasks"} {
-		if strings.Contains(result, hidden) {
-			t.Errorf("no-pipeline card = %q, want no %q", result, hidden)
-		}
-	}
-}
-
-// TestRenderPipelineOrTasksContent_ShowsPipelineWhenDetected 验证检测到 pipeline 时显示 pipeline 内容。
-func TestRenderPipelineOrTasksContent_ShowsPipelineWhenDetected(t *testing.T) {
-	model := newTestModel(&fakeRunner{})
-	model.pipelineState.detected = true
-	result := model.renderPipelineOrTasksContent(28, 10)
-	if !strings.Contains(result, "pipeline") {
-		t.Errorf("pipeline card = %q, want 'pipeline' content", result)
-	}
-}
-
-func TestRenderPipelineWindowedContent_UsesFullWidthProgressAndRows(t *testing.T) {
-	model := newTestModel(&fakeRunner{})
-	model.pipelineState.detected = true
-	model.pipelineState.doneCount = 5
-	model.pipelineState.activeIdx = 5
-	for i := 0; i < len(model.pipelineState.phases); i++ {
-		model.pipelineState.phases[i] = pipelinePhaseEntry{
-			name:   pipelineArtifacts[i][0],
-			status: phaseStatusPending,
-		}
-	}
-	for i := 0; i < 5; i++ {
-		model.pipelineState.phases[i].status = phaseStatusDone
-	}
-	model.pipelineState.phases[5].status = phaseStatusActive
-
-	width := 32
-	result := model.renderPipelineWindowedContent(width, 14)
-	lines := strings.Split(ansi.Strip(result), "\n")
-	if len(lines) < 6 {
-		t.Fatalf("pipeline content = %q, want dashboard rows", result)
-	}
-	progress := lines[2]
-	if got := lipgloss.Width(progress); got != width {
-		t.Fatalf("progress width = %d, want %d in %q", got, width, progress)
-	}
-	if !strings.Contains(progress, "▰") || !strings.Contains(progress, "▶") || !strings.Contains(progress, "▱") {
-		t.Fatalf("progress = %q, want done, active, and pending cells", progress)
-	}
-	if strings.Contains(lines[3], "…") {
-		t.Fatalf("stats row = %q, should not truncate compact labels", lines[3])
-	}
-	for _, line := range lines {
-		if strings.Contains(line, "Execution") && strings.Contains(line, "now") {
-			if got := lipgloss.Width(line); got != width {
-				t.Fatalf("current stage row width = %d, want %d in %q", got, width, line)
-			}
-			return
-		}
-	}
-	t.Fatalf("pipeline content = %q, want current Execution row", result)
-}
-
-func TestRenderPipelineWindowedContent_CompactsLongTimeline(t *testing.T) {
-	model := newTestModel(&fakeRunner{})
-	model.pipelineState.detected = true
-	model.pipelineState.doneCount = 5
-	model.pipelineState.activeIdx = 5
-	for i := 0; i < len(model.pipelineState.phases); i++ {
-		model.pipelineState.phases[i] = pipelinePhaseEntry{
-			name:   pipelineArtifacts[i][0],
-			status: phaseStatusPending,
-		}
-	}
-	for i := 0; i < 5; i++ {
-		model.pipelineState.phases[i].status = phaseStatusDone
-	}
-	model.pipelineState.phases[5].status = phaseStatusActive
-
-	result := ansi.Strip(model.renderPipelineWindowedContent(36, 40))
-	visibleStages := 0
-	for _, pa := range pipelineArtifacts {
-		if strings.Contains(result, pa[0]) {
-			visibleStages++
-		}
-	}
-	if visibleStages > pipelineMaxStageRows {
-		t.Fatalf("visible stages = %d, want <= %d\n%s", visibleStages, pipelineMaxStageRows, result)
-	}
-	if strings.Contains(result, "Cleanup") {
-		t.Fatalf("compact timeline should not show distant Cleanup stage:\n%s", result)
-	}
-}
-
-func TestRenderActivityPipelineProgressDoesNotWrap(t *testing.T) {
-	model := newTestModel(&fakeRunner{})
-	model.ready = true
-	model.width = 80
-	model.height = 24
-	model.pipelineState.detected = true
-	model.pipelineState.doneCount = 5
-	model.pipelineState.activeIdx = 5
-	for i := 0; i < len(model.pipelineState.phases); i++ {
-		model.pipelineState.phases[i] = pipelinePhaseEntry{
-			name:   pipelineArtifacts[i][0],
-			status: phaseStatusPending,
-		}
-	}
-	for i := 0; i < 5; i++ {
-		model.pipelineState.phases[i].status = phaseStatusDone
-	}
-	model.pipelineState.phases[5].status = phaseStatusActive
-
-	model.relayout()
-	model.openActivity(activityTabPipeline)
-	panel := model.renderActivityBox()
-	lines := strings.Split(ansi.Strip(panel), "\n")
-	for _, line := range lines {
-		if strings.TrimSpace(line) == "▱▱" {
-			t.Fatalf("right panel has wrapped progress remainder line: %q\n%s", line, ansi.Strip(panel))
-		}
-	}
-}
-
-func TestLoadPipelineState_DetectedWhenSpecExists(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "spec.json"), []byte(`{}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	state := loadPipelineState(dir, time.Time{})
-	if !state.detected {
-		t.Errorf("detected = false, want true when spec.json exists")
-	}
-}
-
-func TestLoadPipelineState_NotDetectedWhenEmpty(t *testing.T) {
-	dir := t.TempDir()
-	state := loadPipelineState(dir, time.Time{})
-	if state.detected {
-		t.Errorf("detected = true, want false for empty dir")
-	}
-}
-
-func TestLoadPipelineState_ActiveIdxAfterSpec(t *testing.T) {
-	dir := t.TempDir()
-	// spec.json exists → Spec (index 1) is done, Plan (index 2) is active
-	os.WriteFile(filepath.Join(dir, "spec.json"), []byte(`{}`), 0o644)
-	state := loadPipelineState(dir, time.Time{})
-	if state.activeIdx != 2 { // Plan
-		t.Errorf("activeIdx = %d, want 2 (Plan) when spec exists", state.activeIdx)
-	}
-}
-
-func TestLoadPipelineState_IgnoresStaleWorkspaceAfterStartup(t *testing.T) {
-	dir := t.TempDir()
-	specPath := filepath.Join(dir, "spec.json")
-	if err := os.WriteFile(specPath, []byte(`{}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cutoff := time.Now()
-	old := cutoff.Add(-2 * time.Hour)
-	if err := os.Chtimes(specPath, old, old); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(dir, old, old); err != nil {
-		t.Fatal(err)
-	}
-
-	state := loadPipelineState(dir, cutoff)
-	if state.detected {
-		t.Fatalf("detected = true, want false for stale workspace")
-	}
-}
-
-func TestLoadPipelineState_DetectsWorkspaceUpdatedAfterStartup(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "spec.json"), []byte(`{}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	state := loadPipelineState(dir, time.Now().Add(-time.Hour))
-	if !state.detected {
-		t.Fatalf("detected = false, want true for recently updated workspace")
-	}
-}
-
 // TestCtrlC_清空时关闭候选框 验证 Ctrl+C 同时关闭文件补全候选框。
 func TestCtrlC_清空时关闭候选框(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
@@ -6966,7 +6814,6 @@ func TestCtrlC_清空时关闭候选框(t *testing.T) {
 	}
 }
 
-// TestRenderPipelineWindowedContent_ShowsCurrentStage 验证 Pipeline 滚动窗口正确显示当前阶段。
 func TestFullLayout_StatusDockVisibleWithoutSidebar(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.width = 100
@@ -6980,60 +6827,6 @@ func TestFullLayout_StatusDockVisibleWithoutSidebar(t *testing.T) {
 	}
 	if strings.Contains(view, "subagents") {
 		t.Errorf("View() = %q, should not contain persistent subagents sidebar", view)
-	}
-}
-
-func TestFullLayout_PipelineAppearsOnlyInActivityModal(t *testing.T) {
-	model := newTestModel(&fakeRunner{})
-	model.width = 100
-	model.height = 30
-	model.ready = true
-	model.pipelineState.detected = true
-	model.pipelineState.activeIdx = 1
-	model.pipelineState.phases[0] = pipelinePhaseEntry{name: "Brainstorm", status: phaseStatusDone}
-	model.pipelineState.phases[1] = pipelinePhaseEntry{name: "Spec", status: phaseStatusActive}
-	model.relayout()
-
-	view := model.View()
-	if strings.Contains(strings.ToLower(view), "pipeline") {
-		t.Errorf("View() = %q, should not contain persistent pipeline card", view)
-	}
-	model.openActivity(activityTabPipeline)
-	view = model.View()
-	if !strings.Contains(strings.ToLower(view), "pipeline") {
-		t.Errorf("View() = %q, want pipeline in Activity modal", view)
-	}
-}
-
-func TestRenderPipelineWindowedContent_ShowsCurrentStage(t *testing.T) {
-	model := newTestModel(&fakeRunner{})
-	model.pipelineState.detected = true
-	model.pipelineState.globalIter = 3
-	model.pipelineState.doneCount = 8
-	model.pipelineState.activeIdx = 8
-	for i := 0; i < 8; i++ {
-		model.pipelineState.phases[i] = pipelinePhaseEntry{
-			name:   pipelineArtifacts[i][0],
-			status: phaseStatusDone,
-		}
-	}
-	model.pipelineState.phases[8] = pipelinePhaseEntry{
-		name:      "Validation",
-		status:    phaseStatusActive,
-		iteration: 3,
-	}
-	for i := 9; i < 18; i++ {
-		model.pipelineState.phases[i] = pipelinePhaseEntry{
-			name: pipelineArtifacts[i][0],
-		}
-	}
-
-	result := model.renderPipelineWindowedContent(28, 12)
-	if !strings.Contains(result, "Validation") {
-		t.Errorf("windowed = %q, want Validation as current stage", result)
-	}
-	if !strings.Contains(result, "8/18") {
-		t.Errorf("windowed = %q, want 8/18 count", result)
 	}
 }
 
