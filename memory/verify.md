@@ -23,3 +23,23 @@ go test ./internal/tokentracer -count=1                 # ok
 
 - `go build ./...` green on 2026-08-13.
 - `go test ./...` green on 2026-08-13.
+
+## Input dock border layout
+
+- Bottom border order: input mode left, Token Usage middle, project/branch right.
+- Queue summary temporarily replaces the middle Token Usage region while preserving mode and project/branch anchors.
+- Boundary coverage includes 71/72-column worktree visibility, exact terminal-cell width, and long CJK project/branch labels.
+- `go build ./...`, `go test ./...`, and `git diff --check` green on 2026-08-14.
+- Visual evidence: `.agent/visual/input-dock-layout.png` and `.agent/visual/input-dock-layout.md`.
+
+## Subagent transcript preview (2026-08-15)
+
+- `go build ./...` green.
+- `go test ./...` green.
+- Real-data check: 783KB envelope-format subagent transcript parses to 38 non-empty entries via `loadSubagentTranscriptEntries` (previously 0).
+
+## Activity right sidebar (2026-08-15)
+
+- `go build ./...` green; `go test ./...` green.
+- Visual: `.agent/visual/activity-side-panel-open.png` + `activity-side-panel-card.png` + evidence note; independent pixel analysis confirmed right-edge alignment (x=[436,858] vs card x=[615,858], same right edge 857–858), vertical centering, 6 content lines incl. task list.
+- Caveat: card screenshot has a 21px stray vertical line artifact at the capture layer (same pipeline as previous evidence; absent in open shot).

@@ -85,3 +85,66 @@
 - [x] 定位输入框边框、Chat 标签、Token Usage 和 Context Process Bar 的渲染逻辑与现有测试 <!-- todo:locate -->
 - [x] 新增或调整布局测试，覆盖新的上下边框位置 <!-- todo:tests -->
 - [x] 实现输入框边框布局调整 <!-- todo:implement -->
+- [x] 调查底部边框三段布局与队列摘要覆盖规则 <!-- todo:investigate -->
+- [x] 新增/调整项目分支与 Token Usage 对调的回归测试
+- [x] 将底部边框调整为模式左、Token Usage 中、项目/分支右
+- [x] 完成边界/CJK/队列路径、全量 Go 测试及视觉验证
+
+## Subagent preview transcript blank (2026-08-15)
+
+- [x] 定位根因：session transcript 写入已迁移为统一信封 `es.Envelope`（`{"seq","type","occurred_at","schema_version","payload"}`），主会话恢复走 `store.LoadResolvedRecords`（双格式兼容），但 ctrl+g subagent preview 的 `loadSubagentTranscriptEntries` 仍直接 `json.Unmarshal` 到 `session.Record`——envelope 行不报错但字段全空，产出 0 条 entry → 预览一片空白。
+- [x] 修复：session 包导出 `ParseTranscriptLine`（envelope + legacy 双格式，语义与 store 内部 readOwnRecords 一致）；UI 加载优先走 store `LoadResolvedRecords`（与 /resume 一致，含 fork 解析），失败时文件 fallback 改用 `ParseTranscriptLine`。
+- [x] 测试：`ParseTranscriptLine` 单测（envelope/legacy/损坏行）+ bubble 层 3 个（store 路径、envelope 文件 fallback、Content fallback）。
+- [x] 验证：`go build ./...`、`go test ./...` 全绿；真实 783KB envelope subagent transcript 修复前 0 条 → 修复后 38 条非空 entries。
+
+## Ctrl+G subagent panel global toggle (2026-08-15)
+
+- [x] 现状梳理：ctrl+g 打开 Activity（Subagents 选择器）面板，面板内再按 ctrl+g/esc 关闭；但 subagent preview 中按 ctrl+g 会再次弹出面板（preview 状态残留），toggle 语义不完整。
+- [x] 用户选择方案：ctrl+g 升级为全局 toggle。
+- [x] 实现：app.go ctrl+g 分支在 subagentPreview 非 nil 时直接退出 preview 返回主 transcript（restoreMainTranscriptFromSubagentPreview），其余状态打开面板；面板内 ctrl+g 关闭行为保持不变。
+- [x] 测试：新增 TestCtrlGTogglesSubagentPreviewClosed（preview 中 ctrl+g → 恢复主 transcript、preview/picker 均 nil、输入保留）；现有 ctrl+g 打开/关闭测试全绿。
+- [x] 验证：go build ./...、go test ./... 全绿；README 快捷键说明同步为「展开/收起 toggle」。
+
+## Ctrl+G opens Activity as right sidebar (2026-08-15)
+
+- [x] 澄清需求：用户说的「subagent 侧边面板」= subagent 运行时屏幕右侧的悬浮任务卡（task_card.go，placeRightCenteredOverlay 贴右垂直居中）；用户选择：ctrl+g 在右侧展开完整 subagent 面板，替代居中 modal。
+- [x] 实现：placeOpaqueOverlay 增加 overlayAlignRight；renderActivityBox 改为右侧面板尺寸（activityPanelWidth = min(60, contentWidth/2)、高度 = transcriptHeight-2）；renderTranscriptRegion 在 subagentPicker 打开时右侧合成 Activity 面板、隐藏悬浮任务卡；renderActiveModalBox 移除 Activity 居中分支。
+- [x] 测试：新增 activity_side_panel_test.go 3 个（右侧渲染 + 任务卡隐藏 + 面板宽度约束）；既有 Activity/ctrl+g/preview 测试全绿。
+- [x] 视觉验证：真实 View() 输出 → HTML fixture → Chrome 截图（.agent/visual/activity-side-panel-{open,card}.png），独立 subagent 像素分析确认面板贴右、右缘对齐、垂直居中、内容正确；已知截图层伪影（card 图游离竖线）已记录。
+- [x] 验证：go build ./...、go test ./... 全绿；README 快捷键说明更新。
+
+## Select → question 改名 + 批量提问 (2026-08-15)
+
+- [x] /grilling 澄清设计：纯 `questions` 数组（breaking）、结果按顺序数组返回、整批原子取消、旧 `Select` 不兼容、行为模式写入全局 `~/.paw/agent.md`。
+- [x] selecttool 包：`decodeInput` 解码 questions 数组并逐题校验（错误带 `questions[i]:` 前缀）；`Tool.Run` 逐题 `Broker.Ask` 串行展示，任一题取消即丢弃已作答结果整批置 cancelled；返回 `BatchResult`（`{"results":[...]}`）；`Request` 增加 `BatchIndex/BatchSize` 元数据（UI 进度用）。
+- [x] 工具改名 `question`：UI 渲染（utils.go/transcript.go/subagent_picker.go）、plan/filter、loop/prompt_builder（新增批量策略文案）、plan/prompt、docs/plan-mode-runtime-design.md 全部切换；transcript 摘要改「answered N questions」，展开详情按 Q1/Q2 分块。
+- [x] dock 标题 `QUESTION k/N` 批量进度指示（selection_dock_render.go）。
+- [x] 测试：select 包（批量顺序/原子取消/元数据）、UI（批量详情/摘要/进度指示）、register/prompt_builder/filter/tool_track 更新；新增 docs/design-question-tool.md。
+- [x] 验证：`go build ./...`、`go test ./...` 全绿。
+- [x] docs 设计记录 + CHANGELOG 条目 <!-- todo:6 -->
+- [x] 全局 ~/.paw/agent.md 写入 question 工具行为模式 <!-- todo:7 -->
+- [x] 调查 question 批量协议、Broker 与当前串行流程 <!-- todo:investigate-protocol -->
+- [x] 调查 selection dock 状态机、键盘事件与渲染布局 <!-- todo:investigate-ui -->
+- [x] 调查选中态样式定义与现有测试约束 <!-- todo:investigate-style-tests -->
+- [x] 阅读设计文档并运行相关测试建立基线 <!-- todo:investigate-baseline -->
+- [x] 通过 /grill-me 收敛确认页、取消、导航和样式细节 <!-- todo:grill-design -->
+- [x] 输出调查结论与待确认实现方案，等待执行批准 <!-- todo:propose-plan -->
+- [x] 重构 Broker/Tool 批量请求为单次批量事件与完整结果返回 <!-- todo:implement-protocol -->
+- [x] 实现 question dock 的问题页、确认页、左右导航与选择状态保存 <!-- todo:implement-dock -->
+- [x] 统一选中态主题令牌并补充协议/UI 回归测试 <!-- todo:implement-style-tests -->
+- [x] 更新设计文档与运行 go build ./...、go test ./... <!-- todo:verify-document -->
+- [x] 阶段一：引入 conc，保护 in-process subagent 与池管理 goroutine <!-- todo:phase1 -->
+- [x] 检查当前工作区、设计文档和已有 subagent 改动，恢复准确实现边界 <!-- todo:stage0-state -->
+- [x] 阶段一：引入 conc，保护 in-process subagent 与池管理 goroutine <!-- todo:stage1-conc -->
+- [x] 阶段一：引入 conc，保护 in-process subagent 与池管理 goroutine <!-- todo:phase-1-conc -->
+- [x] 阶段一：引入 conc，保护 in-process subagent 与池管理 goroutine <!-- todo:phase1-conc -->
+- [x] model 包：ProxyConfig 类型 + Config.Proxy 字段 + client transport 构建（auto/direct/custom） <!-- todo:t1 -->
+- [x] config 包：Document.Proxy / Provider.Proxy / SetProxy Operation / clone / mergePreset / schema <!-- todo:t2 -->
+- [x] config 包：runtimeConfig 组装 effective proxy + discovery 应用 proxy <!-- todo:t3 -->
+- [x] UI：新增「连接」tab（全局代理）+ Provider 动作页代理选项 + 文本编辑 <!-- todo:t4 -->
+- [x] 测试：新增 proxy 相关单测 + go build ./... && go test ./... 全绿 <!-- todo:t5 -->
+- [x] Write 对已存在文件强制先 Read（VerifyRequired，新建文件不受影响） <!-- todo:w1 -->
+- [x] Edit 拦截报错强化：两步指引 + 禁止 Bash/Write 绕过 <!-- todo:w2 -->
+- [x] Edit/Write/Read 工具 Description 强化先 Read 契约 <!-- todo:w3 -->
+- [x] 更新 write/edit/read_state 相关测试对齐新行为 <!-- todo:w4 -->
+- [x] go build ./... && go test ./internal/tool/... 全绿 <!-- todo:w5 -->
