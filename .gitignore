@@ -62,9 +62,7 @@ quant-mcp/
 quant-study/
 src/quant_mcp/
 examples/
-docs/codex/
-docs/superpowers/
-docs/mockups/
+docs/
 memory.md
 memory/
 .agents/
