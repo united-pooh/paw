@@ -8,20 +8,22 @@ import (
 )
 
 type options struct {
-	prompt           string
-	sessionID        string
-	subagentWorker   bool
-	streamMA         bool
-	tokenTracer      bool
-	tokenTracerOpen  bool
-	tokenTracerPort  int
-	allowOutsideRead bool
+	prompt             string
+	sessionID          string
+	subagentWorker     bool
+	subagentWorkerPool bool
+	streamMA           bool
+	tokenTracer        bool
+	tokenTracerOpen    bool
+	tokenTracerPort    int
+	allowOutsideRead   bool
 }
 
 func parseOptions() options {
 	prompt := flag.String("p", "", "single-turn prompt; omit to start Bubble Tea UI")
 	sessionID := flag.String("s", "", "session ID; omit to resume/create by cwd")
 	subagentWorker := flag.Bool("subagent-worker", false, "run hidden subagent worker")
+	subagentWorkerPool := flag.Bool("subagent-worker-pool", false, "run hidden long-lived subagent pool worker")
 	streamMA := flag.Bool("streamma", defaultStreamMAEnabled(), "enable /streamma and /streamma-trace commands")
 	tokenTracer := flag.Bool("token-tracer", defaultTokenTracerEnabled(), "start local Token Tracer dashboard in interactive mode")
 	tokenTracerOpen := flag.Bool("token-tracer-open", defaultTokenTracerOpen(), "open Token Tracer dashboard in the default browser")
@@ -31,14 +33,15 @@ func parseOptions() options {
 	flag.Parse()
 
 	return options{
-		prompt:           *prompt,
-		sessionID:        *sessionID,
-		subagentWorker:   *subagentWorker,
-		streamMA:         *streamMA,
-		tokenTracer:      *tokenTracer,
-		tokenTracerOpen:  *tokenTracerOpen,
-		tokenTracerPort:  *tokenTracerPort,
-		allowOutsideRead: *yolo || *dangerously,
+		prompt:             *prompt,
+		sessionID:          *sessionID,
+		subagentWorker:     *subagentWorker,
+		subagentWorkerPool: *subagentWorkerPool,
+		streamMA:           *streamMA,
+		tokenTracer:        *tokenTracer,
+		tokenTracerOpen:    *tokenTracerOpen,
+		tokenTracerPort:    *tokenTracerPort,
+		allowOutsideRead:   *yolo || *dangerously,
 	}
 }
 

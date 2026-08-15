@@ -11,10 +11,13 @@ import (
 	"os"
 	"os/exec"
 	coremcp "paw/internal/mcp"
+	"paw/internal/model"
 	"paw/internal/settings"
 	"paw/internal/tokentracer"
 	"strings"
 	"sync"
+
+	"github.com/sourcegraph/conc"
 )
 
 type WorkerRequest struct {
@@ -24,8 +27,11 @@ type WorkerRequest struct {
 	ParentTurnID    string               `json:"parent_turn_id,omitempty"`
 	ParentTaskID    string               `json:"parent_task_id,omitempty"`
 	Prompt          string               `json:"prompt"`
+	SystemPrompt    string               `json:"system_prompt,omitempty"`
 	Description     string               `json:"description,omitempty"`
 	DisableTools    bool                 `json:"disable_tools,omitempty"`
+	Streaming       bool                 `json:"streaming,omitempty"`
+	BootstrapOnly   bool                 `json:"bootstrap_only,omitempty"`
 	ContextMode     settings.ContextMode `json:"context_mode"`
 	RunMode         settings.RunMode     `json:"run_mode"`
 	Depth           int                  `json:"depth"`
@@ -42,6 +48,16 @@ type WorkerResult struct {
 	UsedTokens int                `json:"used_tokens,omitempty"`
 	Usage      *tokentracer.Usage `json:"usage,omitempty"`
 }
+
+type WorkerStreamEvent struct {
+	Delta    string       `json:"delta,omitempty"`
+	Thinking string       `json:"thinking,omitempty"`
+	Done     bool         `json:"done,omitempty"`
+	Error    string       `json:"error,omitempty"`
+	Usage    *model.Usage `json:"usage,omitempty"`
+}
+
+const workerProtocolV2 = 2
 
 type Launcher interface {
 	Start(ctx context.Context, req WorkerRequest) (Process, error)
@@ -202,25 +218,32 @@ type execProcess struct {
 }
 
 const (
+	workerMessageHello     = "worker.hello"
+	workerMessageReady     = "worker.ready"
 	workerMessageStart     = "worker.start"
+	workerMessageEvent     = "worker.event"
 	workerMessageMCPCall   = "mcp.call"
 	workerMessageMCPResult = "mcp.result"
 	workerMessageSnapshot  = "mcp.snapshot"
 	workerMessageResult    = "worker.result"
 	workerMessageCancel    = "worker.cancel"
+	workerMessageShutdown  = "worker.shutdown"
 )
 
 // workerMessage is a newline-delimited envelope shared by the parent worker
 // launcher and the child process. WorkerRequest/WorkerResult fields are
 // flattened to keep the wire format simple and forward-compatible.
 type workerMessage struct {
-	Type      string           `json:"type"`
-	RequestID string           `json:"request_id,omitempty"`
-	Tool      string           `json:"tool,omitempty"`
-	Input     json.RawMessage  `json:"input,omitempty"`
-	Content   string           `json:"content,omitempty"`
-	Error     string           `json:"error,omitempty"`
-	Snapshot  coremcp.Snapshot `json:"snapshot,omitempty"`
+	Protocol  int                `json:"protocol,omitempty"`
+	Seq       uint64             `json:"seq,omitempty"`
+	Type      string             `json:"type"`
+	RequestID string             `json:"request_id,omitempty"`
+	Tool      string             `json:"tool,omitempty"`
+	Input     json.RawMessage    `json:"input,omitempty"`
+	Content   string             `json:"content,omitempty"`
+	Error     string             `json:"error,omitempty"`
+	Snapshot  coremcp.Snapshot   `json:"snapshot,omitempty"`
+	Event     *WorkerStreamEvent `json:"event,omitempty"`
 
 	TaskID          string               `json:"task_id,omitempty"`
 	SessionID       string               `json:"session_id,omitempty"`
@@ -228,8 +251,11 @@ type workerMessage struct {
 	ParentTurnID    string               `json:"parent_turn_id,omitempty"`
 	ParentTaskID    string               `json:"parent_task_id,omitempty"`
 	Prompt          string               `json:"prompt,omitempty"`
+	SystemPrompt    string               `json:"system_prompt,omitempty"`
 	Description     string               `json:"description,omitempty"`
 	DisableTools    bool                 `json:"disable_tools,omitempty"`
+	Streaming       bool                 `json:"streaming,omitempty"`
+	BootstrapOnly   bool                 `json:"bootstrap_only,omitempty"`
 	ContextMode     settings.ContextMode `json:"context_mode,omitempty"`
 	RunMode         settings.RunMode     `json:"run_mode,omitempty"`
 	Depth           int                  `json:"depth,omitempty"`
@@ -245,12 +271,16 @@ type workerMessage struct {
 type WorkerMessage = workerMessage
 
 const (
+	WorkerMessageHello     = workerMessageHello
+	WorkerMessageReady     = workerMessageReady
 	WorkerMessageStart     = workerMessageStart
+	WorkerMessageEvent     = workerMessageEvent
 	WorkerMessageMCPCall   = workerMessageMCPCall
 	WorkerMessageMCPResult = workerMessageMCPResult
 	WorkerMessageSnapshot  = workerMessageSnapshot
 	WorkerMessageResult    = workerMessageResult
 	WorkerMessageCancel    = workerMessageCancel
+	WorkerMessageShutdown  = workerMessageShutdown
 )
 
 func NewWorkerStartMessage(req WorkerRequest, snapshot coremcp.Snapshot) WorkerMessage {
@@ -560,14 +590,17 @@ func (l *inProcessLauncher) Start(ctx context.Context, req WorkerRequest) (Proce
 	}
 	childCtx, cancel := context.WithCancel(ctx)
 	p := &inProcessProcess{
-		pid:    l.pid,
-		cancel: cancel,
-		done:   make(chan workerDone, 1),
+		pid:       l.pid,
+		cancel:    cancel,
+		taskID:    req.TaskID,
+		sessionID: req.SessionID,
+		done:      make(chan workerDone, 1),
+		waitGroup: conc.NewWaitGroup(),
 	}
-	go func() {
+	p.waitGroup.Go(func() {
 		result, err := l.run(childCtx, req)
 		p.done <- workerDone{result: result, err: err}
-	}()
+	})
 	return p, nil
 }
 
@@ -577,10 +610,17 @@ type workerDone struct {
 }
 
 type inProcessProcess struct {
-	pid    int
-	cancel context.CancelFunc
-	once   sync.Once
-	done   chan workerDone
+	pid       int
+	cancel    context.CancelFunc
+	taskID    string
+	sessionID string
+	done      chan workerDone
+	waitGroup *conc.WaitGroup
+
+	waitOnce sync.Once
+	mu       sync.RWMutex
+	result   WorkerResult
+	err      error
 }
 
 func (p *inProcessProcess) PID() int {
@@ -594,15 +634,39 @@ func (p *inProcessProcess) Wait() (WorkerResult, error) {
 	if p == nil {
 		return WorkerResult{ExitCode: 1}, fmt.Errorf("subagent process is nil")
 	}
-	done := <-p.done
-	p.once.Do(p.cancel)
-	return done.result, done.err
+	p.waitOnce.Do(func() {
+		recovered := p.waitGroup.WaitAndRecover()
+		if p.cancel != nil {
+			p.cancel()
+		}
+
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if recovered != nil {
+			p.result = WorkerResult{
+				TaskID:    p.taskID,
+				SessionID: p.sessionID,
+				Error:     recovered.AsError().Error(),
+				ExitCode:  1,
+			}
+			p.err = recovered.AsError()
+			return
+		}
+		done := <-p.done
+		p.result = done.result
+		p.err = done.err
+	})
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.result, p.err
 }
 
 func (p *inProcessProcess) Stop() error {
 	if p == nil {
 		return nil
 	}
-	p.once.Do(p.cancel)
+	if p.cancel != nil {
+		p.cancel()
+	}
 	return nil
 }
