@@ -116,7 +116,7 @@ func (m appModel) renderThemePickerBox() string {
 		label := fmt.Sprintf("%s%-22s %-22s %-5s %s %s", mark, item.Name, item.ID, item.Mode, swatches, saved)
 		style := m.styles.Unselected
 		if i == m.themePicker.selectedIdx {
-			style = m.styles.Selected
+			style = m.styles.SelectionSelected
 		}
 		lines = append(lines, style.Render(truncateStyledCellLine(label, 74)))
 	}
