@@ -74,4 +74,43 @@ func TestAutoContinueModelRoundInputIsValid(t *testing.T) {
 	}
 }
 
+func TestEvaluateCompletionTracksStaleTodoTurns(t *testing.T) {
+	broker := todo.NewBroker()
+	defer broker.Close()
+	runner := NewRunner(&autoContinueModel{}, &fakeUI{}, tool.NewRegistry(), nil, "")
+	runner.SetTodoBroker(broker)
+	runner.SetAutoContinueConfig(AutoContinueConfig{Enabled: true, BaseBudget: 100, AbsoluteMax: 100, MaxNoProgress: 100, StaleTodoThreshold: 3})
+
+	snapshot := todo.Snapshot{Items: []todo.Item{{ID: "work", Content: "finish", Status: todo.StatusInProgress}}}
+	broker.Publish(snapshot)
+
+	round := func(content string) int {
+		decision, _, _, _ := runner.evaluateCompletion(message.Message{Role: message.RoleAssistant, Content: content}, false, 1, 0)
+		return decision.StaleTodoTurns
+	}
+	if got := round("first"); got != 0 {
+		t.Fatalf("baseline round stale = %d, want 0", got)
+	}
+	if got := round("second"); got != 1 {
+		t.Fatalf("round 2 stale = %d, want 1", got)
+	}
+	if got := round("third"); got != 2 {
+		t.Fatalf("round 3 stale = %d, want 2", got)
+	}
+	if got := round("fourth"); got != 3 {
+		t.Fatalf("round 4 stale = %d, want 3", got)
+	}
+
+	updated := snapshot.Clone()
+	updated.Items[0].Status = todo.StatusCompleted
+	broker.Publish(updated)
+	if got := round("fifth"); got != 0 {
+		t.Fatalf("stale after update = %d, want 0", got)
+	}
+	decision, _, _, _ := runner.evaluateCompletion(message.Message{Role: message.RoleAssistant, Content: "done"}, false, 1, 0)
+	if decision.Action != CompletionComplete {
+		t.Fatalf("action = %q, want complete", decision.Action)
+	}
+}
+
 var _ tool.Tool = (*todo.Tool)(nil)

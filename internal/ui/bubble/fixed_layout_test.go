@@ -12,7 +12,6 @@ import (
 	"github.com/muesli/termenv"
 	"paw/internal/settings"
 	"paw/internal/subagent"
-	"paw/internal/todo"
 	selecttool "paw/internal/tool/select"
 )
 
@@ -65,7 +64,7 @@ func TestViewFrameInvariantAcrossContentAndOverlays(t *testing.T) {
 	assertFixedFrame(t, model.View(), 80, 24)
 	model.sessionPicker = nil
 
-	model.openActivity(activityTabPipeline)
+	model.openActivity(activityTabTodo)
 	assertFixedFrame(t, model.View(), 80, 24)
 }
 
@@ -113,18 +112,6 @@ func TestVisualGeometryFullViewUsesUnifiedCellPipeline(t *testing.T) {
 						toolExpanded:  true,
 						toolGroupOpen: true,
 					},
-					{
-						kind: entryTodo,
-						todoSnapshot: &todo.Snapshot{
-							Explanation: "统一所有可视层的 cell 几何",
-							Items: []todo.Item{
-								{ID: "core", Content: "ANSI 与 grapheme 原子化", Status: todo.StatusCompleted},
-								{ID: "view", Content: "验证完整 View overlay", Status: todo.StatusInProgress},
-							},
-						},
-						todoExpanded: true,
-						todoLatest:   true,
-					},
 				}
 				model.relayout()
 				model.refreshViewport()
@@ -143,7 +130,7 @@ func TestVisualGeometryFullViewUsesUnifiedCellPipeline(t *testing.T) {
 				assertVisualGeometryView(t, model.View(), size.width, size.height)
 
 				model.selectionDock = nil
-				model.completion = &completion{kind: completionKindCommand, items: []string{"/model", "/tasks", "/pipeline"}}
+				model.completion = &completion{kind: completionKindCommand, items: []string{"/model", "/tasks"}}
 				model.relayout()
 				assertVisualGeometryView(t, model.View(), size.width, size.height)
 			}
@@ -280,7 +267,7 @@ func TestActivityCommandsAndTabs(t *testing.T) {
 	}
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = next.(appModel)
-	if model.subagentPicker.tab != activityTabPipeline {
+	if model.subagentPicker.tab != activityTabTodo {
 		t.Fatalf("tab=%v, want Pipeline", model.subagentPicker.tab)
 	}
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
@@ -294,9 +281,9 @@ func TestActivityCommandsAndTabs(t *testing.T) {
 		t.Fatalf("Esc activity=%#v, want nil", model.subagentPicker)
 	}
 
-	handled, cmd = model.handleCommand("/pipeline")
-	if !handled || cmd != nil || model.subagentPicker == nil || model.subagentPicker.tab != activityTabPipeline {
-		t.Fatalf("/pipeline handled=%v cmd=%v activity=%#v", handled, cmd, model.subagentPicker)
+	handled, cmd = model.handleCommand("/todo")
+	if !handled || cmd != nil || model.subagentPicker == nil || model.subagentPicker.tab != activityTabTodo {
+		t.Fatalf("/todo handled=%v cmd=%v activity=%#v", handled, cmd, model.subagentPicker)
 	}
 }
 

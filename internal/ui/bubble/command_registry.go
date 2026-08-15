@@ -150,11 +150,11 @@ func NewCommandRegistry() *CommandRegistry {
 		},
 	})
 	registry.Register(Command{
-		Name:              "/pipeline",
-		Description:       "show the current pipeline activity",
+		Name:              "/todo",
+		Description:       "show the current todo list",
 		AllowWhileRunning: true,
 		Handler: func(m *appModel, invocation string) tea.Cmd {
-			m.openActivity(activityTabPipeline)
+			m.openActivity(activityTabTodo)
 			return nil
 		},
 	})

@@ -44,7 +44,7 @@ func NewTool(broker *Broker) *Tool {
 func (*Tool) Name() string { return "update_todo" }
 
 func (*Tool) Description() string {
-	return "Maintain a full todo snapshot for complex multi-step work. Use it before substantial execution and when status materially changes; do not create a todo list for simple questions or one-step edits. Submit the complete ordered list every time, preserve stable item ids, use only pending/in_progress/completed, and keep at most one item in_progress."
+	return "Maintain a full todo snapshot for complex multi-step work. Use it before substantial execution and when status materially changes; do not create a todo list for simple questions or one-step edits. Submit the complete ordered list every time, preserve stable item ids, use only pending/in_progress/completed, and keep at most one item in_progress. Mark items completed as soon as each milestone finishes; do not batch all status updates into one final call at the very end."
 }
 
 func (*Tool) InputSchema() json.RawMessage {

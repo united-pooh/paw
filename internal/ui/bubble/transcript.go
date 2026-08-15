@@ -57,11 +57,6 @@ type transcriptRenderCacheKey struct {
 	toolFocused          bool
 	toolHovered          bool
 	toolResultOnly       bool
-	todoSnapshot         string
-	todoExpanded         bool
-	todoLatest           bool
-	todoCompletedFold    bool
-	todoCleared          bool
 	citations            string
 	width                int
 	version              int
@@ -470,7 +465,7 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 		entry.isError = isError
 		entry.toolStatus = status
 		entry.toolResult = content
-		if strings.EqualFold(name, "Select") && strings.EqualFold(status, "ok") {
+		if strings.EqualFold(name, "question") && strings.EqualFold(status, "ok") {
 			if presentation, ok := parseSelectToolPresentation(entry.toolInput, content); ok {
 				entry.toolTarget = presentation.target
 			}
@@ -1298,11 +1293,6 @@ func transcriptRenderKey(entry transcriptEntry, width int, at time.Time) transcr
 		toolFocused:          entry.toolFocused,
 		toolHovered:          entry.toolHovered,
 		toolResultOnly:       entry.toolResultOnly,
-		todoSnapshot:         transcriptTodoSnapshot(entry.todoSnapshot),
-		todoExpanded:         entry.todoExpanded,
-		todoLatest:           entry.todoLatest,
-		todoCompletedFold:    entry.todoCompletedFold,
-		todoCleared:          entry.todoCleared,
 		width:                width,
 		version:              entry.version,
 		bodyLen:              len(entry.body),
@@ -1766,7 +1756,7 @@ func toolResultForDisplay(entry transcriptEntry) string {
 		if _, detail := splitToolSummary(entry.body); strings.TrimSpace(detail) != "" {
 			result = detail
 		}
-	} else if strings.EqualFold(name, "Select") && toolEntryStatus(entry) == "ok" {
+	} else if strings.EqualFold(name, "question") && toolEntryStatus(entry) == "ok" {
 		if presentation, ok := parseSelectToolPresentation(entry.toolInput, entry.toolResult); ok {
 			result = presentation.detail
 		}
@@ -1801,12 +1791,6 @@ func renderEntry(entry transcriptEntry, width int) string {
 }
 
 func renderEntryAt(entry transcriptEntry, width int, at time.Time) string {
-	if entry.kind == entryTodo {
-		if width <= terminalCellWidth(transcriptEntryGutter) {
-			return fitStyledCellLine(renderTodoEntry(entry, width), width)
-		}
-		return indentLines(renderTodoEntry(entry, transcriptBodyWidth(width)), transcriptEntryGutter)
-	}
 	// SubagentWait 状态行：渲染为单行状态文字（如
 	// "子智能体 高松灯 正在运行 13s"），没有工具块边框、不可折叠。
 	if entry.subagentWaitRunning {
@@ -2211,7 +2195,7 @@ func renderToolTransactionEntry(entry transcriptEntry, width int, at time.Time) 
 		if _, detail := splitToolSummary(entry.body); strings.TrimSpace(detail) != "" {
 			result = detail
 		}
-	} else if strings.EqualFold(name, "Select") && status == "ok" {
+	} else if strings.EqualFold(name, "question") && status == "ok" {
 		if presentation, ok := parseSelectToolPresentation(entry.toolInput, entry.toolResult); ok {
 			result = presentation.detail
 		}

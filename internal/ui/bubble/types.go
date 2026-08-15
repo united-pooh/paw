@@ -36,8 +36,6 @@ const (
 	entryThinking
 	// entryTool 表示工具调用、工具结果或终端命令消息。
 	entryTool
-	// entryTodo 表示 Agent 提交的一次 Todo 完整快照。
-	entryTodo
 	// entryError 表示错误消息。
 	entryError
 )
@@ -65,11 +63,6 @@ type transcriptEntry struct {
 	toolFocused           bool
 	toolHovered           bool
 	toolResultOnly        bool
-	todoSnapshot          *todo.Snapshot
-	todoExpanded          bool
-	todoLatest            bool
-	todoCompletedFold     bool
-	todoCleared           bool
 	citations             []toolCitation
 	// subagentWaitRunning 标记一条 SubagentWait 状态行：运行中显示
 	// "子智能体 <名字> 正在运行 Ns"，工具完成/失败后整行从 transcript 移除，
@@ -394,7 +387,6 @@ type sessionRestoredMsg struct {
 	currentTodo     todo.Snapshot
 	hasCurrentTodo  bool
 	todoWasCleared  bool
-	latestTodoIndex int
 	err             error
 }
 
@@ -451,7 +443,6 @@ type appModel struct {
 	hasCurrentTodo             bool
 	todoWasCleared             bool
 	latestTodoIndex            int
-	todoPage                   *todoPage
 	sessionID                  string
 	modelConfig                ModelConfigController
 	configCenterController     ConfigCenterController
@@ -565,8 +556,6 @@ type appModel struct {
 	subagentPicker             *subagentPicker
 	subagentPreview            *subagentTranscriptPreview
 	completion                 *completion
-	pipelineState              pipelineState
-	pipelineActiveAfter        time.Time
 	lastActivityPollAt         time.Time // Activity 面板 ListTasks 刷新的节流时间戳
 	spinnerFrameIdx            int       // Activity 中 running 条目的动画帧索引，由 cursorFrameMsg 驱动
 	waveAmpTarget              bool      // 均衡器波浪振幅目标态（= isGenerating），翻转时更新
@@ -583,40 +572,8 @@ type activityTab int
 
 const (
 	activityTabSubagents activityTab = iota
-	activityTabPipeline
+	activityTabTodo
 )
-
-// pipelinePhaseStatus 标记单个 pipeline 阶段的状态。
-type pipelinePhaseStatus int
-
-const (
-	phaseStatusPending pipelinePhaseStatus = iota
-	phaseStatusDone
-	phaseStatusActive
-	phaseStatusRetry
-)
-
-// pipelinePhaseEntry 单个阶段的状态快照。
-type pipelinePhaseEntry struct {
-	name      string
-	artifact  string // 相对 .pipeline-workspace/ 的文件名
-	status    pipelinePhaseStatus
-	iteration int
-}
-
-// pipelineState 完整 pipeline 状态快照（每 500ms 轮询更新）。
-type pipelineState struct {
-	detected   bool // 本次 TUI 会话检测到活跃 pipeline
-	activeIdx  int  // 当前 active 阶段索引（-1 = none）
-	globalIter int  // 全局迭代（来自 execution-report.json.iteration）
-	doneCount  int  // 已完成阶段数
-	phases     [18]pipelinePhaseEntry
-}
-
-// pipelineStateUpdatedMsg 由后台轮询 cmd 发回，携带最新 pipelineState。
-type pipelineStateUpdatedMsg struct {
-	state pipelineState
-}
 
 type contextStatsProvider interface {
 	ContextStats(limitTokens int, draft string) loop.ContextStats

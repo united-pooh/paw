@@ -23,11 +23,13 @@ const (
 )
 
 type CompletionDecision struct {
-	Action      CompletionAction
-	Reason      string
-	BudgetUsed  int
-	BudgetLimit int
-	NoProgress  int
+	Action            CompletionAction
+	Reason            string
+	BudgetUsed        int
+	BudgetLimit       int
+	NoProgress        int
+	StaleTodoTurns    int
+	StaleTodoReminder bool
 }
 
 type CompletionObservation struct {
@@ -39,6 +41,7 @@ type CompletionObservation struct {
 	ContinuationUsed        int
 	NoProgressCount         int
 	ProgressHash            string
+	StaleTodoTurns          int
 }
 
 type AutoContinueConfig struct {
@@ -46,10 +49,13 @@ type AutoContinueConfig struct {
 	BaseBudget    int
 	AbsoluteMax   int
 	MaxNoProgress int
+	// StaleTodoThreshold 是 todo 快照连续未变化多少轮后在续行提示中追加
+	// "立即更新 todo" 提醒；<=0 禁用该提醒。
+	StaleTodoThreshold int
 }
 
 func DefaultAutoContinueConfig() AutoContinueConfig {
-	return AutoContinueConfig{Enabled: true, BaseBudget: 2, AbsoluteMax: 12, MaxNoProgress: 2}
+	return AutoContinueConfig{Enabled: true, BaseBudget: 2, AbsoluteMax: 12, MaxNoProgress: 2, StaleTodoThreshold: 3}
 }
 
 type CompletionGate struct {
@@ -103,6 +109,10 @@ func (g CompletionGate) Evaluate(observation CompletionObservation) CompletionDe
 	}
 	decision.Action = CompletionContinue
 	decision.Reason = fmt.Sprintf("%d unfinished todo item(s) remain", pendingTodoCount(observation.Todo))
+	decision.StaleTodoTurns = observation.StaleTodoTurns
+	if config.StaleTodoThreshold > 0 && observation.StaleTodoTurns >= config.StaleTodoThreshold {
+		decision.StaleTodoReminder = true
+	}
 	return decision
 }
 
@@ -127,6 +137,19 @@ func progressFingerprint(snapshot todo.Snapshot, assistant message.Message, hadT
 	return hex.EncodeToString(sum[:])
 }
 
+// todoFingerprint 只反映 todo 快照本身（explanation + 各项状态/内容），
+// 用于检测快照连续未更新（stale）的轮数。
+func todoFingerprint(snapshot todo.Snapshot) string {
+	var b strings.Builder
+	b.WriteString(snapshot.Explanation)
+	b.WriteByte('\x00')
+	for _, item := range snapshot.Items {
+		fmt.Fprintf(&b, "%s\x00%s\x00%s\x00", item.ID, item.Status, item.Content)
+	}
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:])
+}
+
 func buildContinuationPrompt(decision CompletionDecision, snapshot todo.Snapshot, noProgress int) string {
 	var b strings.Builder
 	b.WriteString("任务尚未完成，请继续执行，不要只做总结。\n\n当前未完成事项：\n")
@@ -138,6 +161,9 @@ func buildContinuationPrompt(decision CompletionDecision, snapshot todo.Snapshot
 	fmt.Fprintf(&b, "\n续行原因：%s\n", decision.Reason)
 	if noProgress > 0 {
 		fmt.Fprintf(&b, "已连续无进展：%d\n", noProgress)
+	}
+	if decision.StaleTodoReminder {
+		fmt.Fprintf(&b, "提醒：todo 快照已连续 %d 轮未更新。如任务状态有变化（含已完成项），请立即调用 update_todo 标记，不要攒到最后一次性更新。\n", decision.StaleTodoTurns)
 	}
 	b.WriteString("\n请先检查当前状态，直接执行下一项最有价值的工作；必要时更新 todo，修改代码后执行相关验证。只有确认全部目标完成后才输出最终总结。")
 	return b.String()
@@ -177,16 +203,24 @@ func (runner *Runner) evaluateCompletion(assistant message.Message, hadToolCalls
 		return CompletionGate{Config: config}.Evaluate(CompletionObservation{Assistant: assistant, TurnHadToolCalls: hadToolCalls, ContinuationUsed: used, NoProgressCount: noProgress}), todo.Snapshot{}, false, noProgress
 	}
 	hash := progressFingerprint(snapshot, assistant, hadToolCalls)
+	todoHash := todoFingerprint(snapshot)
 	runner.mu.Lock()
 	previousHash := runner.lastProgressHash
 	runner.lastProgressHash = hash
+	if runner.lastTodoHash != "" && todoHash == runner.lastTodoHash {
+		runner.staleTodoTurns++
+	} else {
+		runner.staleTodoTurns = 0
+	}
+	runner.lastTodoHash = todoHash
+	staleTodoTurns := runner.staleTodoTurns
 	runner.mu.Unlock()
 	if used > 0 && hash == previousHash {
 		noProgress++
 	} else {
 		noProgress = 0
 	}
-	decision := CompletionGate{Config: config}.Evaluate(CompletionObservation{Assistant: assistant, Todo: snapshot, HasTodo: true, TurnHadToolCalls: hadToolCalls, ContinuationUsed: used, NoProgressCount: noProgress, ProgressHash: hash})
+	decision := CompletionGate{Config: config}.Evaluate(CompletionObservation{Assistant: assistant, Todo: snapshot, HasTodo: true, TurnHadToolCalls: hadToolCalls, ContinuationUsed: used, NoProgressCount: noProgress, ProgressHash: hash, StaleTodoTurns: staleTodoTurns})
 	return decision, snapshot, true, noProgress
 }
 

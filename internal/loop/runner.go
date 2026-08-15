@@ -118,6 +118,8 @@ type Runner struct {
 	stateCompactionRatio   float64
 	sessionLoadedHooks     []SessionLoadedHook
 	lastProgressHash       string
+	lastTodoHash           string
+	staleTodoTurns         int
 	activeTool             activeToolState
 	activeTurnCancel       context.CancelFunc
 	turnToolFilter         ToolFilter

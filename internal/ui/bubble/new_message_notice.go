@@ -35,7 +35,6 @@ func (m appModel) newMessageNoticeCanRender() bool {
 		m.configCenter == nil &&
 		m.sessionPicker == nil &&
 		m.subagentPicker == nil &&
-		m.todoPage == nil &&
 		m.completion == nil
 }
 

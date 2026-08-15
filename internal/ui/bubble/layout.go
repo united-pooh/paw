@@ -116,15 +116,6 @@ func (m appModel) View() string {
 	}
 
 	layout := m.currentLayout()
-	if m.todoPage != nil {
-		inner := fitStyledRect(m.renderTodoPage(layout.contentWidth, layout.contentHeight), layout.contentWidth, layout.contentHeight)
-		view := renderHairlineFrame(inner, layout.frameWidth, layout.frameHeight)
-		view = paintStyledBackground(view, layout.frameWidth, layout.frameHeight, m.styles.Frame, m.theme.Colors.TerminalBackground)
-		if m.cursorAnchor != nil {
-			m.cursorAnchor.clear()
-		}
-		return view
-	}
 	parts := make([]string, 0, 3)
 	if layout.transcriptHeight > 0 {
 		parts = append(parts, m.renderTranscriptRegion(layout))
@@ -139,7 +130,7 @@ func (m appModel) View() string {
 
 	inner := fitStyledRect(strings.Join(parts, "\n"), layout.contentWidth, layout.contentHeight)
 	// 顶边框线嵌入 header（模型名/状态/时间）；底边框左侧嵌入输入模式，
-	// 中间按空间显示工作树，右侧嵌入 token usage。边框颜色随 agentmode 变化。
+	// 中间显示 token usage，右侧显示项目/分支。边框颜色随 agentmode 变化。
 	view := renderDockedFrame(
 		inner,
 		m.renderHeaderEmbedded(layout.contentWidth),
@@ -154,7 +145,7 @@ func (m appModel) View() string {
 			m.queuePanelContent(layout.frameWidth),
 			m.currentModeHex(),
 			terminalCellWidth(m.renderModeIndicator())+2,
-			terminalCellWidth(m.renderBottomDockUsage())+2,
+			terminalCellWidth(m.renderBottomDockWorktree(layout.frameWidth))+2,
 		)
 	}
 	view = paintStyledBackground(view, layout.frameWidth, layout.frameHeight, m.styles.Frame, m.theme.Colors.TerminalBackground)
@@ -272,9 +263,24 @@ func (m appModel) renderTranscriptRegion(layout tuiLayout) string {
 	)
 
 	// 运行中 subagent 任务卡：贴在 transcript 右边界内侧、垂直居中。
+	// Activity 面板打开时任务卡不重复渲染（面板自身含任务列表）。
 	// modal / completion 浮层在其之后合成，必要时覆盖卡片。
-	if card := m.renderSubagentTaskCard(m.animationNow()); card != "" {
-		base = placeRightCenteredOverlay(base, card, layout.contentWidth, layout.transcriptHeight)
+	if m.subagentPicker == nil {
+		if card := m.renderSubagentTaskCard(m.animationNow()); card != "" {
+			base = placeRightCenteredOverlay(base, card, layout.contentWidth, layout.transcriptHeight)
+		}
+	}
+
+	// Activity（subagent/pipeline 选择器）以右侧边栏形态合成，而非居中
+	// modal：ctrl+g 展开的是屏幕右侧的悬浮面板。
+	if m.subagentPicker != nil {
+		base = placeOpaqueOverlay(
+			base,
+			m.renderActivityBox(),
+			layout.contentWidth,
+			layout.transcriptHeight,
+			overlayAlignRight,
+		)
 	}
 
 	if modal := m.renderActiveModalBox(layout); modal != "" {
@@ -325,8 +331,6 @@ func (m appModel) renderActiveModalBox(layout tuiLayout) string {
 		return m.renderSettingWizardBox()
 	case m.sessionPicker != nil:
 		return m.renderSessionPickerBox()
-	case m.subagentPicker != nil:
-		return m.renderActivityBox()
 	default:
 		return ""
 	}
@@ -337,6 +341,7 @@ type overlayAlignment int
 const (
 	overlayAlignCenter overlayAlignment = iota
 	overlayAlignBottom
+	overlayAlignRight
 )
 
 func placeOpaqueOverlay(base, overlay string, width, height int, alignment overlayAlignment) string {
@@ -347,8 +352,11 @@ func placeOpaqueOverlay(base, overlay string, width, height int, alignment overl
 
 	left := maxInt(0, (width-overlayWidth)/2)
 	top := maxInt(0, (height-overlayHeight)/2)
-	if alignment == overlayAlignBottom {
+	switch alignment {
+	case overlayAlignBottom:
 		top = maxInt(0, height-overlayHeight)
+	case overlayAlignRight:
+		left = maxInt(0, width-overlayWidth-1)
 	}
 
 	baseLines := strings.Split(base, "\n")
@@ -552,7 +560,7 @@ func (m appModel) shouldAnchorTextInputCursor() bool {
 		m.configCenter == nil &&
 		m.sessionPicker == nil &&
 		m.subagentPicker == nil &&
-		m.todoPage == nil
+		true
 }
 
 // inputCursorTerminalPosition 直接由固定布局矩形计算，不再依赖拼接后字符串高度。

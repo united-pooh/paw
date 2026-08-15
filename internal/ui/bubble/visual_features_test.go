@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
 	"paw/internal/theme"
-	"paw/internal/todo"
 )
 
 func TestSyntaxLanguageInferenceUsesFileExtension(t *testing.T) {
@@ -163,12 +162,8 @@ func TestTodoStatusStylesMatchRunningAndDimCompletedBody(t *testing.T) {
 	if todoInProgressStyle.GetForeground() != contextUsedStyle.GetForeground() {
 		t.Fatal("todo in-progress color is not synchronized with context-used color")
 	}
-	completed := todoItemBodyStyle(todo.StatusCompleted)
-	if completed.GetForeground() == bodyStyle.GetForeground() {
+	if todoCompletedStyle.GetForeground() == bodyStyle.GetForeground() {
 		t.Fatal("completed todo body was not dimmed")
-	}
-	if !completed.GetStrikethrough() {
-		t.Fatal("completed todo body lost strikethrough")
 	}
 }
 
@@ -179,6 +174,31 @@ func TestSelectionFocusedStyleChangesForegroundWithoutBackground(t *testing.T) {
 	}
 	if styles.SelectionFocused.GetForeground() == nil {
 		t.Fatal("selection focused style does not set foreground")
+	}
+}
+
+// TestSelectionTokensStayVisibleInDarkAndLightThemes 防止选中态令牌退回
+// “只有前景色、无背景”的隐形状态：Selected（tab 反色块）与
+// SelectionSelected/SelectionFocusedSelected（行级高亮）必须同时带背景和
+// 前景，且前景不能取自 provider 选中前景（浅色主题下与背景同色）。
+func TestSelectionTokensStayVisibleInDarkAndLightThemes(t *testing.T) {
+	for _, item := range theme.List() {
+		styles := NewStyleSet(item.Colors)
+		for _, token := range []struct {
+			name  string
+			style lipgloss.Style
+		}{
+			{"Selected", styles.Selected},
+			{"SelectionSelected", styles.SelectionSelected},
+			{"SelectionFocusedSelected", styles.SelectionFocusedSelected},
+		} {
+			if _, hasBackground := token.style.GetBackground().(lipgloss.NoColor); hasBackground {
+				t.Fatalf("%s in theme %s lost its background highlight", token.name, item.ID)
+			}
+			if token.style.GetForeground() == nil {
+				t.Fatalf("%s in theme %s does not set foreground", token.name, item.ID)
+			}
+		}
 	}
 }
 

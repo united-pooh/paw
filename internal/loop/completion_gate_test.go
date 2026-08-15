@@ -63,6 +63,57 @@ func TestBuildContinuationPromptIncludesPendingItems(t *testing.T) {
 	}
 }
 
+func TestCompletionGateStaleTodoTurnsThreshold(t *testing.T) {
+	gate := CompletionGate{Config: AutoContinueConfig{Enabled: true, BaseBudget: 2, AbsoluteMax: 12, MaxNoProgress: 2, StaleTodoThreshold: 3}}
+	obs := CompletionObservation{
+		HasTodo: true,
+		Todo:    todo.Snapshot{Items: []todo.Item{{ID: "one", Status: todo.StatusPending}}},
+	}
+	obs.StaleTodoTurns = 2
+	decision := gate.Evaluate(obs)
+	if decision.StaleTodoTurns != 2 || decision.StaleTodoReminder {
+		t.Fatalf("below threshold stale = %d reminder=%t, want 2/false", decision.StaleTodoTurns, decision.StaleTodoReminder)
+	}
+	obs.StaleTodoTurns = 3
+	decision = gate.Evaluate(obs)
+	if decision.StaleTodoTurns != 3 || !decision.StaleTodoReminder {
+		t.Fatalf("at threshold stale = %d reminder=%t, want 3/true", decision.StaleTodoTurns, decision.StaleTodoReminder)
+	}
+	disabled := CompletionGate{Config: AutoContinueConfig{Enabled: true, BaseBudget: 2, AbsoluteMax: 12, MaxNoProgress: 2}}
+	obs.StaleTodoTurns = 5
+	decision = disabled.Evaluate(obs)
+	if decision.StaleTodoTurns != 5 || decision.StaleTodoReminder {
+		t.Fatalf("disabled threshold stale = %d reminder=%t, want 5/false", decision.StaleTodoTurns, decision.StaleTodoReminder)
+	}
+}
+
+func TestBuildContinuationPromptStaleTodoReminder(t *testing.T) {
+	prompt := buildContinuationPrompt(CompletionDecision{Action: CompletionContinue, Reason: "work remains", StaleTodoTurns: 3, StaleTodoReminder: true}, todo.Snapshot{Items: []todo.Item{
+		{ID: "one", Content: "run tests", Status: todo.StatusPending},
+	}}, 0)
+	if !containsAll(prompt, "todo 快照已连续 3 轮未更新", "update_todo") {
+		t.Fatalf("prompt = %q", prompt)
+	}
+	plain := buildContinuationPrompt(CompletionDecision{Action: CompletionContinue, Reason: "work remains", StaleTodoTurns: 3}, todo.Snapshot{Items: []todo.Item{
+		{ID: "one", Content: "run tests", Status: todo.StatusPending},
+	}}, 0)
+	if containsAll(plain, "todo 快照已连续") {
+		t.Fatalf("reminder shown without flag: %q", plain)
+	}
+}
+
+func TestTodoFingerprintChangesWithStatus(t *testing.T) {
+	first := todoFingerprint(todo.Snapshot{Items: []todo.Item{{ID: "one", Status: todo.StatusPending}}})
+	second := todoFingerprint(todo.Snapshot{Items: []todo.Item{{ID: "one", Status: todo.StatusCompleted}}})
+	if first == second {
+		t.Fatal("todo fingerprint did not change after status changed")
+	}
+	third := todoFingerprint(todo.Snapshot{Items: []todo.Item{{ID: "one", Status: todo.StatusCompleted}}})
+	if third != second {
+		t.Fatal("todo fingerprint not stable for identical snapshot")
+	}
+}
+
 func containsAll(value string, parts ...string) bool {
 	for _, part := range parts {
 		if !strings.Contains(value, part) {
