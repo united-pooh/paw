@@ -56,3 +56,12 @@ diff-demo.md
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Moved out of remote repo (keep local working copies)
+quant-mcp/
+quant-study/
+src/quant_mcp/
+examples/
+docs/codex/
+docs/superpowers/
+docs/mockups/
