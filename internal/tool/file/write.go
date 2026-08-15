@@ -24,7 +24,7 @@ func (t *WriteTool) Name() string {
 }
 
 func (t *WriteTool) Description() string {
-	return "写入工作区内文件，并用新内容覆盖整个文件"
+	return "写入工作区内文件，并用新内容覆盖整个文件；覆盖已存在文件前必须先用 Read 读取（新建文件无需 Read）"
 }
 
 func (t *WriteTool) InputSchema() json.RawMessage {
@@ -64,11 +64,16 @@ func (t *WriteTool) Run(ctx context.Context, input json.RawMessage) (string, err
 		return "", err
 	}
 
-	// Stale-write guard: if the model Read this file earlier, reject when the
-	// on-disk content no longer matches the recorded baseline.
+	// Read-before-write guard: overwriting an existing file requires a prior
+	// Read baseline (same contract as Edit), so the model cannot bypass the
+	// read-first rule by rewriting files with Write. New files need no Read.
+	display := relativePath(t.Root, target)
 	if existing, rerr := os.ReadFile(target); rerr == nil {
 		if t.ReadState != nil {
-			if verr := t.ReadState.Verify(target, existing); verr != nil {
+			if verr := t.ReadState.VerifyRequired(target, existing); verr != nil {
+				if strings.Contains(verr.Error(), "file must be read before editing") {
+					return "", fmt.Errorf("file must be read before writing: %s; use Read first (Read the file, then retry this Write; do not bypass with Bash)", display)
+				}
 				return "", verr
 			}
 		}

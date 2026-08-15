@@ -232,7 +232,11 @@ func TestWriteToolOverwriteKeepsExistingContractOfMode0644(t *testing.T) {
 	if err := os.WriteFile(full, []byte("old\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	tool := &WriteTool{Root: root, ReadState: NewReadStateStore()}
+	readState := NewReadStateStore()
+	if _, err := (&ReadTool{Root: root, ReadState: readState}).Run(context.Background(), []byte(`{"file_path":"script.sh"}`)); err != nil {
+		t.Fatal(err)
+	}
+	tool := &WriteTool{Root: root, ReadState: readState}
 	if _, err := tool.Run(context.Background(), []byte(`{"file_path":"script.sh","content":"new\n"}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -242,6 +246,23 @@ func TestWriteToolOverwriteKeepsExistingContractOfMode0644(t *testing.T) {
 	}
 	if got := info.Mode().Perm(); got != 0o644 {
 		t.Fatalf("mode = %04o, want existing Write behavior 0644", got)
+	}
+}
+
+func TestWriteToolRejectsOverwriteWithoutPriorRead(t *testing.T) {
+	root := t.TempDir()
+	full := filepath.Join(root, "a.txt")
+	if err := os.WriteFile(full, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := &WriteTool{Root: root, ReadState: NewReadStateStore()}
+	_, err := tool.Run(context.Background(), []byte(`{"file_path":"a.txt","content":"new\n"}`))
+	if err == nil || !strings.Contains(err.Error(), "file must be read before writing: a.txt; use Read first") {
+		t.Fatalf("err = %v, want read-before-write rejection", err)
+	}
+	got, _ := os.ReadFile(full)
+	if string(got) != "old\n" {
+		t.Fatalf("file = %q, want unchanged old content", string(got))
 	}
 }
 

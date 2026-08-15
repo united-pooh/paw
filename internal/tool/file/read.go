@@ -28,9 +28,9 @@ func (t *ReadTool) Name() string {
 
 func (t *ReadTool) Description() string {
 	if t.OutsideRootAllowed() {
-		return "读取单个文件的完整内容；dangerously/yolo 模式下允许工作区外路径"
+		return "读取单个文件的完整内容；dangerously/yolo 模式下允许工作区外路径。Edit/Write 覆盖文件前必须先读取"
 	}
-	return "读取工作区内单个文件的完整内容"
+	return "读取工作区内单个文件的完整内容；Edit/Write 覆盖已存在文件前必须先读取"
 }
 
 func (t *ReadTool) SetAllowOutsideRoot(enabled bool) {

@@ -28,7 +28,8 @@ type editInput struct {
 func (t *EditTool) Name() string { return "Edit" }
 
 func (t *EditTool) Description() string {
-	return "对工作区内已先用 Read 读取的文件做精确字符串替换：old_string 必须与文件内容逐字节匹配。" +
+	return "对工作区内已先用 Read 读取的文件做精确字符串替换：编辑前必须先调用 Read 读取该文件，否则会被拒绝。" +
+		"old_string 必须与文件内容逐字节匹配。" +
 		"默认 old_string 必须唯一；设 replace_all=true 可替换全部匹配。" +
 		`示例输入: {"file_path":"internal/foo.go","old_string":"return 1","new_string":"return 2"}`
 }
@@ -88,11 +89,11 @@ func (t *EditTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 		return "", fmt.Errorf("read edit target %s: %w", display, err)
 	}
 	if t.ReadState == nil {
-		return "", fmt.Errorf("file must be read before editing: %s; use Read first", display)
+		return "", readFirstEditError(display)
 	}
 	if err := t.ReadState.VerifyRequired(target, current); err != nil {
 		if strings.Contains(err.Error(), "file must be read before editing") {
-			return "", fmt.Errorf("file must be read before editing: %s; use Read first", display)
+			return "", readFirstEditError(display)
 		}
 		return "", fmt.Errorf("file has been modified since last read: %s; read it again before editing", display)
 	}
@@ -127,3 +128,12 @@ func (t *EditTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 }
 
 var _ coretool.FileMutationTool = (*EditTool)(nil)
+
+// readFirstEditError 返回引导模型正确操作的拦截消息：先 Read 再重试 Edit，
+// 并明确禁止用 Write 或 Bash 重写文件绕过 read-before-edit 契约。
+func readFirstEditError(display string) error {
+	return fmt.Errorf(
+		"file must be read before editing: %s; use Read first (call the Read tool on this path, then retry this Edit; do not bypass by rewriting the file with Write or Bash)",
+		display,
+	)
+}
