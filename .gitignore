@@ -67,3 +67,5 @@ memory.md
 memory/
 .agents/
 .agent/
+skills/
+skills-lock.json
