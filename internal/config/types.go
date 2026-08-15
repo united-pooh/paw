@@ -41,22 +41,24 @@ type Document struct {
 	Schema        string              `json:"$schema,omitempty"`
 	SchemaVersion int                 `json:"schemaVersion"`
 	ActiveModel   string              `json:"activeModel,omitempty"`
+	Proxy         *model.ProxyConfig  `json:"proxy,omitempty"`
 	Providers     map[string]Provider `json:"providers"`
 	Models        map[string]Model    `json:"models"`
 }
 
 type Provider struct {
-	Preset         string            `json:"preset,omitempty"`
-	Transport      string            `json:"transport,omitempty"`
-	Endpoint       string            `json:"endpoint,omitempty"`
-	APIPath        string            `json:"apiPath,omitempty"`
-	Auth           Auth              `json:"auth,omitempty"`
-	Headers        map[string]string `json:"headers,omitempty"`
-	Body           map[string]any    `json:"body,omitempty"`
-	TimeoutSeconds int               `json:"timeoutSeconds,omitempty"`
-	Retries        *int              `json:"retries,omitempty"`
-	Stream         *bool             `json:"stream,omitempty"`
-	Discovery      *DiscoveryConfig  `json:"discovery,omitempty"`
+	Preset         string             `json:"preset,omitempty"`
+	Transport      string             `json:"transport,omitempty"`
+	Endpoint       string             `json:"endpoint,omitempty"`
+	APIPath        string             `json:"apiPath,omitempty"`
+	Auth           Auth               `json:"auth,omitempty"`
+	Headers        map[string]string  `json:"headers,omitempty"`
+	Body           map[string]any     `json:"body,omitempty"`
+	TimeoutSeconds int                `json:"timeoutSeconds,omitempty"`
+	Retries        *int               `json:"retries,omitempty"`
+	Stream         *bool              `json:"stream,omitempty"`
+	Proxy          *model.ProxyConfig `json:"proxy,omitempty"`
+	Discovery      *DiscoveryConfig   `json:"discovery,omitempty"`
 }
 
 type DiscoveryConfig struct {
@@ -340,6 +342,7 @@ type OperationKind string
 
 const (
 	OperationSetActiveModel OperationKind = "set-active-model"
+	OperationSetProxy       OperationKind = "set-proxy"
 	OperationUpsertProvider OperationKind = "upsert-provider"
 	OperationDeleteProvider OperationKind = "delete-provider"
 	OperationUpsertModel    OperationKind = "upsert-model"
@@ -361,6 +364,16 @@ func SetActiveModel(id string) Operation {
 func setActiveModelExact(id string) Operation {
 	raw, _ := json.Marshal(id)
 	return Operation{Kind: OperationSetActiveModel, Value: raw}
+}
+
+// SetProxy 写入全局代理设置。proxy 为 nil 时从文档中删除全局代理字段
+// （等价于 auto 语义）。
+func SetProxy(proxy *model.ProxyConfig) Operation {
+	var raw json.RawMessage
+	if proxy != nil {
+		raw, _ = json.Marshal(proxy)
+	}
+	return Operation{Kind: OperationSetProxy, Value: raw}
 }
 
 func UpsertProvider(id string, provider Provider) Operation {
@@ -400,6 +413,7 @@ func (e *SetupRequiredError) Error() string {
 
 func cloneDocument(in Document) Document {
 	out := in
+	out.Proxy = model.CloneProxyConfig(in.Proxy)
 	out.Providers = make(map[string]Provider, len(in.Providers))
 	for id, value := range in.Providers {
 		out.Providers[id] = cloneProvider(value)
@@ -420,6 +434,7 @@ func cloneProvider(value Provider) Provider {
 		value.Retries = &retries
 	}
 	value.Stream = cloneBoolPointer(value.Stream)
+	value.Proxy = model.CloneProxyConfig(value.Proxy)
 	value.Discovery = cloneDiscoveryConfig(value.Discovery)
 	return value
 }

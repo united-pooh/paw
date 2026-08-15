@@ -1,6 +1,10 @@
 package config
 
-import "strings"
+import (
+	"strings"
+
+	"paw/internal/model"
+)
 
 type Preset struct {
 	ID             string
@@ -93,6 +97,9 @@ func mergePreset(id string, configured Provider) Provider {
 	}
 	if configured.Body != nil {
 		base.Body = cloneAnyMap(configured.Body)
+	}
+	if configured.Proxy != nil {
+		base.Proxy = model.CloneProxyConfig(configured.Proxy)
 	}
 	if configured.TimeoutSeconds > 0 {
 		base.TimeoutSeconds = configured.TimeoutSeconds

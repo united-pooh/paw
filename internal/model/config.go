@@ -29,6 +29,7 @@ type Config struct {
 	APIKey                  string
 	APIKeyEnvName           string
 	Headers                 map[string]string
+	Proxy                   *ProxyConfig
 	Model                   string
 	Models                  []string
 	ExtraBody               RequestBody
@@ -42,6 +43,47 @@ type Config struct {
 	StreamSet               bool
 	streamSet               bool
 	Profiles                []Profile
+}
+
+// ProxyMode 描述出站 HTTP 请求的代理解析方式。
+type ProxyMode string
+
+const (
+	// ProxyModeAuto 使用进程环境变量（HTTP_PROXY/HTTPS_PROXY 等），等价于
+	// Go 默认的 ProxyFromEnvironment。空值归一化为 auto。
+	ProxyModeAuto ProxyMode = "auto"
+	// ProxyModeDirect 强制直连，忽略环境变量代理。
+	ProxyModeDirect ProxyMode = "direct"
+	// ProxyModeCustom 使用 ProxyConfig.URL 指定的代理；URL 缺失或非法时回退直连。
+	ProxyModeCustom ProxyMode = "custom"
+)
+
+// ProxyConfig 是一条代理设置。全局 Document.proxy 提供默认值，Provider 可用
+// 自己的 proxy 覆盖；两者都缺省时行为等同 ProxyModeAuto。
+type ProxyConfig struct {
+	Mode ProxyMode `json:"mode,omitempty"`
+	URL  string    `json:"url,omitempty"`
+}
+
+// NormalizeProxyMode 把任意字符串归一到合法 ProxyMode；非法值回退 auto。
+func NormalizeProxyMode(mode ProxyMode) ProxyMode {
+	switch ProxyMode(strings.ToLower(strings.TrimSpace(string(mode)))) {
+	case ProxyModeDirect:
+		return ProxyModeDirect
+	case ProxyModeCustom:
+		return ProxyModeCustom
+	default:
+		return ProxyModeAuto
+	}
+}
+
+// CloneProxyConfig 深拷贝代理配置；nil 保持不变。
+func CloneProxyConfig(proxy *ProxyConfig) *ProxyConfig {
+	if proxy == nil {
+		return nil
+	}
+	cloned := *proxy
+	return &cloned
 }
 
 // Profile is one fully configured provider entry from ~/.paw/config.json.
@@ -58,6 +100,7 @@ type Profile struct {
 	APIKey                  string
 	APIKeyEnvName           string
 	Headers                 map[string]string
+	Proxy                   *ProxyConfig
 	Model                   string
 	Models                  []string
 	ExtraBody               RequestBody
@@ -89,6 +132,7 @@ func (p Profile) Config() Config {
 		APIKey:                  p.APIKey,
 		APIKeyEnvName:           p.APIKeyEnvName,
 		Headers:                 cloneStringMap(p.Headers),
+		Proxy:                   CloneProxyConfig(p.Proxy),
 		Model:                   modelName,
 		Models:                  models,
 		ExtraBody:               CloneRequestBody(p.ExtraBody),
@@ -517,6 +561,7 @@ func cloneProfiles(profiles []Profile) []Profile {
 		cloned[index] = profile
 		cloned[index].Models = append([]string(nil), profile.Models...)
 		cloned[index].Headers = cloneStringMap(profile.Headers)
+		cloned[index].Proxy = CloneProxyConfig(profile.Proxy)
 		cloned[index].ExtraBody = CloneRequestBody(profile.ExtraBody)
 		cloned[index].ModelExtraBody = CloneModelExtraBodies(profile.ModelExtraBody)
 		cloned[index].ModelContextLimitTokens = cloneModelContextLimits(profile.ModelContextLimitTokens)
@@ -542,6 +587,7 @@ func ConfiguredProfiles(cfg Config) []Profile {
 		APIKey:         cfg.APIKey,
 		APIKeyEnvName:  cfg.APIKeyEnvName,
 		Headers:        cloneStringMap(cfg.Headers),
+		Proxy:          CloneProxyConfig(cfg.Proxy),
 		Model:          cfg.Model,
 		Models:         append([]string(nil), cfg.Models...),
 		ExtraBody:      CloneRequestBody(cfg.ExtraBody),

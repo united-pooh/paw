@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	configv2 "paw/internal/config"
+	"paw/internal/model"
 )
 
 type configCenterPage int
@@ -28,6 +30,7 @@ const (
 	configCenterAddModelProvider
 	configCenterCredentials
 	configCenterCredentialActions
+	configCenterConnection
 	configCenterDiagnostics
 	configCenterEdit
 )
@@ -52,6 +55,8 @@ const (
 	configEditCredential
 	configEditGeneralInt
 	configEditGeneralFloat
+	configEditProxyURL
+	configEditProviderProxyURL
 )
 
 type configCenterState struct {
@@ -343,7 +348,7 @@ func (m *appModel) configCenterBack() {
 		return
 	}
 	switch m.configCenter.page {
-	case configCenterGeneral, configCenterProviders, configCenterModels, configCenterCredentials, configCenterDiagnostics:
+	case configCenterGeneral, configCenterProviders, configCenterModels, configCenterCredentials, configCenterConnection, configCenterDiagnostics:
 		m.configCenter = nil
 		return
 	case configCenterProviderActions, configCenterAddProvider:
@@ -496,12 +501,32 @@ func (m appModel) advanceConfigCenter() appModel {
 		}
 	case configCenterCredentialActions:
 		m.advanceCredentialAction(snapshot)
+	case configCenterConnection:
+		m.advanceConnectionAction(snapshot)
 	case configCenterDiagnostics:
 		state.page = configCenterGeneral
 		state.selected = 0
 		state.search = ""
 	}
 	return m
+}
+
+// advanceConnectionAction 处理「连接」页选项：代理模式循环切换，代理地址
+// 进入文本编辑。两者都通过 config-v2 的 SetProxy 写入全局 proxy。
+func (m *appModel) advanceConnectionAction(snapshot configv2.Snapshot) {
+	state := m.configCenter
+	switch state.selected {
+	case 0:
+		next := nextGlobalProxyMode(snapshot.Document.Proxy)
+		m.applyConfigOperations(configv2.SetProxy(next))
+	case 1:
+		proxy := snapshot.Document.Proxy
+		value := ""
+		if proxy != nil {
+			value = proxy.URL
+		}
+		m.openConfigEdit(configEditProxyURL, value, "代理地址（custom 模式，如 http://127.0.0.1:7890）")
+	}
 }
 
 func (m *appModel) advanceProviderAction(snapshot configv2.Snapshot) {
@@ -547,6 +572,15 @@ func (m *appModel) advanceProviderAction(snapshot configv2.Snapshot) {
 	case 7:
 		m.openConfigEdit(configEditProviderBody, marshalCompactObject(provider.Body), "请求体 JSONC")
 	case 8:
+		provider.Proxy = nextProviderProxyMode(provider.Proxy)
+		m.applyConfigOperations(configv2.UpsertProvider(state.targetID, provider))
+	case 9:
+		value := ""
+		if provider.Proxy != nil {
+			value = provider.Proxy.URL
+		}
+		m.openConfigEdit(configEditProviderProxyURL, value, "代理地址（custom 模式，如 http://127.0.0.1:7890）")
+	case 10:
 		if !state.confirmDestructive("delete-provider:"+state.targetID, "再次按 Enter 删除该服务商及其全部模型") {
 			return
 		}
@@ -808,7 +842,7 @@ func (m *appModel) finishConfigEdit(save bool) {
 			state.editValue = ""
 		}
 		switch kind {
-		case configEditProviderEndpoint, configEditProviderTimeout, configEditProviderRetries, configEditProviderEnv, configEditProviderHeaders, configEditProviderBody:
+		case configEditProviderEndpoint, configEditProviderTimeout, configEditProviderRetries, configEditProviderEnv, configEditProviderHeaders, configEditProviderBody, configEditProviderProxyURL:
 			state.page = configCenterProviderActions
 		case configEditModelName, configEditModelContextWindow, configEditModelParameters:
 			state.page = configCenterModelActions
@@ -816,6 +850,8 @@ func (m *appModel) finishConfigEdit(save bool) {
 			state.page = configCenterCredentialActions
 		case configEditGeneralInt, configEditGeneralFloat:
 			state.page = configCenterGeneral
+		case configEditProxyURL:
+			state.page = configCenterConnection
 		default:
 			state.page = configCenterModels
 		}
@@ -1023,6 +1059,38 @@ func (m *appModel) finishConfigEdit(save bool) {
 		}
 		m.syncRunnerSettings(cfg)
 		back()
+	case configEditProxyURL:
+		proxy := model.CloneProxyConfig(snapshot.Document.Proxy)
+		parsedURL, err := validateProxyURL(value)
+		if err != nil {
+			state.err = err.Error()
+			return
+		}
+		if proxy == nil {
+			proxy = &model.ProxyConfig{Mode: model.ProxyModeCustom}
+		}
+		proxy.Mode = model.ProxyModeCustom
+		proxy.URL = parsedURL
+		m.applyConfigOperations(configv2.SetProxy(proxy))
+		if state.err == "" {
+			back()
+		}
+	case configEditProviderProxyURL:
+		provider := snapshot.Document.Providers[state.targetID]
+		parsedURL, err := validateProxyURL(value)
+		if err != nil {
+			state.err = err.Error()
+			return
+		}
+		if provider.Proxy == nil {
+			provider.Proxy = &model.ProxyConfig{Mode: model.ProxyModeCustom}
+		}
+		provider.Proxy.Mode = model.ProxyModeCustom
+		provider.Proxy.URL = parsedURL
+		m.applyConfigOperations(configv2.UpsertProvider(state.targetID, provider))
+		if state.err == "" {
+			back()
+		}
 	}
 }
 
@@ -1134,7 +1202,7 @@ func (m appModel) configCenterOptions() []configCenterOption {
 		return append(result, configCenterOption{"+ 添加服务商", "使用预设或自定义配置"})
 	case configCenterProviderActions:
 		p := snapshot.Document.Providers[state.targetID]
-		return []configCenterOption{{"编辑端点", firstNonEmptyUI(p.Endpoint, "使用预设默认值")}, {"切换传输协议", firstNonEmptyUI(p.Transport, "使用预设默认值")}, {"编辑超时", optionalIntLabel(p.TimeoutSeconds, "继承")}, {"编辑重试次数", optionalIntPointerLabel(p.Retries)}, {"切换流式输出", optionalBoolLabel(p.Stream)}, {"编辑凭据环境变量", firstNonEmptyUI(strings.Join(p.Auth.Env, ", "), "预设/继承")}, {"编辑请求头", "高级 JSONC"}, {"编辑请求体", "高级 JSONC"}, {"删除服务商", "同时删除其模型"}}
+		return []configCenterOption{{"编辑端点", firstNonEmptyUI(p.Endpoint, "使用预设默认值")}, {"切换传输协议", firstNonEmptyUI(p.Transport, "使用预设默认值")}, {"编辑超时", optionalIntLabel(p.TimeoutSeconds, "继承")}, {"编辑重试次数", optionalIntPointerLabel(p.Retries)}, {"切换流式输出", optionalBoolLabel(p.Stream)}, {"编辑凭据环境变量", firstNonEmptyUI(strings.Join(p.Auth.Env, ", "), "预设/继承")}, {"编辑请求头", "高级 JSONC"}, {"编辑请求体", "高级 JSONC"}, {"代理模式", providerProxyModeLabel(snapshot.Document.Proxy, p.Proxy)}, {"代理地址", providerProxyURLLabel(p.Proxy)}, {"删除服务商", "同时删除其模型"}}
 	case configCenterAddProvider:
 		ids := sortedPresetIDs()
 		result := make([]configCenterOption, 0, len(ids)+1)
@@ -1189,6 +1257,12 @@ func (m appModel) configCenterOptions() []configCenterOption {
 		return result
 	case configCenterCredentialActions:
 		return []configCenterOption{{"设置或替换", "密钥始终保持隐藏"}, {"删除", "从系统钥匙串中移除"}}
+	case configCenterConnection:
+		proxy := snapshot.Document.Proxy
+		return []configCenterOption{
+			{"代理模式", globalProxyModeLabel(proxy)},
+			{"代理地址", globalProxyURLLabel(proxy)},
+		}
 	case configCenterDiagnostics:
 		return []configCenterOption{{"返回", "下方显示版本和校验详情"}}
 	}
@@ -1264,7 +1338,7 @@ func (m appModel) renderConfigCenterBox() string {
 			match := matches[i]
 			text := formatGeneralRow(match.option.label, match.option.description, contentWidth)
 			if match.index == state.selected {
-				text = m.styles.Selected.Render(text)
+				text = m.styles.SelectionSelected.Render(text)
 			} else {
 				text = m.styles.Body.Copy().Bold(true).Render(text)
 			}
@@ -1292,7 +1366,7 @@ func (m appModel) renderConfigCenterBox() string {
 // 顶层页已经由反色 tab 表达当前位置，再重复一行标题只会制造视觉噪音。
 func configCenterShowsPageTitle(page configCenterPage) bool {
 	switch page {
-	case configCenterGeneral, configCenterProviders, configCenterModels, configCenterCredentials, configCenterDiagnostics:
+	case configCenterGeneral, configCenterProviders, configCenterModels, configCenterCredentials, configCenterConnection, configCenterDiagnostics:
 		return false
 	default:
 		return true
@@ -1319,6 +1393,8 @@ func configCenterTitle(page configCenterPage, target string) string {
 		return "凭据"
 	case configCenterCredentialActions:
 		return "凭据 · " + target
+	case configCenterConnection:
+		return "连接"
 	case configCenterDiagnostics:
 		return "诊断"
 	}
@@ -1533,4 +1609,77 @@ func providerHasEnvironmentCredential(providerID string, provider configv2.Provi
 		}
 	}
 	return false
+}
+
+// nextProxyMode 循环代理模式：nil（继承/默认）或 auto → direct → custom → nil。
+// 显式 auto 与缺省语义相同，循环中不单独停留，避免「按了没反应」。
+func nextProxyMode(proxy *model.ProxyConfig) *model.ProxyConfig {
+	switch {
+	case proxy == nil || proxy.Mode == model.ProxyModeAuto:
+		return &model.ProxyConfig{Mode: model.ProxyModeDirect}
+	case proxy.Mode == model.ProxyModeDirect:
+		return &model.ProxyConfig{Mode: model.ProxyModeCustom}
+	default:
+		return nil
+	}
+}
+
+func nextGlobalProxyMode(proxy *model.ProxyConfig) *model.ProxyConfig {
+	return nextProxyMode(proxy)
+}
+
+func nextProviderProxyMode(proxy *model.ProxyConfig) *model.ProxyConfig {
+	return nextProxyMode(proxy)
+}
+
+// validateProxyURL 校验代理地址必须是带 scheme 与 host 的绝对 URL。
+func validateProxyURL(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", errors.New("代理地址不能为空")
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("代理地址必须是合法的 URL（如 http://127.0.0.1:7890）")
+	}
+	return value, nil
+}
+
+func proxyModeLabel(proxy *model.ProxyConfig) string {
+	switch {
+	case proxy == nil:
+		return "环境变量"
+	case proxy.Mode == model.ProxyModeDirect:
+		return "直连"
+	case proxy.Mode == model.ProxyModeCustom:
+		return "自定义"
+	default:
+		return "环境变量"
+	}
+}
+
+func proxyURLLabel(proxy *model.ProxyConfig) string {
+	if proxy == nil || proxy.Mode != model.ProxyModeCustom || strings.TrimSpace(proxy.URL) == "" {
+		return "未设置"
+	}
+	return proxy.URL
+}
+
+func globalProxyModeLabel(proxy *model.ProxyConfig) string {
+	return "全局 · " + proxyModeLabel(proxy)
+}
+
+func globalProxyURLLabel(proxy *model.ProxyConfig) string {
+	return proxyURLLabel(proxy)
+}
+
+func providerProxyModeLabel(global, proxy *model.ProxyConfig) string {
+	if proxy == nil {
+		return "继承全局（" + proxyModeLabel(global) + "）"
+	}
+	return proxyModeLabel(proxy)
+}
+
+func providerProxyURLLabel(proxy *model.ProxyConfig) string {
+	return proxyURLLabel(proxy)
 }

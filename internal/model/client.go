@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"paw/internal/message"
 	"strings"
 	"sync"
@@ -34,9 +35,36 @@ type Client struct {
 func NewClient(cfg Config) *Client {
 	cfg = CloneConfig(fillConfigDefaults(cfg))
 	return &Client{
-		httpClient: &http.Client{},
+		httpClient: httpClientWithProxy(cfg.Proxy),
 		cfg:        cfg,
 	}
+}
+
+// httpClientWithProxy 按代理配置构建带 Transport 的 HTTP 客户端。auto（含
+// nil）使用进程环境变量（http.ProxyFromEnvironment），direct 强制直连，
+// custom 使用固定代理 URL；custom URL 缺失或非法时回退直连。
+func httpClientWithProxy(proxy *ProxyConfig) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	switch NormalizeProxyMode(proxyMode(proxy)) {
+	case ProxyModeDirect:
+		transport.Proxy = nil
+	case ProxyModeCustom:
+		if parsed, err := url.Parse(strings.TrimSpace(proxy.URL)); err == nil && parsed.Scheme != "" && parsed.Host != "" {
+			transport.Proxy = http.ProxyURL(parsed)
+		} else {
+			transport.Proxy = nil
+		}
+	default:
+		transport.Proxy = http.ProxyFromEnvironment
+	}
+	return &http.Client{Transport: transport}
+}
+
+func proxyMode(proxy *ProxyConfig) ProxyMode {
+	if proxy == nil {
+		return ProxyModeAuto
+	}
+	return proxy.Mode
 }
 
 const (
@@ -202,6 +230,7 @@ func (c *Client) ApplyModelConfig(cfg Config) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.cfg = cfg
+	c.httpClient = httpClientWithProxy(cfg.Proxy)
 	return nil
 }
 

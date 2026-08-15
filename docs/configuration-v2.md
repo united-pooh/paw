@@ -95,7 +95,29 @@ Paw/
 - `auth.env`：按顺序尝试的环境变量名；填写 `DEEPSEEK_API_KEY` 这类变量名，不使用 `${DEEPSEEK_API_KEY}` 插值语法。
 - `headers`：附加的非敏感请求头。`Authorization`、`X-Api-Key` 等认证头必须通过 `auth` 配置。
 - `body`：Provider 级附加请求参数；不能覆盖 `model`、`messages`、`input`、`stream` 等受保护字段。
+- `proxy`：Provider 级代理覆盖（`{ "mode": "auto" | "direct" | "custom", "url": "..." }`）。`direct` 强制直连（忽略环境变量代理），`custom` 使用 `url` 指定的代理，缺省/`auto` 使用环境变量。未配置时继承全局 `proxy`。
 - `timeoutSeconds`、`retries`、`stream`：Provider 默认请求策略。`retries: 0` 和 `stream: false` 都是有效的显式设置。
+
+### 全局代理
+
+`config.jsonc` 顶层 `proxy` 是全局默认代理，Provider 级 `proxy` 可覆盖：
+
+```jsonc
+{
+  "proxy": { "mode": "direct" },
+
+  "providers": {
+    "openrouter": {
+      "proxy": { "mode": "direct" }
+    },
+    "local": {
+      "proxy": { "mode": "custom", "url": "http://127.0.0.1:7890" }
+    }
+  }
+}
+```
+
+语义：`auto`（缺省）走进程环境变量（`HTTP_PROXY`/`HTTPS_PROXY`）；`direct` 强制直连，可解决「环境代理对某服务商不可达」的问题；`custom` 固定使用指定代理 URL（URL 缺失或非法时回退直连）。模型请求与模型 discovery 都遵循该配置；修改后模型请求热更生效，重新 discovery 需重启 Paw。
 
 ### Model 字段
 
@@ -156,9 +178,12 @@ macOS 使用 Security.framework Keychain；`CGO_ENABLED=0` 的 macOS 构建回�
 - Models
 - Active model
 - Credentials
+- Connection（全局代理）
 - Diagnostics
 
 Provider 和 Model 支持添加、编辑、删除；删除 Provider、Model 或凭据需要二次确认。timeout、retries、stream、context window 与 capabilities 可直接编辑，headers、body、parameters 使用即时 JSONC 校验的高级编辑器。编辑页可按 `Ctrl+S` 或 `Enter` 显式保存，成功后显示 3 秒 `Saved` 提示；凭据输入始终显示为掩码。
+
+「连接」页配置全局代理（模式：环境变量/直连/自定义 + 代理地址）；每个 Provider 的动作页也有「代理模式/代理地址」用于覆盖全局。代理改动即时热更模型请求；重新触发模型 discovery 需要重启 Paw。
 
 辅助命令：
 

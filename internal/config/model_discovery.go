@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"paw/internal/model"
 )
 
 const (
@@ -29,6 +31,35 @@ type ModelDiscoverer interface {
 type HTTPModelDiscoverer struct {
 	client       *http.Client
 	maxBodyBytes int64
+}
+
+// SetProxy 把生效代理注入发现器：direct 直连、custom 使用固定 URL、auto 走
+// 环境变量。nil 等价 auto。仅在调用方（Manager）启动 discovery 串行阶段调用。
+func (d *HTTPModelDiscoverer) SetProxy(proxy *model.ProxyConfig) {
+	if d == nil || d.client == nil {
+		return
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	switch model.NormalizeProxyMode(proxyMode(proxy)) {
+	case model.ProxyModeDirect:
+		transport.Proxy = nil
+	case model.ProxyModeCustom:
+		if parsed, err := url.Parse(strings.TrimSpace(proxy.URL)); err == nil && parsed.Scheme != "" && parsed.Host != "" {
+			transport.Proxy = http.ProxyURL(parsed)
+		} else {
+			transport.Proxy = nil
+		}
+	default:
+		transport.Proxy = http.ProxyFromEnvironment
+	}
+	d.client.Transport = transport
+}
+
+func proxyMode(proxy *model.ProxyConfig) model.ProxyMode {
+	if proxy == nil {
+		return model.ProxyModeAuto
+	}
+	return proxy.Mode
 }
 
 // DiscoveryError classifies a discovery failure without exposing request

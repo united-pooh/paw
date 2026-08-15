@@ -12,8 +12,8 @@ import (
 )
 
 // configCenterTabLabels 是顶部 tab 行的顺序（通用 / 服务商 / 模型 /
-// 凭据 / 诊断）。各子页归属其对应的顶层 tab。
-var configCenterTabLabels = []string{"通用", "服务商", "模型", "凭据", "诊断"}
+// 凭据 / 连接 / 诊断）。各子页归属其对应的顶层 tab。
+var configCenterTabLabels = []string{"通用", "服务商", "模型", "凭据", "连接", "诊断"}
 
 // configCenterTabPages 是每个 tab 切换后落入的顶层页。
 var configCenterTabPages = []configCenterPage{
@@ -21,6 +21,7 @@ var configCenterTabPages = []configCenterPage{
 	configCenterProviders,
 	configCenterModels,
 	configCenterCredentials,
+	configCenterConnection,
 	configCenterDiagnostics,
 }
 
@@ -70,8 +71,10 @@ func configCenterTabForPage(page configCenterPage) int {
 		return 2
 	case configCenterCredentials, configCenterCredentialActions:
 		return 3
-	case configCenterDiagnostics:
+	case configCenterConnection:
 		return 4
+	case configCenterDiagnostics:
+		return 5
 	}
 	return -1
 }
@@ -127,7 +130,7 @@ func (m appModel) renderConfigCenterTabs(contentWidth int) string {
 	if terminalCellWidth(row) <= contentWidth {
 		return row
 	}
-	row = render([]string{"通用", "服务", "模型", "凭据", "诊断"}, " ")
+	row = render([]string{"通用", "服务", "模型", "凭据", "连接", "诊断"}, " ")
 	return truncateStyledCellLine(row, contentWidth)
 }
 
@@ -846,7 +849,7 @@ func (m appModel) renderConfigCenterGeneral(contentWidth, maxRows int) []string 
 			contentWidth,
 		)
 		if i == selected {
-			row = m.styles.Selected.Render(row)
+			row = m.styles.SelectionSelected.Render(row)
 		} else {
 			row = m.styles.Body.Copy().Bold(true).Render(row)
 		}

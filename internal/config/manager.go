@@ -529,6 +529,12 @@ func (m *Manager) discoverProvider(ctx context.Context, document Document, provi
 	fingerprint := discoveryEndpointFingerprint(provider)
 	format := provider.Discovery.Format
 
+	// 应用该 provider 生效的代理（provider 覆盖 > 全局默认 > auto）。
+	// 启动 discovery 是串行执行的，SetProxy 在此无并发竞争。
+	if applier, ok := m.discoverer.(proxyApplier); ok {
+		applier.SetProxy(effectiveProxy(document, provider))
+	}
+
 	targetCache, targetCacheMatched := matchingCacheEntry(m.discoveryCache, providerID, fingerprint, format)
 	if providerID == activeProviderID {
 		m.discoveryTargetFingerprint = fingerprint
@@ -725,6 +731,20 @@ func activeDiscoveryProvider(document Document, activeID string) string {
 		return ""
 	}
 	return configuredModel.Provider
+}
+
+// effectiveProxy 解析一个 provider 生效的代理配置：Provider 级覆盖全局
+// Document 级；两者都未配置时返回 nil（运行时按 auto 处理，使用环境变量）。
+func effectiveProxy(document Document, provider Provider) *model.ProxyConfig {
+	if provider.Proxy != nil {
+		return model.CloneProxyConfig(provider.Proxy)
+	}
+	return model.CloneProxyConfig(document.Proxy)
+}
+
+// proxyApplier 是 ModelDiscoverer 的可选扩展：运行期把生效代理注入发现器。
+type proxyApplier interface {
+	SetProxy(*model.ProxyConfig)
 }
 
 // discoveryTargets returns the sorted provider IDs whose resolved discovery
@@ -1085,7 +1105,8 @@ func (m *Manager) runtimeConfig(ctx context.Context, document Document, workspac
 		Provider: configuredModel.Provider, Transport: provider.Transport, Adapter: configuredModel.Adapter,
 		ProfileID: configuredModel.Provider, ProfileName: configuredModel.Provider,
 		APIBaseURL: strings.TrimRight(provider.Endpoint, "/"), APIPath: provider.APIPath,
-		APIKey: secret, Headers: cloneStringMap(provider.Headers), Model: configuredModel.Name,
+		APIKey: secret, Headers: cloneStringMap(provider.Headers), Proxy: effectiveProxy(document, provider),
+		Model:     configuredModel.Name,
 		ExtraBody: model.RequestBody(cloneAnyMap(provider.Body)), ContextLimitTokens: configuredModel.ContextWindow,
 		Timeout: time.Duration(timeout) * time.Second, RetryCount: retries, RetryCountSet: provider.Retries != nil, Stream: stream, StreamSet: provider.Stream != nil || configuredModel.Stream != nil,
 	}
@@ -1133,7 +1154,7 @@ func synthesizeProfiles(document Document, catalog map[string]CatalogModel, stor
 		if provider.Retries != nil {
 			retries = *provider.Retries
 		}
-		profile := model.Profile{ID: id, Name: id, Provider: id, Transport: provider.Transport, APIBaseURL: strings.TrimRight(provider.Endpoint, "/"), APIPath: provider.APIPath, APIKey: secret, Headers: cloneStringMap(provider.Headers), ExtraBody: model.RequestBody(cloneAnyMap(provider.Body)), Timeout: time.Duration(provider.TimeoutSeconds) * time.Second, RetryCount: retries, RetryCountSet: provider.Retries != nil, Stream: true, StreamSet: provider.Stream != nil, CredentialID: provider.Auth.Credential}
+		profile := model.Profile{ID: id, Name: id, Provider: id, Transport: provider.Transport, APIBaseURL: strings.TrimRight(provider.Endpoint, "/"), APIPath: provider.APIPath, APIKey: secret, Headers: cloneStringMap(provider.Headers), Proxy: effectiveProxy(document, provider), ExtraBody: model.RequestBody(cloneAnyMap(provider.Body)), Timeout: time.Duration(provider.TimeoutSeconds) * time.Second, RetryCount: retries, RetryCountSet: provider.Retries != nil, Stream: true, StreamSet: provider.Stream != nil, CredentialID: provider.Auth.Credential}
 		if provider.Stream != nil {
 			profile.Stream = *provider.Stream
 		}
@@ -1331,8 +1352,14 @@ func (m *Manager) prepareUpdate(ctx context.Context, expectedRevision uint64, op
 		switch operation.Kind {
 		case OperationSetActiveModel:
 			raw, err = patchJSONCMember(raw, nil, "activeModel", operation.Value, false)
+		case OperationSetProxy:
+			if len(operation.Value) == 0 {
+				raw, err = patchJSONCMember(raw, nil, "proxy", nil, true)
+			} else {
+				raw, err = patchJSONCMember(raw, nil, "proxy", operation.Value, false)
+			}
 		case OperationUpsertProvider:
-			raw, err = patchJSONCObjectMemberFields(raw, []string{"providers"}, operation.ID, operation.Value, []string{"preset", "transport", "endpoint", "apiPath", "auth", "headers", "body", "timeoutSeconds", "retries", "stream", "discovery"})
+			raw, err = patchJSONCObjectMemberFields(raw, []string{"providers"}, operation.ID, operation.Value, []string{"preset", "transport", "endpoint", "apiPath", "auth", "headers", "body", "timeoutSeconds", "retries", "stream", "proxy", "discovery"})
 		case OperationDeleteProvider:
 			raw, err = patchJSONCMember(raw, []string{"providers"}, operation.ID, nil, true)
 		case OperationUpsertModel:
