@@ -1,7 +1,7 @@
 // 底部 dock 渲染层。
 //
 // 布局：输入区上方整行是 context progress bar；最下方边框左侧显示输入模式，
-// 中间按空间显示复制反馈或工作树，右侧显示 token usage。
+// 中间显示 token usage 或临时反馈，右侧显示项目/分支。
 // ready/working/generating 状态词只保留在 header。所有内容按 terminal cell
 // 预算截断，整体严格等于目标宽度，数据内容绝不破坏布局。
 package bubble
@@ -115,8 +115,8 @@ func (m appModel) renderDockStatusLine(width int) string {
 	return m.renderTokenFrontierWith(width, used, cache, limit, m.currentModeHex())
 }
 
-// renderBottomDockLine 渲染最下方边框：模式靠左，token usage 靠右；中间剩余
-// 空间优先显示复制反馈，其次显示工作树 chip。线色随 agentmode 变化。
+// renderBottomDockLine 渲染最下方边框：模式靠左，项目/分支靠右；中间剩余
+// 空间显示 token usage，复制反馈出现时临时替代 usage。线色随 agentmode 变化。
 func (m appModel) renderBottomDockLine(width int) string {
 	width = maxInt(1, width)
 	lineStyle := lipgloss.NewStyle()
@@ -126,7 +126,7 @@ func (m appModel) renderBottomDockLine(width int) string {
 	line := lineStyle.Render(strings.Repeat("─", width))
 
 	left := m.renderModeIndicator()
-	right := m.renderBottomDockUsage()
+	right := m.renderBottomDockWorktree(width)
 	left = truncateStyledCellLine(left, maxInt(0, width-2))
 	leftWidth := terminalCellWidth(left)
 	leftAt := 0
@@ -135,9 +135,9 @@ func (m appModel) renderBottomDockLine(width int) string {
 	}
 	leftEnd := leftAt + leftWidth
 
-	// Keep at least one rule cell between the mode and usage plus one at the
-	// outer right edge. On very narrow terminals, usage truncates before it can
-	// overlap the mode.
+	// Keep at least one rule cell between the mode and worktree plus one at the
+	// outer right edge. On narrow terminals the worktree is omitted before it can
+	// overlap the mode or token usage.
 	right = truncateStyledCellLine(right, maxInt(0, width-leftEnd-2))
 	rightWidth := terminalCellWidth(right)
 	rightAt := width
@@ -158,7 +158,7 @@ func (m appModel) renderBottomDockLine(width int) string {
 		middleRight = maxInt(middleLeft, rightAt-1)
 	}
 	if middleRight > middleLeft {
-		middle := m.renderBottomDockMiddle(middleRight-middleLeft, width)
+		middle := m.renderBottomDockMiddle(middleRight - middleLeft)
 		if middle != "" {
 			middleWidth := terminalCellWidth(middle)
 			middleAt := middleLeft + maxInt(0, (middleRight-middleLeft-middleWidth)/2)
@@ -187,17 +187,21 @@ func (m appModel) renderBottomDockUsage() string {
 	return usage
 }
 
-func (m appModel) renderBottomDockMiddle(width, totalWidth int) string {
+func (m appModel) renderBottomDockMiddle(width int) string {
 	if width <= 0 {
 		return ""
 	}
 	if toast := m.renderStatusLeftSegment(); toast != "" {
 		return truncateStyledCellLine(toast, width)
 	}
+	return truncateStyledCellLine(m.renderBottomDockUsage(), width)
+}
+
+func (m appModel) renderBottomDockWorktree(totalWidth int) string {
 	if totalWidth < worktreeInlineMinimumWidth {
 		return ""
 	}
-	return m.renderWorktreeChip(width)
+	return m.renderWorktreeChip(minInt(28, maxInt(1, totalWidth/3)))
 }
 
 // currentModeHex 返回 agentmode（plan/goal）的强调色 hex；chat/shell/

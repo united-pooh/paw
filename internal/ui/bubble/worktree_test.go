@@ -162,14 +162,14 @@ func TestNewModelStartsWithEmptyTranscript(t *testing.T) {
 	}
 }
 
-func TestBottomDockPlacesWorktreeBetweenModeAndTokenUsage(t *testing.T) {
+func TestBottomDockPlacesTokenUsageBetweenModeAndWorktree(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.worktree = worktreeSnapshot{name: "paw", ref: "dev", state: worktreeDirty, isGit: true}
 	bottom := ansi.Strip(model.renderBottomDockLine(100))
 	mode := strings.Index(bottom, "chat")
-	worktree := strings.Index(bottom, "paw  dev")
 	count := strings.Index(bottom, " / ")
-	if mode < 0 || worktree < 0 || count < 0 || !(mode < worktree && worktree < count) {
+	worktree := strings.Index(bottom, "paw  dev")
+	if mode < 0 || count < 0 || worktree < 0 || !(mode < count && count < worktree) {
 		t.Fatalf("bottom border order = %q", bottom)
 	}
 }

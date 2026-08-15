@@ -9,9 +9,10 @@ import (
 	"paw/internal/loop"
 )
 
-func TestDockBorderLayoutUsesFullProgressTopAndAnchoredBottomMetadata(t *testing.T) {
+func TestDockBorderLayoutUsesFullProgressTopAndSwappedBottomMetadata(t *testing.T) {
 	model := newTestModel(&fakeRunner{stats: loop.ContextStats{UsedTokens: 12000, LimitTokens: 128000}})
 	model.cursorFrameAt = time.Unix(0, 0)
+	model.worktree = worktreeSnapshot{name: "paw", ref: "dev", state: worktreeDirty, isGit: true}
 
 	top := ansi.Strip(model.renderDockStatusLine(80))
 	if got := terminalCellWidth(top); got != 80 {
@@ -24,11 +25,48 @@ func TestDockBorderLayoutUsesFullProgressTopAndAnchoredBottomMetadata(t *testing
 	bottom := ansi.Strip(model.renderBottomDockLine(80))
 	modeAt := strings.Index(bottom, "chat")
 	usageAt := strings.Index(bottom, "12k / 128k")
+	worktreeAt := strings.Index(bottom, "paw  dev")
 	if modeAt < 0 || modeAt > 3 {
 		t.Fatalf("bottom border = %q, want chat anchored near the left edge", bottom)
 	}
-	if usageAt < 80-terminalCellWidth("12k / 128k")-3 {
-		t.Fatalf("bottom border = %q, want token usage anchored near the right edge", bottom)
+	if usageAt < 0 || worktreeAt < 0 || !(modeAt < usageAt && usageAt < worktreeAt) {
+		t.Fatalf("bottom border = %q, want mode, token usage, then project/branch", bottom)
+	}
+	if worktreeAt < 80-terminalCellWidth("paw  dev")-3 {
+		t.Fatalf("bottom border = %q, want project/branch anchored near the right edge", bottom)
+	}
+}
+
+func TestBottomDockExactWidthAndWorktreeVisibilityBoundary(t *testing.T) {
+	model := newTestModel(&fakeRunner{stats: loop.ContextStats{UsedTokens: 12000, LimitTokens: 128000}})
+	model.worktree = worktreeSnapshot{name: "paw", ref: "dev", state: worktreeDirty, isGit: true}
+
+	for _, width := range []int{8, 12, 20, 32, 60, 71, 72, 80, 100} {
+		bottom := model.renderBottomDockLine(width)
+		if got := terminalCellWidth(bottom); got != width {
+			t.Fatalf("width=%d bottom border cell width=%d line=%q", width, got, ansi.Strip(bottom))
+		}
+	}
+	if bottom := ansi.Strip(model.renderBottomDockLine(71)); strings.Contains(bottom, "paw") {
+		t.Fatalf("width=71 bottom border = %q, worktree should be hidden", bottom)
+	}
+	if bottom := ansi.Strip(model.renderBottomDockLine(72)); !strings.Contains(bottom, "paw") {
+		t.Fatalf("width=72 bottom border = %q, worktree should be visible", bottom)
+	}
+}
+
+func TestBottomDockLongCJKWorktreeKeepsRegionOrder(t *testing.T) {
+	model := newTestModel(&fakeRunner{stats: loop.ContextStats{UsedTokens: 12000, LimitTokens: 128000}})
+	model.worktree = worktreeSnapshot{name: "项目中文名称很长", ref: "功能/长分支名称", state: worktreeDirty, isGit: true}
+	bottom := ansi.Strip(model.renderBottomDockLine(100))
+	if got := terminalCellWidth(bottom); got != 100 {
+		t.Fatalf("bottom border cell width=%d, want 100: %q", got, bottom)
+	}
+	modeAt := strings.Index(bottom, "chat")
+	usageAt := strings.Index(bottom, "12k / 128k")
+	worktreeAt := strings.Index(bottom, "项目")
+	if modeAt < 0 || usageAt < 0 || worktreeAt < 0 || !(modeAt < usageAt && usageAt < worktreeAt) {
+		t.Fatalf("bottom border = %q, want mode, usage, then CJK project/branch", bottom)
 	}
 }
 
