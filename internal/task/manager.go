@@ -964,6 +964,15 @@ func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Pro
 		return TaskSnapshot{}, nil, err
 	}
 	task.PID = process.PID()
+	// worker 具名角色：若进程承载者是具名池 worker，任务名/色采用执行它的
+	// worker 角色（任务剥离 persona）；无具名 worker（in-process/streaming）
+	// 时保留 assignPersona 分配的角色名。
+	if source, ok := process.(WorkerRoleSource); ok {
+		if name, color := source.WorkerRole(); name != "" {
+			task.Name = name
+			task.Color = color
+		}
+	}
 	m.mu.Lock()
 	m.tasks[task.ID] = task
 	m.running[task.ID] = process

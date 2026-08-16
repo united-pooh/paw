@@ -69,6 +69,12 @@ type Process interface {
 	Stop() error
 }
 
+// WorkerRoleSource 由能识别执行 worker 角色的进程实现（进程池具名 worker）。
+// 返回空名字表示没有具名 worker，调用方回落进程内角色分配。
+type WorkerRoleSource interface {
+	WorkerRole() (name, color string)
+}
+
 type ProcessLauncher struct {
 	mu      sync.RWMutex
 	Command string

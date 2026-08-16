@@ -215,3 +215,71 @@ func TestProcessPoolCloseCancelsQueuedJobs(t *testing.T) {
 }
 
 var _ = time.Second
+
+func TestPoolWorkersGetUniqueNamedRoles(t *testing.T) {
+	launcher := &ProcessPoolLauncher{
+		Command:       os.Args[0],
+		Args:          []string{"-test.run=TestTaskPoolHelperProcess"},
+		Env:           []string{"PAW_task_POOL_HELPER=1"},
+		MaxWorkers:    1,
+		QueueCapacity: 1,
+	}
+	defer launcher.Close()
+
+	first, err := launcher.newPoolWorker()
+	if err != nil {
+		t.Fatalf("first newPoolWorker() error = %v", err)
+	}
+	defer first.stop()
+	second, err := launcher.newPoolWorker()
+	if err != nil {
+		t.Fatalf("second newPoolWorker() error = %v", err)
+	}
+	defer second.stop()
+
+	if first.roleName == "" || first.roleColor == "" {
+		t.Fatalf("first worker role = %q/%q, want non-empty", first.roleName, first.roleColor)
+	}
+	if first.roleName == second.roleName {
+		t.Fatalf("pool workers share role %q, want unique per worker", first.roleName)
+	}
+	known := false
+	for _, persona := range defaultPersonas {
+		if persona.Name == first.roleName {
+			known = true
+			break
+		}
+	}
+	if !known {
+		t.Fatalf("worker role %q is not from the persona pool", first.roleName)
+	}
+
+	// WorkerRole 经 poolJobProcess 透传给任务。
+	job := &poolJob{ctx: context.Background(), cancel: func() {}, req: WorkerRequest{TaskID: "unique-role-1"}}
+	job.setWorker(first)
+	process := &poolJobProcess{job: job}
+	if name, color := process.WorkerRole(); name != first.roleName || color != first.roleColor {
+		t.Fatalf("WorkerRole() = %q/%q, want %q/%q", name, color, first.roleName, first.roleColor)
+	}
+}
+
+func TestPoolJobProcessWorkerRoleWaitsForWorkerBinding(t *testing.T) {
+	job := &poolJob{ctx: context.Background(), cancel: func() {}, req: WorkerRequest{TaskID: "pending-binding"}}
+	process := &poolJobProcess{job: job}
+
+	done := make(chan struct{})
+	go func() {
+		name, _ := process.WorkerRole()
+		if name != "高松灯" {
+			t.Errorf("WorkerRole() = %q, want 高松灯", name)
+		}
+		close(done)
+	}()
+	time.Sleep(20 * time.Millisecond)
+	job.setWorker(&poolWorker{roleName: "高松灯", roleColor: "#CC0033"})
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("WorkerRole() did not resolve after worker binding")
+	}
+}

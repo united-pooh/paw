@@ -1357,6 +1357,51 @@ func TestTaskToolPropagatesTurnOwnerFromContext(t *testing.T) {
 	_, _ = manager.Stop(context.Background(), task.ID)
 }
 
+type roleAwareLauncher struct {
+	result func(WorkerRequest) WorkerResult
+}
+
+func (l roleAwareLauncher) Start(ctx context.Context, req WorkerRequest) (Process, error) {
+	result := WorkerResult{
+		TaskID:    req.TaskID,
+		SessionID: req.SessionID,
+		ExitCode:  0,
+	}
+	if l.result != nil {
+		result = l.result(req)
+	}
+	return roleAwareProcess{result: result}, nil
+}
+
+type roleAwareProcess struct {
+	result WorkerResult
+}
+
+func (p roleAwareProcess) PID() int                     { return 6161 }
+func (p roleAwareProcess) Wait() (WorkerResult, error)  { return p.result, nil }
+func (p roleAwareProcess) Stop() error                  { return nil }
+func (p roleAwareProcess) WorkerRole() (string, string) { return "高松灯", "#CC0033" }
+
+// TestWorkerRoleOverridesTaskName 验证具名池 worker 的角色覆盖任务名/色
+// （任务剥离 persona；无具名 worker 的路径仍走 assignPersona 兜底）。
+func TestWorkerRoleOverridesTaskName(t *testing.T) {
+	modelStreamer := &recordingModel{
+		rounds: []fakeRound{
+			{events: []model.StreamEvent{{Delta: "worker answer"}, {Done: true}}},
+		},
+	}
+	manager, _, _ := newTestManager(t, modelStreamer, settings.DefaultConfig(), nil)
+	manager.launcher = roleAwareLauncher{}
+
+	result, err := manager.Run(context.Background(), Request{Prompt: "worker role"})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.AgentName != "高松灯" || result.AgentColor != "#CC0033" {
+		t.Fatalf("AgentName/AgentColor = %q/%q, want worker role 高松灯/#CC0033", result.AgentName, result.AgentColor)
+	}
+}
+
 func TestProcessLauncherParsesWorkerJSON(t *testing.T) {
 	launcher := &ProcessLauncher{
 		Command: os.Args[0],

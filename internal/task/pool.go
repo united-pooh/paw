@@ -45,6 +45,9 @@ type ProcessPoolLauncher struct {
 	// JobWallTime 是单任务最大墙钟时长；0 表示不设上限（默认不启用）。
 	JobWallTime time.Duration
 
+	// roleCursor 按序分配池内 worker 的角色名（defaultPersonas），进程内唯一。
+	roleCursor int
+
 	submit    chan *poolJob
 	shutdown  chan struct{}
 	wake      chan struct{}
@@ -517,6 +520,10 @@ type poolWorker struct {
 
 	wall time.Duration
 
+	// roleName/roleColor 是该 worker 的具名角色（建池时从角色池分配）。
+	roleName  string
+	roleColor string
+
 	writeMu    sync.Mutex
 	mu         sync.Mutex
 	currentCtx context.Context
@@ -524,6 +531,34 @@ type poolWorker struct {
 	ready      chan error
 	closed     chan struct{}
 	stopOnce   sync.Once
+}
+
+// nextWorkerRoleLocked 在已持有 l.mu 的前提下按序分配一个角色（进程内唯一）。
+func (l *ProcessPoolLauncher) nextWorkerRoleLocked() persona {
+	if l == nil || len(defaultPersonas) == 0 {
+		return persona{}
+	}
+	role := defaultPersonas[l.roleCursor%len(defaultPersonas)]
+	l.roleCursor++
+	return role
+}
+
+// WorkerRole 返回承载该任务的池 worker 的角色名/色。任务尚未绑定 worker
+// （排队中）时短暂等待绑定；超时返回空，调用方回落进程内角色分配。
+func (p *poolJobProcess) WorkerRole() (name, color string) {
+	if p == nil || p.job == nil {
+		return "", ""
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		if worker := p.job.getWorker(); worker != nil {
+			return worker.roleName, worker.roleColor
+		}
+		if time.Now().After(deadline) {
+			return "", ""
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func (l *ProcessPoolLauncher) newPoolWorker() (*poolWorker, error) {
@@ -534,9 +569,13 @@ func (l *ProcessPoolLauncher) newPoolWorker() (*poolWorker, error) {
 	dir := l.Dir
 	broker := l.Broker
 	wall := l.JobWallTime
+	role := l.nextWorkerRoleLocked()
 	l.mu.Unlock()
 	if command == "" {
 		return nil, errors.New("task worker command is empty")
+	}
+	if role.Name == "" {
+		role = persona{Name: "task", Color: "#888888"}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, command, args...)
@@ -569,7 +608,8 @@ func (l *ProcessPoolLauncher) newPoolWorker() (*poolWorker, error) {
 	}
 	worker := &poolWorker{
 		cmd: cmd, stdin: stdin, broker: broker, ctx: ctx, cancel: cancel,
-		wall: wall, ready: make(chan error, 1), closed: make(chan struct{}),
+		wall: wall, roleName: role.Name, roleColor: role.Color,
+		ready: make(chan error, 1), closed: make(chan struct{}),
 	}
 	go func() {
 		_, _ = io.Copy(io.Discard, stderr)
