@@ -42,8 +42,33 @@ type Document struct {
 	SchemaVersion int                 `json:"schemaVersion"`
 	ActiveModel   string              `json:"activeModel,omitempty"`
 	Proxy         *model.ProxyConfig  `json:"proxy,omitempty"`
+	Sandbox       *Sandbox            `json:"sandbox,omitempty"`
 	Providers     map[string]Provider `json:"providers"`
 	Models        map[string]Model    `json:"models"`
+}
+
+// Sandbox 是 subagent worker 沙箱的全局安全基线。Limits 是硬上限（工作区不能
+// 放宽，只能收紧/保持）；Pool 同时是工作区 pool 覆盖的硬上限。
+type Sandbox struct {
+	Pool   *SandboxPool   `json:"pool,omitempty"`
+	Limits *SandboxLimits `json:"limits,omitempty"`
+}
+
+// SandboxPool 是进程池规模参数（性能相关）。全局值为硬上限且作为工作区未覆盖
+// 时的生效值；工作区可在 [1, 上限] 内调整。
+type SandboxPool struct {
+	MaxWorkers    *int `json:"maxWorkers,omitempty"`
+	QueueCapacity *int `json:"queueCapacity,omitempty"`
+}
+
+// SandboxLimits 是 worker 进程资源上限的安全基线。仅出现在全局配置；
+// 工作区配置不允许包含 limits（安全硬 cap 不可关）。
+type SandboxLimits struct {
+	CPUSeconds     *int `json:"cpuSeconds,omitempty"`
+	FileSizeMiB    *int `json:"fileSizeMiB,omitempty"`
+	MaxProcesses   *int `json:"maxProcesses,omitempty"`
+	OpenFiles      *int `json:"openFiles,omitempty"`
+	JobWallSeconds *int `json:"jobWallSeconds,omitempty"`
 }
 
 type Provider struct {
@@ -243,12 +268,19 @@ type DiscoveryStatus struct {
 	LastError       string
 }
 
+// SandboxWorkspace 是工作区允许的沙箱覆盖：仅 pool（性能调优），且受全局硬上限
+// 约束；资源硬上限（Limits）只存在于全局，工作区无法放宽。
+type SandboxWorkspace struct {
+	Pool *SandboxPool `json:"pool,omitempty"`
+}
+
 // WorkspaceDocument is deliberately narrow. A workspace cannot override
 // provider connectivity or credentials inherited from the user's config.
 type WorkspaceDocument struct {
 	SchemaVersion int                      `json:"schemaVersion,omitempty"`
 	ActiveModel   string                   `json:"activeModel,omitempty"`
 	Models        map[string]ModelOverride `json:"models,omitempty"`
+	Sandbox       *SandboxWorkspace        `json:"sandbox,omitempty"`
 }
 
 type ModelOverride struct {
@@ -414,6 +446,7 @@ func (e *SetupRequiredError) Error() string {
 func cloneDocument(in Document) Document {
 	out := in
 	out.Proxy = model.CloneProxyConfig(in.Proxy)
+	out.Sandbox = cloneSandbox(in.Sandbox)
 	out.Providers = make(map[string]Provider, len(in.Providers))
 	for id, value := range in.Providers {
 		out.Providers[id] = cloneProvider(value)
@@ -481,7 +514,58 @@ func cloneWorkspace(in WorkspaceDocument) WorkspaceDocument {
 		value.Stream = cloneBoolPointer(value.Stream)
 		out.Models[id] = value
 	}
+	out.Sandbox = cloneSandboxWorkspace(in.Sandbox)
 	return out
+}
+
+func cloneSandboxWorkspace(in *SandboxWorkspace) *SandboxWorkspace {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.Pool = cloneSandboxPool(in.Pool)
+	return &out
+}
+
+func cloneSandbox(in *Sandbox) *Sandbox {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.Pool = cloneSandboxPool(in.Pool)
+	out.Limits = cloneSandboxLimits(in.Limits)
+	return &out
+}
+
+func cloneSandboxPool(in *SandboxPool) *SandboxPool {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.MaxWorkers = cloneIntPointer(in.MaxWorkers)
+	out.QueueCapacity = cloneIntPointer(in.QueueCapacity)
+	return &out
+}
+
+func cloneSandboxLimits(in *SandboxLimits) *SandboxLimits {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.CPUSeconds = cloneIntPointer(in.CPUSeconds)
+	out.FileSizeMiB = cloneIntPointer(in.FileSizeMiB)
+	out.MaxProcesses = cloneIntPointer(in.MaxProcesses)
+	out.OpenFiles = cloneIntPointer(in.OpenFiles)
+	out.JobWallSeconds = cloneIntPointer(in.JobWallSeconds)
+	return &out
+}
+
+func cloneIntPointer(in *int) *int {
+	if in == nil {
+		return nil
+	}
+	cloned := *in
+	return &cloned
 }
 
 func cloneBoolPointer(value *bool) *bool {

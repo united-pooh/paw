@@ -79,6 +79,11 @@ func validateDocument(document Document, path string) ([]Diagnostic, error) {
 	if document.SchemaVersion != SchemaVersion {
 		return nil, fmt.Errorf("%s: schemaVersion must be %d", path, SchemaVersion)
 	}
+	if document.Sandbox != nil {
+		if err := validateSandbox(document.Sandbox); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+	}
 	for id, provider := range document.Providers {
 		if strings.TrimSpace(id) == "" {
 			return nil, fmt.Errorf("%s: provider ID cannot be empty", path)
@@ -137,6 +142,44 @@ func validateDocument(document Document, path string) ([]Diagnostic, error) {
 		}
 	}
 	return nil, nil
+}
+
+// validateSandbox 校验沙箱参数均为正整数（>0）；0/负值视为配置错误而非禁用。
+func validateSandbox(sandbox *Sandbox) error {
+	if sandbox == nil {
+		return nil
+	}
+	check := func(name string, value *int) error {
+		if value != nil && *value < 1 {
+			return fmt.Errorf("sandbox.%s must be at least 1, got %d", name, *value)
+		}
+		return nil
+	}
+	if sandbox.Pool != nil {
+		if err := check("pool.maxWorkers", sandbox.Pool.MaxWorkers); err != nil {
+			return err
+		}
+		if err := check("pool.queueCapacity", sandbox.Pool.QueueCapacity); err != nil {
+			return err
+		}
+	}
+	if sandbox.Limits != nil {
+		for _, item := range []struct {
+			name  string
+			value *int
+		}{
+			{"limits.cpuSeconds", sandbox.Limits.CPUSeconds},
+			{"limits.fileSizeMiB", sandbox.Limits.FileSizeMiB},
+			{"limits.maxProcesses", sandbox.Limits.MaxProcesses},
+			{"limits.openFiles", sandbox.Limits.OpenFiles},
+			{"limits.jobWallSeconds", sandbox.Limits.JobWallSeconds},
+		} {
+			if err := check(item.name, item.value); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func validateDiscoveryConfig(providerID string, cfg DiscoveryConfig) error {
@@ -217,9 +260,23 @@ func parseAndValidateWorkspace(raw []byte, path string, global Document) (Worksp
 	}
 	for key := range generic {
 		switch key {
-		case "schemaVersion", "activeModel", "models":
+		case "schemaVersion", "activeModel", "models", "sandbox":
 		default:
 			return WorkspaceDocument{}, fmt.Errorf("%s: project field %q is not allowed", path, key)
+		}
+	}
+	if rawSandbox, ok := generic["sandbox"].(map[string]any); ok {
+		for key := range rawSandbox {
+			if key != "pool" {
+				return WorkspaceDocument{}, fmt.Errorf("%s: project sandbox.%s is not allowed (workspace can only tune pool performance)", path, key)
+			}
+		}
+		if rawPool, ok := rawSandbox["pool"].(map[string]any); ok {
+			for key := range rawPool {
+				if key != "maxWorkers" && key != "queueCapacity" {
+					return WorkspaceDocument{}, fmt.Errorf("%s: project sandbox.pool.%s is not allowed", path, key)
+				}
+			}
 		}
 	}
 	if rawModels, ok := generic["models"].(map[string]any); ok {

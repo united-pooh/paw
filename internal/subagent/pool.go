@@ -42,6 +42,9 @@ type ProcessPoolLauncher struct {
 	MaxWorkers    int
 	QueueCapacity int
 
+	// JobWallTime 是单任务最大墙钟时长；0 表示不设上限（默认不启用）。
+	JobWallTime time.Duration
+
 	submit    chan *poolJob
 	shutdown  chan struct{}
 	wake      chan struct{}
@@ -512,6 +515,8 @@ type poolWorker struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
+	wall time.Duration
+
 	writeMu    sync.Mutex
 	mu         sync.Mutex
 	currentCtx context.Context
@@ -528,6 +533,7 @@ func (l *ProcessPoolLauncher) newPoolWorker() (*poolWorker, error) {
 	env := append([]string(nil), l.Env...)
 	dir := l.Dir
 	broker := l.Broker
+	wall := l.JobWallTime
 	l.mu.Unlock()
 	if command == "" {
 		return nil, errors.New("subagent worker command is empty")
@@ -563,7 +569,7 @@ func (l *ProcessPoolLauncher) newPoolWorker() (*poolWorker, error) {
 	}
 	worker := &poolWorker{
 		cmd: cmd, stdin: stdin, broker: broker, ctx: ctx, cancel: cancel,
-		ready: make(chan error, 1), closed: make(chan struct{}),
+		wall: wall, ready: make(chan error, 1), closed: make(chan struct{}),
 	}
 	go func() {
 		_, _ = io.Copy(io.Discard, stderr)
@@ -645,13 +651,26 @@ func (w *poolWorker) run(job *poolJob) (WorkerResult, error, bool) {
 		w.failCurrent(err)
 		return WorkerResult{TaskID: job.req.TaskID, SessionID: job.req.SessionID, Error: err.Error(), ExitCode: 1}, err, false
 	}
+	jobCtx := job.ctx
+	if w.wall > 0 {
+		var stopWall context.CancelFunc
+		jobCtx, stopWall = context.WithTimeout(job.ctx, w.wall)
+		defer stopWall()
+	}
 	select {
 	case done := <-resultCh:
 		return done.result, done.err, done.err == nil
-	case <-job.ctx.Done():
-		_ = w.send(workerMessage{Protocol: workerProtocolV2, Type: workerMessageCancel, TaskID: job.req.TaskID})
+	case <-jobCtx.Done():
+		if err := job.ctx.Err(); err != nil {
+			// 调用方取消：正常取消路径。
+			_ = w.send(workerMessage{Protocol: workerProtocolV2, Type: workerMessageCancel, TaskID: job.req.TaskID})
+			w.stop()
+			return canceledWorkerResult(job.req, job.ctx.Err()), job.ctx.Err(), false
+		}
+		// 墙钟超时：不信任 worker 后续，直接拉起失败并回收该 worker。
+		err := fmt.Errorf("subagent job wall clock exceeded %s", w.wall)
 		w.stop()
-		return canceledWorkerResult(job.req, job.ctx.Err()), job.ctx.Err(), false
+		return WorkerResult{TaskID: job.req.TaskID, SessionID: job.req.SessionID, Error: err.Error(), ExitCode: 1}, err, false
 	case <-w.closed:
 		err := errors.New("subagent pool worker exited unexpectedly")
 		return WorkerResult{TaskID: job.req.TaskID, SessionID: job.req.SessionID, Error: err.Error(), ExitCode: 1}, err, false

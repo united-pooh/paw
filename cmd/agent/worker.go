@@ -19,8 +19,8 @@ import (
 	"sync/atomic"
 )
 
-func runSubagentWorkerMode(ctx context.Context, input io.Reader, output io.Writer, allowOutsideRead bool) error {
-	if err := subagent.ApplyWorkerResourceLimits(); err != nil {
+func runSubagentWorkerMode(ctx context.Context, input io.Reader, output io.Writer, allowOutsideRead bool, sandboxLimits subagent.SandboxLimits) error {
+	if err := subagent.ApplyWorkerResourceLimits(sandboxLimits); err != nil {
 		return fmt.Errorf("apply worker resource limits: %w", err)
 	}
 	decoder := json.NewDecoder(input)
@@ -175,8 +175,8 @@ type poolWorkerInput struct {
 // 协议：parent 发送 hello → 本 worker 应答 ready；随后循环接收 start 任务，
 // 每任务独立执行并回报 result；收到 cancel/shutdown 或 stdin EOF 时退出。
 // 单个 worker 同时只处理一个任务（parent 侧串行调度，保证每任务隔离）。
-func runSubagentPoolWorkerMode(ctx context.Context, input io.Reader, output io.Writer, allowOutsideRead bool) error {
-	if err := subagent.ApplyWorkerResourceLimits(); err != nil {
+func runSubagentPoolWorkerMode(ctx context.Context, input io.Reader, output io.Writer, allowOutsideRead bool, sandboxLimits subagent.SandboxLimits) error {
+	if err := subagent.ApplyWorkerResourceLimits(sandboxLimits); err != nil {
 		return fmt.Errorf("apply worker resource limits: %w", err)
 	}
 	if ctx == nil {

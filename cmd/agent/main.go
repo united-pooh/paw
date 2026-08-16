@@ -18,16 +18,17 @@ func main() {
 
 	opts := parseOptions()
 	ctx := context.Background()
+	sandboxLimits := parseSandboxLimits(opts.sandboxLimits)
 
 	if opts.subagentWorkerPool {
-		if err := runSubagentPoolWorkerMode(ctx, os.Stdin, os.Stdout, opts.allowOutsideRead); err != nil {
+		if err := runSubagentPoolWorkerMode(ctx, os.Stdin, os.Stdout, opts.allowOutsideRead, sandboxLimits); err != nil {
 			log.Fatal(err)
 		}
 		return
 	}
 
 	if opts.subagentWorker {
-		if err := runSubagentWorkerMode(ctx, os.Stdin, os.Stdout, opts.allowOutsideRead); err != nil {
+		if err := runSubagentWorkerMode(ctx, os.Stdin, os.Stdout, opts.allowOutsideRead, sandboxLimits); err != nil {
 			log.Fatal(err)
 		}
 		return

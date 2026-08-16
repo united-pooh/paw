@@ -8,30 +8,24 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const (
-	workerCPUSeconds    = 120               // RLIMIT_CPU：单 worker 累计 CPU 秒数
-	workerFileSizeBytes = 256 * 1024 * 1024 // RLIMIT_FSIZE：单文件写入上限
-	workerMaxProcesses  = 64                // RLIMIT_NPROC：worker 可派生的进程数
-	workerMaxOpenFiles  = 256               // RLIMIT_NOFILE：单 worker 打开文件描述符上限
-)
-
 // ApplyWorkerResourceLimits 在 worker 进程内设置软资源上限，作为 subagent 沙箱
 // 资源限制（阶段三）的一部分。只应在 worker 入口调用，主 agent 进程不受影响。
-// 设置失败返回错误，由调用方 fail-closed。
-func ApplyWorkerResourceLimits() error {
-	limits := []struct {
+// 传入的 limits 中 <=0 的字段回落默认值；设置失败返回错误，由调用方 fail-closed。
+func ApplyWorkerResourceLimits(limits SandboxLimits) error {
+	limits = resolveSandboxLimits(limits)
+	resources := []struct {
 		resource int
 		value    uint64
 		name     string
 	}{
-		{unix.RLIMIT_CPU, workerCPUSeconds, "RLIMIT_CPU"},
-		{unix.RLIMIT_FSIZE, workerFileSizeBytes, "RLIMIT_FSIZE"},
-		{unix.RLIMIT_NPROC, workerMaxProcesses, "RLIMIT_NPROC"},
-		{unix.RLIMIT_NOFILE, workerMaxOpenFiles, "RLIMIT_NOFILE"},
+		{unix.RLIMIT_CPU, uint64(limits.CPUSeconds), "RLIMIT_CPU"},
+		{unix.RLIMIT_FSIZE, uint64(limits.FileSizeMiB) * 1024 * 1024, "RLIMIT_FSIZE"},
+		{unix.RLIMIT_NPROC, uint64(limits.MaxProcesses), "RLIMIT_NPROC"},
+		{unix.RLIMIT_NOFILE, uint64(limits.OpenFiles), "RLIMIT_NOFILE"},
 	}
-	for _, limit := range limits {
-		if err := setSoftLimit(limit.resource, limit.value); err != nil {
-			return fmt.Errorf("set %s: %w", limit.name, err)
+	for _, item := range resources {
+		if err := setSoftLimit(item.resource, item.value); err != nil {
+			return fmt.Errorf("set %s: %w", item.name, err)
 		}
 	}
 	return nil

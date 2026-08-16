@@ -17,6 +17,7 @@ import (
 	toolfile "paw/internal/tool/file"
 	toolmcp "paw/internal/tool/mcp"
 	uiiface "paw/internal/ui"
+	"time"
 )
 
 type subagentRuntimeContext struct {
@@ -112,6 +113,13 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 	launcher := subagent.NewProcessPoolLauncher(executable, root)
 	launcher.SetDangerousMode(allowOutsideRead)
 	launcher.SetMCPBroker(broker)
+	// 沙箱生效值接线：全局安全基线（硬 cap）→ 池容量/墙钟；worker 进程经
+	// --sandbox-limits 接收资源限制。工作区只能在池容量上覆盖且受全局 cap 约束。
+	sandbox := configManager.Snapshot().Sandbox()
+	launcher.MaxWorkers = sandbox.MaxWorkers
+	launcher.QueueCapacity = sandbox.QueueCapacity
+	launcher.JobWallTime = time.Duration(sandbox.JobWallSeconds) * time.Second
+	launcher.Args = append(launcher.Args, "--sandbox-limits="+sandboxLimitsFlag(sandbox))
 	registry := tool.NewRegistry()
 	runner := loop.NewRunnerWithInstructionRoot(client, output, registry, store, sessionID, root)
 	runner.SetSkillRegistry(skill.NewRegistry([]string{paths.Skills}))
@@ -196,6 +204,14 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 
 	success = true
 	return runner, sessionID, client, configController, settingsController, subagentManager, store, mcpManager, nil
+}
+
+// sandboxLimitsFlag 把生效沙箱资源限制编码为 --sandbox-limits CSV，由 worker
+// 进程在入口处解析并应用 rlimit（缺失字段回落默认值）。
+func sandboxLimitsFlag(effective configv2.EffectiveSandbox) string {
+	return fmt.Sprintf("cpu=%d,file_mb=%d,proc=%d,nofile=%d,wall=%d",
+		effective.CPUSeconds, effective.FileSizeMiB, effective.MaxProcesses,
+		effective.OpenFiles, effective.JobWallSeconds)
 }
 
 type streamMASubagentAdapter struct {
