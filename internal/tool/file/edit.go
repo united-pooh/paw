@@ -119,7 +119,10 @@ func (t *EditTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 		updated = strings.Replace(string(current), in.OldString, in.NewString, 1)
 	}
 
-	if err := atomicWriteFile(target, []byte(updated), info.Mode().Perm()); err != nil {
+	// 跨进程 coordination：多 worker 并发编辑同一文件时用 OS advisory flock 串行化。
+	if err := withMutationLock(t.Root, func() error {
+		return atomicWriteFile(target, []byte(updated), info.Mode().Perm())
+	}); err != nil {
 		return "", err
 	}
 	if t.ReadState != nil {

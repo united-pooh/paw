@@ -88,7 +88,11 @@ func (t *WriteTool) Run(ctx context.Context, input json.RawMessage) (string, err
 		return "", rerr
 	}
 
-	if err := atomicWriteFile(target, []byte(in.Content), 0o644); err != nil {
+	// 跨进程 coordination：同一工作区的并发 worker 写同一文件时，用 OS advisory
+	// flock 串行化写入，避免 Write/Edit/后台任务互相覆盖（lost-update）。
+	if err := withMutationLock(t.Root, func() error {
+		return atomicWriteFile(target, []byte(in.Content), 0o644)
+	}); err != nil {
 		return "", err
 	}
 	if t.ReadState != nil {
