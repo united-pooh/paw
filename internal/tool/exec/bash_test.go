@@ -162,3 +162,51 @@ func TestCheckCommandSafetyBlocksDangerous(t *testing.T) {
 		}
 	}
 }
+
+// TestBashToolSandboxedBlocksWorkerHostileCommands 验证 worker 沙箱模式追加拦截
+// 提权/权限/块设备写命令，同时主 agent（非 Sandboxed）不受这些追加规则影响。
+func TestBashToolSandboxedBlocksWorkerHostileCommands(t *testing.T) {
+	sandboxed := &BashTool{Sandboxed: true}
+	nonSandboxed := &BashTool{}
+
+	hostile := []string{
+		"sudo apt-get update",
+		"sudo pkill -9 dockerd",
+		"su root -c whoami",
+		"chmod 777 script.sh",
+		"chown admin:admin data.txt",
+		"echo hi > /dev/sda",
+		"dd if=x of=/dev/sdb",
+	}
+	for _, cmd := range hostile {
+		if hit, _ := sandboxed.checkCommandSafety(cmd); !hit {
+			t.Errorf("sandboxed checkCommandSafety(%q) = allowed, want blocked", cmd)
+		}
+		// 主 agent 只在全局模式 命中时拦截；sudo/chmod 等不由沙箱规则触发。
+		globalHit, _ := checkCommandSafety(cmd)
+		if nonSandboxedHit, _ := nonSandboxed.checkCommandSafety(cmd); nonSandboxedHit != globalHit {
+			t.Errorf("non-sandboxed checkCommandSafety(%q) inconsistency", cmd)
+		}
+	}
+
+	// worker 沙箱仍放行常规开发命令与 /dev/null 重定向。
+	allowed := []string{
+		"go test ./...",
+		"ls -la",
+		"echo hello > /dev/null",
+		"echo note > notes.txt",
+		"cat /dev/null",
+	}
+	for _, cmd := range allowed {
+		if hit, _ := sandboxed.checkCommandSafety(cmd); hit {
+			t.Errorf("sandboxed checkCommandSafety(%q) = blocked, want allowed", cmd)
+		}
+	}
+
+	// 全局高危模式对两种模式都生效。
+	for _, tool := range []*BashTool{sandboxed, nonSandboxed} {
+		if hit, _ := tool.checkCommandSafety("rm -rf /"); !hit {
+			t.Errorf("checkCommandSafety(rm -rf /) should always be blocked")
+		}
+	}
+}

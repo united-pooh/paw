@@ -24,7 +24,7 @@ func (t *BashTool) Stream(ctx context.Context, input json.RawMessage) (output st
 	if err != nil {
 		return "", false, err
 	}
-	if blocked, pattern := checkCommandSafety(in.Command); blocked {
+	if blocked, pattern := t.checkCommandSafety(in.Command); blocked {
 		return "", false, fmt.Errorf("命令包含不允许的操作（匹配到危险模式: %s），执行已拦截", pattern)
 	}
 	workdir, err := resolveWorkingDir(t.Root, in.CWD)

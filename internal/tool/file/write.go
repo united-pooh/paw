@@ -12,6 +12,8 @@ import (
 type WriteTool struct {
 	Root      string
 	ReadState *ReadStateStore
+	// ForbidDotPaw 在 worker 沙箱中置位：拒绝写入 root/.paw（仅内部会话存储写入）。
+	ForbidDotPaw bool
 }
 
 type writeInput struct {
@@ -62,6 +64,11 @@ func (t *WriteTool) Run(ctx context.Context, input json.RawMessage) (string, err
 	target, _, err := resolveMutationPath(t.Root, in.FilePath, true)
 	if err != nil {
 		return "", err
+	}
+	if t.ForbidDotPaw {
+		if err := forbidDotPaw(t.Root, target); err != nil {
+			return "", err
+		}
 	}
 
 	// Read-before-write guard: overwriting an existing file requires a prior

@@ -13,6 +13,8 @@ import (
 	"paw/internal/skill"
 	"paw/internal/subagent"
 	"paw/internal/tool"
+	toolexec "paw/internal/tool/exec"
+	toolfile "paw/internal/tool/file"
 	toolmcp "paw/internal/tool/mcp"
 	uiiface "paw/internal/ui"
 )
@@ -146,6 +148,16 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 			_ = mcpManager.Close(context.Background())
 		}
 		return nil, "", nil, nil, nil, nil, nil, nil, err
+	}
+	// worker 进程以沙箱模式覆盖文件/Bash 工具（主 agent 非 workerMode 不变）：
+	//  - Write/Edit：拒绝写入 root/.paw（仅内部会话存储写入），沿用共享 read-state；
+	//  - Bash：追加拦截提权/权限/块设备写等不该由 subagent worker 执行的高危命令。
+	if subCtx.workerMode {
+		readState := toolfile.NewReadStateStore()
+		registry.Register(&toolfile.ReadTool{Root: root, ReadRoots: runner.SkillRoots(), ReadState: readState, AllowOutsideRoot: allowOutsideRead})
+		registry.Register(&toolfile.WriteTool{Root: root, ReadState: readState, ForbidDotPaw: true})
+		registry.Register(&toolfile.EditTool{Root: root, ReadState: readState, ForbidDotPaw: true})
+		registry.Register(&toolexec.BashTool{Root: root, Sandboxed: true})
 	}
 	runner.SetYoloModeHandler(launcher.SetDangerousMode)
 	if !subCtx.disableMainTodo {

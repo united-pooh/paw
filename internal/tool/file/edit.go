@@ -16,6 +16,8 @@ import (
 type EditTool struct {
 	Root      string
 	ReadState *ReadStateStore
+	// ForbidDotPaw 在 worker 沙箱中置位：拒绝编辑 root/.paw 下的文件。
+	ForbidDotPaw bool
 }
 
 type editInput struct {
@@ -74,6 +76,11 @@ func (t *EditTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 	target, _, err := resolveMutationPath(t.Root, in.FilePath, false)
 	if err != nil {
 		return "", err
+	}
+	if t.ForbidDotPaw {
+		if err := forbidDotPaw(t.Root, target); err != nil {
+			return "", err
+		}
 	}
 
 	display := relativePath(t.Root, target)

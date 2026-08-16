@@ -34,13 +34,26 @@ var blockedPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`:\s*\(\s*\)\s*\{.*:\|:.*\}`),
 }
 
+// sandboxedPatterns 只对 subagent worker（Sandboxed）追加拦截的高危命令模式。
+// 主 agent 不设此限制：提权、修改属主/权限、直接写块设备等操作不应由 worker 执行。
+var sandboxedPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\bsudo\b`),
+	regexp.MustCompile(`(?i)\bsu\s`),
+	regexp.MustCompile(`(?i)\bchown\b`),
+	regexp.MustCompile(`(?i)\bchmod\b`),
+	// 直接写块设备（/dev/sd*）；/dev/null 等常规重定向不受影响。
+	regexp.MustCompile(`(?i)>\s*/dev/sd`),
+	regexp.MustCompile(`(?i)of=/dev/sd`),
+}
+
 // BashTool 在工作区内运行 shell 命令。
 // 安全策略：
-//  1. 正则预检，拦截高风险破坏性命令（rm -rf、mkfs 等）；
+//  1. 正则预检，拦截高风险破坏性命令（rm -rf、mkfs 等）；Sandboxed 时额外拦截提权/权限/块设备写；
 //  2. 工作目录沙箱：cwd 不允许逃出 Root；
 //  3. 强制超时，超时后 kill 整个进程组。
 type BashTool struct {
-	Root string
+	Root      string
+	Sandboxed bool
 }
 
 type bashInput struct {
@@ -79,8 +92,8 @@ func (t *BashTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 		return "", err
 	}
 
-	// 安全预检：拦截高风险命令
-	if blocked, pattern := checkCommandSafety(in.Command); blocked {
+	// 安全预检：拦截高风险命令（Sandboxed 时含追加的 worker 高危模式）
+	if blocked, pattern := t.checkCommandSafety(in.Command); blocked {
 		return "", fmt.Errorf("命令包含不允许的操作（匹配到危险模式: %s），执行已拦截", pattern)
 	}
 
@@ -125,12 +138,27 @@ func (t *BashTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 	return renderedOutput, nil
 }
 
-// checkCommandSafety 检查命令是否命中危险模式。
+// checkCommandSafety 检查命令是否命中全局危险模式。
 // 返回 (true, patternDesc) 表示命中。
 func checkCommandSafety(command string) (bool, string) {
 	for _, re := range blockedPatterns {
 		if re.MatchString(command) {
 			return true, re.String()
+		}
+	}
+	return false, ""
+}
+
+// checkCommandSafety 方法版：全局危险模式 + Sandboxed 时的 worker 高危模式。
+func (t *BashTool) checkCommandSafety(command string) (bool, string) {
+	if blocked, pattern := checkCommandSafety(command); blocked {
+		return blocked, pattern
+	}
+	if t != nil && t.Sandboxed {
+		for _, re := range sandboxedPatterns {
+			if re.MatchString(command) {
+				return true, re.String()
+			}
 		}
 	}
 	return false, ""
