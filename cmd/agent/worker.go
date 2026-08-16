@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	coremcp "paw/internal/mcp"
@@ -19,8 +20,11 @@ import (
 )
 
 func runSubagentWorkerMode(ctx context.Context, input io.Reader, output io.Writer, allowOutsideRead bool) error {
+	if err := subagent.ApplyWorkerResourceLimits(); err != nil {
+		return fmt.Errorf("apply worker resource limits: %w", err)
+	}
 	decoder := json.NewDecoder(input)
-	start, req, subCtx, err := readSubagentWorkerStart(decoder)
+	start, req, _, err := readSubagentWorkerStart(decoder)
 	if err != nil {
 		return err
 	}
@@ -28,38 +32,9 @@ func runSubagentWorkerMode(ctx context.Context, input io.Reader, output io.Write
 	workerCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	broker := newWorkerMCPBroker(workerCtx, start.Snapshot, output)
-	subCtx.mcpBroker = broker
 	workerDone := make(chan subagent.WorkerResult, 1)
 	go func() {
-		workerUI := &workerUsageUI{UI: headless.New(io.Discard)}
-		runner, sessionID, _, configController, _, _, _, _, err := buildRunnerWithSubagentContext(workerCtx, req.SessionID, workerUI, allowOutsideRead, false, subCtx)
-		result := subagent.WorkerResult{TaskID: req.TaskID, SessionID: sessionID, ExitCode: 0}
-		if err != nil {
-			result.Error = err.Error()
-			result.ExitCode = 1
-			workerDone <- result
-			return
-		}
-		defer func() { _ = configController.Close() }()
-		broker.SetUpdateHandler(func(snapshot coremcp.Snapshot) {
-			adapted := toolmcp.NewSnapshotTools(snapshot, broker)
-			tools := make([]tool.Tool, 0, len(adapted))
-			for _, item := range adapted {
-				tools = append(tools, item)
-			}
-			_ = runner.ReplaceToolNamespace("mcp", tools)
-		})
-		broker.Update(broker.Snapshot())
-		msg, err := runner.RunTurn(workerCtx, req.Prompt)
-		result.UsedTokens = runner.ContextStats(1<<30, "").UsedTokens
-		result.Usage = workerUI.Usage()
-		if err != nil {
-			result.Error = err.Error()
-			result.ExitCode = 1
-		} else {
-			result.Content = strings.TrimSpace(msg.Content)
-		}
-		workerDone <- result
+		workerDone <- runWorkerTurn(workerCtx, req, broker, allowOutsideRead)
 	}()
 
 	messages := make(chan subagent.WorkerMessage)
@@ -108,14 +83,8 @@ func readSubagentWorkerStart(decoder *json.Decoder) (subagent.WorkerMessage, sub
 		return subagent.WorkerMessage{}, subagent.WorkerRequest{}, subagentRuntimeContext{}, fmt.Errorf("subagent worker.start is required")
 	}
 	req := start.Request()
-	if strings.TrimSpace(req.SessionID) == "" {
-		return subagent.WorkerMessage{}, subagent.WorkerRequest{}, subagentRuntimeContext{}, fmt.Errorf("subagent worker session_id is required")
-	}
-	if req.MaxDepth < 1 {
-		return subagent.WorkerMessage{}, subagent.WorkerRequest{}, subagentRuntimeContext{}, fmt.Errorf("subagent worker max_depth must be at least 1: %d", req.MaxDepth)
-	}
-	if req.Depth < 1 || req.Depth > req.MaxDepth {
-		return subagent.WorkerMessage{}, subagent.WorkerRequest{}, subagentRuntimeContext{}, fmt.Errorf("subagent worker depth must satisfy 1 <= depth <= max_depth: depth=%d max_depth=%d", req.Depth, req.MaxDepth)
+	if err := validateWorkerRequest(req); err != nil {
+		return subagent.WorkerMessage{}, subagent.WorkerRequest{}, subagentRuntimeContext{}, err
 	}
 	return start, req, subagentRuntimeContext{
 		workerMode:      true,
@@ -124,6 +93,170 @@ func readSubagentWorkerStart(decoder *json.Decoder) (subagent.WorkerMessage, sub
 		parentTaskID:    req.TaskID,
 		disableMainTodo: true,
 	}, nil
+}
+
+func validateWorkerRequest(req subagent.WorkerRequest) error {
+	if strings.TrimSpace(req.SessionID) == "" {
+		return fmt.Errorf("subagent worker session_id is required")
+	}
+	if req.MaxDepth < 1 {
+		return fmt.Errorf("subagent worker max_depth must be at least 1: %d", req.MaxDepth)
+	}
+	if req.Depth < 1 || req.Depth > req.MaxDepth {
+		return fmt.Errorf("subagent worker depth must satisfy 1 <= depth <= max_depth: depth=%d max_depth=%d", req.Depth, req.MaxDepth)
+	}
+	return nil
+}
+
+// runWorkerTurn 执行单个 worker 任务：为任务构建独立的 runner/会话/工具注册表/
+// 上下文/broker，运行一轮后返回结果。池 worker 与单 worker 共用此逻辑，确保
+// 每次任务之间的运行时状态完全隔离（仅 model.Client 在池内按需复用）。
+func runWorkerTurn(ctx context.Context, req subagent.WorkerRequest, broker *workerMCPBroker, allowOutsideRead bool) subagent.WorkerResult {
+	workerUI := &workerUsageUI{UI: headless.New(io.Discard)}
+	runner, sessionID, _, configController, _, _, _, _, err := buildRunnerWithSubagentContext(ctx, req.SessionID, workerUI, allowOutsideRead, false, subagentRuntimeContext{
+		workerMode:      true,
+		depth:           req.Depth,
+		maxDepth:        req.MaxDepth,
+		parentTaskID:    req.TaskID,
+		disableMainTodo: true,
+		mcpBroker:       broker,
+	})
+	result := subagent.WorkerResult{TaskID: req.TaskID, SessionID: sessionID, ExitCode: 0}
+	if err != nil {
+		result.Error = err.Error()
+		result.ExitCode = 1
+		return result
+	}
+	defer func() { _ = configController.Close() }()
+	broker.SetUpdateHandler(func(snapshot coremcp.Snapshot) {
+		adapted := toolmcp.NewSnapshotTools(snapshot, broker)
+		tools := make([]tool.Tool, 0, len(adapted))
+		for _, item := range adapted {
+			tools = append(tools, item)
+		}
+		_ = runner.ReplaceToolNamespace("mcp", tools)
+	})
+	broker.Update(broker.Snapshot())
+	msg, runErr := runner.RunTurn(ctx, req.Prompt)
+	result.UsedTokens = runner.ContextStats(1<<30, "").UsedTokens
+	result.Usage = workerUI.Usage()
+	if runErr != nil {
+		result.Error = runErr.Error()
+		result.ExitCode = 1
+	} else {
+		result.Content = strings.TrimSpace(msg.Content)
+	}
+	return result
+}
+
+// lockedWriter 串行化对共享输出（worker stdout）的写入。MCP 调用应答与任务结果
+// 都写同一管道，跨任务的写入不能交错形成非法 JSONL。
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (lw *lockedWriter) Write(p []byte) (int, error) {
+	if lw == nil || lw.w == nil {
+		return 0, io.ErrClosedPipe
+	}
+	lw.mu.Lock()
+	defer lw.mu.Unlock()
+	return lw.w.Write(p)
+}
+
+type poolWorkerInput struct {
+	msg subagent.WorkerMessage
+	err error
+	ok  bool
+}
+
+// runSubagentPoolWorkerMode 是 ProcessPoolLauncher 生成的长驻 worker 入口。
+// 协议：parent 发送 hello → 本 worker 应答 ready；随后循环接收 start 任务，
+// 每任务独立执行并回报 result；收到 cancel/shutdown 或 stdin EOF 时退出。
+// 单个 worker 同时只处理一个任务（parent 侧串行调度，保证每任务隔离）。
+func runSubagentPoolWorkerMode(ctx context.Context, input io.Reader, output io.Writer, allowOutsideRead bool) error {
+	if err := subagent.ApplyWorkerResourceLimits(); err != nil {
+		return fmt.Errorf("apply worker resource limits: %w", err)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	decoder := json.NewDecoder(input)
+
+	var hello subagent.WorkerMessage
+	if err := decoder.Decode(&hello); err != nil {
+		return fmt.Errorf("decode subagent pool worker hello: %w", err)
+	}
+	if hello.Type != subagent.WorkerMessageHello {
+		return fmt.Errorf("subagent pool worker hello is required")
+	}
+	shared := &lockedWriter{w: output}
+	if err := json.NewEncoder(shared).Encode(subagent.NewWorkerReadyMessage()); err != nil {
+		return fmt.Errorf("send subagent pool worker ready: %w", err)
+	}
+
+	jobCtx := ctx
+	jobCancel := func() {}
+	var current *workerMCPBroker
+
+	msgCh := make(chan poolWorkerInput, 4)
+	go func() {
+		for {
+			var message subagent.WorkerMessage
+			if err := decoder.Decode(&message); err != nil {
+				msgCh <- poolWorkerInput{err: err, ok: false}
+				return
+			}
+			msgCh <- poolWorkerInput{msg: message, ok: true}
+		}
+	}()
+
+	for {
+		select {
+		case in := <-msgCh:
+			if !in.ok {
+				jobCancel()
+				if errors.Is(in.err, io.EOF) {
+					return nil
+				}
+				return fmt.Errorf("read subagent pool worker input: %w", in.err)
+			}
+			switch in.msg.Type {
+			case subagent.WorkerMessageStart:
+				req := in.msg.Request()
+				if err := validateWorkerRequest(req); err != nil {
+					_ = json.NewEncoder(shared).Encode(subagent.NewWorkerResultMessage(subagent.WorkerResult{
+						TaskID: req.TaskID, SessionID: req.SessionID, Error: err.Error(), ExitCode: 1,
+					}))
+					continue
+				}
+				jobCancel()
+				jobCtx, jobCancel = context.WithCancel(ctx)
+				broker := newWorkerMCPBroker(jobCtx, req.MCPSnapshot, shared)
+				current = broker
+				go poolWorkerRunJob(jobCtx, req, shared, broker, allowOutsideRead)
+			case subagent.WorkerMessageMCPResult:
+				if current != nil {
+					current.resolve(in.msg.RequestID, in.msg.Content, in.msg.Error)
+				}
+			case subagent.WorkerMessageSnapshot:
+				if current != nil {
+					current.Update(in.msg.Snapshot)
+				}
+			case subagent.WorkerMessageCancel:
+				jobCancel()
+			case subagent.WorkerMessageShutdown:
+				jobCancel()
+				return nil
+			}
+		}
+	}
+}
+
+func poolWorkerRunJob(ctx context.Context, req subagent.WorkerRequest, output io.Writer, broker *workerMCPBroker, allowOutsideRead bool) {
+	result := runWorkerTurn(ctx, req, broker, allowOutsideRead)
+	_ = json.NewEncoder(output).Encode(subagent.NewWorkerResultMessage(result))
 }
 
 type workerMCPBroker struct {

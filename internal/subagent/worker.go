@@ -333,6 +333,12 @@ func NewWorkerResultMessage(result WorkerResult) WorkerMessage {
 	}
 }
 
+// NewWorkerReadyMessage 是池 worker 对 parent 的 Hello 的应答，表示该 worker
+// 已就绪、可接收 start 任务。
+func NewWorkerReadyMessage() WorkerMessage {
+	return workerMessage{Protocol: workerProtocolV2, Type: workerMessageReady}
+}
+
 func (m workerMessage) Result() WorkerResult {
 	return WorkerResult{
 		TaskID:     m.TaskID,

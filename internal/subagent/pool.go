@@ -422,6 +422,16 @@ func (j *poolJob) setWorker(worker *poolWorker) {
 	j.mu.Unlock()
 }
 
+func (j *poolJob) getWorker() *poolWorker {
+	if j == nil {
+		return nil
+	}
+	j.mu.RLock()
+	worker := j.worker
+	j.mu.RUnlock()
+	return worker
+}
+
 func (j *poolJob) pid() int {
 	if j == nil {
 		return 0
@@ -473,6 +483,19 @@ func (p *poolJobProcess) Stop() error {
 	}
 	p.job.cancel()
 	return nil
+}
+
+// UpdateMCPSnapshot 在任务执行期间推送更新的 MCP 快照给承载该任务的 worker。
+// 队列中的任务（尚未绑定 worker）则忽略更新——任务启动时已带上当前快照。
+func (p *poolJobProcess) UpdateMCPSnapshot(snapshot coremcp.Snapshot) error {
+	if p == nil || p.job == nil {
+		return nil
+	}
+	worker := p.job.getWorker()
+	if worker == nil {
+		return nil
+	}
+	return worker.send(workerMessage{Protocol: workerProtocolV2, Type: workerMessageSnapshot, Snapshot: snapshot.Clone()})
 }
 
 func canceledWorkerResult(req WorkerRequest, err error) WorkerResult {

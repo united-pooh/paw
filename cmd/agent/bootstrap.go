@@ -107,7 +107,7 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 		}
 		broker = mcpManager
 	}
-	launcher := subagent.NewProcessLauncher(executable, root)
+	launcher := subagent.NewProcessPoolLauncher(executable, root)
 	launcher.SetDangerousMode(allowOutsideRead)
 	launcher.SetMCPBroker(broker)
 	registry := tool.NewRegistry()

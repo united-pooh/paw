@@ -19,6 +19,13 @@ func main() {
 	opts := parseOptions()
 	ctx := context.Background()
 
+	if opts.subagentWorkerPool {
+		if err := runSubagentPoolWorkerMode(ctx, os.Stdin, os.Stdout, opts.allowOutsideRead); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
 	if opts.subagentWorker {
 		if err := runSubagentWorkerMode(ctx, os.Stdin, os.Stdout, opts.allowOutsideRead); err != nil {
 			log.Fatal(err)
