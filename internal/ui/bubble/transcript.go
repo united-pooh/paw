@@ -291,14 +291,14 @@ func (m *appModel) recordToolCallCitation(toolUseID, name string, input json.Raw
 	m.refreshViewport()
 }
 
-// isSubagentWaitTool 报告工具名是否为 SubagentWait。SubagentWait 在 TUI 中
-// 不渲染为工具调用块：运行期间显示一行 "子智能体 <名字> 正在运行 Ns"，
+// isSubagentWaitTool 报告工具名是否为 TaskWait。TaskWait 在 TUI 中
+// 不渲染为工具调用块：运行期间显示一行 "worker <名字> 正在运行 Ns"，
 // 工具完成后该行直接消失（错误时改为错误行），不进入 Tools 折叠组。
 func isSubagentWaitTool(name string) bool {
-	return strings.EqualFold(strings.TrimSpace(name), "SubagentWait")
+	return strings.EqualFold(strings.TrimSpace(name), "TaskWait")
 }
 
-// parseSubagentWaitTaskIDs 从 SubagentWait 的 input JSON 中解析 task_ids。
+// parseSubagentWaitTaskIDs 从 TaskWait 的 input JSON 中解析 task_ids。
 func parseSubagentWaitTaskIDs(input json.RawMessage) []string {
 	if len(input) == 0 {
 		return nil
@@ -318,8 +318,8 @@ func parseSubagentWaitTaskIDs(input json.RawMessage) []string {
 	return ids
 }
 
-// subagentWaitNames 通过 subagent controller 查询 task_ids 对应的子智能体名字。
-// 只返回能匹配到名字的任务；找不到名字时显示兜底文案 "子智能体"。
+// subagentWaitNames 通过 task controller 查询 task_ids 对应的worker名字。
+// 只返回能匹配到名字的任务；找不到名字时显示兜底文案 "worker"。
 func (m *appModel) subagentWaitNames(ids []string) []string {
 	if len(ids) == 0 || m.subagents == nil {
 		return nil
@@ -343,10 +343,10 @@ func (m *appModel) subagentWaitNames(ids []string) []string {
 	return names
 }
 
-// subagentWaitRunningBody 生成 SubagentWait 状态行的正文，如
-// "子智能体 高松灯 正在运行 13s"。
+// subagentWaitRunningBody 生成 TaskWait 状态行的正文，如
+// "worker 高松灯 正在运行 13s"。
 func subagentWaitRunningBody(names []string, elapsed int64) string {
-	label := "子智能体"
+	label := "worker"
 	if len(names) > 0 {
 		label += " " + strings.Join(names, "、")
 	}
@@ -410,11 +410,11 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 			if isError {
 				body := strings.TrimSpace(content)
 				if body == "" {
-					body = "子智能体等待失败"
+					body = "worker等待失败"
 				}
 				m.addEntry(transcriptEntry{
 					kind:  entryError,
-					title: "subagent",
+					title: "task",
 					body:  body,
 				})
 			} else {
@@ -570,7 +570,7 @@ func toolEntryMatchesResult(entry transcriptEntry, result toolEntryResult) bool 
 	return strings.EqualFold(entry.toolName, result.name)
 }
 
-// removeSubagentWaitEntry 从 transcript 中移除匹配的 SubagentWait 状态行，
+// removeSubagentWaitEntry 从 transcript 中移除匹配的 TaskWait 状态行，
 // 使等待结束（成功或失败）后该行直接消失而不折叠为工具块。
 func (m *appModel) removeSubagentWaitEntry(toolUseID, name string) bool {
 	for index := len(m.transcript) - 1; index >= 0; index-- {
@@ -1202,7 +1202,7 @@ func (m *appModel) markRunningToolsError(err error) {
 	for index := len(m.transcript) - 1; index >= 0; index-- {
 		entry := &m.transcript[index]
 		if entry.subagentWaitRunning {
-			// turn 意外失败时 SubagentWait 不会再收到结果：直接移除状态行，
+			// turn 意外失败时 TaskWait 不会再收到结果：直接移除状态行，
 			// 由后续 entryError 呈现失败原因，不保留悬挂的工具块。
 			m.transcript = append(m.transcript[:index], m.transcript[index+1:]...)
 			m.transcriptRenderCache = nil
@@ -1702,7 +1702,7 @@ func renderToolInputForDisplay(entry transcriptEntry, width int) string {
 }
 
 func isSubagentToolEntry(entry transcriptEntry) bool {
-	return strings.EqualFold(strings.TrimSpace(toolEntryDisplayName(entry)), "subagent")
+	return strings.EqualFold(strings.TrimSpace(toolEntryDisplayName(entry)), "task")
 }
 
 func renderSubagentToolDetail(entry transcriptEntry) string {
@@ -1791,8 +1791,8 @@ func renderEntry(entry transcriptEntry, width int) string {
 }
 
 func renderEntryAt(entry transcriptEntry, width int, at time.Time) string {
-	// SubagentWait 状态行：渲染为单行状态文字（如
-	// "子智能体 高松灯 正在运行 13s"），没有工具块边框、不可折叠。
+	// TaskWait 状态行：渲染为单行状态文字（如
+	// "worker 高松灯 正在运行 13s"），没有工具块边框、不可折叠。
 	if entry.subagentWaitRunning {
 		body := sanitizeTerminalText(entry.body)
 		if strings.TrimSpace(body) == "" {
@@ -1801,7 +1801,7 @@ func renderEntryAt(entry transcriptEntry, width int, at time.Time) string {
 		return indentLines(subagentWaitStyle.Render(body), transcriptEntryGutter)
 	}
 	bodyWidth := transcriptBodyWidth(width)
-	// 结构化 <task> 完成块：整块渲染为状态色框线卡片，不显示 "subagent" 标签
+	// 结构化 <task> 完成块：整块渲染为状态色框线卡片，不显示 "task" 标签
 	// （卡片标题行自带 ✓/✗/■ 状态标记与名称）。
 	if entry.kind == entrySystem && isTaskCompletionBlock(entry.body) {
 		card := renderTaskCompletionCard(entry.body, bodyWidth)
@@ -1990,7 +1990,7 @@ func renderTaskCompletionCard(body string, width int) string {
 	}
 	name := strings.TrimSpace(info.Name)
 	if name == "" {
-		name = "subagent"
+		name = "task"
 	}
 	title := lipgloss.NewStyle().Foreground(borderColor).Bold(true).Render(marker + " " + name + " " + stateText)
 

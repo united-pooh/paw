@@ -59,7 +59,7 @@ type historyExistenceStore interface {
 	Exists(ctx context.Context, sessionID string) (bool, error)
 }
 
-type SubagentTokensProvider interface {
+type TaskTokensProvider interface {
 	TotalSubagentTokens(parentSessionID string) int
 }
 
@@ -100,7 +100,7 @@ type Runner struct {
 	compactStuck           bool
 	streamMAEnabled        bool
 	streamMASubagents      StreamMASubagentRunner
-	subagentTokensProvider SubagentTokensProvider
+	subagentTokensProvider TaskTokensProvider
 	turnOwnedTaskCleaner   TurnOwnedTaskCleaner
 	recovery               *session.RecoveryState
 	skillRegistry          *skill.Registry

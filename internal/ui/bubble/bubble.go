@@ -17,7 +17,7 @@ import (
 	"paw/internal/session"
 	"paw/internal/settings"
 	"paw/internal/skill"
-	"paw/internal/subagent"
+	"paw/internal/task"
 	"paw/internal/todo"
 	selecttool "paw/internal/tool/select"
 	"paw/internal/ui"
@@ -108,17 +108,17 @@ type SettingsController interface {
 	UpdateRuntime(settings.Config)
 }
 
-// SubagentController 描述 TUI 手动启动和查看 subagent 所需的能力。
-type SubagentController interface {
-	Run(context.Context, subagent.Request) (subagent.Result, error)
-	Launch(context.Context, subagent.Request) (subagent.TaskSnapshot, error)
-	ListTasks() []subagent.TaskSnapshot
+// TaskController 描述 TUI 手动启动和查看 task 所需的能力。
+type TaskController interface {
+	Run(context.Context, task.Request) (task.Result, error)
+	Launch(context.Context, task.Request) (task.TaskSnapshot, error)
+	ListTasks() []task.TaskSnapshot
 }
 
-// SubagentTaskUpdateSubscriber is an optional live-update capability. It lets
+// TaskUpdateSubscriber is an optional live-update capability. It lets
 // the TUI wake immediately when a background task changes state instead of
 // waiting for the animation/poll interval.
-type SubagentTaskUpdateSubscriber interface {
+type TaskUpdateSubscriber interface {
 	SubscribeTaskUpdates() (<-chan struct{}, func())
 }
 
@@ -156,7 +156,7 @@ type UI struct {
 	modelConfigController  ModelConfigController
 	configCenterController ConfigCenterController
 	settingsController     SettingsController
-	subagentController     SubagentController
+	subagentController     TaskController
 	sessionStore           SessionStore
 	mcpController          MCPStatusController
 	goalController         GoalController
@@ -207,8 +207,8 @@ func (u *UI) SetSettingsController(controller SettingsController) {
 	u.settingsController = controller
 }
 
-// SetSubagentController 注入 subagent 控制器，供 /subagent 和 /tasks 使用。
-func (u *UI) SetSubagentController(controller SubagentController) {
+// SetTaskController 注入 task 控制器，供 /task 和 /tasks 使用。
+func (u *UI) SetTaskController(controller TaskController) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.subagentController = controller
@@ -306,7 +306,7 @@ func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 	if configCenterController != nil && !configCenterController.Snapshot().Ready {
 		appModel.openConfigCenter()
 	}
-	if subscriber, ok := subagentController.(SubagentTaskUpdateSubscriber); ok {
+	if subscriber, ok := subagentController.(TaskUpdateSubscriber); ok {
 		updates, stopUpdates := subscriber.SubscribeTaskUpdates()
 		appModel.subagentTaskUpdates = updates
 		appModel.subagentTaskUpdatesStop = stopUpdates

@@ -43,7 +43,7 @@ const (
 )
 
 type Config struct {
-	Subagent           SubagentConfig           `json:"subagent"`
+	Task           TaskConfig           `json:"subagent"`
 	UI                 UIConfig                 `json:"ui"`
 	ContextMaintenance ContextMaintenanceConfig `json:"context_maintenance"`
 	ContextCompression ContextCompressionConfig `json:"context_compression"`
@@ -70,7 +70,7 @@ type ContextMaintenanceConfig struct {
 	ArchiveEnabled      bool    `json:"archive_enabled"`
 }
 
-type SubagentConfig struct {
+type TaskConfig struct {
 	DefaultContextMode ContextMode `json:"default_context_mode"`
 	DefaultRunMode     RunMode     `json:"default_run_mode"`
 	WaitTimeoutMs      int         `json:"wait_timeout_ms"`
@@ -97,7 +97,7 @@ const (
 
 func DefaultConfig() Config {
 	return Config{
-		Subagent:           SubagentConfig{DefaultContextMode: ContextModeEmpty, DefaultRunMode: RunModeBackground, WaitTimeoutMs: DefaultSubagentWaitTimeoutMs},
+		Task:           TaskConfig{DefaultContextMode: ContextModeEmpty, DefaultRunMode: RunModeBackground, WaitTimeoutMs: DefaultTaskWaitTimeoutMs},
 		UI:                 UIConfig{Theme: theme.Default, ContextLimitTokens: DefaultContextLimitTokens, ContextMeterLocation: MeterLocationInputAbove, TranscriptOutputMode: TranscriptOutputModeLine},
 		ContextMaintenance: DefaultContextMaintenanceConfig(),
 		ContextCompression: DefaultContextCompressionConfig(),
@@ -121,9 +121,9 @@ func NormalizeCompressionMode(mode CompressionMode) CompressionMode {
 	}
 }
 
-// DefaultSubagentWaitTimeoutMs 是 SubagentWait 未显式指定 timeout_ms 时的默认
+// DefaultTaskWaitTimeoutMs 是 TaskWait 未显式指定 timeout_ms 时的默认
 // 等待上限（10 分钟）。超时返回当前快照 + timed_out 标记，并非错误。
-const DefaultSubagentWaitTimeoutMs = 600000
+const DefaultTaskWaitTimeoutMs = 600000
 
 func DefaultContextMaintenanceConfig() ContextMaintenanceConfig {
 	return ContextMaintenanceConfig{
@@ -212,10 +212,10 @@ func Save(path string, cfg Config) error {
 }
 
 func Normalize(cfg Config) Config {
-	cfg.Subagent.DefaultContextMode = NormalizeContextMode(cfg.Subagent.DefaultContextMode)
-	cfg.Subagent.DefaultRunMode = NormalizeRunMode(cfg.Subagent.DefaultRunMode)
-	if cfg.Subagent.WaitTimeoutMs <= 0 {
-		cfg.Subagent.WaitTimeoutMs = DefaultSubagentWaitTimeoutMs
+	cfg.Task.DefaultContextMode = NormalizeContextMode(cfg.Task.DefaultContextMode)
+	cfg.Task.DefaultRunMode = NormalizeRunMode(cfg.Task.DefaultRunMode)
+	if cfg.Task.WaitTimeoutMs <= 0 {
+		cfg.Task.WaitTimeoutMs = DefaultTaskWaitTimeoutMs
 	}
 	cfg.UI.Theme = theme.NormalizeID(string(cfg.UI.Theme))
 	cfg.UI.ContextMeterLocation = NormalizeMeterLocation(cfg.UI.ContextMeterLocation)

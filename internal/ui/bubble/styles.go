@@ -164,7 +164,7 @@ func rebuildLegacyStyles() {
 		Bold(true)
 	bodyStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorBody))
-	// SubagentWait 状态行：与工具标签同色但无边框、无背景，作为
+	// TaskWait 状态行：与工具标签同色但无边框、无背景，作为
 	// "子智能体 高松灯 正在运行 13s" 的单行状态文字。
 	subagentWaitStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorLabelTool))

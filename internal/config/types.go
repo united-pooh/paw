@@ -47,7 +47,7 @@ type Document struct {
 	Models        map[string]Model    `json:"models"`
 }
 
-// Sandbox 是 subagent worker 沙箱的全局安全基线。Limits 是硬上限（工作区不能
+// Sandbox 是 task worker 沙箱的全局安全基线。Limits 是硬上限（工作区不能
 // 放宽，只能收紧/保持）；Pool 同时是工作区 pool 覆盖的硬上限。
 type Sandbox struct {
 	Pool   *SandboxPool   `json:"pool,omitempty"`

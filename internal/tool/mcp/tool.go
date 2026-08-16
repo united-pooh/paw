@@ -10,7 +10,7 @@ import (
 )
 
 // Tool adapts one model-facing MCP capability to Paw's normal tool
-// interface. The broker may be the main-process Manager or a subagent proxy.
+// interface. The broker may be the main-process Manager or a task proxy.
 type Tool struct {
 	spec        coremcp.ToolSpec
 	modelSchema json.RawMessage

@@ -1,6 +1,6 @@
 //go:build darwin || linux
 
-package subagent
+package task
 
 import (
 	"testing"

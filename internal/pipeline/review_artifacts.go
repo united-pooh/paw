@@ -578,8 +578,8 @@ func moduleFamily(path string) string {
 		return "runtime"
 	case strings.HasPrefix(path, "internal/loop"):
 		return "orchestration"
-	case strings.HasPrefix(path, "internal/subagent"):
-		return "subagent"
+	case strings.HasPrefix(path, "internal/task"):
+		return "task"
 	case strings.HasPrefix(path, "internal/ui"):
 		return "ui"
 	case strings.HasPrefix(path, "internal/tool"):

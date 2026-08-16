@@ -115,16 +115,16 @@ func TestTimelineProjectionShowsParallelAgentsAndFailure(t *testing.T) {
 	}
 	events := []Event{
 		{Seq: 1, Type: "stage_start", Timestamp: ts(0), Data: map[string]any{"stage_id": "turn-1", "name": "StreamMA 1"}},
-		{Seq: 2, Type: "streamma.subagent_start", Timestamp: ts(0), Data: map[string]any{"stage_id": "turn-1", "agent_id": "scout", "role": "workspace_scout", "session_id": "scout-session", "invocation_index": 1}},
-		{Seq: 3, Type: "streamma.subagent_start", Timestamp: ts(10 * time.Millisecond), Data: map[string]any{"stage_id": "turn-1", "agent_id": "planner", "role": "source_planner", "session_id": "planner-session", "invocation_index": 1}},
+		{Seq: 2, Type: "streamma.task_start", Timestamp: ts(0), Data: map[string]any{"stage_id": "turn-1", "agent_id": "scout", "role": "workspace_scout", "session_id": "scout-session", "invocation_index": 1}},
+		{Seq: 3, Type: "streamma.task_start", Timestamp: ts(10 * time.Millisecond), Data: map[string]any{"stage_id": "turn-1", "agent_id": "planner", "role": "source_planner", "session_id": "planner-session", "invocation_index": 1}},
 		{Seq: 4, Type: "api_call", Timestamp: ts(10 * time.Second), Data: map[string]any{"stage_id": "turn-1", "agent_id": "scout", "session_id": "scout-session", "invocation_index": 1, "usage": Usage{Input: 10, CacheRead: 5, Output: 2}}},
 		{Seq: 5, Type: "api_call", Timestamp: ts(20 * time.Second), Data: map[string]any{"stage_id": "turn-1", "agent_id": "planner", "session_id": "planner-session", "invocation_index": 1, "usage": Usage{Input: 20, CacheRead: 15, Output: 3}}},
-		{Seq: 6, Type: "streamma.subagent_end", Timestamp: ts(40 * time.Second), Data: map[string]any{"stage_id": "turn-1", "agent_id": "scout", "role": "workspace_scout", "session_id": "scout-session", "invocation_index": 1}},
+		{Seq: 6, Type: "streamma.task_end", Timestamp: ts(40 * time.Second), Data: map[string]any{"stage_id": "turn-1", "agent_id": "scout", "role": "workspace_scout", "session_id": "scout-session", "invocation_index": 1}},
 		{Seq: 7, Type: "streamma.agent.step.committed", Timestamp: ts(50 * time.Second), Data: map[string]any{"stage_id": "turn-1", "agent_id": "planner", "step_id": "planner:1"}},
-		{Seq: 8, Type: "streamma.subagent_start", Timestamp: ts(55 * time.Second), Data: map[string]any{"stage_id": "turn-1", "agent_id": "builder", "role": "implementation_builder", "session_id": "builder-session", "invocation_index": 1}},
+		{Seq: 8, Type: "streamma.task_start", Timestamp: ts(55 * time.Second), Data: map[string]any{"stage_id": "turn-1", "agent_id": "builder", "role": "implementation_builder", "session_id": "builder-session", "invocation_index": 1}},
 		{Seq: 9, Type: "api_call", Timestamp: ts(2 * time.Minute), Data: map[string]any{"stage_id": "turn-1", "agent_id": "builder", "session_id": "builder-session", "invocation_index": 1, "usage": Usage{CacheRead: 10, Output: 5}}},
 		{Seq: 10, Type: "streamma.run.failed", Timestamp: ts(3 * time.Minute), Data: map[string]any{"stage_id": "turn-1", "error": "parser builder: missing END_STEP"}},
-		{Seq: 11, Type: "subagent_task_end", Timestamp: ts(3 * time.Minute), Data: map[string]any{"session_id": "builder-session", "status": "failed", "error": "missing END_STEP"}},
+		{Seq: 11, Type: "task_end", Timestamp: ts(3 * time.Minute), Data: map[string]any{"session_id": "builder-session", "status": "failed", "error": "missing END_STEP"}},
 		{Seq: 12, Type: "stage_end", Timestamp: ts(3*time.Minute + time.Second), Data: map[string]any{"stage_id": "turn-1", "status": "failed", "error": "context canceled"}},
 	}
 
@@ -157,7 +157,7 @@ func TestTimelineProjectionUsesNowForLiveRows(t *testing.T) {
 	base := time.Date(2026, 6, 26, 14, 37, 9, 0, time.UTC)
 	now := base.Add(30 * time.Second)
 	timeline := buildTimeline(Pipeline{ID: "run-live", Name: "Paw", Status: "live"}, []Event{
-		{Seq: 1, Type: "streamma.subagent_start", Timestamp: base.Format(time.RFC3339Nano), Data: map[string]any{"stage_id": "turn-1", "agent_id": "planner", "session_id": "planner-session", "invocation_index": 1}},
+		{Seq: 1, Type: "streamma.task_start", Timestamp: base.Format(time.RFC3339Nano), Data: map[string]any{"stage_id": "turn-1", "agent_id": "planner", "session_id": "planner-session", "invocation_index": 1}},
 	}, now)
 	planner := findTimelineRow(t, timeline, "planner")
 	if planner.Status != "live" {

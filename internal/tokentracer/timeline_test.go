@@ -11,15 +11,15 @@ func TestTimelineSubagentLifecycleUsesTaskMetadataAndAggregateTokens(t *testing.
 	startedAt := ts(2 * time.Second)
 	finishedAt := ts(12 * time.Second)
 	events := []Event{
-		{Seq: 1, Type: "subagent_task_start", Timestamp: ts(time.Second), Data: map[string]any{"task_id": "task-1", "name": "Research citations", "description": "Collect source links", "session_id": "researcher-session", "started_at": startedAt}},
-		{Seq: 2, Type: "subagent_task_end", Timestamp: ts(10 * time.Second), Data: map[string]any{"task_id": "task-1", "name": "Research citations", "description": "Collect source links", "session_id": "researcher-session", "status": "completed", "finished_at": finishedAt, "used_tokens": 4479}},
+		{Seq: 1, Type: "task_start", Timestamp: ts(time.Second), Data: map[string]any{"task_id": "task-1", "name": "Research citations", "description": "Collect source links", "session_id": "researcher-session", "started_at": startedAt}},
+		{Seq: 2, Type: "task_end", Timestamp: ts(10 * time.Second), Data: map[string]any{"task_id": "task-1", "name": "Research citations", "description": "Collect source links", "session_id": "researcher-session", "status": "completed", "finished_at": finishedAt, "used_tokens": 4479}},
 	}
 
 	timeline := buildTimeline(Pipeline{ID: "run-aggregate", Name: "Paw", StartTime: ts(0), Status: "completed"}, events, base.Add(time.Minute))
 	researcher := findTimelineRowBySession(t, timeline, "researcher-session")
 
-	if researcher.AgentID != "subagent" {
-		t.Fatalf("agent id = %q, want subagent fallback", researcher.AgentID)
+	if researcher.AgentID != "task" {
+		t.Fatalf("agent id = %q, want task fallback", researcher.AgentID)
 	}
 	if researcher.Name != "Research citations" || researcher.DisplayName != "Research citations" {
 		t.Fatalf("name/display_name = %q/%q, want task name", researcher.Name, researcher.DisplayName)
@@ -45,8 +45,8 @@ func TestTimelineSubagentLifecyclePrefersStructuredUsageOverUsedTokens(t *testin
 	base := time.Date(2026, 6, 27, 9, 45, 0, 0, time.UTC)
 	ts := func(offset time.Duration) string { return base.Add(offset).Format(time.RFC3339Nano) }
 	events := []Event{
-		{Seq: 1, Type: "subagent_task_start", Timestamp: ts(0), Data: map[string]any{"task_id": "task-structured", "name": "Build patch", "session_id": "structured-session", "started_at": ts(0)}},
-		{Seq: 2, Type: "subagent_task_end", Timestamp: ts(5 * time.Second), Data: map[string]any{
+		{Seq: 1, Type: "task_start", Timestamp: ts(0), Data: map[string]any{"task_id": "task-structured", "name": "Build patch", "session_id": "structured-session", "started_at": ts(0)}},
+		{Seq: 2, Type: "task_end", Timestamp: ts(5 * time.Second), Data: map[string]any{
 			"task_id":     "task-structured",
 			"name":        "Build patch",
 			"session_id":  "structured-session",
@@ -75,9 +75,9 @@ func TestTimelineSubagentLifecycleDoesNotOverrideAPICallUsage(t *testing.T) {
 	base := time.Date(2026, 6, 27, 10, 15, 0, 0, time.UTC)
 	ts := func(offset time.Duration) string { return base.Add(offset).Format(time.RFC3339Nano) }
 	events := []Event{
-		{Seq: 1, Type: "subagent_task_start", Timestamp: ts(0), Data: map[string]any{"task_id": "task-2", "description": "Implement the patch", "session_id": "builder-session", "started_at": ts(0)}},
+		{Seq: 1, Type: "task_start", Timestamp: ts(0), Data: map[string]any{"task_id": "task-2", "description": "Implement the patch", "session_id": "builder-session", "started_at": ts(0)}},
 		{Seq: 2, Type: "api_call", Timestamp: ts(5 * time.Second), Data: map[string]any{"session_id": "builder-session", "usage": Usage{Input: 10, CacheRead: 3, Output: 2}}},
-		{Seq: 3, Type: "subagent_task_end", Timestamp: ts(10 * time.Second), Data: map[string]any{"task_id": "task-2", "description": "Implement the patch", "session_id": "builder-session", "status": "completed", "finished_at": ts(10 * time.Second), "usage": Usage{Input: 1000, CacheRead: 500, Output: 250}, "used_tokens": 9999}},
+		{Seq: 3, Type: "task_end", Timestamp: ts(10 * time.Second), Data: map[string]any{"task_id": "task-2", "description": "Implement the patch", "session_id": "builder-session", "status": "completed", "finished_at": ts(10 * time.Second), "usage": Usage{Input: 1000, CacheRead: 500, Output: 250}, "used_tokens": 9999}},
 	}
 
 	timeline := buildTimeline(Pipeline{ID: "run-api", Name: "Paw", StartTime: ts(0), Status: "completed"}, events, base.Add(time.Minute))
@@ -101,8 +101,8 @@ func TestTimelineTotalIncludesLifecycleFallbackUsageWithPipelineTotal(t *testing
 	base := time.Date(2026, 6, 27, 11, 0, 0, 0, time.UTC)
 	ts := func(offset time.Duration) string { return base.Add(offset).Format(time.RFC3339Nano) }
 	events := []Event{
-		{Seq: 1, Type: "subagent_task_start", Timestamp: ts(time.Second), Data: map[string]any{"task_id": "task-3", "name": "Check references", "session_id": "checker-session", "started_at": ts(time.Second)}},
-		{Seq: 2, Type: "subagent_task_end", Timestamp: ts(4 * time.Second), Data: map[string]any{"task_id": "task-3", "name": "Check references", "session_id": "checker-session", "status": "completed", "finished_at": ts(4 * time.Second), "used_tokens": 25}},
+		{Seq: 1, Type: "task_start", Timestamp: ts(time.Second), Data: map[string]any{"task_id": "task-3", "name": "Check references", "session_id": "checker-session", "started_at": ts(time.Second)}},
+		{Seq: 2, Type: "task_end", Timestamp: ts(4 * time.Second), Data: map[string]any{"task_id": "task-3", "name": "Check references", "session_id": "checker-session", "status": "completed", "finished_at": ts(4 * time.Second), "used_tokens": 25}},
 	}
 	pipeline := Pipeline{
 		ID:        "run-total",

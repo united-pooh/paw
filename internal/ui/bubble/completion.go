@@ -488,7 +488,7 @@ func commandCompletionItems(prefix string, registry *CommandRegistry, skillRegis
 }
 
 // commandCompletionItemsForContext 根据斜杠词所在位置构造候选。行首保留全部
-// 命令；已有普通文本时仅保留可嵌入 prompt 的 subagent/streamma 命令。
+// 命令；已有普通文本时仅保留可嵌入 prompt 的 task/streamma 命令。
 // Skill 在两种场景下都完整保留。
 func commandCompletionItemsForContext(prefix string, registry *CommandRegistry, skillRegistry *skill.Registry, inline bool) []string {
 	if registry == nil && skillRegistry == nil {
@@ -527,7 +527,7 @@ func firstSkillRegistry(registries []*skill.Registry) *skill.Registry {
 }
 
 func isInlinePromptCommand(name string) bool {
-	return name == "/subagent" || name == "/streamma"
+	return name == "/task" || name == "/streamma"
 }
 
 // skillCompletionItems 从 skill 注册表中筛选匹配前缀的技能名。

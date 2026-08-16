@@ -34,7 +34,7 @@ var blockedPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`:\s*\(\s*\)\s*\{.*:\|:.*\}`),
 }
 
-// sandboxedPatterns 只对 subagent worker（Sandboxed）追加拦截的高危命令模式。
+// sandboxedPatterns 只对 task worker（Sandboxed）追加拦截的高危命令模式。
 // 主 agent 不设此限制：提权、修改属主/权限、直接写块设备等操作不应由 worker 执行。
 var sandboxedPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bsudo\b`),

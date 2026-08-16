@@ -1,4 +1,4 @@
-package subagent
+package task
 
 // SandboxLimits 是 worker 进程资源上限的数值。任何字段 <=0 时回落默认值。
 // 该结构经 --sandbox-limits 标志从宿主（config 生效值）传入 worker 进程。

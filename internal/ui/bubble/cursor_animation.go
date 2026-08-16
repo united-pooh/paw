@@ -118,7 +118,7 @@ func (m appModel) needsUIAnimationFrames(now time.Time) bool {
 			}
 		}
 	}
-	// 运行中 subagent 任务卡：需要动画帧驱动 spinner 与任务状态刷新。
+	// 运行中 task 任务卡：需要动画帧驱动 spinner 与任务状态刷新。
 	if m.hasRunningSubagentTasks() {
 		return true
 	}

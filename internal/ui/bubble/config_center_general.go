@@ -258,26 +258,26 @@ func configGeneralFields() []configGeneralField {
 			parse: parseGeneralFloat,
 		},
 		{
-			key:     "subagent.default_context_mode",
+			key:     "task.default_context_mode",
 			kind:    configGeneralEnum,
 			options: []string{string(settings.ContextModeEmpty), string(settings.ContextModeFork)},
-			get:     func(cfg settings.Config) string { return string(cfg.Subagent.DefaultContextMode) },
+			get:     func(cfg settings.Config) string { return string(cfg.Task.DefaultContextMode) },
 			set: func(cfg *settings.Config, value string) {
-				cfg.Subagent.DefaultContextMode = settings.ContextMode(value)
+				cfg.Task.DefaultContextMode = settings.ContextMode(value)
 			},
 		},
 		{
-			key:     "subagent.default_run_mode",
+			key:     "task.default_run_mode",
 			kind:    configGeneralEnum,
 			options: []string{string(settings.RunModeSync), string(settings.RunModeBackground)},
-			get:     func(cfg settings.Config) string { return string(cfg.Subagent.DefaultRunMode) },
-			set:     func(cfg *settings.Config, value string) { cfg.Subagent.DefaultRunMode = settings.RunMode(value) },
+			get:     func(cfg settings.Config) string { return string(cfg.Task.DefaultRunMode) },
+			set:     func(cfg *settings.Config, value string) { cfg.Task.DefaultRunMode = settings.RunMode(value) },
 		},
 		{
-			key:   "subagent.wait_timeout_ms",
+			key:   "task.wait_timeout_ms",
 			kind:  configGeneralInt,
-			get:   func(cfg settings.Config) string { return strconv.Itoa(cfg.Subagent.WaitTimeoutMs) },
-			set:   func(cfg *settings.Config, value string) { n, _ := strconv.Atoi(value); cfg.Subagent.WaitTimeoutMs = n },
+			get:   func(cfg settings.Config) string { return strconv.Itoa(cfg.Task.WaitTimeoutMs) },
+			set:   func(cfg *settings.Config, value string) { n, _ := strconv.Atoi(value); cfg.Task.WaitTimeoutMs = n },
 			parse: parseGeneralInt,
 		},
 		{
@@ -443,17 +443,17 @@ var configGeneralPresentations = map[string]configGeneralPresentation{
 		label:       "状态压缩触发比例",
 		description: "状态模式触发历史压缩的上下文占用比例",
 	},
-	"subagent.default_context_mode": {
-		label:       "子智能体上下文模式",
-		description: "子智能体使用空上下文，或继承父会话历史",
+	"task.default_context_mode": {
+		label:       "worker上下文模式",
+		description: "worker使用空上下文，或继承父会话历史",
 	},
-	"subagent.default_run_mode": {
-		label:       "子智能体运行模式",
-		description: "子智能体同步执行，或在后台运行",
+	"task.default_run_mode": {
+		label:       "worker运行模式",
+		description: "worker同步执行，或在后台运行",
 	},
-	"subagent.wait_timeout_ms": {
-		label:       "子智能体等待超时",
-		description: "等待子智能体结果的最长时间（毫秒）",
+	"task.wait_timeout_ms": {
+		label:       "worker等待超时",
+		description: "等待worker结果的最长时间（毫秒）",
 	},
 	"ui.theme": {
 		label:       "界面主题",
@@ -540,13 +540,13 @@ func configGeneralDisplayValue(key, value string) string {
 		return "状态压缩"
 	case "compression.mode\x00summary":
 		return "摘要压缩"
-	case "subagent.default_context_mode\x00empty":
+	case "task.default_context_mode\x00empty":
 		return "空上下文"
-	case "subagent.default_context_mode\x00fork":
+	case "task.default_context_mode\x00fork":
 		return "继承父会话"
-	case "subagent.default_run_mode\x00sync":
+	case "task.default_run_mode\x00sync":
 		return "同步"
-	case "subagent.default_run_mode\x00background":
+	case "task.default_run_mode\x00background":
 		return "后台"
 	case "ui.transcript_output_mode\x00line":
 		return "逐行"

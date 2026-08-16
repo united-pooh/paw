@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"paw/internal/model"
 	"paw/internal/settings"
-	"paw/internal/subagent"
+	"paw/internal/task"
 	"strings"
 	"time"
 )
@@ -225,20 +225,20 @@ func exportTranscriptText(entries []transcriptEntry) string {
 func (m *appModel) handleSubagentCommand(invocation string) tea.Cmd {
 	req, err := m.parseSubagentCommand(invocation)
 	if err != nil {
-		m.addEntry(transcriptEntry{kind: entryError, title: "subagent", body: err.Error()})
+		m.addEntry(transcriptEntry{kind: entryError, title: "task", body: err.Error()})
 		return nil
 	}
 	if m.subagents == nil {
-		m.addEntry(transcriptEntry{kind: entryError, title: "subagent", body: "subagent controller is unavailable"})
+		m.addEntry(transcriptEntry{kind: entryError, title: "task", body: "task controller is unavailable"})
 		return nil
 	}
 	if req.RunMode == settings.RunModeBackground {
 		task, err := m.subagents.Launch(m.ctx, req)
 		if err != nil {
-			m.addEntry(transcriptEntry{kind: entryError, title: "subagent", body: err.Error()})
+			m.addEntry(transcriptEntry{kind: entryError, title: "task", body: err.Error()})
 			return nil
 		}
-		m.addEntry(transcriptEntry{kind: entrySystem, title: "subagent", body: renderTask(task)})
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "task", body: renderTask(task)})
 		return nil
 	}
 	if !m.queryGuard.StartModel() {
@@ -246,18 +246,18 @@ func (m *appModel) handleSubagentCommand(invocation string) tea.Cmd {
 		return nil
 	}
 	m.syncRunningFlags()
-	m.addEntry(transcriptEntry{kind: entrySystem, title: "subagent", body: "started sync subagent"})
+	m.addEntry(transcriptEntry{kind: entrySystem, title: "task", body: "started sync task"})
 	workCmd := runSubagentCmd(m.beginModelWorkContext(), m.subagents, req)
 	frameCmd := m.scheduleUIAnimationFrame()
 	return tea.Batch(workCmd, frameCmd)
 }
 
-func (m appModel) parseSubagentCommand(invocation string) (subagent.Request, error) {
+func (m appModel) parseSubagentCommand(invocation string) (task.Request, error) {
 	cfg := m.currentSettings()
-	req := subagent.Request{
+	req := task.Request{
 		ParentSessionID: m.sessionID,
-		ContextMode:     cfg.Subagent.DefaultContextMode,
-		RunMode:         cfg.Subagent.DefaultRunMode,
+		ContextMode:     cfg.Task.DefaultContextMode,
+		RunMode:         cfg.Task.DefaultRunMode,
 	}
 	fields := strings.Fields(commandArgs(invocation))
 	var prompt []string
@@ -283,7 +283,7 @@ func (m appModel) parseSubagentCommand(invocation string) (subagent.Request, err
 	return req, nil
 }
 
-func runSubagentCmd(ctx context.Context, controller SubagentController, req subagent.Request) tea.Cmd {
+func runSubagentCmd(ctx context.Context, controller TaskController, req task.Request) tea.Cmd {
 	return func() tea.Msg {
 		result, err := controller.Run(ctx, req)
 		return subagentFinishedMsg{result: result, err: err}
@@ -292,12 +292,12 @@ func runSubagentCmd(ctx context.Context, controller SubagentController, req suba
 
 func (m *appModel) handleTasksCommand() {
 	if m.subagents == nil {
-		m.addEntry(transcriptEntry{kind: entryError, title: "tasks", body: "subagent controller is unavailable"})
+		m.addEntry(transcriptEntry{kind: entryError, title: "tasks", body: "task controller is unavailable"})
 		return
 	}
 	tasks := m.subagentTasks()
 	if len(tasks) == 0 {
-		m.addEntry(transcriptEntry{kind: entrySystem, title: "tasks", body: "no subagent tasks"})
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "tasks", body: "no task tasks"})
 		return
 	}
 	lines := make([]string, 0, len(tasks))
@@ -357,8 +357,8 @@ func (m appModel) statusText(sessionID string) string {
 		modelCfg.Provider,
 		modelCfg.Model,
 		model.EffectiveContextLimitTokens(modelCfg),
-		cfg.Subagent.DefaultContextMode,
-		cfg.Subagent.DefaultRunMode,
+		cfg.Task.DefaultContextMode,
+		cfg.Task.DefaultRunMode,
 		cfg.UI.ContextMeterLocation,
 		m.theme.ID,
 		m.chatQueue.Len(),
@@ -369,7 +369,7 @@ func (m appModel) statusText(sessionID string) string {
 	)
 }
 
-func (m appModel) subagentTasks() []subagent.TaskSnapshot {
+func (m appModel) subagentTasks() []task.TaskSnapshot {
 	if m.subagents == nil {
 		return nil
 	}
@@ -378,7 +378,7 @@ func (m appModel) subagentTasks() []subagent.TaskSnapshot {
 		return nil
 	}
 	all := m.subagents.ListTasks()
-	tasks := make([]subagent.TaskSnapshot, 0, len(all))
+	tasks := make([]task.TaskSnapshot, 0, len(all))
 	for _, task := range all {
 		if strings.TrimSpace(task.ParentSessionID) == sessionID {
 			tasks = append(tasks, task)
@@ -387,7 +387,7 @@ func (m appModel) subagentTasks() []subagent.TaskSnapshot {
 	return tasks
 }
 
-func renderSubagentResult(result subagent.Result) string {
+func renderSubagentResult(result task.Result) string {
 	lines := []string{
 		fmt.Sprintf("done  depth %d", result.Depth),
 	}
@@ -403,7 +403,7 @@ func renderSubagentResult(result subagent.Result) string {
 	return strings.Join(lines, "\n")
 }
 
-func renderTask(task subagent.TaskSnapshot) string {
+func renderTask(task task.TaskSnapshot) string {
 	lines := []string{
 		fmt.Sprintf("%s  %s  %s  depth %d", taskDisplayName(task), task.Status, task.ContextMode, task.Depth),
 	}
@@ -425,18 +425,18 @@ func renderTask(task subagent.TaskSnapshot) string {
 	return strings.Join(lines, "\n")
 }
 
-func taskDisplayName(task subagent.TaskSnapshot) string {
+func taskDisplayName(task task.TaskSnapshot) string {
 	if name := strings.TrimSpace(task.Name); name != "" {
 		return name
 	}
-	return "subagent"
+	return "task"
 }
 
-func resultDisplayName(result subagent.Result) string {
+func resultDisplayName(result task.Result) string {
 	if name := strings.TrimSpace(result.AgentName); name != "" {
 		return name
 	}
-	return "subagent"
+	return "task"
 }
 
 func (m *appModel) syncRunnerModelContextLimit(cfg model.Config) {

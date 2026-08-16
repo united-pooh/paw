@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	coremcp "paw/internal/mcp"
 	"paw/internal/session"
-	"paw/internal/subagent"
+	"paw/internal/task"
 	"paw/internal/todo"
 	"paw/internal/tool"
 	toolexec "paw/internal/tool/exec"
@@ -109,7 +109,7 @@ func registerInteractiveTools(registry *tool.Registry, broker *selecttool.Broker
 	return nil
 }
 
-func registerTools(registry *tool.Registry, root string, readRoots []string, subagentManager *subagent.Manager, sessionID string, broker coremcp.Broker, allowOutsideRead bool) error {
+func registerTools(registry *tool.Registry, root string, readRoots []string, taskManager *task.Manager, sessionID string, broker coremcp.Broker, allowOutsideRead bool) error {
 	if registry == nil {
 		return fmt.Errorf("tool registry is nil")
 	}
@@ -122,10 +122,10 @@ func registerTools(registry *tool.Registry, root string, readRoots []string, sub
 	registry.Register(&toolfile.GlobTool{Root: root, ReadRoots: readRoots})
 	registry.Register(&toolexec.BashTool{Root: root})
 	registry.Register(&toolwebfetch.Tool{})
-	registry.Register(subagent.NewTool(subagentManager, sessionID))
-	registry.Register(subagent.NewStatusTool(subagentManager))
-	registry.Register(subagent.NewStopTool(subagentManager))
-	registry.Register(subagent.NewWaitTool(subagentManager))
+	registry.Register(task.NewTool(taskManager, sessionID))
+	registry.Register(task.NewStatusTool(taskManager))
+	registry.Register(task.NewStopTool(taskManager))
+	registry.Register(task.NewWaitTool(taskManager))
 	if broker != nil {
 		adapted := toolmcp.NewTools(broker)
 		tools := make([]tool.Tool, 0, len(adapted))

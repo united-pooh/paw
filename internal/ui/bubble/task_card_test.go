@@ -1,4 +1,4 @@
-// 本文件覆盖 subagent 任务卡（右侧垂直居中）与 <task> 结构化完成块的
+// 本文件覆盖 task 任务卡（右侧垂直居中）与 <task> 结构化完成块的
 // 解析、渲染和叠加行为。
 package bubble
 
@@ -11,7 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"paw/internal/settings"
-	"paw/internal/subagent"
+	"paw/internal/task"
 	"paw/internal/ui"
 )
 
@@ -122,7 +122,7 @@ func TestTaskBlockMetaLineFormatsDurationAndSize(t *testing.T) {
 func TestSystemTaskBlockEntryRendersAsCard(t *testing.T) {
 	entry := transcriptEntry{
 		kind:  entrySystem,
-		title: "subagent",
+		title: "task",
 		body:  "<task id=\"task-9\" state=\"completed\" name=\"深潜者\">\nsummary: 完成工作\n</task>",
 	}
 	rendered := ansi.Strip(renderEntryAt(entry, 60, time.Time{}))
@@ -131,8 +131,8 @@ func TestSystemTaskBlockEntryRendersAsCard(t *testing.T) {
 			t.Fatalf("rendered = %q, want %q", rendered, want)
 		}
 	}
-	if strings.Contains(rendered, "subagent") {
-		t.Fatalf("rendered = %q, should not show the subagent system label", rendered)
+	if strings.Contains(rendered, "task") {
+		t.Fatalf("rendered = %q, should not show the task system label", rendered)
 	}
 	for _, line := range strings.Split(rendered, "\n") {
 		if got := lipgloss.Width(line); got > 60 {
@@ -151,13 +151,13 @@ func TestRenderSubagentTaskCardEmpty(t *testing.T) {
 
 func TestRenderSubagentTaskCardListsRunningOnly(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	model.subagents = &fakeSubagentController{tasks: []subagent.TaskSnapshot{
-		{ID: "running-1", Name: "二叶筑", Color: "#ff9900", Status: subagent.TaskRunning},
-		{ID: "done-1", Name: "已完成", Status: subagent.TaskCompleted},
-		{ID: "running-2", Status: subagent.TaskRunning},
+	model.subagents = &fakeSubagentController{tasks: []task.TaskSnapshot{
+		{ID: "running-1", Name: "二叶筑", Color: "#ff9900", Status: task.TaskRunning},
+		{ID: "done-1", Name: "已完成", Status: task.TaskCompleted},
+		{ID: "running-2", Status: task.TaskRunning},
 	}}
 	card := ansi.Strip(model.renderSubagentTaskCard(time.Time{}))
-	for _, want := range []string{"subagents · 2 运行中", "二叶筑", "subagent"} {
+	for _, want := range []string{"subagents · 2 运行中", "二叶筑", "task"} {
 		if !strings.Contains(card, want) {
 			t.Fatalf("task card = %q, want %q", card, want)
 		}
@@ -213,7 +213,7 @@ func TestPlaceRightCenteredOverlayPosition(t *testing.T) {
 }
 
 func TestRenderSubagentTaskCardRowHidesSessionID(t *testing.T) {
-	row := ansi.Strip(renderSubagentTaskCardRow(subagent.TaskSnapshot{
+	row := ansi.Strip(renderSubagentTaskCardRow(task.TaskSnapshot{
 		ID:    "a6c81e94d94a5e40",
 		Name:  "八潮瑠唯",
 		Color: "#669988",
@@ -226,8 +226,8 @@ func TestRenderSubagentTaskCardRowHidesSessionID(t *testing.T) {
 	if strings.Contains(row, "a6c81e94") {
 		t.Fatalf("task row = %q, should not show task id / session id", row)
 	}
-	fallback := ansi.Strip(renderSubagentTaskCardRow(subagent.TaskSnapshot{ID: "x123", Status: subagent.TaskRunning}, "◐"))
-	if !strings.Contains(fallback, "subagent") || strings.Contains(fallback, "x123") {
+	fallback := ansi.Strip(renderSubagentTaskCardRow(task.TaskSnapshot{ID: "x123", Status: task.TaskRunning}, "◐"))
+	if !strings.Contains(fallback, "task") || strings.Contains(fallback, "x123") {
 		t.Fatalf("nameless task row = %q, want generic name without id", fallback)
 	}
 }
@@ -238,15 +238,15 @@ func TestRunningSubagentTasksKeepsAnimationFrames(t *testing.T) {
 	if model.needsUIAnimationFrames(time.Now()) {
 		t.Fatal("animation frames needed without running tasks")
 	}
-	model.subagents = &fakeSubagentController{tasks: []subagent.TaskSnapshot{
-		{ID: "run-1", Status: subagent.TaskRunning},
-		{ID: "done-1", Status: subagent.TaskCompleted},
+	model.subagents = &fakeSubagentController{tasks: []task.TaskSnapshot{
+		{ID: "run-1", Status: task.TaskRunning},
+		{ID: "done-1", Status: task.TaskCompleted},
 	}}
 	if !model.needsUIAnimationFrames(time.Now()) {
 		t.Fatal("animation frames not needed with a running task")
 	}
-	model.subagents = &fakeSubagentController{tasks: []subagent.TaskSnapshot{
-		{ID: "done-1", Status: subagent.TaskCompleted},
+	model.subagents = &fakeSubagentController{tasks: []task.TaskSnapshot{
+		{ID: "done-1", Status: task.TaskCompleted},
 	}}
 	if model.needsUIAnimationFrames(time.Now()) {
 		t.Fatal("animation frames needed with only completed tasks")
@@ -273,14 +273,14 @@ func TestSystemEventTaskBlockAppearsInViewport(t *testing.T) {
 
 func uiSystemEventTaskBlock() systemEventMsg {
 	return systemEventMsg(ui.SystemEvent{
-		Title: "subagent",
+		Title: "task",
 		Body:  "<task id=\"a6c81e94\" state=\"completed\" name=\"二叶筑\">\nsummary: 后台调查完成\n</task>",
 	})
 }
 
 func TestSettingsDefaultWaitTimeout(t *testing.T) {
 	cfg := settings.DefaultConfig()
-	if cfg.Subagent.WaitTimeoutMs != settings.DefaultSubagentWaitTimeoutMs {
-		t.Fatalf("default wait_timeout_ms = %d, want %d", cfg.Subagent.WaitTimeoutMs, settings.DefaultSubagentWaitTimeoutMs)
+	if cfg.Task.WaitTimeoutMs != settings.DefaultTaskWaitTimeoutMs {
+		t.Fatalf("default wait_timeout_ms = %d, want %d", cfg.Task.WaitTimeoutMs, settings.DefaultTaskWaitTimeoutMs)
 	}
 }

@@ -1,6 +1,6 @@
 //go:build !windows
 
-package subagent
+package task
 
 import (
 	"errors"

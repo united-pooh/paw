@@ -14,8 +14,8 @@ func newSettingWizard(current settings.Config) *settingWizard {
 		selected: make(map[settingWizardStep]int),
 		draft:    current,
 	}
-	w.selected[settingWizardContext] = selectedSettingIndex(settingOptions(settingWizardContext), string(current.Subagent.DefaultContextMode))
-	w.selected[settingWizardRunMode] = selectedSettingIndex(settingOptions(settingWizardRunMode), string(current.Subagent.DefaultRunMode))
+	w.selected[settingWizardContext] = selectedSettingIndex(settingOptions(settingWizardContext), string(current.Task.DefaultContextMode))
+	w.selected[settingWizardRunMode] = selectedSettingIndex(settingOptions(settingWizardRunMode), string(current.Task.DefaultRunMode))
 	w.selected[settingWizardTranslate] = selectedSettingIndex(settingOptions(settingWizardTranslate), boolSettingLabel(current.UI.TranslateOnDoubleClick))
 	return w
 }
@@ -40,13 +40,13 @@ func settingOptions(step settingWizardStep) []settingOption {
 	switch step {
 	case settingWizardContext:
 		return []settingOption{
-			{label: string(settings.ContextModeEmpty), description: "temporary empty session", apply: func(cfg *settings.Config) { cfg.Subagent.DefaultContextMode = settings.ContextModeEmpty }},
-			{label: string(settings.ContextModeFork), description: "fork parent committed history", apply: func(cfg *settings.Config) { cfg.Subagent.DefaultContextMode = settings.ContextModeFork }},
+			{label: string(settings.ContextModeEmpty), description: "temporary empty session", apply: func(cfg *settings.Config) { cfg.Task.DefaultContextMode = settings.ContextModeEmpty }},
+			{label: string(settings.ContextModeFork), description: "fork parent committed history", apply: func(cfg *settings.Config) { cfg.Task.DefaultContextMode = settings.ContextModeFork }},
 		}
 	case settingWizardRunMode:
 		return []settingOption{
-			{label: string(settings.RunModeSync), description: "wait for subagent result", apply: func(cfg *settings.Config) { cfg.Subagent.DefaultRunMode = settings.RunModeSync }},
-			{label: string(settings.RunModeBackground), description: "return a task id immediately", apply: func(cfg *settings.Config) { cfg.Subagent.DefaultRunMode = settings.RunModeBackground }},
+			{label: string(settings.RunModeSync), description: "wait for task result", apply: func(cfg *settings.Config) { cfg.Task.DefaultRunMode = settings.RunModeSync }},
+			{label: string(settings.RunModeBackground), description: "return a task id immediately", apply: func(cfg *settings.Config) { cfg.Task.DefaultRunMode = settings.RunModeBackground }},
 		}
 	case settingWizardTranslate:
 		return []settingOption{
@@ -62,9 +62,9 @@ func settingOptions(step settingWizardStep) []settingOption {
 func settingStepTitle(step settingWizardStep) string {
 	switch step {
 	case settingWizardContext:
-		return "Subagent context"
+		return "Task context"
 	case settingWizardRunMode:
-		return "Subagent run mode"
+		return "Task run mode"
 	case settingWizardTranslate:
 		return "Translate selected word"
 	default:
@@ -227,9 +227,9 @@ func (m appModel) renderSettingConfirmStep() string {
 func renderSettingsSummary(cfg settings.Config) string {
 	cfg = settings.Normalize(cfg)
 	return fmt.Sprintf(
-		"subagent.context=%s\nsubagent.run=%s\nui.translate_on_double_click=%s",
-		cfg.Subagent.DefaultContextMode,
-		cfg.Subagent.DefaultRunMode,
+		"task.context=%s\ntask.run=%s\nui.translate_on_double_click=%s",
+		cfg.Task.DefaultContextMode,
+		cfg.Task.DefaultRunMode,
 		boolSettingLabel(cfg.UI.TranslateOnDoubleClick),
 	)
 }

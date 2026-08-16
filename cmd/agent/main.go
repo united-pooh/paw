@@ -20,15 +20,15 @@ func main() {
 	ctx := context.Background()
 	sandboxLimits := parseSandboxLimits(opts.sandboxLimits)
 
-	if opts.subagentWorkerPool {
-		if err := runSubagentPoolWorkerMode(ctx, os.Stdin, os.Stdout, opts.allowOutsideRead, sandboxLimits); err != nil {
+	if opts.taskWorkerPool {
+		if err := runTaskPoolWorkerMode(ctx, os.Stdin, os.Stdout, opts.allowOutsideRead, sandboxLimits); err != nil {
 			log.Fatal(err)
 		}
 		return
 	}
 
-	if opts.subagentWorker {
-		if err := runSubagentWorkerMode(ctx, os.Stdin, os.Stdout, opts.allowOutsideRead, sandboxLimits); err != nil {
+	if opts.taskWorker {
+		if err := runTaskWorkerMode(ctx, os.Stdin, os.Stdout, opts.allowOutsideRead, sandboxLimits); err != nil {
 			log.Fatal(err)
 		}
 		return

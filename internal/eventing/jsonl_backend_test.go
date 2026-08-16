@@ -171,7 +171,7 @@ func TestJSONLBackendAppendsAfterValidUnterminatedRecord(t *testing.T) {
 
 func TestJSONLBackendRejectsVersionDiscontinuity(t *testing.T) {
 	backend := NewJSONLBackend(t.TempDir())
-	ref := StreamRef{StreamType: "subagent", StreamID: "task"}
+	ref := StreamRef{StreamType: "task", StreamID: "task"}
 	commit := appendOne(t, backend, ref, "one", 0, testEvent("Started", `{}`))
 	path, _ := backend.StreamPath(ref)
 	raw, _ := os.ReadFile(path)

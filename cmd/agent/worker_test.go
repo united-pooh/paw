@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	configv2 "paw/internal/config"
-	"paw/internal/subagent"
+	"paw/internal/task"
 	"strings"
 	"testing"
 )
@@ -20,19 +20,19 @@ func TestReadSubagentWorkerStartBuildsWorkerRuntimeContext(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			wantReq := subagent.WorkerRequest{
+			wantReq := task.WorkerRequest{
 				TaskID:    "task-1",
 				SessionID: "session-1",
 				Depth:     tt.depth,
 				MaxDepth:  tt.maxDepth,
 			}
 			decoder := json.NewDecoder(bytes.NewReader(mustWorkerStartJSON(t, wantReq)))
-			start, gotReq, subCtx, err := readSubagentWorkerStart(decoder)
+			start, gotReq, subCtx, err := readTaskWorkerStart(decoder)
 			if err != nil {
-				t.Fatalf("readSubagentWorkerStart: %v", err)
+				t.Fatalf("readTaskWorkerStart: %v", err)
 			}
-			if start.Type != subagent.WorkerMessageStart {
-				t.Fatalf("message type = %q, want %q", start.Type, subagent.WorkerMessageStart)
+			if start.Type != task.WorkerMessageStart {
+				t.Fatalf("message type = %q, want %q", start.Type, task.WorkerMessageStart)
 			}
 			if gotReq.Depth != wantReq.Depth || gotReq.MaxDepth != wantReq.MaxDepth {
 				t.Fatalf("decoded depth = %d/%d, want %d/%d", gotReq.Depth, gotReq.MaxDepth, wantReq.Depth, wantReq.MaxDepth)
@@ -68,16 +68,16 @@ func TestReadSubagentWorkerStartRejectsInvalidDepth(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := subagent.WorkerRequest{
+			req := task.WorkerRequest{
 				TaskID:    "task-1",
 				SessionID: "session-1",
 				Depth:     tt.depth,
 				MaxDepth:  tt.maxDepth,
 			}
 			decoder := json.NewDecoder(bytes.NewReader(mustWorkerStartJSON(t, req)))
-			_, _, _, err := readSubagentWorkerStart(decoder)
+			_, _, _, err := readTaskWorkerStart(decoder)
 			if err == nil {
-				t.Fatal("readSubagentWorkerStart succeeded")
+				t.Fatal("readTaskWorkerStart succeeded")
 			}
 			if !strings.Contains(err.Error(), tt.wantMessage) {
 				t.Fatalf("error = %q, want substring %q", err, tt.wantMessage)
@@ -88,26 +88,26 @@ func TestReadSubagentWorkerStartRejectsInvalidDepth(t *testing.T) {
 
 func TestReadSubagentWorkerStartRejectsMalformedDepth(t *testing.T) {
 	decoder := json.NewDecoder(strings.NewReader(`{"type":"worker.start","task_id":"task-1","session_id":"session-1","depth":"one","max_depth":4}`))
-	_, _, _, err := readSubagentWorkerStart(decoder)
+	_, _, _, err := readTaskWorkerStart(decoder)
 	if err == nil {
-		t.Fatal("readSubagentWorkerStart succeeded")
+		t.Fatal("readTaskWorkerStart succeeded")
 	}
-	if !strings.Contains(err.Error(), "decode subagent worker.start") || !strings.Contains(err.Error(), "depth") {
+	if !strings.Contains(err.Error(), "decode task worker.start") || !strings.Contains(err.Error(), "depth") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestWorkerStartToConfigOpenOptionsProductionPath(t *testing.T) {
-	wantReq := subagent.WorkerRequest{
+	wantReq := task.WorkerRequest{
 		TaskID:    "delegated-task",
 		SessionID: "delegated-session",
 		Depth:     2,
 		MaxDepth:  4,
 	}
 	decoder := json.NewDecoder(bytes.NewReader(mustWorkerStartJSON(t, wantReq)))
-	_, _, subCtx, err := readSubagentWorkerStart(decoder)
+	_, _, subCtx, err := readTaskWorkerStart(decoder)
 	if err != nil {
-		t.Fatalf("readSubagentWorkerStart: %v", err)
+		t.Fatalf("readTaskWorkerStart: %v", err)
 	}
 	paths := configv2.Paths{Home: "/tmp/paw", WorkspaceRoot: "/tmp/workspace"}
 	options := configOpenOptions(paths, subCtx)
@@ -119,9 +119,9 @@ func TestWorkerStartToConfigOpenOptionsProductionPath(t *testing.T) {
 	}
 }
 
-func mustWorkerStartJSON(t *testing.T, req subagent.WorkerRequest) []byte {
+func mustWorkerStartJSON(t *testing.T, req task.WorkerRequest) []byte {
 	t.Helper()
-	payload, err := json.Marshal(subagent.NewWorkerStartMessage(req, req.MCPSnapshot))
+	payload, err := json.Marshal(task.NewWorkerStartMessage(req, req.MCPSnapshot))
 	if err != nil {
 		t.Fatalf("marshal worker start: %v", err)
 	}

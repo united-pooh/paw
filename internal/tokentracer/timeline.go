@@ -182,7 +182,7 @@ func (b *timelineBuilder) collectEventRows() {
 				b.setTimelineError(row.Error)
 				b.addMarker(row, eventTime, "failure", "failed", row.Error, "failed", nil)
 			}
-		case "streamma.subagent_start":
+		case "streamma.task_start":
 			row := b.ensureRow(agentRowID(stageID, agentID, sessionID, invocation), "agent", stageID, agentID, invocation)
 			row.Role = stringValue(data, "role")
 			row.SessionID = sessionID
@@ -193,7 +193,7 @@ func (b *timelineBuilder) collectEventRows() {
 			b.rememberSession(sessionID, row.ID)
 			b.rememberAgent(stageID, agentID, row.ID)
 			b.addMarker(row, eventTime, "start", "start", row.Role, "live", nil)
-		case "streamma.subagent_end":
+		case "streamma.task_end":
 			row := b.findRow(stageID, agentID, sessionID, invocation)
 			if row == nil {
 				row = b.ensureRow(agentRowID(stageID, agentID, sessionID, invocation), "agent", stageID, agentID, invocation)
@@ -205,11 +205,11 @@ func (b *timelineBuilder) collectEventRows() {
 			b.rememberSession(sessionID, row.ID)
 			b.rememberAgent(stageID, agentID, row.ID)
 			b.addMarker(row, eventTime, "end", "end", row.Role, row.Status, nil)
-		case "subagent_task_start":
+		case "task_start":
 			row := b.ensureSubagentTaskRow(stageID, agentID, sessionID, invocation)
 			b.applySubagentTaskMetadata(row, data, sessionID)
 			b.setRowStartTime(row, firstNonEmpty(stringValue(data, "started_at"), event.Timestamp))
-		case "subagent_task_end":
+		case "task_end":
 			row := b.ensureSubagentTaskRow(stageID, agentID, sessionID, invocation)
 			b.applySubagentTaskMetadata(row, data, sessionID)
 			if row.StartTime == "" {
@@ -224,7 +224,7 @@ func (b *timelineBuilder) collectEventRows() {
 			b.applySubagentUsedTokens(row, intValue(data, "used_tokens"))
 			if row.Error != "" || row.Status == "failed" {
 				if row.Error == "" {
-					row.Error = "subagent failed"
+					row.Error = "task failed"
 				}
 				b.setTimelineError(row.Error)
 				b.addMarker(row, eventTime, "failure", "failed", row.Error, "failed", nil)
@@ -271,7 +271,7 @@ func (b *timelineBuilder) collectEventRows() {
 func (b *timelineBuilder) ensureSubagentTaskRow(stageID, agentID, sessionID string, invocation int) *TimelineRow {
 	row := b.rowForSession(sessionID)
 	if row == nil {
-		rowAgentID := defaultID(agentID, "subagent")
+		rowAgentID := defaultID(agentID, "task")
 		row = b.ensureRow(agentRowID(stageID, rowAgentID, sessionID, invocation), "agent", stageID, rowAgentID, invocation)
 	}
 	if sessionID != "" {
@@ -291,8 +291,8 @@ func (b *timelineBuilder) applySubagentTaskMetadata(row *TimelineRow, data map[s
 		b.taskNames[sessionID] = taskName
 	}
 	taskName = firstNonEmpty(taskName, b.taskNames[sessionID])
-	if row.AgentID == "subagent" || row.AgentID == "" {
-		row.Name = defaultName(taskName, "subagent")
+	if row.AgentID == "task" || row.AgentID == "" {
+		row.Name = defaultName(taskName, "task")
 		row.DisplayName = row.Name
 		return
 	}
@@ -625,7 +625,7 @@ func isWeakTimelineError(errText string) bool {
 		strings.Contains(lower, "context canceled") ||
 		strings.Contains(lower, "context cancelled") ||
 		strings.Contains(lower, "context deadline exceeded") ||
-		strings.Contains(lower, "subagent failed")
+		strings.Contains(lower, "task failed")
 }
 
 func (b *timelineBuilder) noteTime(ts time.Time) {

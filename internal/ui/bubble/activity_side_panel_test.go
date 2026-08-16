@@ -9,7 +9,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"paw/internal/subagent"
+	"paw/internal/task"
 )
 
 // TestActivityPanelRendersAsRightSidebar 验证 subagentPicker 打开时：
@@ -20,8 +20,8 @@ func TestActivityPanelRendersAsRightSidebar(t *testing.T) {
 	model.ready = true
 	model.width = 120
 	model.height = 30
-	model.subagents = &fakeSubagentController{tasks: []subagent.TaskSnapshot{
-		{ID: "agent-1", SessionID: "agent-1", ParentSessionID: "session-1", Name: "worker", Status: subagent.TaskCompleted},
+	model.subagents = &fakeSubagentController{tasks: []task.TaskSnapshot{
+		{ID: "agent-1", SessionID: "agent-1", ParentSessionID: "session-1", Name: "worker", Status: task.TaskCompleted},
 	}}
 	model.relayout()
 	model.openActivity(activityTabSubagents)
@@ -32,7 +32,7 @@ func TestActivityPanelRendersAsRightSidebar(t *testing.T) {
 	}
 
 	rendered := ansi.Strip(model.renderTranscriptRegion(layout))
-	if !strings.Contains(rendered, "Activity") || !strings.Contains(rendered, "Subagents") || !strings.Contains(rendered, "worker") {
+	if !strings.Contains(rendered, "Activity") || !strings.Contains(rendered, "Tasks") || !strings.Contains(rendered, "worker") {
 		t.Fatalf("transcript region = %q, want Activity sidebar content", rendered)
 	}
 	// 面板应贴在右端：包含 "Activity" 标题的行，其列位置应超过内容区中线。
@@ -58,8 +58,8 @@ func TestActivityPanelHidesFloatingTaskCard(t *testing.T) {
 	model.ready = true
 	model.width = 120
 	model.height = 30
-	model.subagents = &fakeSubagentController{tasks: []subagent.TaskSnapshot{
-		{ID: "agent-1", SessionID: "agent-1", ParentSessionID: "session-1", Name: "worker", Status: subagent.TaskRunning, StartedAt: time.Now()},
+	model.subagents = &fakeSubagentController{tasks: []task.TaskSnapshot{
+		{ID: "agent-1", SessionID: "agent-1", ParentSessionID: "session-1", Name: "worker", Status: task.TaskRunning, StartedAt: time.Now()},
 	}}
 	model.relayout()
 	model.openActivity(activityTabSubagents)

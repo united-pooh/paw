@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"paw/internal/subagent"
+	"paw/internal/task"
 )
 
 // renderSubagentsCardContent 渲染 Subagents 内容（Task 4 实现）。
@@ -82,17 +82,17 @@ func (m appModel) renderSubagentsCardContentHeight(width, height int) string {
 		dotStyle := dotDoneStyle
 		lineStyle := lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorBody))
 		switch t.Status {
-		case subagent.TaskRunning:
+		case task.TaskRunning:
 			dot = spinnerFrames[m.spinnerFrameIdx%len(spinnerFrames)]
 			status = formatElapsedTime(time.Since(t.StartedAt))
 			dotStyle = dotRunStyle
 			lineStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorWorktreeClean))
-		case subagent.TaskFailed:
+		case task.TaskFailed:
 			dot = "✗"
 			status = "failed"
 			dotStyle = dotFailStyle
 			lineStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorLabelError))
-		case subagent.TaskStopped:
+		case task.TaskStopped:
 			dot = "■"
 			status = "stopped"
 			dotStyle = dotStopStyle

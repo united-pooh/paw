@@ -8,7 +8,7 @@ import (
 	"io"
 	coremcp "paw/internal/mcp"
 	"paw/internal/model"
-	"paw/internal/subagent"
+	"paw/internal/task"
 	"paw/internal/tokentracer"
 	"paw/internal/tool"
 	toolmcp "paw/internal/tool/mcp"
@@ -19,12 +19,12 @@ import (
 	"sync/atomic"
 )
 
-func runSubagentWorkerMode(ctx context.Context, input io.Reader, output io.Writer, allowOutsideRead bool, sandboxLimits subagent.SandboxLimits) error {
-	if err := subagent.ApplyWorkerResourceLimits(sandboxLimits); err != nil {
+func runTaskWorkerMode(ctx context.Context, input io.Reader, output io.Writer, allowOutsideRead bool, sandboxLimits task.SandboxLimits) error {
+	if err := task.ApplyWorkerResourceLimits(sandboxLimits); err != nil {
 		return fmt.Errorf("apply worker resource limits: %w", err)
 	}
 	decoder := json.NewDecoder(input)
-	start, req, _, err := readSubagentWorkerStart(decoder)
+	start, req, _, err := readTaskWorkerStart(decoder)
 	if err != nil {
 		return err
 	}
@@ -32,16 +32,16 @@ func runSubagentWorkerMode(ctx context.Context, input io.Reader, output io.Write
 	workerCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	broker := newWorkerMCPBroker(workerCtx, start.Snapshot, output)
-	workerDone := make(chan subagent.WorkerResult, 1)
+	workerDone := make(chan task.WorkerResult, 1)
 	go func() {
 		workerDone <- runWorkerTurn(workerCtx, req, broker, allowOutsideRead)
 	}()
 
-	messages := make(chan subagent.WorkerMessage)
+	messages := make(chan task.WorkerMessage)
 	decodeErr := make(chan error, 1)
 	go func() {
 		for {
-			var message subagent.WorkerMessage
+			var message task.WorkerMessage
 			if err := decoder.Decode(&message); err != nil {
 				decodeErr <- err
 				close(messages)
@@ -53,40 +53,40 @@ func runSubagentWorkerMode(ctx context.Context, input io.Reader, output io.Write
 	for {
 		select {
 		case result := <-workerDone:
-			return broker.send(subagent.NewWorkerResultMessage(result))
+			return broker.send(task.NewWorkerResultMessage(result))
 		case message, ok := <-messages:
 			if !ok {
 				cancel()
 				return <-decodeErr
 			}
 			switch message.Type {
-			case subagent.WorkerMessageMCPResult:
+			case task.WorkerMessageMCPResult:
 				broker.resolve(message.RequestID, message.Content, message.Error)
-			case subagent.WorkerMessageSnapshot:
+			case task.WorkerMessageSnapshot:
 				broker.Update(message.Snapshot)
-			case subagent.WorkerMessageCancel:
+			case task.WorkerMessageCancel:
 				cancel()
 			}
 		case err := <-decodeErr:
 			cancel()
-			return fmt.Errorf("read subagent worker input: %w", err)
+			return fmt.Errorf("read task worker input: %w", err)
 		}
 	}
 }
 
-func readSubagentWorkerStart(decoder *json.Decoder) (subagent.WorkerMessage, subagent.WorkerRequest, subagentRuntimeContext, error) {
-	var start subagent.WorkerMessage
+func readTaskWorkerStart(decoder *json.Decoder) (task.WorkerMessage, task.WorkerRequest, taskRuntimeContext, error) {
+	var start task.WorkerMessage
 	if err := decoder.Decode(&start); err != nil {
-		return subagent.WorkerMessage{}, subagent.WorkerRequest{}, subagentRuntimeContext{}, fmt.Errorf("decode subagent worker.start: %w", err)
+		return task.WorkerMessage{}, task.WorkerRequest{}, taskRuntimeContext{}, fmt.Errorf("decode task worker.start: %w", err)
 	}
-	if start.Type != subagent.WorkerMessageStart {
-		return subagent.WorkerMessage{}, subagent.WorkerRequest{}, subagentRuntimeContext{}, fmt.Errorf("subagent worker.start is required")
+	if start.Type != task.WorkerMessageStart {
+		return task.WorkerMessage{}, task.WorkerRequest{}, taskRuntimeContext{}, fmt.Errorf("task worker.start is required")
 	}
 	req := start.Request()
 	if err := validateWorkerRequest(req); err != nil {
-		return subagent.WorkerMessage{}, subagent.WorkerRequest{}, subagentRuntimeContext{}, err
+		return task.WorkerMessage{}, task.WorkerRequest{}, taskRuntimeContext{}, err
 	}
-	return start, req, subagentRuntimeContext{
+	return start, req, taskRuntimeContext{
 		workerMode:      true,
 		depth:           req.Depth,
 		maxDepth:        req.MaxDepth,
@@ -95,15 +95,15 @@ func readSubagentWorkerStart(decoder *json.Decoder) (subagent.WorkerMessage, sub
 	}, nil
 }
 
-func validateWorkerRequest(req subagent.WorkerRequest) error {
+func validateWorkerRequest(req task.WorkerRequest) error {
 	if strings.TrimSpace(req.SessionID) == "" {
-		return fmt.Errorf("subagent worker session_id is required")
+		return fmt.Errorf("task worker session_id is required")
 	}
 	if req.MaxDepth < 1 {
-		return fmt.Errorf("subagent worker max_depth must be at least 1: %d", req.MaxDepth)
+		return fmt.Errorf("task worker max_depth must be at least 1: %d", req.MaxDepth)
 	}
 	if req.Depth < 1 || req.Depth > req.MaxDepth {
-		return fmt.Errorf("subagent worker depth must satisfy 1 <= depth <= max_depth: depth=%d max_depth=%d", req.Depth, req.MaxDepth)
+		return fmt.Errorf("task worker depth must satisfy 1 <= depth <= max_depth: depth=%d max_depth=%d", req.Depth, req.MaxDepth)
 	}
 	return nil
 }
@@ -111,9 +111,9 @@ func validateWorkerRequest(req subagent.WorkerRequest) error {
 // runWorkerTurn 执行单个 worker 任务：为任务构建独立的 runner/会话/工具注册表/
 // 上下文/broker，运行一轮后返回结果。池 worker 与单 worker 共用此逻辑，确保
 // 每次任务之间的运行时状态完全隔离（仅 model.Client 在池内按需复用）。
-func runWorkerTurn(ctx context.Context, req subagent.WorkerRequest, broker *workerMCPBroker, allowOutsideRead bool) subagent.WorkerResult {
+func runWorkerTurn(ctx context.Context, req task.WorkerRequest, broker *workerMCPBroker, allowOutsideRead bool) task.WorkerResult {
 	workerUI := &workerUsageUI{UI: headless.New(io.Discard)}
-	runner, sessionID, _, configController, _, _, _, _, err := buildRunnerWithSubagentContext(ctx, req.SessionID, workerUI, allowOutsideRead, false, subagentRuntimeContext{
+	runner, sessionID, _, configController, _, _, _, _, err := buildRunnerWithTaskContext(ctx, req.SessionID, workerUI, allowOutsideRead, false, taskRuntimeContext{
 		workerMode:      true,
 		depth:           req.Depth,
 		maxDepth:        req.MaxDepth,
@@ -121,7 +121,7 @@ func runWorkerTurn(ctx context.Context, req subagent.WorkerRequest, broker *work
 		disableMainTodo: true,
 		mcpBroker:       broker,
 	})
-	result := subagent.WorkerResult{TaskID: req.TaskID, SessionID: sessionID, ExitCode: 0}
+	result := task.WorkerResult{TaskID: req.TaskID, SessionID: sessionID, ExitCode: 0}
 	if err != nil {
 		result.Error = err.Error()
 		result.ExitCode = 1
@@ -166,17 +166,17 @@ func (lw *lockedWriter) Write(p []byte) (int, error) {
 }
 
 type poolWorkerInput struct {
-	msg subagent.WorkerMessage
+	msg task.WorkerMessage
 	err error
 	ok  bool
 }
 
-// runSubagentPoolWorkerMode 是 ProcessPoolLauncher 生成的长驻 worker 入口。
+// runTaskPoolWorkerMode 是 ProcessPoolLauncher 生成的长驻 worker 入口。
 // 协议：parent 发送 hello → 本 worker 应答 ready；随后循环接收 start 任务，
 // 每任务独立执行并回报 result；收到 cancel/shutdown 或 stdin EOF 时退出。
 // 单个 worker 同时只处理一个任务（parent 侧串行调度，保证每任务隔离）。
-func runSubagentPoolWorkerMode(ctx context.Context, input io.Reader, output io.Writer, allowOutsideRead bool, sandboxLimits subagent.SandboxLimits) error {
-	if err := subagent.ApplyWorkerResourceLimits(sandboxLimits); err != nil {
+func runTaskPoolWorkerMode(ctx context.Context, input io.Reader, output io.Writer, allowOutsideRead bool, sandboxLimits task.SandboxLimits) error {
+	if err := task.ApplyWorkerResourceLimits(sandboxLimits); err != nil {
 		return fmt.Errorf("apply worker resource limits: %w", err)
 	}
 	if ctx == nil {
@@ -184,16 +184,16 @@ func runSubagentPoolWorkerMode(ctx context.Context, input io.Reader, output io.W
 	}
 	decoder := json.NewDecoder(input)
 
-	var hello subagent.WorkerMessage
+	var hello task.WorkerMessage
 	if err := decoder.Decode(&hello); err != nil {
-		return fmt.Errorf("decode subagent pool worker hello: %w", err)
+		return fmt.Errorf("decode task pool worker hello: %w", err)
 	}
-	if hello.Type != subagent.WorkerMessageHello {
-		return fmt.Errorf("subagent pool worker hello is required")
+	if hello.Type != task.WorkerMessageHello {
+		return fmt.Errorf("task pool worker hello is required")
 	}
 	shared := &lockedWriter{w: output}
-	if err := json.NewEncoder(shared).Encode(subagent.NewWorkerReadyMessage()); err != nil {
-		return fmt.Errorf("send subagent pool worker ready: %w", err)
+	if err := json.NewEncoder(shared).Encode(task.NewWorkerReadyMessage()); err != nil {
+		return fmt.Errorf("send task pool worker ready: %w", err)
 	}
 
 	jobCtx := ctx
@@ -203,7 +203,7 @@ func runSubagentPoolWorkerMode(ctx context.Context, input io.Reader, output io.W
 	msgCh := make(chan poolWorkerInput, 4)
 	go func() {
 		for {
-			var message subagent.WorkerMessage
+			var message task.WorkerMessage
 			if err := decoder.Decode(&message); err != nil {
 				msgCh <- poolWorkerInput{err: err, ok: false}
 				return
@@ -220,13 +220,13 @@ func runSubagentPoolWorkerMode(ctx context.Context, input io.Reader, output io.W
 				if errors.Is(in.err, io.EOF) {
 					return nil
 				}
-				return fmt.Errorf("read subagent pool worker input: %w", in.err)
+				return fmt.Errorf("read task pool worker input: %w", in.err)
 			}
 			switch in.msg.Type {
-			case subagent.WorkerMessageStart:
+			case task.WorkerMessageStart:
 				req := in.msg.Request()
 				if err := validateWorkerRequest(req); err != nil {
-					_ = json.NewEncoder(shared).Encode(subagent.NewWorkerResultMessage(subagent.WorkerResult{
+					_ = json.NewEncoder(shared).Encode(task.NewWorkerResultMessage(task.WorkerResult{
 						TaskID: req.TaskID, SessionID: req.SessionID, Error: err.Error(), ExitCode: 1,
 					}))
 					continue
@@ -236,17 +236,17 @@ func runSubagentPoolWorkerMode(ctx context.Context, input io.Reader, output io.W
 				broker := newWorkerMCPBroker(jobCtx, req.MCPSnapshot, shared)
 				current = broker
 				go poolWorkerRunJob(jobCtx, req, shared, broker, allowOutsideRead)
-			case subagent.WorkerMessageMCPResult:
+			case task.WorkerMessageMCPResult:
 				if current != nil {
 					current.resolve(in.msg.RequestID, in.msg.Content, in.msg.Error)
 				}
-			case subagent.WorkerMessageSnapshot:
+			case task.WorkerMessageSnapshot:
 				if current != nil {
 					current.Update(in.msg.Snapshot)
 				}
-			case subagent.WorkerMessageCancel:
+			case task.WorkerMessageCancel:
 				jobCancel()
-			case subagent.WorkerMessageShutdown:
+			case task.WorkerMessageShutdown:
 				jobCancel()
 				return nil
 			}
@@ -254,9 +254,9 @@ func runSubagentPoolWorkerMode(ctx context.Context, input io.Reader, output io.W
 	}
 }
 
-func poolWorkerRunJob(ctx context.Context, req subagent.WorkerRequest, output io.Writer, broker *workerMCPBroker, allowOutsideRead bool) {
+func poolWorkerRunJob(ctx context.Context, req task.WorkerRequest, output io.Writer, broker *workerMCPBroker, allowOutsideRead bool) {
 	result := runWorkerTurn(ctx, req, broker, allowOutsideRead)
-	_ = json.NewEncoder(output).Encode(subagent.NewWorkerResultMessage(result))
+	_ = json.NewEncoder(output).Encode(task.NewWorkerResultMessage(result))
 }
 
 type workerMCPBroker struct {
@@ -340,8 +340,8 @@ func (b *workerMCPBroker) Call(ctx context.Context, name string, input json.RawM
 	b.mu.Lock()
 	b.pending[requestID] = result
 	b.mu.Unlock()
-	if err := b.send(subagent.WorkerMessage{
-		Type:      subagent.WorkerMessageMCPCall,
+	if err := b.send(task.WorkerMessage{
+		Type:      task.WorkerMessageMCPCall,
 		RequestID: requestID,
 		Tool:      name,
 		Input:     append(json.RawMessage(nil), input...),
@@ -379,14 +379,14 @@ func (b *workerMCPBroker) resolve(requestID, content, errText string) {
 	}
 }
 
-func (b *workerMCPBroker) send(message subagent.WorkerMessage) error {
+func (b *workerMCPBroker) send(message task.WorkerMessage) error {
 	b.writeMu.Lock()
 	defer b.writeMu.Unlock()
 	if b.output == nil {
-		return fmt.Errorf("subagent worker output is nil")
+		return fmt.Errorf("task worker output is nil")
 	}
 	if err := json.NewEncoder(b.output).Encode(message); err != nil {
-		return fmt.Errorf("write subagent worker message: %w", err)
+		return fmt.Errorf("write task worker message: %w", err)
 	}
 	return nil
 }

@@ -1,4 +1,4 @@
-package subagent
+package task
 
 import (
 	"context"
@@ -313,7 +313,7 @@ func withDefaultPersonas(t *testing.T, personas []persona) {
 func TestBaseToolRegistryDoesNotContainUpdateTodo(t *testing.T) {
 	registry := newBaseToolRegistry(t.TempDir())
 	if _, ok := registry.Get("update_todo"); ok {
-		t.Fatal("subagent base registry unexpectedly contains update_todo")
+		t.Fatal("task base registry unexpectedly contains update_todo")
 	}
 }
 
@@ -349,8 +349,8 @@ func TestRunEmptyContextStartsIndependentRootSession(t *testing.T) {
 		t.Fatalf("model calls = %#v", calls)
 	}
 	systemPrompt := calls[0][0].Content
-	if strings.Contains(systemPrompt, "Subagent:") || strings.Contains(systemPrompt, "SubagentStatus:") {
-		t.Fatalf("system prompt should not expose recursive subagent tools: %q", systemPrompt)
+	if strings.Contains(systemPrompt, "Task:") || strings.Contains(systemPrompt, "TaskStatus:") {
+		t.Fatalf("system prompt should not expose recursive task tools: %q", systemPrompt)
 	}
 	for _, msg := range calls[0][1:] {
 		if strings.Contains(msg.Content, "parent question") || strings.Contains(msg.Content, "parent answer") {
@@ -621,7 +621,7 @@ func TestLaunchAssignsUniqueRunningPersonas(t *testing.T) {
 		t.Fatalf("running subagents reused persona %q", first.Name)
 	}
 
-	if _, err := manager.Launch(context.Background(), Request{Prompt: "third"}); err == nil || !strings.Contains(err.Error(), "no idle subagent names") {
+	if _, err := manager.Launch(context.Background(), Request{Prompt: "third"}); err == nil || !strings.Contains(err.Error(), "no idle task names") {
 		t.Fatalf("third Launch() error = %v, want exhausted persona pool", err)
 	}
 
@@ -772,7 +772,7 @@ func TestLaunchTracksStatusListAndNotification(t *testing.T) {
 	}
 
 	event := notifier.wait(t)
-	if event.Title != "subagent" || !strings.Contains(event.Body, `<task id="`+task.ID+`"`) || !strings.Contains(event.Body, `state="completed"`) || !strings.Contains(event.Body, "summary: background answer") {
+	if event.Title != "task" || !strings.Contains(event.Body, `<task id="`+task.ID+`"`) || !strings.Contains(event.Body, `state="completed"`) || !strings.Contains(event.Body, "summary: background answer") {
 		t.Fatalf("system event = %#v", event)
 	}
 }
@@ -823,12 +823,12 @@ func TestWorkerResultUsagePersistsToTaskSnapshotAndTracerEvent(t *testing.T) {
 
 	var end tokentracer.Event
 	for _, event := range tracer.Snapshot().Events {
-		if event.Type == "subagent_task_end" {
+		if event.Type == "task_end" {
 			end = event
 		}
 	}
 	if end.Type == "" {
-		t.Fatal("subagent_task_end event not recorded")
+		t.Fatal("task_end event not recorded")
 	}
 	if got, ok := end.Data["used_tokens"].(int); !ok || got != 9999 {
 		t.Fatalf("event used_tokens = %#v, want 9999", end.Data["used_tokens"])
@@ -926,8 +926,8 @@ func TestSubagentToolsProvideSyncAndStatusAccess(t *testing.T) {
 	manager, _, _ := newTestManager(t, modelStreamer, settings.DefaultConfig(), nil)
 
 	tool := NewTool(manager, "parent-session")
-	if tool.Name() != "Subagent" {
-		t.Fatalf("tool.Name() = %q, want Subagent", tool.Name())
+	if tool.Name() != "Task" {
+		t.Fatalf("tool.Name() = %q, want Task", tool.Name())
 	}
 	schema := string(tool.InputSchema())
 	for _, want := range []string{`"required":["prompt"]`, `"context_mode"`, `"run_mode"`, `"description"`} {
@@ -937,7 +937,7 @@ func TestSubagentToolsProvideSyncAndStatusAccess(t *testing.T) {
 	}
 
 	if safeTool, ok := tool.(interface{ IsConcurrencySafe(json.RawMessage) bool }); !ok || !safeTool.IsConcurrencySafe(json.RawMessage(`{"prompt":"background prompt"}`)) || safeTool.IsConcurrencySafe(json.RawMessage(`{"prompt":"sync prompt","run_mode":"sync"}`)) {
-		t.Fatalf("Subagent concurrency safety should be true for default background and false for explicit sync")
+		t.Fatalf("Task concurrency safety should be true for default background and false for explicit sync")
 	}
 
 	syncOut, err := tool.Run(context.Background(), json.RawMessage(`{"prompt":"sync prompt","description":"focus","run_mode":"sync"}`))
@@ -1196,7 +1196,7 @@ func TestWaitToolAppliesDefaultTimeoutFromSettings(t *testing.T) {
 		},
 	}
 	cfg := settings.DefaultConfig()
-	cfg.Subagent.WaitTimeoutMs = 42
+	cfg.Task.WaitTimeoutMs = 42
 	manager, _, _ := newTestManager(t, modelStreamer, cfg, nil)
 	waitTool := NewWaitTool(manager)
 

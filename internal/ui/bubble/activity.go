@@ -17,7 +17,7 @@ func (m appModel) renderActivityBox() string {
 	contentWidth := maxInt(1, panelWidth-wizardPanelStyle.GetHorizontalFrameSize()-wizardPanelStyle.GetHorizontalPadding())
 	contentHeight := maxInt(1, panelHeight-wizardPanelStyle.GetVerticalFrameSize()-wizardPanelStyle.GetVerticalPadding())
 
-	subagentsTab := " Subagents "
+	subagentsTab := " Tasks "
 	todoTab := " Todo "
 	if m.subagentPicker.tab == activityTabSubagents {
 		subagentsTab = selectedProviderStyle.Render(subagentsTab)
@@ -110,10 +110,10 @@ func (m appModel) activityPanelHeight() int {
 
 func (m appModel) renderActivitySubagents(width, height int) string {
 	if m.subagents == nil {
-		return labelErrorStyle.Render("Subagent controller is unavailable.")
+		return labelErrorStyle.Render("Task controller is unavailable.")
 	}
 	if len(m.subagentTasks()) == 0 {
-		return unselectedProviderStyle.Render("No subagent tasks.")
+		return unselectedProviderStyle.Render("No tasks yet.")
 	}
 	return lipgloss.NewStyle().
 		Width(maxInt(1, width)).

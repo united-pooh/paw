@@ -1,6 +1,6 @@
 package config
 
-// 沙箱默认值。与 internal/subagent 侧 worker 兜底默认保持一致（改这里时同步那侧）。
+// 沙箱默认值。与 internal/task 侧 worker 兜底默认保持一致（改这里时同步那侧）。
 const (
 	SandboxDefaultMaxWorkers    = 4
 	SandboxDefaultQueueCapacity = 8

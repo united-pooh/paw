@@ -23,13 +23,13 @@ func TestConfigOpenOptionsUsesExplicitWorkerMode(t *testing.T) {
 	}
 	tests := []struct {
 		name     string
-		context  subagentRuntimeContext
+		context  taskRuntimeContext
 		disabled bool
 	}{
-		{name: "root", context: subagentRuntimeContext{}},
-		{name: "root ignores depth", context: subagentRuntimeContext{depth: 2}},
-		{name: "first-level worker", context: subagentRuntimeContext{workerMode: true, depth: 1, maxDepth: 4}, disabled: true},
-		{name: "delegated worker", context: subagentRuntimeContext{workerMode: true, depth: 2, maxDepth: 4}, disabled: true},
+		{name: "root", context: taskRuntimeContext{}},
+		{name: "root ignores depth", context: taskRuntimeContext{depth: 2}},
+		{name: "first-level worker", context: taskRuntimeContext{workerMode: true, depth: 1, maxDepth: 4}, disabled: true},
+		{name: "delegated worker", context: taskRuntimeContext{workerMode: true, depth: 2, maxDepth: 4}, disabled: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

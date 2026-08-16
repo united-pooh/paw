@@ -24,7 +24,7 @@ import (
 )
 
 // newModel 创建完整的 TUI 状态模型，并初始化输入框、滚动区和系统消息。
-func newModel(ctx context.Context, runner Runner, sessionID string, controller ModelConfigController, settingsController SettingsController, subagentController SubagentController, sessionStore SessionStore, anchor *terminalCursorAnchor) appModel {
+func newModel(ctx context.Context, runner Runner, sessionID string, controller ModelConfigController, settingsController SettingsController, subagentController TaskController, sessionStore SessionStore, anchor *terminalCursorAnchor) appModel {
 	now := time.Now()
 	input := textarea.New()
 	input.Prompt = ""
@@ -470,7 +470,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			title := "sessions"
 			if msg.source == sessionRestoreSubagentEnter {
-				title = "subagent"
+				title = "task"
 				m.subagentPicker = nil
 			} else {
 				m.sessionPicker = nil
@@ -642,8 +642,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, clipboardPasteCmd(m.ctx, textareaAbsoluteCursor(m.input))
 		}
 		if msg.String() == "ctrl+g" {
-			// ctrl+g 是 subagent 面板的全局 toggle：面板打开时由
-			// handleSubagentPickerKey 拦截并关闭；subagent preview 中按下
+			// ctrl+g 是 task 面板的全局 toggle：面板打开时由
+			// handleSubagentPickerKey 拦截并关闭；task preview 中按下
 			// 视为收起面板，直接返回主 transcript；其余状态打开面板。
 			if m.subagentPreview != nil {
 				m.restoreMainTranscriptFromSubagentPreview()

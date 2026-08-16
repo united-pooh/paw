@@ -1,4 +1,4 @@
-// 覆盖 subagent transcript 预览加载：store 读取路径（统一信封格式）
+// 覆盖 task transcript 预览加载：store 读取路径（统一信封格式）
 // 与文件 fallback 路径（envelope + legacy 双格式）。
 package bubble
 
@@ -11,7 +11,7 @@ import (
 
 	"paw/internal/message"
 	"paw/internal/session"
-	"paw/internal/subagent"
+	"paw/internal/task"
 )
 
 type fakeResolvedRecordStore struct {
@@ -31,11 +31,11 @@ func TestLoadSubagentTranscriptEntriesViaStore(t *testing.T) {
 	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	store := &fakeResolvedRecordStore{records: []session.Record{
 		{Seq: 0, Kind: session.JournalTurnStarted, TurnID: "t1", CreatedAt: now},
-		{Seq: 1, Kind: session.JournalMessage, Message: message.Message{Role: message.RoleUser, Content: "subagent prompt"}, CreatedAt: now},
-		{Seq: 2, Kind: session.JournalAssistant, TurnID: "t1", Message: message.Message{Role: message.RoleAssistant, Content: "subagent answer"}, CreatedAt: now},
+		{Seq: 1, Kind: session.JournalMessage, Message: message.Message{Role: message.RoleUser, Content: "task prompt"}, CreatedAt: now},
+		{Seq: 2, Kind: session.JournalAssistant, TurnID: "t1", Message: message.Message{Role: message.RoleAssistant, Content: "task answer"}, CreatedAt: now},
 		{Seq: 3, Kind: session.JournalTurnCompleted, TurnID: "t1", CreatedAt: now},
 	}}
-	task := subagent.TaskSnapshot{ID: "agent-1", SessionID: "agent-1", Status: subagent.TaskCompleted}
+	task := task.TaskSnapshot{ID: "agent-1", SessionID: "agent-1", Status: task.TaskCompleted}
 
 	entries, err := loadSubagentTranscriptEntries(context.Background(), store, task, now, "")
 	if err != nil {
@@ -45,7 +45,7 @@ func TestLoadSubagentTranscriptEntriesViaStore(t *testing.T) {
 	for _, entry := range entries {
 		bodies = append(bodies, entry.body)
 	}
-	if len(entries) != 2 || bodies[0] != "subagent prompt" || bodies[1] != "subagent answer" {
+	if len(entries) != 2 || bodies[0] != "task prompt" || bodies[1] != "task answer" {
 		t.Fatalf("entries = %#v, want prompt + answer", entries)
 	}
 }
@@ -58,7 +58,7 @@ func TestLoadSubagentTranscriptEntriesFallsBackToEnvelopeFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	task := subagent.TaskSnapshot{ID: "agent-1", SessionID: "agent-1", Status: subagent.TaskCompleted, TranscriptPath: path}
+	task := task.TaskSnapshot{ID: "agent-1", SessionID: "agent-1", Status: task.TaskCompleted, TranscriptPath: path}
 
 	// store 为 nil（或不可用）时走文件 fallback，envelope 行也必须能解析
 	entries, err := loadSubagentTranscriptEntries(context.Background(), nil, task, time.Now(), "")
@@ -75,10 +75,10 @@ func TestLoadSubagentTranscriptEntriesFallsBackToEnvelopeFile(t *testing.T) {
 }
 
 func TestLoadSubagentTranscriptEntriesFallbackUsesContentWhenFileMissing(t *testing.T) {
-	task := subagent.TaskSnapshot{
+	task := task.TaskSnapshot{
 		ID:        "agent-1",
 		SessionID: "agent-1",
-		Status:    subagent.TaskCompleted,
+		Status:    task.TaskCompleted,
 		Content:   "final summary only",
 	}
 	entries, err := loadSubagentTranscriptEntries(context.Background(), nil, task, time.Now(), "")

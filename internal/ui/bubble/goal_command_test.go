@@ -10,7 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
-	"paw/internal/subagent"
+	"paw/internal/task"
 )
 
 type fakeGoalController struct {
@@ -297,7 +297,7 @@ func TestGoalStoppedMsgReleasesWorkingState(t *testing.T) {
 	}
 }
 
-// TestSubagentFinishedMsgClearsGenerating 验证 subagent 轮结束也清除
+// TestSubagentFinishedMsgClearsGenerating 验证 task 轮结束也清除
 // isGenerating（与 turnFinishedMsg 对称），防止流式标记残留导致 header
 // 永久 working。
 func TestSubagentFinishedMsgClearsGenerating(t *testing.T) {
@@ -305,7 +305,7 @@ func TestSubagentFinishedMsgClearsGenerating(t *testing.T) {
 	model.ctx = context.Background()
 	model.isGenerating = true
 
-	updated, _ := model.Update(subagentFinishedMsg{result: subagent.Result{}, err: nil})
+	updated, _ := model.Update(subagentFinishedMsg{result: task.Result{}, err: nil})
 	next, ok := updated.(appModel)
 	if !ok {
 		t.Fatalf("unexpected model type %T", updated)

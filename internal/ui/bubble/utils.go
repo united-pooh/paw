@@ -65,7 +65,7 @@ func formatToolCallBodyResolved(name string, input json.RawMessage, oldContent s
 	if strings.EqualFold(name, "question") {
 		return formatQuestionToolCallBody(name, input)
 	}
-	if strings.EqualFold(name, "Subagent") {
+	if strings.EqualFold(name, "Task") {
 		return formatSubagentToolCallBody(name, fields)
 	}
 	if allowNameMutation && isFileMutationTool(name) {

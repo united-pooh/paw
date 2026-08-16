@@ -1,6 +1,6 @@
 //go:build darwin || linux
 
-package subagent
+package task
 
 import (
 	"fmt"
@@ -8,7 +8,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// ApplyWorkerResourceLimits 在 worker 进程内设置软资源上限，作为 subagent 沙箱
+// ApplyWorkerResourceLimits 在 worker 进程内设置软资源上限，作为 task 沙箱
 // 资源限制（阶段三）的一部分。只应在 worker 入口调用，主 agent 进程不受影响。
 // 传入的 limits 中 <=0 的字段回落默认值；设置失败返回错误，由调用方 fail-closed。
 func ApplyWorkerResourceLimits(limits SandboxLimits) error {

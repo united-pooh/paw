@@ -110,7 +110,7 @@ func TestLoadMissingFileReturnsDefaultConfig(t *testing.T) {
 
 func TestNormalizeRestoresSupportedDefaults(t *testing.T) {
 	cfg := Normalize(Config{
-		Subagent: SubagentConfig{
+		Task: TaskConfig{
 			DefaultContextMode: ContextMode("bad-context"),
 			DefaultRunMode:     RunMode("bad-run"),
 		},
@@ -126,7 +126,7 @@ func TestNormalizeRestoresSupportedDefaults(t *testing.T) {
 
 func TestNormalizeLegacyInputTitleMeterLocation(t *testing.T) {
 	cfg := Normalize(Config{
-		Subagent: SubagentConfig{
+		Task: TaskConfig{
 			DefaultContextMode: ContextModeEmpty,
 			DefaultRunMode:     RunModeSync,
 		},
@@ -176,10 +176,10 @@ func TestTranslateOnDoubleClickDefaultsOffAndRoundTrips(t *testing.T) {
 func TestSaveLoadAndControllerRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".paw", "settings.json")
 	want := DefaultConfig()
-	want.Subagent = SubagentConfig{
+	want.Task = TaskConfig{
 		DefaultContextMode: ContextModeFork,
 		DefaultRunMode:     RunModeBackground,
-		WaitTimeoutMs:      DefaultSubagentWaitTimeoutMs,
+		WaitTimeoutMs:      DefaultTaskWaitTimeoutMs,
 	}
 	want.UI = UIConfig{
 		Theme:                theme.Default,
@@ -209,10 +209,10 @@ func TestSaveLoadAndControllerRoundTrip(t *testing.T) {
 	}
 
 	next := DefaultConfig()
-	next.Subagent = SubagentConfig{
+	next.Task = TaskConfig{
 		DefaultContextMode: ContextModeEmpty,
 		DefaultRunMode:     RunModeSync,
-		WaitTimeoutMs:      DefaultSubagentWaitTimeoutMs,
+		WaitTimeoutMs:      DefaultTaskWaitTimeoutMs,
 	}
 	next.UI = UIConfig{
 		Theme:                theme.Default,
@@ -288,7 +288,7 @@ func TestNewDefaultControllerIgnoresProjectSettings(t *testing.T) {
 
 func TestLoadLegacyGlobalJSONDefaultsTheme(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
-	if err := os.WriteFile(path, []byte(`{"subagent":{"default_context_mode":"fork","default_run_mode":"sync"},"ui":{"context_limit_tokens":128000}}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"task":{"default_context_mode":"fork","default_run_mode":"sync"},"ui":{"context_limit_tokens":128000}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load(path)

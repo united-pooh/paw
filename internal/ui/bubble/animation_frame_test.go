@@ -108,16 +108,16 @@ func TestSyncSubagentWakesAnimation(t *testing.T) {
 	model.subagents = &fakeSubagentController{}
 	model.uiAnimationFrameScheduled = false
 
-	cmd := model.handleSubagentCommand("/subagent --sync inspect")
+	cmd := model.handleSubagentCommand("/task --sync inspect")
 
 	if cmd == nil {
-		t.Fatal("sync subagent should return work and animation commands")
+		t.Fatal("sync task should return work and animation commands")
 	}
 	if !model.queryGuard.IsModelRunning() {
-		t.Fatal("sync subagent should start model guard")
+		t.Fatal("sync task should start model guard")
 	}
 	if !model.uiAnimationFrameScheduled {
-		t.Fatal("sync subagent should wake animation")
+		t.Fatal("sync task should wake animation")
 	}
 }
 

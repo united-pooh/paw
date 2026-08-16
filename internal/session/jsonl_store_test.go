@@ -148,8 +148,8 @@ func TestListSessions_ExcludesSubagentSessions(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 	createTestSession(t, store, "foreground", nil)
-	if _, err := store.CreateRoot(ctx, CreateRootRequest{SessionID: "worker", Subagent: true}); err != nil {
-		t.Fatalf("CreateRoot subagent: %v", err)
+	if _, err := store.CreateRoot(ctx, CreateRootRequest{SessionID: "worker", Task: true}); err != nil {
+		t.Fatalf("CreateRoot task: %v", err)
 	}
 
 	summaries, err := store.ListSessions(ctx)

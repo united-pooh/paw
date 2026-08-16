@@ -1,4 +1,4 @@
-package subagent
+package task
 
 import (
 	"bufio"
@@ -72,7 +72,7 @@ func NewProcessPoolLauncher(command, dir string) *ProcessPoolLauncher {
 	}
 	return &ProcessPoolLauncher{
 		Command:       command,
-		Args:          []string{"--subagent-worker-pool"},
+		Args:          []string{"--task-worker-pool"},
 		Dir:           dir,
 		MaxWorkers:    workers,
 		QueueCapacity: minInt(defaultPoolQueueSize, workers*2),
@@ -108,7 +108,7 @@ func (l *ProcessPoolLauncher) SetDangerousMode(enabled bool) {
 
 func (l *ProcessPoolLauncher) Start(ctx context.Context, req WorkerRequest) (Process, error) {
 	if l == nil {
-		return nil, errors.New("subagent process pool launcher is nil")
+		return nil, errors.New("task process pool launcher is nil")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -147,13 +147,13 @@ func (l *ProcessPoolLauncher) Start(ctx context.Context, req WorkerRequest) (Pro
 	l.mu.Lock()
 	if l.closed {
 		l.mu.Unlock()
-		return nil, errors.New("subagent process pool is shut down")
+		return nil, errors.New("task process pool is shut down")
 	}
 	submit := l.submit
 	shutdown := l.shutdown
 	l.mu.Unlock()
 	if submit == nil || shutdown == nil {
-		return nil, errors.New("subagent process pool is not initialized")
+		return nil, errors.New("task process pool is not initialized")
 	}
 
 	jobCtx, cancel := context.WithCancel(ctx)
@@ -167,7 +167,7 @@ func (l *ProcessPoolLauncher) Start(ctx context.Context, req WorkerRequest) (Pro
 	defer l.mu.Unlock()
 	if l.closed {
 		cancel()
-		return nil, errors.New("subagent process pool is shut down")
+		return nil, errors.New("task process pool is shut down")
 	}
 	select {
 	case submit <- job:
@@ -177,10 +177,10 @@ func (l *ProcessPoolLauncher) Start(ctx context.Context, req WorkerRequest) (Pro
 		return nil, ctx.Err()
 	case <-shutdown:
 		cancel()
-		return nil, errors.New("subagent process pool is shut down")
+		return nil, errors.New("task process pool is shut down")
 	default:
 		cancel()
-		return nil, fmt.Errorf("subagent process pool queue is full")
+		return nil, fmt.Errorf("task process pool queue is full")
 	}
 }
 
@@ -308,7 +308,7 @@ func (s *poolSchedulerState) dispatch() {
 			if err != nil || worker == nil {
 				s.queue = s.queue[1:]
 				if err == nil {
-					err = errors.New("start subagent pool worker failed")
+					err = errors.New("start task pool worker failed")
 				}
 				job.deliver(workerDone{result: WorkerResult{
 					TaskID:    job.req.TaskID,
@@ -344,7 +344,7 @@ func runPoolWorkerSafely(worker *poolWorker, job *poolJob) (result WorkerResult,
 			result = WorkerResult{
 				TaskID:    job.req.TaskID,
 				SessionID: job.req.SessionID,
-				Error:     fmt.Sprintf("subagent pool worker panic: %v\n%s", recovered, debug.Stack()),
+				Error:     fmt.Sprintf("task pool worker panic: %v\n%s", recovered, debug.Stack()),
 				ExitCode:  1,
 			}
 			err = errors.New(result.Error)
@@ -466,7 +466,7 @@ func (p *poolJobProcess) PID() int {
 
 func (p *poolJobProcess) Wait() (WorkerResult, error) {
 	if p == nil || p.job == nil {
-		return WorkerResult{ExitCode: 1}, errors.New("subagent pool job is nil")
+		return WorkerResult{ExitCode: 1}, errors.New("task pool job is nil")
 	}
 	p.waitOnce.Do(func() {
 		done := <-p.job.result
@@ -536,7 +536,7 @@ func (l *ProcessPoolLauncher) newPoolWorker() (*poolWorker, error) {
 	wall := l.JobWallTime
 	l.mu.Unlock()
 	if command == "" {
-		return nil, errors.New("subagent worker command is empty")
+		return nil, errors.New("task worker command is empty")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, command, args...)
@@ -578,7 +578,7 @@ func (l *ProcessPoolLauncher) newPoolWorker() (*poolWorker, error) {
 	go worker.readLoop(stdout)
 	go func() {
 		_ = cmd.Wait()
-		worker.failCurrent(errors.New("subagent pool worker exited"))
+		worker.failCurrent(errors.New("task pool worker exited"))
 		worker.stopOnce.Do(func() { close(worker.closed) })
 	}()
 	if err := worker.send(workerMessage{Protocol: workerProtocolV2, Type: workerMessageHello}); err != nil {
@@ -595,7 +595,7 @@ func (l *ProcessPoolLauncher) newPoolWorker() (*poolWorker, error) {
 		}
 	case <-readyCtx.Done():
 		worker.stop()
-		return nil, fmt.Errorf("subagent pool worker ready timeout: %w", readyCtx.Err())
+		return nil, fmt.Errorf("task pool worker ready timeout: %w", readyCtx.Err())
 	}
 	return worker, nil
 }
@@ -605,7 +605,7 @@ func (w *poolWorker) readLoop(stdout io.Reader) {
 	for scanner.Scan() {
 		var msg workerMessage
 		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
-			w.failCurrent(fmt.Errorf("decode subagent pool worker message: %w", err))
+			w.failCurrent(fmt.Errorf("decode task pool worker message: %w", err))
 			return
 		}
 		switch msg.Type {
@@ -632,7 +632,7 @@ func (w *poolWorker) readLoop(stdout io.Reader) {
 	if err := scanner.Err(); err != nil {
 		w.failCurrent(err)
 	} else {
-		w.failCurrent(errors.New("subagent pool worker output closed"))
+		w.failCurrent(errors.New("task pool worker output closed"))
 	}
 }
 
@@ -668,11 +668,11 @@ func (w *poolWorker) run(job *poolJob) (WorkerResult, error, bool) {
 			return canceledWorkerResult(job.req, job.ctx.Err()), job.ctx.Err(), false
 		}
 		// 墙钟超时：不信任 worker 后续，直接拉起失败并回收该 worker。
-		err := fmt.Errorf("subagent job wall clock exceeded %s", w.wall)
+		err := fmt.Errorf("task job wall clock exceeded %s", w.wall)
 		w.stop()
 		return WorkerResult{TaskID: job.req.TaskID, SessionID: job.req.SessionID, Error: err.Error(), ExitCode: 1}, err, false
 	case <-w.closed:
-		err := errors.New("subagent pool worker exited unexpectedly")
+		err := errors.New("task pool worker exited unexpectedly")
 		return WorkerResult{TaskID: job.req.TaskID, SessionID: job.req.SessionID, Error: err.Error(), ExitCode: 1}, err, false
 	}
 }
@@ -699,7 +699,7 @@ func (w *poolWorker) handleMCPCall(msg workerMessage) {
 
 func (w *poolWorker) failCurrent(err error) {
 	if err == nil {
-		err = errors.New("subagent pool worker failed")
+		err = errors.New("task pool worker failed")
 	}
 	w.mu.Lock()
 	current := w.current
@@ -719,7 +719,7 @@ func (w *poolWorker) send(msg workerMessage) error {
 	w.writeMu.Lock()
 	defer w.writeMu.Unlock()
 	if w.stdin == nil {
-		return errors.New("subagent pool worker stdin is closed")
+		return errors.New("task pool worker stdin is closed")
 	}
 	return json.NewEncoder(w.stdin).Encode(msg)
 }

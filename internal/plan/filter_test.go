@@ -16,7 +16,7 @@ func TestModeFilterAllowlist(t *testing.T) {
 			t.Fatalf("read-only tool %q rejected: %v", name, err)
 		}
 	}
-	for _, name := range []string{"Bash", "Edit", "Subagent", "todo", "mcp__exec"} {
+	for _, name := range []string{"Bash", "Edit", "Task", "todo", "mcp__exec"} {
 		if err := filter(name, nil); err == nil {
 			t.Fatalf("mutating tool %q allowed", name)
 		}

@@ -6,14 +6,14 @@ import (
 	"strconv"
 	"strings"
 
-	"paw/internal/subagent"
+	"paw/internal/task"
 )
 
 type options struct {
 	prompt             string
 	sessionID          string
-	subagentWorker     bool
-	subagentWorkerPool bool
+	taskWorker     bool
+	taskWorkerPool bool
 	streamMA           bool
 	tokenTracer        bool
 	tokenTracerOpen    bool
@@ -25,8 +25,8 @@ type options struct {
 func parseOptions() options {
 	prompt := flag.String("p", "", "single-turn prompt; omit to start Bubble Tea UI")
 	sessionID := flag.String("s", "", "session ID; omit to resume/create by cwd")
-	subagentWorker := flag.Bool("subagent-worker", false, "run hidden subagent worker")
-	subagentWorkerPool := flag.Bool("subagent-worker-pool", false, "run hidden long-lived subagent pool worker")
+	taskWorker := flag.Bool("task-worker", false, "run hidden task worker")
+	taskWorkerPool := flag.Bool("task-worker-pool", false, "run hidden long-lived task pool worker")
 	sandboxLimits := flag.String("sandbox-limits", "", "worker sandbox limits (csv: cpu=sec,file_mb=MiB,proc=n,nofile=n,wall=sec; unset fields fall back to defaults)")
 	streamMA := flag.Bool("streamma", defaultStreamMAEnabled(), "enable /streamma and /streamma-trace commands")
 	tokenTracer := flag.Bool("token-tracer", defaultTokenTracerEnabled(), "start local Token Tracer dashboard in interactive mode")
@@ -39,8 +39,8 @@ func parseOptions() options {
 	return options{
 		prompt:             *prompt,
 		sessionID:          *sessionID,
-		subagentWorker:     *subagentWorker,
-		subagentWorkerPool: *subagentWorkerPool,
+		taskWorker:     *taskWorker,
+		taskWorkerPool: *taskWorkerPool,
 		streamMA:           *streamMA,
 		tokenTracer:        *tokenTracer,
 		tokenTracerOpen:    *tokenTracerOpen,
@@ -52,8 +52,8 @@ func parseOptions() options {
 
 // parseSandboxLimits 把宿主传下的 --sandbox-limits CSV 解析为生效值；缺失/非法
 // 字段保持 0，由 worker 侧 resolveSandboxLimits 回落默认。
-func parseSandboxLimits(value string) subagent.SandboxLimits {
-	var limits subagent.SandboxLimits
+func parseSandboxLimits(value string) task.SandboxLimits {
+	var limits task.SandboxLimits
 	for _, part := range strings.Split(value, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {

@@ -1,4 +1,4 @@
-package subagent
+package task
 
 import (
 	"bufio"
@@ -81,7 +81,7 @@ type ProcessLauncher struct {
 func NewProcessLauncher(command, dir string) *ProcessLauncher {
 	return &ProcessLauncher{
 		Command: command,
-		Args:    []string{"--subagent-worker"},
+		Args:    []string{"--task-worker"},
 		Dir:     dir,
 	}
 }
@@ -120,13 +120,13 @@ func (l *ProcessLauncher) commandConfig() (args, env []string, dir string, broke
 
 func (l *ProcessLauncher) Start(ctx context.Context, req WorkerRequest) (Process, error) {
 	if l == nil {
-		return nil, fmt.Errorf("subagent process launcher is nil")
+		return nil, fmt.Errorf("task process launcher is nil")
 	}
 	l.mu.RLock()
 	command := strings.TrimSpace(l.Command)
 	l.mu.RUnlock()
 	if command == "" {
-		return nil, fmt.Errorf("subagent worker command is empty")
+		return nil, fmt.Errorf("task worker command is empty")
 	}
 	args, env, dir, broker := l.commandConfig()
 	if broker != nil {
@@ -152,7 +152,7 @@ func (l *ProcessLauncher) Start(ctx context.Context, req WorkerRequest) (Process
 
 	if err := cmd.Start(); err != nil {
 		cancel()
-		return nil, fmt.Errorf("start subagent worker: %w", err)
+		return nil, fmt.Errorf("start task worker: %w", err)
 	}
 	return &execProcess{cmd: cmd, cancel: cancel, stdout: &stdout, stderr: &stderr}, nil
 }
@@ -165,27 +165,27 @@ func (l *ProcessLauncher) startFramed(ctx context.Context, req WorkerRequest, co
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("create subagent worker stdin: %w", err)
+		return nil, fmt.Errorf("create task worker stdin: %w", err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		_ = stdin.Close()
 		cancel()
-		return nil, fmt.Errorf("create subagent worker stdout: %w", err)
+		return nil, fmt.Errorf("create task worker stdout: %w", err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		_ = stdin.Close()
 		_ = stdout.Close()
 		cancel()
-		return nil, fmt.Errorf("create subagent worker stderr: %w", err)
+		return nil, fmt.Errorf("create task worker stderr: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
 		_ = stdout.Close()
 		_ = stderr.Close()
 		cancel()
-		return nil, fmt.Errorf("start subagent worker: %w", err)
+		return nil, fmt.Errorf("start task worker: %w", err)
 	}
 	p := &framedProcess{
 		cmd:        cmd,
@@ -381,10 +381,10 @@ func (p *framedProcess) send(message workerMessage) error {
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
 	if p.stdin == nil {
-		return fmt.Errorf("subagent worker stdin is closed")
+		return fmt.Errorf("task worker stdin is closed")
 	}
 	if err := json.NewEncoder(p.stdin).Encode(message); err != nil {
-		return fmt.Errorf("write subagent worker message: %w", err)
+		return fmt.Errorf("write task worker message: %w", err)
 	}
 	return nil
 }
@@ -396,7 +396,7 @@ func (p *framedProcess) readLoop() {
 	for scanner.Scan() {
 		var message workerMessage
 		if err := json.Unmarshal(scanner.Bytes(), &message); err != nil {
-			p.setResultError(fmt.Errorf("decode subagent worker message: %w", err))
+			p.setResultError(fmt.Errorf("decode task worker message: %w", err))
 			return
 		}
 		switch message.Type {
@@ -412,11 +412,11 @@ func (p *framedProcess) readLoop() {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		p.setResultError(fmt.Errorf("read subagent worker output: %w", err))
+		p.setResultError(fmt.Errorf("read task worker output: %w", err))
 	} else {
 		p.resultMu.Lock()
 		if !p.gotResult && p.resultErr == nil {
-			p.resultErr = errors.New("subagent worker exited without worker.result")
+			p.resultErr = errors.New("task worker exited without worker.result")
 		}
 		p.resultMu.Unlock()
 	}
@@ -446,7 +446,7 @@ func (p *framedProcess) setResultError(err error) {
 
 func (p *framedProcess) Wait() (WorkerResult, error) {
 	if p == nil || p.cmd == nil {
-		return WorkerResult{ExitCode: 1}, fmt.Errorf("subagent process is nil")
+		return WorkerResult{ExitCode: 1}, fmt.Errorf("task process is nil")
 	}
 	p.waitOnce.Do(func() {
 		<-p.resultDone
@@ -504,7 +504,7 @@ func (p *framedProcess) Stop() error {
 
 func (p *framedProcess) UpdateMCPSnapshot(snapshot coremcp.Snapshot) error {
 	if p == nil {
-		return fmt.Errorf("subagent process is nil")
+		return fmt.Errorf("task process is nil")
 	}
 	return p.send(workerMessage{Type: workerMessageSnapshot, Snapshot: snapshot.Clone()})
 }
@@ -518,7 +518,7 @@ func (p *execProcess) PID() int {
 
 func (p *execProcess) Wait() (WorkerResult, error) {
 	if p == nil || p.cmd == nil {
-		return WorkerResult{ExitCode: 1}, fmt.Errorf("subagent process is nil")
+		return WorkerResult{ExitCode: 1}, fmt.Errorf("task process is nil")
 	}
 	err := p.cmd.Wait()
 	if p.cancel != nil {
@@ -529,7 +529,7 @@ func (p *execProcess) Wait() (WorkerResult, error) {
 	output := bytes.TrimSpace(p.stdout.Bytes())
 	if len(output) > 0 {
 		if decodeErr := json.Unmarshal(output, &result); decodeErr != nil {
-			return WorkerResult{ExitCode: exitCodeFromError(err)}, fmt.Errorf("decode subagent worker output: %w: %s", decodeErr, string(output))
+			return WorkerResult{ExitCode: exitCodeFromError(err)}, fmt.Errorf("decode task worker output: %w: %s", decodeErr, string(output))
 		}
 	}
 	if result.ExitCode == 0 && err != nil {
@@ -547,7 +547,7 @@ func (p *execProcess) Wait() (WorkerResult, error) {
 		if result.Error == "" {
 			result.Error = detail
 		}
-		return result, fmt.Errorf("subagent worker failed: %s", detail)
+		return result, fmt.Errorf("task worker failed: %s", detail)
 	}
 	if result.Error != "" {
 		return result, fmt.Errorf("%s", result.Error)
@@ -592,7 +592,7 @@ func newInProcessLauncher(run func(context.Context, WorkerRequest) (WorkerResult
 
 func (l *inProcessLauncher) Start(ctx context.Context, req WorkerRequest) (Process, error) {
 	if l == nil || l.run == nil {
-		return nil, fmt.Errorf("subagent in-process launcher is nil")
+		return nil, fmt.Errorf("task in-process launcher is nil")
 	}
 	childCtx, cancel := context.WithCancel(ctx)
 	p := &inProcessProcess{
@@ -638,7 +638,7 @@ func (p *inProcessProcess) PID() int {
 
 func (p *inProcessProcess) Wait() (WorkerResult, error) {
 	if p == nil {
-		return WorkerResult{ExitCode: 1}, fmt.Errorf("subagent process is nil")
+		return WorkerResult{ExitCode: 1}, fmt.Errorf("task process is nil")
 	}
 	p.waitOnce.Do(func() {
 		recovered := p.waitGroup.WaitAndRecover()

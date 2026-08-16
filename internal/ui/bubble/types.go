@@ -11,7 +11,7 @@ import (
 	"paw/internal/session"
 	"paw/internal/settings"
 	"paw/internal/skill"
-	"paw/internal/subagent"
+	"paw/internal/task"
 	"paw/internal/theme"
 	"paw/internal/todo"
 	selecttool "paw/internal/tool/select"
@@ -64,7 +64,7 @@ type transcriptEntry struct {
 	toolHovered           bool
 	toolResultOnly        bool
 	citations             []toolCitation
-	// subagentWaitRunning 标记一条 SubagentWait 状态行：运行中显示
+	// subagentWaitRunning 标记一条 TaskWait 状态行：运行中显示
 	// "子智能体 <名字> 正在运行 Ns"，工具完成/失败后整行从 transcript 移除，
 	// 不渲染为可折叠的 Tools 调用块。
 	subagentWaitRunning bool
@@ -205,7 +205,7 @@ type shellFinishedMsg struct {
 }
 
 type subagentFinishedMsg struct {
-	result subagent.Result
+	result task.Result
 	err    error
 }
 
@@ -414,13 +414,13 @@ type sessionSummaryItem struct {
 }
 
 type subagentPicker struct {
-	tasks         []subagent.TaskSnapshot
+	tasks         []task.TaskSnapshot
 	selectedIndex int
 	tab           activityTab
 }
 
 type subagentTranscriptPreview struct {
-	task             subagent.TaskSnapshot
+	task             task.TaskSnapshot
 	sessionID        string
 	parentSessionID  string
 	parentTranscript []transcriptEntry
@@ -448,7 +448,7 @@ type appModel struct {
 	configCenterController     ConfigCenterController
 	configCenter               *configCenterState
 	settingsConfig             SettingsController
-	subagents                  SubagentController
+	subagents                  TaskController
 	subagentTaskUpdates        <-chan struct{}
 	subagentTaskUpdatesStop    func()
 	sessionStore               SessionStore

@@ -1,4 +1,4 @@
-package subagent
+package task
 
 import (
 	"context"
@@ -80,7 +80,7 @@ type Manager struct {
 	running map[string]Process
 
 	// notifyCh 广播任务状态转换。每次有任务进入终态（或启动失败）时在
-	// m.mu 内 close 并替换为新 channel，唤醒所有 SubagentWait 等待者。
+	// m.mu 内 close 并替换为新 channel，唤醒所有 TaskWait 等待者。
 	// WaitAny 每次迭代都在锁内获取引用并先检查终态，保证不丢失唤醒。
 	notifyCh chan struct{}
 
@@ -150,7 +150,7 @@ const (
 	// 进程退出后其 worker 进程已不存在（异常退出路径不会执行 finishTask）。
 	// 语义区别于 TaskFailed（任务自身出错）与 TaskStopped（用户主动停止）。
 	TaskInterrupted TaskStatus = "interrupted"
-	// TaskNotFound 标记 SubagentWait/SubagentStatus 中请求了未知任务 id。
+	// TaskNotFound 标记 TaskWait/TaskStatus 中请求了未知任务 id。
 	// 它不参与终态判断，仅用于宽容地告知调用方该 id 不存在。
 	TaskNotFound TaskStatus = "not_found"
 )
@@ -200,7 +200,7 @@ type TaskSummary struct {
 	NotFound       bool       `json:"not_found,omitempty"`
 }
 
-// WaitResult 是 SubagentWait 的返回体。AnyTerminal 仅供内部判断使用，
+// WaitResult 是 TaskWait 的返回体。AnyTerminal 仅供内部判断使用，
 // 不进入 JSON 输出。
 type WaitResult struct {
 	TimedOut    bool          `json:"timed_out"`
@@ -270,7 +270,7 @@ func NewManager(cfg Config) *Manager {
 	}
 	// 孤儿回收：上一实例异常退出后磁盘上残留 running 的任务（进程已死）
 	// 立即转为 interrupted 终态，避免任务卡/活动面板/RunningTasks 把它们
-	// 当作运行中，也避免 SubagentWait 对僵尸 id 一直等到超时。
+	// 当作运行中，也避免 TaskWait 对僵尸 id 一直等到超时。
 	m.reconcileOrphanedTasks(context.Background())
 	return m
 }
@@ -463,7 +463,7 @@ func (m *Manager) Stop(ctx context.Context, id string) (TaskSnapshot, error) {
 	}
 	id = strings.TrimSpace(id)
 	if id == "" {
-		return TaskSnapshot{}, fmt.Errorf("subagent task id is required")
+		return TaskSnapshot{}, fmt.Errorf("task task id is required")
 	}
 
 	m.mu.RLock()
@@ -478,17 +478,17 @@ func (m *Manager) Stop(ctx context.Context, id string) (TaskSnapshot, error) {
 		}
 	}
 	if !taskOK {
-		return TaskSnapshot{}, fmt.Errorf("subagent task not found: %s", id)
+		return TaskSnapshot{}, fmt.Errorf("task task not found: %s", id)
 	}
 	if task.Status != TaskRunning {
-		return task, fmt.Errorf("subagent task %s is not running (status=%s)", id, task.Status)
+		return task, fmt.Errorf("task task %s is not running (status=%s)", id, task.Status)
 	}
 	if process != nil {
 		_ = process.Stop()
 	}
 	stopped, changed := m.transitionTaskStopped(ctx, id, TaskStopped, "stopped")
 	if !changed {
-		return stopped, fmt.Errorf("subagent task %s is not running (status=%s)", id, stopped.Status)
+		return stopped, fmt.Errorf("task task %s is not running (status=%s)", id, stopped.Status)
 	}
 	m.notifyTaskFinished(stopped)
 	return stopped, nil
@@ -616,7 +616,7 @@ func (m *Manager) signalTaskUpdate() {
 // 未知 id 标记 not_found 且不构成"完成"条件。ctx 取消时返回错误。
 func (m *Manager) WaitAny(ctx context.Context, ids []string, timeout time.Duration) (WaitResult, error) {
 	if m == nil {
-		return WaitResult{}, fmt.Errorf("subagent manager is nil")
+		return WaitResult{}, fmt.Errorf("task manager is nil")
 	}
 	if err := ctx.Err(); err != nil {
 		return WaitResult{}, err
@@ -632,7 +632,7 @@ func (m *Manager) WaitAny(ctx context.Context, ids []string, timeout time.Durati
 		targets = append(targets, id)
 	}
 	if len(targets) == 0 {
-		return WaitResult{}, fmt.Errorf("at least one subagent task id is required")
+		return WaitResult{}, fmt.Errorf("at least one task task id is required")
 	}
 
 	// 磁盘加载过的任务快照，避免每次迭代读盘。
@@ -828,10 +828,10 @@ func (m *Manager) normalizeRequest(req Request) Request {
 		cfg = m.settings.CurrentSettings()
 	}
 	if req.ContextMode == "" {
-		req.ContextMode = cfg.Subagent.DefaultContextMode
+		req.ContextMode = cfg.Task.DefaultContextMode
 	}
 	if req.RunMode == "" {
-		req.RunMode = cfg.Subagent.DefaultRunMode
+		req.RunMode = cfg.Task.DefaultRunMode
 	}
 	req.ContextMode = settings.NormalizeContextMode(req.ContextMode)
 	req.RunMode = settings.NormalizeRunMode(req.RunMode)
@@ -852,32 +852,32 @@ func validateRequest(req Request) error {
 
 func (m *Manager) validate() error {
 	if m == nil {
-		return fmt.Errorf("subagent manager is nil")
+		return fmt.Errorf("task manager is nil")
 	}
 	if m.launcher == nil {
-		return fmt.Errorf("subagent launcher is nil")
+		return fmt.Errorf("task launcher is nil")
 	}
 	if m.store == nil {
-		return fmt.Errorf("subagent store is nil")
+		return fmt.Errorf("task store is nil")
 	}
 	if strings.TrimSpace(m.root) == "" {
-		return fmt.Errorf("subagent root is empty")
+		return fmt.Errorf("task root is empty")
 	}
 	return nil
 }
 
 func (m *Manager) validateStreaming() error {
 	if m == nil {
-		return fmt.Errorf("subagent manager is nil")
+		return fmt.Errorf("task manager is nil")
 	}
 	if m.model == nil {
-		return fmt.Errorf("subagent streaming model is nil")
+		return fmt.Errorf("task streaming model is nil")
 	}
 	if m.store == nil {
-		return fmt.Errorf("subagent store is nil")
+		return fmt.Errorf("task store is nil")
 	}
 	if strings.TrimSpace(m.root) == "" {
-		return fmt.Errorf("subagent root is empty")
+		return fmt.Errorf("task root is empty")
 	}
 	return nil
 }
@@ -888,7 +888,7 @@ func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Pro
 
 	depth := m.depth + 1
 	if depth > m.maxDepth {
-		return TaskSnapshot{}, nil, fmt.Errorf("subagent depth limit exceeded: %d > %d", depth, m.maxDepth)
+		return TaskSnapshot{}, nil, fmt.Errorf("task depth limit exceeded: %d > %d", depth, m.maxDepth)
 	}
 
 	persona, err := m.assignPersona(ctx)
@@ -1000,7 +1000,7 @@ func (m *Manager) startStreamingTask(ctx context.Context, req Request) (TaskSnap
 
 	depth := m.depth + 1
 	if depth > m.maxDepth {
-		return TaskSnapshot{}, fmt.Errorf("subagent depth limit exceeded: %d > %d", depth, m.maxDepth)
+		return TaskSnapshot{}, fmt.Errorf("task depth limit exceeded: %d > %d", depth, m.maxDepth)
 	}
 
 	persona, err := m.assignPersona(ctx)
@@ -1155,12 +1155,12 @@ func (m *Manager) prepareSession(ctx context.Context, req Request) (string, erro
 				SessionID:       sessionID,
 				ParentSessionID: parentID,
 				ForkFromSeq:     -1,
-				Subagent:        true,
+				Task:        true,
 			}); err != nil {
 				return "", err
 			}
 		default:
-			if _, err := m.store.CreateRoot(ctx, session.CreateRootRequest{SessionID: sessionID, Subagent: true}); err != nil {
+			if _, err := m.store.CreateRoot(ctx, session.CreateRootRequest{SessionID: sessionID, Task: true}); err != nil {
 				return "", err
 			}
 		}
@@ -1180,12 +1180,12 @@ func (m *Manager) prepareSession(ctx context.Context, req Request) (string, erro
 			SessionID:       sessionID,
 			ParentSessionID: parentID,
 			ForkFromSeq:     -1,
-			Subagent:        true,
+			Task:        true,
 		}); err != nil {
 			return "", err
 		}
 	default:
-		if _, err := m.store.CreateRoot(ctx, session.CreateRootRequest{SessionID: sessionID, Subagent: true}); err != nil {
+		if _, err := m.store.CreateRoot(ctx, session.CreateRootRequest{SessionID: sessionID, Task: true}); err != nil {
 			return "", err
 		}
 	}
@@ -1290,7 +1290,7 @@ func (m *Manager) recordTaskStarted(task TaskSnapshot) {
 	if tracer == nil {
 		return
 	}
-	tracer.RecordEvent("subagent_task_start", map[string]any{
+	tracer.RecordEvent("task_start", map[string]any{
 		"task_id":           task.ID,
 		"name":              task.Name,
 		"session_id":        task.SessionID,
@@ -1329,7 +1329,7 @@ func (m *Manager) recordTaskFinished(task TaskSnapshot) {
 	if usage := normalizedUsage(task.Usage); usage != nil {
 		data["usage"] = *usage
 	}
-	tracer.RecordEvent("subagent_task_end", data)
+	tracer.RecordEvent("task_end", data)
 }
 
 func normalizedUsage(usage *tokentracer.Usage) *tokentracer.Usage {
@@ -1354,7 +1354,7 @@ func (m *Manager) notifyTaskFinished(task TaskSnapshot) {
 	}
 	// 与 SubmitSupplement 注入父会话的块一致：TUI 识别 <task> 块并渲染为框线卡片。
 	_ = m.notifier.OnSystemMessage(ui.SystemEvent{
-		Title: "subagent",
+		Title: "task",
 		Body:  renderTaskCompletionBlock(task),
 	})
 }
@@ -1651,7 +1651,7 @@ func sendModelStreamEvent(ctx context.Context, events chan<- model.StreamEvent, 
 	}
 }
 
-type subagentTool struct {
+type taskTool struct {
 	manager         *Manager
 	parentSessionID string
 }
@@ -1689,7 +1689,7 @@ type waitInput struct {
 }
 
 func NewTool(manager *Manager, parentSessionID string) tool.Tool {
-	return &subagentTool{manager: manager, parentSessionID: parentSessionID}
+	return &taskTool{manager: manager, parentSessionID: parentSessionID}
 }
 
 func NewStatusTool(manager *Manager) tool.Tool {
@@ -1704,19 +1704,19 @@ func NewWaitTool(manager *Manager) tool.Tool {
 	return &waitTool{manager: manager}
 }
 
-func (t *subagentTool) Name() string {
-	return "Subagent"
+func (t *taskTool) Name() string {
+	return "Task"
 }
 
-func (t *subagentTool) Description() string {
-	return "Launch a focused subagent. Use context_mode empty for a self-contained spec, or fork to inherit committed parent session history. run_mode defaults to background and returns a task id immediately; explicit sync waits for the result."
+func (t *taskTool) Description() string {
+	return "Launch a focused task. Use context_mode empty for a self-contained spec, or fork to inherit committed parent session history. run_mode defaults to background and returns a task id immediately; explicit sync waits for the result."
 }
 
-func (t *subagentTool) InputSchema() json.RawMessage {
+func (t *taskTool) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"prompt":{"type":"string"},"description":{"type":"string"},"context_mode":{"type":"string","enum":["empty","fork"]},"run_mode":{"type":"string","enum":["sync","background"],"default":"background"}},"required":["prompt"]}`)
 }
 
-func (t *subagentTool) buildRequest(raw json.RawMessage) (Request, error) {
+func (t *taskTool) buildRequest(raw json.RawMessage) (Request, error) {
 	var in toolInput
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return Request{}, err
@@ -1735,12 +1735,12 @@ func (t *subagentTool) buildRequest(raw json.RawMessage) (Request, error) {
 	return req, nil
 }
 
-func (t *subagentTool) IsConcurrencySafe(raw json.RawMessage) bool {
+func (t *taskTool) IsConcurrencySafe(raw json.RawMessage) bool {
 	req, err := t.buildRequest(raw)
 	return err == nil && req.RunMode == settings.RunModeBackground
 }
 
-func (t *subagentTool) Run(ctx context.Context, raw json.RawMessage) (string, error) {
+func (t *taskTool) Run(ctx context.Context, raw json.RawMessage) (string, error) {
 	req, err := t.buildRequest(raw)
 	if err != nil {
 		return "", err
@@ -1764,11 +1764,11 @@ func (t *subagentTool) Run(ctx context.Context, raw json.RawMessage) (string, er
 }
 
 func (t *statusTool) Name() string {
-	return "SubagentStatus"
+	return "TaskStatus"
 }
 
 func (t *statusTool) Description() string {
-	return "Summarize subagent tasks. Without id, lists only running tasks. Results are not included — read the task's output_path. Never poll — use SubagentWait instead."
+	return "Summarize task tasks. Without id, lists only running tasks. Results are not included — read the task's output_path. Never poll — use TaskWait instead."
 }
 
 func (t *statusTool) InputSchema() json.RawMessage {
@@ -1792,7 +1792,7 @@ func (t *statusTool) Run(ctx context.Context, raw json.RawMessage) (string, erro
 	if strings.TrimSpace(in.ID) != "" {
 		task, ok := t.manager.Status(in.ID)
 		if !ok {
-			return "", fmt.Errorf("subagent task not found: %s", in.ID)
+			return "", fmt.Errorf("task task not found: %s", in.ID)
 		}
 		return marshalResult(summarizeTask(task)), nil
 	}
@@ -1805,11 +1805,11 @@ func (t *statusTool) Run(ctx context.Context, raw json.RawMessage) (string, erro
 }
 
 func (t *stopTool) Name() string {
-	return "SubagentStop"
+	return "TaskStop"
 }
 
 func (t *stopTool) Description() string {
-	return "Stop a running background subagent task by id."
+	return "Stop a running background task task by id."
 }
 
 func (t *stopTool) InputSchema() json.RawMessage {
@@ -1829,11 +1829,11 @@ func (t *stopTool) Run(ctx context.Context, raw json.RawMessage) (string, error)
 }
 
 func (t *waitTool) Name() string {
-	return "SubagentWait"
+	return "TaskWait"
 }
 
 func (t *waitTool) Description() string {
-	return "Block until any of the given subagent tasks finishes (completed, failed, or stopped). Returns the latest snapshot of all requested tasks with timed_out=false once at least one finishes; on timeout returns timed_out=true with the current snapshot (not an error). Do not poll SubagentStatus — use SubagentWait instead."
+	return "Block until any of the given task tasks finishes (completed, failed, or stopped). Returns the latest snapshot of all requested tasks with timed_out=false once at least one finishes; on timeout returns timed_out=true with the current snapshot (not an error). Do not poll TaskStatus — use TaskWait instead."
 }
 
 func (t *waitTool) InputSchema() json.RawMessage {
@@ -1853,7 +1853,7 @@ func (t *waitTool) Run(ctx context.Context, raw json.RawMessage) (string, error)
 		return "", err
 	}
 	if len(in.TaskIDs) == 0 {
-		return "", fmt.Errorf("task_ids is required (at least one subagent task id)")
+		return "", fmt.Errorf("task_ids is required (at least one task task id)")
 	}
 	timeout := time.Duration(in.TimeoutMs) * time.Millisecond
 	if timeout <= 0 {
@@ -1866,12 +1866,12 @@ func (t *waitTool) Run(ctx context.Context, raw json.RawMessage) (string, error)
 	return marshalResult(result), nil
 }
 
-// defaultWaitTimeout 返回 settings.subagent.wait_timeout_ms 的默认等待上限。
+// defaultWaitTimeout 返回 settings.task.wait_timeout_ms 的默认等待上限。
 func (m *Manager) defaultWaitTimeout() int {
 	if m == nil || m.settings == nil {
-		return settings.DefaultSubagentWaitTimeoutMs
+		return settings.DefaultTaskWaitTimeoutMs
 	}
-	return m.settings.CurrentSettings().Subagent.WaitTimeoutMs
+	return m.settings.CurrentSettings().Task.WaitTimeoutMs
 }
 
 func marshalResult(v any) string {

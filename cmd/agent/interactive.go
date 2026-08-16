@@ -57,7 +57,7 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	defer todoBroker.Close()
 	output.SetSelectionBroker(selectionBroker)
 	output.SetTodoBroker(todoBroker)
-	runner, sessionID, _, configController, settingsController, subagentManager, store, mcpManager, err := buildRunner(ctx, opts.sessionID, output, opts.allowOutsideRead, true, func(registry *tool.Registry) error {
+	runner, sessionID, _, configController, settingsController, taskManager, store, mcpManager, err := buildRunner(ctx, opts.sessionID, output, opts.allowOutsideRead, true, func(registry *tool.Registry) error {
 		if err := registerMainAgentTools(registry, todoBroker); err != nil {
 			return err
 		}
@@ -92,13 +92,13 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 			_ = server.Shutdown(shutdownCtx)
 		}()
 		runner.SetTokenTracer(tracer)
-		subagentManager.SetTokenTracer(tracer)
+		taskManager.SetTokenTracer(tracer)
 	}
 
 	output.SetModelConfigController(configController)
 	output.SetConfigCenterController(configController)
 	output.SetSettingsController(settingsController)
-	output.SetSubagentController(subagentManager)
+	output.SetTaskController(taskManager)
 	output.SetSessionStore(store)
 	output.SetMCPStatusController(mcpManager)
 	goalController := newSessionGoalController(sessionID, runner, todoBroker, store)

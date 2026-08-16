@@ -53,7 +53,7 @@ func TestConfigCenterGeneralFlatListShowsAllFields(t *testing.T) {
 	for _, label := range []string{
 		"推理开关", "推理强度",
 		"压缩模式", "保留最近对话轮数", "状态压缩触发比例",
-		"子智能体上下文模式", "子智能体运行模式", "子智能体等待超时",
+		"worker上下文模式", "worker运行模式", "worker等待超时",
 		"界面主题", "上下文 Token 上限", "上下文用量显示位置", "助手输出节奏", "双击翻译",
 		"温和压缩触发比例", "工具结果裁剪比例", "常规压缩触发比例", "强制压缩触发比例",
 		"压缩目标比例", "尾部保留 Token", "工具结果最小保留字节", "保留错误信息",
@@ -68,7 +68,7 @@ func TestConfigCenterGeneralFlatListShowsAllFields(t *testing.T) {
 	}
 	for _, description := range []string{
 		"选择状态快照压缩或 LLM 摘要压缩",
-		"子智能体同步执行，或在后台运行",
+		"worker同步执行，或在后台运行",
 		"清理工具结果前将原始内容写入归档",
 	} {
 		if !strings.Contains(rendered, description) {
@@ -153,7 +153,7 @@ func TestConfigCenterGeneralSearchFiltersAndEscClears(t *testing.T) {
 	if !strings.Contains(rendered, "强制压缩触发比例") {
 		t.Fatalf("filtered list missing Chinese match:\n%s", rendered)
 	}
-	for _, label := range []string{"压缩模式", "界面主题", "子智能体等待超时"} {
+	for _, label := range []string{"压缩模式", "界面主题", "worker等待超时"} {
 		if strings.Contains(rendered, label) {
 			t.Fatalf("filtered list should not contain %q:\n%s", label, rendered)
 		}

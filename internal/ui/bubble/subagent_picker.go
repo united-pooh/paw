@@ -9,7 +9,7 @@ import (
 	"os"
 	"paw/internal/message"
 	"paw/internal/session"
-	"paw/internal/subagent"
+	taskpkg "paw/internal/task"
 	"paw/internal/tokentracer"
 	"strings"
 	"time"
@@ -31,9 +31,9 @@ func waitSubagentTaskUpdateCmd(ctx context.Context, updates <-chan struct{}) tea
 	}
 }
 
-func newSubagentPicker(tasks []subagent.TaskSnapshot) *subagentPicker {
+func newSubagentPicker(tasks []taskpkg.TaskSnapshot) *subagentPicker {
 	return &subagentPicker{
-		tasks: append([]subagent.TaskSnapshot(nil), tasks...),
+		tasks: append([]taskpkg.TaskSnapshot(nil), tasks...),
 		tab:   activityTabSubagents,
 	}
 }
@@ -155,13 +155,13 @@ func (m *appModel) activityHasRunningTask() bool {
 	return false
 }
 
-func (m appModel) previewSubagentTranscript(task subagent.TaskSnapshot) (tea.Model, tea.Cmd) {
+func (m appModel) previewSubagentTranscript(task taskpkg.TaskSnapshot) (tea.Model, tea.Cmd) {
 	sessionID := strings.TrimSpace(task.SessionID)
 	if sessionID == "" {
 		sessionID = strings.TrimSpace(task.ID)
 	}
 	if sessionID == "" {
-		m.addEntry(transcriptEntry{kind: entryError, title: "subagent", body: "selected subagent has no session id"})
+		m.addEntry(transcriptEntry{kind: entryError, title: "task", body: "selected task has no session id"})
 		return m, nil
 	}
 
@@ -182,7 +182,7 @@ func (m appModel) previewSubagentTranscript(task subagent.TaskSnapshot) (tea.Mod
 	return m, loadSubagentTranscriptPreviewCmd(m.ctx, m.sessionStore, task, sessionID, preview, m.workspaceRoot)
 }
 
-func loadSubagentTranscriptPreviewCmd(ctx context.Context, store SessionStore, task subagent.TaskSnapshot, sessionID string, preview *subagentTranscriptPreview, workspaceRoot string) tea.Cmd {
+func loadSubagentTranscriptPreviewCmd(ctx context.Context, store SessionStore, task taskpkg.TaskSnapshot, sessionID string, preview *subagentTranscriptPreview, workspaceRoot string) tea.Cmd {
 	return func() tea.Msg {
 		entries, err := loadSubagentTranscriptEntries(ctx, store, task, time.Now(), workspaceRoot)
 		if err != nil {
@@ -197,7 +197,7 @@ func loadSubagentTranscriptPreviewCmd(ctx context.Context, store SessionStore, t
 	}
 }
 
-func loadSubagentTranscriptEntries(ctx context.Context, store SessionStore, task subagent.TaskSnapshot, at time.Time, workspaceRoot string) ([]transcriptEntry, error) {
+func loadSubagentTranscriptEntries(ctx context.Context, store SessionStore, task taskpkg.TaskSnapshot, at time.Time, workspaceRoot string) ([]transcriptEntry, error) {
 	// 优先走与 /resume 主会话恢复一致的 store 读取：统一信封与 legacy
 	// Record 双格式、fork 解析都由 store 内部处理。
 	if loader, ok := store.(ResolvedRecordLoader); ok {
@@ -215,7 +215,7 @@ func loadSubagentTranscriptEntries(ctx context.Context, store SessionStore, task
 		if content := strings.TrimSpace(task.Content); content != "" {
 			return []transcriptEntry{{kind: entryAssistant, title: "assistant", body: content, createdAt: at}}, nil
 		}
-		return nil, fmt.Errorf("selected subagent has no transcript path")
+		return nil, fmt.Errorf("selected task has no transcript path")
 	}
 	file, err := os.Open(path)
 	if err != nil {
@@ -401,10 +401,10 @@ func appendToolResults(msg message.Message) []message.ToolResult {
 	return results
 }
 
-func decorateSubagentTranscript(task subagent.TaskSnapshot, entries []transcriptEntry, createdAt time.Time) []transcriptEntry {
+func decorateSubagentTranscript(task taskpkg.TaskSnapshot, entries []transcriptEntry, createdAt time.Time) []transcriptEntry {
 	header := transcriptEntry{
 		kind:      entrySystem,
-		title:     "subagent",
+		title:     "task",
 		body:      fmt.Sprintf("viewing %s", taskDisplayName(task)),
 		createdAt: createdAt,
 	}
@@ -460,10 +460,10 @@ func (m *appModel) refreshSubagentToolEntriesFromTasks() bool {
 				break
 			}
 			status := "ok"
-			if task.Status == subagent.TaskRunning {
+			if task.Status == taskpkg.TaskRunning {
 				status = "running"
 			}
-			isError := strings.TrimSpace(task.Error) != "" || task.Status == subagent.TaskFailed || task.Status == subagent.TaskInterrupted
+			isError := strings.TrimSpace(task.Error) != "" || task.Status == taskpkg.TaskFailed || task.Status == taskpkg.TaskInterrupted
 			if isError {
 				status = "error"
 			}
@@ -511,9 +511,9 @@ func (m *appModel) refreshSubagentPreviewFromTasks() bool {
 	return true
 }
 
-func (m appModel) findSubagentPreviewTask() (subagent.TaskSnapshot, bool) {
+func (m appModel) findSubagentPreviewTask() (taskpkg.TaskSnapshot, bool) {
 	if m.subagentPreview == nil || m.subagents == nil {
-		return subagent.TaskSnapshot{}, false
+		return taskpkg.TaskSnapshot{}, false
 	}
 	sessionID := strings.TrimSpace(m.subagentPreview.sessionID)
 	if sessionID == "" {
@@ -528,11 +528,11 @@ func (m appModel) findSubagentPreviewTask() (subagent.TaskSnapshot, bool) {
 			return task, true
 		}
 	}
-	return subagent.TaskSnapshot{}, false
+	return taskpkg.TaskSnapshot{}, false
 }
 
-func liveSubagentContent(task subagent.TaskSnapshot) string {
-	if task.Status != subagent.TaskRunning {
+func liveSubagentContent(task taskpkg.TaskSnapshot) string {
+	if task.Status != taskpkg.TaskRunning {
 		return ""
 	}
 	return strings.TrimSpace(task.Content)

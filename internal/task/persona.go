@@ -1,4 +1,4 @@
-package subagent
+package task
 
 import (
 	"context"
@@ -70,12 +70,12 @@ func (m *Manager) assignPersona(ctx context.Context) (persona, error) {
 		available = append(available, p)
 	}
 	if len(available) == 0 {
-		return persona{}, fmt.Errorf("no idle subagent names available")
+		return persona{}, fmt.Errorf("no idle task names available")
 	}
 
 	n, err := rand.Int(rand.Reader, big.NewInt(int64(len(available))))
 	if err != nil {
-		return persona{}, fmt.Errorf("pick subagent name: %w", err)
+		return persona{}, fmt.Errorf("pick task name: %w", err)
 	}
 	return available[n.Int64()], nil
 }

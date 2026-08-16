@@ -114,8 +114,8 @@ func NewCommandRegistry() *CommandRegistry {
 		},
 	})
 	registry.Register(Command{
-		Name:              "/subagent",
-		Description:       "launch a subagent",
+		Name:              "/task",
+		Description:       "launch a task",
 		ArgumentHint:      "[--fork|--empty] [--background|--sync] <prompt>",
 		AllowWhileRunning: false,
 		Handler: func(m *appModel, invocation string) tea.Cmd {
@@ -142,7 +142,7 @@ func NewCommandRegistry() *CommandRegistry {
 	})
 	registry.Register(Command{
 		Name:              "/tasks",
-		Description:       "show background subagent tasks",
+		Description:       "show background task tasks",
 		AllowWhileRunning: true,
 		Handler: func(m *appModel, invocation string) tea.Cmd {
 			m.openActivity(activityTabSubagents)
@@ -570,7 +570,7 @@ func (m *appModel) handleStreamMACommand(invocation string) tea.Cmd {
 		m.addEntry(transcriptEntry{
 			kind:  entrySystem,
 			title: "streamma",
-			body:  "usage: /streamma <prompt>\nRuns an adaptive StreamMA DAG with real subagent workers and END_STEP step exchange.",
+			body:  "usage: /streamma <prompt>\nRuns an adaptive StreamMA DAG with real task workers and END_STEP step exchange.",
 		})
 		return nil
 	}

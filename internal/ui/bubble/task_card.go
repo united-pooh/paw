@@ -1,4 +1,4 @@
-// 本文件定义 transcript 右侧垂直居中的运行中 subagent 任务卡。
+// 本文件定义 transcript 右侧垂直居中的运行中 task 任务卡。
 // 卡片只列出 running 任务；任务进入终态后即从卡片移除（持久记录由
 // <task> 完成块保留在 transcript 流中）。样式与颜色跟随当前主题。
 package bubble
@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"paw/internal/subagent"
+	taskpkg "paw/internal/task"
 )
 
 // subagentSpinnerFrames 是任务卡 spinner 的旋转帧，由动画帧驱动换帧。
@@ -18,28 +18,28 @@ var subagentSpinnerFrames = []string{"◐", "◓", "◑", "◒"}
 const subagentTaskCardMaxWidth = 32
 
 // runningSubagentTasks 返回当前所有 running 任务；nil controller 或空列表返回 nil。
-func (m appModel) runningSubagentTasks() []subagent.TaskSnapshot {
+func (m appModel) runningSubagentTasks() []taskpkg.TaskSnapshot {
 	if m.subagents == nil {
 		return nil
 	}
 	tasks := m.subagents.ListTasks()
-	running := make([]subagent.TaskSnapshot, 0, len(tasks))
+	running := make([]taskpkg.TaskSnapshot, 0, len(tasks))
 	for _, task := range tasks {
-		if task.Status == subagent.TaskRunning {
+		if task.Status == taskpkg.TaskRunning {
 			running = append(running, task)
 		}
 	}
 	return running
 }
 
-// hasRunningSubagentTasks 报告是否存在运行中的 subagent 任务。
+// hasRunningSubagentTasks 报告是否存在运行中的 task 任务。
 // 供动画帧驱动判断是否需要持续重绘（spinner 与任务状态变化）。
 func (m appModel) hasRunningSubagentTasks() bool {
 	if m.subagents == nil {
 		return false
 	}
 	for _, task := range m.subagents.ListTasks() {
-		if task.Status == subagent.TaskRunning {
+		if task.Status == taskpkg.TaskRunning {
 			return true
 		}
 	}
@@ -89,14 +89,14 @@ func (m appModel) renderSubagentTaskCard(now time.Time) string {
 
 // renderSubagentTaskCardRow 渲染单行任务：spinner + 名称（persona 色）。
 // 不显示任务 id / session id。
-func renderSubagentTaskCardRow(task subagent.TaskSnapshot, spinner string) string {
+func renderSubagentTaskCardRow(task taskpkg.TaskSnapshot, spinner string) string {
 	nameStyle := lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorBody))
 	if color := strings.TrimSpace(task.Color); color != "" {
 		nameStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(color))
 	}
 	name := strings.TrimSpace(task.Name)
 	if name == "" {
-		name = "subagent"
+		name = "task"
 	}
 
 	return spinnerStyle.Render(spinner) +

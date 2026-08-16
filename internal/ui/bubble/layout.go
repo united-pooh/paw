@@ -262,7 +262,7 @@ func (m appModel) renderTranscriptRegion(layout tuiLayout) string {
 		content,
 	)
 
-	// 运行中 subagent 任务卡：贴在 transcript 右边界内侧、垂直居中。
+	// 运行中 task 任务卡：贴在 transcript 右边界内侧、垂直居中。
 	// Activity 面板打开时任务卡不重复渲染（面板自身含任务列表）。
 	// modal / completion 浮层在其之后合成，必要时覆盖卡片。
 	if m.subagentPicker == nil {
@@ -271,7 +271,7 @@ func (m appModel) renderTranscriptRegion(layout tuiLayout) string {
 		}
 	}
 
-	// Activity（subagent/pipeline 选择器）以右侧边栏形态合成，而非居中
+	// Activity（task/pipeline 选择器）以右侧边栏形态合成，而非居中
 	// modal：ctrl+g 展开的是屏幕右侧的悬浮面板。
 	if m.subagentPicker != nil {
 		base = placeOpaqueOverlay(

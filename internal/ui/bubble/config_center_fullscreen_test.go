@@ -92,10 +92,10 @@ func TestConfigCenterSettingWizardRoutesFullscreen(t *testing.T) {
 	var found bool
 	for _, line := range lines {
 		trimmed := strings.TrimRight(line, " ")
-		if !strings.Contains(trimmed, "Subagent context") {
+		if !strings.Contains(trimmed, "Task context") {
 			continue
 		}
-		if !strings.HasPrefix(line, prefix+"Subagent context") {
+		if !strings.HasPrefix(line, prefix+"Task context") {
 			t.Fatalf("wizard title not left-aligned to content column left edge (col %d): %q", leftMargin, line)
 		}
 		found = true

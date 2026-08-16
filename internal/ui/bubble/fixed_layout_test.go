@@ -11,7 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
 	"paw/internal/settings"
-	"paw/internal/subagent"
+	"paw/internal/task"
 	selecttool "paw/internal/tool/select"
 )
 
@@ -248,10 +248,10 @@ func TestActivityCommandsAndTabs(t *testing.T) {
 		"session-1",
 		&fakeModelConfigController{},
 		nil,
-		&fakeSubagentController{tasks: []subagent.TaskSnapshot{{
+		&fakeSubagentController{tasks: []task.TaskSnapshot{{
 			ID:              "worker-1",
 			ParentSessionID: "session-1",
-			Status:          subagent.TaskRunning,
+			Status:          task.TaskRunning,
 		}}},
 		nil,
 		newTerminalCursorAnchor(),
@@ -273,7 +273,7 @@ func TestActivityCommandsAndTabs(t *testing.T) {
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
 	model = next.(appModel)
 	if model.subagentPicker.tab != activityTabSubagents {
-		t.Fatalf("shift+tab=%v, want Subagents", model.subagentPicker.tab)
+		t.Fatalf("shift+tab=%v, want Tasks", model.subagentPicker.tab)
 	}
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	model = next.(appModel)

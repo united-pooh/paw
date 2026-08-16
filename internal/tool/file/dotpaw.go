@@ -6,7 +6,7 @@ import (
 )
 
 // isInsideDotPawRoot 判断 target 是否位于 root/.paw 之下。.paw 目录由内部会话
-// 存储与任务注册表管理，subagent worker 的文件工具（Write/Edit）不允许写入它。
+// 存储与任务注册表管理，task worker 的文件工具（Write/Edit）不允许写入它。
 // 返回 (inside, err)；路径解析失败时返回 err。
 func isInsideDotPawRoot(root, target string) (bool, error) {
 	absRoot, err := filepath.Abs(root)

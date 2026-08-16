@@ -187,7 +187,7 @@ func (s *JSONLStore) CreateRoot(ctx context.Context, request CreateRootRequest) 
 	meta := Meta{
 		SessionID: sessionID,
 		CreatedAt: s.nowFn().UTC(),
-		Subagent:  request.Subagent,
+		Task:  request.Task,
 	}
 	if err := s.writeMeta(ctx, meta); err != nil {
 		return Meta{}, err
@@ -239,7 +239,7 @@ func (s *JSONLStore) Fork(ctx context.Context, request ForkRequest) (Meta, error
 		ParentSessionID: parentID,
 		ForkFromSeq:     forkFromSeq,
 		CreatedAt:       s.nowFn().UTC(),
-		Subagent:        request.Subagent,
+		Task:        request.Task,
 	}
 	if err := s.writeMeta(ctx, meta); err != nil {
 		return Meta{}, err
@@ -1321,7 +1321,7 @@ func (s *JSONLStore) TouchSession(ctx context.Context, sessionID string) error {
 }
 
 // ListSessions 枚举所有可恢复的前台会话，按最近使用时间倒序返回。
-// 全局布局与 legacy 工作区布局合并（同 ID 取全局）；subagent 会话及
+// 全局布局与 legacy 工作区布局合并（同 ID 取全局）；task 会话及
 // 读取失败的会话会被跳过。
 func (s *JSONLStore) ListSessions(ctx context.Context) ([]SessionSummary, error) {
 	if err := ctx.Err(); err != nil {
@@ -1350,7 +1350,7 @@ func (s *JSONLStore) ListSessions(ctx context.Context) ([]SessionSummary, error)
 			if err != nil {
 				continue // 跳过读取失败的会话
 			}
-			if meta.Subagent || s.isLegacySubagentSession(sessionID) {
+			if meta.Task || s.isLegacySubagentSession(sessionID) {
 				continue
 			}
 			seen[sessionID] = true

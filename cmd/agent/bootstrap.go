@@ -11,7 +11,7 @@ import (
 	"paw/internal/session"
 	"paw/internal/settings"
 	"paw/internal/skill"
-	"paw/internal/subagent"
+	"paw/internal/task"
 	"paw/internal/tool"
 	toolexec "paw/internal/tool/exec"
 	toolfile "paw/internal/tool/file"
@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-type subagentRuntimeContext struct {
+type taskRuntimeContext struct {
 	workerMode      bool
 	depth           int
 	maxDepth        int
@@ -29,7 +29,7 @@ type subagentRuntimeContext struct {
 	disableMainTodo bool
 }
 
-func configOpenOptions(paths configv2.Paths, subCtx subagentRuntimeContext) configv2.Options {
+func configOpenOptions(paths configv2.Paths, subCtx taskRuntimeContext) configv2.Options {
 	return configv2.Options{
 		Paths:                 paths,
 		DisableModelDiscovery: subCtx.workerMode,
@@ -38,11 +38,11 @@ func configOpenOptions(paths configv2.Paths, subCtx subagentRuntimeContext) conf
 
 type runnerToolConfigurator func(*tool.Registry) error
 
-func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI, allowOutsideRead bool, allowIncompleteConfig bool, configurators ...runnerToolConfigurator) (*loop.Runner, string, *model.Client, *configv2.Controller, *settings.Controller, *subagent.Manager, *session.JSONLStore, *coremcp.Manager, error) {
-	return buildRunnerWithSubagentContext(ctx, sessionIDFlag, output, allowOutsideRead, allowIncompleteConfig, subagentRuntimeContext{}, configurators...)
+func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI, allowOutsideRead bool, allowIncompleteConfig bool, configurators ...runnerToolConfigurator) (*loop.Runner, string, *model.Client, *configv2.Controller, *settings.Controller, *task.Manager, *session.JSONLStore, *coremcp.Manager, error) {
+	return buildRunnerWithTaskContext(ctx, sessionIDFlag, output, allowOutsideRead, allowIncompleteConfig, taskRuntimeContext{}, configurators...)
 }
 
-func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, output uiiface.UI, allowOutsideRead bool, allowIncompleteConfig bool, subCtx subagentRuntimeContext, configurators ...runnerToolConfigurator) (*loop.Runner, string, *model.Client, *configv2.Controller, *settings.Controller, *subagent.Manager, *session.JSONLStore, *coremcp.Manager, error) {
+func buildRunnerWithTaskContext(ctx context.Context, sessionIDFlag string, output uiiface.UI, allowOutsideRead bool, allowIncompleteConfig bool, subCtx taskRuntimeContext, configurators ...runnerToolConfigurator) (*loop.Runner, string, *model.Client, *configv2.Controller, *settings.Controller, *task.Manager, *session.JSONLStore, *coremcp.Manager, error) {
 	root, err := os.Getwd()
 	if err != nil {
 		return nil, "", nil, nil, nil, nil, nil, nil, err
@@ -89,8 +89,8 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 	if err != nil {
 		return nil, "", nil, nil, nil, nil, nil, nil, err
 	}
-	var notifier subagent.Notifier
-	if n, ok := output.(subagent.Notifier); ok {
+	var notifier task.Notifier
+	if n, ok := output.(task.Notifier); ok {
 		notifier = n
 	}
 	executable, err := os.Executable()
@@ -110,7 +110,7 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 		}
 		broker = mcpManager
 	}
-	launcher := subagent.NewProcessPoolLauncher(executable, root)
+	launcher := task.NewProcessPoolLauncher(executable, root)
 	launcher.SetDangerousMode(allowOutsideRead)
 	launcher.SetMCPBroker(broker)
 	// 沙箱生效值接线：全局安全基线（硬 cap）→ 池容量/墙钟；worker 进程经
@@ -132,7 +132,7 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 		}
 		return nil, "", nil, nil, nil, nil, nil, nil, fmt.Errorf("configure context maintenance: %w", err)
 	}
-	subagentManager := subagent.NewManager(subagent.Config{
+	taskManager := task.NewManager(task.Config{
 		Model:        client,
 		Store:        store,
 		Root:         root,
@@ -145,13 +145,13 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 		ParentTaskID: subCtx.parentTaskID,
 		MCPBroker:    broker,
 	})
-	runner.SetStreamMASubagentRunner(streamMASubagentAdapter{
-		manager:         subagentManager,
+	runner.SetStreamMATaskRunner(streamMATaskAdapter{
+		manager:         taskManager,
 		parentSessionID: sessionID,
 	})
-	runner.SetSubagentTokensProvider(subagentManager)
-	runner.SetTurnOwnedTaskCleaner(subagentManager)
-	if err := registerTools(registry, root, runner.SkillRoots(), subagentManager, sessionID, broker, allowOutsideRead); err != nil {
+	runner.SetTaskTokensProvider(taskManager)
+	runner.SetTurnOwnedTaskCleaner(taskManager)
+	if err := registerTools(registry, root, runner.SkillRoots(), taskManager, sessionID, broker, allowOutsideRead); err != nil {
 		if mcpManager != nil {
 			_ = mcpManager.Close(context.Background())
 		}
@@ -159,7 +159,7 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 	}
 	// worker 进程以沙箱模式覆盖文件/Bash 工具（主 agent 非 workerMode 不变）：
 	//  - Write/Edit：拒绝写入 root/.paw（仅内部会话存储写入），沿用共享 read-state；
-	//  - Bash：追加拦截提权/权限/块设备写等不该由 subagent worker 执行的高危命令。
+	//  - Bash：追加拦截提权/权限/块设备写等不该由 task worker 执行的高危命令。
 	if subCtx.workerMode {
 		readState := toolfile.NewReadStateStore()
 		registry.Register(&toolfile.ReadTool{Root: root, ReadRoots: runner.SkillRoots(), ReadState: readState, AllowOutsideRoot: allowOutsideRead})
@@ -203,7 +203,7 @@ func buildRunnerWithSubagentContext(ctx context.Context, sessionIDFlag string, o
 	}
 
 	success = true
-	return runner, sessionID, client, configController, settingsController, subagentManager, store, mcpManager, nil
+	return runner, sessionID, client, configController, settingsController, taskManager, store, mcpManager, nil
 }
 
 // sandboxLimitsFlag 把生效沙箱资源限制编码为 --sandbox-limits CSV，由 worker
@@ -214,16 +214,16 @@ func sandboxLimitsFlag(effective configv2.EffectiveSandbox) string {
 		effective.OpenFiles, effective.JobWallSeconds)
 }
 
-type streamMASubagentAdapter struct {
-	manager         *subagent.Manager
+type streamMATaskAdapter struct {
+	manager         *task.Manager
 	parentSessionID string
 }
 
-func (a streamMASubagentAdapter) StreamSubagent(ctx context.Context, req loop.StreamMASubagentRequest) (loop.StreamMASubagentStream, error) {
+func (a streamMATaskAdapter) StreamTask(ctx context.Context, req loop.StreamMASubagentRequest) (loop.StreamMASubagentStream, error) {
 	if a.manager == nil {
-		return loop.StreamMASubagentStream{}, fmt.Errorf("streamma subagent manager is nil")
+		return loop.StreamMASubagentStream{}, fmt.Errorf("streamma task manager is nil")
 	}
-	stream, err := a.manager.Stream(ctx, subagent.Request{
+	stream, err := a.manager.Stream(ctx, task.Request{
 		SessionID:       req.SessionID,
 		ParentSessionID: a.parentSessionID,
 		Prompt:          req.Prompt,
