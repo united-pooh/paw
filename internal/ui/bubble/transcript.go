@@ -291,15 +291,15 @@ func (m *appModel) recordToolCallCitation(toolUseID, name string, input json.Raw
 	m.refreshViewport()
 }
 
-// isSubagentWaitTool 报告工具名是否为 TaskWait。TaskWait 在 TUI 中
+// isTaskWaitTool 报告工具名是否为 TaskWait。TaskWait 在 TUI 中
 // 不渲染为工具调用块：运行期间显示一行 "worker <名字> 正在运行 Ns"，
 // 工具完成后该行直接消失（错误时改为错误行），不进入 Tools 折叠组。
-func isSubagentWaitTool(name string) bool {
+func isTaskWaitTool(name string) bool {
 	return strings.EqualFold(strings.TrimSpace(name), "TaskWait")
 }
 
-// parseSubagentWaitTaskIDs 从 TaskWait 的 input JSON 中解析 task_ids。
-func parseSubagentWaitTaskIDs(input json.RawMessage) []string {
+// parseTaskWaitTaskIDs 从 TaskWait 的 input JSON 中解析 task_ids。
+func parseTaskWaitTaskIDs(input json.RawMessage) []string {
 	if len(input) == 0 {
 		return nil
 	}
@@ -318,14 +318,14 @@ func parseSubagentWaitTaskIDs(input json.RawMessage) []string {
 	return ids
 }
 
-// subagentWaitNames 通过 task controller 查询 task_ids 对应的worker名字。
+// taskWaitNames 通过 task controller 查询 task_ids 对应的worker名字。
 // 只返回能匹配到名字的任务；找不到名字时显示兜底文案 "worker"。
-func (m *appModel) subagentWaitNames(ids []string) []string {
-	if len(ids) == 0 || m.subagents == nil {
+func (m *appModel) taskWaitNames(ids []string) []string {
+	if len(ids) == 0 || m.taskController == nil {
 		return nil
 	}
 	byID := make(map[string]string, len(ids))
-	for _, task := range m.subagents.ListTasks() {
+	for _, task := range m.taskController.ListTasks() {
 		if name := strings.TrimSpace(task.Name); name != "" {
 			byID[task.ID] = name
 		}
@@ -343,9 +343,9 @@ func (m *appModel) subagentWaitNames(ids []string) []string {
 	return names
 }
 
-// subagentWaitRunningBody 生成 TaskWait 状态行的正文，如
+// taskWaitRunningBody 生成 TaskWait 状态行的正文，如
 // "worker 高松灯 正在运行 13s"。
-func subagentWaitRunningBody(names []string, elapsed int64) string {
+func taskWaitRunningBody(names []string, elapsed int64) string {
 	label := "worker"
 	if len(names) > 0 {
 		label += " " + strings.Join(names, "、")
@@ -358,19 +358,19 @@ func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMes
 	if name == "" {
 		name = "tool"
 	}
-	if isSubagentWaitTool(name) {
-		names := m.subagentWaitNames(parseSubagentWaitTaskIDs(input))
+	if isTaskWaitTool(name) {
+		names := m.taskWaitNames(parseTaskWaitTaskIDs(input))
 		m.addEntry(transcriptEntry{
-			kind:                entrySystem,
-			title:               "",
-			body:                subagentWaitRunningBody(names, 0),
-			toolUseID:           strings.TrimSpace(toolUseID),
-			toolName:            name,
-			toolStatus:          "running",
-			subagentWaitRunning: true,
-			subagentWaitNames:   names,
-			createdAt:           m.animationNow(),
-			toolStartedAt:       m.animationNow(),
+			kind:            entrySystem,
+			title:           "",
+			body:            taskWaitRunningBody(names, 0),
+			toolUseID:       strings.TrimSpace(toolUseID),
+			toolName:        name,
+			toolStatus:      "running",
+			taskWaitRunning: true,
+			taskWaitNames:   names,
+			createdAt:       m.animationNow(),
+			toolStartedAt:   m.animationNow(),
 		})
 		return
 	}
@@ -404,8 +404,8 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 	if name == "" {
 		name = "tool"
 	}
-	if isSubagentWaitTool(name) {
-		if m.removeSubagentWaitEntry(strings.TrimSpace(toolUseID), name) {
+	if isTaskWaitTool(name) {
+		if m.removeTaskWaitEntry(strings.TrimSpace(toolUseID), name) {
 			m.lastToolProgressSecond = -1
 			if isError {
 				body := strings.TrimSpace(content)
@@ -570,12 +570,12 @@ func toolEntryMatchesResult(entry transcriptEntry, result toolEntryResult) bool 
 	return strings.EqualFold(entry.toolName, result.name)
 }
 
-// removeSubagentWaitEntry 从 transcript 中移除匹配的 TaskWait 状态行，
+// removeTaskWaitEntry 从 transcript 中移除匹配的 TaskWait 状态行，
 // 使等待结束（成功或失败）后该行直接消失而不折叠为工具块。
-func (m *appModel) removeSubagentWaitEntry(toolUseID, name string) bool {
+func (m *appModel) removeTaskWaitEntry(toolUseID, name string) bool {
 	for index := len(m.transcript) - 1; index >= 0; index-- {
 		entry := &m.transcript[index]
-		if !entry.subagentWaitRunning {
+		if !entry.taskWaitRunning {
 			continue
 		}
 		if toolUseID != "" && entry.toolUseID != "" {
@@ -1148,12 +1148,12 @@ func (m *appModel) refreshRunningToolProgress(now time.Time) {
 	for index := range m.transcript {
 		entry := &m.transcript[index]
 		switch {
-		case entry.subagentWaitRunning:
+		case entry.taskWaitRunning:
 			elapsed := toolElapsedSeconds(*entry, now)
 			if elapsed > maxElapsed {
 				maxElapsed = elapsed
 			}
-			body := subagentWaitRunningBody(entry.subagentWaitNames, elapsed)
+			body := taskWaitRunningBody(entry.taskWaitNames, elapsed)
 			if entry.body != body {
 				entry.body = body
 				touchTranscriptEntry(entry)
@@ -1179,7 +1179,7 @@ func (m *appModel) refreshRunningToolProgress(now time.Time) {
 	// 工具条目版本递增，使缓存失效后重渲染刷新计时。
 	for index := range m.transcript {
 		entry := &m.transcript[index]
-		if entry.subagentWaitRunning || (isToolTransaction(*entry) && toolEntryStatus(*entry) == "running") {
+		if entry.taskWaitRunning || (isToolTransaction(*entry) && toolEntryStatus(*entry) == "running") {
 			touchTranscriptEntry(entry)
 		}
 	}
@@ -1201,7 +1201,7 @@ func (m *appModel) markRunningToolsError(err error) {
 	changed := false
 	for index := len(m.transcript) - 1; index >= 0; index-- {
 		entry := &m.transcript[index]
-		if entry.subagentWaitRunning {
+		if entry.taskWaitRunning {
 			// turn 意外失败时 TaskWait 不会再收到结果：直接移除状态行，
 			// 由后续 entryError 呈现失败原因，不保留悬挂的工具块。
 			m.transcript = append(m.transcript[:index], m.transcript[index+1:]...)
@@ -1648,7 +1648,7 @@ func renderGroupedToolEntry(entry transcriptEntry, width int, at time.Time, full
 		summary = toolFocusedStyle.Width(innerWidth).Render(summary)
 	}
 	if toolEntryStatus(entry) == "running" {
-		if !isSubagentToolEntry(entry) {
+		if !isTaskToolEntry(entry) {
 			return borderStyle.Width(contentWidth).Render(summary)
 		}
 		detail := renderToolInputForDisplay(entry, maxInt(1, innerWidth-2))
@@ -1661,8 +1661,8 @@ func renderGroupedToolEntry(entry transcriptEntry, width int, at time.Time, full
 		return borderStyle.Width(contentWidth).Render(summary)
 	}
 	result := toolResultForDisplay(entry)
-	if isSubagentToolEntry(entry) {
-		result = renderSubagentToolDetail(entry)
+	if isTaskToolEntry(entry) {
+		result = renderTaskToolDetail(entry)
 	}
 	if result == "" {
 		result = "(empty result)"
@@ -1701,11 +1701,11 @@ func renderToolInputForDisplay(entry transcriptEntry, width int) string {
 	return renderToolDetailLines(strings.Split(strings.TrimSpace(string(entry.toolInput)), "\n"), width)
 }
 
-func isSubagentToolEntry(entry transcriptEntry) bool {
+func isTaskToolEntry(entry transcriptEntry) bool {
 	return strings.EqualFold(strings.TrimSpace(toolEntryDisplayName(entry)), "task")
 }
 
-func renderSubagentToolDetail(entry transcriptEntry) string {
+func renderTaskToolDetail(entry transcriptEntry) string {
 	var payload struct {
 		Status         string `json:"status"`
 		ID             string `json:"id"`
@@ -1793,12 +1793,12 @@ func renderEntry(entry transcriptEntry, width int) string {
 func renderEntryAt(entry transcriptEntry, width int, at time.Time) string {
 	// TaskWait 状态行：渲染为单行状态文字（如
 	// "worker 高松灯 正在运行 13s"），没有工具块边框、不可折叠。
-	if entry.subagentWaitRunning {
+	if entry.taskWaitRunning {
 		body := sanitizeTerminalText(entry.body)
 		if strings.TrimSpace(body) == "" {
 			return ""
 		}
-		return indentLines(subagentWaitStyle.Render(body), transcriptEntryGutter)
+		return indentLines(taskWaitStyle.Render(body), transcriptEntryGutter)
 	}
 	bodyWidth := transcriptBodyWidth(width)
 	// 结构化 <task> 完成块：整块渲染为状态色框线卡片，不显示 "task" 标签

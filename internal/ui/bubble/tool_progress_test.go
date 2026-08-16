@@ -50,8 +50,8 @@ func TestRunningToolElapsedAdvancesAcrossFrames(t *testing.T) {
 	}
 }
 
-// TestSubagentWaitProgressAdvances 回归：TaskWait 状态行计时同样不被缓存冻结。
-func TestSubagentWaitProgressAdvances(t *testing.T) {
+// TestTaskWaitProgressAdvances 回归：TaskWait 状态行计时同样不被缓存冻结。
+func TestTaskWaitProgressAdvances(t *testing.T) {
 	vp := viewportx.New(100, 20)
 	vp.Width = 100
 	started := time.Now().Add(-2 * time.Second)
@@ -59,7 +59,7 @@ func TestSubagentWaitProgressAdvances(t *testing.T) {
 		viewport: vp,
 		transcript: []transcriptEntry{{
 			kind: entrySystem, title: "", body: "worker 正在运行 2s",
-			subagentWaitRunning: true, subagentWaitNames: []string{"测试"},
+			taskWaitRunning: true, taskWaitNames: []string{"测试"},
 			toolName: "TaskWait", toolStatus: "running",
 			createdAt: started, toolStartedAt: started,
 		}},

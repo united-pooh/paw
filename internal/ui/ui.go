@@ -37,7 +37,7 @@ type ToolResultEvent struct {
 type SystemEvent struct {
 	Title string
 	Body  string
-	Color string // 可选：标题颜色（lipgloss 颜色字符串），与 subagents 面板保持一致
+	Color string // 可选：标题颜色（lipgloss 颜色字符串），与 taskController 面板保持一致
 }
 
 // UI 定义 loop 层依赖的最小输出接口。

@@ -47,7 +47,7 @@ type transcriptEntry struct {
 	body                  string
 	newMessageNoticeCycle uint64       // UI-only marker; 不参与 transcript 文本渲染。
 	inputTokens           []inputToken // visual-only metadata; body remains the raw submitted/session text
-	color                 string       // 可选：标题颜色（lipgloss 颜色字符串），与 subagents 面板保持一致
+	color                 string       // 可选：标题颜色（lipgloss 颜色字符串），与 taskController 面板保持一致
 	isError               bool         // true for tool results with IsError=true
 	toolUseID             string
 	toolName              string
@@ -64,16 +64,16 @@ type transcriptEntry struct {
 	toolHovered           bool
 	toolResultOnly        bool
 	citations             []toolCitation
-	// subagentWaitRunning 标记一条 TaskWait 状态行：运行中显示
+	// taskWaitRunning 标记一条 TaskWait 状态行：运行中显示
 	// "子智能体 <名字> 正在运行 Ns"，工具完成/失败后整行从 transcript 移除，
 	// 不渲染为可折叠的 Tools 调用块。
-	subagentWaitRunning bool
-	subagentWaitNames   []string
-	createdAt           time.Time
-	toolStartedAt       time.Time
-	toolFinishedAt      time.Time
-	turnMetadata        *session.TurnMetadata
-	version             int
+	taskWaitRunning bool
+	taskWaitNames   []string
+	createdAt       time.Time
+	toolStartedAt   time.Time
+	toolFinishedAt  time.Time
+	turnMetadata    *session.TurnMetadata
+	version         int
 }
 
 type toolCitation struct {
@@ -204,12 +204,12 @@ type shellFinishedMsg struct {
 	err     error
 }
 
-type subagentFinishedMsg struct {
+type taskFinishedMsg struct {
 	result task.Result
 	err    error
 }
 
-type subagentTaskUpdateMsg struct {
+type taskUpdateMsg struct {
 	closed bool
 }
 
@@ -380,21 +380,21 @@ type sessionsLoadedMsg struct {
 
 // sessionRestoredMsg 携带历史恢复完成的结果。
 type sessionRestoredMsg struct {
-	sessionID       string
-	entries         []transcriptEntry
-	source          sessionRestoreSource
-	subagentPreview *subagentTranscriptPreview
-	currentTodo     todo.Snapshot
-	hasCurrentTodo  bool
-	todoWasCleared  bool
-	err             error
+	sessionID      string
+	entries        []transcriptEntry
+	source         sessionRestoreSource
+	taskPreview    *taskTranscriptPreview
+	currentTodo    todo.Snapshot
+	hasCurrentTodo bool
+	todoWasCleared bool
+	err            error
 }
 
 type sessionRestoreSource int
 
 const (
 	sessionRestorePicker sessionRestoreSource = iota
-	sessionRestoreSubagentEnter
+	sessionRestoreTaskEnter
 )
 
 // fileCompletionLoadedMsg 携带异步加载完成的文件补全列表。
@@ -413,13 +413,13 @@ type sessionSummaryItem struct {
 	transcriptSize int64
 }
 
-type subagentPicker struct {
+type taskPicker struct {
 	tasks         []task.TaskSnapshot
 	selectedIndex int
 	tab           activityTab
 }
 
-type subagentTranscriptPreview struct {
+type taskTranscriptPreview struct {
 	task             task.TaskSnapshot
 	sessionID        string
 	parentSessionID  string
@@ -448,9 +448,9 @@ type appModel struct {
 	configCenterController     ConfigCenterController
 	configCenter               *configCenterState
 	settingsConfig             SettingsController
-	subagents                  TaskController
-	subagentTaskUpdates        <-chan struct{}
-	subagentTaskUpdatesStop    func()
+	taskController             TaskController
+	taskUpdates                <-chan struct{}
+	taskUpdatesStop            func()
 	sessionStore               SessionStore
 	mcpController              MCPStatusController
 	goalController             GoalController
@@ -553,8 +553,8 @@ type appModel struct {
 	modelWizard                *modelWizard
 	settingWizard              *settingWizard
 	sessionPicker              *sessionPicker
-	subagentPicker             *subagentPicker
-	subagentPreview            *subagentTranscriptPreview
+	taskPicker                 *taskPicker
+	taskPreview                *taskTranscriptPreview
 	completion                 *completion
 	lastActivityPollAt         time.Time // Activity 面板 ListTasks 刷新的节流时间戳
 	spinnerFrameIdx            int       // Activity 中 running 条目的动画帧索引，由 cursorFrameMsg 驱动
@@ -571,7 +571,7 @@ type appModel struct {
 type activityTab int
 
 const (
-	activityTabSubagents activityTab = iota
+	activityTabTasks activityTab = iota
 	activityTabTodo
 )
 

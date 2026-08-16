@@ -805,9 +805,9 @@ func (m *Manager) ListTasks() []TaskSnapshot {
 	return tasks
 }
 
-// TotalSubagentTokens returns the sum of UsedTokens for all completed tasks
+// TotalTaskTokens returns the sum of UsedTokens for all completed tasks
 // whose ParentSessionID matches the given session ID.
-func (m *Manager) TotalSubagentTokens(parentSessionID string) int {
+func (m *Manager) TotalTaskTokens(parentSessionID string) int {
 	if m == nil || parentSessionID == "" {
 		return 0
 	}
@@ -1155,7 +1155,7 @@ func (m *Manager) prepareSession(ctx context.Context, req Request) (string, erro
 				SessionID:       sessionID,
 				ParentSessionID: parentID,
 				ForkFromSeq:     -1,
-				Task:        true,
+				Task:            true,
 			}); err != nil {
 				return "", err
 			}
@@ -1180,7 +1180,7 @@ func (m *Manager) prepareSession(ctx context.Context, req Request) (string, erro
 			SessionID:       sessionID,
 			ParentSessionID: parentID,
 			ForkFromSeq:     -1,
-			Task:        true,
+			Task:            true,
 		}); err != nil {
 			return "", err
 		}

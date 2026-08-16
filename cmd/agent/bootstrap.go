@@ -219,9 +219,9 @@ type streamMATaskAdapter struct {
 	parentSessionID string
 }
 
-func (a streamMATaskAdapter) StreamTask(ctx context.Context, req loop.StreamMASubagentRequest) (loop.StreamMASubagentStream, error) {
+func (a streamMATaskAdapter) StreamTask(ctx context.Context, req loop.StreamMATaskRequest) (loop.StreamMATaskStream, error) {
 	if a.manager == nil {
-		return loop.StreamMASubagentStream{}, fmt.Errorf("streamma task manager is nil")
+		return loop.StreamMATaskStream{}, fmt.Errorf("streamma task manager is nil")
 	}
 	stream, err := a.manager.Stream(ctx, task.Request{
 		SessionID:       req.SessionID,
@@ -234,9 +234,9 @@ func (a streamMATaskAdapter) StreamTask(ctx context.Context, req loop.StreamMASu
 		DisableTools:    req.DisableTools,
 	})
 	if err != nil {
-		return loop.StreamMASubagentStream{}, err
+		return loop.StreamMATaskStream{}, err
 	}
-	return loop.StreamMASubagentStream{
+	return loop.StreamMATaskStream{
 		Events:         stream.Events,
 		AgentName:      stream.AgentName,
 		AgentColor:     stream.AgentColor,

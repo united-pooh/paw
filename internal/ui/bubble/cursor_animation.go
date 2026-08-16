@@ -111,15 +111,15 @@ func (m appModel) needsUIAnimationFrames(now time.Time) bool {
 	if !m.waveAmpStartedAt.IsZero() && now.Sub(m.waveAmpStartedAt) < equalizerAmpDuration {
 		return true
 	}
-	if m.subagentPicker != nil {
-		for _, task := range m.subagentPicker.tasks {
+	if m.taskPicker != nil {
+		for _, task := range m.taskPicker.tasks {
 			if string(task.Status) == "running" {
 				return true
 			}
 		}
 	}
 	// 运行中 task 任务卡：需要动画帧驱动 spinner 与任务状态刷新。
-	if m.hasRunningSubagentTasks() {
+	if m.hasRunningTasks() {
 		return true
 	}
 	return false

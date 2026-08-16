@@ -248,7 +248,7 @@ func TestActivityCommandsAndTabs(t *testing.T) {
 		"session-1",
 		&fakeModelConfigController{},
 		nil,
-		&fakeSubagentController{tasks: []task.TaskSnapshot{{
+		&fakeTaskController{tasks: []task.TaskSnapshot{{
 			ID:              "worker-1",
 			ParentSessionID: "session-1",
 			Status:          task.TaskRunning,
@@ -262,28 +262,28 @@ func TestActivityCommandsAndTabs(t *testing.T) {
 	model.relayout()
 
 	handled, cmd := model.handleCommand("/tasks")
-	if !handled || cmd != nil || model.subagentPicker == nil || model.subagentPicker.tab != activityTabSubagents {
-		t.Fatalf("/tasks handled=%v cmd=%v activity=%#v", handled, cmd, model.subagentPicker)
+	if !handled || cmd != nil || model.taskPicker == nil || model.taskPicker.tab != activityTabTasks {
+		t.Fatalf("/tasks handled=%v cmd=%v activity=%#v", handled, cmd, model.taskPicker)
 	}
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = next.(appModel)
-	if model.subagentPicker.tab != activityTabTodo {
-		t.Fatalf("tab=%v, want Pipeline", model.subagentPicker.tab)
+	if model.taskPicker.tab != activityTabTodo {
+		t.Fatalf("tab=%v, want Pipeline", model.taskPicker.tab)
 	}
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
 	model = next.(appModel)
-	if model.subagentPicker.tab != activityTabSubagents {
-		t.Fatalf("shift+tab=%v, want Tasks", model.subagentPicker.tab)
+	if model.taskPicker.tab != activityTabTasks {
+		t.Fatalf("shift+tab=%v, want Tasks", model.taskPicker.tab)
 	}
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	model = next.(appModel)
-	if model.subagentPicker != nil {
-		t.Fatalf("Esc activity=%#v, want nil", model.subagentPicker)
+	if model.taskPicker != nil {
+		t.Fatalf("Esc activity=%#v, want nil", model.taskPicker)
 	}
 
 	handled, cmd = model.handleCommand("/todo")
-	if !handled || cmd != nil || model.subagentPicker == nil || model.subagentPicker.tab != activityTabTodo {
-		t.Fatalf("/todo handled=%v cmd=%v activity=%#v", handled, cmd, model.subagentPicker)
+	if !handled || cmd != nil || model.taskPicker == nil || model.taskPicker.tab != activityTabTodo {
+		t.Fatalf("/todo handled=%v cmd=%v activity=%#v", handled, cmd, model.taskPicker)
 	}
 }
 

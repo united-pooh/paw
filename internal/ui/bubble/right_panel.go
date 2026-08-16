@@ -1,4 +1,4 @@
-// 本文件定义 Activity modal 使用的 Subagents 内容渲染逻辑。
+// 本文件定义 Activity modal 使用的 Tasks 内容渲染逻辑。
 package bubble
 
 import (
@@ -10,24 +10,24 @@ import (
 	"paw/internal/task"
 )
 
-// renderSubagentsCardContent 渲染 Subagents 内容（Task 4 实现）。
-func (m appModel) renderSubagentsCardContent(width int) string {
-	return m.renderSubagentsCardContentHeight(width, 0)
+// renderTasksCardContent 渲染 Tasks 内容（Task 4 实现）。
+func (m appModel) renderTasksCardContent(width int) string {
+	return m.renderTasksCardContentHeight(width, 0)
 }
 
-func (m appModel) renderSubagentsCardContentHeight(width, height int) string {
+func (m appModel) renderTasksCardContentHeight(width, height int) string {
 	hdrStyle := lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorHeaderForeground)).Bold(true)
 	mutedStyle := lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorContextFree))
-	hdr := renderSidebarRow(width, "subagents", "", hdrStyle, mutedStyle)
+	hdr := renderSidebarRow(width, "taskController", "", hdrStyle, mutedStyle)
 	maxLines := height
 
-	if m.subagents == nil {
+	if m.taskController == nil {
 		if maxLines == 1 {
 			return hdr
 		}
 		return hdr + "\n" + mutedStyle.Italic(true).Render(fitStyledCellLine("none", width))
 	}
-	tasks := m.subagentTasks()
+	tasks := m.taskEntries()
 	if len(tasks) == 0 {
 		if maxLines == 1 {
 			return hdr
@@ -57,8 +57,8 @@ func (m appModel) renderSubagentsCardContentHeight(width, height int) string {
 			}
 		}
 	}
-	if m.subagentPicker != nil && availableTaskRows > 0 {
-		selected := clampInt(m.subagentPicker.selectedIndex, 0, len(tasks)-1)
+	if m.taskPicker != nil && availableTaskRows > 0 {
+		selected := clampInt(m.taskPicker.selectedIndex, 0, len(tasks)-1)
 		if selected < windowStart {
 			windowStart = selected
 		}
@@ -105,13 +105,13 @@ func (m appModel) renderSubagentsCardContentHeight(width, height int) string {
 		if color := strings.TrimSpace(t.Color); color != "" {
 			nameStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(color))
 		}
-		if m.subagentPicker != nil && idx == clampInt(m.subagentPicker.selectedIndex, 0, len(tasks)-1) {
+		if m.taskPicker != nil && idx == clampInt(m.taskPicker.selectedIndex, 0, len(tasks)-1) {
 			dot = ">"
 			dotStyle = selectedProviderStyle
 			nameStyle = selectedProviderStyle
 			lineStyle = selectedProviderStyle
 		}
-		lines = append(lines, renderSubagentSidebarRow(width, dot, taskDisplayName(t), status, dotStyle, nameStyle, lineStyle))
+		lines = append(lines, rendertaskSidebarRow(width, dot, taskDisplayName(t), status, dotStyle, nameStyle, lineStyle))
 	}
 	if moreCount > 0 {
 		lines = append(lines, renderSidebarRow(width, fmt.Sprintf("+%d more", moreCount), "", mutedStyle, mutedStyle))
@@ -132,21 +132,21 @@ func renderSidebarRow(width int, left, right string, leftStyle, rightStyle lipgl
 	return leftStyle.Render(left) + strings.Repeat(" ", gap) + rightStyle.Render(right)
 }
 
-func renderSubagentSidebarRow(width int, dot, name, right string, dotStyle, nameStyle, rightStyle lipgloss.Style) string {
+func rendertaskSidebarRow(width int, dot, name, right string, dotStyle, nameStyle, rightStyle lipgloss.Style) string {
 	width = maxInt(1, width)
 	right = strings.TrimSpace(right)
 	if width <= 2 || right == "" {
-		return renderSubagentSidebarLeft(width, dot, name, dotStyle, nameStyle)
+		return rendertaskSidebarLeft(width, dot, name, dotStyle, nameStyle)
 	}
 	right = truncateStyledCellLine(right, maxInt(1, width/2))
 	rightWidth := terminalCellWidth(right)
 	leftMax := maxInt(1, width-rightWidth-1)
-	left := renderSubagentSidebarLeft(leftMax, dot, name, dotStyle, nameStyle)
+	left := rendertaskSidebarLeft(leftMax, dot, name, dotStyle, nameStyle)
 	gap := maxInt(0, width-terminalCellWidth(left)-rightWidth)
 	return left + strings.Repeat(" ", gap) + rightStyle.Render(right)
 }
 
-func renderSubagentSidebarLeft(width int, dot, name string, dotStyle, nameStyle lipgloss.Style) string {
+func rendertaskSidebarLeft(width int, dot, name string, dotStyle, nameStyle lipgloss.Style) string {
 	width = maxInt(1, width)
 	dot = truncateStyledCellLine(dot, width)
 	dotWidth := terminalCellWidth(dot)

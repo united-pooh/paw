@@ -1,4 +1,4 @@
-// 本文件定义从右侧 Subagents 卡片选择并预览子会话 transcript 的交互。
+// 本文件定义从右侧 Tasks 卡片选择并预览子会话 transcript 的交互。
 package bubble
 
 import (
@@ -17,28 +17,28 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func waitSubagentTaskUpdateCmd(ctx context.Context, updates <-chan struct{}) tea.Cmd {
+func waitTaskUpdateCmd(ctx context.Context, updates <-chan struct{}) tea.Cmd {
 	return func() tea.Msg {
 		if updates == nil {
-			return subagentTaskUpdateMsg{closed: true}
+			return taskUpdateMsg{closed: true}
 		}
 		select {
 		case _, ok := <-updates:
-			return subagentTaskUpdateMsg{closed: !ok}
+			return taskUpdateMsg{closed: !ok}
 		case <-ctx.Done():
-			return subagentTaskUpdateMsg{closed: true}
+			return taskUpdateMsg{closed: true}
 		}
 	}
 }
 
-func newSubagentPicker(tasks []taskpkg.TaskSnapshot) *subagentPicker {
-	return &subagentPicker{
+func newTaskPicker(tasks []taskpkg.TaskSnapshot) *taskPicker {
+	return &taskPicker{
 		tasks: append([]taskpkg.TaskSnapshot(nil), tasks...),
-		tab:   activityTabSubagents,
+		tab:   activityTabTasks,
 	}
 }
-func (m appModel) openSubagentPicker() (tea.Model, tea.Cmd) {
-	m.openActivity(activityTabSubagents)
+func (m appModel) openTaskPicker() (tea.Model, tea.Cmd) {
+	m.openActivity(activityTabTasks)
 	return m, nil
 }
 
@@ -51,8 +51,8 @@ func (m *appModel) openActivity(tab activityTab) {
 	if m == nil {
 		return
 	}
-	m.subagentPicker = newSubagentPicker(m.subagentTasks())
-	m.subagentPicker.tab = tab
+	m.taskPicker = newTaskPicker(m.taskEntries())
+	m.taskPicker.tab = tab
 	m.sessionPicker = nil
 	m.modelWizard = nil
 	m.settingWizard = nil
@@ -60,61 +60,61 @@ func (m *appModel) openActivity(tab activityTab) {
 	m.relayout()
 }
 
-func (m appModel) handleSubagentPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.subagentPicker == nil {
+func (m appModel) handleTaskPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.taskPicker == nil {
 		return m, nil
 	}
 
 	switch msg.String() {
 	case "ctrl+c", "ctrl+g", "esc":
-		m.subagentPicker = nil
+		m.taskPicker = nil
 		m.relayout()
 		return m, m.input.Focus()
 	case "tab", "right", "l":
-		m.subagentPicker.tab = activityTabTodo
+		m.taskPicker.tab = activityTabTodo
 		return m, nil
 	case "shift+tab", "left", "h":
-		m.subagentPicker.tab = activityTabSubagents
+		m.taskPicker.tab = activityTabTasks
 		return m, nil
 	case "up", "k":
-		if m.subagentPicker.tab != activityTabSubagents {
+		if m.taskPicker.tab != activityTabTasks {
 			return m, nil
 		}
-		if m.subagentPicker.selectedIndex > 0 {
-			m.subagentPicker.selectedIndex--
+		if m.taskPicker.selectedIndex > 0 {
+			m.taskPicker.selectedIndex--
 		}
 		return m, nil
 	case "down", "j":
-		if m.subagentPicker.tab != activityTabSubagents {
+		if m.taskPicker.tab != activityTabTasks {
 			return m, nil
 		}
-		if m.subagentPicker.selectedIndex < len(m.subagentPicker.tasks)-1 {
-			m.subagentPicker.selectedIndex++
+		if m.taskPicker.selectedIndex < len(m.taskPicker.tasks)-1 {
+			m.taskPicker.selectedIndex++
 		}
 		return m, nil
 	case "enter":
-		if m.subagentPicker.tab != activityTabSubagents {
+		if m.taskPicker.tab != activityTabTasks {
 			return m, nil
 		}
-		if len(m.subagentPicker.tasks) == 0 {
+		if len(m.taskPicker.tasks) == 0 {
 			return m, nil
 		}
-		task := m.subagentPicker.tasks[m.subagentPicker.selectedIndex]
-		return m.previewSubagentTranscript(task)
+		task := m.taskPicker.tasks[m.taskPicker.selectedIndex]
+		return m.previewTaskTranscript(task)
 	}
 	return m, nil
 }
 
 func (m *appModel) refreshActivityTasks() {
-	if m == nil || m.subagentPicker == nil {
+	if m == nil || m.taskPicker == nil {
 		return
 	}
-	m.subagentPicker.tasks = append(m.subagentPicker.tasks[:0], m.subagentTasks()...)
-	if len(m.subagentPicker.tasks) == 0 {
-		m.subagentPicker.selectedIndex = 0
+	m.taskPicker.tasks = append(m.taskPicker.tasks[:0], m.taskEntries()...)
+	if len(m.taskPicker.tasks) == 0 {
+		m.taskPicker.selectedIndex = 0
 		return
 	}
-	m.subagentPicker.selectedIndex = clampInt(m.subagentPicker.selectedIndex, 0, len(m.subagentPicker.tasks)-1)
+	m.taskPicker.selectedIndex = clampInt(m.taskPicker.selectedIndex, 0, len(m.taskPicker.tasks)-1)
 }
 
 // activityPollInterval 是 Activity 面板中 ListTasks 刷新的节流间隔。
@@ -125,7 +125,7 @@ const activityPollInterval = 500 * time.Millisecond
 // ListTasks 相关刷新：高频（running 任务存在）时使用 500ms 节流，
 // 否则使用更保守的 2s 节流，避免每帧都跨进程读 task registry。
 func (m *appModel) refreshActivityFromTasks(now time.Time) bool {
-	if m == nil || m.subagentPicker == nil {
+	if m == nil || m.taskPicker == nil {
 		return false
 	}
 	interval := activityPollInterval
@@ -135,8 +135,8 @@ func (m *appModel) refreshActivityFromTasks(now time.Time) bool {
 	if m.lastActivityPollAt.IsZero() || now.Sub(m.lastActivityPollAt) >= interval {
 		m.lastActivityPollAt = now
 		m.refreshActivityTasks()
-		m.refreshSubagentPreviewFromTasks()
-		m.refreshSubagentToolEntriesFromTasks()
+		m.refreshTaskPreviewFromTasks()
+		m.refreshTaskToolEntriesFromTasks()
 		return true
 	}
 	return false
@@ -144,10 +144,10 @@ func (m *appModel) refreshActivityFromTasks(now time.Time) bool {
 
 // activityHasRunningTask 报告当前 Activity 面板任务列表中是否有 running 任务。
 func (m *appModel) activityHasRunningTask() bool {
-	if m == nil || m.subagentPicker == nil {
+	if m == nil || m.taskPicker == nil {
 		return false
 	}
-	for _, task := range m.subagentPicker.tasks {
+	for _, task := range m.taskPicker.tasks {
 		if string(task.Status) == "running" {
 			return true
 		}
@@ -155,7 +155,7 @@ func (m *appModel) activityHasRunningTask() bool {
 	return false
 }
 
-func (m appModel) previewSubagentTranscript(task taskpkg.TaskSnapshot) (tea.Model, tea.Cmd) {
+func (m appModel) previewTaskTranscript(task taskpkg.TaskSnapshot) (tea.Model, tea.Cmd) {
 	sessionID := strings.TrimSpace(task.SessionID)
 	if sessionID == "" {
 		sessionID = strings.TrimSpace(task.ID)
@@ -167,37 +167,37 @@ func (m appModel) previewSubagentTranscript(task taskpkg.TaskSnapshot) (tea.Mode
 
 	parentSessionID := m.sessionID
 	parentTranscript := copyTranscriptEntries(m.transcript)
-	if m.subagentPreview != nil {
-		parentSessionID = m.subagentPreview.parentSessionID
-		parentTranscript = copyTranscriptEntries(m.subagentPreview.parentTranscript)
+	if m.taskPreview != nil {
+		parentSessionID = m.taskPreview.parentSessionID
+		parentTranscript = copyTranscriptEntries(m.taskPreview.parentTranscript)
 	}
 
-	preview := &subagentTranscriptPreview{
+	preview := &taskTranscriptPreview{
 		task:             task,
 		sessionID:        sessionID,
 		parentSessionID:  parentSessionID,
 		parentTranscript: parentTranscript,
-		liveContent:      liveSubagentContent(task),
+		liveContent:      liveTaskContent(task),
 	}
-	return m, loadSubagentTranscriptPreviewCmd(m.ctx, m.sessionStore, task, sessionID, preview, m.workspaceRoot)
+	return m, loadTaskTranscriptPreviewCmd(m.ctx, m.sessionStore, task, sessionID, preview, m.workspaceRoot)
 }
 
-func loadSubagentTranscriptPreviewCmd(ctx context.Context, store SessionStore, task taskpkg.TaskSnapshot, sessionID string, preview *subagentTranscriptPreview, workspaceRoot string) tea.Cmd {
+func loadTaskTranscriptPreviewCmd(ctx context.Context, store SessionStore, task taskpkg.TaskSnapshot, sessionID string, preview *taskTranscriptPreview, workspaceRoot string) tea.Cmd {
 	return func() tea.Msg {
-		entries, err := loadSubagentTranscriptEntries(ctx, store, task, time.Now(), workspaceRoot)
+		entries, err := loadTaskTranscriptEntries(ctx, store, task, time.Now(), workspaceRoot)
 		if err != nil {
-			return sessionRestoredMsg{source: sessionRestoreSubagentEnter, subagentPreview: preview, err: err}
+			return sessionRestoredMsg{source: sessionRestoreTaskEnter, taskPreview: preview, err: err}
 		}
 		return sessionRestoredMsg{
-			sessionID:       sessionID,
-			entries:         entries,
-			source:          sessionRestoreSubagentEnter,
-			subagentPreview: preview,
+			sessionID:   sessionID,
+			entries:     entries,
+			source:      sessionRestoreTaskEnter,
+			taskPreview: preview,
 		}
 	}
 }
 
-func loadSubagentTranscriptEntries(ctx context.Context, store SessionStore, task taskpkg.TaskSnapshot, at time.Time, workspaceRoot string) ([]transcriptEntry, error) {
+func loadTaskTranscriptEntries(ctx context.Context, store SessionStore, task taskpkg.TaskSnapshot, at time.Time, workspaceRoot string) ([]transcriptEntry, error) {
 	// 优先走与 /resume 主会话恢复一致的 store 读取：统一信封与 legacy
 	// Record 双格式、fork 解析都由 store 内部处理。
 	if loader, ok := store.(ResolvedRecordLoader); ok {
@@ -401,7 +401,7 @@ func appendToolResults(msg message.Message) []message.ToolResult {
 	return results
 }
 
-func decorateSubagentTranscript(task taskpkg.TaskSnapshot, entries []transcriptEntry, createdAt time.Time) []transcriptEntry {
+func decorateTaskTranscript(task taskpkg.TaskSnapshot, entries []transcriptEntry, createdAt time.Time) []transcriptEntry {
 	header := transcriptEntry{
 		kind:      entrySystem,
 		title:     "task",
@@ -414,7 +414,7 @@ func decorateSubagentTranscript(task taskpkg.TaskSnapshot, entries []transcriptE
 	return out
 }
 
-func renderSubagentPreviewTranscript(preview *subagentTranscriptPreview, createdAt time.Time) []transcriptEntry {
+func renderTaskPreviewTranscript(preview *taskTranscriptPreview, createdAt time.Time) []transcriptEntry {
 	if preview == nil {
 		return nil
 	}
@@ -427,21 +427,21 @@ func renderSubagentPreviewTranscript(preview *subagentTranscriptPreview, created
 			createdAt: createdAt,
 		})
 	}
-	return decorateSubagentTranscript(preview.task, entries, createdAt)
+	return decorateTaskTranscript(preview.task, entries, createdAt)
 }
 
-func (m *appModel) refreshSubagentToolEntriesFromTasks() bool {
-	if m == nil || m.subagents == nil {
+func (m *appModel) refreshTaskToolEntriesFromTasks() bool {
+	if m == nil || m.taskController == nil {
 		return false
 	}
-	tasks := m.subagents.ListTasks()
+	tasks := m.taskController.ListTasks()
 	if len(tasks) == 0 {
 		return false
 	}
 	changed := false
 	for index := range m.transcript {
 		entry := &m.transcript[index]
-		if !isToolTransaction(*entry) || !isSubagentToolEntry(*entry) || strings.TrimSpace(entry.toolResult) == "" {
+		if !isToolTransaction(*entry) || !isTaskToolEntry(*entry) || strings.TrimSpace(entry.toolResult) == "" {
 			continue
 		}
 		var reference struct {
@@ -487,40 +487,40 @@ func (m *appModel) refreshSubagentToolEntriesFromTasks() bool {
 	}
 	return changed
 }
-func (m *appModel) refreshSubagentPreviewFromTasks() bool {
-	if m == nil || m.subagentPreview == nil || m.subagents == nil {
+func (m *appModel) refreshTaskPreviewFromTasks() bool {
+	if m == nil || m.taskPreview == nil || m.taskController == nil {
 		return false
 	}
-	task, ok := m.findSubagentPreviewTask()
+	task, ok := m.findTaskPreviewTask()
 	if !ok {
 		return false
 	}
-	live := liveSubagentContent(task)
-	if task.Status == m.subagentPreview.task.Status &&
-		task.Content == m.subagentPreview.task.Content &&
-		task.UsedTokens == m.subagentPreview.task.UsedTokens &&
-		taskUsageEqual(task.Usage, m.subagentPreview.task.Usage) &&
-		live == m.subagentPreview.liveContent {
+	live := liveTaskContent(task)
+	if task.Status == m.taskPreview.task.Status &&
+		task.Content == m.taskPreview.task.Content &&
+		task.UsedTokens == m.taskPreview.task.UsedTokens &&
+		taskUsageEqual(task.Usage, m.taskPreview.task.Usage) &&
+		live == m.taskPreview.liveContent {
 		return false
 	}
-	m.subagentPreview.task = task
-	m.subagentPreview.liveContent = live
+	m.taskPreview.task = task
+	m.taskPreview.liveContent = live
 	m.resetToolInspect()
-	m.transcript = renderSubagentPreviewTranscript(m.subagentPreview, m.animationNow())
+	m.transcript = renderTaskPreviewTranscript(m.taskPreview, m.animationNow())
 	m.refreshViewport()
 	return true
 }
 
-func (m appModel) findSubagentPreviewTask() (taskpkg.TaskSnapshot, bool) {
-	if m.subagentPreview == nil || m.subagents == nil {
+func (m appModel) findTaskPreviewTask() (taskpkg.TaskSnapshot, bool) {
+	if m.taskPreview == nil || m.taskController == nil {
 		return taskpkg.TaskSnapshot{}, false
 	}
-	sessionID := strings.TrimSpace(m.subagentPreview.sessionID)
+	sessionID := strings.TrimSpace(m.taskPreview.sessionID)
 	if sessionID == "" {
-		sessionID = strings.TrimSpace(m.subagentPreview.task.SessionID)
+		sessionID = strings.TrimSpace(m.taskPreview.task.SessionID)
 	}
-	taskID := strings.TrimSpace(m.subagentPreview.task.ID)
-	for _, task := range m.subagents.ListTasks() {
+	taskID := strings.TrimSpace(m.taskPreview.task.ID)
+	for _, task := range m.taskController.ListTasks() {
 		if sessionID != "" && strings.TrimSpace(task.SessionID) == sessionID {
 			return task, true
 		}
@@ -531,7 +531,7 @@ func (m appModel) findSubagentPreviewTask() (taskpkg.TaskSnapshot, bool) {
 	return taskpkg.TaskSnapshot{}, false
 }
 
-func liveSubagentContent(task taskpkg.TaskSnapshot) string {
+func liveTaskContent(task taskpkg.TaskSnapshot) string {
 	if task.Status != taskpkg.TaskRunning {
 		return ""
 	}
@@ -597,8 +597,8 @@ func (m *appModel) applySessionPickerRestore(msg sessionRestoredMsg) {
 	m.clearNewMessageNotice()
 	m.sessionID = msg.sessionID
 	m.sessionPicker = nil
-	m.subagentPicker = nil
-	m.subagentPreview = nil
+	m.taskPicker = nil
+	m.taskPreview = nil
 	m.syncInputPlaceholder()
 	m.transcript = mergeTranscriptToolEntries(copyTranscriptEntries(msg.entries))
 	m.finalizeRestoredRunningTools()
@@ -611,31 +611,31 @@ func (m *appModel) applySessionPickerRestore(msg sessionRestoredMsg) {
 	m.clearNewMessageNotice()
 }
 
-func (m *appModel) applySubagentPreviewRestore(msg sessionRestoredMsg) {
+func (m *appModel) applyTaskPreviewRestore(msg sessionRestoredMsg) {
 	m.resetToolInspect()
 	m.clearNewMessageNotice()
 	m.sessionPicker = nil
-	m.subagentPicker = nil
-	if msg.subagentPreview != nil {
-		preview := *msg.subagentPreview
-		preview.parentTranscript = copyTranscriptEntries(msg.subagentPreview.parentTranscript)
+	m.taskPicker = nil
+	if msg.taskPreview != nil {
+		preview := *msg.taskPreview
+		preview.parentTranscript = copyTranscriptEntries(msg.taskPreview.parentTranscript)
 		preview.entries = mergeTranscriptToolEntries(copyTranscriptEntries(msg.entries))
 		finalizeRestoredRunningToolEntries(preview.entries, m.animationNow())
-		m.subagentPreview = &preview
+		m.taskPreview = &preview
 	}
-	m.transcript = renderSubagentPreviewTranscript(m.subagentPreview, m.animationNow())
+	m.transcript = renderTaskPreviewTranscript(m.taskPreview, m.animationNow())
 	m.relayout()
 	m.refreshViewport()
 }
 
-func (m *appModel) restoreMainTranscriptFromSubagentPreview() {
-	preview := m.subagentPreview
+func (m *appModel) restoreMainTranscriptFromTaskPreview() {
+	preview := m.taskPreview
 	if preview == nil {
 		return
 	}
 	m.sessionPicker = nil
-	m.subagentPicker = nil
-	m.subagentPreview = nil
+	m.taskPicker = nil
+	m.taskPreview = nil
 	m.resetToolInspect()
 	m.clearNewMessageNotice()
 	m.sessionID = preview.parentSessionID

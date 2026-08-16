@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestReadSubagentWorkerStartBuildsWorkerRuntimeContext(t *testing.T) {
+func TestReadTaskWorkerStartBuildsWorkerRuntimeContext(t *testing.T) {
 	tests := []struct {
 		name     string
 		depth    int
@@ -53,7 +53,7 @@ func TestReadSubagentWorkerStartBuildsWorkerRuntimeContext(t *testing.T) {
 	}
 }
 
-func TestReadSubagentWorkerStartRejectsInvalidDepth(t *testing.T) {
+func TestReadTaskWorkerStartRejectsInvalidDepth(t *testing.T) {
 	tests := []struct {
 		name        string
 		depth       int
@@ -86,7 +86,7 @@ func TestReadSubagentWorkerStartRejectsInvalidDepth(t *testing.T) {
 	}
 }
 
-func TestReadSubagentWorkerStartRejectsMalformedDepth(t *testing.T) {
+func TestReadTaskWorkerStartRejectsMalformedDepth(t *testing.T) {
 	decoder := json.NewDecoder(strings.NewReader(`{"type":"worker.start","task_id":"task-1","session_id":"session-1","depth":"one","max_depth":4}`))
 	_, _, _, err := readTaskWorkerStart(decoder)
 	if err == nil {

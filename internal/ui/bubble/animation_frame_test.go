@@ -103,12 +103,12 @@ func TestWorkingCursorFrameSchedulesSuccessorWithoutModelDelta(t *testing.T) {
 	}
 }
 
-func TestSyncSubagentWakesAnimation(t *testing.T) {
+func TestSynctaskWakesAnimation(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	model.subagents = &fakeSubagentController{}
+	model.taskController = &fakeTaskController{}
 	model.uiAnimationFrameScheduled = false
 
-	cmd := model.handleSubagentCommand("/task --sync inspect")
+	cmd := model.handleTaskCommand("/task --sync inspect")
 
 	if cmd == nil {
 		t.Fatal("sync task should return work and animation commands")

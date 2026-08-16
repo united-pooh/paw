@@ -598,16 +598,16 @@ func TestRunToolCallBindsMutationAndRunToResolvedTool(t *testing.T) {
 	}
 }
 
-type fakeStreamMASubagentRunner struct {
+type fakeStreamMATaskRunner struct {
 	mu                   sync.Mutex
-	requests             []StreamMASubagentRequest
+	requests             []StreamMATaskRequest
 	omitBoundaryFor      map[string]bool
 	plannerFirstStepSent chan struct{}
 	releasePlanner       chan struct{}
 	builderStarted       chan struct{}
 }
 
-func (r *fakeStreamMASubagentRunner) StreamTask(ctx context.Context, req StreamMASubagentRequest) (StreamMASubagentStream, error) {
+func (r *fakeStreamMATaskRunner) StreamTask(ctx context.Context, req StreamMATaskRequest) (StreamMATaskStream, error) {
 	r.mu.Lock()
 	r.requests = append(r.requests, req)
 	r.mu.Unlock()
@@ -616,7 +616,7 @@ func (r *fakeStreamMASubagentRunner) StreamTask(ctx context.Context, req StreamM
 		sessionID = req.AgentID + "-session"
 	}
 	if req.AgentID == "planner" && r.plannerFirstStepSent != nil {
-		return StreamMASubagentStream{Events: r.streamBlockingPlanner(ctx), SessionID: sessionID}, nil
+		return StreamMATaskStream{Events: r.streamBlockingPlanner(ctx), SessionID: sessionID}, nil
 	}
 	if req.AgentID == "builder" && r.builderStarted != nil {
 		closeOnce(r.builderStarted)
@@ -633,16 +633,16 @@ func (r *fakeStreamMASubagentRunner) StreamTask(ctx context.Context, req StreamM
 			content = "final StreamMA answer\n"
 		}
 	}
-	return StreamMASubagentStream{Events: streamMAEvents(ctx, content), SessionID: sessionID}, nil
+	return StreamMATaskStream{Events: streamMAEvents(ctx, content), SessionID: sessionID}, nil
 }
 
-func (r *fakeStreamMASubagentRunner) Requests() []StreamMASubagentRequest {
+func (r *fakeStreamMATaskRunner) Requests() []StreamMATaskRequest {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]StreamMASubagentRequest(nil), r.requests...)
+	return append([]StreamMATaskRequest(nil), r.requests...)
 }
 
-func (r *fakeStreamMASubagentRunner) streamBlockingPlanner(ctx context.Context) <-chan model.StreamEvent {
+func (r *fakeStreamMATaskRunner) streamBlockingPlanner(ctx context.Context) <-chan model.StreamEvent {
 	ch := make(chan model.StreamEvent)
 	go func() {
 		defer close(ch)
@@ -1012,16 +1012,16 @@ func TestRunTurnStreamMAWorkersReceiveSkillContext(t *testing.T) {
 	root := t.TempDir()
 	writeLoopTestSkill(t, root, "design", "# Design\nStreamMA skill body.")
 	output := &fakeUI{}
-	subagents := &fakeStreamMASubagentRunner{}
+	taskController := &fakeStreamMATaskRunner{}
 	store := &fakeStore{}
 	runner := NewRunner(&fakeModel{}, output, tool.NewRegistry(), store, "streamma-skill-session")
 	runner.SetSkillRegistry(skill.NewRegistry([]string{root}))
-	runner.SetStreamMATaskRunner(subagents)
+	runner.SetStreamMATaskRunner(taskController)
 
 	if _, err := runner.RunTurn(context.Background(), "/streamma explain $design"); err != nil {
 		t.Fatalf("RunTurn(streamma skill) error = %v", err)
 	}
-	requests := subagents.Requests()
+	requests := taskController.Requests()
 	if len(requests) == 0 {
 		t.Fatalf("requests = nil, want StreamMA task requests")
 	}
@@ -1033,12 +1033,12 @@ func TestRunTurnStreamMAWorkersReceiveSkillContext(t *testing.T) {
 func TestRunTurnStreamMACommandUsesRuntime(t *testing.T) {
 	output := &fakeUI{}
 	streamer := &fakeModel{}
-	subagents := &fakeStreamMASubagentRunner{}
+	taskController := &fakeStreamMATaskRunner{}
 	registry := tool.NewRegistry()
 	registry.Register(&fakeTool{name: "read"})
 	store := &fakeStore{}
 	runner := NewRunner(streamer, output, registry, store, "streamma-session")
-	runner.SetStreamMATaskRunner(subagents)
+	runner.SetStreamMATaskRunner(taskController)
 
 	msg, err := runner.RunTurn(context.Background(), "/streamma 制作一个临时游戏")
 	if err != nil {
@@ -1061,9 +1061,9 @@ func TestRunTurnStreamMACommandUsesRuntime(t *testing.T) {
 		t.Fatalf("first system event = %#v, want task-backed graph notice", systemEvents[0])
 	}
 	if len(streamer.calls) != 0 {
-		t.Fatalf("model calls = %d, want direct model unused when StreamMA subagents are configured", len(streamer.calls))
+		t.Fatalf("model calls = %d, want direct model unused when StreamMA taskController are configured", len(streamer.calls))
 	}
-	requests := subagents.Requests()
+	requests := taskController.Requests()
 	if len(requests) < 4 {
 		t.Fatalf("task requests = %d, want multiple StreamMA workers", len(requests))
 	}
@@ -1093,22 +1093,22 @@ func TestRunTurnStreamMACommandUsesRuntime(t *testing.T) {
 
 func TestRunTurnStreamMAReusesLogicalAgentSessionAndIncrementalPrompt(t *testing.T) {
 	output := &fakeUI{}
-	subagents := &fakeStreamMASubagentRunner{}
+	taskController := &fakeStreamMATaskRunner{}
 	runner := NewRunner(&fakeModel{}, output, tool.NewRegistry(), &fakeStore{}, "streamma-session")
-	runner.SetStreamMATaskRunner(subagents)
+	runner.SetStreamMATaskRunner(taskController)
 
 	if _, err := runner.RunTurn(context.Background(), "/streamma 制作一个临时游戏"); err != nil {
 		t.Fatalf("RunTurn() error = %v", err)
 	}
 
-	var builder []StreamMASubagentRequest
-	for _, req := range subagents.Requests() {
+	var builder []StreamMATaskRequest
+	for _, req := range taskController.Requests() {
 		if req.AgentID == "builder" {
 			builder = append(builder, req)
 		}
 	}
 	if len(builder) < 2 {
-		t.Fatalf("builder requests = %d, want repeated logical agent invocations: %#v", len(builder), subagents.Requests())
+		t.Fatalf("builder requests = %d, want repeated logical agent invocations: %#v", len(builder), taskController.Requests())
 	}
 	if builder[0].SessionID != "" {
 		t.Fatalf("first builder request SessionID = %q, want empty before session assignment", builder[0].SessionID)
@@ -1131,9 +1131,9 @@ func TestRunTurnStreamMAReusesLogicalAgentSessionAndIncrementalPrompt(t *testing
 
 func TestRunTurnStreamMATraceEmitsRuntimeEvents(t *testing.T) {
 	output := &fakeUI{}
-	subagents := &fakeStreamMASubagentRunner{}
+	taskController := &fakeStreamMATaskRunner{}
 	runner := NewRunner(&fakeModel{}, output, tool.NewRegistry(), &fakeStore{}, "streamma-session")
-	runner.SetStreamMATaskRunner(subagents)
+	runner.SetStreamMATaskRunner(taskController)
 
 	if _, err := runner.RunTurn(context.Background(), "/streamma-trace 制作一个临时游戏"); err != nil {
 		t.Fatalf("RunTurn() error = %v", err)
@@ -1165,7 +1165,7 @@ func TestRunTurnStreamMATraceEmitsRuntimeEvents(t *testing.T) {
 
 func TestRunTurnStreamMARecordsTokenTracerEvents(t *testing.T) {
 	runner := NewRunner(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), &fakeStore{}, "streamma-session")
-	runner.SetStreamMATaskRunner(&fakeStreamMASubagentRunner{})
+	runner.SetStreamMATaskRunner(&fakeStreamMATaskRunner{})
 	tracer := tokentracer.New("streamma-test")
 	runner.SetTokenTracer(tracer)
 
@@ -1262,35 +1262,35 @@ func TestRunnerCompactToolPromptOmitsSystemSchemasButKeepsNativeTools(t *testing
 	}
 }
 
-func TestRunTurnStreamMARejectsRecoveredSubagentStep(t *testing.T) {
+func TestRunTurnStreamMARejectsRecoveredtaskStep(t *testing.T) {
 	output := &fakeUI{}
-	subagents := &fakeStreamMASubagentRunner{
+	taskController := &fakeStreamMATaskRunner{
 		omitBoundaryFor: map[string]bool{"planner": true, "scout": true},
 	}
 	runner := NewRunner(&fakeModel{}, output, tool.NewRegistry(), &fakeStore{}, "streamma-session")
-	runner.SetStreamMATaskRunner(subagents)
+	runner.SetStreamMATaskRunner(taskController)
 
 	_, err := runner.RunTurn(context.Background(), "/streamma 制作一个临时游戏")
 	if err == nil || !strings.Contains(err.Error(), "stream ended before exact boundary") {
 		t.Fatalf("RunTurn() error = %v, want strict boundary failure", err)
 	}
-	for _, req := range subagents.Requests() {
+	for _, req := range taskController.Requests() {
 		if req.AgentID == "builder" {
-			t.Fatalf("builder should not start from recovered upstream step: %#v", subagents.Requests())
+			t.Fatalf("builder should not start from recovered upstream step: %#v", taskController.Requests())
 		}
 	}
 }
 
-func TestRunTurnStreamMAFansOutSubagentStepBeforeDone(t *testing.T) {
+func TestRunTurnStreamMAFansOuttaskStepBeforeDone(t *testing.T) {
 	output := &fakeUI{}
 	streamer := &fakeModel{}
-	subagents := &fakeStreamMASubagentRunner{
+	taskController := &fakeStreamMATaskRunner{
 		plannerFirstStepSent: make(chan struct{}),
 		releasePlanner:       make(chan struct{}),
 		builderStarted:       make(chan struct{}),
 	}
 	runner := NewRunner(streamer, output, tool.NewRegistry(), &fakeStore{}, "streamma-session")
-	runner.SetStreamMATaskRunner(subagents)
+	runner.SetStreamMATaskRunner(taskController)
 
 	done := make(chan error, 1)
 	go func() {
@@ -1299,17 +1299,17 @@ func TestRunTurnStreamMAFansOutSubagentStepBeforeDone(t *testing.T) {
 	}()
 
 	select {
-	case <-subagents.plannerFirstStepSent:
+	case <-taskController.plannerFirstStepSent:
 	case <-time.After(time.Second):
 		t.Fatal("planner did not emit its first StreamMA step")
 	}
 	select {
-	case <-subagents.builderStarted:
+	case <-taskController.builderStarted:
 	case <-time.After(time.Second):
 		t.Fatal("builder did not start from planner END_STEP before planner Done")
 	}
 
-	close(subagents.releasePlanner)
+	close(taskController.releasePlanner)
 
 	select {
 	case err := <-done:
@@ -1321,7 +1321,7 @@ func TestRunTurnStreamMAFansOutSubagentStepBeforeDone(t *testing.T) {
 	}
 }
 
-func TestRunTurnStreamMARequiresSubagentBackend(t *testing.T) {
+func TestRunTurnStreamMARequirestaskBackend(t *testing.T) {
 	output := &fakeUI{}
 	runner := NewRunner(&fakeModel{}, output, tool.NewRegistry(), nil, "")
 
@@ -1333,16 +1333,16 @@ func TestRunTurnStreamMARequiresSubagentBackend(t *testing.T) {
 
 func TestRunTurnStreamMADisabledRejectsCommandBeforeRuntime(t *testing.T) {
 	output := &fakeUI{}
-	subagents := &fakeStreamMASubagentRunner{}
+	taskController := &fakeStreamMATaskRunner{}
 	runner := NewRunner(&fakeModel{}, output, tool.NewRegistry(), nil, "")
-	runner.SetStreamMATaskRunner(subagents)
+	runner.SetStreamMATaskRunner(taskController)
 	runner.SetStreamMAEnabled(false)
 
 	_, err := runner.RunTurn(context.Background(), "/streamma-trace explain the design")
 	if err == nil || !strings.Contains(err.Error(), "streamma is disabled") {
 		t.Fatalf("RunTurn() error = %v, want disabled error", err)
 	}
-	if got := len(subagents.Requests()); got != 0 {
+	if got := len(taskController.Requests()); got != 0 {
 		t.Fatalf("task requests = %d, want 0 when StreamMA is disabled", got)
 	}
 }

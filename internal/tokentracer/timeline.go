@@ -206,12 +206,12 @@ func (b *timelineBuilder) collectEventRows() {
 			b.rememberAgent(stageID, agentID, row.ID)
 			b.addMarker(row, eventTime, "end", "end", row.Role, row.Status, nil)
 		case "task_start":
-			row := b.ensureSubagentTaskRow(stageID, agentID, sessionID, invocation)
-			b.applySubagentTaskMetadata(row, data, sessionID)
+			row := b.ensureTaskRow(stageID, agentID, sessionID, invocation)
+			b.applyTaskMetadata(row, data, sessionID)
 			b.setRowStartTime(row, firstNonEmpty(stringValue(data, "started_at"), event.Timestamp))
 		case "task_end":
-			row := b.ensureSubagentTaskRow(stageID, agentID, sessionID, invocation)
-			b.applySubagentTaskMetadata(row, data, sessionID)
+			row := b.ensureTaskRow(stageID, agentID, sessionID, invocation)
+			b.applyTaskMetadata(row, data, sessionID)
 			if row.StartTime == "" {
 				b.setRowStartTime(row, firstNonEmpty(stringValue(data, "started_at"), stringValue(data, "finished_at"), event.Timestamp))
 			}
@@ -221,7 +221,7 @@ func (b *timelineBuilder) collectEventRows() {
 			if usage := usageValue(data["usage"]).Normalized(); !usage.Empty() && row.Usage.Empty() {
 				row.Usage = usage
 			}
-			b.applySubagentUsedTokens(row, intValue(data, "used_tokens"))
+			b.applytaskUsedTokens(row, intValue(data, "used_tokens"))
 			if row.Error != "" || row.Status == "failed" {
 				if row.Error == "" {
 					row.Error = "task failed"
@@ -268,7 +268,7 @@ func (b *timelineBuilder) collectEventRows() {
 	}
 }
 
-func (b *timelineBuilder) ensureSubagentTaskRow(stageID, agentID, sessionID string, invocation int) *TimelineRow {
+func (b *timelineBuilder) ensureTaskRow(stageID, agentID, sessionID string, invocation int) *TimelineRow {
 	row := b.rowForSession(sessionID)
 	if row == nil {
 		rowAgentID := defaultID(agentID, "task")
@@ -282,7 +282,7 @@ func (b *timelineBuilder) ensureSubagentTaskRow(stageID, agentID, sessionID stri
 	return row
 }
 
-func (b *timelineBuilder) applySubagentTaskMetadata(row *TimelineRow, data map[string]any, sessionID string) {
+func (b *timelineBuilder) applyTaskMetadata(row *TimelineRow, data map[string]any, sessionID string) {
 	if row == nil {
 		return
 	}
@@ -314,7 +314,7 @@ func (b *timelineBuilder) setRowStartTime(row *TimelineRow, value string) {
 	}
 }
 
-func (b *timelineBuilder) applySubagentUsedTokens(row *TimelineRow, usedTokens int) {
+func (b *timelineBuilder) applytaskUsedTokens(row *TimelineRow, usedTokens int) {
 	if row == nil || usedTokens <= 0 || !row.Usage.Empty() {
 		return
 	}

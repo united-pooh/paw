@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-func TestTimelineSubagentLifecycleUsesTaskMetadataAndAggregateTokens(t *testing.T) {
+func TestTimelinetaskLifecycleUsesTaskMetadataAndAggregateTokens(t *testing.T) {
 	base := time.Date(2026, 6, 27, 9, 30, 0, 0, time.UTC)
 	ts := func(offset time.Duration) string { return base.Add(offset).Format(time.RFC3339Nano) }
 	startedAt := ts(2 * time.Second)
@@ -41,7 +41,7 @@ func TestTimelineSubagentLifecycleUsesTaskMetadataAndAggregateTokens(t *testing.
 	}
 }
 
-func TestTimelineSubagentLifecyclePrefersStructuredUsageOverUsedTokens(t *testing.T) {
+func TestTimelinetaskLifecyclePrefersStructuredUsageOverUsedTokens(t *testing.T) {
 	base := time.Date(2026, 6, 27, 9, 45, 0, 0, time.UTC)
 	ts := func(offset time.Duration) string { return base.Add(offset).Format(time.RFC3339Nano) }
 	events := []Event{
@@ -71,7 +71,7 @@ func TestTimelineSubagentLifecyclePrefersStructuredUsageOverUsedTokens(t *testin
 	}
 }
 
-func TestTimelineSubagentLifecycleDoesNotOverrideAPICallUsage(t *testing.T) {
+func TestTimelinetaskLifecycleDoesNotOverrideAPICallUsage(t *testing.T) {
 	base := time.Date(2026, 6, 27, 10, 15, 0, 0, time.UTC)
 	ts := func(offset time.Duration) string { return base.Add(offset).Format(time.RFC3339Nano) }
 	events := []Event{

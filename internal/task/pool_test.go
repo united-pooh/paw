@@ -12,8 +12,8 @@ import (
 func TestProcessPoolReusesWorkerAndKeepsRequestsIsolated(t *testing.T) {
 	launcher := &ProcessPoolLauncher{
 		Command:       os.Args[0],
-		Args:          []string{"-test.run=TestSubagentPoolHelperProcess"},
-		Env:           []string{"PAW_SUBAGENT_POOL_HELPER=1"},
+		Args:          []string{"-test.run=TestTaskPoolHelperProcess"},
+		Env:           []string{"PAW_task_POOL_HELPER=1"},
 		MaxWorkers:    1,
 		QueueCapacity: 2,
 	}
@@ -60,8 +60,8 @@ func TestProcessPoolReusesWorkerAndKeepsRequestsIsolated(t *testing.T) {
 
 func TestProcessPoolCloseRejectsNewJobs(t *testing.T) {
 	launcher := NewProcessPoolLauncher(os.Args[0], "")
-	launcher.Args = []string{"-test.run=TestSubagentPoolHelperProcess"}
-	launcher.Env = []string{"PAW_SUBAGENT_POOL_HELPER=1"}
+	launcher.Args = []string{"-test.run=TestTaskPoolHelperProcess"}
+	launcher.Env = []string{"PAW_task_POOL_HELPER=1"}
 	if err := launcher.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
@@ -70,8 +70,8 @@ func TestProcessPoolCloseRejectsNewJobs(t *testing.T) {
 	}
 }
 
-func TestSubagentPoolHelperProcess(t *testing.T) {
-	if os.Getenv("PAW_SUBAGENT_POOL_HELPER") != "1" {
+func TestTaskPoolHelperProcess(t *testing.T) {
+	if os.Getenv("PAW_task_POOL_HELPER") != "1" {
 		return
 	}
 	decoder := json.NewDecoder(os.Stdin)
@@ -100,8 +100,8 @@ func TestSubagentPoolHelperProcess(t *testing.T) {
 func TestProcessPoolCanceledQueuedJobReturnsPromptly(t *testing.T) {
 	launcher := &ProcessPoolLauncher{
 		Command:       os.Args[0],
-		Args:          []string{"-test.run=TestSubagentPoolBlockingHelperProcess"},
-		Env:           []string{"PAW_SUBAGENT_POOL_BLOCKING_HELPER=1"},
+		Args:          []string{"-test.run=TestTaskPoolBlockingHelperProcess"},
+		Env:           []string{"PAW_task_POOL_BLOCKING_HELPER=1"},
 		MaxWorkers:    1,
 		QueueCapacity: 1,
 	}
@@ -135,8 +135,8 @@ func TestProcessPoolCanceledQueuedJobReturnsPromptly(t *testing.T) {
 	_ = first.Stop()
 }
 
-func TestSubagentPoolBlockingHelperProcess(t *testing.T) {
-	if os.Getenv("PAW_SUBAGENT_POOL_BLOCKING_HELPER") != "1" {
+func TestTaskPoolBlockingHelperProcess(t *testing.T) {
+	if os.Getenv("PAW_task_POOL_BLOCKING_HELPER") != "1" {
 		return
 	}
 	decoder := json.NewDecoder(os.Stdin)
@@ -166,8 +166,8 @@ func TestSubagentPoolBlockingHelperProcess(t *testing.T) {
 func TestProcessPoolCloseCancelsQueuedJobs(t *testing.T) {
 	launcher := &ProcessPoolLauncher{
 		Command:       os.Args[0],
-		Args:          []string{"-test.run=TestSubagentPoolBlockingHelperProcess"},
-		Env:           []string{"PAW_SUBAGENT_POOL_BLOCKING_HELPER=1"},
+		Args:          []string{"-test.run=TestTaskPoolBlockingHelperProcess"},
+		Env:           []string{"PAW_task_POOL_BLOCKING_HELPER=1"},
 		MaxWorkers:    1,
 		QueueCapacity: 1,
 	}

@@ -10,16 +10,16 @@ import (
 )
 
 type options struct {
-	prompt             string
-	sessionID          string
-	taskWorker     bool
-	taskWorkerPool bool
-	streamMA           bool
-	tokenTracer        bool
-	tokenTracerOpen    bool
-	tokenTracerPort    int
-	allowOutsideRead   bool
-	sandboxLimits      string
+	prompt           string
+	sessionID        string
+	taskWorker       bool
+	taskWorkerPool   bool
+	streamMA         bool
+	tokenTracer      bool
+	tokenTracerOpen  bool
+	tokenTracerPort  int
+	allowOutsideRead bool
+	sandboxLimits    string
 }
 
 func parseOptions() options {
@@ -37,16 +37,16 @@ func parseOptions() options {
 	flag.Parse()
 
 	return options{
-		prompt:             *prompt,
-		sessionID:          *sessionID,
-		taskWorker:     *taskWorker,
-		taskWorkerPool: *taskWorkerPool,
-		streamMA:           *streamMA,
-		tokenTracer:        *tokenTracer,
-		tokenTracerOpen:    *tokenTracerOpen,
-		tokenTracerPort:    *tokenTracerPort,
-		allowOutsideRead:   *yolo || *dangerously,
-		sandboxLimits:      *sandboxLimits,
+		prompt:           *prompt,
+		sessionID:        *sessionID,
+		taskWorker:       *taskWorker,
+		taskWorkerPool:   *taskWorkerPool,
+		streamMA:         *streamMA,
+		tokenTracer:      *tokenTracer,
+		tokenTracerOpen:  *tokenTracerOpen,
+		tokenTracerPort:  *tokenTracerPort,
+		allowOutsideRead: *yolo || *dangerously,
+		sandboxLimits:    *sandboxLimits,
 	}
 }
 

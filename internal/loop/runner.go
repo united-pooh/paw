@@ -60,7 +60,7 @@ type historyExistenceStore interface {
 }
 
 type TaskTokensProvider interface {
-	TotalSubagentTokens(parentSessionID string) int
+	TotalTaskTokens(parentSessionID string) int
 }
 
 // TurnOwnedTaskCleaner stops background work owned by an exact outer turn.
@@ -84,45 +84,45 @@ type Runner struct {
 	// history 保存”已经成功完成”的多轮对话消息。
 	// 当前调用路径是串行的，因此这里先不引入锁。
 	// TODO: 如果后续要把 Runner 暴露给并发调用方，需要为 history 增加互斥保护。
-	history                []message.Message
-	usage                  model.Usage
-	usageKnown             bool
-	sessionUsage           model.Usage
-	sessionUsageKnown      bool
-	supplements            []string
-	systemSupplement       string
-	compactToolPrompt      bool
-	contextLimitTokens     int
-	contextMaintenance     contextMaintenanceConfig
-	compactionArchive      *compactionArchive
-	softCompactNoticed     bool
-	consecutiveCompacts    int
-	compactStuck           bool
-	streamMAEnabled        bool
-	streamMASubagents      StreamMASubagentRunner
-	subagentTokensProvider TaskTokensProvider
-	turnOwnedTaskCleaner   TurnOwnedTaskCleaner
-	recovery               *session.RecoveryState
-	skillRegistry          *skill.Registry
-	activeSkillContext     string
-	tokenTracer            *tokentracer.Tracer
-	traceStageID           string
-	traceAgentID           string
-	yoloModeHandler        func(bool)
-	nowFn                  func() time.Time
-	autoContinueConfig     AutoContinueConfig
-	todoBroker             *todo.Broker
-	stateBlockProvider     StateBlockProvider
-	contextMode            string
-	recentTurns            int
-	stateCompactionRatio   float64
-	sessionLoadedHooks     []SessionLoadedHook
-	lastProgressHash       string
-	lastTodoHash           string
-	staleTodoTurns         int
-	activeTool             activeToolState
-	activeTurnCancel       context.CancelFunc
-	turnToolFilter         ToolFilter
+	history              []message.Message
+	usage                model.Usage
+	usageKnown           bool
+	sessionUsage         model.Usage
+	sessionUsageKnown    bool
+	supplements          []string
+	systemSupplement     string
+	compactToolPrompt    bool
+	contextLimitTokens   int
+	contextMaintenance   contextMaintenanceConfig
+	compactionArchive    *compactionArchive
+	softCompactNoticed   bool
+	consecutiveCompacts  int
+	compactStuck         bool
+	streamMAEnabled      bool
+	streamMATasks        StreamMATaskRunner
+	taskTokensProvider   TaskTokensProvider
+	turnOwnedTaskCleaner TurnOwnedTaskCleaner
+	recovery             *session.RecoveryState
+	skillRegistry        *skill.Registry
+	activeSkillContext   string
+	tokenTracer          *tokentracer.Tracer
+	traceStageID         string
+	traceAgentID         string
+	yoloModeHandler      func(bool)
+	nowFn                func() time.Time
+	autoContinueConfig   AutoContinueConfig
+	todoBroker           *todo.Broker
+	stateBlockProvider   StateBlockProvider
+	contextMode          string
+	recentTurns          int
+	stateCompactionRatio float64
+	sessionLoadedHooks   []SessionLoadedHook
+	lastProgressHash     string
+	lastTodoHash         string
+	staleTodoTurns       int
+	activeTool           activeToolState
+	activeTurnCancel     context.CancelFunc
+	turnToolFilter       ToolFilter
 }
 
 type activeToolState struct {
@@ -534,13 +534,13 @@ func (runner *Runner) ContextStats(limitTokens int, _ string) ContextStats {
 	usage := runner.usage
 	usageKnown := runner.usageKnown
 	sessionID := runner.sessionID
-	provider := runner.subagentTokensProvider
+	provider := runner.taskTokensProvider
 	runner.mu.RUnlock()
 
 	current := usageTotalsFromUsage(usage, usageKnown)
-	subagentTokens := 0
+	taskTokens := 0
 	if provider != nil {
-		subagentTokens = provider.TotalSubagentTokens(sessionID)
+		taskTokens = provider.TotalTaskTokens(sessionID)
 	}
 
 	runner.mu.RLock()
@@ -548,9 +548,9 @@ func (runner *Runner) ContextStats(limitTokens int, _ string) ContextStats {
 	runner.mu.RUnlock()
 
 	return ContextStats{
-		UsedTokens:        current.used + subagentTokens,
+		UsedTokens:        current.used + taskTokens,
 		CacheTokens:       current.cache,
 		LimitTokens:       limitTokens,
-		SessionUsedTokens: sessionTotals.used + subagentTokens,
+		SessionUsedTokens: sessionTotals.used + taskTokens,
 	}
 }

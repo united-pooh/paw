@@ -141,23 +141,23 @@ func TestSystemTaskBlockEntryRendersAsCard(t *testing.T) {
 	}
 }
 
-func TestRenderSubagentTaskCardEmpty(t *testing.T) {
+func TestRenderTaskCardEmpty(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	model.subagents = &fakeSubagentController{}
-	if card := model.renderSubagentTaskCard(time.Time{}); card != "" {
+	model.taskController = &fakeTaskController{}
+	if card := model.renderTaskCard(time.Time{}); card != "" {
 		t.Fatalf("task card = %q, want empty for no running tasks", card)
 	}
 }
 
-func TestRenderSubagentTaskCardListsRunningOnly(t *testing.T) {
+func TestRenderTaskCardListsRunningOnly(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	model.subagents = &fakeSubagentController{tasks: []task.TaskSnapshot{
+	model.taskController = &fakeTaskController{tasks: []task.TaskSnapshot{
 		{ID: "running-1", Name: "二叶筑", Color: "#ff9900", Status: task.TaskRunning},
 		{ID: "done-1", Name: "已完成", Status: task.TaskCompleted},
 		{ID: "running-2", Status: task.TaskRunning},
 	}}
-	card := ansi.Strip(model.renderSubagentTaskCard(time.Time{}))
-	for _, want := range []string{"subagents · 2 运行中", "二叶筑", "task"} {
+	card := ansi.Strip(model.renderTaskCard(time.Time{}))
+	for _, want := range []string{"taskController · 2 运行中", "二叶筑", "task"} {
 		if !strings.Contains(card, want) {
 			t.Fatalf("task card = %q, want %q", card, want)
 		}
@@ -169,8 +169,8 @@ func TestRenderSubagentTaskCardListsRunningOnly(t *testing.T) {
 		t.Fatalf("task card = %q, should not show task id / session id", card)
 	}
 	for _, line := range strings.Split(card, "\n") {
-		if got := lipgloss.Width(line); got > subagentTaskCardMaxWidth {
-			t.Fatalf("task card line width = %d, want <= %d: %q", got, subagentTaskCardMaxWidth, line)
+		if got := lipgloss.Width(line); got > taskCardMaxWidth {
+			t.Fatalf("task card line width = %d, want <= %d: %q", got, taskCardMaxWidth, line)
 		}
 	}
 }
@@ -181,12 +181,12 @@ func TestSpinnerFrameIndexRotates(t *testing.T) {
 		t.Fatalf("spinnerFrameIndex(zero) = %d, want 0", spinnerFrameIndex(base))
 	}
 	seen := make(map[int]bool)
-	for i := 0; i < len(subagentSpinnerFrames)*4; i++ {
+	for i := 0; i < len(taskSpinnerFrames)*4; i++ {
 		frame := spinnerFrameIndex(base.Add(time.Duration(i) * 250 * time.Millisecond))
 		seen[frame] = true
 	}
-	if len(seen) != len(subagentSpinnerFrames) {
-		t.Fatalf("spinner frames seen = %d, want %d", len(seen), len(subagentSpinnerFrames))
+	if len(seen) != len(taskSpinnerFrames) {
+		t.Fatalf("spinner frames seen = %d, want %d", len(seen), len(taskSpinnerFrames))
 	}
 }
 
@@ -212,8 +212,8 @@ func TestPlaceRightCenteredOverlayPosition(t *testing.T) {
 	}
 }
 
-func TestRenderSubagentTaskCardRowHidesSessionID(t *testing.T) {
-	row := ansi.Strip(renderSubagentTaskCardRow(task.TaskSnapshot{
+func TestRenderTaskCardRowHidesSessionID(t *testing.T) {
+	row := ansi.Strip(renderTaskCardRow(task.TaskSnapshot{
 		ID:    "a6c81e94d94a5e40",
 		Name:  "八潮瑠唯",
 		Color: "#669988",
@@ -226,26 +226,26 @@ func TestRenderSubagentTaskCardRowHidesSessionID(t *testing.T) {
 	if strings.Contains(row, "a6c81e94") {
 		t.Fatalf("task row = %q, should not show task id / session id", row)
 	}
-	fallback := ansi.Strip(renderSubagentTaskCardRow(task.TaskSnapshot{ID: "x123", Status: task.TaskRunning}, "◐"))
+	fallback := ansi.Strip(renderTaskCardRow(task.TaskSnapshot{ID: "x123", Status: task.TaskRunning}, "◐"))
 	if !strings.Contains(fallback, "task") || strings.Contains(fallback, "x123") {
 		t.Fatalf("nameless task row = %q, want generic name without id", fallback)
 	}
 }
 
-func TestRunningSubagentTasksKeepsAnimationFrames(t *testing.T) {
+func TestRunningTasksKeepsAnimationFrames(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	model.subagents = &fakeSubagentController{}
+	model.taskController = &fakeTaskController{}
 	if model.needsUIAnimationFrames(time.Now()) {
 		t.Fatal("animation frames needed without running tasks")
 	}
-	model.subagents = &fakeSubagentController{tasks: []task.TaskSnapshot{
+	model.taskController = &fakeTaskController{tasks: []task.TaskSnapshot{
 		{ID: "run-1", Status: task.TaskRunning},
 		{ID: "done-1", Status: task.TaskCompleted},
 	}}
 	if !model.needsUIAnimationFrames(time.Now()) {
 		t.Fatal("animation frames not needed with a running task")
 	}
-	model.subagents = &fakeSubagentController{tasks: []task.TaskSnapshot{
+	model.taskController = &fakeTaskController{tasks: []task.TaskSnapshot{
 		{ID: "done-1", Status: task.TaskCompleted},
 	}}
 	if model.needsUIAnimationFrames(time.Now()) {

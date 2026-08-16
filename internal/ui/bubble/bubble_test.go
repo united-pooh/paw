@@ -158,7 +158,7 @@ func (c *fakeSettingsController) UpdateRuntime(cfg settings.Config) {
 	c.current = cfg
 }
 
-type fakeSubagentController struct {
+type fakeTaskController struct {
 	runResult      taskpkg.Result
 	runErr         error
 	launchTask     taskpkg.TaskSnapshot
@@ -168,7 +168,7 @@ type fakeSubagentController struct {
 	launchRequests []taskpkg.Request
 }
 
-func (c *fakeSubagentController) Run(ctx context.Context, req taskpkg.Request) (taskpkg.Result, error) {
+func (c *fakeTaskController) Run(ctx context.Context, req taskpkg.Request) (taskpkg.Result, error) {
 	c.runRequests = append(c.runRequests, req)
 	if c.runErr != nil {
 		return taskpkg.Result{}, c.runErr
@@ -176,7 +176,7 @@ func (c *fakeSubagentController) Run(ctx context.Context, req taskpkg.Request) (
 	return c.runResult, nil
 }
 
-func (c *fakeSubagentController) Launch(ctx context.Context, req taskpkg.Request) (taskpkg.TaskSnapshot, error) {
+func (c *fakeTaskController) Launch(ctx context.Context, req taskpkg.Request) (taskpkg.TaskSnapshot, error) {
 	c.launchRequests = append(c.launchRequests, req)
 	if c.launchErr != nil {
 		return taskpkg.TaskSnapshot{}, c.launchErr
@@ -209,7 +209,7 @@ func (c *fakeSubagentController) Launch(ctx context.Context, req taskpkg.Request
 	return task, nil
 }
 
-func (c *fakeSubagentController) ListTasks() []taskpkg.TaskSnapshot {
+func (c *fakeTaskController) ListTasks() []taskpkg.TaskSnapshot {
 	return append([]taskpkg.TaskSnapshot(nil), c.tasks...)
 }
 
@@ -453,7 +453,7 @@ func TestHelpComesFromCommandRegistry(t *testing.T) {
 		"/task [--fork|--empty] [--background|--sync] <prompt>",
 		"launch a task",
 		"/streamma <prompt>",
-		"run a prompt through StreamMA subagents",
+		"run a prompt through StreamMA taskController",
 		"/streamma-trace <prompt>",
 		"run StreamMA with live event trace",
 		"/tasks",
@@ -1656,12 +1656,12 @@ func TestToolResultEntryMatchesByToolUseID(t *testing.T) {
 	}
 }
 
-// TestSubagentWaitRendersRunningLineAndDisappears 验证 TaskWait 以
+// TestTaskWaitRendersRunningLineAndDisappears 验证 TaskWait 以
 // "worker <名字> 正在运行 Ns" 状态行展示：运行中每秒刷新秒数，工具完成后
 // 整行直接消失，不留下可折叠的 Tools 调用块。
-func TestSubagentWaitRendersRunningLineAndDisappears(t *testing.T) {
+func TestTaskWaitRendersRunningLineAndDisappears(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	model.subagents = &fakeSubagentController{tasks: []taskpkg.TaskSnapshot{
+	model.taskController = &fakeTaskController{tasks: []taskpkg.TaskSnapshot{
 		{ID: "task-light", Name: "高松灯", Status: taskpkg.TaskRunning},
 	}}
 	model.transcript = []transcriptEntry{{kind: entryUser, title: "you", body: "wait"}}
@@ -1670,7 +1670,7 @@ func TestSubagentWaitRendersRunningLineAndDisappears(t *testing.T) {
 	model = next.(appModel)
 
 	last := model.transcript[len(model.transcript)-1]
-	if !last.subagentWaitRunning || last.toolUseID != "wait_1" {
+	if !last.taskWaitRunning || last.toolUseID != "wait_1" {
 		t.Fatalf("last transcript entry = %#v, want TaskWait status line", last)
 	}
 	if got := last.body; got != "worker 高松灯 正在运行 0s" {
@@ -1702,7 +1702,7 @@ func TestSubagentWaitRendersRunningLineAndDisappears(t *testing.T) {
 	model = next.(appModel)
 
 	for _, entry := range model.transcript {
-		if entry.subagentWaitRunning {
+		if entry.taskWaitRunning {
 			t.Fatalf("TaskWait status line survived completion: %#v", entry)
 		}
 	}
@@ -1717,11 +1717,11 @@ func TestSubagentWaitRendersRunningLineAndDisappears(t *testing.T) {
 	}
 }
 
-// TestSubagentWaitErrorReplacesLineWithErrorEntry 验证 TaskWait 失败时
+// TestTaskWaitErrorReplacesLineWithErrorEntry 验证 TaskWait 失败时
 // 状态行消失并转为错误行，而不是折叠成工具调用块。
-func TestSubagentWaitErrorReplacesLineWithErrorEntry(t *testing.T) {
+func TestTaskWaitErrorReplacesLineWithErrorEntry(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	model.subagents = &fakeSubagentController{tasks: []taskpkg.TaskSnapshot{
+	model.taskController = &fakeTaskController{tasks: []taskpkg.TaskSnapshot{
 		{ID: "task-1", Name: "弦卷心", Status: taskpkg.TaskRunning},
 	}}
 
@@ -1744,28 +1744,28 @@ func TestSubagentWaitErrorReplacesLineWithErrorEntry(t *testing.T) {
 	}
 }
 
-// TestMarkRunningToolsErrorRemovesSubagentWaitLine 验证 turn 失败时悬挂的
+// TestMarkRunningToolsErrorRemovesTaskWaitLine 验证 turn 失败时悬挂的
 // TaskWait 状态行被移除。
-func TestMarkRunningToolsErrorRemovesSubagentWaitLine(t *testing.T) {
+func TestMarkRunningToolsErrorRemovesTaskWaitLine(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.transcript = []transcriptEntry{
 		{kind: entryUser, title: "you", body: "wait"},
 		{
-			kind:                entrySystem,
-			title:               "",
-			body:                "worker 高松灯 正在运行 5s",
-			subagentWaitRunning: true,
-			subagentWaitNames:   []string{"高松灯"},
-			toolUseID:           "wait_1",
-			toolName:            "TaskWait",
-			toolStatus:          "running",
-			toolStartedAt:       time.Now().Add(-5 * time.Second),
+			kind:            entrySystem,
+			title:           "",
+			body:            "worker 高松灯 正在运行 5s",
+			taskWaitRunning: true,
+			taskWaitNames:   []string{"高松灯"},
+			toolUseID:       "wait_1",
+			toolName:        "TaskWait",
+			toolStatus:      "running",
+			toolStartedAt:   time.Now().Add(-5 * time.Second),
 		},
 	}
 	model.markRunningToolsError(errors.New("stream error"))
 
 	for _, entry := range model.transcript {
-		if entry.subagentWaitRunning {
+		if entry.taskWaitRunning {
 			t.Fatalf("TaskWait status line survived turn failure: %#v", entry)
 		}
 	}
@@ -1819,7 +1819,7 @@ func TestAssistantToolUseJSONIsHiddenFromTranscript(t *testing.T) {
 	}
 }
 
-func TestSubagentToolCallBodySummarizesPrompt(t *testing.T) {
+func TestTaskToolCallBodySummarizesPrompt(t *testing.T) {
 	body := formatToolCallBody("Task", []byte(`{
 		"context_mode":"empty",
 		"description":"读取并分析项目结构",
@@ -2629,8 +2629,8 @@ func TestPersistentTerminalModeColorsEmptyInputPlaceholder(t *testing.T) {
 	}
 }
 
-// TestSubagentCommandUsesDefaultsAndTasksOpenActivity verifies /task defaults and /tasks Activity entry.
-func TestSubagentCommandUsesDefaultsAndTasksRender(t *testing.T) {
+// TestTaskCommandUsesDefaultsAndTasksOpenActivity verifies /task defaults and /tasks Activity entry.
+func TestTaskCommandUsesDefaultsAndTasksRender(t *testing.T) {
 	settingsController := &fakeSettingsController{current: settings.Config{
 		Task: settings.TaskConfig{
 			DefaultContextMode: settings.ContextModeFork,
@@ -2641,7 +2641,7 @@ func TestSubagentCommandUsesDefaultsAndTasksRender(t *testing.T) {
 			ContextMeterLocation: settings.MeterLocationInputAbove,
 		},
 	}}
-	subagents := &fakeSubagentController{
+	taskController := &fakeTaskController{
 		launchTask: taskpkg.TaskSnapshot{
 			ID:             "task-42",
 			Name:           "worker",
@@ -2652,7 +2652,7 @@ func TestSubagentCommandUsesDefaultsAndTasksRender(t *testing.T) {
 			TranscriptPath: "/tmp/task-42.jsonl",
 		},
 	}
-	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, settingsController, subagents, nil, newTerminalCursorAnchor())
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, settingsController, taskController, nil, newTerminalCursorAnchor())
 	model.ready = true
 	model.width = 80
 	model.height = 24
@@ -2662,10 +2662,10 @@ func TestSubagentCommandUsesDefaultsAndTasksRender(t *testing.T) {
 	if !handled || cmd != nil {
 		t.Fatalf("/task handled/cmd = %v/%v", handled, cmd)
 	}
-	if len(subagents.launchRequests) != 1 {
-		t.Fatalf("launch requests = %#v", subagents.launchRequests)
+	if len(taskController.launchRequests) != 1 {
+		t.Fatalf("launch requests = %#v", taskController.launchRequests)
 	}
-	req := subagents.launchRequests[0]
+	req := taskController.launchRequests[0]
 	if req.ContextMode != settings.ContextModeFork || req.RunMode != settings.RunModeBackground || req.ParentSessionID != "session-1" || req.Prompt != "summarize recent changes" {
 		t.Fatalf("launch request = %#v", req)
 	}
@@ -2680,18 +2680,18 @@ func TestSubagentCommandUsesDefaultsAndTasksRender(t *testing.T) {
 	if !handled || cmd != nil {
 		t.Fatalf("/tasks handled/cmd = %v/%v", handled, cmd)
 	}
-	if model.subagentPicker == nil || model.subagentPicker.tab != activityTabSubagents {
-		t.Fatalf("activity = %#v, want Tasks tab", model.subagentPicker)
+	if model.taskPicker == nil || model.taskPicker.tab != activityTabTasks {
+		t.Fatalf("activity = %#v, want Tasks tab", model.taskPicker)
 	}
 	if got := model.renderActivityBox(); !strings.Contains(got, "worker") {
 		t.Fatalf("Activity modal = %q, want worker", got)
 	}
 }
 
-// TestSyncSubagentCompletionStartsQueuedTurn verifies sync task completion drains queued chat work.
-func TestSyncSubagentCompletionStartsQueuedTurn(t *testing.T) {
+// TestSyncTaskCompletionStartsQueuedTurn verifies sync task completion drains queued chat work.
+func TestSyncTaskCompletionStartsQueuedTurn(t *testing.T) {
 	runner := &fakeRunner{}
-	subagents := &fakeSubagentController{
+	taskController := &fakeTaskController{
 		runResult: taskpkg.Result{
 			AgentID:        "agent-7",
 			SessionID:      "agent-7",
@@ -2701,7 +2701,7 @@ func TestSyncSubagentCompletionStartsQueuedTurn(t *testing.T) {
 			Content:        "task complete",
 		},
 	}
-	model := newModel(context.Background(), runner, "session-1", &fakeModelConfigController{}, nil, subagents, nil, newTerminalCursorAnchor())
+	model := newModel(context.Background(), runner, "session-1", &fakeModelConfigController{}, nil, taskController, nil, newTerminalCursorAnchor())
 
 	handled, cmd := model.handleCommand("/task --sync inspect this")
 	if !handled || cmd == nil {
@@ -2724,20 +2724,20 @@ func TestSyncSubagentCompletionStartsQueuedTurn(t *testing.T) {
 	if followCmd == nil {
 		t.Fatalf("sync task completion should start queued turn")
 	}
-	var subagentEntry transcriptEntry
-	foundSubagent := false
+	var taskEntry transcriptEntry
+	foundTask := false
 	for _, entry := range model.transcript {
 		if entry.title == "task" && strings.Contains(entry.body, "done  depth 0") {
-			subagentEntry = entry
-			foundSubagent = true
+			taskEntry = entry
+			foundTask = true
 			break
 		}
 	}
-	if !foundSubagent || !strings.Contains(subagentEntry.body, "/tmp/agent-7.jsonl") {
+	if !foundTask || !strings.Contains(taskEntry.body, "/tmp/agent-7.jsonl") {
 		t.Fatalf("task transcript = %#v", model.transcript)
 	}
-	if strings.Contains(subagentEntry.body, "id  ") {
-		t.Fatalf("task transcript = %q, should not show task id / session id", subagentEntry.body)
+	if strings.Contains(taskEntry.body, "id  ") {
+		t.Fatalf("task transcript = %q, should not show task id / session id", taskEntry.body)
 	}
 
 	finished, ok := followCmd().(turnFinishedMsg)
@@ -5316,7 +5316,7 @@ func TestRestoredSkillReferenceRebuildsTranscriptAndInputTokens(t *testing.T) {
 	}
 }
 
-func TestCtrlGSubagentPickerEnterPreviewsSelectedSubagent(t *testing.T) {
+func TestCtrlGtaskPickerEnterPreviewsSelectedtask(t *testing.T) {
 	transcriptPath := filepath.Join(t.TempDir(), "agent-2.jsonl")
 	transcript := strings.Join([]string{
 		`{"seq":0,"message":{"role":"user","content":"task prompt"},"created_at":"2026-06-28T00:00:00Z"}`,
@@ -5328,7 +5328,7 @@ func TestCtrlGSubagentPickerEnterPreviewsSelectedSubagent(t *testing.T) {
 
 	runner := &fakeRunner{}
 	model := newTestModel(runner)
-	model.subagents = &fakeSubagentController{tasks: []taskpkg.TaskSnapshot{
+	model.taskController = &fakeTaskController{tasks: []taskpkg.TaskSnapshot{
 		{ID: "agent-1", SessionID: "agent-1", ParentSessionID: "session-1", Status: taskpkg.TaskCompleted, Description: "first"},
 		{ID: "agent-2", SessionID: "agent-2", ParentSessionID: "session-1", Status: taskpkg.TaskRunning, Description: "second", TranscriptPath: transcriptPath},
 	}}
@@ -5337,8 +5337,8 @@ func TestCtrlGSubagentPickerEnterPreviewsSelectedSubagent(t *testing.T) {
 
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
 	model = next.(appModel)
-	if model.subagentPicker == nil {
-		t.Fatalf("subagentPicker = nil, want picker")
+	if model.taskPicker == nil {
+		t.Fatalf("taskPicker = nil, want picker")
 	}
 	if got := model.input.Value(); got != "main input" {
 		t.Fatalf("input value after ctrl+g = %q, want preserved", got)
@@ -5352,8 +5352,8 @@ func TestCtrlGSubagentPickerEnterPreviewsSelectedSubagent(t *testing.T) {
 
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
 	model = next.(appModel)
-	if model.subagentPicker.selectedIndex != 1 {
-		t.Fatalf("selectedIndex = %d, want second task", model.subagentPicker.selectedIndex)
+	if model.taskPicker.selectedIndex != 1 {
+		t.Fatalf("selectedIndex = %d, want second task", model.taskPicker.selectedIndex)
 	}
 
 	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -5367,8 +5367,8 @@ func TestCtrlGSubagentPickerEnterPreviewsSelectedSubagent(t *testing.T) {
 	if model.sessionID != "session-1" {
 		t.Fatalf("sessionID = %q, want main session", model.sessionID)
 	}
-	if model.subagentPreview == nil || model.subagentPreview.parentSessionID != "session-1" {
-		t.Fatalf("subagentPreview = %#v, want parent session-1", model.subagentPreview)
+	if model.taskPreview == nil || model.taskPreview.parentSessionID != "session-1" {
+		t.Fatalf("taskPreview = %#v, want parent session-1", model.taskPreview)
 	}
 	if got := runner.loadHistoryCalls; len(got) != 0 {
 		t.Fatalf("loadHistoryCalls = %#v, want no runner history switch", got)
@@ -5389,32 +5389,32 @@ func TestCtrlGSubagentPickerEnterPreviewsSelectedSubagent(t *testing.T) {
 		t.Fatalf("main submit while previewing returned nil cmd")
 	}
 	_ = cmd()
-	if model.subagentPreview != nil {
-		t.Fatalf("subagentPreview = %#v, want nil after main submit", model.subagentPreview)
+	if model.taskPreview != nil {
+		t.Fatalf("taskPreview = %#v, want nil after main submit", model.taskPreview)
 	}
 	if got := runner.inputs; !equalStrings(got, []string{"main input"}) {
 		t.Fatalf("runner.inputs = %#v, want main input", got)
 	}
 }
 
-func TestSubagentPickerEscAndCtrlGCloseSelection(t *testing.T) {
+func TestTaskPickerEscAndCtrlGCloseSelection(t *testing.T) {
 	for _, key := range []tea.KeyType{tea.KeyEsc, tea.KeyCtrlG} {
 		model := newTestModel(&fakeRunner{})
-		model.subagents = &fakeSubagentController{tasks: []taskpkg.TaskSnapshot{
+		model.taskController = &fakeTaskController{tasks: []taskpkg.TaskSnapshot{
 			{ID: "agent-1", SessionID: "agent-1", ParentSessionID: "session-1", Status: taskpkg.TaskCompleted},
 		}}
 		model.input.SetValue("main input")
 
 		next, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
 		model = next.(appModel)
-		if model.subagentPicker == nil {
-			t.Fatalf("key %v: subagentPicker = nil after ctrl+g", key)
+		if model.taskPicker == nil {
+			t.Fatalf("key %v: taskPicker = nil after ctrl+g", key)
 		}
 
 		next, _ = model.Update(tea.KeyMsg{Type: key})
 		model = next.(appModel)
-		if model.subagentPicker != nil {
-			t.Fatalf("key %v: subagentPicker = %#v, want nil", key, model.subagentPicker)
+		if model.taskPicker != nil {
+			t.Fatalf("key %v: taskPicker = %#v, want nil", key, model.taskPicker)
 		}
 		if got := model.input.Value(); got != "main input" {
 			t.Fatalf("key %v: input value = %q, want preserved", key, got)
@@ -5425,13 +5425,13 @@ func TestSubagentPickerEscAndCtrlGCloseSelection(t *testing.T) {
 	}
 }
 
-func TestEscReturnsFromSubagentPreviewToMainTranscript(t *testing.T) {
+func TestEscReturnsFromtaskPreviewToMainTranscript(t *testing.T) {
 	mainTranscript := []transcriptEntry{{kind: entryUser, title: "you", body: "main message"}}
 	model := newTestModel(&fakeRunner{})
 	model.sessionID = "session-1"
 	model.viewport.Width = 80
 	model.viewport.Height = 2
-	model.subagentPreview = &subagentTranscriptPreview{
+	model.taskPreview = &taskTranscriptPreview{
 		task:             taskpkg.TaskSnapshot{ID: "agent-2", SessionID: "agent-2"},
 		parentSessionID:  "session-1",
 		parentTranscript: copyTranscriptEntries(mainTranscript),
@@ -5445,8 +5445,8 @@ func TestEscReturnsFromSubagentPreviewToMainTranscript(t *testing.T) {
 	if model.sessionID != "session-1" {
 		t.Fatalf("sessionID = %q, want session-1", model.sessionID)
 	}
-	if model.subagentPreview != nil {
-		t.Fatalf("subagentPreview = %#v, want nil", model.subagentPreview)
+	if model.taskPreview != nil {
+		t.Fatalf("taskPreview = %#v, want nil", model.taskPreview)
 	}
 	if len(model.transcript) != 1 || model.transcript[0].body != "main message" {
 		t.Fatalf("transcript = %#v, want restored main transcript", model.transcript)
@@ -5459,15 +5459,15 @@ func TestEscReturnsFromSubagentPreviewToMainTranscript(t *testing.T) {
 	}
 }
 
-// TestCtrlGTogglesSubagentPreviewClosed 验证 task preview 中按 ctrl+g
+// TestCtrlGTogglestaskPreviewClosed 验证 task preview 中按 ctrl+g
 // 直接收起面板并返回主 transcript（ctrl+g 全局 toggle 语义）。
-func TestCtrlGTogglesSubagentPreviewClosed(t *testing.T) {
+func TestCtrlGTogglestaskPreviewClosed(t *testing.T) {
 	mainTranscript := []transcriptEntry{{kind: entryUser, title: "you", body: "main message"}}
 	model := newTestModel(&fakeRunner{})
 	model.sessionID = "session-1"
 	model.viewport.Width = 80
 	model.viewport.Height = 2
-	model.subagentPreview = &subagentTranscriptPreview{
+	model.taskPreview = &taskTranscriptPreview{
 		task:             taskpkg.TaskSnapshot{ID: "agent-2", SessionID: "agent-2"},
 		parentSessionID:  "session-1",
 		parentTranscript: copyTranscriptEntries(mainTranscript),
@@ -5481,11 +5481,11 @@ func TestCtrlGTogglesSubagentPreviewClosed(t *testing.T) {
 	if model.sessionID != "session-1" {
 		t.Fatalf("sessionID = %q, want session-1", model.sessionID)
 	}
-	if model.subagentPreview != nil {
-		t.Fatalf("subagentPreview = %#v, want nil after ctrl+g toggle", model.subagentPreview)
+	if model.taskPreview != nil {
+		t.Fatalf("taskPreview = %#v, want nil after ctrl+g toggle", model.taskPreview)
 	}
-	if model.subagentPicker != nil {
-		t.Fatalf("subagentPicker = %#v, want nil after ctrl+g toggle", model.subagentPicker)
+	if model.taskPicker != nil {
+		t.Fatalf("taskPicker = %#v, want nil after ctrl+g toggle", model.taskPicker)
 	}
 	if len(model.transcript) != 1 || model.transcript[0].body != "main message" {
 		t.Fatalf("transcript = %#v, want restored main transcript", model.transcript)
@@ -6717,26 +6717,26 @@ func TestRenderDockStatusLine_ContainsModelTokenAndFree(t *testing.T) {
 
 // TestRenderTasksCard_ShowsRunningAndDone 验证 Tasks 卡片显示 running 和 completed 任务。
 func TestRenderTasksCard_ShowsRunningAndDone(t *testing.T) {
-	ctrl := &fakeSubagentController{
+	ctrl := &fakeTaskController{
 		tasks: []taskpkg.TaskSnapshot{
 			{ID: "worker-1", Name: "worker-1", ParentSessionID: "session-1", Status: taskpkg.TaskRunning},
 			{ID: "worker-2", Name: "worker-2", ParentSessionID: "session-1", Status: taskpkg.TaskCompleted},
 		},
 	}
 	model := newTestModel(&fakeRunner{})
-	model.subagents = ctrl
-	result := model.renderSubagentsCardContent(30)
+	model.taskController = ctrl
+	result := model.renderTasksCardContent(30)
 	if !strings.Contains(result, "worker-1") {
-		t.Errorf("subagents card = %q, want worker-1", result)
+		t.Errorf("taskController card = %q, want worker-1", result)
 	}
 	if !strings.Contains(result, "worker-2") {
-		t.Errorf("subagents card = %q, want worker-2", result)
+		t.Errorf("taskController card = %q, want worker-2", result)
 	}
 }
 
 func TestRenderTasksCard_UsesPersonaColorForName(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	model.subagents = &fakeSubagentController{tasks: []taskpkg.TaskSnapshot{
+	model.taskController = &fakeTaskController{tasks: []taskpkg.TaskSnapshot{
 		{
 			ID:              "worker-1",
 			Name:            "八潮瑠唯",
@@ -6746,27 +6746,27 @@ func TestRenderTasksCard_UsesPersonaColorForName(t *testing.T) {
 		},
 	}}
 
-	result := model.renderSubagentsCardContent(40)
+	result := model.renderTasksCardContent(40)
 	expectedName := lipgloss.NewStyle().Foreground(lipgloss.Color("#669988")).Render("八潮瑠唯")
 	if !strings.Contains(result, expectedName) {
-		t.Fatalf("subagents card = %q, want persona-colored name %q", result, expectedName)
+		t.Fatalf("taskController card = %q, want persona-colored name %q", result, expectedName)
 	}
 }
 
 func TestRenderTasksCard_HidesTasksFromOtherSessions(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	model.subagents = &fakeSubagentController{tasks: []taskpkg.TaskSnapshot{
+	model.taskController = &fakeTaskController{tasks: []taskpkg.TaskSnapshot{
 		{ID: "old-worker", ParentSessionID: "previous-session", Status: taskpkg.TaskCompleted},
 		{ID: "legacy-worker", Status: taskpkg.TaskCompleted},
 	}}
 
-	result := model.renderSubagentsCardContent(30)
+	result := model.renderTasksCardContent(30)
 	if !strings.Contains(result, "none") {
-		t.Fatalf("subagents card = %q, want empty state for fresh session", result)
+		t.Fatalf("taskController card = %q, want empty state for fresh session", result)
 	}
 	for _, hidden := range []string{"old-worker", "legacy-worker"} {
 		if strings.Contains(result, hidden) {
-			t.Fatalf("subagents card = %q, should not contain %q", result, hidden)
+			t.Fatalf("taskController card = %q, should not contain %q", result, hidden)
 		}
 	}
 }
@@ -6781,15 +6781,15 @@ func TestRenderTasksCardContent_ClampsToHeight(t *testing.T) {
 		})
 	}
 	model := newTestModel(&fakeRunner{})
-	model.subagents = &fakeSubagentController{tasks: tasks}
+	model.taskController = &fakeTaskController{tasks: tasks}
 
-	result := ansi.Strip(model.renderSubagentsCardContentHeight(30, 5))
+	result := ansi.Strip(model.renderTasksCardContentHeight(30, 5))
 	lines := strings.Split(result, "\n")
 	if len(lines) != 5 {
-		t.Fatalf("subagents lines = %d, want 5\n%s", len(lines), result)
+		t.Fatalf("taskController lines = %d, want 5\n%s", len(lines), result)
 	}
 	if !strings.Contains(result, "more") {
-		t.Fatalf("subagents card = %q, want overflow summary", result)
+		t.Fatalf("taskController card = %q, want overflow summary", result)
 	}
 }
 
@@ -6825,8 +6825,8 @@ func TestFullLayout_StatusDockVisibleWithoutSidebar(t *testing.T) {
 	if !strings.Contains(view, "0 / 131k") {
 		t.Errorf("View() = %q, want bottom token status", view)
 	}
-	if strings.Contains(view, "subagents") {
-		t.Errorf("View() = %q, should not contain persistent subagents sidebar", view)
+	if strings.Contains(view, "taskController") {
+		t.Errorf("View() = %q, should not contain persistent taskController sidebar", view)
 	}
 }
 
@@ -7016,62 +7016,62 @@ func TestWorktreeRefreshDoesNotStartIdleRedrawLoop(t *testing.T) {
 	}
 }
 
-func TestSubagentTaskUpdateMsgRefreshesActivityAndPreview(t *testing.T) {
-	controller := &fakeSubagentController{tasks: []taskpkg.TaskSnapshot{{
+func TestTaskTaskUpdateMsgRefreshesActivityAndPreview(t *testing.T) {
+	controller := &fakeTaskController{tasks: []taskpkg.TaskSnapshot{{
 		ID: "task-1", SessionID: "task-1", ParentSessionID: "session-1", Name: "worker", Status: taskpkg.TaskRunning,
 	}}}
 	model := newTestModel(&fakeRunner{})
-	model.subagents = controller
-	model.openActivity(activityTabSubagents)
-	model.subagentPreview = &subagentTranscriptPreview{
+	model.taskController = controller
+	model.openActivity(activityTabTasks)
+	model.taskPreview = &taskTranscriptPreview{
 		task:      controller.tasks[0],
 		sessionID: "task-1",
 	}
-	model.subagentPreview.liveContent = "partial result"
-	model.subagentTaskUpdates = make(chan struct{})
+	model.taskPreview.liveContent = "partial result"
+	model.taskUpdates = make(chan struct{})
 
 	controller.tasks[0].Status = taskpkg.TaskCompleted
 	controller.tasks[0].Content = "final result"
 	controller.tasks[0].FinishedAt = ptrTime(time.Now())
 
-	next, cmd := model.Update(subagentTaskUpdateMsg{})
+	next, cmd := model.Update(taskUpdateMsg{})
 	model = next.(appModel)
 	if cmd == nil {
 		t.Fatal("task update should re-arm the subscription wait command")
 	}
-	if len(model.subagentPicker.tasks) != 1 || model.subagentPicker.tasks[0].Status != taskpkg.TaskCompleted {
-		t.Fatalf("activity tasks = %#v, want completed task", model.subagentPicker.tasks)
+	if len(model.taskPicker.tasks) != 1 || model.taskPicker.tasks[0].Status != taskpkg.TaskCompleted {
+		t.Fatalf("activity tasks = %#v, want completed task", model.taskPicker.tasks)
 	}
-	if model.subagentPreview.task.Status != taskpkg.TaskCompleted || model.subagentPreview.liveContent != "" {
-		t.Fatalf("preview = %#v, want refreshed terminal task without live content", model.subagentPreview)
+	if model.taskPreview.task.Status != taskpkg.TaskCompleted || model.taskPreview.liveContent != "" {
+		t.Fatalf("preview = %#v, want refreshed terminal task without live content", model.taskPreview)
 	}
-	card := ansi.Strip(model.renderSubagentTaskCard(time.Now()))
+	card := ansi.Strip(model.renderTaskCard(time.Now()))
 	if strings.Contains(card, "running") || strings.Contains(card, "worker") {
 		t.Fatalf("sidebar card = %q, want no running worker after completion", card)
 	}
 }
 
-func TestSubagentTaskUpdateMsgClosedStopsRearming(t *testing.T) {
+func TestTaskTaskUpdateMsgClosedStopsRearming(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	updates := make(chan struct{})
-	model.subagentTaskUpdates = updates
+	model.taskUpdates = updates
 
-	next, cmd := model.Update(subagentTaskUpdateMsg{closed: true})
+	next, cmd := model.Update(taskUpdateMsg{closed: true})
 	model = next.(appModel)
 	if cmd != nil {
 		t.Fatal("closed task update should not re-arm wait command")
 	}
-	if model.subagentTaskUpdates != nil {
-		t.Fatalf("subagentTaskUpdates = %v, want nil after close", model.subagentTaskUpdates)
+	if model.taskUpdates != nil {
+		t.Fatalf("taskUpdates = %v, want nil after close", model.taskUpdates)
 	}
 }
 
-func TestSubagentTaskUpdateMsgRefreshesToolEntryImmediately(t *testing.T) {
-	controller := &fakeSubagentController{tasks: []taskpkg.TaskSnapshot{{
+func TestTaskTaskUpdateMsgRefreshesToolEntryImmediately(t *testing.T) {
+	controller := &fakeTaskController{tasks: []taskpkg.TaskSnapshot{{
 		ID: "task-1", SessionID: "task-1", ParentSessionID: "session-1", Name: "worker", Status: taskpkg.TaskRunning,
 	}}}
 	model := newTestModel(&fakeRunner{})
-	model.subagents = controller
+	model.taskController = controller
 	model.transcript = []transcriptEntry{{
 		kind:       entryTool,
 		toolName:   "Task",
@@ -7081,7 +7081,7 @@ func TestSubagentTaskUpdateMsgRefreshesToolEntryImmediately(t *testing.T) {
 
 	controller.tasks[0].Status = taskpkg.TaskCompleted
 	controller.tasks[0].Content = "done"
-	next, _ := model.Update(subagentTaskUpdateMsg{})
+	next, _ := model.Update(taskUpdateMsg{})
 	model = next.(appModel)
 	if model.transcript[0].toolStatus != "ok" {
 		t.Fatalf("tool status = %q, want successful completed task result", model.transcript[0].toolStatus)

@@ -187,7 +187,7 @@ func (s *JSONLStore) CreateRoot(ctx context.Context, request CreateRootRequest) 
 	meta := Meta{
 		SessionID: sessionID,
 		CreatedAt: s.nowFn().UTC(),
-		Task:  request.Task,
+		Task:      request.Task,
 	}
 	if err := s.writeMeta(ctx, meta); err != nil {
 		return Meta{}, err
@@ -239,7 +239,7 @@ func (s *JSONLStore) Fork(ctx context.Context, request ForkRequest) (Meta, error
 		ParentSessionID: parentID,
 		ForkFromSeq:     forkFromSeq,
 		CreatedAt:       s.nowFn().UTC(),
-		Task:        request.Task,
+		Task:            request.Task,
 	}
 	if err := s.writeMeta(ctx, meta); err != nil {
 		return Meta{}, err
@@ -1350,7 +1350,7 @@ func (s *JSONLStore) ListSessions(ctx context.Context) ([]SessionSummary, error)
 			if err != nil {
 				continue // 跳过读取失败的会话
 			}
-			if meta.Task || s.isLegacySubagentSession(sessionID) {
+			if meta.Task || s.isLegacytaskSession(sessionID) {
 				continue
 			}
 			seen[sessionID] = true
@@ -1407,7 +1407,7 @@ func (s *JSONLStore) sessionRoots() []string {
 	return roots
 }
 
-func (s *JSONLStore) isLegacySubagentSession(sessionID string) bool {
+func (s *JSONLStore) isLegacytaskSession(sessionID string) bool {
 	for _, root := range []string{s.baseDir, s.legacyBaseDir} {
 		if root == "" {
 			continue

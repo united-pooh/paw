@@ -24,7 +24,7 @@ import (
 )
 
 // newModel 创建完整的 TUI 状态模型，并初始化输入框、滚动区和系统消息。
-func newModel(ctx context.Context, runner Runner, sessionID string, controller ModelConfigController, settingsController SettingsController, subagentController TaskController, sessionStore SessionStore, anchor *terminalCursorAnchor) appModel {
+func newModel(ctx context.Context, runner Runner, sessionID string, controller ModelConfigController, settingsController SettingsController, taskController TaskController, sessionStore SessionStore, anchor *terminalCursorAnchor) appModel {
 	now := time.Now()
 	input := textarea.New()
 	input.Prompt = ""
@@ -78,7 +78,7 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 		sessionID:                 sessionID,
 		modelConfig:               controller,
 		settingsConfig:            settingsController,
-		subagents:                 subagentController,
+		taskController:            taskController,
 		sessionStore:              sessionStore,
 		commandRegistry:           NewCommandRegistry(),
 		skillRegistry:             skill.NewRegistry(skill.DefaultRoots(skillRoot)),
@@ -120,8 +120,8 @@ func (m appModel) Init() tea.Cmd {
 	if m.todoBroker != nil {
 		cmds = append(cmds, waitTodoBrokerEventCmd(m.ctx, m.todoBroker))
 	}
-	if m.subagentTaskUpdates != nil {
-		cmds = append(cmds, waitSubagentTaskUpdateCmd(m.ctx, m.subagentTaskUpdates))
+	if m.taskUpdates != nil {
+		cmds = append(cmds, waitTaskUpdateCmd(m.ctx, m.taskUpdates))
 	}
 	if m.worktreeCWD != "" {
 		cmds = append(cmds, worktreeRefreshCmd(m.ctx, m.worktreeCWD, m.worktreeReader))
@@ -168,16 +168,16 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resizeStreamingBuffers()
 		m.refreshViewportWithBottomState(wasAtBottom)
 		return m, nil
-	case subagentTaskUpdateMsg:
+	case taskUpdateMsg:
 		m.refreshActivityTasks()
-		m.refreshSubagentPreviewFromTasks()
-		m.refreshSubagentToolEntriesFromTasks()
+		m.refreshTaskPreviewFromTasks()
+		m.refreshTaskToolEntriesFromTasks()
 		m.refreshViewport()
-		if m.subagentTaskUpdates != nil && !msg.closed {
-			return m, waitSubagentTaskUpdateCmd(m.ctx, m.subagentTaskUpdates)
+		if m.taskUpdates != nil && !msg.closed {
+			return m, waitTaskUpdateCmd(m.ctx, m.taskUpdates)
 		}
 		if msg.closed {
-			m.subagentTaskUpdates = nil
+			m.taskUpdates = nil
 		}
 		return m, nil
 	case cursorFrameMsg:
@@ -417,7 +417,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			body:  shellResultBody(msg),
 		})
 		cmds = append(cmds, m.input.Focus())
-	case subagentFinishedMsg:
+	case taskFinishedMsg:
 		wasWorking := m.isAgentWorking()
 		expectedCancel := m.modelCancelRequested && errors.Is(msg.err, context.Canceled)
 		m.finishModelWork()
@@ -446,7 +446,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				kind:  entrySystem,
 				title: agentTitle,
 				color: agentColor,
-				body:  renderSubagentResult(msg.result),
+				body:  rendertaskResult(msg.result),
 			})
 		}
 		cmds = append(cmds, m.input.Focus())
@@ -469,17 +469,17 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clearInputTokens()
 		if msg.err != nil {
 			title := "sessions"
-			if msg.source == sessionRestoreSubagentEnter {
+			if msg.source == sessionRestoreTaskEnter {
 				title = "task"
-				m.subagentPicker = nil
+				m.taskPicker = nil
 			} else {
 				m.sessionPicker = nil
 			}
 			m.addEntry(transcriptEntry{kind: entryError, title: title, body: msg.err.Error()})
 		} else {
 			switch msg.source {
-			case sessionRestoreSubagentEnter:
-				m.applySubagentPreviewRestore(msg)
+			case sessionRestoreTaskEnter:
+				m.applyTaskPreviewRestore(msg)
 			default:
 				m.applySessionPickerRestore(msg)
 			}
@@ -615,8 +615,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.sessionPicker != nil {
 			return m.handleSessionPickerKey(msg)
 		}
-		if m.subagentPicker != nil {
-			return m.handleSubagentPickerKey(msg)
+		if m.taskPicker != nil {
+			return m.handleTaskPickerKey(msg)
 		}
 		if m.toolInspectActive {
 			return m.handleToolInspectKey(msg)
@@ -643,13 +643,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.String() == "ctrl+g" {
 			// ctrl+g 是 task 面板的全局 toggle：面板打开时由
-			// handleSubagentPickerKey 拦截并关闭；task preview 中按下
+			// handleTaskPickerKey 拦截并关闭；task preview 中按下
 			// 视为收起面板，直接返回主 transcript；其余状态打开面板。
-			if m.subagentPreview != nil {
-				m.restoreMainTranscriptFromSubagentPreview()
+			if m.taskPreview != nil {
+				m.restoreMainTranscriptFromTaskPreview()
 				return m, m.input.Focus()
 			}
-			return m.openSubagentPicker()
+			return m.openTaskPicker()
 		}
 		// 补全激活时：只拦截导航键和确认键，其余按键正常透传给输入框
 		if m.completion != nil {
@@ -721,8 +721,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "esc":
-				if m.subagentPreview != nil {
-					m.restoreMainTranscriptFromSubagentPreview()
+				if m.taskPreview != nil {
+					m.restoreMainTranscriptFromTaskPreview()
 					return m, m.input.Focus()
 				}
 				m.transcriptKeyScrollActive = false
@@ -734,8 +734,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "esc":
-			if m.subagentPreview != nil {
-				m.restoreMainTranscriptFromSubagentPreview()
+			if m.taskPreview != nil {
+				m.restoreMainTranscriptFromTaskPreview()
 				return m, m.input.Focus()
 			}
 		case "ctrl+c":

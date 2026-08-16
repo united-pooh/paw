@@ -25,10 +25,10 @@ func (r *escCoalescingReader) peekOne(buf []byte) (int, bool) {
 	// 只查询可读字节数，不消耗数据（lpBuffer=nil, lpBytesRead=nil）。
 	var avail uint32
 	r1, _, _ := procPeekNamedPipe.Call(
-		r.File.Fd(), // hNamedPipe
-		0,           // lpBuffer
-		0,           // nBufferSize
-		0,           // lpBytesRead
+		r.File.Fd(),                     // hNamedPipe
+		0,                               // lpBuffer
+		0,                               // nBufferSize
+		0,                               // lpBytesRead
 		uintptr(unsafe.Pointer(&avail)), // lpTotalBytesAvail
 		0,                               // lpBytesLeftThisMessage
 	)

@@ -30,7 +30,7 @@ const (
 	streamMAReviewSnapshotMaxBytes      = 8192
 )
 
-type StreamMASubagentRequest struct {
+type StreamMATaskRequest struct {
 	RunID           string
 	SessionID       string
 	SessionKey      string
@@ -49,7 +49,7 @@ type StreamMASubagentRequest struct {
 	DisableTools    bool
 }
 
-type StreamMASubagentStream struct {
+type StreamMATaskStream struct {
 	Events         <-chan model.StreamEvent
 	AgentName      string
 	AgentColor     string
@@ -58,17 +58,17 @@ type StreamMASubagentStream struct {
 	OutputPath     string
 }
 
-type StreamMASubagentRunner interface {
-	StreamTask(ctx context.Context, req StreamMASubagentRequest) (StreamMASubagentStream, error)
+type StreamMATaskRunner interface {
+	StreamTask(ctx context.Context, req StreamMATaskRequest) (StreamMATaskStream, error)
 }
 
-func (runner *Runner) SetStreamMATaskRunner(subagents StreamMASubagentRunner) {
+func (runner *Runner) SetStreamMATaskRunner(taskController StreamMATaskRunner) {
 	if runner == nil {
 		return
 	}
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
-	runner.streamMASubagents = subagents
+	runner.streamMATasks = taskController
 }
 
 func (runner *Runner) SetStreamMAEnabled(enabled bool) {
@@ -86,7 +86,7 @@ func (runner *Runner) SetTaskTokensProvider(p TaskTokensProvider) {
 	}
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
-	runner.subagentTokensProvider = p
+	runner.taskTokensProvider = p
 }
 
 func (runner *Runner) SetTurnOwnedTaskCleaner(cleaner TurnOwnedTaskCleaner) {
@@ -213,8 +213,8 @@ func (runner *Runner) runStreamMATurn(ctx context.Context, input string, invocat
 		}
 		return message.Message{}, fmt.Errorf("usage: /streamma <task>")
 	}
-	subagents := runner.currentStreamMASubagents()
-	if subagents == nil {
+	taskController := runner.currentStreamMAtasks()
+	if taskController == nil {
 		return message.Message{}, fmt.Errorf("streamma requires task backend")
 	}
 
@@ -268,8 +268,8 @@ func (runner *Runner) runStreamMATurn(ctx context.Context, input string, invocat
 	if graphKind == streamMAGraphReview {
 		problem = strings.TrimRight(problem, "\n") + "\n\n" + streamMAReviewWorkspaceSnapshot(runner.workRoot)
 	}
-	subagentModel := newStreamMASubagentModel(
-		subagents,
+	taskModel := newStreamMAtaskModel(
+		taskController,
 		runner.notifySystem,
 		invocation.Trace,
 		toolsPolicy,
@@ -281,7 +281,7 @@ func (runner *Runner) runStreamMATurn(ctx context.Context, input string, invocat
 	result, err := streamma.RunGraphWithAgentEventSink(
 		ctx,
 		spec,
-		subagentModel,
+		taskModel,
 		problem,
 		mergeStreamMASinks(runner.streamMATraceSink(invocation.Trace), runner.streamMATokenTraceSink(trace.stageID)),
 	)
@@ -299,9 +299,9 @@ func (runner *Runner) runStreamMATurn(ctx context.Context, input string, invocat
 	}
 	var logger streamma.RunLogger
 	if decision.GraphSelectionEvidence != nil {
-		logger = streamma.BuildRunLogger(spec, result.Events, subagentModel.runLoggerSpans(), *decision.GraphSelectionEvidence)
+		logger = streamma.BuildRunLogger(spec, result.Events, taskModel.runLoggerSpans(), *decision.GraphSelectionEvidence)
 	} else {
-		logger = streamma.BuildRunLogger(spec, result.Events, subagentModel.runLoggerSpans())
+		logger = streamma.BuildRunLogger(spec, result.Events, taskModel.runLoggerSpans())
 	}
 	if writeErr := runner.writeStreamMARunLogger(result.RunID, logger); writeErr != nil && invocation.Trace {
 		runner.notifySystem("streamma-trace", "runlogger write failed: "+writeErr.Error())
@@ -469,13 +469,13 @@ func formatStreamMATraceEvent(started time.Time, event streamma.Event) string {
 	return strings.Join(parts, " ")
 }
 
-func (runner *Runner) currentStreamMASubagents() StreamMASubagentRunner {
+func (runner *Runner) currentStreamMAtasks() StreamMATaskRunner {
 	if runner == nil {
 		return nil
 	}
 	runner.mu.RLock()
 	defer runner.mu.RUnlock()
-	return runner.streamMASubagents
+	return runner.streamMATasks
 }
 
 func (runner *Runner) currentStreamMAEnabled() bool {
@@ -930,15 +930,15 @@ func (runner *Runner) notifySystem(title, body string) {
 	_ = notifier.OnSystemMessage(ui.SystemEvent{Title: title, Body: body})
 }
 
-type streamMASubagentModel struct {
-	subagents    StreamMASubagentRunner
-	notify       func(string, string)
-	trace        bool
-	tools        streamMAToolsPolicy
-	skillContext string
-	tokenTracer  *tokentracer.Tracer
-	traceStageID string
-	modelLabels  func() (string, string)
+type streamMATaskModel struct {
+	taskController StreamMATaskRunner
+	notify         func(string, string)
+	trace          bool
+	tools          streamMAToolsPolicy
+	skillContext   string
+	tokenTracer    *tokentracer.Tracer
+	traceStageID   string
+	modelLabels    func() (string, string)
 
 	mu       sync.Mutex
 	sessions map[string]string
@@ -947,21 +947,21 @@ type streamMASubagentModel struct {
 
 type streamMAToolsPolicy func(agentID string) bool
 
-func newStreamMASubagentModel(subagents StreamMASubagentRunner, notify func(string, string), trace bool, tools streamMAToolsPolicy, skillContext string, tokenTracer *tokentracer.Tracer, traceStageID string, modelLabels func() (string, string)) *streamMASubagentModel {
-	return &streamMASubagentModel{
-		subagents:    subagents,
-		notify:       notify,
-		trace:        trace,
-		tools:        tools,
-		skillContext: strings.TrimSpace(skillContext),
-		tokenTracer:  tokenTracer,
-		traceStageID: strings.TrimSpace(traceStageID),
-		modelLabels:  modelLabels,
-		sessions:     map[string]string{},
+func newStreamMAtaskModel(taskController StreamMATaskRunner, notify func(string, string), trace bool, tools streamMAToolsPolicy, skillContext string, tokenTracer *tokentracer.Tracer, traceStageID string, modelLabels func() (string, string)) *streamMATaskModel {
+	return &streamMATaskModel{
+		taskController: taskController,
+		notify:         notify,
+		trace:          trace,
+		tools:          tools,
+		skillContext:   strings.TrimSpace(skillContext),
+		tokenTracer:    tokenTracer,
+		traceStageID:   strings.TrimSpace(traceStageID),
+		modelLabels:    modelLabels,
+		sessions:       map[string]string{},
 	}
 }
 
-func (m *streamMASubagentModel) toolsEnabled(agentID string) bool {
+func (m *streamMATaskModel) toolsEnabled(agentID string) bool {
 	if m == nil || m.tools == nil {
 		return false
 	}
@@ -985,8 +985,8 @@ func streamMAToolsPolicyForGraph(kind streamMAGraphKind) streamMAToolsPolicy {
 	}
 }
 
-func (m *streamMASubagentModel) StreamAgent(ctx context.Context, invocation streamma.AgentInvocation) (<-chan model.StreamEvent, error) {
-	if m == nil || m.subagents == nil {
+func (m *streamMATaskModel) StreamAgent(ctx context.Context, invocation streamma.AgentInvocation) (<-chan model.StreamEvent, error) {
+	if m == nil || m.taskController == nil {
 		return nil, fmt.Errorf("streamma task backend is nil")
 	}
 	agentID := strings.TrimSpace(invocation.AgentID)
@@ -1006,7 +1006,7 @@ func (m *streamMASubagentModel) StreamAgent(ctx context.Context, invocation stre
 		systemPrompt = strings.TrimRight(systemPrompt, "\n") + "\n\nSelected skill instructions for this StreamMA worker:\n" + m.skillContext + "\n"
 	}
 	startedAt := time.Now().UTC()
-	stream, err := m.subagents.StreamTask(ctx, StreamMASubagentRequest{
+	stream, err := m.taskController.StreamTask(ctx, StreamMATaskRequest{
 		RunID:           invocation.RunID,
 		SessionID:       sessionID,
 		SessionKey:      sessionKey,
@@ -1052,13 +1052,13 @@ func (m *streamMASubagentModel) StreamAgent(ctx context.Context, invocation stre
 	return m.wrapStream(ctx, invocation, stream, spanIndex), nil
 }
 
-func (m *streamMASubagentModel) sessionID(sessionKey string) string {
+func (m *streamMATaskModel) sessionID(sessionKey string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.sessions[sessionKey]
 }
 
-func (m *streamMASubagentModel) rememberSession(sessionKey, sessionID string) string {
+func (m *streamMATaskModel) rememberSession(sessionKey, sessionID string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if existing := strings.TrimSpace(m.sessions[sessionKey]); existing != "" {
@@ -1068,7 +1068,7 @@ func (m *streamMASubagentModel) rememberSession(sessionKey, sessionID string) st
 	return sessionID
 }
 
-func (m *streamMASubagentModel) startRunLoggerSpan(agentID string, startedAt time.Time) int {
+func (m *streamMATaskModel) startRunLoggerSpan(agentID string, startedAt time.Time) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.spans = append(m.spans, streamma.AgentRunSpan{
@@ -1078,7 +1078,7 @@ func (m *streamMASubagentModel) startRunLoggerSpan(agentID string, startedAt tim
 	return len(m.spans) - 1
 }
 
-func (m *streamMASubagentModel) finishRunLoggerSpan(index int, finishedAt time.Time, usage *model.Usage) {
+func (m *streamMATaskModel) finishRunLoggerSpan(index int, finishedAt time.Time, usage *model.Usage) {
 	if index < 0 {
 		return
 	}
@@ -1097,7 +1097,7 @@ func (m *streamMASubagentModel) finishRunLoggerSpan(index int, finishedAt time.T
 	}
 }
 
-func (m *streamMASubagentModel) runLoggerSpans() []streamma.AgentRunSpan {
+func (m *streamMATaskModel) runLoggerSpans() []streamma.AgentRunSpan {
 	if m == nil {
 		return nil
 	}
@@ -1106,7 +1106,7 @@ func (m *streamMASubagentModel) runLoggerSpans() []streamma.AgentRunSpan {
 	return append([]streamma.AgentRunSpan(nil), m.spans...)
 }
 
-func (m *streamMASubagentModel) wrapStream(ctx context.Context, invocation streamma.AgentInvocation, stream StreamMASubagentStream, spanIndex int) <-chan model.StreamEvent {
+func (m *streamMATaskModel) wrapStream(ctx context.Context, invocation streamma.AgentInvocation, stream StreamMATaskStream, spanIndex int) <-chan model.StreamEvent {
 	out := make(chan model.StreamEvent)
 	go func() {
 		defer close(out)
@@ -1175,7 +1175,7 @@ func (m *streamMASubagentModel) wrapStream(ctx context.Context, invocation strea
 						modelName,
 						delta,
 						map[string]any{
-							"source":           "streamma_subagent",
+							"source":           "streamma_task",
 							"run_id":           invocation.RunID,
 							"role":             role,
 							"invocation_index": invocation.InvocationIndex,
@@ -1223,7 +1223,7 @@ func streamMASessionKey(runID, agentID string) string {
 	return runID + ":" + agentID
 }
 
-func streamMAAgentTraceFields(stream StreamMASubagentStream) string {
+func streamMAAgentTraceFields(stream StreamMATaskStream) string {
 	var parts []string
 	if name := strings.TrimSpace(stream.AgentName); name != "" {
 		parts = append(parts, "name="+name)

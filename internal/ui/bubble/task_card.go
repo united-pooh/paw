@@ -11,18 +11,18 @@ import (
 	taskpkg "paw/internal/task"
 )
 
-// subagentSpinnerFrames 是任务卡 spinner 的旋转帧，由动画帧驱动换帧。
-var subagentSpinnerFrames = []string{"◐", "◓", "◑", "◒"}
+// taskSpinnerFrames 是任务卡 spinner 的旋转帧，由动画帧驱动换帧。
+var taskSpinnerFrames = []string{"◐", "◓", "◑", "◒"}
 
-// subagentTaskCardMaxWidth 是任务卡的显示宽度上限（含边框）。
-const subagentTaskCardMaxWidth = 32
+// taskCardMaxWidth 是任务卡的显示宽度上限（含边框）。
+const taskCardMaxWidth = 32
 
-// runningSubagentTasks 返回当前所有 running 任务；nil controller 或空列表返回 nil。
-func (m appModel) runningSubagentTasks() []taskpkg.TaskSnapshot {
-	if m.subagents == nil {
+// runningTasks 返回当前所有 running 任务；nil controller 或空列表返回 nil。
+func (m appModel) runningTasks() []taskpkg.TaskSnapshot {
+	if m.taskController == nil {
 		return nil
 	}
-	tasks := m.subagents.ListTasks()
+	tasks := m.taskController.ListTasks()
 	running := make([]taskpkg.TaskSnapshot, 0, len(tasks))
 	for _, task := range tasks {
 		if task.Status == taskpkg.TaskRunning {
@@ -32,13 +32,13 @@ func (m appModel) runningSubagentTasks() []taskpkg.TaskSnapshot {
 	return running
 }
 
-// hasRunningSubagentTasks 报告是否存在运行中的 task 任务。
+// hasRunningTasks 报告是否存在运行中的 task 任务。
 // 供动画帧驱动判断是否需要持续重绘（spinner 与任务状态变化）。
-func (m appModel) hasRunningSubagentTasks() bool {
-	if m.subagents == nil {
+func (m appModel) hasRunningTasks() bool {
+	if m.taskController == nil {
 		return false
 	}
-	for _, task := range m.subagents.ListTasks() {
+	for _, task := range m.taskController.ListTasks() {
 		if task.Status == taskpkg.TaskRunning {
 			return true
 		}
@@ -46,14 +46,14 @@ func (m appModel) hasRunningSubagentTasks() bool {
 	return false
 }
 
-// renderSubagentTaskCard 渲染运行中任务卡；没有 running 任务时返回空串。
+// renderTaskCard 渲染运行中任务卡；没有 running 任务时返回空串。
 //
-//	┌ subagents · 2 运行中 ──┐
+//	┌ taskController · 2 运行中 ──┐
 //	│ ◐ 二叶筑               │
 //	│ ◐ 深潜者               │
 //	└───────────────────────┘
-func (m appModel) renderSubagentTaskCard(now time.Time) string {
-	running := m.runningSubagentTasks()
+func (m appModel) renderTaskCard(now time.Time) string {
+	running := m.runningTasks()
 	if len(running) == 0 {
 		return ""
 	}
@@ -66,19 +66,19 @@ func (m appModel) renderSubagentTaskCard(now time.Time) string {
 	title := lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorWorktreeClean)).
 		Bold(true).
-		Render("subagents · " + itoa(len(running)) + " 运行中")
+		Render("taskController · " + itoa(len(running)) + " 运行中")
 
 	lines := make([]string, 0, len(running)+1)
 	lines = append(lines, title)
-	spinner := subagentSpinnerFrames[spinnerFrameIndex(now)]
+	spinner := taskSpinnerFrames[spinnerFrameIndex(now)]
 	for _, task := range running {
-		lines = append(lines, renderSubagentTaskCardRow(task, spinner))
+		lines = append(lines, renderTaskCardRow(task, spinner))
 	}
 
 	// lipgloss 的 Width 含 padding 但不含 border：styleWidth 只减边框，
 	// body 再 fit 到减去 padding 后的宽度，最终总宽精确等于卡片上限。
 	horizontalBorder := cardStyle.GetHorizontalBorderSize()
-	styleWidth := maxInt(1, subagentTaskCardMaxWidth-horizontalBorder)
+	styleWidth := maxInt(1, taskCardMaxWidth-horizontalBorder)
 	bodyWidth := maxInt(1, styleWidth-cardStyle.GetHorizontalPadding())
 	content := make([]string, 0, len(lines))
 	for _, line := range lines {
@@ -87,9 +87,9 @@ func (m appModel) renderSubagentTaskCard(now time.Time) string {
 	return cardStyle.Width(styleWidth).Render(strings.Join(content, "\n"))
 }
 
-// renderSubagentTaskCardRow 渲染单行任务：spinner + 名称（persona 色）。
+// renderTaskCardRow 渲染单行任务：spinner + 名称（persona 色）。
 // 不显示任务 id / session id。
-func renderSubagentTaskCardRow(task taskpkg.TaskSnapshot, spinner string) string {
+func renderTaskCardRow(task taskpkg.TaskSnapshot, spinner string) string {
 	nameStyle := lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorBody))
 	if color := strings.TrimSpace(task.Color); color != "" {
 		nameStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(color))
@@ -113,7 +113,7 @@ func spinnerFrameIndex(now time.Time) int {
 	if now.IsZero() {
 		return 0
 	}
-	return int(now.UnixMilli()/250) % len(subagentSpinnerFrames)
+	return int(now.UnixMilli()/250) % len(taskSpinnerFrames)
 }
 
 // itoa 是 strconv.Itoa 的薄封装，避免任务卡文件引入额外导入。

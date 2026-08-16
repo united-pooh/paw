@@ -9,7 +9,7 @@ import (
 )
 
 func (m appModel) renderActivityBox() string {
-	if m.subagentPicker == nil {
+	if m.taskPicker == nil {
 		return ""
 	}
 	panelWidth := m.activityPanelWidth()
@@ -17,25 +17,25 @@ func (m appModel) renderActivityBox() string {
 	contentWidth := maxInt(1, panelWidth-wizardPanelStyle.GetHorizontalFrameSize()-wizardPanelStyle.GetHorizontalPadding())
 	contentHeight := maxInt(1, panelHeight-wizardPanelStyle.GetVerticalFrameSize()-wizardPanelStyle.GetVerticalPadding())
 
-	subagentsTab := " Tasks "
+	tasksTab := " Tasks "
 	todoTab := " Todo "
-	if m.subagentPicker.tab == activityTabSubagents {
-		subagentsTab = selectedProviderStyle.Render(subagentsTab)
+	if m.taskPicker.tab == activityTabTasks {
+		tasksTab = selectedProviderStyle.Render(tasksTab)
 		todoTab = unselectedProviderStyle.Render(todoTab)
 	} else {
-		subagentsTab = unselectedProviderStyle.Render(subagentsTab)
+		tasksTab = unselectedProviderStyle.Render(tasksTab)
 		todoTab = selectedProviderStyle.Render(todoTab)
 	}
 
 	lines := []string{
 		wizardTitleStyle.Render("Activity"),
-		subagentsTab + " " + todoTab,
+		tasksTab + " " + todoTab,
 	}
-	switch m.subagentPicker.tab {
+	switch m.taskPicker.tab {
 	case activityTabTodo:
 		lines = append(lines, "", m.renderActivityTodo(contentWidth, maxInt(1, contentHeight-len(lines))))
 	default:
-		lines = append(lines, "", m.renderActivitySubagents(contentWidth, maxInt(1, contentHeight-len(lines))))
+		lines = append(lines, "", m.renderActivityTasks(contentWidth, maxInt(1, contentHeight-len(lines))))
 	}
 	lines = append(lines, "", unselectedProviderStyle.Render("Tab/←/→ switch  ↑/↓ select  Enter open  Esc close"))
 	return renderFixedStyledPanel(wizardPanelStyle, panelWidth, panelHeight, strings.Join(lines, "\n"))
@@ -108,16 +108,16 @@ func (m appModel) activityPanelHeight() int {
 	return maxInt(1, layout.transcriptHeight-2)
 }
 
-func (m appModel) renderActivitySubagents(width, height int) string {
-	if m.subagents == nil {
+func (m appModel) renderActivityTasks(width, height int) string {
+	if m.taskController == nil {
 		return labelErrorStyle.Render("Task controller is unavailable.")
 	}
-	if len(m.subagentTasks()) == 0 {
+	if len(m.taskEntries()) == 0 {
 		return unselectedProviderStyle.Render("No tasks yet.")
 	}
 	return lipgloss.NewStyle().
 		Width(maxInt(1, width)).
 		MaxWidth(maxInt(1, width)).
 		MaxHeight(maxInt(1, height)).
-		Render(m.renderSubagentsCardContentHeight(width, height))
+		Render(m.renderTasksCardContentHeight(width, height))
 }

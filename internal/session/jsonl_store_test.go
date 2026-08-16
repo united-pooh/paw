@@ -144,7 +144,7 @@ func TestListSessions_TouchMovesSessionToFront(t *testing.T) {
 	}
 }
 
-func TestListSessions_ExcludesSubagentSessions(t *testing.T) {
+func TestListSessions_ExcludestaskSessions(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 	createTestSession(t, store, "foreground", nil)

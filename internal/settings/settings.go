@@ -43,7 +43,7 @@ const (
 )
 
 type Config struct {
-	Task           TaskConfig           `json:"subagent"`
+	Task               TaskConfig               `json:"subagent"`
 	UI                 UIConfig                 `json:"ui"`
 	ContextMaintenance ContextMaintenanceConfig `json:"context_maintenance"`
 	ContextCompression ContextCompressionConfig `json:"context_compression"`
@@ -97,7 +97,7 @@ const (
 
 func DefaultConfig() Config {
 	return Config{
-		Task:           TaskConfig{DefaultContextMode: ContextModeEmpty, DefaultRunMode: RunModeBackground, WaitTimeoutMs: DefaultTaskWaitTimeoutMs},
+		Task:               TaskConfig{DefaultContextMode: ContextModeEmpty, DefaultRunMode: RunModeBackground, WaitTimeoutMs: DefaultTaskWaitTimeoutMs},
 		UI:                 UIConfig{Theme: theme.Default, ContextLimitTokens: DefaultContextLimitTokens, ContextMeterLocation: MeterLocationInputAbove, TranscriptOutputMode: TranscriptOutputModeLine},
 		ContextMaintenance: DefaultContextMaintenanceConfig(),
 		ContextCompression: DefaultContextCompressionConfig(),

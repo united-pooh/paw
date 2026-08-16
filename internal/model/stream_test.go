@@ -117,7 +117,7 @@ func TestStreamMessageEmitsAnthropicToolCalls(t *testing.T) {
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = fmt.Fprint(w, "event: content_block_start\n")
-		_, _ = fmt.Fprint(w, "data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_subagent\",\"name\":\"Task\"}}\n\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_task\",\"name\":\"Task\"}}\n\n")
 		_, _ = fmt.Fprint(w, "event: content_block_delta\n")
 		_, _ = fmt.Fprint(w, "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"prompt\\\":\\\"work\\\"}\"}}\n\n")
 		_, _ = fmt.Fprint(w, "event: content_block_stop\n")
@@ -155,7 +155,7 @@ func TestStreamMessageEmitsAnthropicToolCalls(t *testing.T) {
 	if delta.String() != "" {
 		t.Fatalf("delta = %q, want no textual tool JSON", delta.String())
 	}
-	if len(calls) != 1 || calls[0].ID != "call_subagent" || calls[0].Name != "Task" {
+	if len(calls) != 1 || calls[0].ID != "call_task" || calls[0].Name != "Task" {
 		t.Fatalf("tool calls = %#v, want Task call", calls)
 	}
 	if string(calls[0].Input) != `{"prompt":"work"}` {

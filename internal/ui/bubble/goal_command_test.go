@@ -297,24 +297,24 @@ func TestGoalStoppedMsgReleasesWorkingState(t *testing.T) {
 	}
 }
 
-// TestSubagentFinishedMsgClearsGenerating 验证 task 轮结束也清除
+// TestTaskFinishedMsgClearsGenerating 验证 task 轮结束也清除
 // isGenerating（与 turnFinishedMsg 对称），防止流式标记残留导致 header
 // 永久 working。
-func TestSubagentFinishedMsgClearsGenerating(t *testing.T) {
+func TestTaskFinishedMsgClearsGenerating(t *testing.T) {
 	model := newModel(nil, &fakeRunner{}, "session-1", nil, nil, nil, nil, nil)
 	model.ctx = context.Background()
 	model.isGenerating = true
 
-	updated, _ := model.Update(subagentFinishedMsg{result: task.Result{}, err: nil})
+	updated, _ := model.Update(taskFinishedMsg{result: task.Result{}, err: nil})
 	next, ok := updated.(appModel)
 	if !ok {
 		t.Fatalf("unexpected model type %T", updated)
 	}
 	if next.isGenerating {
-		t.Fatal("isGenerating = true, want false after subagentFinishedMsg")
+		t.Fatal("isGenerating = true, want false after taskFinishedMsg")
 	}
 	if next.isAgentWorking() {
-		t.Fatal("isAgentWorking = true, want false after subagentFinishedMsg")
+		t.Fatal("isAgentWorking = true, want false after taskFinishedMsg")
 	}
 }
 

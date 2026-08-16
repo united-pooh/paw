@@ -66,7 +66,7 @@ func formatToolCallBodyResolved(name string, input json.RawMessage, oldContent s
 		return formatQuestionToolCallBody(name, input)
 	}
 	if strings.EqualFold(name, "Task") {
-		return formatSubagentToolCallBody(name, fields)
+		return formattaskToolCallBody(name, fields)
 	}
 	if allowNameMutation && isFileMutationTool(name) {
 		return formatFileMutationToolCallBody(name, fields, oldContent)
@@ -330,7 +330,7 @@ func formatToolResultBody(name, status, content string) string {
 	return strings.Join(lines, "\n")
 }
 
-func formatSubagentToolCallBody(name string, fields []toolDisplayField) string {
+func formattaskToolCallBody(name string, fields []toolDisplayField) string {
 	contextMode := fieldValue(fields, "context_mode")
 	runMode := fieldValue(fields, "run_mode")
 	description := fieldValue(fields, "description")
@@ -452,7 +452,7 @@ func primaryToolInputKeys(name string) []string {
 		return []string{"command"}
 	case "webfetch":
 		return []string{"url"}
-	case "subagentstop":
+	case "taskstop":
 		return []string{"id"}
 	default:
 		return []string{"path", "file_path", "command", "url", "id"}

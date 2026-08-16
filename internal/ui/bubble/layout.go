@@ -265,15 +265,15 @@ func (m appModel) renderTranscriptRegion(layout tuiLayout) string {
 	// 运行中 task 任务卡：贴在 transcript 右边界内侧、垂直居中。
 	// Activity 面板打开时任务卡不重复渲染（面板自身含任务列表）。
 	// modal / completion 浮层在其之后合成，必要时覆盖卡片。
-	if m.subagentPicker == nil {
-		if card := m.renderSubagentTaskCard(m.animationNow()); card != "" {
+	if m.taskPicker == nil {
+		if card := m.renderTaskCard(m.animationNow()); card != "" {
 			base = placeRightCenteredOverlay(base, card, layout.contentWidth, layout.transcriptHeight)
 		}
 	}
 
 	// Activity（task/pipeline 选择器）以右侧边栏形态合成，而非居中
 	// modal：ctrl+g 展开的是屏幕右侧的悬浮面板。
-	if m.subagentPicker != nil {
+	if m.taskPicker != nil {
 		base = placeOpaqueOverlay(
 			base,
 			m.renderActivityBox(),
@@ -559,7 +559,7 @@ func (m appModel) shouldAnchorTextInputCursor() bool {
 		m.settingWizard == nil &&
 		m.configCenter == nil &&
 		m.sessionPicker == nil &&
-		m.subagentPicker == nil &&
+		m.taskPicker == nil &&
 		true
 }
 

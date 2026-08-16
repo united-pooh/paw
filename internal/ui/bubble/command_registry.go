@@ -119,12 +119,12 @@ func NewCommandRegistry() *CommandRegistry {
 		ArgumentHint:      "[--fork|--empty] [--background|--sync] <prompt>",
 		AllowWhileRunning: false,
 		Handler: func(m *appModel, invocation string) tea.Cmd {
-			return m.handleSubagentCommand(invocation)
+			return m.handleTaskCommand(invocation)
 		},
 	})
 	registry.Register(Command{
 		Name:              "/streamma",
-		Description:       "run a prompt through StreamMA subagents",
+		Description:       "run a prompt through StreamMA taskController",
 		ArgumentHint:      "<prompt>",
 		AllowWhileRunning: false,
 		Handler: func(m *appModel, invocation string) tea.Cmd {
@@ -145,7 +145,7 @@ func NewCommandRegistry() *CommandRegistry {
 		Description:       "show background task tasks",
 		AllowWhileRunning: true,
 		Handler: func(m *appModel, invocation string) tea.Cmd {
-			m.openActivity(activityTabSubagents)
+			m.openActivity(activityTabTasks)
 			return nil
 		},
 	})

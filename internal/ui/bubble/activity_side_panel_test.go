@@ -12,7 +12,7 @@ import (
 	"paw/internal/task"
 )
 
-// TestActivityPanelRendersAsRightSidebar 验证 subagentPicker 打开时：
+// TestActivityPanelRendersAsRightSidebar 验证 taskPicker 打开时：
 // renderActiveModalBox 不再居中渲染 Activity；renderTranscriptRegion 把
 // Activity 面板合成在内容区右端（面板文本出现在行末附近而非居中）。
 func TestActivityPanelRendersAsRightSidebar(t *testing.T) {
@@ -20,11 +20,11 @@ func TestActivityPanelRendersAsRightSidebar(t *testing.T) {
 	model.ready = true
 	model.width = 120
 	model.height = 30
-	model.subagents = &fakeSubagentController{tasks: []task.TaskSnapshot{
+	model.taskController = &fakeTaskController{tasks: []task.TaskSnapshot{
 		{ID: "agent-1", SessionID: "agent-1", ParentSessionID: "session-1", Name: "worker", Status: task.TaskCompleted},
 	}}
 	model.relayout()
-	model.openActivity(activityTabSubagents)
+	model.openActivity(activityTabTasks)
 
 	layout := model.currentLayout()
 	if modal := model.renderActiveModalBox(layout); modal != "" {
@@ -58,11 +58,11 @@ func TestActivityPanelHidesFloatingTaskCard(t *testing.T) {
 	model.ready = true
 	model.width = 120
 	model.height = 30
-	model.subagents = &fakeSubagentController{tasks: []task.TaskSnapshot{
+	model.taskController = &fakeTaskController{tasks: []task.TaskSnapshot{
 		{ID: "agent-1", SessionID: "agent-1", ParentSessionID: "session-1", Name: "worker", Status: task.TaskRunning, StartedAt: time.Now()},
 	}}
 	model.relayout()
-	model.openActivity(activityTabSubagents)
+	model.openActivity(activityTabTasks)
 
 	rendered := ansi.Strip(model.renderTranscriptRegion(model.currentLayout()))
 	if strings.Contains(rendered, "运行中") {
@@ -81,7 +81,7 @@ func TestActivityPanelLayoutKeepsTranscriptVisible(t *testing.T) {
 	model.width = 120
 	model.height = 30
 	model.relayout()
-	model.openActivity(activityTabSubagents)
+	model.openActivity(activityTabTasks)
 
 	panel := model.renderActivityBox()
 	panelWidth := lipgloss.Width(panel)

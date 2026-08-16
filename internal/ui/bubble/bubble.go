@@ -156,7 +156,7 @@ type UI struct {
 	modelConfigController  ModelConfigController
 	configCenterController ConfigCenterController
 	settingsController     SettingsController
-	subagentController     TaskController
+	taskController         TaskController
 	sessionStore           SessionStore
 	mcpController          MCPStatusController
 	goalController         GoalController
@@ -211,7 +211,7 @@ func (u *UI) SetSettingsController(controller SettingsController) {
 func (u *UI) SetTaskController(controller TaskController) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	u.subagentController = controller
+	u.taskController = controller
 }
 
 // SetSessionStore 注入 session store，供 /resume 命令列举历史会话。
@@ -288,7 +288,7 @@ func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 	controller := u.modelConfigController
 	configCenterController := u.configCenterController
 	settingsController := u.settingsController
-	subagentController := u.subagentController
+	taskController := u.taskController
 	sessionStore := u.sessionStore
 	mcpController := u.mcpController
 	goalController := u.goalController
@@ -298,7 +298,7 @@ func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 	u.mu.Unlock()
 
 	anchor := newTerminalCursorAnchor()
-	appModel := newModel(ctx, runner, sessionID, controller, settingsController, subagentController, sessionStore, anchor)
+	appModel := newModel(ctx, runner, sessionID, controller, settingsController, taskController, sessionStore, anchor)
 	appModel.configCenterController = configCenterController
 	if configCenterController != nil && configCenterController.ConfigPath() != "" {
 		appModel.skillRegistry = skill.NewRegistry([]string{filepath.Join(filepath.Dir(configCenterController.ConfigPath()), "skills")})
@@ -306,10 +306,10 @@ func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 	if configCenterController != nil && !configCenterController.Snapshot().Ready {
 		appModel.openConfigCenter()
 	}
-	if subscriber, ok := subagentController.(TaskUpdateSubscriber); ok {
+	if subscriber, ok := taskController.(TaskUpdateSubscriber); ok {
 		updates, stopUpdates := subscriber.SubscribeTaskUpdates()
-		appModel.subagentTaskUpdates = updates
-		appModel.subagentTaskUpdatesStop = stopUpdates
+		appModel.taskUpdates = updates
+		appModel.taskUpdatesStop = stopUpdates
 		defer stopUpdates()
 	}
 	appModel.selectionBroker = selectionBroker

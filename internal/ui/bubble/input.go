@@ -17,7 +17,7 @@ func (m appModel) handleSubmit() (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	m.restoreMainTranscriptFromSubagentPreview()
+	m.restoreMainTranscriptFromTaskPreview()
 
 	if isExitCommandInput(line) {
 		m.rememberInputHistory(line)

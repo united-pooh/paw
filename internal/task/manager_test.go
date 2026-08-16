@@ -466,7 +466,7 @@ func TestStreamPersistsStructuredUsageFromModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
 	}
-	drainSubagentStream(t, stream.Events)
+	drainTaskStream(t, stream.Events)
 	completed := waitForTask(t, manager, stream.SessionID, TaskCompleted)
 
 	if completed.Usage == nil {
@@ -525,7 +525,7 @@ func TestStreamReusesRequestedSessionAndDoesNotDuplicateBootstrapPrompt(t *testi
 	if err != nil {
 		t.Fatalf("first Stream() error = %v", err)
 	}
-	drainSubagentStream(t, first.Events)
+	drainTaskStream(t, first.Events)
 	waitForTask(t, manager, sessionID, TaskCompleted)
 
 	second, err := manager.Stream(ctx, Request{
@@ -539,7 +539,7 @@ func TestStreamReusesRequestedSessionAndDoesNotDuplicateBootstrapPrompt(t *testi
 	if second.SessionID != sessionID {
 		t.Fatalf("second SessionID = %q, want %q", second.SessionID, sessionID)
 	}
-	drainSubagentStream(t, second.Events)
+	drainTaskStream(t, second.Events)
 	waitForTask(t, manager, sessionID, TaskCompleted)
 
 	history, err := store.LoadResolvedHistory(ctx, sessionID)
@@ -578,7 +578,7 @@ func TestStreamReusesRequestedSessionAndDoesNotDuplicateBootstrapPrompt(t *testi
 	}
 }
 
-func drainSubagentStream(t *testing.T, events <-chan model.StreamEvent) {
+func drainTaskStream(t *testing.T, events <-chan model.StreamEvent) {
 	t.Helper()
 	for ev := range events {
 		if ev.Err != nil {
@@ -618,7 +618,7 @@ func TestLaunchAssignsUniqueRunningPersonas(t *testing.T) {
 		t.Fatalf("launched personas = %#v / %#v", first, second)
 	}
 	if first.Name == second.Name {
-		t.Fatalf("running subagents reused persona %q", first.Name)
+		t.Fatalf("running taskController reused persona %q", first.Name)
 	}
 
 	if _, err := manager.Launch(context.Background(), Request{Prompt: "third"}); err == nil || !strings.Contains(err.Error(), "no idle task names") {
@@ -916,7 +916,7 @@ func TestSyncCompletionDoesNotSubmitParentContext(t *testing.T) {
 	}
 }
 
-func TestSubagentToolsProvideSyncAndStatusAccess(t *testing.T) {
+func TestTaskToolsProvideSyncAndStatusAccess(t *testing.T) {
 	modelStreamer := &recordingModel{
 		rounds: []fakeRound{
 			{events: []model.StreamEvent{{Delta: "sync answer"}, {Done: true}}},
@@ -1334,7 +1334,7 @@ func TestStopOwnedTasksOnlyInterruptsExactParentTurn(t *testing.T) {
 	_, _ = manager.Stop(context.Background(), legacy.ID)
 }
 
-func TestSubagentToolPropagatesTurnOwnerFromContext(t *testing.T) {
+func TestTaskToolPropagatesTurnOwnerFromContext(t *testing.T) {
 	root := t.TempDir()
 	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
 	if err != nil {
@@ -1360,8 +1360,8 @@ func TestSubagentToolPropagatesTurnOwnerFromContext(t *testing.T) {
 func TestProcessLauncherParsesWorkerJSON(t *testing.T) {
 	launcher := &ProcessLauncher{
 		Command: os.Args[0],
-		Args:    []string{"-test.run=TestSubagentWorkerHelperProcess"},
-		Env:     []string{"PAW_SUBAGENT_HELPER=1"},
+		Args:    []string{"-test.run=TestTaskWorkerHelperProcess"},
+		Env:     []string{"PAW_task_HELPER=1"},
 	}
 	proc, err := launcher.Start(context.Background(), WorkerRequest{
 		TaskID:    "task-1",
@@ -1380,8 +1380,8 @@ func TestProcessLauncherParsesWorkerJSON(t *testing.T) {
 	}
 }
 
-func TestSubagentWorkerHelperProcess(t *testing.T) {
-	if os.Getenv("PAW_SUBAGENT_HELPER") != "1" {
+func TestTaskWorkerHelperProcess(t *testing.T) {
+	if os.Getenv("PAW_task_HELPER") != "1" {
 		return
 	}
 	var req WorkerRequest
@@ -1402,8 +1402,8 @@ func TestProcessLauncherBrokeredWorkerProtocol(t *testing.T) {
 	broker := &testMCPBroker{snapshot: coremcp.Snapshot{Tools: []coremcp.ToolSpec{{Name: "codegraph__explore"}}}}
 	launcher := &ProcessLauncher{
 		Command: os.Args[0],
-		Args:    []string{"-test.run=TestSubagentFramedWorkerHelperProcess"},
-		Env:     []string{"PAW_SUBAGENT_FRAMED_HELPER=1"},
+		Args:    []string{"-test.run=TestTaskFramedWorkerHelperProcess"},
+		Env:     []string{"PAW_task_FRAMED_HELPER=1"},
 		Broker:  broker,
 	}
 	proc, err := launcher.Start(context.Background(), WorkerRequest{TaskID: "task-2", SessionID: "session-2"})
@@ -1437,8 +1437,8 @@ func (b *testMCPBroker) Call(_ context.Context, name string, _ json.RawMessage) 
 	return "parent:" + name, nil
 }
 
-func TestSubagentFramedWorkerHelperProcess(t *testing.T) {
-	if os.Getenv("PAW_SUBAGENT_FRAMED_HELPER") != "1" {
+func TestTaskFramedWorkerHelperProcess(t *testing.T) {
+	if os.Getenv("PAW_task_FRAMED_HELPER") != "1" {
 		return
 	}
 	decoder := json.NewDecoder(os.Stdin)

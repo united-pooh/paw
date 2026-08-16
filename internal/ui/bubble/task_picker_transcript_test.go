@@ -27,7 +27,7 @@ func (f *fakeResolvedRecordStore) LoadResolvedRecords(context.Context, string) (
 	return f.records, f.err
 }
 
-func TestLoadSubagentTranscriptEntriesViaStore(t *testing.T) {
+func TestLoadTaskTranscriptEntriesViaStore(t *testing.T) {
 	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	store := &fakeResolvedRecordStore{records: []session.Record{
 		{Seq: 0, Kind: session.JournalTurnStarted, TurnID: "t1", CreatedAt: now},
@@ -37,7 +37,7 @@ func TestLoadSubagentTranscriptEntriesViaStore(t *testing.T) {
 	}}
 	task := task.TaskSnapshot{ID: "agent-1", SessionID: "agent-1", Status: task.TaskCompleted}
 
-	entries, err := loadSubagentTranscriptEntries(context.Background(), store, task, now, "")
+	entries, err := loadTaskTranscriptEntries(context.Background(), store, task, now, "")
 	if err != nil {
 		t.Fatalf("load via store: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestLoadSubagentTranscriptEntriesViaStore(t *testing.T) {
 	}
 }
 
-func TestLoadSubagentTranscriptEntriesFallsBackToEnvelopeFile(t *testing.T) {
+func TestLoadTaskTranscriptEntriesFallsBackToEnvelopeFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "transcript.jsonl")
 	content := `{"seq":0,"type":"session.user_message","occurred_at":"2026-08-14T12:00:00Z","schema_version":1,"payload":{"turn_id":"t1","message":{"role":"user","content":"envelope prompt"}}}` + "\n" +
@@ -61,7 +61,7 @@ func TestLoadSubagentTranscriptEntriesFallsBackToEnvelopeFile(t *testing.T) {
 	task := task.TaskSnapshot{ID: "agent-1", SessionID: "agent-1", Status: task.TaskCompleted, TranscriptPath: path}
 
 	// store 为 nil（或不可用）时走文件 fallback，envelope 行也必须能解析
-	entries, err := loadSubagentTranscriptEntries(context.Background(), nil, task, time.Now(), "")
+	entries, err := loadTaskTranscriptEntries(context.Background(), nil, task, time.Now(), "")
 	if err != nil {
 		t.Fatalf("load file fallback: %v", err)
 	}
@@ -74,14 +74,14 @@ func TestLoadSubagentTranscriptEntriesFallsBackToEnvelopeFile(t *testing.T) {
 	}
 }
 
-func TestLoadSubagentTranscriptEntriesFallbackUsesContentWhenFileMissing(t *testing.T) {
+func TestLoadTaskTranscriptEntriesFallbackUsesContentWhenFileMissing(t *testing.T) {
 	task := task.TaskSnapshot{
 		ID:        "agent-1",
 		SessionID: "agent-1",
 		Status:    task.TaskCompleted,
 		Content:   "final summary only",
 	}
-	entries, err := loadSubagentTranscriptEntries(context.Background(), nil, task, time.Now(), "")
+	entries, err := loadTaskTranscriptEntries(context.Background(), nil, task, time.Now(), "")
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
