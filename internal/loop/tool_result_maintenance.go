@@ -40,6 +40,23 @@ func isUserMarkedMessage(msg message.Message) bool {
 func keepMessageIndexes(history []message.Message, policy keepPolicy) map[int]bool {
 	keep := make(map[int]bool)
 	start := latestCompactionSummaryEnd(history)
+	// The latest accepted Todo snapshot is durable state, not disposable
+	// transcript detail. Keep its protocol pair in every projection so summary
+	// and tool-result maintenance cannot silently change the model's current
+	// task list before the next state refresh.
+	toolNames := toolNamesByUseID(history)
+	for resultIndex := len(history) - 1; resultIndex >= start; resultIndex-- {
+		for _, result := range toolResultsFromMessage(history[resultIndex]) {
+			if toolNames[strings.TrimSpace(result.ToolUseID)] != "update_todo" || result.IsError {
+				continue
+			}
+			keep[resultIndex] = true
+			if callIndex := assistantCallIndexForResults(history, start, resultIndex, []message.ToolResult{result}); callIndex >= start {
+				keep[callIndex] = true
+			}
+			return keep
+		}
+	}
 	for i := start; i < len(history); i++ {
 		msg := history[i]
 		if policy.userMarked && isUserMarkedMessage(msg) {
@@ -345,25 +362,7 @@ func cloneMessages(history []message.Message) []message.Message {
 }
 
 func cloneMessage(msg message.Message) message.Message {
-	copyMessage := msg
-	copyMessage.ProviderData = append(json.RawMessage(nil), msg.ProviderData...)
-	copyMessage.Parts = append([]message.ContentPart(nil), msg.Parts...)
-	copyMessage.ToolUses = make([]message.ToolCall, len(msg.ToolUses))
-	for i, call := range msg.ToolUses {
-		copyMessage.ToolUses[i] = call
-		copyMessage.ToolUses[i].Input = append(json.RawMessage(nil), call.Input...)
-	}
-	copyMessage.ToolResults = append([]message.ToolResult(nil), msg.ToolResults...)
-	if msg.ToolUse != nil {
-		call := *msg.ToolUse
-		call.Input = append(json.RawMessage(nil), msg.ToolUse.Input...)
-		copyMessage.ToolUse = &call
-	}
-	if msg.ToolResult != nil {
-		result := *msg.ToolResult
-		copyMessage.ToolResult = &result
-	}
-	return copyMessage
+	return message.CloneMessage(msg)
 }
 
 func setToolResultsOnMessage(msg *message.Message, results []message.ToolResult) {

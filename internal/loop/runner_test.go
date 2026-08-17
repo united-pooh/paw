@@ -1535,7 +1535,8 @@ func TestRunnerForwardsThinkingEventsToUI(t *testing.T) {
 	output := &fakeUI{}
 	runner := NewRunner(streamer, output, tool.NewRegistry(), nil, "")
 
-	if _, err := runner.RunTurn(context.Background(), "hello"); err != nil {
+	msg, err := runner.RunTurn(context.Background(), "hello")
+	if err != nil {
 		t.Fatalf("RunTurn() error = %v", err)
 	}
 	if got := strings.Join(output.thinking, ""); got != "plan" {
@@ -1543,6 +1544,12 @@ func TestRunnerForwardsThinkingEventsToUI(t *testing.T) {
 	}
 	if got := strings.Join(output.deltas, ""); got != "answer" {
 		t.Fatalf("deltas = %q, want answer", got)
+	}
+	if len(msg.AssistantParts) != 2 || msg.AssistantParts[0].Type != message.AssistantPartReasoning || msg.AssistantParts[1].Type != message.AssistantPartText {
+		t.Fatalf("assistant parts = %#v, want reasoning then text", msg.AssistantParts)
+	}
+	if msg.AssistantParts[1].Text == nil || msg.AssistantParts[1].Text.Text != "answer" {
+		t.Fatalf("assistant text part = %#v, want answer", msg.AssistantParts[1].Text)
 	}
 }
 
@@ -1823,6 +1830,82 @@ func TestRunTurnExecutesToolAndReturnsFinalAnswer(t *testing.T) {
 	}
 	if !foundToolResult {
 		t.Fatalf("second round messages do not include tool result: %#v", model.calls[1])
+	}
+}
+
+func TestRunTurnReadResultIsBoundedBeforeNextModelRound(t *testing.T) {
+	const maxReadResultBytesForLoopTest = 128 * 1024
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "large.txt"), []byte(strings.Repeat("x\n", maxReadResultBytesForLoopTest)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	modelClient := &fakeModel{rounds: []fakeRound{
+		{events: []model.StreamEvent{
+			{Delta: `{"type":"tool_use","id":"read-large","name":"Read","input":{"file_path":"large.txt","limit":1000000}}`},
+			{Done: true},
+		}},
+		{events: []model.StreamEvent{{Delta: "bounded", Done: true}}},
+	}}
+	registry := tool.NewRegistry()
+	registry.Register(&toolfile.ReadTool{Root: root, ReadState: toolfile.NewReadStateStore()})
+	runner := NewRunnerWithInstructionRoot(modelClient, &fakeUI{}, registry, nil, "", root)
+	if _, err := runner.RunTurn(context.Background(), "read large.txt"); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	found := false
+	for _, msg := range modelClient.calls[1] {
+		for _, result := range toolResultsFromMessage(msg) {
+			if result.ToolUseID != "read-large" {
+				continue
+			}
+			found = true
+			if len([]byte(result.Content)) > maxReadResultBytesForLoopTest {
+				t.Fatalf("Read tool result bytes = %d, want <= %d", len([]byte(result.Content)), maxReadResultBytesForLoopTest)
+			}
+			if !strings.Contains(result.Content, "[Read partial:") {
+				tailStart := len(result.Content) - 160
+				if tailStart < 0 {
+					tailStart = 0
+				}
+				t.Fatalf("Read tool result = %q, want partial marker", result.Content[tailStart:])
+			}
+		}
+	}
+	if !found {
+		t.Fatal("second model round did not receive the bounded Read result")
+	}
+}
+
+func TestRunTurnKeepsNativeToolCallAfterThinking(t *testing.T) {
+	ui := &fakeUI{}
+	modelClient := &fakeModel{rounds: []fakeRound{
+		{events: []model.StreamEvent{
+			{Thinking: "inspect the repository"},
+			{ToolCalls: []message.ToolCall{{ID: "call_1", Name: "Read", Input: json.RawMessage(`{"file_path":"go.mod"}`)}}, FinishReason: model.FinishReasonToolCalls},
+			{Done: true, FinishReason: model.FinishReasonToolCalls},
+		}},
+		{events: []model.StreamEvent{
+			{Delta: "go.mod loaded"},
+			{Done: true},
+		}},
+	}}
+	registry := tool.NewRegistry()
+	registry.Register(&fakeTool{name: "Read", output: "module paw"})
+	runner := NewRunner(modelClient, ui, registry, nil, "")
+
+	msg, err := runner.RunTurn(context.Background(), "read go.mod")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if msg.Content != "go.mod loaded" {
+		t.Fatalf("msg.Content = %q, want final answer", msg.Content)
+	}
+	if len(modelClient.calls) != 2 {
+		t.Fatalf("model calls = %d, want tool result round", len(modelClient.calls))
+	}
+	if len(ui.toolCalls) != 1 || ui.toolCalls[0].Name != "Read" {
+		t.Fatalf("tool calls = %#v, want Read", ui.toolCalls)
 	}
 }
 

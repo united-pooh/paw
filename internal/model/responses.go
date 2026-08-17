@@ -82,10 +82,11 @@ func validateResponsesOutputItems(items []json.RawMessage) error {
 // responsesRequest models the OpenAI Responses API without coupling the rest
 // of the agent loop to provider-specific input/output item shapes.
 type responsesRequest struct {
-	Model  string            `json:"model"`
-	Input  []json.RawMessage `json:"input"`
-	Stream bool              `json:"stream"`
-	Tools  []responsesTool   `json:"tools,omitempty"`
+	Model     string            `json:"model"`
+	Input     []json.RawMessage `json:"input"`
+	Stream    bool              `json:"stream"`
+	Reasoning RequestBody       `json:"reasoning,omitempty"`
+	Tools     []responsesTool   `json:"tools,omitempty"`
 }
 
 // responsesItem 用于把通用消息投影为 Responses input item。
@@ -131,14 +132,18 @@ type responsesAPIResponse struct {
 }
 
 // responsesOutputItemView 是已知字段的轻量视图，用于从 raw item 中提取
-// 文本和函数调用；未知字段原样保留在 raw bytes 中。
+// 文本、reasoning summary 和函数调用；未知字段原样保留在 raw bytes 中。
 type responsesOutputItemView struct {
 	Type      string `json:"type"`
 	ID        string `json:"id,omitempty"`
 	CallID    string `json:"call_id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
-	Content   []struct {
+	Summary   []struct {
+		Type string `json:"type"`
+		Text string `json:"text,omitempty"`
+	} `json:"summary,omitempty"`
+	Content []struct {
 		Type string `json:"type"`
 		Text string `json:"text,omitempty"`
 	} `json:"content,omitempty"`
@@ -174,6 +179,58 @@ func shouldUseResponsesAPI(cfg Config) bool {
 	return strings.HasSuffix(path, "/responses")
 }
 
+func responsesReasoningSummary(view responsesOutputItemView) string {
+	parts := make([]string, 0, len(view.Summary))
+	for _, summary := range view.Summary {
+		if summary.Type != "summary_text" {
+			continue
+		}
+		if text := strings.TrimSpace(summary.Text); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func isGPTResponsesConfig(cfg Config) bool {
+	adapter := strings.ToLower(strings.TrimSpace(cfg.Adapter))
+	if adapter == "gpt" {
+		return true
+	}
+	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
+	model := strings.ToLower(strings.TrimSpace(cfg.Model))
+	return provider == "gpt" || provider == "openai" || strings.HasPrefix(model, "gpt-")
+}
+
+func defaultResponsesReasoning(cfg Config) RequestBody {
+	if !isGPTResponsesConfig(cfg) {
+		return nil
+	}
+	return RequestBody{"summary": "auto"}
+}
+
+func effectiveResponsesExtraRequestBody(cfg Config) RequestBody {
+	body := CloneRequestBody(EffectiveExtraRequestBody(cfg))
+	if body == nil {
+		body = make(RequestBody)
+	}
+
+	if effort, ok := body["reasoning_effort"]; ok {
+		reasoning, reasoningOK := jsonObject(body["reasoning"])
+		if !reasoningOK {
+			reasoning = make(RequestBody)
+		}
+		if _, exists := reasoning["effort"]; !exists {
+			reasoning["effort"] = cloneJSONValue(effort)
+		}
+		body["reasoning"] = reasoning
+		delete(body, "reasoning_effort")
+	}
+	// thinking is an Anthropic Messages field and is not valid Responses input.
+	delete(body, "thinking")
+	return body
+}
+
 func buildResponsesRequest(cfg Config, messages []message.Message, tools PreparedToolSet, stream bool) (responsesRequest, error) {
 	input, err := buildResponsesInput(messages)
 	if err != nil {
@@ -185,7 +242,12 @@ func buildResponsesRequest(cfg Config, messages []message.Message, tools Prepare
 	if err := validateResponsesInputItems(input); err != nil {
 		return responsesRequest{}, err
 	}
-	req := responsesRequest{Model: cfg.Model, Input: input, Stream: stream}
+	req := responsesRequest{
+		Model:     cfg.Model,
+		Input:     input,
+		Stream:    stream,
+		Reasoning: defaultResponsesReasoning(cfg),
+	}
 	for _, tool := range tools {
 		parameters := tool.Parameters
 		if len(parameters) == 0 {
@@ -313,6 +375,15 @@ func responsesMessageContent(msg message.Message) (any, error) {
 }
 
 func messageToolCalls(msg message.Message) []message.ToolCall {
+	if len(msg.AssistantParts) > 0 {
+		calls := make([]message.ToolCall, 0)
+		for _, part := range msg.AssistantParts {
+			if part.ToolCall != nil {
+				calls = append(calls, *part.ToolCall)
+			}
+		}
+		return calls
+	}
 	if len(msg.ToolUses) != 0 {
 		return msg.ToolUses
 	}
@@ -333,14 +404,14 @@ func messageToolResults(msg message.Message) []message.ToolResult {
 }
 
 func (c *Client) runResponsesMessage(ctx context.Context, cfg Config, messages []message.Message) (string, error) {
-	reqBody, err := buildResponsesRequest(cfg, messages, nil, false)
+	reqBody, err := buildResponsesRequestForAdapter(cfg, SelectModelAdapter(cfg), messages, nil, false)
 	if err != nil {
 		return "", fmt.Errorf("构造 OpenAI Responses 请求失败: %w", err)
 	}
 	if err := ValidateExtraRequestBodies(cfg); err != nil {
 		return "", fmt.Errorf("校验请求体配置失败: %w", err)
 	}
-	bodyBytes, err := MarshalRequestBody(reqBody, EffectiveExtraRequestBody(cfg))
+	bodyBytes, err := MarshalRequestBody(reqBody, effectiveResponsesExtraRequestBody(cfg))
 	if err != nil {
 		return "", fmt.Errorf("序列化请求体失败: %w", err)
 	}
@@ -393,11 +464,11 @@ func (c *Client) runResponsesMessage(ctx context.Context, cfg Config, messages [
 }
 
 func (c *Client) streamResponsesMessage(ctx context.Context, cfg Config, messages []message.Message, tools PreparedToolSet) (<-chan StreamEvent, error) {
-	reqBody, err := buildResponsesRequest(cfg, messages, tools, true)
+	reqBody, err := buildResponsesRequestForAdapter(cfg, SelectModelAdapter(cfg), messages, tools, true)
 	if err != nil {
 		return nil, fmt.Errorf("构造 OpenAI Responses 请求失败: %w", err)
 	}
-	bodyBytes, err := MarshalRequestBody(reqBody, EffectiveExtraRequestBody(cfg))
+	bodyBytes, err := MarshalRequestBody(reqBody, effectiveResponsesExtraRequestBody(cfg))
 	if err != nil {
 		return nil, fmt.Errorf("序列化请求体失败: %w", err)
 	}
@@ -486,11 +557,11 @@ func (c *Client) streamResponsesMessage(ctx context.Context, cfg Config, message
 }
 
 func (c *Client) nonStreamingResponsesMessage(ctx context.Context, cfg Config, messages []message.Message, tools PreparedToolSet) (<-chan StreamEvent, error) {
-	reqBody, err := buildResponsesRequest(cfg, messages, tools, false)
+	reqBody, err := buildResponsesRequestForAdapter(cfg, SelectModelAdapter(cfg), messages, tools, false)
 	if err != nil {
 		return nil, fmt.Errorf("构造 OpenAI Responses 请求失败: %w", err)
 	}
-	bodyBytes, err := MarshalRequestBody(reqBody, EffectiveExtraRequestBody(cfg))
+	bodyBytes, err := MarshalRequestBody(reqBody, effectiveResponsesExtraRequestBody(cfg))
 	if err != nil {
 		return nil, fmt.Errorf("序列化请求体失败: %w", err)
 	}
@@ -531,6 +602,9 @@ func (c *Client) nonStreamingResponsesMessage(ctx context.Context, cfg Config, m
 	if event.Usage != nil {
 		events <- StreamEvent{Usage: event.Usage}
 	}
+	if event.Thinking != "" {
+		events <- StreamEvent{Thinking: event.Thinking}
+	}
 	if event.Delta != "" {
 		events <- StreamEvent{Delta: event.Delta}
 	}
@@ -557,6 +631,7 @@ func completedResponsesEvent(output []json.RawMessage, usage *Usage) (StreamEven
 		return StreamEvent{}, err
 	}
 	var calls []message.ToolCall
+	var thinking strings.Builder
 	var text strings.Builder
 	for _, raw := range output {
 		var view responsesOutputItemView
@@ -564,6 +639,13 @@ func completedResponsesEvent(output []json.RawMessage, usage *Usage) (StreamEven
 			return StreamEvent{}, fmt.Errorf("解析 Responses output item 失败: %w", err)
 		}
 		switch view.Type {
+		case "reasoning":
+			if summary := responsesReasoningSummary(view); summary != "" {
+				if thinking.Len() > 0 {
+					thinking.WriteString("\n\n")
+				}
+				thinking.WriteString(summary)
+			}
 		case "message":
 			for _, part := range view.Content {
 				if part.Type == "output_text" && part.Text != "" {
@@ -583,6 +665,7 @@ func completedResponsesEvent(output []json.RawMessage, usage *Usage) (StreamEven
 		return StreamEvent{}, err
 	}
 	return StreamEvent{
+		Thinking:     thinking.String(),
 		Delta:        text.String(),
 		ToolCalls:    calls,
 		ProviderData: providerData,
@@ -697,6 +780,7 @@ func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response
 	scanner.Buffer(make([]byte, 0, streamScannerInitialBufferBytes), streamScannerMaxTokenBytes)
 	active := make(map[int]*activeResponseToolCall)
 	sawOutputTextDelta := false
+	sawReasoningSummaryDelta := false
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -721,6 +805,15 @@ func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response
 					return result
 				}
 				sawOutputTextDelta = true
+			}
+		case "response.reasoning_summary_text.delta":
+			if event.Delta != "" {
+				result.madeProgress = true
+				if !emitStreamEvent(ctx, events, StreamEvent{Thinking: event.Delta}) {
+					result.err = ctx.Err()
+					return result
+				}
+				sawReasoningSummaryDelta = true
 			}
 		case "response.output_item.added":
 			if len(event.Item) != 0 {
@@ -780,6 +873,9 @@ func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response
 			}
 			if sawOutputTextDelta {
 				finalEvent.Delta = ""
+			}
+			if sawReasoningSummaryDelta {
+				finalEvent.Thinking = ""
 			}
 			if !emitFinalResponsesEvent(ctx, events, finalEvent) {
 				result.err = ctx.Err()

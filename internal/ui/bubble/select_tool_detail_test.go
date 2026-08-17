@@ -91,9 +91,9 @@ func TestSelectToolPresentationRejectsInconsistentSelection(t *testing.T) {
 
 func TestTranscriptRenderKeyIncludesSelectToolInput(t *testing.T) {
 	entry := transcriptEntry{kind: entryTool, toolName: "question", toolStatus: "ok", toolInput: json.RawMessage(`{"questions":[{"prompt":"First"}]}`)}
-	first := transcriptRenderKey(entry, 80, time.Time{})
+	first := transcriptRenderKey(entry, 80, time.Time{}, false)
 	entry.toolInput = json.RawMessage(`{"questions":[{"prompt":"Second"}]}`)
-	second := transcriptRenderKey(entry, 80, time.Time{})
+	second := transcriptRenderKey(entry, 80, time.Time{}, false)
 	if first == second {
 		t.Fatal("tool input did not participate in transcript render cache key")
 	}

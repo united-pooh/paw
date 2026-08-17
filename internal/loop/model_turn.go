@@ -328,24 +328,44 @@ func (runner *Runner) handleEvent(state *turnState, ev model.StreamEvent, finali
 	if ev.Usage != nil {
 		runner.recordUsageEvent(state, *ev.Usage)
 	}
-	if err := runner.appendThinking(ev.Thinking); err != nil {
-		msg, failErr := runner.failModelTurnWithPartial(state, err)
-		return msg, "", false, failErr
+
+	// 捕获请求 origin
+	if ev.GeneratedBy != nil {
+		state.generatedBy = ev.GeneratedBy
 	}
 
-	if err := runner.appendDelta(state, ev.Delta); err != nil {
-		return runner.partialAssistantMessage(state), "", false, err
-	}
-	if len(ev.ToolCalls) > 0 {
-		state.resetToolPayloadCandidate()
-	}
-	appendStreamToolCalls(state, ev.ToolCalls)
-	if len(ev.ProviderData) != 0 {
-		state.providerData = append(json.RawMessage(nil), ev.ProviderData...)
-	}
-
-	if !ev.Done {
-		return message.Message{}, "", false, nil
+	// 新路径：AssistantPart 生命周期事件
+	if ev.AssistantPart != nil {
+		state.structuredPartsSeen = true
+		if err := runner.handleAssistantPartEvent(state, ev.AssistantPart); err != nil {
+			msg, failErr := runner.failModelTurnWithPartial(state, err)
+			return msg, "", false, failErr
+		}
+		if !ev.Done {
+			return message.Message{}, "", false, nil
+		}
+	} else {
+		// 旧路径：转换 Delta/Thinking/ToolCalls 为兼容合成 parts
+		if !state.structuredPartsSeen && (ev.Thinking != "" || ev.Delta != "" || len(ev.ToolCalls) > 0 || len(ev.ProviderData) != 0) {
+			state.legacyEvents = true
+		}
+		if err := runner.appendThinking(state, ev.Thinking); err != nil {
+			msg, failErr := runner.failModelTurnWithPartial(state, err)
+			return msg, "", false, failErr
+		}
+		if err := runner.appendDelta(state, ev.Delta); err != nil {
+			return runner.partialAssistantMessage(state), "", false, err
+		}
+		if len(ev.ToolCalls) > 0 {
+			state.resetToolPayloadCandidate()
+		}
+		appendStreamToolCalls(state, ev.ToolCalls)
+		if len(ev.ProviderData) != 0 {
+			state.providerData = append(json.RawMessage(nil), ev.ProviderData...)
+		}
+		if !ev.Done {
+			return message.Message{}, "", false, nil
+		}
 	}
 
 	if err := runner.flushContinuationOverlap(state); err != nil {
@@ -366,6 +386,66 @@ func (runner *Runner) handleEvent(state *turnState, ev model.StreamEvent, finali
 		return msg, ev.FinishReason, false, failErr
 	}
 	return msg, ev.FinishReason, true, nil
+}
+
+func (runner *Runner) handleAssistantPartEvent(state *turnState, event *model.AssistantPartEvent) error {
+	if state.parts == nil {
+		state.parts = newPartAccumulator()
+	}
+
+	switch event.Lifecycle {
+	case model.AssistantPartLifecycleStart:
+		state.parts.openPart(event.BlockIndex, message.AssistantPartType(event.Type))
+		switch event.Type {
+		case "reasoning":
+			if event.Redacted {
+				state.parts.setReasoningRedacted(event.BlockIndex)
+			}
+			runner.sendReasoningStart(state, event.BlockIndex, event.Redacted)
+		case "tool_call":
+			state.parts.setToolCallIdentity(event.BlockIndex, event.ToolCallID, event.ToolName)
+			if len(event.ToolArgs) != 0 {
+				state.parts.setToolCallIdentity(event.BlockIndex, event.ToolCallID, event.ToolName)
+				state.parts.appendToolArgs(event.BlockIndex, string(event.ToolArgs))
+			}
+		}
+
+	case model.AssistantPartLifecycleDelta:
+		switch event.Type {
+		case "reasoning":
+			state.parts.appendText(event.BlockIndex, event.Delta)
+			runner.sendReasoningDelta(state, event.BlockIndex, event.Delta)
+		case "text":
+			state.parts.appendText(event.BlockIndex, event.Delta)
+			// 仍通过旧路径渲染文本，保证 Bubble 可见
+			return runner.appendDelta(state, event.Delta)
+		case "tool_call":
+			state.parts.appendToolArgs(event.BlockIndex, string(event.ToolArgs))
+			// 如果 tool 的文本可见性发生变化，可能需要重置 tool payload 状态
+		}
+
+		if len(event.OpaqueData) != 0 && event.Type == "reasoning" {
+			state.parts.setReasoningProviderData(event.BlockIndex, event.OpaqueData)
+		}
+
+	case model.AssistantPartLifecycleEnd:
+		switch event.Type {
+		case "reasoning":
+			runner.sendReasoningEnd(state, event.BlockIndex)
+			if len(event.OpaqueData) != 0 {
+				state.parts.setReasoningProviderData(event.BlockIndex, event.OpaqueData)
+			}
+		case "tool_call":
+			// 将累积的工具调用加入 state.toolCalls，保持与现有工具执行兼容
+			if p, exists := state.parts.active[event.BlockIndex]; exists && p.ToolCall != nil {
+				state.toolCalls = append(state.toolCalls, *p.ToolCall)
+				state.resetToolPayloadCandidate()
+			}
+		}
+		state.parts.closePart(event.BlockIndex)
+	}
+
+	return nil
 }
 
 func (runner *Runner) beginUsageRequest(state *turnState) {
@@ -852,9 +932,13 @@ func looksLikeToolPreamble(trimmed string) bool {
 	return false
 }
 
-func (runner *Runner) appendThinking(thinking string) error {
+func (runner *Runner) appendThinking(state *turnState, thinking string) error {
 	if thinking == "" {
 		return nil
+	}
+	if state != nil {
+		runner.ensureLegacyAssistantPart(state, message.AssistantPartReasoning)
+		state.parts.appendText(state.legacyActiveIndex, thinking)
 	}
 	runner.recordTraceEvent("thinking_delta", map[string]any{
 		"text":  thinking,
@@ -868,9 +952,67 @@ func (runner *Runner) appendThinking(thinking string) error {
 	return nil
 }
 
+func (runner *Runner) ensureLegacyAssistantPart(state *turnState, partType message.AssistantPartType) {
+	if state == nil {
+		return
+	}
+	if state.parts == nil {
+		state.parts = newPartAccumulator()
+	}
+	if state.legacyActiveType == partType {
+		if _, exists := state.parts.active[state.legacyActiveIndex]; exists {
+			return
+		}
+	}
+	if state.legacyActiveType != "" {
+		state.parts.closePart(state.legacyActiveIndex)
+	}
+	state.legacyNextPartIndex++
+	state.legacyActiveIndex = -state.legacyNextPartIndex
+	state.legacyActiveType = partType
+	state.parts.openPart(state.legacyActiveIndex, partType)
+}
+
+func (runner *Runner) finalizeLegacyAssistantPart(state *turnState) {
+	if state == nil || state.parts == nil || state.legacyActiveType == "" {
+		return
+	}
+	state.parts.closePart(state.legacyActiveIndex)
+	state.legacyActiveType = ""
+}
+
+func (runner *Runner) sendReasoningStart(state *turnState, blockIndex int, redacted bool) {
+	if sink, ok := runner.ui.(ui.AssistantPartReceiver); ok {
+		_ = sink.OnReasoningStart(blockIndex, redacted)
+	}
+}
+
+func (runner *Runner) sendReasoningDelta(state *turnState, blockIndex int, text string) {
+	if text == "" {
+		return
+	}
+	runner.recordTraceEvent("thinking_delta", map[string]any{
+		"text":  text,
+		"bytes": len([]byte(text)),
+	})
+	if sink, ok := runner.ui.(ui.AssistantPartReceiver); ok {
+		_ = sink.OnReasoningDelta(blockIndex, text)
+	}
+}
+
+func (runner *Runner) sendReasoningEnd(state *turnState, blockIndex int) {
+	if sink, ok := runner.ui.(ui.AssistantPartReceiver); ok {
+		_ = sink.OnReasoningEnd(blockIndex)
+	}
+}
+
 func (runner *Runner) writeDelta(state *turnState, delta string) error {
 	if delta == "" {
 		return nil
+	}
+	if state != nil && state.legacyEvents {
+		runner.ensureLegacyAssistantPart(state, message.AssistantPartText)
+		state.parts.appendText(state.legacyActiveIndex, delta)
 	}
 	runner.recordTraceEvent("assistant_delta", map[string]any{
 		"text":  delta,
@@ -892,11 +1034,15 @@ func (runner *Runner) finalizeAssistantMessage(state *turnState) (message.Messag
 	if len(state.toolCalls) > 0 {
 		msg := buildAssistantToolCallMessage(state.toolCalls)
 		msg.ProviderData = append(json.RawMessage(nil), state.providerData...)
+		msg.AssistantParts = runner.completedAssistantParts(state, state.toolCalls)
+		msg.GeneratedBy = state.generatedBy
 		return msg, nil
 	}
 
 	msg := parseAssistantMessage(state.content.String())
-	if len(toolCallsFromMessage(msg)) > 0 {
+	if calls := toolCallsFromMessage(msg); len(calls) > 0 {
+		msg.AssistantParts = runner.completedAssistantParts(state, calls)
+		msg.GeneratedBy = state.generatedBy
 		return msg, nil
 	}
 
@@ -911,7 +1057,50 @@ func (runner *Runner) finalizeAssistantMessage(state *turnState) (message.Messag
 	}
 
 	msg.ProviderData = append(json.RawMessage(nil), state.providerData...)
+	msg.AssistantParts = runner.completedAssistantParts(state, nil)
+	msg.GeneratedBy = state.generatedBy
 	return msg, nil
+}
+
+func (runner *Runner) completedAssistantParts(state *turnState, calls []message.ToolCall) []message.AssistantPart {
+	if state == nil {
+		return nil
+	}
+	var parts []message.AssistantPart
+	if state.parts != nil {
+		parts = state.parts.finalize()
+	}
+	for _, call := range calls {
+		if assistantPartsContainToolCall(parts, call) {
+			continue
+		}
+		copied := call
+		copied.Input = append(json.RawMessage(nil), call.Input...)
+		parts = append(parts, message.AssistantPart{
+			Type:     message.AssistantPartToolCall,
+			Status:   message.AssistantPartCompleted,
+			ToolCall: &copied,
+		})
+	}
+	return parts
+}
+
+func assistantPartsContainToolCall(parts []message.AssistantPart, want message.ToolCall) bool {
+	for _, part := range parts {
+		if part.ToolCall == nil {
+			continue
+		}
+		if want.ID != "" || part.ToolCall.ID != "" {
+			if want.ID == part.ToolCall.ID {
+				return true
+			}
+			continue
+		}
+		if want.Name == part.ToolCall.Name && string(want.Input) == string(part.ToolCall.Input) {
+			return true
+		}
+	}
+	return false
 }
 
 func (runner *Runner) finishWithoutDone(ctx context.Context, state *turnState) (message.Message, error) {
@@ -961,6 +1150,14 @@ func (runner *Runner) partialAssistantMessage(state *turnState) message.Message 
 	msg.Role = message.RoleAssistant
 	msg.Content = content
 	msg.ProviderData = append(json.RawMessage(nil), state.providerData...)
+	if state.parts != nil {
+		msg.AssistantParts = state.parts.finalize()
+		for i := range msg.AssistantParts {
+			if msg.AssistantParts[i].Status == "" {
+				msg.AssistantParts[i].Status = message.AssistantPartPartial
+			}
+		}
+	}
 	return msg
 }
 
@@ -971,10 +1168,14 @@ func (runner *Runner) protocolAssistantMessage(state *turnState) message.Message
 	if len(state.toolCalls) > 0 {
 		msg := buildAssistantToolCallMessage(state.toolCalls)
 		msg.ProviderData = append(json.RawMessage(nil), state.providerData...)
+		msg.AssistantParts = runner.completedAssistantParts(state, state.toolCalls)
+		msg.GeneratedBy = state.generatedBy
 		return msg
 	}
 	msg := parseAssistantMessage(state.content.String())
 	msg.ProviderData = append(json.RawMessage(nil), state.providerData...)
+	msg.AssistantParts = runner.completedAssistantParts(state, toolCallsFromMessage(msg))
+	msg.GeneratedBy = state.generatedBy
 	return msg
 }
 

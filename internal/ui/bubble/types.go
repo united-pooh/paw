@@ -32,8 +32,10 @@ const (
 	entryUser
 	// entryAssistant 表示 assistant 的模型输出消息。
 	entryAssistant
-	// entryThinking 表示模型 thinking 过程消息。
+	// entryThinking 表示模型 thinking 过程消息（旧路径，逐步被 entryReasoning 取代）。
 	entryThinking
+	// entryReasoning 表示模型思考过程消息（有序 assistant part 路径）。
+	entryReasoning
 	// entryTool 表示工具调用、工具结果或终端命令消息。
 	entryTool
 	// entryError 表示错误消息。
@@ -74,6 +76,13 @@ type transcriptEntry struct {
 	toolFinishedAt  time.Time
 	turnMetadata    *session.TurnMetadata
 	version         int
+	// reasoning 特定字段
+	redacted              bool
+	reasoningPartIndex    int // provider block index
+	reasoningStartedAt    *time.Time
+	reasoningFinishedAt   *time.Time
+	reasoningExpansionSet bool // UI-only local override; never persisted
+	reasoningExpanded     bool // value used when reasoningExpansionSet is true
 }
 
 type toolCitation struct {
@@ -148,6 +157,15 @@ type assistantDeltaMsg string
 
 // thinkingDeltaMsg 表示模型 thinking 流式输出的一段文本增量。
 type thinkingDeltaMsg string
+
+// assistantPartMsg 表示有序助理 part 生命周期事件（从模型流接收）。
+type assistantPartMsg struct {
+	lifecycle  string // "start" | "delta" | "end"
+	blockIndex int
+	partType   string // "reasoning" | "text" | "tool_call"
+	delta      string
+	redacted   bool
+}
 
 // toolCallMsg 表示工具调用事件。
 type toolCallMsg ui.ToolCallEvent
@@ -539,6 +557,7 @@ type appModel struct {
 	lastToolProgressSecond     int64
 	activeAssistant            int
 	activeThinking             int
+	activeReasoning            int
 	activeTurnUserEntry        int
 	doneAssistant              int
 	assistantStream            streamLineBuffer

@@ -412,7 +412,7 @@ func TestThinkingTailFlushesBeforeAssistantStream(t *testing.T) {
 	next, _ = model.Update(assistantDeltaMsg("answer"))
 	model = next.(appModel)
 
-	thinking := lastEntryOfKind(t, model.transcript, entryThinking)
+	thinking := lastEntryOfKind(t, model.transcript, entryReasoning)
 	if thinking.body != "private plan" {
 		t.Fatalf("thinking entry = %#v, want flushed tail", thinking)
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -244,6 +245,85 @@ func TestTodoSnapshotSurvivesReload(t *testing.T) {
 	}
 	if len(raw) != 1 || raw[0].TodoSnapshot == nil || raw[0].TodoSnapshot.Items[0].ID != "x" {
 		t.Fatalf("todo snapshot lost after reload: %+v", raw)
+	}
+}
+
+func TestLoadLatestTodoSnapshotRestoresNewestPersistedEvent(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewJSONLStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := store.AppendTodoSnapshot(ctx, "s1", todo.Snapshot{
+		Items:     []todo.Item{{ID: "first", Content: "First", Status: todo.StatusCompleted}},
+		UpdatedAt: time.Date(2026, 8, 16, 1, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := todo.Snapshot{
+		Explanation: "resume this work",
+		Items:       []todo.Item{{ID: "current", Content: "Current", Status: todo.StatusInProgress}},
+		UpdatedAt:   time.Date(2026, 8, 16, 2, 0, 0, 0, time.UTC),
+	}
+	if _, err := store.AppendTodoSnapshot(ctx, "s1", want); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := NewJSONLStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok, err := reopened.LoadLatestTodoSnapshot(ctx, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || !reflect.DeepEqual(got, want) {
+		t.Fatalf("LoadLatestTodoSnapshot() = (%#v, %v), want (%#v, true)", got, ok, want)
+	}
+}
+
+func TestLoadLatestTodoSnapshotPreservesExplicitClear(t *testing.T) {
+	store := newTestJSONLStore(t)
+	ctx := context.Background()
+	if _, err := store.AppendTodoSnapshot(ctx, "cleared", todo.Snapshot{
+		Items: []todo.Item{{ID: "old", Content: "Old", Status: todo.StatusCompleted}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendTodoSnapshot(ctx, "cleared", todo.Snapshot{}); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := store.LoadLatestTodoSnapshot(ctx, "cleared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || !got.Cleared() {
+		t.Fatalf("LoadLatestTodoSnapshot() = (%#v, %v), want explicit clear", got, ok)
+	}
+}
+
+func TestLoadLatestTodoSnapshotRestoresLegacyToolResult(t *testing.T) {
+	store := newTestJSONLStore(t)
+	ctx := context.Background()
+	if err := store.Append(ctx, "legacy",
+		message.Message{Role: message.RoleAssistant, ToolUse: &message.ToolCall{
+			ID: "todo-call", Name: "update_todo", Input: json.RawMessage(`{"items":[]}`),
+		}},
+		message.Message{Role: message.RoleUser, ToolResult: &message.ToolResult{
+			ToolUseID: "todo-call",
+			Content:   `{"accepted":true,"snapshot":{"explanation":"legacy work","items":[{"id":"legacy","content":"Resume legacy work","status":"pending"}],"updated_at":"2026-08-02T10:00:00Z"}}`,
+		}},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok, err := store.LoadLatestTodoSnapshot(ctx, "legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || got.Explanation != "legacy work" || len(got.Items) != 1 || got.Items[0].ID != "legacy" || got.Items[0].Status != todo.StatusPending {
+		t.Fatalf("LoadLatestTodoSnapshot() = (%#v, %v), want restored legacy snapshot", got, ok)
 	}
 }
 

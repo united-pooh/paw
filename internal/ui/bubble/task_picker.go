@@ -256,6 +256,9 @@ func loadTaskTranscriptEntries(ctx context.Context, store SessionStore, task tas
 }
 
 func transcriptEntriesFromMessage(msg message.Message, createdAt time.Time, workspaceRoot string) []transcriptEntry {
+	if len(msg.AssistantParts) > 0 && msg.Role == message.RoleAssistant {
+		return transcriptEntriesFromAssistantParts(msg, createdAt, workspaceRoot)
+	}
 	var entries []transcriptEntry
 	if content := strings.TrimSpace(msg.Content); content != "" {
 		switch msg.Role {
@@ -312,6 +315,63 @@ func transcriptEntriesFromMessage(msg message.Message, createdAt time.Time, work
 			toolResultOnly: true,
 			createdAt:      createdAt,
 		})
+	}
+	return entries
+}
+
+// transcriptEntriesFromAssistantParts 将有序 AssistantParts 按原顺序展开为
+// reasoning / text / tool 条目。存在有序 parts 时不使用兼容投影的 Content/
+// ToolUses，避免重复渲染。
+func transcriptEntriesFromAssistantParts(msg message.Message, createdAt time.Time, workspaceRoot string) []transcriptEntry {
+	entries := make([]transcriptEntry, 0, len(msg.AssistantParts))
+	for _, part := range msg.AssistantParts {
+		switch part.Type {
+		case message.AssistantPartReasoning:
+			entry := transcriptEntry{
+				kind:                entryReasoning,
+				title:               "reasoning",
+				redacted:            part.Reasoning.Redacted,
+				reasoningPartIndex:  -1,
+				reasoningStartedAt:  part.Reasoning.StartedAt,
+				reasoningFinishedAt: part.Reasoning.FinishedAt,
+				createdAt:           createdAt,
+			}
+			if !part.Reasoning.Redacted {
+				entry.body = part.Reasoning.Text
+			}
+			entries = append(entries, entry)
+		case message.AssistantPartText:
+			entries = append(entries, transcriptEntry{
+				kind:      entryAssistant,
+				title:     "assistant",
+				body:      part.Text.Text,
+				createdAt: createdAt,
+			})
+		case message.AssistantPartToolCall:
+			call := part.ToolCall
+			if call == nil {
+				continue
+			}
+			name := strings.TrimSpace(call.Name)
+			if name == "" {
+				name = "tool"
+			}
+			target := displayToolTarget(name, call.Input, workspaceRoot)
+			if selectTarget, ok := selectToolCallTarget(name, call.Input); ok {
+				target = selectTarget
+			}
+			entries = append(entries, transcriptEntry{
+				kind:       entryTool,
+				title:      "tool",
+				body:       formatRunningToolCallBody(name, call.Input, ""),
+				toolUseID:  strings.TrimSpace(call.ID),
+				toolName:   name,
+				toolStatus: "running",
+				toolTarget: target,
+				toolInput:  append(json.RawMessage(nil), call.Input...),
+				createdAt:  createdAt,
+			})
+		}
 	}
 	return entries
 }

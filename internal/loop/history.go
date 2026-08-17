@@ -41,7 +41,7 @@ func (runner *Runner) PendingSupplementCount() int {
 
 func (runner *Runner) buildTurnHistory(input message.Message) ([]message.Message, []string) {
 	runner.mu.RLock()
-	history := append([]message.Message(nil), runner.history...)
+	history := message.CloneMessages(runner.history)
 	runner.mu.RUnlock()
 	supplements := runner.drainSupplements()
 	history = append(history, buildSupplementMessages(supplements)...)
@@ -139,7 +139,7 @@ func (runner *Runner) currentHistory() []message.Message {
 	}
 	runner.mu.RLock()
 	defer runner.mu.RUnlock()
-	return append([]message.Message(nil), runner.history...)
+	return message.CloneMessages(runner.history)
 }
 
 func (runner *Runner) setHistory(history []message.Message) {
@@ -147,7 +147,7 @@ func (runner *Runner) setHistory(history []message.Message) {
 		return
 	}
 	runner.mu.Lock()
-	runner.history = append([]message.Message(nil), history...)
+	runner.history = message.CloneMessages(history)
 	runner.mu.Unlock()
 }
 
@@ -300,7 +300,7 @@ func (runner *Runner) commitHistory(ctx context.Context, history []message.Messa
 
 	// 持久化成功后再更新内存副本。
 	runner.mu.Lock()
-	runner.history = append([]message.Message(nil), history...)
+	runner.history = message.CloneMessages(history)
 	runner.mu.Unlock()
 	return lastSeq, nil
 }
@@ -328,16 +328,16 @@ func (runner *Runner) LoadSession(ctx context.Context, sessionID string) (Sessio
 		if err != nil {
 			return SessionLoadResult{}, err
 		}
-		result.Messages = append([]message.Message(nil), snapshot.Messages...)
+		result.Messages = message.CloneMessages(snapshot.Messages)
 		result.Recovery = copyRecoveryState(snapshot.Recovery)
-		activeHistory = append([]message.Message(nil), snapshot.ActiveHistory...)
+		activeHistory = message.CloneMessages(snapshot.ActiveHistory)
 	} else {
 		messages, err := runner.store.LoadResolvedHistory(ctx, sessionID)
 		if err != nil {
 			return SessionLoadResult{}, err
 		}
-		result.Messages = append([]message.Message(nil), messages...)
-		activeHistory = append([]message.Message(nil), messages...)
+		result.Messages = message.CloneMessages(messages)
+		activeHistory = message.CloneMessages(messages)
 	}
 	// 会话加载时修复工具调用配对（对齐 CodeWhale session_manager 加载修复）：
 	// 崩溃/中断后持久化的历史可能带孤儿 tool result 或悬空 tool_use，
@@ -385,7 +385,7 @@ func (runner *Runner) setHistoryIfNil(history []message.Message) {
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
 	if runner.history == nil {
-		runner.history = append([]message.Message(nil), history...)
+		runner.history = message.CloneMessages(history)
 	}
 }
 
@@ -429,6 +429,15 @@ func buildToolResultsMessage(results []message.ToolResult) message.Message {
 }
 
 func toolCallsFromMessage(msg message.Message) []message.ToolCall {
+	if len(msg.AssistantParts) > 0 {
+		calls := make([]message.ToolCall, 0)
+		for _, part := range msg.AssistantParts {
+			if part.ToolCall != nil {
+				calls = append(calls, *part.ToolCall)
+			}
+		}
+		return calls
+	}
 	if len(msg.ToolUses) > 0 {
 		return append([]message.ToolCall(nil), msg.ToolUses...)
 	}

@@ -124,9 +124,8 @@ func copyToolCalls(calls []message.ToolCall) []message.ToolCall {
 	if len(calls) == 0 {
 		return nil
 	}
-	out := make([]message.ToolCall, len(calls))
-	copy(out, calls)
-	return out
+	msg := message.Message{Role: message.RoleAssistant, ToolUses: calls}
+	return message.CloneMessage(msg).ToolUses
 }
 
 func copyRecovery(in *RecoveryState) *RecoveryState {
@@ -140,6 +139,15 @@ func copyRecovery(in *RecoveryState) *RecoveryState {
 }
 
 func toolCallsFromMessage(msg message.Message) []message.ToolCall {
+	if len(msg.AssistantParts) > 0 {
+		calls := make([]message.ToolCall, 0)
+		for _, part := range msg.AssistantParts {
+			if part.ToolCall != nil {
+				calls = append(calls, *part.ToolCall)
+			}
+		}
+		return calls
+	}
 	if len(msg.ToolUses) > 0 {
 		return append([]message.ToolCall(nil), msg.ToolUses...)
 	}

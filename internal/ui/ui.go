@@ -54,6 +54,15 @@ type ThinkingDeltaReceiver interface {
 	OnThinkingDelta(text string) error
 }
 
+// AssistantPartReceiver 是 UI 的可选扩展，用于接收有序助理 part 生命周期事件。
+// partIndex 是 provider block 索引，对应 model.AssistantPartEvent.BlockIndex。
+// 实现者应处理 live reasoning 渲染、完成折叠等。
+type AssistantPartReceiver interface {
+	OnReasoningStart(partIndex int, redacted bool) error
+	OnReasoningDelta(partIndex int, text string) error
+	OnReasoningEnd(partIndex int) error
+}
+
 // SystemNotifier 是 UI 的可选扩展，用于接收后台任务完成等系统事件。
 type SystemNotifier interface {
 	OnSystemMessage(event SystemEvent) error

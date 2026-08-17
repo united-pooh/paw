@@ -57,7 +57,7 @@ func TestStateBlockProviderFull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	for _, want := range []string{"## 目标（plan）", "完成状态压缩", "## 进度（todo）", "T1 存储层", "## 长期习惯（memory）", "用户偏好", "## 方向记忆（ariadne）", "状态压缩实施", "updated"} {
+	for _, want := range []string{"## 目标（plan）", "完成状态压缩", "## 进度（todo）", "说明：进度", "T1 存储层", "id: 1", "## 长期习惯（memory）", "用户偏好", "## 方向记忆（ariadne）", "状态压缩实施", "updated"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("state block missing %q:\n%s", want, out)
 		}

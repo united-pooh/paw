@@ -48,6 +48,28 @@ func TestBrokerCopiesPublishedSnapshot(t *testing.T) {
 	}
 }
 
+func TestBrokerRestoreReplacesSessionState(t *testing.T) {
+	broker := NewBroker()
+	broker.Publish(Snapshot{Items: []Item{{ID: "old", Content: "old", Status: StatusPending}}})
+	want := Snapshot{Explanation: "resumed", Items: []Item{{ID: "new", Content: "new", Status: StatusInProgress}}}
+	broker.Restore(want, true)
+
+	got, ok := broker.Latest()
+	if !ok || got.Explanation != want.Explanation || got.Items[0].ID != "new" {
+		t.Fatalf("Latest() = (%#v, %v), want restored snapshot", got, ok)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := broker.Next(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Next() returned stale event: %v", err)
+	}
+
+	broker.Restore(Snapshot{}, false)
+	if _, ok := broker.Latest(); ok {
+		t.Fatal("Restore(empty, false) retained prior snapshot")
+	}
+}
+
 func TestBrokerNextHonorsContext(t *testing.T) {
 	broker := NewBroker()
 	ctx, cancel := context.WithCancel(context.Background())

@@ -43,12 +43,16 @@ func TestStreamMessageUsesAnthropicStreamForDeepSeekEarlyUsageAndThinking(t *tes
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = fmt.Fprint(w, "event: message_start\n")
 		_, _ = fmt.Fprint(w, "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":100,\"cache_creation_input_tokens\":4,\"cache_read_input_tokens\":40,\"output_tokens\":0}}}\n\n")
-		_, _ = fmt.Fprint(w, "event: content_block_delta\n")
-		_, _ = fmt.Fprint(w, "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"plan\"}}\n\n")
-		_, _ = fmt.Fprint(w, "event: content_block_delta\n")
-		_, _ = fmt.Fprint(w, "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n")
+		_, _ = fmt.Fprint(w, "event: content_block_start\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"plan\"}}\n\n")
+		_, _ = fmt.Fprint(w, "event: content_block_start\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"hi\"}}\n\n")
 		_, _ = fmt.Fprint(w, "event: message_delta\n")
 		_, _ = fmt.Fprint(w, "data: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":100,\"cache_creation_input_tokens\":4,\"cache_read_input_tokens\":40,\"output_tokens\":2}}\n\n")
+		_, _ = fmt.Fprint(w, "event: content_block_stop\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n")
+		_, _ = fmt.Fprint(w, "event: content_block_stop\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"content_block_stop\",\"index\":1}\n\n")
 		_, _ = fmt.Fprint(w, "event: message_stop\n")
 		_, _ = fmt.Fprint(w, "data: {\"type\":\"message_stop\"}\n\n")
 	}))
@@ -88,8 +92,13 @@ func TestStreamMessageUsesAnthropicStreamForDeepSeekEarlyUsageAndThinking(t *tes
 			}
 			lastUsage = &usage
 		}
+		if ev.AssistantPart != nil && ev.AssistantPart.Type == "reasoning" {
+			gotThinking += ev.AssistantPart.Delta
+		}
+		if ev.AssistantPart != nil && ev.AssistantPart.Lifecycle == AssistantPartLifecycleDelta && ev.AssistantPart.Type == "text" {
+			gotDelta += ev.AssistantPart.Delta
+		}
 		gotDelta += ev.Delta
-		gotThinking += ev.Thinking
 	}
 	if !requestChecked {
 		t.Fatalf("server did not check request")

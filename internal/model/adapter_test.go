@@ -98,3 +98,22 @@ func TestDeepSeekAdapterIncludesToolNameInSchemaErrors(t *testing.T) {
 		t.Fatalf("error = %v, want tool name", err)
 	}
 }
+
+func TestOpenAICompatibleAdapterBuildsResponsesRequest(t *testing.T) {
+	adapter := OpenAICompatibleAdapter{}
+	req, err := adapter.BuildResponsesRequest(
+		Config{Provider: "openai", Adapter: "gpt", Model: "gpt-test"},
+		[]message.Message{{Role: message.RoleUser, Content: "hello"}},
+		nil,
+		true,
+	)
+	if err != nil {
+		t.Fatalf("BuildResponsesRequest() error = %v", err)
+	}
+	if req.Model != "gpt-test" || !req.Stream {
+		t.Fatalf("request = %#v", req)
+	}
+	if req.Reasoning["summary"] != "auto" {
+		t.Fatalf("reasoning = %#v, want summary=auto", req.Reasoning)
+	}
+}

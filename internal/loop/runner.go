@@ -172,23 +172,162 @@ const (
 )
 
 type turnState struct {
-	content           strings.Builder
-	visibleContent    strings.Builder
-	streamEstablished bool
-	pending           strings.Builder
-	toolPayload       toolPayloadCandidateState
-	toolCalls         []message.ToolCall
-	providerData      json.RawMessage
-	wroteOutput       bool
-	outputMode        outputMode
-	usage             model.Usage
-	usageKnown        bool
-	requestUsage      model.Usage
-	requestUsageKnown bool
-	overlap           continuationOverlapState
-	uiFinalized       bool
-	traceStageID      string
-	traceAgentID      string
+	content             strings.Builder
+	visibleContent      strings.Builder
+	streamEstablished   bool
+	pending             strings.Builder
+	toolPayload         toolPayloadCandidateState
+	toolCalls           []message.ToolCall
+	providerData        json.RawMessage
+	wroteOutput         bool
+	outputMode          outputMode
+	usage               model.Usage
+	usageKnown          bool
+	requestUsage        model.Usage
+	requestUsageKnown   bool
+	overlap             continuationOverlapState
+	uiFinalized         bool
+	traceStageID        string
+	traceAgentID        string
+	parts               *partAccumulator
+	generatedBy         *message.MessageOrigin
+	structuredPartsSeen bool
+	legacyEvents        bool
+	legacyActiveType    message.AssistantPartType
+	legacyActiveIndex   int
+	legacyNextPartIndex int
+}
+
+// partAccumulator 按 provider block index 收集有序助理 parts。
+// active 存正在接收的事件，order 记录插入顺序，completedParts 存储已关闭的 part。
+type partAccumulator struct {
+	active         map[int]message.AssistantPart
+	order          []int
+	completedParts []message.AssistantPart
+	origin         *message.MessageOrigin
+}
+
+func newPartAccumulator() *partAccumulator {
+	return &partAccumulator{
+		active: make(map[int]message.AssistantPart),
+	}
+}
+
+func (pa *partAccumulator) openPart(blockIndex int, partType message.AssistantPartType) {
+	if _, exists := pa.active[blockIndex]; exists {
+		return
+	}
+	now := time.Now()
+	p := message.AssistantPart{
+		Type:   partType,
+		Status: message.AssistantPartPartial,
+	}
+	switch partType {
+	case message.AssistantPartReasoning:
+		p.Reasoning = &message.ReasoningPart{
+			ProviderStateComplete: false,
+			StartedAt:             &now,
+		}
+	case message.AssistantPartText:
+		p.Text = &message.AssistantTextPart{}
+	case message.AssistantPartToolCall:
+		p.ToolCall = &message.ToolCall{}
+	}
+	pa.active[blockIndex] = p
+	pa.order = append(pa.order, blockIndex)
+}
+
+func (pa *partAccumulator) closePart(blockIndex int) {
+	p, exists := pa.active[blockIndex]
+	if !exists {
+		return
+	}
+	now := time.Now()
+	switch p.Type {
+	case message.AssistantPartReasoning:
+		if p.Reasoning != nil {
+			p.Reasoning.FinishedAt = &now
+		}
+	case message.AssistantPartText:
+		// text parts carry no extra timestamp
+	}
+	p.Status = message.AssistantPartCompleted
+	delete(pa.active, blockIndex)
+	pa.completedParts = append(pa.completedParts, p)
+}
+
+func (pa *partAccumulator) appendText(blockIndex int, delta string) {
+	p, exists := pa.active[blockIndex]
+	if !exists {
+		return
+	}
+	switch p.Type {
+	case message.AssistantPartReasoning:
+		if p.Reasoning != nil {
+			p.Reasoning.Text += delta
+		}
+	case message.AssistantPartText:
+		if p.Text != nil {
+			p.Text.Text += delta
+		}
+	}
+	pa.active[blockIndex] = p
+}
+
+func (pa *partAccumulator) setToolCallIdentity(blockIndex int, id, name string) {
+	p, exists := pa.active[blockIndex]
+	if !exists || p.ToolCall == nil {
+		return
+	}
+	if id != "" {
+		p.ToolCall.ID = id
+	}
+	if name != "" {
+		p.ToolCall.Name = name
+	}
+	pa.active[blockIndex] = p
+}
+
+func (pa *partAccumulator) appendToolArgs(blockIndex int, args string) {
+	p, exists := pa.active[blockIndex]
+	if !exists || p.ToolCall == nil {
+		return
+	}
+	if p.ToolCall.Input == nil {
+		p.ToolCall.Input = json.RawMessage(args)
+	} else {
+		p.ToolCall.Input = append(p.ToolCall.Input, []byte(args)...)
+	}
+	pa.active[blockIndex] = p
+}
+
+func (pa *partAccumulator) setReasoningProviderData(blockIndex int, data json.RawMessage) {
+	p, exists := pa.active[blockIndex]
+	if !exists || p.Reasoning == nil {
+		return
+	}
+	p.Reasoning.ProviderData = append(json.RawMessage(nil), data...)
+	p.Reasoning.ProviderStateComplete = true
+	pa.active[blockIndex] = p
+}
+
+func (pa *partAccumulator) setReasoningRedacted(blockIndex int) {
+	p, exists := pa.active[blockIndex]
+	if !exists || p.Reasoning == nil {
+		return
+	}
+	p.Reasoning.Redacted = true
+	pa.active[blockIndex] = p
+}
+
+func (pa *partAccumulator) finalize() []message.AssistantPart {
+	// 关闭所有仍活跃的 parts
+	for _, idx := range pa.order {
+		if _, exists := pa.active[idx]; exists {
+			pa.closePart(idx)
+		}
+	}
+	return message.CloneAssistantParts(pa.completedParts)
 }
 
 type toolPayloadCandidateState struct {

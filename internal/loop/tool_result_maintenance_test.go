@@ -44,6 +44,41 @@ func TestKeepIndexesOnlyApplyAfterLatestSummary(t *testing.T) {
 	}
 }
 
+func TestKeepIndexesPreserveLatestTodoSnapshot(t *testing.T) {
+	history := []message.Message{
+		buildAssistantToolCallMessage([]message.ToolCall{{ID: "todo-1", Name: "update_todo"}}),
+		buildToolResultMessage("todo-1", `{"accepted":true,"snapshot":{"explanation":"keep this","items":[{"id":"a","content":"`+strings.Repeat("work ", 300)+`","status":"in_progress"}]}}`, false),
+		{Role: message.RoleAssistant, Content: "recent answer"},
+	}
+	keep := keepMessageIndexes(history, keepPolicy{})
+	if !keep[0] || !keep[1] {
+		t.Fatalf("latest Todo pair was not preserved: %v", keep)
+	}
+}
+
+func TestMaintainToolResultsDoesNotPruneLatestTodoSnapshot(t *testing.T) {
+	content := `{"accepted":true,"snapshot":{"items":[{"id":"a","content":"` + strings.Repeat("work ", 500) + `","status":"pending"}]}}`
+	history := []message.Message{
+		buildAssistantToolCallMessage([]message.ToolCall{{ID: "todo-1", Name: "update_todo"}}),
+		buildToolResultMessage("todo-1", content, false),
+		{Role: message.RoleAssistant, Content: "recent answer"},
+	}
+	archive, err := newCompactionArchive(t.TempDir(), "todo", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, stats, err := maintainToolResults(history, maintenanceRequest{
+		mode: maintenancePrune, tailStart: len(history), minBytes: 1024,
+		policy: keepPolicy{}, archive: archive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.results != 0 || toolResultsFromMessage(got[1])[0].Content != content {
+		t.Fatalf("latest Todo result was rewritten: stats=%+v result=%q", stats, toolResultsFromMessage(got[1])[0].Content)
+	}
+}
+
 func TestIsUserMarkedMessage(t *testing.T) {
 	for _, text := range []string{" [[KEEP]] fact", "[keep] fact", "<keep>fact", "<!-- keep --> fact"} {
 		if !isUserMarkedMessage(message.Message{Role: message.RoleUser, Content: text}) {

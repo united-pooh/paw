@@ -125,7 +125,7 @@ func TestSystemTaskBlockEntryRendersAsCard(t *testing.T) {
 		title: "task",
 		body:  "<task id=\"task-9\" state=\"completed\" name=\"深潜者\">\nsummary: 完成工作\n</task>",
 	}
-	rendered := ansi.Strip(renderEntryAt(entry, 60, time.Time{}))
+	rendered := ansi.Strip(renderEntryAt(entry, 60, time.Time{}, false))
 	for _, want := range []string{"✓", "深潜者", "完成", "摘要: 完成工作"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered = %q, want %q", rendered, want)

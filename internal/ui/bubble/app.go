@@ -92,6 +92,7 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 		worktreeReader:            readWorktreeStatus,
 		activeAssistant:           -1,
 		activeThinking:            -1,
+		activeReasoning:           -1,
 		activeTurnUserEntry:       -1,
 		doneAssistant:             -1,
 		newMessageNoticeCycle:     1,
@@ -118,7 +119,7 @@ func (m appModel) Init() tea.Cmd {
 		cmds = append(cmds, waitSelectionBrokerEventCmd(m.ctx, m.selectionBroker))
 	}
 	if m.todoBroker != nil {
-		cmds = append(cmds, waitTodoBrokerEventCmd(m.ctx, m.todoBroker))
+		cmds = append(cmds, waitTodoBrokerEventCmd(m.ctx, m.todoBroker, m.sessionID))
 	}
 	if m.taskUpdates != nil {
 		cmds = append(cmds, waitTaskUpdateCmd(m.ctx, m.taskUpdates))
@@ -234,6 +235,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.isGenerating = true
 		m.consumeThinkingStreamDelta(string(msg))
+		return m, nil
+	case assistantPartMsg:
+		if msg.delta != "" || msg.lifecycle == "start" || msg.lifecycle == "end" {
+			m.turnHasModelOutput = true
+		}
+		m.isGenerating = true
+		m.handleAssistantPartEvent(msg)
 		return m, nil
 	case toolCallMsg:
 		m.turnHasModelOutput = true

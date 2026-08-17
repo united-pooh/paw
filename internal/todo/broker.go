@@ -82,6 +82,28 @@ func (b *Broker) Latest() (Snapshot, bool) {
 	return b.latest.Clone(), true
 }
 
+// Restore replaces the in-memory session state without emitting a live tool
+// event. Session switching uses this to discard the previous session's queued
+// updates before seeding the broker from its durable snapshot.
+func (b *Broker) Restore(snapshot Snapshot, ok bool) {
+	if b == nil {
+		return
+	}
+	copy := snapshot.Clone()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return
+	}
+	b.events = nil
+	b.latest = Snapshot{}
+	b.hasLatest = false
+	if ok {
+		b.latest = copy
+		b.hasLatest = true
+	}
+}
+
 func (b *Broker) Close() {
 	if b == nil {
 		return

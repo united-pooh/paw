@@ -15,6 +15,29 @@ type ModelAdapter interface {
 	BuildChatCompletionsRequest(cfg Config, messages []message.Message, tools PreparedToolSet, stream bool) (ChatCompletionsRequest, error)
 }
 
+// ResponsesRequestBuilder constructs the provider-independent Responses API
+// request body. It is separate from ModelAdapter because Chat Completions and
+// Responses are different wire protocols even when they share model adapters.
+type ResponsesRequestBuilder interface {
+	BuildResponsesRequest(cfg Config, messages []message.Message, tools PreparedToolSet, stream bool) (responsesRequest, error)
+}
+
+// selectResponsesAdapter keeps GPT Responses on the OpenAI-compatible adapter
+// boundary while leaving other Responses providers on their existing path.
+func selectResponsesAdapter(cfg Config, fallback ModelAdapter) ModelAdapter {
+	if isGPTResponsesConfig(cfg) {
+		return OpenAICompatibleAdapter{}
+	}
+	return fallback
+}
+
+func buildResponsesRequestForAdapter(cfg Config, adapter ModelAdapter, messages []message.Message, tools PreparedToolSet, stream bool) (responsesRequest, error) {
+	adapter = selectResponsesAdapter(cfg, adapter)
+	if builder, ok := adapter.(ResponsesRequestBuilder); ok {
+		return builder.BuildResponsesRequest(cfg, messages, tools, stream)
+	}
+	return buildResponsesRequest(cfg, messages, tools, stream)
+}
 func buildOpenAICompatibleChatCompletionsRequest(cfg Config, messages []message.Message, tools PreparedToolSet, stream bool) (ChatCompletionsRequest, error) {
 	apiMessages, err := buildOpenAIMessages(messages)
 	if err != nil {

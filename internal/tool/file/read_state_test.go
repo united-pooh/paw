@@ -102,6 +102,31 @@ func TestReadStateStoreRecordAfterWriteResetsBaseline(t *testing.T) {
 	}
 }
 
+func TestReadStateStoreVerifyRequiredWithDiffUsesLatestReadPage(t *testing.T) {
+	s := NewReadStateStore()
+	s.RecordRead("/p", contentHash([]byte("old\nkeep\noutside\n")), 0, 2, []byte("old\nkeep\n"))
+
+	err := s.VerifyRequiredWithDiff("/p", []byte("new\nkeep\noutside\n"))
+	if err == nil || !strings.Contains(err.Error(), "read-range diff") || !strings.Contains(err.Error(), "-old") || !strings.Contains(err.Error(), "+new") {
+		t.Fatalf("err = %v, want latest page diff", err)
+	}
+}
+
+func TestReadStateStoreVerifyRequiredWithDiffCapsDiff(t *testing.T) {
+	s := NewReadStateStore()
+	oldContent := strings.Repeat("old\n", 4000)
+	newContent := strings.Repeat("new\n", 4000)
+	s.RecordRead("/p", contentHash([]byte(oldContent)), 0, 4000, []byte(oldContent))
+
+	err := s.VerifyRequiredWithDiff("/p", []byte(newContent))
+	if err == nil {
+		t.Fatal("VerifyRequiredWithDiff = nil, want stale error")
+	}
+	if len([]byte(err.Error())) > maxReadDiffBytes+512 {
+		t.Fatalf("error bytes = %d, want bounded diff", len([]byte(err.Error())))
+	}
+}
+
 func TestReadStateStoreVerifyConcurrentSafe(t *testing.T) {
 	s := NewReadStateStore()
 	s.Record("/p", []byte("x"))

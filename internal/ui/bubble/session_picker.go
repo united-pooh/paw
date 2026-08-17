@@ -82,6 +82,17 @@ func loadSessionHistoryCmd(ctx context.Context, runner Runner, store SessionStor
 				return sessionRestoredMsg{err: err}
 			}
 		}
+		var currentTodo todo.Snapshot
+		hasCurrentTodo := false
+		todoWasCleared := false
+		if todoLoader, ok := store.(TodoSnapshotLoader); ok {
+			var todoErr error
+			currentTodo, hasCurrentTodo, todoErr = todoLoader.LoadLatestTodoSnapshot(ctx, sessionID)
+			if todoErr != nil {
+				return sessionRestoredMsg{err: todoErr}
+			}
+			todoWasCleared = hasCurrentTodo && currentTodo.Cleared()
+		}
 		metadata := loadRestoreTurnMetadata(ctx, store, sessionID)
 		entries := make([]transcriptEntry, 0, len(messages))
 		if recordLoader, ok := store.(ResolvedRecordLoader); ok {
@@ -107,9 +118,9 @@ func loadSessionHistoryCmd(ctx context.Context, runner Runner, store SessionStor
 		return sessionRestoredMsg{
 			sessionID:      sessionID,
 			entries:        entries,
-			currentTodo:    todo.Snapshot{},
-			hasCurrentTodo: false,
-			todoWasCleared: false,
+			currentTodo:    currentTodo,
+			hasCurrentTodo: hasCurrentTodo && !todoWasCleared,
+			todoWasCleared: todoWasCleared,
 		}
 	}
 }

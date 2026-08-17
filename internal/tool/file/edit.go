@@ -98,11 +98,11 @@ func (t *EditTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 	if t.ReadState == nil {
 		return "", readFirstEditError(display)
 	}
-	if err := t.ReadState.VerifyRequired(target, current); err != nil {
+	if err := t.ReadState.VerifyRequiredWithDiff(target, current); err != nil {
 		if strings.Contains(err.Error(), "file must be read before editing") {
 			return "", readFirstEditError(display)
 		}
-		return "", fmt.Errorf("file has been modified since last read: %s; read it again before editing", display)
+		return "", rewriteStaleReadError("editing", display, err)
 	}
 	count := strings.Count(string(current), in.OldString)
 	if count == 0 {

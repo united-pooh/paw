@@ -10,17 +10,18 @@ import (
 )
 
 type todoBrokerEventMsg struct {
-	snapshot todo.Snapshot
-	err      error
+	sessionID string
+	snapshot  todo.Snapshot
+	err       error
 }
 
-func waitTodoBrokerEventCmd(ctx context.Context, broker *todo.Broker) tea.Cmd {
+func waitTodoBrokerEventCmd(ctx context.Context, broker *todo.Broker, sessionID string) tea.Cmd {
 	if broker == nil {
 		return nil
 	}
 	return func() tea.Msg {
 		snapshot, err := broker.Next(ctx)
-		return todoBrokerEventMsg{snapshot: snapshot, err: err}
+		return todoBrokerEventMsg{sessionID: sessionID, snapshot: snapshot, err: err}
 	}
 }
 
@@ -54,11 +55,14 @@ func (m appModel) assistantFinalAnswerVisible(index int) bool {
 }
 
 func todoBrokerEventCommand(m appModel, msg todoBrokerEventMsg) (appModel, tea.Cmd) {
+	if msg.sessionID != "" && msg.sessionID != m.sessionID {
+		return m, waitTodoBrokerEventCmd(m.ctx, m.todoBroker, m.sessionID)
+	}
 	if errors.Is(msg.err, todo.ErrBrokerClosed) || errors.Is(msg.err, context.Canceled) {
 		return m, nil
 	}
 	if msg.err == nil {
 		m.applyTodoSnapshot(msg.snapshot, true)
 	}
-	return m, waitTodoBrokerEventCmd(m.ctx, m.todoBroker)
+	return m, waitTodoBrokerEventCmd(m.ctx, m.todoBroker, m.sessionID)
 }

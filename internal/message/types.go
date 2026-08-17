@@ -16,12 +16,14 @@ type Message struct {
 	// Parts preserves the ordered text/image representation of a rich user
 	// message. Content remains the compatibility/debug representation and is
 	// intentionally kept for old transcripts and text-only providers.
-	Parts        []ContentPart   `json:"parts,omitempty"`
-	ToolUse      *ToolCall       `json:"tool_use,omitempty"`
-	ToolUses     []ToolCall      `json:"tool_uses,omitempty"`
-	ToolResult   *ToolResult     `json:"tool_result,omitempty"`
-	ToolResults  []ToolResult    `json:"tool_results,omitempty"`
-	ProviderData json.RawMessage `json:"provider_data,omitempty"`
+	Parts          []ContentPart   `json:"parts,omitempty"`
+	AssistantParts []AssistantPart `json:"assistant_parts,omitempty"`
+	GeneratedBy    *MessageOrigin  `json:"generated_by,omitempty"`
+	ToolUse        *ToolCall       `json:"tool_use,omitempty"`
+	ToolUses       []ToolCall      `json:"tool_uses,omitempty"`
+	ToolResult     *ToolResult     `json:"tool_result,omitempty"`
+	ToolResults    []ToolResult    `json:"tool_results,omitempty"`
+	ProviderData   json.RawMessage `json:"provider_data,omitempty"`
 }
 
 // ContentPartType identifies one ordered part in a multimodal message.

@@ -1,7 +1,7 @@
 # Paw 项目指令（本仓库）
 
 
-- 本项目是 **Paw 本体**（Go 语言）：任何改动后先 `go build ./...`、`go test ./...`
+- 本项目是 **Paw 本体**（Go 语言）：任何改动后先 `go test ./...`
   验证通过再交付。
 - 遵循仓库既有分层（internal/loop、internal/model、internal/ui 等）；新功能先查
   docs/ 下的设计文档再动手。

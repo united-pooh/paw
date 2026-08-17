@@ -102,6 +102,47 @@ func TestResumeRebindsStateTools(t *testing.T) {
 	}
 }
 
+func TestResumeRestoresTodoBrokerFromSession(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"session-a", "session-b"} {
+		if _, err := store.CreateRoot(ctx, session.CreateRootRequest{SessionID: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.AppendTodoSnapshot(ctx, "session-b", todo.Snapshot{
+		Explanation: "resume B",
+		Items:       []todo.Item{{ID: "b", Content: "B task", Status: todo.StatusInProgress}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	registry := tool.NewRegistry()
+	broker := todo.NewBroker()
+	defer broker.Close()
+	if err := registerMainAgentTools(registry, broker); err != nil {
+		t.Fatal(err)
+	}
+	runner := loop.NewRunnerWithInstructionRoot(&resumeTestModel{}, headless.New(io.Discard), registry, store, "session-a", root)
+	wireSessionTools(runner, store, broker, "session-a")
+	if _, err := mainTodoTool.Run(ctx, json.RawMessage(`{"items":[{"id":"a","content":"A task","status":"pending"}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	runner.SetSessionLoadedHook(func(sid string) { wireSessionTools(runner, store, broker, sid) })
+	if _, err := runner.LoadSession(ctx, "session-b"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := broker.Latest()
+	if !ok || got.Explanation != "resume B" || len(got.Items) != 1 || got.Items[0].ID != "b" {
+		t.Fatalf("broker after resume = (%#v, %v), want session-b snapshot", got, ok)
+	}
+}
+
 func TestTodoArchiveWritesProgressFile(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()

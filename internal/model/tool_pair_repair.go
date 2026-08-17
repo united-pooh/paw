@@ -41,8 +41,7 @@ func RepairToolCallPairs(messages []message.Message) ([]message.Message, ToolPai
 	}
 
 	changed := false
-	out := make([]message.Message, len(messages))
-	copy(out, messages)
+	out := message.CloneMessages(messages)
 
 	// 1. 隔离孤儿结果：ToolUseID 引用了不存在的 tool_use。
 	//    空 ToolUseID 的结果无法验证引用，保留（文本协议可承载；

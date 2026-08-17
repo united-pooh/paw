@@ -76,6 +76,13 @@ type ResolvedRecordLoader interface {
 	LoadResolvedRecords(ctx context.Context, sessionID string) ([]session.Record, error)
 }
 
+// TodoSnapshotLoader is an optional restore capability for the current
+// session's durable Todo state. It is separate from transcript projection so
+// context compaction cannot make the UI appear to have lost the latest list.
+type TodoSnapshotLoader interface {
+	LoadLatestTodoSnapshot(ctx context.Context, sessionID string) (todo.Snapshot, bool, error)
+}
+
 // ModelConfigController 描述运行时读取和应用模型配置的控制器。
 type ModelConfigController interface {
 	CurrentModelConfig() model.Config
@@ -365,6 +372,39 @@ func (u *UI) OnThinkingDelta(text string) error {
 		return nil
 	}
 	return u.send(thinkingDeltaMsg(text))
+}
+
+// OnReasoningStart 开始一个有序 reasoning 块。redacted 块只显示占位标题，
+// 不会把 provider 的不透明内容暴露给 transcript。
+func (u *UI) OnReasoningStart(partIndex int, redacted bool) error {
+	return u.send(assistantPartMsg{
+		lifecycle:  "start",
+		blockIndex: partIndex,
+		partType:   "reasoning",
+		redacted:   redacted,
+	})
+}
+
+// OnReasoningDelta 转发一个 reasoning 文本增量。
+func (u *UI) OnReasoningDelta(partIndex int, text string) error {
+	if text == "" {
+		return nil
+	}
+	return u.send(assistantPartMsg{
+		lifecycle:  "delta",
+		blockIndex: partIndex,
+		partType:   "reasoning",
+		delta:      text,
+	})
+}
+
+// OnReasoningEnd 完成一个 reasoning 块，使其折叠为时长标题。
+func (u *UI) OnReasoningEnd(partIndex int) error {
+	return u.send(assistantPartMsg{
+		lifecycle:  "end",
+		blockIndex: partIndex,
+		partType:   "reasoning",
+	})
 }
 
 // OnToolCall 接收工具调用事件，并转发给 Bubble Tea 状态机展示。

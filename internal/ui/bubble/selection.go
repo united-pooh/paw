@@ -227,12 +227,16 @@ func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.C
 	}
 }
 
-// performTranscriptClick 执行单击位置的“可点击位置”动作（链接 / todo / 工具行）。
+// performTranscriptClick 执行单击位置的“可点击位置”动作（链接 / reasoning / 工具行）。
 // 由延迟消息触发；双击窗口内到达第二次按下时，seq 失配使消息被丢弃。
 func (m appModel) performTranscriptClick(point selectionPoint) (appModel, bool, tea.Cmd) {
 	if target := m.transcriptHyperlinkAtPoint(point); target != "" {
 		m.refreshViewportPreservingOffset()
 		return m, true, openTerminalURLCmd(target)
+	}
+	if index, ok := m.reasoningHitAtTranscriptRow(point.row); ok {
+		m.toggleReasoningExpansion(index)
+		return m, true, nil
 	}
 	if index, header, ok := m.toolHitAtTranscriptRow(point.row); ok {
 		if m.toolInspectActive {

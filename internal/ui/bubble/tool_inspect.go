@@ -89,7 +89,7 @@ func transcriptEntryLocationsWith(entries []transcriptEntry, width int, showThin
 			locationIndex = first
 			kind = entryTool
 		} else {
-			rendered = renderEntryAt(entry, width, at)
+			rendered = renderEntryAt(entry, width, at, showThinking)
 		}
 		rendered = strings.TrimRight(rendered, "\n")
 		if rendered == "" {
@@ -148,6 +148,40 @@ func (m appModel) toolHitAtTranscriptRow(row int) (index int, isHeaderRow bool, 
 		return entryIndex, false, true
 	}
 	return -1, false, false
+}
+
+// reasoningHitAtTranscriptRow resolves a rendered transcript row to a
+// completed, non-redacted reasoning entry. Only completed reasoning headers
+// are clickable (live reasoning is streaming and cannot be folded).
+func (m appModel) reasoningHitAtTranscriptRow(row int) (int, bool) {
+	for _, location := range m.transcriptEntryLocationsAt() {
+		if row < location.startRow || row >= location.startRow+location.height {
+			continue
+		}
+		entry := m.transcript[location.transcriptIndex]
+		if entry.kind == entryReasoning && entry.reasoningFinishedAt != nil && !entry.redacted {
+			return location.transcriptIndex, true
+		}
+	}
+	return -1, false
+}
+
+// toggleReasoningExpansion flips the per-entry expansion override of a
+// completed reasoning entry. Once set, the override wins over the global
+// Ctrl+O toggle for that single entry.
+func (m *appModel) toggleReasoningExpansion(index int) bool {
+	if m == nil || index < 0 || index >= len(m.transcript) {
+		return false
+	}
+	entry := &m.transcript[index]
+	if entry.kind != entryReasoning || entry.reasoningFinishedAt == nil || entry.redacted {
+		return false
+	}
+	entry.reasoningExpansionSet = true
+	entry.reasoningExpanded = !entry.reasoningExpanded
+	touchTranscriptEntry(entry)
+	m.refreshViewportPreservingOffset()
+	return true
 }
 
 // toolDetailEntryAtRow resolves which single tool entry owns the given row

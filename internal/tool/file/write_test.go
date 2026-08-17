@@ -126,6 +126,26 @@ func TestWriteRejectsSymlinkEscapeInCapabilityAndRun(t *testing.T) {
 	}
 }
 
+func TestWriteRejectsExistingFileWithoutReadState(t *testing.T) {
+	root := t.TempDir()
+	full := filepath.Join(root, "existing.txt")
+	if err := os.WriteFile(full, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := (&WriteTool{Root: root}).Run(context.Background(), []byte(`{"file_path":"existing.txt","content":"new\n"}`))
+	if err == nil || !strings.Contains(err.Error(), "file must be read before writing") {
+		t.Fatalf("err = %v, want read-before-write rejection", err)
+	}
+	got, readErr := os.ReadFile(full)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != "old\n" {
+		t.Fatalf("file changed after rejected Write: %q", got)
+	}
+}
+
 func TestWriteRejectsFinalWorkspaceInternalSymlinkInCapabilityAndRun(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation commonly requires elevated privileges on Windows")

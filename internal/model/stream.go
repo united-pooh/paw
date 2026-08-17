@@ -14,20 +14,47 @@ import (
 	"strings"
 )
 
+type AssistantPartLifecycle string
+
+const (
+	AssistantPartLifecycleStart AssistantPartLifecycle = "start"
+	AssistantPartLifecycleDelta AssistantPartLifecycle = "delta"
+	AssistantPartLifecycleEnd   AssistantPartLifecycle = "end"
+)
+
+// AssistantPartEvent 表示一条有序助理 part 的生命周期事件。
+// 官方传输层应当使用这些事件，而非直接发送 Delta/Thinking/ToolCalls。
+// 旧字段 Delta/Thinking/ToolCalls/ProviderData 暂保留，由 Runner 兼容层转换为 part 事件。
+type AssistantPartEvent struct {
+	Lifecycle  AssistantPartLifecycle
+	BlockIndex int
+	Type       string // "reasoning" | "text" | "tool_call"
+	Delta      string
+	Redacted   bool
+	ToolCallID string
+	ToolName   string
+	ToolArgs   json.RawMessage
+	OpaqueData json.RawMessage
+}
+
 // StreamEvent 表示一次流式输出事件。
 // 一个事件只表达一种状态：
-// 1) Delta 非空：收到一段增量文本
-// 2) Done=true：当前协议响应结束
-// 3) Err 非空：流中出现错误
+// 1) AssistantPart 非空：part 生命周期事件
+// 2) Delta 非空：收到一段增量文本（旧路径，由 Runner 转换为 AssistantPart）
+// 3) Thinking 非空：thinking 增量（旧路径，由 Runner 转换为 AssistantPart）
+// 4) Done=true：当前协议响应结束
+// 5) Err 非空：流中出现错误
 type StreamEvent struct {
-	Delta        string
-	Thinking     string
-	ToolCalls    []message.ToolCall
-	ProviderData json.RawMessage
-	Done         bool
-	FinishReason FinishReason
-	Err          error
-	Usage        *Usage
+	AssistantPart *AssistantPartEvent
+	GeneratedBy   *message.MessageOrigin
+	Delta         string
+	Thinking      string
+	ToolCalls     []message.ToolCall
+	ProviderData  json.RawMessage
+	Done          bool
+	FinishReason  FinishReason
+	Err           error
+	Usage         *Usage
 }
 
 // FinishReason is the typed Chat Completions finish_reason value surfaced to
@@ -46,8 +73,10 @@ const (
 type chatCompletionsStreamResponse struct {
 	Choices []struct {
 		Delta struct {
-			Content   string          `json:"content"`
-			ToolCalls []toolCallDelta `json:"tool_calls,omitempty"`
+			Content          string          `json:"content"`
+			ReasoningContent string          `json:"reasoning_content,omitempty"`
+			Reasoning        string          `json:"reasoning,omitempty"`
+			ToolCalls        []toolCallDelta `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
@@ -87,6 +116,13 @@ func (c *Client) StreamMessage(ctx context.Context, messages []message.Message, 
 	messages, _ = RepairToolCallPairs(messages)
 
 	cfg := c.CurrentModelConfig()
+	transport := "openai-compatible"
+	if shouldUseResponsesAPI(cfg) {
+		transport = "openai-responses"
+	} else if shouldAttemptAnthropicStream(cfg) {
+		transport = "anthropic-compatible"
+	}
+	origin := &message.MessageOrigin{Transport: transport, Model: cfg.Model}
 	adapter := SelectModelAdapter(cfg)
 	prepared, err := c.prepareTools(adapter, tools)
 	if err != nil {
@@ -98,25 +134,25 @@ func (c *Client) StreamMessage(ctx context.Context, messages []message.Message, 
 			if err != nil {
 				return nil, err
 			}
-			return adaptPreparedToolEvents(ctx, events, prepared), nil
+			return wrapWithOrigin(adaptPreparedToolEvents(ctx, events, prepared), origin), nil
 		}
 		events, err := c.streamResponsesMessage(ctx, cfg, messages, prepared)
 		if err != nil {
 			return nil, err
 		}
-		return adaptPreparedToolEvents(ctx, events, prepared), nil
+		return wrapWithOrigin(adaptPreparedToolEvents(ctx, events, prepared), origin), nil
 	}
 	if !cfg.Stream {
 		events, err := c.nonStreamingOpenAIMessage(ctx, cfg, adapter, messages, prepared)
 		if err != nil {
 			return nil, err
 		}
-		return adaptPreparedToolEvents(ctx, events, prepared), nil
+		return wrapWithOrigin(adaptPreparedToolEvents(ctx, events, prepared), origin), nil
 	}
 	if shouldAttemptAnthropicStream(cfg) {
 		events, err := c.streamAnthropicMessage(ctx, cfg, messages, tools)
 		if err == nil {
-			return events, nil
+			return wrapWithOrigin(events, origin), nil
 		}
 		var providerErr *ProviderHTTPError
 		if errors.As(err, &providerErr) && providerErr.StatusCode != http.StatusNotFound && providerErr.StatusCode != http.StatusMethodNotAllowed {
@@ -128,14 +164,27 @@ func (c *Client) StreamMessage(ctx context.Context, messages []message.Message, 
 	if err != nil {
 		return nil, err
 	}
-	return adaptPreparedToolEvents(ctx, events, prepared), nil
+	return wrapWithOrigin(adaptPreparedToolEvents(ctx, events, prepared), origin), nil
+}
+
+func wrapWithOrigin(events <-chan StreamEvent, origin *message.MessageOrigin) <-chan StreamEvent {
+	out := make(chan StreamEvent)
+	go func() {
+		defer close(out)
+		out <- StreamEvent{GeneratedBy: origin}
+		for ev := range events {
+			out <- ev
+		}
+	}()
+	return out
 }
 
 type nonStreamingChatResponse struct {
 	Choices []struct {
 		Message struct {
-			Content   string `json:"content"`
-			ToolCalls []struct {
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content,omitempty"`
+			ToolCalls        []struct {
 				ID       string `json:"id"`
 				Function struct {
 					Name      string `json:"name"`
@@ -202,6 +251,9 @@ func (c *Client) nonStreamingOpenAIMessage(ctx context.Context, cfg Config, adap
 	events := make(chan StreamEvent, 4)
 	if parsed.Usage != nil {
 		events <- StreamEvent{Usage: parsed.Usage}
+	}
+	if reasoning := strings.TrimSpace(choice.ReasoningContent); reasoning != "" {
+		events <- StreamEvent{Thinking: reasoning}
 	}
 	if content := strings.TrimSpace(choice.Content); content != "" {
 		events <- StreamEvent{Delta: content}
@@ -336,6 +388,17 @@ func emitChunkEvents(ctx context.Context, chunk chatCompletionsStreamResponse, e
 		return false
 	}
 
+	// 推理/思考内容 delta
+	reasoningText := chunk.Choices[0].Delta.ReasoningContent
+	if reasoningText == "" {
+		reasoningText = chunk.Choices[0].Delta.Reasoning
+	}
+	if reasoningText != "" {
+		if !emitStreamEvent(ctx, events, StreamEvent{Thinking: reasoningText}) {
+			return true
+		}
+	}
+
 	delta := chunk.Choices[0].Delta.Content
 	if delta != "" {
 		if !emitStreamEvent(ctx, events, StreamEvent{Delta: delta}) {
@@ -451,7 +514,6 @@ func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events 
 			_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("模型接口返回错误: %s", chunk.Error.Message)})
 			return
 		}
-
 		// 累积 delta.tool_calls
 		if len(chunk.Choices) > 0 && !finishSeen {
 			for _, tc := range chunk.Choices[0].Delta.ToolCalls {
@@ -479,6 +541,17 @@ func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events 
 
 		if len(chunk.Choices) == 0 {
 			continue
+		}
+
+		// 推理/思考内容 delta（DeepSeek reasoning_content / 通用 reasoning）
+		reasoningText := chunk.Choices[0].Delta.ReasoningContent
+		if reasoningText == "" {
+			reasoningText = chunk.Choices[0].Delta.Reasoning
+		}
+		if reasoningText != "" && !finishSeen {
+			if !emitStreamEvent(ctx, events, StreamEvent{Thinking: reasoningText}) {
+				return
+			}
 		}
 
 		// 文本内容 delta

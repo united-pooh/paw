@@ -76,13 +76,14 @@ func (t *WriteTool) Run(ctx context.Context, input json.RawMessage) (string, err
 	// read-first rule by rewriting files with Write. New files need no Read.
 	display := relativePath(t.Root, target)
 	if existing, rerr := os.ReadFile(target); rerr == nil {
-		if t.ReadState != nil {
-			if verr := t.ReadState.VerifyRequired(target, existing); verr != nil {
-				if strings.Contains(verr.Error(), "file must be read before editing") {
-					return "", fmt.Errorf("file must be read before writing: %s; use Read first (Read the file, then retry this Write; do not bypass with Bash)", display)
-				}
-				return "", verr
+		if t.ReadState == nil {
+			return "", fmt.Errorf("file must be read before writing: %s; use Read first (Read the file, then retry this Write; do not bypass with Bash)", display)
+		}
+		if verr := t.ReadState.VerifyRequiredWithDiff(target, existing); verr != nil {
+			if strings.Contains(verr.Error(), "file must be read before editing") {
+				return "", fmt.Errorf("file must be read before writing: %s; use Read first (Read the file, then retry this Write; do not bypass with Bash)", display)
 			}
+			return "", rewriteStaleReadError("writing", display, verr)
 		}
 	} else if !os.IsNotExist(rerr) {
 		return "", rerr

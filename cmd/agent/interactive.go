@@ -124,11 +124,28 @@ func wireSessionTools(runner *loop.Runner, store *session.JSONLStore, todoBroker
 	if runner == nil || store == nil {
 		return
 	}
+	restoreTodoBroker(store, todoBroker, sessionID)
 	wireTodoEvents(store, sessionID, filepath.Join(runner.WorkspaceRoot(), "memory", "progress.md"))
 	wireSearchTranscript(store, sessionID)
 	wireStateTools(store, sessionID)
 	runner.SetTodoBroker(todoBroker)
 	runner.SetStateBlockProvider(stateBlockProviderFor(sessionID, store, todoBroker, plansDir(runner)))
+}
+
+func restoreTodoBroker(store *session.JSONLStore, broker *todo.Broker, sessionID string) {
+	if store == nil || broker == nil || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	snapshot, ok, err := store.LoadLatestTodoSnapshot(context.Background(), sessionID)
+	if err != nil {
+		// A damaged Todo projection must not leave the previous session's state
+		// visible to the new session. Clear it and keep the transcript error
+		// observable in logs for diagnosis.
+		broker.Restore(todo.Snapshot{}, false)
+		fmt.Fprintf(os.Stderr, "restore todo snapshot for %s: %v\n", sessionID, err)
+		return
+	}
+	broker.Restore(snapshot, ok)
 }
 
 // plansDir resolves the plan document directory under the workspace root.
@@ -167,7 +184,9 @@ func stateBlockProviderFor(sessionID string, store *session.JSONLStore, broker *
 	}
 	home, _ := os.UserHomeDir()
 	memoryPath := filepath.Join(home, ".paw", "memory.md")
-	return newStateBlockProvider(docStore, broker, sessionID, sessionBase, memoryPath)
+	provider := newStateBlockProvider(docStore, broker, sessionID, sessionBase, memoryPath)
+	provider.todoStore = store
+	return provider
 }
 
 func startTokenTracer(ctx context.Context, sessionID string, opts options) (*tokentracer.Tracer, *tokentracer.Server, error) {

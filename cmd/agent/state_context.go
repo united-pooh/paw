@@ -16,8 +16,11 @@ import (
 // （设计文档 D9 字节稳定 / D12 时间戳标注）。
 // 组件级容错：单个组件读取失败跳过该组件，不阻断恢复。
 type stateBlockProvider struct {
-	planStore   plan.DocStore
-	todoBroker  *todo.Broker
+	planStore  plan.DocStore
+	todoBroker *todo.Broker
+	todoStore  interface {
+		LoadLatestTodoSnapshot(context.Context, string) (todo.Snapshot, bool, error)
+	}
 	sessionID   string
 	sessionBase string // session store 根目录（~/.paw/projects/<项目>）
 	memoryPath  string // ~/.paw/memory.md
@@ -56,14 +59,23 @@ func (p *stateBlockProvider) BuildStateContext(ctx context.Context) (string, err
 		}
 	}
 
-	if p.todoBroker != nil {
-		if snap, ok := p.todoBroker.Latest(); ok && len(snap.Items) > 0 {
+	if p.todoBroker != nil || p.todoStore != nil {
+		snap, ok := p.latestTodo(ctx)
+		if ok {
 			var todoLines []string
+			if explanation := oneLine(snap.Explanation); explanation != "" {
+				fmt.Fprintf(&b, "## 进度（todo）\n说明：%s\n", explanation)
+			} else {
+				b.WriteString("## 进度（todo）\n")
+			}
 			for _, item := range snap.Items {
 				status := string(item.Status)
-				todoLines = append(todoLines, fmt.Sprintf("- [%s] %s", status, oneLine(item.Content)))
+				todoLines = append(todoLines, fmt.Sprintf("- [%s] %s (id: %s)", status, oneLine(item.Content), oneLine(item.ID)))
 			}
-			fmt.Fprintf(&b, "## 进度（todo）\n%s\n(updated %s)\n", strings.Join(todoLines, "\n"), snap.UpdatedAt.Format(time.RFC3339))
+			if len(todoLines) > 0 {
+				fmt.Fprintf(&b, "%s\n", strings.Join(todoLines, "\n"))
+			}
+			fmt.Fprintf(&b, "权威快照更新时间（updated %s）\n", snap.UpdatedAt.Format(time.RFC3339))
 			any = true
 		}
 	}
@@ -85,6 +97,24 @@ func (p *stateBlockProvider) BuildStateContext(ctx context.Context) (string, err
 		return "", nil
 	}
 	return b.String(), nil
+}
+
+func (p *stateBlockProvider) latestTodo(ctx context.Context) (todo.Snapshot, bool) {
+	if p == nil {
+		return todo.Snapshot{}, false
+	}
+	if p.todoBroker != nil {
+		if snapshot, ok := p.todoBroker.Latest(); ok {
+			return snapshot, true
+		}
+	}
+	if p.todoStore != nil {
+		snapshot, ok, err := p.todoStore.LoadLatestTodoSnapshot(ctx, p.sessionID)
+		if err == nil && ok {
+			return snapshot, true
+		}
+	}
+	return todo.Snapshot{}, false
 }
 
 func readStateFile(path string) (string, string, bool) {

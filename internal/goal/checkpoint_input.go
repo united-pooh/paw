@@ -36,30 +36,7 @@ func (c GoalCheckpoint) Clone() GoalCheckpoint {
 }
 
 func cloneMessage(m message.Message) message.Message {
-	m.Parts = append([]message.ContentPart(nil), m.Parts...)
-	for i := range m.Parts {
-		if m.Parts[i].Image != nil {
-			image := *m.Parts[i].Image
-			image.Data = append([]byte(nil), image.Data...)
-			m.Parts[i].Image = &image
-		}
-	}
-	if m.ToolUse != nil {
-		call := *m.ToolUse
-		call.Input = append([]byte(nil), call.Input...)
-		m.ToolUse = &call
-	}
-	m.ToolUses = append([]message.ToolCall(nil), m.ToolUses...)
-	for i := range m.ToolUses {
-		m.ToolUses[i].Input = append([]byte(nil), m.ToolUses[i].Input...)
-	}
-	if m.ToolResult != nil {
-		result := *m.ToolResult
-		m.ToolResult = &result
-	}
-	m.ToolResults = append([]message.ToolResult(nil), m.ToolResults...)
-	m.ProviderData = append([]byte(nil), m.ProviderData...)
-	return m
+	return message.CloneMessage(m)
 }
 
 type CheckpointStore interface {

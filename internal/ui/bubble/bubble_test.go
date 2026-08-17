@@ -2081,8 +2081,8 @@ func TestCtrlOTogglesThinkingTranscriptRendering(t *testing.T) {
 	next, _ = model.Update(assistantDeltaMsg("answer"))
 	model = next.(appModel)
 
-	if len(model.transcript) < 2 || model.transcript[len(model.transcript)-2].kind != entryThinking {
-		t.Fatalf("transcript = %#v, want thinking entry before answer", model.transcript)
+	if len(model.transcript) < 2 || model.transcript[len(model.transcript)-2].kind != entryReasoning {
+		t.Fatalf("transcript = %#v, want reasoning entry before answer", model.transcript)
 	}
 	if strings.Contains(model.viewport.View(), "hidden thought") {
 		t.Fatalf("viewport = %q, should hide thinking by default", model.viewport.View())

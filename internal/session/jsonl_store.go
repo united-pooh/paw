@@ -656,6 +656,71 @@ func (s *JSONLStore) LoadResolvedJournalRecords(ctx context.Context, sessionID s
 	return s.loadResolvedJournalRecords(ctx, sessionID)
 }
 
+func (s *JSONLStore) LoadLatestTodoSnapshot(ctx context.Context, sessionID string) (todo.Snapshot, bool, error) {
+	records, err := s.loadResolvedJournalRecords(ctx, sessionID)
+	if err != nil {
+		return todo.Snapshot{}, false, err
+	}
+	toolNames := make(map[string]string)
+	var latest todo.Snapshot
+	hasLatest := false
+	for _, record := range records {
+		for _, call := range toolCallsFromRecord(record) {
+			if id := strings.TrimSpace(call.ID); id != "" {
+				toolNames[id] = strings.TrimSpace(call.Name)
+			}
+		}
+		if record.Kind == JournalTodoSnapshot && record.TodoSnapshot != nil {
+			if snapshot, ok := validTodoSnapshot(*record.TodoSnapshot); ok {
+				latest = snapshot
+				hasLatest = true
+			}
+		}
+		// Old sessions persisted update_todo only as an assistant tool call plus
+		// its JSON result. Keep this fallback read-only so new snapshots remain
+		// the canonical format while pre-event transcripts remain resumable.
+		for _, result := range toolResultsFromRecord(record) {
+			if toolNames[strings.TrimSpace(result.ToolUseID)] != "update_todo" || result.IsError {
+				continue
+			}
+			if snapshot, ok := decodeLegacyTodoResult(result.Content); ok {
+				latest = snapshot
+				hasLatest = true
+			}
+		}
+	}
+	if hasLatest {
+		return latest, true, nil
+	}
+	return todo.Snapshot{}, false, nil
+}
+
+func validTodoSnapshot(snapshot todo.Snapshot) (todo.Snapshot, bool) {
+	normalized, err := todo.ValidateSnapshot(snapshot)
+	if err != nil {
+		return todo.Snapshot{}, false
+	}
+	return normalized.Clone(), true
+}
+
+func decodeLegacyTodoResult(content string) (todo.Snapshot, bool) {
+	var result todo.UpdateResult
+	if err := json.Unmarshal([]byte(content), &result); err != nil || !result.Accepted {
+		return todo.Snapshot{}, false
+	}
+	return validTodoSnapshot(result.Snapshot)
+}
+
+func toolResultsFromRecord(record Record) []message.ToolResult {
+	if record.ToolResult != nil {
+		return []message.ToolResult{*record.ToolResult}
+	}
+	if record.Message.ToolResult != nil {
+		return []message.ToolResult{*record.Message.ToolResult}
+	}
+	return append([]message.ToolResult(nil), record.Message.ToolResults...)
+}
+
 func projectJournalRecords(records []Record) []Record {
 	projected := make([]Record, 0, len(records))
 	for _, record := range records {
@@ -704,8 +769,8 @@ func (s *JSONLStore) LoadSnapshot(ctx context.Context, sessionID string) (Sessio
 
 	turnID, status, failure := latestTurnState(ownRecords)
 	snapshot := SessionSnapshot{
-		Messages:      append([]message.Message(nil), messages...),
-		ActiveHistory: append([]message.Message(nil), activeMessages...),
+		Messages:      message.CloneMessages(messages),
+		ActiveHistory: message.CloneMessages(activeMessages),
 	}
 	if turnID == "" || status == JournalTurnCompleted {
 		return snapshot, nil
@@ -723,7 +788,7 @@ func (s *JSONLStore) LoadSnapshot(ctx context.Context, sessionID string) (Sessio
 	safeOwn := safeTurnHistory(entries, recovery)
 	if len(entries) <= len(activeMessages) {
 		prefixLen := len(activeMessages) - len(entries)
-		active := append([]message.Message(nil), activeMessages[:prefixLen]...)
+		active := message.CloneMessages(activeMessages[:prefixLen])
 		active = append(active, safeOwn...)
 		snapshot.ActiveHistory = active
 	}
@@ -1457,7 +1522,7 @@ func (s *JSONLStore) SearchTranscript(ctx context.Context, sessionID, query stri
 		switch r.Kind {
 		case "", JournalMessage, JournalAssistant, JournalAssistantPartial:
 			role = string(r.Message.Role)
-			text = r.Message.Content
+			text = searchableMessageText(r.Message)
 			for _, tu := range toolCallsFromRecord(r) {
 				text += " " + tu.Name
 			}

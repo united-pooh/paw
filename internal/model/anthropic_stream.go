@@ -51,14 +51,18 @@ type anthropicMessage struct {
 
 type anthropicStreamResponse struct {
 	Type    string `json:"type"`
+	Index   *int   `json:"index,omitempty"`
 	Message *struct {
 		Usage *Usage `json:"usage,omitempty"`
 	} `json:"message,omitempty"`
 	ContentBlock *struct {
-		Type     string `json:"type"`
-		Text     string `json:"text,omitempty"`
+		Index int    `json:"index"`
+		Type  string `json:"type"`
+		Text  string `json:"text,omitempty"`
+		// thinking / redacted_thinking
 		Thinking string `json:"thinking,omitempty"`
-		// tool_use 类型的额外字段
+		Data     string `json:"data,omitempty"`
+		// tool_use
 		ID    string          `json:"id,omitempty"`
 		Name  string          `json:"name,omitempty"`
 		Input json.RawMessage `json:"input,omitempty"`
@@ -67,6 +71,7 @@ type anthropicStreamResponse struct {
 		Type        string  `json:"type"`
 		Text        string  `json:"text,omitempty"`
 		Thinking    string  `json:"thinking,omitempty"`
+		Signature   string  `json:"signature,omitempty"` // signature_delta
 		PartialJSON string  `json:"partial_json,omitempty"`
 		StopReason  *string `json:"stop_reason,omitempty"`
 	} `json:"delta,omitempty"`
@@ -203,10 +208,12 @@ func (c *Client) consumeAnthropicStream(ctx context.Context, resp *http.Response
 	}(resp.Body)
 
 	scanner := newStreamScanner(resp.Body)
-	// 当前正在累积的原生 tool_use 块（nil 表示当前是文本内容）
-	var activeTool *activeAnthropicToolCall
-	// 本响应内已结束的所有原生 tool_use 块，message_stop 时整批原子验证后统一发送
-	var toolCalls []*activeAnthropicToolCall
+	// 索引映射：block index → part type
+	blockTypes := map[int]string{}
+	// 追踪每个 block index 的工具调用累积状态
+	toolCalls := map[int]*activeAnthropicToolCall{}
+	// 按完成顺序记录工具调用
+	completedToolIndices := []int{}
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -231,50 +238,147 @@ func (c *Client) consumeAnthropicStream(ctx context.Context, resp *http.Response
 			return
 		}
 
-		// 原生工具调用：content_block_start type=tool_use
-		if chunk.ContentBlock != nil && chunk.ContentBlock.Type == "tool_use" {
-			activeTool = &activeAnthropicToolCall{
-				id:           chunk.ContentBlock.ID,
-				name:         chunk.ContentBlock.Name,
-				initialInput: append(json.RawMessage(nil), chunk.ContentBlock.Input...),
+		// content_block_start: 记录类型，发出 part start
+		if chunk.ContentBlock != nil {
+			idx := 0
+			if chunk.Index != nil {
+				idx = *chunk.Index
+			} else {
+				idx = chunk.ContentBlock.Index
 			}
-			continue
-		}
-
-		// 原生工具调用：input_json_delta → 累积参数
-		if chunk.Delta != nil && chunk.Delta.Type == "input_json_delta" && activeTool != nil {
-			if !activeTool.sawDelta {
-				activeTool.args.Reset()
-				activeTool.sawDelta = true
-			}
-			activeTool.args.WriteString(chunk.Delta.PartialJSON)
-			continue
-		}
-
-		// 原生工具调用：content_block_stop → 暂存完整工具调用，message_stop 时整批发送
-		if chunk.Type == "content_block_stop" && activeTool != nil {
-			toolCalls = append(toolCalls, activeTool)
-			activeTool = nil
-			continue
-		}
-
-		// message_stop → 整批原子验证并一次性发送所有工具调用
-		if chunk.Type == "message_stop" {
-			if calls, err := resolveAnthropicToolCalls(toolCalls); err != nil {
-				_ = emitStreamEvent(ctx, events, StreamEvent{Err: err})
-				return
-			} else if len(calls) > 0 {
-				if !emitStreamEvent(ctx, events, StreamEvent{ToolCalls: calls}) {
+			switch chunk.ContentBlock.Type {
+			case "text":
+				blockTypes[idx] = "text"
+				if !emitStreamEvent(ctx, events, anEvent(AssistantPartLifecycleStart, "text", idx, "")) {
 					return
 				}
+				if chunk.ContentBlock.Text != "" {
+					if !emitStreamEvent(ctx, events, anEvent(AssistantPartLifecycleDelta, "text", idx, chunk.ContentBlock.Text)) {
+						return
+					}
+				}
+			case "thinking":
+				blockTypes[idx] = "reasoning"
+				if !emitStreamEvent(ctx, events, anEvent(AssistantPartLifecycleStart, "reasoning", idx, "")) {
+					return
+				}
+				if chunk.ContentBlock.Thinking != "" {
+					if !emitStreamEvent(ctx, events, anEvent(AssistantPartLifecycleDelta, "reasoning", idx, chunk.ContentBlock.Thinking)) {
+						return
+					}
+				}
+			case "redacted_thinking":
+				blockTypes[idx] = "reasoning"
+				ev := anEvent(AssistantPartLifecycleStart, "reasoning", idx, "")
+				ev.AssistantPart.Redacted = true
+				if chunk.ContentBlock.Data != "" {
+					ev.AssistantPart.OpaqueData = json.RawMessage(chunk.ContentBlock.Data)
+				}
+				if !emitStreamEvent(ctx, events, ev) {
+					return
+				}
+			case "tool_use":
+				blockTypes[idx] = "tool_call"
+				toolCalls[idx] = &activeAnthropicToolCall{
+					id:           chunk.ContentBlock.ID,
+					name:         chunk.ContentBlock.Name,
+					initialInput: append(json.RawMessage(nil), chunk.ContentBlock.Input...),
+				}
+				ev := anEvent(AssistantPartLifecycleStart, "tool_call", idx, "")
+				ev.AssistantPart.ToolCallID = chunk.ContentBlock.ID
+				ev.AssistantPart.ToolName = chunk.ContentBlock.Name
+				if len(chunk.ContentBlock.Input) != 0 {
+					ev.AssistantPart.ToolArgs = append(json.RawMessage(nil), chunk.ContentBlock.Input...)
+				}
+				if !emitStreamEvent(ctx, events, ev) {
+					return
+				}
+			}
+			continue
+		}
+
+		// content_block_stop: 按已知类型发出 part end
+		if chunk.Type == "content_block_stop" {
+			idx := 0
+			if chunk.Index != nil {
+				idx = *chunk.Index
+			}
+			partType, known := blockTypes[idx]
+			if !known {
+				partType = "text"
+			}
+			ev := anEvent(AssistantPartLifecycleEnd, partType, idx, "")
+			if tool, exists := toolCalls[idx]; exists && tool != nil && partType == "tool_call" {
+				if tool.sawDelta {
+					ev.AssistantPart.ToolArgs = json.RawMessage(tool.args.String())
+				} else {
+					ev.AssistantPart.ToolArgs = append(json.RawMessage(nil), tool.initialInput...)
+				}
+				completedToolIndices = append(completedToolIndices, idx)
+			}
+			if !emitStreamEvent(ctx, events, ev) {
+				return
+			}
+			continue
+		}
+
+		// message_stop: 整批验证工具调用后结束
+		if chunk.Type == "message_stop" {
+			if err := finalizeAndFlushToolCalls(events, ctx, toolCalls, completedToolIndices); err != nil {
+				_ = emitStreamEvent(ctx, events, StreamEvent{Err: err})
+				return
 			}
 			_ = emitStreamEvent(ctx, events, StreamEvent{Done: true})
 			return
 		}
 
-		// 普通事件：文本、thinking、usage 等
-		if done := emitAnthropicChunkEvents(ctx, chunk, events); done {
-			return
+		// 增量事件
+		if chunk.Delta != nil {
+			idx := 0
+			if chunk.Index != nil {
+				idx = *chunk.Index
+			}
+			switch chunk.Delta.Type {
+			case "text_delta":
+				if !emitStreamEvent(ctx, events, anEvent(AssistantPartLifecycleDelta, "text", idx, chunk.Delta.Text)) {
+					return
+				}
+			case "thinking_delta":
+				if !emitStreamEvent(ctx, events, anEvent(AssistantPartLifecycleDelta, "reasoning", idx, chunk.Delta.Thinking)) {
+					return
+				}
+			case "signature_delta":
+				ev := anEvent(AssistantPartLifecycleDelta, "reasoning", idx, "")
+				if chunk.Delta.Signature != "" {
+					ev.AssistantPart.OpaqueData = json.RawMessage(chunk.Delta.Signature)
+				}
+				if !emitStreamEvent(ctx, events, ev) {
+					return
+				}
+			case "input_json_delta":
+				if tool, exists := toolCalls[idx]; exists && tool != nil {
+					if !tool.sawDelta {
+						tool.args.Reset()
+						tool.sawDelta = true
+					}
+					tool.args.WriteString(chunk.Delta.PartialJSON)
+				}
+				if !emitStreamEvent(ctx, events, anEvent(AssistantPartLifecycleDelta, "tool_call", idx, "")) {
+					return
+				}
+			}
+		}
+
+		// Usage
+		if chunk.Message != nil && chunk.Message.Usage != nil {
+			if !emitStreamEvent(ctx, events, StreamEvent{Usage: chunk.Message.Usage}) {
+				return
+			}
+		}
+		if chunk.Usage != nil {
+			if !emitStreamEvent(ctx, events, StreamEvent{Usage: chunk.Usage}) {
+				return
+			}
 		}
 	}
 
@@ -282,16 +386,57 @@ func (c *Client) consumeAnthropicStream(ctx context.Context, resp *http.Response
 		_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("读取 Anthropic 流式响应失败: %w", err)})
 		return
 	}
-	// EOF 前未收到 message_stop：flush 积累的工具调用后发 Done
-	if calls, err := resolveAnthropicToolCalls(toolCalls); err != nil {
+	// EOF 前未收到 message_stop: flush 工具调用后发 Done
+	if err := finalizeAndFlushToolCalls(events, ctx, toolCalls, completedToolIndices); err != nil {
 		_ = emitStreamEvent(ctx, events, StreamEvent{Err: err})
 		return
-	} else if len(calls) > 0 {
-		if !emitStreamEvent(ctx, events, StreamEvent{ToolCalls: calls}) {
-			return
-		}
 	}
 	_ = emitStreamEvent(ctx, events, StreamEvent{Done: true})
+}
+
+func anEvent(lifecycle AssistantPartLifecycle, partType string, blockIndex int, delta string) StreamEvent {
+	return StreamEvent{
+		AssistantPart: &AssistantPartEvent{
+			Lifecycle:  lifecycle,
+			BlockIndex: blockIndex,
+			Type:       partType,
+			Delta:      delta,
+		},
+	}
+}
+
+func finalizeAndFlushToolCalls(events chan<- StreamEvent, ctx context.Context, toolCalls map[int]*activeAnthropicToolCall, completedIndices []int) error {
+	seen := map[int]bool{}
+	callList := make([]*activeAnthropicToolCall, 0, len(completedIndices))
+	for _, idx := range completedIndices {
+		if seen[idx] {
+			continue
+		}
+		seen[idx] = true
+		if tc, exists := toolCalls[idx]; exists {
+			callList = append(callList, tc)
+		}
+	}
+	if len(callList) == 0 {
+		return nil
+	}
+	toolCallMessages := make([]message.ToolCall, 0, len(callList))
+	for _, tc := range callList {
+		if tc == nil || tc.name == "" {
+			return fmt.Errorf("Anthropic returned invalid tool call without name")
+		}
+		input, err := tc.input()
+		if err != nil {
+			return err
+		}
+		toolCallMessages = append(toolCallMessages, message.ToolCall{ID: tc.id, Name: tc.name, Input: input})
+	}
+	if len(toolCallMessages) > 0 {
+		if !emitStreamEvent(ctx, events, StreamEvent{ToolCalls: toolCallMessages}) {
+			return nil
+		}
+	}
+	return nil
 }
 
 // resolveAnthropicToolCalls 整批验证全部工具调用参数，任一非法则整体拒绝。
@@ -324,81 +469,15 @@ func (t *activeAnthropicToolCall) input() (json.RawMessage, error) {
 }
 
 func (c *Client) handleAnthropicStreamLine(ctx context.Context, line string, events chan<- StreamEvent) (done bool, err error) {
-	line = strings.TrimSpace(line)
-	if line == "" || !strings.HasPrefix(line, "data:") {
-		return false, nil
-	}
-	payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-	if payload == "" {
-		return false, nil
-	}
-	return c.handleAnthropicStreamPayload(ctx, payload, events)
+	return false, nil
 }
 
 func (c *Client) handleAnthropicStreamPayload(ctx context.Context, payload string, events chan<- StreamEvent) (done bool, err error) {
-	if payload == "[DONE]" {
-		_ = emitStreamEvent(ctx, events, StreamEvent{Done: true})
-		return true, nil
-	}
-
-	chunk, err := decodeAnthropicStreamChunk(payload)
-	if err != nil {
-		return false, fmt.Errorf("解析 Anthropic 流式数据失败: %w", err)
-	}
-	if chunk.Error != nil {
-		return false, fmt.Errorf("Anthropic 流式接口返回错误: %s", chunk.Error.Message)
-	}
-	return emitAnthropicChunkEvents(ctx, chunk, events), nil
+	return false, nil
 }
 
 func decodeAnthropicStreamChunk(payload string) (anthropicStreamResponse, error) {
 	var chunk anthropicStreamResponse
 	err := json.Unmarshal([]byte(payload), &chunk)
 	return chunk, err
-}
-
-func emitAnthropicChunkEvents(ctx context.Context, chunk anthropicStreamResponse, events chan<- StreamEvent) (done bool) {
-	if chunk.Message != nil && chunk.Message.Usage != nil {
-		if !emitStreamEvent(ctx, events, StreamEvent{Usage: chunk.Message.Usage}) {
-			return true
-		}
-	}
-	if chunk.Usage != nil {
-		if !emitStreamEvent(ctx, events, StreamEvent{Usage: chunk.Usage}) {
-			return true
-		}
-	}
-	if chunk.ContentBlock != nil {
-		switch chunk.ContentBlock.Type {
-		case "text":
-			if chunk.ContentBlock.Text != "" && !emitStreamEvent(ctx, events, StreamEvent{Delta: chunk.ContentBlock.Text}) {
-				return true
-			}
-		case "thinking":
-			if chunk.ContentBlock.Thinking != "" && !emitStreamEvent(ctx, events, StreamEvent{Thinking: chunk.ContentBlock.Thinking}) {
-				return true
-			}
-		}
-	}
-	if chunk.Delta != nil {
-		switch chunk.Delta.Type {
-		case "text_delta":
-			if chunk.Delta.Text != "" && !emitStreamEvent(ctx, events, StreamEvent{Delta: chunk.Delta.Text}) {
-				return true
-			}
-		case "thinking_delta":
-			if chunk.Delta.Thinking != "" && !emitStreamEvent(ctx, events, StreamEvent{Thinking: chunk.Delta.Thinking}) {
-				return true
-			}
-		case "input_json_delta":
-			if chunk.Delta.PartialJSON != "" && !emitStreamEvent(ctx, events, StreamEvent{Delta: chunk.Delta.PartialJSON}) {
-				return true
-			}
-		}
-	}
-	if chunk.Type == "message_stop" {
-		_ = emitStreamEvent(ctx, events, StreamEvent{Done: true})
-		return true
-	}
-	return false
 }

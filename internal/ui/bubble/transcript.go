@@ -68,6 +68,7 @@ type transcriptRenderCacheKey struct {
 	toolFinishedAtUnixNS int64
 	toolElapsedSecond    int64
 	turnMetadata         string
+	showThinking         bool
 }
 
 func (m *appModel) ensureAssistantStreamEntry() {
@@ -105,14 +106,118 @@ func (m *appModel) appendAssistantDelta(delta string) {
 
 func (m *appModel) ensureThinkingStreamEntry() {
 	m.activeAssistant = -1
-	if m.activeThinking < 0 || m.activeThinking >= len(m.transcript) || m.transcript[m.activeThinking].kind != entryThinking {
+	if m.activeThinking < 0 || m.activeThinking >= len(m.transcript) || m.transcript[m.activeThinking].kind != entryReasoning {
+		now := m.animationNow()
 		m.transcript = append(m.transcript, transcriptEntry{
-			kind:      entryThinking,
-			title:     "thinking",
-			createdAt: m.animationNow(),
+			kind:               entryReasoning,
+			title:              "reasoning",
+			reasoningPartIndex: -len(m.transcript) - 1,
+			reasoningStartedAt: &now,
+			createdAt:          now,
 		})
 		m.activeThinking = len(m.transcript) - 1
 	}
+}
+
+// handleAssistantPartEvent 处理有序助理 part 生命周期事件（UI 实现）。
+func (m *appModel) handleAssistantPartEvent(msg assistantPartMsg) {
+	switch msg.partType {
+	case "reasoning":
+		switch msg.lifecycle {
+		case "start":
+			m.ensureReasoningEntry(msg.blockIndex, msg.redacted)
+		case "delta":
+			m.appendReasoningDelta(msg.blockIndex, msg.delta)
+		case "end":
+			m.finalizeReasoningEntry(msg.blockIndex)
+		}
+	case "text":
+		switch msg.lifecycle {
+		case "delta":
+			m.turnHasModelOutput = true
+			m.readyPendingToolSegmentsInCurrentTurn()
+			if !m.toolInspectActive {
+				m.toolGroupExpanded = false
+				m.toolGroupFullResult = false
+			}
+			m.isGenerating = true
+			m.consumeAssistantStreamDelta(msg.delta)
+		}
+	case "tool_call":
+		// tool call lifecycle is handled by toolCallMsg / toolResultMsg
+	}
+}
+
+func (m *appModel) findActiveReasoningEntry(blockIndex int) int {
+	start, _ := currentTurnTranscriptBounds(m.transcript)
+	for idx := len(m.transcript) - 1; idx >= start && idx >= 0; idx-- {
+		entry := m.transcript[idx]
+		if entry.kind == entryReasoning && entry.reasoningPartIndex == blockIndex && entry.reasoningFinishedAt == nil {
+			return idx
+		}
+	}
+	return -1
+}
+
+func (m *appModel) ensureReasoningEntry(blockIndex int, redacted bool) {
+	if idx := m.findActiveReasoningEntry(blockIndex); idx >= 0 {
+		m.activeReasoning = idx
+		return
+	}
+	m.activeAssistant = -1
+	now := m.animationNow()
+	m.transcript = append(m.transcript, transcriptEntry{
+		kind:               entryReasoning,
+		title:              "reasoning",
+		body:               "",
+		redacted:           redacted,
+		reasoningPartIndex: blockIndex,
+		reasoningStartedAt: &now,
+		createdAt:          now,
+	})
+	m.activeReasoning = len(m.transcript) - 1
+	if redacted {
+		// redacted block 没有可读正文；开始事件即可建立不可展开的完成占位。
+		m.transcript[m.activeReasoning].reasoningFinishedAt = &now
+		touchTranscriptEntry(&m.transcript[m.activeReasoning])
+		m.refreshViewportForStreaming()
+	}
+}
+
+func (m *appModel) appendReasoningDelta(blockIndex int, delta string) {
+	if delta == "" {
+		return
+	}
+	if idx := m.findActiveReasoningEntry(blockIndex); idx >= 0 {
+		m.activeReasoning = idx
+	} else {
+		m.ensureReasoningEntry(blockIndex, false)
+	}
+	m.transcript[m.activeReasoning].body += delta
+	touchTranscriptEntry(&m.transcript[m.activeReasoning])
+	m.refreshViewportForStreaming()
+}
+
+func (m *appModel) finalizeReasoningEntry(blockIndex int) {
+	idx := m.findActiveReasoningEntry(blockIndex)
+	if idx < 0 {
+		return
+	}
+	now := m.animationNow()
+	entry := &m.transcript[idx]
+	if entry.reasoningStartedAt == nil {
+		started := entry.createdAt
+		if started.IsZero() {
+			started = now
+		}
+		entry.reasoningStartedAt = &started
+	}
+	entry.reasoningFinishedAt = &now
+	touchTranscriptEntry(entry)
+	if m.activeReasoning == idx {
+		m.activeReasoning = -1
+	}
+	m.refreshViewportForStreaming()
 }
 
 // appendThinkingDelta 将经过流隔离器确认的稳定 thinking 文本追加到 transcript。
@@ -204,6 +309,12 @@ func (m *appModel) finalizeThinkingStream() {
 		m.ensureThinkingStreamEntry()
 	}
 	m.appendThinkingDelta(committed)
+	if thinkingIndex >= 0 && thinkingIndex < len(m.transcript) && m.transcript[thinkingIndex].kind == entryReasoning && m.transcript[thinkingIndex].reasoningFinishedAt == nil {
+		now := m.animationNow()
+		m.transcript[thinkingIndex].reasoningFinishedAt = &now
+		touchTranscriptEntry(&m.transcript[thinkingIndex])
+		m.refreshViewportForStreaming()
+	}
 	m.activeThinking = -1
 }
 
@@ -713,6 +824,14 @@ func (m appModel) lastAssistantCitationHostIndex() int {
 }
 
 func assistantEntryIsRenderable(entry transcriptEntry) bool {
+	if entry.kind == entryReasoning {
+		// 已完成且 redacted 或折叠时永远可渲染（显示 Thought 标题）
+		if entry.redacted || entry.reasoningFinishedAt != nil {
+			return true
+		}
+		// live 状态必须有正文才渲染
+		return len(strings.TrimSpace(entry.body)) > 0
+	}
 	if entry.kind != entryAssistant {
 		return true
 	}
@@ -1009,7 +1128,7 @@ func (m *appModel) renderTranscriptEntriesFrom(startIdx int, width int, showThin
 			if first != idx {
 				continue
 			}
-			key := transcriptRenderKey(entry, width, at)
+			key := transcriptRenderKey(entry, width, at, showThinking)
 			groupEntries := toolEntriesForGroup(m.transcript, idx)
 			groupExpanded := m.toolGroupExpanded
 			if !toolGroupHasRunning(m.transcript, first, last) {
@@ -1033,11 +1152,11 @@ func (m *appModel) renderTranscriptEntriesFrom(startIdx int, width int, showThin
 			}
 			kind = entryTool
 		} else {
-			key := transcriptRenderKey(entry, width, at)
+			key := transcriptRenderKey(entry, width, at, showThinking)
 			if m.transcriptRenderCache[idx].key == key {
 				renderedEntry = m.transcriptRenderCache[idx].rendered
 			} else {
-				renderedEntry = renderEntryAt(entry, width, at)
+				renderedEntry = renderEntryAt(entry, width, at, showThinking)
 				if renderedEntry == "" {
 					continue
 				}
@@ -1273,7 +1392,7 @@ func (m *appModel) renderTranscriptContentAt(width int, showThinking bool, at ti
 	return strings.Join(m.transcriptLines, "\n")
 }
 
-func transcriptRenderKey(entry transcriptEntry, width int, at time.Time) transcriptRenderCacheKey {
+func transcriptRenderKey(entry transcriptEntry, width int, at time.Time, showThinking bool) transcriptRenderCacheKey {
 	key := transcriptRenderCacheKey{
 		kind:                 entry.kind,
 		title:                entry.title,
@@ -1302,6 +1421,7 @@ func transcriptRenderKey(entry transcriptEntry, width int, at time.Time) transcr
 		toolStartedAtUnixNS:  entry.toolStartedAt.UnixNano(),
 		toolFinishedAtUnixNS: entry.toolFinishedAt.UnixNano(),
 		turnMetadata:         transcriptTurnMetadataSnapshot(entry.turnMetadata),
+		showThinking:         showThinking,
 	}
 	if toolEntryStatus(entry) == "running" {
 		key.toolElapsedSecond = toolElapsedSeconds(entry, at)
@@ -1397,7 +1517,7 @@ func toolGroupRenderSnapshot(entries []transcriptEntry, width int, at time.Time)
 	var snapshot strings.Builder
 	for _, entry := range entries {
 		// Include every entry because one cached frame represents the whole group.
-		snapshot.WriteString(fmt.Sprintf("%#v;", transcriptRenderKey(entry, width, at)))
+		snapshot.WriteString(fmt.Sprintf("%#v;", transcriptRenderKey(entry, width, at, false)))
 	}
 	return snapshot.String()
 }
@@ -1423,7 +1543,7 @@ func renderTranscriptAt(entries []transcriptEntry, width int, showThinking bool,
 		if !assistantEntryIsRenderable(entry) {
 			continue
 		}
-		rendered := renderEntryAt(entry, width, at)
+		rendered := renderEntryAt(entry, width, at, showThinking)
 		if rendered == "" {
 			continue
 		}
@@ -1466,7 +1586,7 @@ func renderTranscriptWithToolGroup(entries []transcriptEntry, width int, showThi
 			}
 			continue
 		}
-		rendered := renderEntryAt(entry, width, at)
+		rendered := renderEntryAt(entry, width, at, showThinking)
 		if rendered == "" {
 			continue
 		}
@@ -1782,15 +1902,21 @@ func transcriptEntrySeparator(previousKind, currentKind entryKind) string {
 	if previousKind == currentKind {
 		return "\n"
 	}
+	if currentKind == entryReasoning && (previousKind == entryAssistant || previousKind == entryReasoning) {
+		return "\n"
+	}
+	if previousKind == entryReasoning && currentKind == entryAssistant {
+		return "\n"
+	}
 	return "\n\n"
 }
 
 // renderEntry 渲染一条带标签和统一缩进的 transcript 记录。
 func renderEntry(entry transcriptEntry, width int) string {
-	return renderEntryAt(entry, width, time.Time{})
+	return renderEntryAt(entry, width, time.Time{}, false)
 }
 
-func renderEntryAt(entry transcriptEntry, width int, at time.Time) string {
+func renderEntryAt(entry transcriptEntry, width int, at time.Time, showThinking bool) string {
 	// TaskWait 状态行：渲染为单行状态文字（如
 	// "worker 高松灯 正在运行 13s"），没有工具块边框、不可折叠。
 	if entry.taskWaitRunning {
@@ -1810,7 +1936,7 @@ func renderEntryAt(entry transcriptEntry, width int, at time.Time) string {
 		}
 		return indentLines(card, transcriptEntryGutter)
 	}
-	body := renderEntryBodyAt(entry, bodyWidth, at)
+	body := renderEntryBodyAt(entry, bodyWidth, at, showThinking)
 	if entry.kind == entryAssistant && entry.turnMetadata != nil {
 		footer := contextFreeStyle.Render(formatTurnFooter(*entry.turnMetadata))
 		if body == "" {
@@ -1838,6 +1964,9 @@ func renderEntryAt(entry transcriptEntry, width int, at time.Time) string {
 		// 后续行用等宽空格延续同一正文列，避免模型回答失去原有缩进。
 		return indentAssistantGutter(body)
 	}
+	if entry.kind == entryReasoning {
+		return indentLines(body, transcriptEntryGutter)
+	}
 	title := displayEntryTitle(entry)
 	color := sanitizeTerminalText(entry.color)
 	var label string
@@ -1858,6 +1987,8 @@ func displayEntryTitle(entry transcriptEntry) string {
 		return ""
 	case entryThinking:
 		return "thinking >"
+	case entryReasoning:
+		return "reasoning >"
 	default:
 		return sanitizeTerminalText(entry.title)
 	}
@@ -2063,10 +2194,10 @@ func formatTaskBlockSize(bytes int64) string {
 
 // renderEntryBody 按消息类型渲染正文，assistant 消息会走 Markdown 渲染。
 func renderEntryBody(entry transcriptEntry, width int) string {
-	return renderEntryBodyAt(entry, width, time.Time{})
+	return renderEntryBodyAt(entry, width, time.Time{}, false)
 }
 
-func renderEntryBodyAt(entry transcriptEntry, width int, at time.Time) string {
+func renderEntryBodyAt(entry transcriptEntry, width int, at time.Time, showThinking bool) string {
 	if isToolTransaction(entry) {
 		return renderToolTransactionEntry(entry, width, at)
 	}
@@ -2079,6 +2210,9 @@ func renderEntryBodyAt(entry transcriptEntry, width int, at time.Time) string {
 		body = sanitizeAssistantVisibleBody(body)
 		// Always render as Markdown; unclosed markers stay literal during streaming.
 		return renderAssistantBodyWithCitations(body, width, entry.citations)
+	}
+	if entry.kind == entryReasoning {
+		return renderReasoningBody(entry, width, at, showThinking)
 	}
 	if body == "" {
 		return ""
@@ -2111,6 +2245,38 @@ func renderEntryBodyAt(entry transcriptEntry, width int, at time.Time) string {
 		}
 	}
 	return bodyStyle.Width(width).Render(body)
+}
+
+// renderReasoningBody 渲染 reasoning 条目。
+// 已完成时默认折叠为 "Thought for N s" 标题；全局 Ctrl+O（showThinking）或
+// 单块点击（reasoningExpansionSet）会展开显示正文，标题仍保留在首行。
+// redacted 块无正文，始终显示 "Thought (redacted)"。
+func renderReasoningBody(entry transcriptEntry, width int, at time.Time, showThinking bool) string {
+	bodyWidth := transcriptBodyWidth(width)
+	if entry.redacted {
+		return thinkingBodyStyle.Width(bodyWidth).Render("Thought (redacted)")
+	}
+	expanded := showThinking
+	if entry.reasoningExpansionSet {
+		expanded = entry.reasoningExpanded
+	}
+	if entry.reasoningFinishedAt != nil {
+		duration := time.Duration(0)
+		if entry.reasoningStartedAt != nil {
+			duration = entry.reasoningFinishedAt.Sub(*entry.reasoningStartedAt)
+		}
+		title := fmt.Sprintf("Thought for %d s", maxInt(1, int(duration.Seconds())))
+		content := strings.TrimSpace(entry.body)
+		if expanded && content != "" {
+			return thinkingBodyStyle.Width(bodyWidth).Render(title + "\n" + content)
+		}
+		return thinkingBodyStyle.Width(bodyWidth).Render(title)
+	}
+	content := strings.TrimSpace(entry.body)
+	if content == "" {
+		return ""
+	}
+	return thinkingBodyStyle.Width(bodyWidth).Render(content)
 }
 
 func toolEntryHasCompletedStatus(entry transcriptEntry) bool {
@@ -2701,6 +2867,8 @@ func labelStyle(kind entryKind) lipgloss.Style {
 	case entryAssistant:
 		return labelAssistantStyle
 	case entryThinking:
+		return labelThinkingStyle
+	case entryReasoning:
 		return labelThinkingStyle
 	case entryTool:
 		return labelToolStyle

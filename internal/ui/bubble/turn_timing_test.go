@@ -92,7 +92,7 @@ func TestRenderAssistantTurnFooter(t *testing.T) {
 			Status:     session.TurnStatusCompleted,
 		},
 	}
-	rendered := renderEntryAt(entry, 80, time.Time{})
+	rendered := renderEntryAt(entry, 80, time.Time{}, false)
 	plain := ansi.Strip(rendered)
 	footer := formatTurnFooter(*entry.turnMetadata)
 	if !strings.Contains(plain, "answer") || !strings.Contains(plain, footer) {
@@ -104,7 +104,7 @@ func TestRenderAssistantTurnFooter(t *testing.T) {
 	if expected := contextFreeStyle.Render(footer); !strings.Contains(rendered, expected) {
 		t.Fatalf("rendered footer does not use contextFreeStyle: %q, expected fragment %q", rendered, expected)
 	}
-	user := renderEntryAt(transcriptEntry{kind: entryUser, body: "answer", turnMetadata: entry.turnMetadata}, 80, time.Time{})
+	user := renderEntryAt(transcriptEntry{kind: entryUser, body: "answer", turnMetadata: entry.turnMetadata}, 80, time.Time{}, false)
 	if strings.Contains(ansi.Strip(user), footer) {
 		t.Fatalf("user entry unexpectedly contains footer: %q", user)
 	}
@@ -112,10 +112,10 @@ func TestRenderAssistantTurnFooter(t *testing.T) {
 
 func TestTranscriptRenderCacheIncludesTurnMetadata(t *testing.T) {
 	entry := transcriptEntry{kind: entryAssistant, body: "answer"}
-	without := transcriptRenderKey(entry, 80, time.Time{})
+	without := transcriptRenderKey(entry, 80, time.Time{}, false)
 	response := time.Unix(10, 0).UTC()
 	entry.turnMetadata = &session.TurnMetadata{DurationMS: 1000, ResponseAt: &response, Status: session.TurnStatusCompleted}
-	with := transcriptRenderKey(entry, 80, time.Time{})
+	with := transcriptRenderKey(entry, 80, time.Time{}, false)
 	if reflect.DeepEqual(without, with) {
 		t.Fatalf("cache key did not change after adding turn metadata: %#v", with)
 	}

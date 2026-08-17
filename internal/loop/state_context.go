@@ -94,7 +94,7 @@ func (runner *Runner) SetResumeRecentTurns(n int) {
 
 // stateRefreshInstruction 是状态压缩触发时注入的刷新指令（随下一轮请求
 // 发送，不单独调用模型）。
-const stateRefreshInstruction = "[系统] 上下文接近上限，已执行状态压缩：较早的对话已归档（可用 search_transcript 取回细节）。请先调用 update_todo / update_memory / update_ariadne 刷新状态文件（使后续恢复有最新依据），再继续当前工作。"
+const stateRefreshInstruction = "[系统] 上下文接近上限，已执行状态压缩：较早的对话已归档（可用 search_transcript 取回细节）。工作状态块中的 todo 是权威快照：先按其中稳定 ID、状态和内容继续；只有任务确有变化时才调用 update_todo，并提交完整列表，保留未变化条目的 ID、内容和 Explanation，不得因压缩删项或改写状态。必要时再更新 memory/ariadne，然后继续当前工作。"
 
 // maintainStateProjection 实现模式 B 的运行时上下文维护（设计文档 §6）：
 // 与模式 A 共享同样的 4 级压力响应（soft → snip → compact → force），
