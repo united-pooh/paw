@@ -411,6 +411,58 @@ func TestValidateProviderDiscovery(t *testing.T) {
 	}
 }
 
+func TestValidateDocumentRejectsCanonicalAPIPathTransportMismatch(t *testing.T) {
+	provider := func(transport, apiPath string) Document {
+		return Document{
+			SchemaVersion: SchemaVersion,
+			Providers: map[string]Provider{
+				"local": {
+					Transport: transport,
+					Endpoint:  "http://127.0.0.1:1234/v1",
+					APIPath:   apiPath,
+				},
+			},
+			Models: map[string]Model{},
+		}
+	}
+
+	tests := []struct {
+		name      string
+		transport string
+		apiPath   string
+		want      string
+	}{
+		{name: "Responses with Chat Completions path", transport: TransportOpenAIResponses, apiPath: "/chat/completions", want: "/responses"},
+		{name: "Chat Completions with Responses path", transport: TransportOpenAICompatible, apiPath: "/responses", want: "/chat/completions"},
+		{name: "Anthropic with Responses path", transport: TransportAnthropicCompatible, apiPath: "/responses", want: "/messages"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := validateDocument(provider(tt.transport, tt.apiPath), "config.jsonc")
+			if err == nil || !strings.Contains(err.Error(), "apiPath") || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error=%v want apiPath conflict with expected path %q", err, tt.want)
+			}
+		})
+	}
+
+	valid := []struct {
+		name      string
+		transport string
+		apiPath   string
+	}{
+		{name: "empty path uses transport default", transport: TransportOpenAIResponses},
+		{name: "matching canonical path", transport: TransportOpenAICompatible, apiPath: "/chat/completions"},
+		{name: "custom gateway path", transport: TransportOpenAIResponses, apiPath: "/gateway/generate"},
+	}
+	for _, tt := range valid {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := validateDocument(provider(tt.transport, tt.apiPath), "config.jsonc"); err != nil {
+				t.Fatalf("valid transport/path rejected: %v", err)
+			}
+		})
+	}
+}
+
 func TestValidateDocumentRejectsUnsafeProviderHeaders(t *testing.T) {
 	documentWithHeaders := func(headers map[string]string) Document {
 		return Document{

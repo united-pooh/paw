@@ -389,6 +389,48 @@ func TestConfigCenterEditsProviderRuntimeFields(t *testing.T) {
 	}
 }
 
+func TestConfigCenterTransportSwitchAlignsCanonicalAPIPath(t *testing.T) {
+	tests := []struct {
+		name     string
+		apiPath  string
+		wantPath string
+	}{
+		{name: "previous canonical path", apiPath: "/chat/completions", wantPath: "/messages"},
+		{name: "empty path", wantPath: "/messages"},
+		{name: "custom path", apiPath: "/gateway/generate", wantPath: "/gateway/generate"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			controller, _ := newConfigCenterHarness(t)
+			snapshot := controller.Snapshot()
+			provider := snapshot.Document.Providers["local"]
+			provider.APIPath = tt.apiPath
+			updated, err := controller.UpdateConfig(context.Background(), snapshot.Revision, []configv2.Operation{configv2.UpsertProvider("local", provider)})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			model := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+			model.configCenterController = controller
+			model.openConfigCenter()
+			model.configCenter.page = configCenterProviderActions
+			model.configCenter.targetID = "local"
+			model.configCenter.revision = updated.Revision
+			model.configCenter.selected = 1
+
+			model.advanceProviderAction(updated)
+
+			if model.configCenter.err != "" {
+				t.Fatalf("transport switch failed: %s", model.configCenter.err)
+			}
+			got := controller.Snapshot().Document.Providers["local"]
+			if got.Transport != configv2.TransportAnthropicCompatible || got.APIPath != tt.wantPath {
+				t.Fatalf("provider transport/path=%q %q want=%q %q", got.Transport, got.APIPath, configv2.TransportAnthropicCompatible, tt.wantPath)
+			}
+		})
+	}
+}
+
 func TestConfigCenterEditsModelRuntimeFields(t *testing.T) {
 	controller, _ := newConfigCenterHarness(t)
 	model := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())

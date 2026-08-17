@@ -548,7 +548,12 @@ func (m *appModel) advanceProviderAction(snapshot configv2.Snapshot) {
 				current = i
 			}
 		}
+		previousTransport := provider.Transport
 		provider.Transport = transports[(current+1)%len(transports)]
+		apiPath := strings.TrimRight(strings.TrimSpace(provider.APIPath), "/")
+		if apiPath == "" || apiPath == configv2.DefaultAPIPathForTransport(previousTransport) {
+			provider.APIPath = configv2.DefaultAPIPathForTransport(provider.Transport)
+		}
 		m.applyConfigOperations(configv2.UpsertProvider(state.targetID, provider))
 	case 2:
 		value := ""

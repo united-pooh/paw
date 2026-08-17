@@ -125,6 +125,61 @@ func TestResponsesReasoningSummaryFromCompletedOutputBecomesThinking(t *testing.
 	}
 }
 
+func TestResponsesReasoningTextFromCompletedOutputBecomesThinking(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.completed","response":{"output":[{"type":"reasoning","id":"rs_1","summary":[],"content":[{"type":"reasoning_text","text":"I inspected the OpenRouter response."}]},{"type":"message","content":[{"type":"output_text","text":"answer"}]}]}}`+"\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Provider: "openrouter", Adapter: "openai-compatible", Transport: "openai-responses",
+		APIBaseURL: server.URL, APIPath: "/responses", Model: "deepseek/deepseek-v4-flash", Timeout: time.Second,
+	})
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "hello"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+	var thinking, text string
+	for event := range events {
+		if event.Err != nil {
+			t.Fatalf("stream error = %v", event.Err)
+		}
+		thinking += event.Thinking
+		text += event.Delta
+	}
+	if thinking != "I inspected the OpenRouter response." || text != "answer" {
+		t.Fatalf("thinking=%q text=%q", thinking, text)
+	}
+}
+
+func TestResponsesStringReasoningSummaryFromCompletedOutputBecomesThinking(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.completed","response":{"output":[{"type":"reasoning","id":"rs_1","summary":["First step","Second step"]},{"type":"message","content":[{"type":"output_text","text":"answer"}]}]}}`+"\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Provider: "openrouter", Adapter: "openai-compatible", Transport: "openai-responses",
+		APIBaseURL: server.URL, APIPath: "/responses", Model: "deepseek/deepseek-v4-flash", Timeout: time.Second,
+	})
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "hello"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+	var thinking string
+	for event := range events {
+		if event.Err != nil {
+			t.Fatalf("stream error = %v", event.Err)
+		}
+		thinking += event.Thinking
+	}
+	if thinking != "First step\n\nSecond step" {
+		t.Fatalf("thinking = %q, want string reasoning summaries", thinking)
+	}
+}
+
 func TestResponsesReasoningSummaryStreamDeltasAreNotDuplicatedAtCompletion(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -151,6 +206,37 @@ func TestResponsesReasoningSummaryStreamDeltasAreNotDuplicatedAtCompletion(t *te
 	}
 	if thinking != "first second" {
 		t.Fatalf("thinking = %q, want one streamed summary", thinking)
+	}
+}
+
+func TestResponsesReasoningStreamDeltasAreLiveAndNotDuplicatedAtCompletion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.reasoning.delta","delta":"first "}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.reasoning.delta","delta":"second"}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.completed","response":{"output":[{"type":"reasoning","id":"rs_1","summary":[],"content":[{"type":"reasoning_text","text":"first second"}]},{"type":"message","content":[{"type":"output_text","text":"answer"}]}]}}`+"\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Provider: "openrouter", Adapter: "openai-compatible", Transport: "openai-responses",
+		APIBaseURL: server.URL, APIPath: "/responses", Model: "deepseek/deepseek-v4-flash", Timeout: time.Second,
+	})
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "hello"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+	var thinkingEvents []string
+	for event := range events {
+		if event.Err != nil {
+			t.Fatalf("stream error = %v", event.Err)
+		}
+		if event.Thinking != "" {
+			thinkingEvents = append(thinkingEvents, event.Thinking)
+		}
+	}
+	if got := strings.Join(thinkingEvents, "|"); got != "first |second" {
+		t.Fatalf("thinking events = %q, want two live deltas without completion duplicate", got)
 	}
 }
 

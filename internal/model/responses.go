@@ -134,16 +134,13 @@ type responsesAPIResponse struct {
 // responsesOutputItemView 是已知字段的轻量视图，用于从 raw item 中提取
 // 文本、reasoning summary 和函数调用；未知字段原样保留在 raw bytes 中。
 type responsesOutputItemView struct {
-	Type      string `json:"type"`
-	ID        string `json:"id,omitempty"`
-	CallID    string `json:"call_id,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Arguments string `json:"arguments,omitempty"`
-	Summary   []struct {
-		Type string `json:"type"`
-		Text string `json:"text,omitempty"`
-	} `json:"summary,omitempty"`
-	Content []struct {
+	Type      string          `json:"type"`
+	ID        string          `json:"id,omitempty"`
+	CallID    string          `json:"call_id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Arguments string          `json:"arguments,omitempty"`
+	Summary   json.RawMessage `json:"summary,omitempty"`
+	Content   []struct {
 		Type string `json:"type"`
 		Text string `json:"text,omitempty"`
 	} `json:"content,omitempty"`
@@ -180,12 +177,47 @@ func shouldUseResponsesAPI(cfg Config) bool {
 }
 
 func responsesReasoningSummary(view responsesOutputItemView) string {
-	parts := make([]string, 0, len(view.Summary))
-	for _, summary := range view.Summary {
-		if summary.Type != "summary_text" {
+	var structured []struct {
+		Type string `json:"type"`
+		Text string `json:"text,omitempty"`
+	}
+	if json.Unmarshal(view.Summary, &structured) == nil {
+		parts := make([]string, 0, len(structured))
+		for _, summary := range structured {
+			if summary.Type != "summary_text" {
+				continue
+			}
+			if text := strings.TrimSpace(summary.Text); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, "\n\n")
+		}
+	}
+	var summaries []string
+	if json.Unmarshal(view.Summary, &summaries) != nil {
+		return ""
+	}
+	parts := make([]string, 0, len(summaries))
+	for _, summary := range summaries {
+		if text := strings.TrimSpace(summary); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func responsesReasoningText(view responsesOutputItemView) string {
+	if summary := responsesReasoningSummary(view); summary != "" {
+		return summary
+	}
+	parts := make([]string, 0, len(view.Content))
+	for _, content := range view.Content {
+		if content.Type != "reasoning_text" {
 			continue
 		}
-		if text := strings.TrimSpace(summary.Text); text != "" {
+		if text := strings.TrimSpace(content.Text); text != "" {
 			parts = append(parts, text)
 		}
 	}
@@ -640,11 +672,11 @@ func completedResponsesEvent(output []json.RawMessage, usage *Usage) (StreamEven
 		}
 		switch view.Type {
 		case "reasoning":
-			if summary := responsesReasoningSummary(view); summary != "" {
+			if reasoning := responsesReasoningText(view); reasoning != "" {
 				if thinking.Len() > 0 {
 					thinking.WriteString("\n\n")
 				}
-				thinking.WriteString(summary)
+				thinking.WriteString(reasoning)
 			}
 		case "message":
 			for _, part := range view.Content {
@@ -780,7 +812,7 @@ func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response
 	scanner.Buffer(make([]byte, 0, streamScannerInitialBufferBytes), streamScannerMaxTokenBytes)
 	active := make(map[int]*activeResponseToolCall)
 	sawOutputTextDelta := false
-	sawReasoningSummaryDelta := false
+	sawReasoningDelta := false
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -806,14 +838,14 @@ func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response
 				}
 				sawOutputTextDelta = true
 			}
-		case "response.reasoning_summary_text.delta":
+		case "response.reasoning_summary_text.delta", "response.reasoning.delta":
 			if event.Delta != "" {
 				result.madeProgress = true
 				if !emitStreamEvent(ctx, events, StreamEvent{Thinking: event.Delta}) {
 					result.err = ctx.Err()
 					return result
 				}
-				sawReasoningSummaryDelta = true
+				sawReasoningDelta = true
 			}
 		case "response.output_item.added":
 			if len(event.Item) != 0 {
@@ -874,7 +906,7 @@ func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response
 			if sawOutputTextDelta {
 				finalEvent.Delta = ""
 			}
-			if sawReasoningSummaryDelta {
+			if sawReasoningDelta {
 				finalEvent.Thinking = ""
 			}
 			if !emitFinalResponsesEvent(ctx, events, finalEvent) {

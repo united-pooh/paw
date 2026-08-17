@@ -28,6 +28,19 @@ const (
 	DiscoveryModeReplace         = "replace"
 )
 
+func DefaultAPIPathForTransport(transport string) string {
+	switch strings.TrimSpace(transport) {
+	case TransportOpenAIResponses:
+		return "/responses"
+	case TransportAnthropicCompatible:
+		return "/messages"
+	case TransportOpenAICompatible:
+		return "/chat/completions"
+	default:
+		return ""
+	}
+}
+
 var (
 	ErrRevisionConflict           = errors.New("configuration revision conflict")
 	ErrCredentialNotFound         = errors.New("credential not found")

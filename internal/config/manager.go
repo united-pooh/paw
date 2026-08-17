@@ -1111,14 +1111,7 @@ func (m *Manager) runtimeConfig(ctx context.Context, document Document, workspac
 		Timeout: time.Duration(timeout) * time.Second, RetryCount: retries, RetryCountSet: provider.Retries != nil, Stream: stream, StreamSet: provider.Stream != nil || configuredModel.Stream != nil,
 	}
 	if requestConfig.APIPath == "" {
-		switch provider.Transport {
-		case TransportOpenAIResponses:
-			requestConfig.APIPath = "/responses"
-		case TransportAnthropicCompatible:
-			requestConfig.APIPath = "/messages"
-		default:
-			requestConfig.APIPath = "/chat/completions"
-		}
+		requestConfig.APIPath = DefaultAPIPathForTransport(provider.Transport)
 	}
 	requestConfig.Profiles = synthesizeProfiles(document, catalog, m.credentials, ctx)
 	if models := modelsForProvider(catalog, configuredModel.Provider); len(models) > 0 {

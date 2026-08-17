@@ -99,6 +99,9 @@ func validateDocument(document Document, path string) ([]Diagnostic, error) {
 		default:
 			return nil, fmt.Errorf("%s: providers.%s.transport is unsupported", path, id)
 		}
+		if err := validateProviderAPIPath(resolved.Transport, resolved.APIPath); err != nil {
+			return nil, fmt.Errorf("%s: providers.%s.apiPath: %w", path, id, err)
+		}
 		endpoint, err := url.Parse(resolved.Endpoint)
 		if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Host == "" {
 			return nil, fmt.Errorf("%s: providers.%s.endpoint must be an http(s) URL", path, id)
@@ -142,6 +145,27 @@ func validateDocument(document Document, path string) ([]Diagnostic, error) {
 		}
 	}
 	return nil, nil
+}
+
+func validateProviderAPIPath(transport, apiPath string) error {
+	path := strings.TrimRight(strings.TrimSpace(apiPath), "/")
+	if path == "" {
+		return nil
+	}
+	expected := DefaultAPIPathForTransport(transport)
+	if path == expected {
+		return nil
+	}
+	for _, candidate := range []string{
+		TransportOpenAIResponses,
+		TransportOpenAICompatible,
+		TransportAnthropicCompatible,
+	} {
+		if path == DefaultAPIPathForTransport(candidate) {
+			return fmt.Errorf("%q is canonical for a different transport; %s expects %q", apiPath, transport, expected)
+		}
+	}
+	return nil
 }
 
 // validateSandbox 校验沙箱参数均为正整数（>0）；0/负值视为配置错误而非禁用。
