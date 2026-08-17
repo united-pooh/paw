@@ -1881,7 +1881,11 @@ func toolResultForDisplay(entry transcriptEntry) string {
 			result = presentation.detail
 		}
 	}
-	return strings.TrimRight(renderTerminalLinks(sanitizeTerminalText(result)), "\n")
+	// Tool output is untrusted terminal text. Sanitize control sequences, but do
+	// not turn URLs from shell output back into OSC 8 hyperlinks: command output
+	// may contain terminal-specific escape conventions and must remain plain
+	// text in the transcript renderer.
+	return strings.TrimRight(sanitizeTerminalText(result), "\n")
 }
 
 func appendTranscriptRenderedEntry(builder *strings.Builder, rendered string, currentKind, previousKind entryKind, hasPrevious bool) {
@@ -2366,7 +2370,9 @@ func renderToolTransactionEntry(entry transcriptEntry, width int, at time.Time) 
 			result = presentation.detail
 		}
 	}
-	result = renderTerminalLinks(sanitizeTerminalText(result))
+	// Keep shell/tool results plain after sanitizing them. Rendering OSC 8 here
+	// can leak hyperlink parameters in terminals that do not fully support OSC 8.
+	result = sanitizeTerminalText(result)
 	result = strings.TrimRight(result, "\n")
 	if result == "" {
 		result = "(empty result)"
