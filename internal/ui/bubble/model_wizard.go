@@ -16,7 +16,7 @@ func (m appModel) currentModelConfig() model.Config {
 	return m.modelConfig.CurrentModelConfig()
 }
 
-// configForProfile 根据 config.json 中的 profile 生成可应用的模型配置。
+// configForProfile 根据 config.jsonc 运行时快照中的 profile 生成可应用配置。
 func (m appModel) configForProfile(profile model.Profile) model.Config {
 	cfg := profile.Config()
 	cfg.Profiles = m.currentModelConfig().Profiles
@@ -25,7 +25,7 @@ func (m appModel) configForProfile(profile model.Profile) model.Config {
 
 // prepareModelWizardStep resolves the selected provider and creates the model
 // list for the second step of /model. Config-v2 wizards use only the immutable
-// catalog selections captured when the wizard opened; legacy controllers keep
+// catalog selections captured when the wizard opened; minimal controllers keep
 // using their configured profile model names.
 func (m *appModel) prepareModelWizardStep() {
 	if m == nil || m.modelWizard == nil {

@@ -170,19 +170,21 @@ func (m appModel) configCenterHintBar() string {
 type configGeneralKind int
 
 const (
-	configGeneralEnum           configGeneralKind = iota // 枚举/布尔：Enter 循环到下一个值
-	configGeneralInt                                     // 整数：Enter 内联输入
-	configGeneralFloat                                   // 浮点：Enter 内联输入
-	configGeneralModelParameter                          // 当前激活模型参数：Enter 循环并写回 config-v2
+	configGeneralEnum            configGeneralKind = iota // settings 枚举/布尔：Enter 循环并保存
+	configGeneralInt                                      // settings 整数：Enter 内联输入
+	configGeneralFloat                                    // settings 浮点：Enter 内联输入
+	configGeneralModelParameter                           // 当前激活模型参数：Enter 循环并写回 config-v2
+	configGeneralDocumentBoolean                          // config.jsonc 顶层布尔：Enter 循环并热应用
 )
 
 const (
+	configGeneralYoloKey            = "security.yolo"
 	configGeneralThinkingKey        = "model.thinking"
 	configGeneralReasoningEffortKey = "model.reasoning_effort"
 )
 
 // configGeneralField 描述 General 页的一个扁平字段：显示 key、当前值和编辑方式。
-// settings.json 字段使用 get/set/parse；当前模型参数由专用分支读写 config-v2。
+// settings.json 字段使用 get/set/parse；config.jsonc 与当前模型参数由专用分支处理。
 type configGeneralField struct {
 	key     string
 	kind    configGeneralKind
@@ -212,10 +214,15 @@ func meterLocationOptions() []string {
 	}
 }
 
-// configGeneralFields 按界面顺序返回 General 页字段。当前模型的常用推理参数
-// 放在最前，其余字段保持 settings.json 的 spec 表顺序。
+// configGeneralFields 按界面顺序返回 General 页字段。全局安全开关与当前模型
+// 常用推理参数放在最前，其余字段保持 settings.json 的 spec 表顺序。
 func configGeneralFields() []configGeneralField {
 	return []configGeneralField{
+		{
+			key:     configGeneralYoloKey,
+			kind:    configGeneralDocumentBoolean,
+			options: []string{"false", "true"},
+		},
 		{
 			key:  configGeneralThinkingKey,
 			kind: configGeneralModelParameter,
@@ -423,6 +430,10 @@ type configGeneralPresentation struct {
 // configGeneralPresentations 只负责显示层。持久化 key 和枚举值保持不变，
 // 避免中文界面影响 settings.json 兼容性及运行时热更新。
 var configGeneralPresentations = map[string]configGeneralPresentation{
+	configGeneralYoloKey: {
+		label:       "YOLO 模式",
+		description: "允许 Read 访问工作区外路径，并传递给后续 worker",
+	},
 	configGeneralThinkingKey: {
 		label:       "推理开关",
 		description: "控制当前模型是否启用推理过程",
@@ -612,6 +623,11 @@ func lookupConfigGeneralField(key string) *configGeneralField {
 // settings.Config 读取；推理字段读取当前激活模型的 config-v2 parameters。
 func (m appModel) configGeneralRawValue(field configGeneralField, cfg settings.Config) string {
 	switch field.key {
+	case configGeneralYoloKey:
+		if m.configCenterController == nil {
+			return "false"
+		}
+		return boolGeneralLabel(m.configCenterController.Snapshot().Document.Yolo)
 	case configGeneralThinkingKey, configGeneralReasoningEffortKey:
 		if m.configCenterController == nil {
 			return "不可用"
@@ -742,6 +758,22 @@ func (m *appModel) advanceGeneralEdit() {
 	field := displayed[selected]
 	if field.kind == configGeneralModelParameter {
 		m.advanceGeneralModelParameter(field.key)
+		return
+	}
+	if field.kind == configGeneralDocumentBoolean {
+		current := m.configGeneralRawValue(field, m.currentSettings())
+		next := current != "true"
+		m.applyConfigOperations(configv2.SetYolo(next))
+		if state.err != "" {
+			return
+		}
+		if setter, ok := m.runner.(interface {
+			SetYoloMode(bool) (bool, error)
+		}); ok {
+			if _, err := setter.SetYoloMode(next); err != nil {
+				state.err = err.Error()
+			}
+		}
 		return
 	}
 	cfg := m.currentSettings()

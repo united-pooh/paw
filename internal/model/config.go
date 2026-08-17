@@ -2,10 +2,8 @@ package model
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -14,8 +12,6 @@ const (
 	defaultTimeoutSeconds     = 60
 	defaultRetryCountValue    = 3
 	DefaultContextLimitTokens = 128 * 1024
-	modelConfigDirName        = ".paw"
-	modelConfigFileName       = "config.json"
 )
 
 type Config struct {
@@ -86,7 +82,7 @@ func CloneProxyConfig(proxy *ProxyConfig) *ProxyConfig {
 	return &cloned
 }
 
-// Profile is one fully configured provider entry from ~/.paw/config.json.
+// Profile is one fully resolved provider entry synthesized from config.jsonc.
 // The UI uses one profile as the first-level provider choice and its Models
 // as the second-level model choices.
 type Profile struct {
@@ -148,303 +144,6 @@ func (p Profile) Config() Config {
 	}
 }
 
-type persistedModelConfig struct {
-	ID                      string                 `json:"id,omitempty"`
-	Name                    string                 `json:"name,omitempty"`
-	Provider                string                 `json:"provider,omitempty"`
-	Transport               string                 `json:"transport,omitempty"`
-	APIBaseURL              string                 `json:"baseUrl,omitempty"`
-	APIPath                 string                 `json:"apiPath,omitempty"`
-	APIKeyEnvName           string                 `json:"apiKeyEnvName,omitempty"`
-	APIKey                  string                 `json:"apiKey,omitempty"`
-	Model                   string                 `json:"model,omitempty"`
-	Models                  []string               `json:"models,omitempty"`
-	Timeout                 int                    `json:"timeoutSeconds,omitempty"`
-	RetryCount              int                    `json:"retryCount,omitempty"`
-	Stream                  *bool                  `json:"stream,omitempty"`
-	CredentialID            string                 `json:"credentialId,omitempty"`
-	ExtraBody               RequestBody            `json:"-"`
-	ModelExtraBody          map[string]RequestBody `json:"-"`
-	ContextLimitTokens      int                    `json:"context_limit_tokens,omitempty"`
-	ModelContextLimitTokens map[string]int         `json:"model_context_limit_tokens,omitempty"`
-	extraBodySet            bool
-	modelExtraBodySet       bool
-}
-
-func (p *persistedModelConfig) UnmarshalJSON(data []byte) error {
-	type alias persistedModelConfig
-	var decoded alias
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return err
-	}
-	*p = persistedModelConfig(decoded)
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
-	}
-	if p.ContextLimitTokens == 0 {
-		if raw, ok := fields["contextLimitTokens"]; ok {
-			_ = json.Unmarshal(raw, &p.ContextLimitTokens)
-		}
-	}
-	if len(p.ModelContextLimitTokens) == 0 {
-		if raw, ok := fields["modelContextLimitTokens"]; ok {
-			_ = json.Unmarshal(raw, &p.ModelContextLimitTokens)
-		}
-	}
-	if raw, ok := fields["extraBody"]; ok {
-		p.extraBodySet = true
-		body, err := decodeRequiredRequestBody(raw, "extraBody")
-		if err != nil {
-			return fmt.Errorf("model profile %q: %w", persistedProfileLabel(*p), err)
-		}
-		p.ExtraBody = body
-	}
-	if raw, ok := fields["modelExtraBody"]; ok {
-		p.modelExtraBodySet = true
-		values, err := decodeModelExtraBodies(raw)
-		if err != nil {
-			return fmt.Errorf("model profile %q: %w", persistedProfileLabel(*p), err)
-		}
-		p.ModelExtraBody = values
-	}
-	return nil
-}
-
-func persistedProfileLabel(p persistedModelConfig) string {
-	for _, value := range []string{p.ID, p.Name, p.Provider} {
-		if value = strings.TrimSpace(value); value != "" {
-			return value
-		}
-	}
-	return "default"
-}
-
-func (p persistedModelConfig) MarshalJSON() ([]byte, error) {
-	type fields persistedModelConfig
-
-	// Keep nil maps omitted for backwards-compatible config output, while
-	// retaining explicitly configured empty objects as {} rather than null.
-	var extraBody *RequestBody
-	if p.ExtraBody != nil {
-		cloned := CloneRequestBody(p.ExtraBody)
-		extraBody = &cloned
-	}
-	var modelExtraBody *map[string]RequestBody
-	if p.ModelExtraBody != nil {
-		cloned := CloneModelExtraBodies(p.ModelExtraBody)
-		modelExtraBody = &cloned
-	}
-
-	return json.Marshal(struct {
-		fields
-		ExtraBody      *RequestBody            `json:"extraBody,omitempty"`
-		ModelExtraBody *map[string]RequestBody `json:"modelExtraBody,omitempty"`
-	}{
-		fields:         fields(p),
-		ExtraBody:      extraBody,
-		ModelExtraBody: modelExtraBody,
-	})
-}
-
-func decodeRequiredRequestBody(raw json.RawMessage, location string) (RequestBody, error) {
-	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return nil, fmt.Errorf("%s: %w", location, err)
-	}
-	object, ok := value.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("%s must be a JSON object", location)
-	}
-	return CloneRequestBody(RequestBody(object)), nil
-}
-
-func decodeModelExtraBodies(raw json.RawMessage) (map[string]RequestBody, error) {
-	body, err := decodeRequiredRequestBody(raw, "modelExtraBody")
-	if err != nil {
-		return nil, err
-	}
-	result := make(map[string]RequestBody, len(body))
-	for _, modelName := range sortedRequestBodyKeys(body) {
-		object, ok := jsonObject(body[modelName])
-		if !ok {
-			return nil, fmt.Errorf("modelExtraBody[%q] must be a JSON object", modelName)
-		}
-		result[modelName] = CloneRequestBody(object)
-	}
-	return result, nil
-}
-
-type persistedPawConfig struct {
-	SchemaVersion        int                    `json:"schemaVersion,omitempty"`
-	ModelProfiles        []persistedModelConfig `json:"modelProfiles,omitempty"`
-	ActiveModelProfileID string                 `json:"activeModelProfileId,omitempty"`
-}
-
-func LoadConfigFromEnv() (Config, error) {
-	fileEnvValues, err := loadOptionalEnvFiles(".env", ".env.local")
-	if err != nil {
-		return Config{}, err
-	}
-	configPath, err := modelConfigPath()
-	if err != nil {
-		return Config{}, err
-	}
-
-	document, persisted, err := loadPawConfigDocument(configPath)
-	if err != nil {
-		return Config{}, err
-	}
-	profiles, err := configuredProfiles(persisted.ModelProfiles, fileEnvValues)
-	if err != nil {
-		return Config{}, err
-	}
-	if len(profiles) == 0 {
-		if document == nil {
-			if err := savePawConfigDocument(configPath, map[string]any{
-				"schemaVersion":        1,
-				"modelProfiles":        []any{},
-				"activeModelProfileId": "",
-			}); err != nil {
-				return Config{}, fmt.Errorf("create Paw config: %w", err)
-			}
-		}
-		return Config{}, fmt.Errorf("no model profiles configured in %s", configPath)
-	}
-
-	selected := 0
-	activeID := strings.TrimSpace(persisted.ActiveModelProfileID)
-	if activeID != "" {
-		for index, profile := range profiles {
-			if profile.ID == activeID {
-				selected = index
-				break
-			}
-		}
-	}
-	cfg := profiles[selected].Config()
-	cfg.Profiles = cloneProfiles(profiles)
-	cfg = fillConfigDefaults(cfg)
-	if cfg.APIKey == "" {
-		cfg.APIKey = loadAPIKeyByEnvName(cfg.APIKeyEnvName, fileEnvValues)
-	}
-	return cfg, nil
-}
-
-func SaveModelConfig(cfg Config) error {
-	configPath, err := modelConfigPath()
-	if err != nil {
-		return err
-	}
-	return saveModelConfigAtPath(cfg, configPath)
-}
-
-func saveModelConfigAtPath(cfg Config, configPath string) error {
-	cfg = fillConfigDefaults(cfg)
-	if err := ValidateExtraRequestBodies(cfg); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
-		return fmt.Errorf("create config directory: %w", err)
-	}
-
-	document, persisted, err := loadPawConfigDocument(configPath)
-	if err != nil {
-		return err
-	}
-	if document == nil {
-		document = make(map[string]any)
-	}
-	if _, ok := document["schemaVersion"]; !ok {
-		document["schemaVersion"] = 1
-	}
-
-	profileID := strings.TrimSpace(cfg.ProfileID)
-	if profileID == "" {
-		profileID = strings.TrimSpace(persisted.ActiveModelProfileID)
-	}
-	if profileID == "" && len(persisted.ModelProfiles) > 0 {
-		profileID = strings.TrimSpace(persisted.ModelProfiles[0].ID)
-	}
-	if profileID == "" {
-		profileID = "default"
-	}
-
-	profiles := profileDocuments(document)
-	profileIndex := -1
-	for index, profile := range profiles {
-		if strings.TrimSpace(stringValue(profile["id"])) == profileID {
-			profileIndex = index
-			break
-		}
-	}
-	if profileIndex < 0 {
-		profiles = append(profiles, make(map[string]any))
-		profileIndex = len(profiles) - 1
-	}
-	profile := profiles[profileIndex]
-	profile["id"] = profileID
-	if strings.TrimSpace(cfg.ProfileName) != "" {
-		profile["name"] = cfg.ProfileName
-	}
-	if strings.TrimSpace(cfg.Provider) != "" {
-		profile["provider"] = cfg.Provider
-	}
-	if strings.TrimSpace(cfg.Transport) != "" {
-		profile["transport"] = cfg.Transport
-	}
-	if strings.TrimSpace(cfg.APIBaseURL) != "" {
-		profile["baseUrl"] = cfg.APIBaseURL
-	}
-	if strings.TrimSpace(cfg.APIPath) != "" {
-		profile["apiPath"] = cfg.APIPath
-	}
-	if strings.TrimSpace(cfg.APIKeyEnvName) != "" {
-		profile["apiKeyEnvName"] = cfg.APIKeyEnvName
-	}
-	if strings.TrimSpace(cfg.Model) != "" {
-		profile["model"] = cfg.Model
-	}
-	if models := AvailableModels(cfg); len(models) > 0 {
-		profile["models"] = models
-	}
-	if cfg.Timeout > 0 {
-		profile["timeoutSeconds"] = int(cfg.Timeout / time.Second)
-	}
-	if cfg.RetryCount > 0 {
-		profile["retryCount"] = cfg.RetryCount
-	}
-	profile["stream"] = cfg.Stream
-	if cfg.ExtraBody != nil {
-		profile["extraBody"] = CloneRequestBody(cfg.ExtraBody)
-	} else {
-		delete(profile, "extraBody")
-	}
-	if cfg.ModelExtraBody != nil {
-		profile["modelExtraBody"] = CloneModelExtraBodies(cfg.ModelExtraBody)
-	} else {
-		delete(profile, "modelExtraBody")
-	}
-	if cfg.ContextLimitTokens > 0 {
-		profile["context_limit_tokens"] = cfg.ContextLimitTokens
-		delete(profile, "contextLimitTokens")
-	} else {
-		delete(profile, "context_limit_tokens")
-		delete(profile, "contextLimitTokens")
-	}
-	if len(cfg.ModelContextLimitTokens) > 0 {
-		profile["model_context_limit_tokens"] = cloneModelContextLimits(cfg.ModelContextLimitTokens)
-		delete(profile, "modelContextLimitTokens")
-	} else {
-		delete(profile, "model_context_limit_tokens")
-		delete(profile, "modelContextLimitTokens")
-	}
-	document["modelProfiles"] = profiles
-	document["activeModelProfileId"] = profileID
-
-	return savePawConfigDocument(configPath, document)
-}
-
 func defaultTimeout() time.Duration {
 	return time.Duration(defaultTimeoutSeconds) * time.Second
 }
@@ -503,56 +202,6 @@ func applyTransportDefaults(cfg *Config) {
 	if cfg.APIPath == "" && strings.Contains(transport, "response") {
 		cfg.APIPath = "/responses"
 	}
-}
-
-func configuredProfiles(persisted []persistedModelConfig, envValues map[string]string) ([]Profile, error) {
-	profiles := make([]Profile, 0, len(persisted))
-	for _, raw := range persisted {
-		profile := Profile{
-			ID:                      strings.TrimSpace(raw.ID),
-			Name:                    strings.TrimSpace(raw.Name),
-			Provider:                strings.TrimSpace(raw.Provider),
-			Transport:               strings.TrimSpace(raw.Transport),
-			APIBaseURL:              strings.TrimSpace(raw.APIBaseURL),
-			APIPath:                 strings.TrimSpace(raw.APIPath),
-			APIKey:                  strings.TrimSpace(raw.APIKey),
-			APIKeyEnvName:           strings.TrimSpace(raw.APIKeyEnvName),
-			Model:                   strings.TrimSpace(raw.Model),
-			Models:                  normalizeModelNames(raw.Models),
-			ExtraBody:               CloneRequestBody(raw.ExtraBody),
-			ModelExtraBody:          CloneModelExtraBodies(raw.ModelExtraBody),
-			ContextLimitTokens:      raw.ContextLimitTokens,
-			ModelContextLimitTokens: cloneModelContextLimits(raw.ModelContextLimitTokens),
-			CredentialID:            strings.TrimSpace(raw.CredentialID),
-			StreamSet:               raw.Stream != nil,
-		}
-		if raw.Timeout > 0 {
-			profile.Timeout = time.Duration(raw.Timeout) * time.Second
-		}
-		if raw.RetryCount > 0 {
-			profile.RetryCount = raw.RetryCount
-			profile.RetryCountSet = true
-		}
-		if raw.Stream != nil {
-			profile.Stream = *raw.Stream
-		}
-		if profile.APIKeyEnvName != "" {
-			if key := loadAPIKeyByEnvName(profile.APIKeyEnvName, envValues); key != "" {
-				profile.APIKey = key
-			}
-		}
-		if profile.ID == "" {
-			profile.ID = profile.Name
-		}
-		if profile.ID == "" {
-			profile.ID = profile.Provider
-		}
-		if err := ValidateExtraRequestBodies(fillConfigDefaults(profile.Config())); err != nil {
-			return nil, err
-		}
-		profiles = append(profiles, profile)
-	}
-	return profiles, nil
 }
 
 func cloneProfiles(profiles []Profile) []Profile {
@@ -687,76 +336,6 @@ func normalizeModelContextLimits(values map[string]int) map[string]int {
 	return out
 }
 
-func modelConfigPath() (string, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve user home: %w", err)
-	}
-	if strings.TrimSpace(homeDir) == "" {
-		return "", fmt.Errorf("resolve user home: empty path")
-	}
-	return filepath.Join(homeDir, modelConfigDirName, modelConfigFileName), nil
-}
-
-func loadPawConfigDocument(configPath string) (map[string]any, persistedPawConfig, error) {
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, persistedPawConfig{}, nil
-		}
-		return nil, persistedPawConfig{}, fmt.Errorf("read Paw config: %w", err)
-	}
-
-	if strings.TrimSpace(string(data)) == "" {
-		return make(map[string]any), persistedPawConfig{}, nil
-	}
-
-	var document map[string]any
-	if err := json.Unmarshal(data, &document); err != nil {
-		return nil, persistedPawConfig{}, fmt.Errorf("parse Paw config: %w", err)
-	}
-	var persisted persistedPawConfig
-	if err := json.Unmarshal(data, &persisted); err != nil {
-		return nil, persistedPawConfig{}, fmt.Errorf("parse Paw model profiles: %w", err)
-	}
-	return document, persisted, nil
-}
-
-func savePawConfigDocument(configPath string, document map[string]any) error {
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
-		return fmt.Errorf("create Paw config directory: %w", err)
-	}
-	data, err := json.MarshalIndent(document, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal Paw config: %w", err)
-	}
-	data = append(data, '\n')
-	if err := os.WriteFile(configPath, data, 0o600); err != nil {
-		return fmt.Errorf("write Paw config: %w", err)
-	}
-	return nil
-}
-
-func profileDocuments(document map[string]any) []map[string]any {
-	values, ok := document["modelProfiles"].([]any)
-	if !ok {
-		return nil
-	}
-	profiles := make([]map[string]any, 0, len(values))
-	for _, value := range values {
-		profile, ok := value.(map[string]any)
-		if ok {
-			profiles = append(profiles, profile)
-		}
-	}
-	return profiles
-}
-
-func stringValue(value any) string {
-	stringValue, _ := value.(string)
-	return stringValue
-}
-
 func loadAPIKeyByEnvName(primary string, values map[string]string) string {
 	primary = strings.TrimSpace(primary)
 	if primary == "" {
@@ -765,10 +344,7 @@ func loadAPIKeyByEnvName(primary string, values map[string]string) string {
 	if value := strings.TrimSpace(values[primary]); value != "" {
 		return value
 	}
-	if value := strings.TrimSpace(os.Getenv(primary)); value != "" {
-		return value
-	}
-	return ""
+	return strings.TrimSpace(os.Getenv(primary))
 }
 
 // LoadOptionalEnvFiles loads key=value pairs from .env and .env.local in the

@@ -50,7 +50,7 @@ func openTestManager(t *testing.T, paths Paths, store CredentialStore, watch boo
 }
 
 // fakeModelDiscoverer is intentionally countable so lifecycle tests can prove
-// that only top-level Open is allowed to perform live discovery.
+// exactly which startup or explicit refresh path performs live discovery.
 type fakeModelDiscoverer struct {
 	calls  []string
 	models []DiscoveredModel
@@ -413,6 +413,41 @@ func TestManagerDiscoveryUpdateAndReloadDoNotRequestAgain(t *testing.T) {
 	}
 	if _, ok := manager.Snapshot().EffectiveModels["local/live"]; !ok {
 		t.Fatalf("retained discovery missing after reload/update: %#v", manager.Snapshot().EffectiveModels)
+	}
+}
+
+func TestManagerExplicitDiscoveryRefreshRequestsAgain(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, false)
+	document := emptyDocument()
+	document.Providers["local"] = discoveryTestProvider("http://127.0.0.1:1234/v1")
+	document.Models["local/manual"] = Model{Provider: "local", Name: "manual"}
+	document.ActiveModel = "local/manual"
+	writeManagerDocument(t, paths, document)
+	discoverer := &fakeModelDiscoverer{models: []DiscoveredModel{{Name: "first"}}}
+
+	manager, err := Open(context.Background(), Options{Paths: paths, Credentials: &FakeCredentialStore{Unavailable: true}, DisableWatch: true, Discoverer: discoverer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	before := manager.Snapshot()
+	discoverer.models = []DiscoveredModel{{Name: "second"}}
+	refreshed, err := manager.RefreshModelDiscovery(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(discoverer.calls) != 2 {
+		t.Fatalf("discovery calls = %#v, want startup plus explicit refresh", discoverer.calls)
+	}
+	if refreshed.Revision != before.Revision+1 {
+		t.Fatalf("refresh revision = %d, want %d", refreshed.Revision, before.Revision+1)
+	}
+	if _, ok := refreshed.EffectiveModels["local/second"]; !ok {
+		t.Fatalf("refreshed catalog missing second model: %#v", refreshed.EffectiveModels)
+	}
+	if _, ok := refreshed.EffectiveModels["local/first"]; ok {
+		t.Fatalf("refreshed catalog retained stale model: %#v", refreshed.EffectiveModels)
 	}
 }
 
@@ -1670,6 +1705,45 @@ func TestFirstRunCreatesStarterWithoutTouchingUserHome(t *testing.T) {
 	}
 }
 
+func TestFirstRunIgnoresLegacyConfigJSONButCopiesNonConfigAssets(t *testing.T) {
+	clearDetectionEnv(t)
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	legacyHome := filepath.Join(home, ".paw")
+	legacyPath := filepath.Join(legacyHome, "config.json")
+	if err := os.MkdirAll(legacyHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := []byte(`{"schemaVersion":1,"modelProfiles":[{"id":"legacy","provider":"deepseek","apiKey":"must-not-import","model":"deepseek-chat"}]}`)
+	if err := os.WriteFile(legacyPath, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	legacySettings := []byte(`{"ui":{"theme":"dracula"}}`)
+	if err := os.WriteFile(filepath.Join(legacyHome, "settings.json"), legacySettings, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := ResolvePaths(PathOptions{ConfigHome: filepath.Join(root, "config", "Paw"), UserHomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := openTestManager(t, paths, &FakeCredentialStore{Unavailable: true}, false)
+	snapshot := manager.Snapshot()
+	if len(snapshot.Document.Providers) != 0 || len(snapshot.Document.Models) != 0 {
+		t.Fatalf("legacy config was imported: %#v", snapshot.Document)
+	}
+	if got, err := os.ReadFile(legacyPath); err != nil || !bytes.Equal(got, legacy) {
+		t.Fatalf("legacy config was modified: got=%q err=%v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(paths.Home, "config-v1.backup.json")); !os.IsNotExist(err) {
+		t.Fatalf("legacy backup should not be created, stat=%v", err)
+	}
+	if got, err := os.ReadFile(paths.Settings); err != nil || !bytes.Equal(got, legacySettings) {
+		t.Fatalf("non-config legacy settings were not copied: got=%q err=%v", got, err)
+	}
+}
+
 func TestManagerInvalidGlobalStartupExplicitReloadUsesLoadedDiscoveryCacheWithoutRequest(t *testing.T) {
 	clearDetectionEnv(t)
 	paths := isolatedPaths(t, false)
@@ -2662,79 +2736,5 @@ func TestWatcherObservesAtomicReplacement(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for config watcher")
-	}
-}
-
-func TestLegacyMigrationIsIdempotentAndImportsPlaintextCredential(t *testing.T) {
-	clearDetectionEnv(t)
-	t.Setenv("DEEPSEEK_API_KEY", "legacy-secret")
-	paths := isolatedPaths(t, false)
-	if err := os.MkdirAll(paths.LegacyHome, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	legacy := `{"schemaVersion":1,"activeModelProfileId":"deepseek","modelProfiles":[{"id":"deepseek","provider":"deepseek","apiKey":"legacy-secret","models":["deepseek-chat"],"model":"deepseek-chat"}]}`
-	if err := os.WriteFile(paths.LegacyConfig, []byte(legacy), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(paths.LegacyHome, "settings.json"), []byte(`{"ui":{"theme":"dracula"}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(paths.LegacyHome, "mcp.toml"), []byte("# legacy mcp\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	legacySkill := filepath.Join(paths.LegacyHome, "skills", "demo")
-	if err := os.MkdirAll(legacySkill, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(legacySkill, "SKILL.md"), []byte("# Demo\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	store := &FakeCredentialStore{Values: map[string]string{}}
-	manager := openTestManager(t, paths, store, false)
-	if !manager.Snapshot().Ready {
-		t.Fatalf("migrated snapshot not ready: %#v", manager.Snapshot().Diagnostics)
-	}
-	secret, err := store.Get(context.Background(), "provider/deepseek")
-	if err != nil || secret != "legacy-secret" {
-		t.Fatalf("migrated secret=%q err=%v", secret, err)
-	}
-	if _, err := os.Stat(filepath.Join(paths.Home, "config-v1.backup.json")); err != nil {
-		t.Fatalf("backup: %v", err)
-	}
-	for _, copied := range []string{paths.Settings, paths.MCP, filepath.Join(paths.Skills, "demo", "SKILL.md")} {
-		if _, err := os.Stat(copied); err != nil {
-			t.Fatalf("legacy asset %s: %v", copied, err)
-		}
-	}
-	before, _ := os.ReadFile(paths.GlobalConfig)
-	if _, _, err := migrateLegacy(context.Background(), paths, store); err != nil {
-		t.Fatal(err)
-	}
-	after, _ := os.ReadFile(paths.GlobalConfig)
-	if string(before) != string(after) {
-		t.Fatal("idempotent migration overwrote v2 config")
-	}
-}
-
-func TestLegacyPlaintextIsNotMigratedWithoutKeyring(t *testing.T) {
-	clearDetectionEnv(t)
-	paths := isolatedPaths(t, false)
-	if err := os.MkdirAll(paths.LegacyHome, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	legacy := `{"schemaVersion":1,"modelProfiles":[{"id":"private","provider":"deepseek","apiKey":"must-not-leak","models":["deepseek-chat"]}]}`
-	if err := os.WriteFile(paths.LegacyConfig, []byte(legacy), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	manager, err := Open(context.Background(), Options{Paths: paths, Credentials: &FakeCredentialStore{Unavailable: true}, DisableWatch: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer manager.Close()
-	if manager.Snapshot().Ready || manager.RequireReady() == nil || !strings.Contains(manager.Snapshot().Diagnostics[0].Message, "not migrated") {
-		t.Fatalf("blocked migration snapshot=%#v", manager.Snapshot())
-	}
-	if _, statErr := os.Stat(paths.GlobalConfig); !os.IsNotExist(statErr) {
-		t.Fatalf("v2 config should not exist, stat=%v", statErr)
 	}
 }

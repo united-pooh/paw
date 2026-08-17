@@ -16,7 +16,7 @@ type ModelRuntime interface {
 }
 
 // Controller bridges the durable registry and the model runtime. It also
-// satisfies the legacy TUI model-controller interface while keeping configured
+// satisfies the TUI model-controller interface while keeping configured
 // selections to activeModel-only updates and pinning only selected discoveries.
 type Controller struct {
 	manager         *Manager
@@ -194,6 +194,23 @@ func (c *Controller) ReloadConfig() error {
 	}
 	return c.applySnapshot(c.manager.Snapshot())
 }
+
+// RefreshModelDiscovery performs an explicit live refresh and synchronizes the
+// resulting effective catalog/profile set into the model runtime.
+func (c *Controller) RefreshModelDiscovery(ctx context.Context) (Snapshot, error) {
+	if c == nil || c.manager == nil {
+		return Snapshot{}, fmt.Errorf("configuration manager is unavailable")
+	}
+	snapshot, err := c.manager.RefreshModelDiscovery(ctx)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if err := c.applySnapshot(snapshot); err != nil {
+		return Snapshot{}, err
+	}
+	return snapshot, nil
+}
+
 func (c *Controller) ConfigPath() string {
 	if c == nil || c.manager == nil {
 		return ""

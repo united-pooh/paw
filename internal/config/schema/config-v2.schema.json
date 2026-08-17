@@ -7,6 +7,7 @@
   "properties": {
     "schemaVersion": { "const": 2 },
     "activeModel": { "type": "string" },
+    "yolo": { "type": "boolean", "default": false },
     "proxy": { "$ref": "#/$defs/proxy" },
     "providers": {
       "type": "object",

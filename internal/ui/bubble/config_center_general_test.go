@@ -51,7 +51,7 @@ func TestConfigCenterGeneralFlatListShowsAllFields(t *testing.T) {
 	model, _, _ := openGeneralCenter(t)
 	rendered := ansi.Strip(model.renderConfigCenterBox())
 	for _, label := range []string{
-		"推理开关", "推理强度",
+		"YOLO 模式", "推理开关", "推理强度",
 		"压缩模式", "保留最近对话轮数", "状态压缩触发比例",
 		"worker上下文模式", "worker运行模式", "worker等待超时",
 		"界面主题", "上下文 Token 上限", "上下文用量显示位置", "助手输出节奏", "双击翻译",
@@ -223,6 +223,31 @@ func TestConfigCenterTabSwitchCyclesTabs(t *testing.T) {
 	model = press(model, tea.KeyMsg{Type: tea.KeyLeft})
 	if model.configCenter.page != configCenterModels {
 		t.Fatalf("after Left page = %v, want Models", model.configCenter.page)
+	}
+}
+
+func TestConfigCenterGeneralYoloPersistsToJSONCAndHotApplies(t *testing.T) {
+	model, settingsController, runner := openGeneralCenter(t)
+	model.configCenter.selected = generalFieldIndex(t, model, configGeneralYoloKey)
+	model = press(model, tea.KeyMsg{Type: tea.KeyEnter})
+
+	snapshot := model.configCenterController.Snapshot()
+	if !snapshot.Document.Yolo || !strings.Contains(string(snapshot.Raw), `"yolo": true`) {
+		t.Fatalf("YOLO was not persisted to config.jsonc: document=%#v raw=%s", snapshot.Document, snapshot.Raw)
+	}
+	if len(runner.yoloModes) != 1 || !runner.yoloModes[0] {
+		t.Fatalf("runner YOLO calls = %#v, want [true]", runner.yoloModes)
+	}
+	if len(settingsController.saved) != 0 {
+		t.Fatalf("YOLO was incorrectly persisted to settings.json: %#v", settingsController.saved)
+	}
+
+	model = press(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.configCenterController.Snapshot().Document.Yolo {
+		t.Fatal("second activation did not disable YOLO")
+	}
+	if len(runner.yoloModes) != 2 || runner.yoloModes[1] {
+		t.Fatalf("runner YOLO calls = %#v, want [true false]", runner.yoloModes)
 	}
 }
 

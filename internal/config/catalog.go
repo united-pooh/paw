@@ -49,7 +49,7 @@ var builtinPresets = map[string]Preset{
 	},
 	"custom": {
 		ID: "custom", Name: "Custom", RequiresAuth: false,
-		Provider:       Provider{Transport: TransportOpenAICompatible, Endpoint: "http://127.0.0.1:8000/v1", TimeoutSeconds: 60, Retries: intPointer(3)},
+		Provider:       Provider{Transport: TransportOpenAICompatible, Endpoint: "http://127.0.0.1:8000/v1", TimeoutSeconds: 60, Retries: intPointer(3), Discovery: &DiscoveryConfig{Enabled: boolPointer(true), Path: "models", PathSet: true, Format: DiscoveryFormatOpenAIList}},
 		DefaultModelID: "custom/model", DefaultModel: Model{Provider: "custom", Name: "model", Adapter: AdapterOpenAICompatible},
 	},
 }

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-08-17
+
+- `config.jsonc` 新增持久化 `yolo` 开关，并接入 `/config` 通用设置与运行时/worker 热应用。
+- 自定义 OpenAI 兼容 provider 默认启用 `/models` 发现；服务商面板新增发现开关，provider 更新后显式刷新模型目录。
+- 移除旧 `~/.paw/config.json` 的启动迁移、schema-v1 读写 API 与兼容测试，配置链全面使用 v2 JSONC。
+
 ## 2026-08-15
 
 - 结构化提问工具 `Select` 更名为 `question`，并支持批量提问：一次调用通过

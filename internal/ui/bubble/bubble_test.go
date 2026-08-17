@@ -42,6 +42,7 @@ type fakeRunner struct {
 	supplements      []string
 	contextLimits    []int
 	contextModes     []string
+	yoloModes        []bool
 	compactFocus     string
 	compactResult    loop.ContextCompactionResult
 	compactErr       error
@@ -106,6 +107,11 @@ func (r *fakeRunner) SetContextLimitTokens(limit int) {
 
 func (r *fakeRunner) SetContextMode(mode string) {
 	r.contextModes = append(r.contextModes, mode)
+}
+
+func (r *fakeRunner) SetYoloMode(enabled bool) (bool, error) {
+	r.yoloModes = append(r.yoloModes, enabled)
+	return enabled, nil
 }
 
 func (r *fakeRunner) CompactContext(ctx context.Context, focus string) (loop.ContextCompactionResult, error) {

@@ -126,15 +126,7 @@ func openManager(ctx context.Context, options Options, cacheWriter func(string, 
 	}
 
 	diagnostics := copyLegacyAssets(paths)
-	_, migrationDiagnostics, migrationErr := migrateLegacy(ctx, paths, options.Credentials)
-	if migrationErr != nil && !errors.Is(migrationErr, ErrCredentialMigrationBlocked) {
-		return nil, migrationErr
-	}
-	diagnostics = append(diagnostics, migrationDiagnostics...)
-	if migrationErr != nil {
-		diagnostics = append(diagnostics, Diagnostic{Severity: "error", File: paths.LegacyConfig, Message: migrationErr.Error()})
-	}
-	if _, err := os.Stat(paths.GlobalConfig); os.IsNotExist(err) && migrationErr == nil {
+	if _, err := os.Stat(paths.GlobalConfig); os.IsNotExist(err) {
 		document, startupDiagnostics := firstRunDocument(ctx, paths, options.Credentials)
 		diagnostics = append(diagnostics, startupDiagnostics...)
 		raw, err := marshalStarter(document, "Paw configuration v2 — comments and trailing commas are supported")
@@ -149,7 +141,7 @@ func openManager(ctx context.Context, options Options, cacheWriter func(string, 
 				return nil, fmt.Errorf("create starter config: %w", err)
 			}
 		}
-	} else if err != nil && !os.IsNotExist(err) {
+	} else if err != nil {
 		return nil, err
 	}
 
@@ -168,26 +160,13 @@ func openManager(ctx context.Context, options Options, cacheWriter func(string, 
 		done:                  make(chan struct{}),
 	}
 	manager.loadModelDiscoveryCache()
-	var candidate Snapshot
-	var loadErr error
-	if migrationErr != nil {
-		raw, _ := marshalStarter(emptyDocument(), "Migration is blocked until the legacy plaintext credential can be moved to a keyring")
-		hash := sha256.Sum256(raw)
-		files, _ := manager.readConfigFileStates()
-		candidate = Snapshot{
-			Document: emptyDocument(), Revision: 1, ContentHash: hex.EncodeToString(hash[:]),
-			Diagnostics: diagnostics, Ready: false, LoadedAt: time.Now(), Raw: raw,
-			globalConfigExists: files.global.exists, workspaceConfigExists: files.workspace.exists,
-			workspaceRaw: append([]byte(nil), files.workspace.raw...),
-		}
-		diagnostics = nil
-	} else {
-		document, activeID, err := manager.loadDiscoverySelection()
-		if err == nil {
-			manager.initializeModelDiscovery(ctx, document, activeID)
-		}
+	document, activeID, err := manager.loadDiscoverySelection()
+	if err == nil {
+		manager.initializeModelDiscovery(ctx, document, activeID)
 	}
 
+	var candidate Snapshot
+	var loadErr error
 	var watchContext context.Context
 	if !options.DisableWatch {
 		var err error
@@ -209,9 +188,7 @@ func openManager(ctx context.Context, options Options, cacheWriter func(string, 
 	// watches before the one full runtime/profile load so both global and
 	// workspace changes during discovery, or immediately after it, are either
 	// observed by this synchronous read or queued for the watch loop.
-	if migrationErr == nil {
-		candidate, loadErr = manager.loadStartupCandidate(ctx, 1)
-	}
+	candidate, loadErr = manager.loadStartupCandidate(ctx, 1)
 	if loadErr != nil {
 		raw, readErr := os.ReadFile(paths.GlobalConfig)
 		if readErr != nil {
@@ -748,8 +725,8 @@ type proxyApplier interface {
 }
 
 // discoveryTargets returns the sorted provider IDs whose resolved discovery
-// configuration is enabled. Live discovery runs against every target once on
-// startup, bounded per provider.
+// configuration is enabled. Startup and explicit refreshes run every target
+// serially, bounded per provider.
 func discoveryTargets(document Document) []string {
 	providerIDs := make([]string, 0, len(document.Providers))
 	for providerID := range document.Providers {
@@ -1345,6 +1322,8 @@ func (m *Manager) prepareUpdate(ctx context.Context, expectedRevision uint64, op
 		switch operation.Kind {
 		case OperationSetActiveModel:
 			raw, err = patchJSONCMember(raw, nil, "activeModel", operation.Value, false)
+		case OperationSetYolo:
+			raw, err = patchJSONCMember(raw, nil, "yolo", operation.Value, false)
 		case OperationSetProxy:
 			if len(operation.Value) == 0 {
 				raw, err = patchJSONCMember(raw, nil, "proxy", nil, true)
@@ -1377,6 +1356,56 @@ func (m *Manager) prepareUpdate(ctx context.Context, expectedRevision uint64, op
 		return Snapshot{}, nil, Snapshot{}, fmt.Errorf("updated configuration does not have a usable active credential")
 	}
 	return candidate, raw, base, nil
+}
+
+// RefreshModelDiscovery reruns live discovery against every currently enabled
+// provider without rewriting config.jsonc. It is explicit by design: ordinary
+// model selection and file reloads continue to reuse retained/cache results,
+// while provider edits in /config call this method after the durable update.
+func (m *Manager) RefreshModelDiscovery(ctx context.Context) (Snapshot, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m.updateMu.Lock()
+	defer m.updateMu.Unlock()
+
+	m.mu.RLock()
+	if m.closed {
+		m.mu.RUnlock()
+		return Snapshot{}, errors.New("configuration manager is closed")
+	}
+	current := m.snapshot.Clone()
+	m.mu.RUnlock()
+
+	files, err := m.verifyConfigFilesUnchanged(current)
+	if err != nil {
+		return current, err
+	}
+	parsed, err := m.parseCandidateWithWorkspace(files.global.raw, files.workspace)
+	if err != nil {
+		return current, err
+	}
+
+	// A fresh attempt supersedes earlier per-target/cache-write diagnostics.
+	// Keep cache-read diagnostics until a successful cache write repairs the
+	// loaded cache; applicableDiscoveryDiagnostics hides them once repaired.
+	retainedDiagnostics := make([]retainedDiscoveryDiagnostic, 0, len(m.startupDiscoveryDiagnostics))
+	for _, diagnostic := range m.startupDiscoveryDiagnostics {
+		if diagnostic.Kind == discoveryDiagnosticCacheRead {
+			retainedDiagnostics = append(retainedDiagnostics, diagnostic)
+		}
+	}
+	m.startupDiscoveryDiagnostics = retainedDiagnostics
+	m.pendingDiscoveries = map[string]pendingDiscovery{}
+	m.initializeModelDiscovery(ctx, parsed.document, parsed.activeID)
+	m.finalizeModelDiscovery(parsed.document, parsed.activeID)
+
+	candidate := m.candidateFromParsed(ctx, files.global.raw, parsed, current.Revision+1)
+	if !candidate.Ready && current.Ready {
+		return current, fmt.Errorf("refreshed model discovery has no usable active credential; keeping last-known-good snapshot")
+	}
+	m.publish(candidate)
+	return candidate.Clone(), nil
 }
 
 func (m *Manager) Reload() error { return m.reload(context.Background(), true, true) }

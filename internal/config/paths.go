@@ -15,16 +15,14 @@ type Paths struct {
 	Skills              string
 	Schemas             string
 	Schema              string
-	MigrationMarker     string
 	ModelDiscoveryCache string
-	LegacyHome          string
-	LegacyConfig        string
+	LegacyAssetsHome    string
 	WorkspaceRoot       string
 	WorkspaceConfig     string
 }
 
-// PathOptions makes path behavior deterministic in tests and keeps callers
-// from mutating HOME/USERPROFILE process-wide.
+// PathOptions makes path behavior deterministic in tests without mutating
+// process-wide environment variables.
 type PathOptions struct {
 	ConfigHome    string
 	UserConfigDir string
@@ -60,7 +58,7 @@ func ResolvePaths(options PathOptions) (Paths, error) {
 			return Paths{}, fmt.Errorf("resolve user home directory: %w", err)
 		}
 	}
-	legacyHome := filepath.Join(userHome, ".paw")
+
 	paths := Paths{
 		Home:                root,
 		GlobalConfig:        filepath.Join(root, "config.jsonc"),
@@ -69,10 +67,8 @@ func ResolvePaths(options PathOptions) (Paths, error) {
 		Skills:              filepath.Join(root, "skills"),
 		Schemas:             filepath.Join(root, "schemas"),
 		Schema:              filepath.Join(root, "schemas", "config-v2.schema.json"),
-		MigrationMarker:     filepath.Join(root, ".migration-v2.json"),
 		ModelDiscoveryCache: filepath.Join(root, "model-discovery-cache.json"),
-		LegacyHome:          legacyHome,
-		LegacyConfig:        filepath.Join(legacyHome, "config.json"),
+		LegacyAssetsHome:    filepath.Join(userHome, ".paw"),
 	}
 	if work := strings.TrimSpace(options.WorkspaceRoot); work != "" {
 		work, err = filepath.Abs(work)

@@ -51,6 +51,32 @@ func TestSetProxyOperationRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSetYoloOperationRoundTrip(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, false)
+	document := emptyDocument()
+	document.Providers["local"] = Provider{Transport: TransportOpenAICompatible, Endpoint: "http://127.0.0.1:8000/v1"}
+	document.Models["local/m"] = Model{Provider: "local", Name: "m"}
+	document.ActiveModel = "local/m"
+	writeManagerDocument(t, paths, document)
+
+	manager := openTestManager(t, paths, &FakeCredentialStore{Unavailable: true}, false)
+	after, err := manager.Update(context.Background(), manager.Snapshot().Revision, []Operation{SetYolo(true)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.Document.Yolo || !strings.Contains(string(after.Raw), `"yolo": true`) {
+		t.Fatalf("yolo enable did not round trip: document=%#v raw=%s", after.Document, after.Raw)
+	}
+	after, err = manager.Update(context.Background(), after.Revision, []Operation{SetYolo(false)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Document.Yolo || !strings.Contains(string(after.Raw), `"yolo": false`) {
+		t.Fatalf("yolo disable did not persist explicitly: document=%#v raw=%s", after.Document, after.Raw)
+	}
+}
+
 func TestEffectiveProxyPrecedence(t *testing.T) {
 	clearDetectionEnv(t)
 	paths := isolatedPaths(t, false)

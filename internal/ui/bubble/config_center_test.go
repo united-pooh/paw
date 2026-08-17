@@ -9,7 +9,6 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	configv2 "paw/internal/config"
@@ -18,9 +17,11 @@ import (
 
 type fakeConfigCenterDiscoverer struct {
 	models []configv2.DiscoveredModel
+	calls  int
 }
 
 func (d *fakeConfigCenterDiscoverer) Discover(_ context.Context, _ string, _ configv2.Provider, _ string) ([]configv2.DiscoveredModel, error) {
+	d.calls++
 	return append([]configv2.DiscoveredModel(nil), d.models...), nil
 }
 
@@ -124,67 +125,6 @@ func TestConfigCenterBackFromTopLevelClosesWithoutPanic(t *testing.T) {
 	}
 }
 
-func TestConfigCenterDiagnosticsWrapLongMigrationError(t *testing.T) {
-	for _, name := range []string{"PAW_MODEL", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "OLLAMA_HOST", "OLLAMA_MODEL"} {
-		t.Setenv(name, "")
-	}
-	root := t.TempDir()
-	paths, err := configv2.ResolvePaths(configv2.PathOptions{
-		ConfigHome:    filepath.Join(root, "Paw"),
-		UserHomeDir:   filepath.Join(root, "home"),
-		WorkspaceRoot: filepath.Join(root, "work"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(paths.LegacyHome, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	legacy := `{"schemaVersion":1,"modelProfiles":[{"id":"deepseek","provider":"deepseek","apiKey":"fixture-secret","models":["deepseek-chat"]}]}`
-	if err := os.WriteFile(paths.LegacyConfig, []byte(legacy), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	manager, err := configv2.Open(context.Background(), configv2.Options{
-		Paths:                 paths,
-		Credentials:           &configv2.FakeCredentialStore{Unavailable: true},
-		DisableWatch:          true,
-		DisableModelDiscovery: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := modelcfg.NewClient(manager.Snapshot().Active)
-	controller := configv2.NewController(manager, client)
-	t.Cleanup(func() { _ = controller.Close() })
-
-	model := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
-	model.configCenterController = controller
-	model.ready = true
-	model.width = 100
-	model.height = 30
-	model.relayout()
-	model.openConfigCenter()
-	if model.configCenter.page != configCenterDiagnostics {
-		t.Fatalf("page=%v, want diagnostics", model.configCenter.page)
-	}
-
-	rendered := ansi.Strip(model.renderConfigCenterBox())
-	if strings.Contains(rendered, "fixture-secret") {
-		t.Fatalf("diagnostics leaked credential: %q", rendered)
-	}
-	compact := strings.NewReplacer(" ", "", "\n", "", "│", "").Replace(rendered)
-	if !strings.Contains(compact, "configureanenvironmentvariableandretry") {
-		t.Fatalf("diagnostic tail was clipped:\n%s", rendered)
-	}
-	// 配置中心已全屏化并使用小页面 gutter，整页行宽等于终端宽 100；诊断
-	// 正文按页面内容宽换行，长迁移错误应被完整显示、不越界、不泄露凭证。
-	for index, line := range strings.Split(rendered, "\n") {
-		if got := lipgloss.Width(line); got > 100 {
-			t.Fatalf("line %d width=%d, want <=100 (full screen): %q", index+1, got, line)
-		}
-	}
-}
-
 func TestConfigCenterWithoutActiveModelOpensMergedModelsPage(t *testing.T) {
 	controller, _ := newConfigCenterHarness(t)
 	snapshot := controller.Snapshot()
@@ -203,6 +143,21 @@ func TestConfigCenterWithoutActiveModelOpensMergedModelsPage(t *testing.T) {
 	options := app.configCenterOptions()
 	if len(options) != 3 || options[0].label != "local/one" || options[1].label != "local/two" || options[2].label != "+ 添加模型" {
 		t.Fatalf("model options=%#v", options)
+	}
+}
+
+func TestCustomProviderDraftEnablesOpenAIModelDiscovery(t *testing.T) {
+	controller, _ := newConfigCenterHarness(t)
+	model := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	model.configCenterController = controller
+	model.openConfigCenter()
+	model.configCenter.page = configCenterAddProvider
+	model.configCenter.selected = len(sortedPresetIDs())
+
+	model = model.advanceConfigCenter()
+	discovery := model.configCenter.draftProvider.Discovery
+	if discovery == nil || discovery.Enabled == nil || !*discovery.Enabled || discovery.Path != "models" || discovery.Format != configv2.DiscoveryFormatOpenAIList {
+		t.Fatalf("custom provider discovery defaults = %#v", discovery)
 	}
 }
 
@@ -386,6 +341,50 @@ func TestConfigCenterEditsProviderRuntimeFields(t *testing.T) {
 	runtime := client.CurrentModelConfig()
 	if runtime.Timeout != 45*time.Second || !runtime.Stream {
 		t.Fatalf("runtime was not synchronously updated: timeout=%s stream=%v", runtime.Timeout, runtime.Stream)
+	}
+}
+
+func TestConfigCenterEnablesDiscoveryForExistingCustomProvider(t *testing.T) {
+	controller, _ := newConfigCenterHarness(t)
+	model := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	model.configCenterController = controller
+	model.openConfigCenter()
+	model.configCenter.page = configCenterProviderActions
+	model.configCenter.targetID = "local"
+	model.configCenter.selected = 10
+
+	model.advanceProviderAction(controller.Snapshot())
+	provider := controller.Snapshot().Document.Providers["local"]
+	if provider.Discovery == nil || provider.Discovery.Enabled == nil || !*provider.Discovery.Enabled || provider.Discovery.Path != "models" || provider.Discovery.Format != configv2.DiscoveryFormatOpenAIList {
+		t.Fatalf("existing provider discovery defaults = %#v", provider.Discovery)
+	}
+}
+
+func TestConfigCenterProviderDiscoveryToggleRefreshesCatalog(t *testing.T) {
+	controller, _ := newConfigCenterHarnessWithDiscovery(t, []configv2.DiscoveredModel{{Name: "live"}})
+	model := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	model.configCenterController = controller
+	model.openConfigCenter()
+	model.configCenter.page = configCenterProviderActions
+	model.configCenter.targetID = "local"
+	model.configCenter.selected = 10
+
+	model.advanceProviderAction(controller.Snapshot())
+	disabled := controller.Snapshot()
+	if provider := disabled.Document.Providers["local"]; provider.Discovery == nil || provider.Discovery.Enabled == nil || *provider.Discovery.Enabled {
+		t.Fatalf("discovery was not disabled: %#v", provider.Discovery)
+	}
+	if _, ok := disabled.EffectiveModels["local/live"]; ok {
+		t.Fatalf("disabled discovery retained live catalog entry: %#v", disabled.EffectiveModels)
+	}
+
+	model.advanceProviderAction(controller.Snapshot())
+	enabled := controller.Snapshot()
+	if provider := enabled.Document.Providers["local"]; provider.Discovery == nil || provider.Discovery.Enabled == nil || !*provider.Discovery.Enabled {
+		t.Fatalf("discovery was not re-enabled: %#v", provider.Discovery)
+	}
+	if _, ok := enabled.EffectiveModels["local/live"]; !ok {
+		t.Fatalf("re-enabled discovery did not refresh catalog: %#v", enabled.EffectiveModels)
 	}
 }
 

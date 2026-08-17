@@ -95,11 +95,11 @@ type ModelConfigSaver interface {
 }
 
 // ConfigCenterController is the optional config-v2 capability used by the
-// unified /setting and /config center. Legacy embedders can continue to expose
-// only ModelConfigController.
+// unified /setting and /config center.
 type ConfigCenterController interface {
 	Snapshot() configv2.Snapshot
 	ReloadConfig() error
+	RefreshModelDiscovery(context.Context) (configv2.Snapshot, error)
 	ConfigPath() string
 	SetActiveModelID(string) error
 	ActivateCatalogSelection(configv2.CatalogSelection) error

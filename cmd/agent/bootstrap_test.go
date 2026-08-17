@@ -5,6 +5,18 @@ import (
 	"testing"
 )
 
+func TestEffectiveYoloModeUsesConfigOrCommandLine(t *testing.T) {
+	if effectiveYoloMode(false, configv2.Document{}) {
+		t.Fatal("YOLO enabled without config or command-line flag")
+	}
+	if !effectiveYoloMode(false, configv2.Document{Yolo: true}) {
+		t.Fatal("config.jsonc YOLO setting was ignored")
+	}
+	if !effectiveYoloMode(true, configv2.Document{}) {
+		t.Fatal("command-line YOLO flag was ignored")
+	}
+}
+
 func TestConfigOpenOptionsUsesExplicitWorkerMode(t *testing.T) {
 	paths := configv2.Paths{
 		Home:                "/tmp/paw",
@@ -14,10 +26,7 @@ func TestConfigOpenOptionsUsesExplicitWorkerMode(t *testing.T) {
 		Skills:              "/tmp/paw/skills",
 		Schemas:             "/tmp/paw/schemas",
 		Schema:              "/tmp/paw/schemas/config-v2.schema.json",
-		MigrationMarker:     "/tmp/paw/.migration-v2.json",
 		ModelDiscoveryCache: "/tmp/paw/model-discovery-cache.json",
-		LegacyHome:          "/tmp/.paw",
-		LegacyConfig:        "/tmp/.paw/config.json",
 		WorkspaceRoot:       "/tmp/workspace",
 		WorkspaceConfig:     "/tmp/workspace/.paw/config.jsonc",
 	}

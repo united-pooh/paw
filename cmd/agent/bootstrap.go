@@ -36,6 +36,10 @@ func configOpenOptions(paths configv2.Paths, subCtx taskRuntimeContext) configv2
 	}
 }
 
+func effectiveYoloMode(commandLineEnabled bool, document configv2.Document) bool {
+	return commandLineEnabled || document.Yolo
+}
+
 type runnerToolConfigurator func(*tool.Registry) error
 
 func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI, allowOutsideRead bool, allowIncompleteConfig bool, configurators ...runnerToolConfigurator) (*loop.Runner, string, *model.Client, *configv2.Controller, *settings.Controller, *task.Manager, *session.JSONLStore, *coremcp.Manager, error) {
@@ -71,7 +75,9 @@ func buildRunnerWithTaskContext(ctx context.Context, sessionIDFlag string, outpu
 			return nil, "", nil, nil, nil, nil, nil, nil, err
 		}
 	}
-	cfg := configManager.Snapshot().Active
+	configSnapshot := configManager.Snapshot()
+	cfg := configSnapshot.Active
+	yoloMode := effectiveYoloMode(allowOutsideRead, configSnapshot.Document)
 
 	store, err := session.NewJSONLStoreInCwd()
 	if err != nil {
@@ -111,7 +117,7 @@ func buildRunnerWithTaskContext(ctx context.Context, sessionIDFlag string, outpu
 		broker = mcpManager
 	}
 	launcher := task.NewProcessPoolLauncher(executable, root)
-	launcher.SetDangerousMode(allowOutsideRead)
+	launcher.SetDangerousMode(yoloMode)
 	launcher.SetMCPBroker(broker)
 	// 沙箱生效值接线：全局安全基线（硬 cap）→ 池容量/墙钟；worker 进程经
 	// --sandbox-limits 接收资源限制。工作区只能在池容量上覆盖且受全局 cap 约束。
@@ -123,9 +129,6 @@ func buildRunnerWithTaskContext(ctx context.Context, sessionIDFlag string, outpu
 	registry := tool.NewRegistry()
 	runner := loop.NewRunnerWithInstructionRoot(client, output, registry, store, sessionID, root)
 	runner.SetSkillRegistry(skill.NewRegistry([]string{paths.Skills}))
-	configController.SetSnapshotHandler(func(snapshot configv2.Snapshot) {
-		runner.SetContextLimitTokens(model.EffectiveContextLimitTokens(snapshot.Active))
-	})
 	if err := runner.SetContextMaintenanceConfig(settingsController.CurrentSettings().ContextMaintenance); err != nil {
 		if mcpManager != nil {
 			_ = mcpManager.Close(context.Background())
@@ -151,7 +154,7 @@ func buildRunnerWithTaskContext(ctx context.Context, sessionIDFlag string, outpu
 	})
 	runner.SetTaskTokensProvider(taskManager)
 	runner.SetTurnOwnedTaskCleaner(taskManager)
-	if err := registerTools(registry, root, runner.SkillRoots(), taskManager, sessionID, broker, allowOutsideRead); err != nil {
+	if err := registerTools(registry, root, runner.SkillRoots(), taskManager, sessionID, broker, yoloMode); err != nil {
 		if mcpManager != nil {
 			_ = mcpManager.Close(context.Background())
 		}
@@ -162,12 +165,21 @@ func buildRunnerWithTaskContext(ctx context.Context, sessionIDFlag string, outpu
 	//  - Bash：追加拦截提权/权限/块设备写等不该由 task worker 执行的高危命令。
 	if subCtx.workerMode {
 		readState := toolfile.NewReadStateStore()
-		registry.Register(&toolfile.ReadTool{Root: root, ReadRoots: runner.SkillRoots(), ReadState: readState, AllowOutsideRoot: allowOutsideRead})
+		registry.Register(&toolfile.ReadTool{Root: root, ReadRoots: runner.SkillRoots(), ReadState: readState, AllowOutsideRoot: yoloMode})
 		registry.Register(&toolfile.WriteTool{Root: root, ReadState: readState, ForbidDotPaw: true})
 		registry.Register(&toolfile.EditTool{Root: root, ReadState: readState, ForbidDotPaw: true})
 		registry.Register(&toolexec.BashTool{Root: root, Sandboxed: true})
 	}
 	runner.SetYoloModeHandler(launcher.SetDangerousMode)
+	lastConfiguredYolo := yoloMode
+	configController.SetSnapshotHandler(func(snapshot configv2.Snapshot) {
+		runner.SetContextLimitTokens(model.EffectiveContextLimitTokens(snapshot.Active))
+		desiredYolo := effectiveYoloMode(allowOutsideRead, snapshot.Document)
+		if desiredYolo != lastConfiguredYolo {
+			_, _ = runner.SetYoloMode(desiredYolo)
+			lastConfiguredYolo = desiredYolo
+		}
+	})
 	if !subCtx.disableMainTodo {
 		if err := registerMainAgentTools(registry, nil); err != nil {
 			if mcpManager != nil {

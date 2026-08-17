@@ -1,4 +1,4 @@
-// Package config owns Paw's durable configuration, credentials, migration and
+// Package config owns Paw's durable config.jsonc contract, credentials and
 // hot-reload lifecycle. Runtime packages consume immutable snapshots produced
 // here and never read configuration files directly.
 package config
@@ -45,7 +45,6 @@ var (
 	ErrRevisionConflict           = errors.New("configuration revision conflict")
 	ErrCredentialNotFound         = errors.New("credential not found")
 	ErrCredentialStoreUnavailable = errors.New("credential store unavailable")
-	ErrCredentialMigrationBlocked = errors.New("credential migration blocked")
 )
 
 // Document is the global config-v2 contract. Unknown fields and comments are
@@ -54,6 +53,7 @@ type Document struct {
 	Schema        string              `json:"$schema,omitempty"`
 	SchemaVersion int                 `json:"schemaVersion"`
 	ActiveModel   string              `json:"activeModel,omitempty"`
+	Yolo          bool                `json:"yolo,omitempty"`
 	Proxy         *model.ProxyConfig  `json:"proxy,omitempty"`
 	Sandbox       *Sandbox            `json:"sandbox,omitempty"`
 	Providers     map[string]Provider `json:"providers"`
@@ -387,6 +387,7 @@ type OperationKind string
 
 const (
 	OperationSetActiveModel OperationKind = "set-active-model"
+	OperationSetYolo        OperationKind = "set-yolo"
 	OperationSetProxy       OperationKind = "set-proxy"
 	OperationUpsertProvider OperationKind = "upsert-provider"
 	OperationDeleteProvider OperationKind = "delete-provider"
@@ -409,6 +410,13 @@ func SetActiveModel(id string) Operation {
 func setActiveModelExact(id string) Operation {
 	raw, _ := json.Marshal(id)
 	return Operation{Kind: OperationSetActiveModel, Value: raw}
+}
+
+// SetYolo 持久化全局 YOLO 模式。false 仍写入显式布尔值，确保配置面板
+// 的关闭操作不会被未知字段或旧注释状态干扰。
+func SetYolo(enabled bool) Operation {
+	raw, _ := json.Marshal(enabled)
+	return Operation{Kind: OperationSetYolo, Value: raw}
 }
 
 // SetProxy 写入全局代理设置。proxy 为 nil 时从文档中删除全局代理字段

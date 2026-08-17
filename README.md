@@ -141,12 +141,49 @@ git config core.hooksPath .githooks
 
 这是当前的依赖装配点。
 
-当前会注册的持久化目录（完整契约见 [配置系统 v2](./docs/configuration-v2.md)）:
-- `os.UserConfigDir()/Paw/config.jsonc`（可由 `PAW_CONFIG_HOME` 覆盖；Provider/Model registry、JSONC、Schema 与热重载）
+当前会注册的持久化目录（完整契约见下文“配置系统 v2”）:
+- `os.UserConfigDir()/Paw/config.jsonc`（可由 `PAW_CONFIG_HOME` 覆盖；Provider/Model registry、YOLO、模型发现、JSONC、Schema 与热重载；不再读取旧 `~/.paw/config.json`）
 - `os.UserConfigDir()/Paw/settings.json`、`mcp.toml`、`skills/`
 - 项目 `.paw/config.jsonc`（仅活动模型和安全模型参数覆盖）
 - `.paw/exports/`
 - `.paw/sessions/<sessionID>/`
+
+### 配置系统 v2（`config.jsonc`）
+
+Provider/Model、YOLO、安全沙箱与连接配置只以全局 `config.jsonc` 为事实来源；旧 `~/.paw/config.json`（schema v1）不再自动迁移、读取或回写。UI/上下文维护设置仍单独保存在 `settings.json`；首次切换配置目录时仍可独占复制旧 `settings.json`、`mcp.toml` 与 `skills/`，但不会读取其中的模型配置。
+
+最小自定义 provider 示例：
+
+```jsonc
+{
+  "$schema": "./schemas/config-v2.schema.json",
+  "schemaVersion": 2,
+  "activeModel": "gateway/gpt",
+  "yolo": false,
+  "providers": {
+    "gateway": {
+      "transport": "openai-compatible",
+      "endpoint": "https://gateway.example/v1",
+      "auth": { "env": ["GATEWAY_API_KEY"] },
+      "discovery": {
+        "enabled": true,
+        "path": "models",
+        "format": "openai-list"
+      }
+    }
+  },
+  "models": {
+    "gateway/gpt": { "provider": "gateway", "name": "gpt-example" }
+  }
+}
+```
+
+- `yolo` 默认 `false`；`/config` →“通用”可持久化并热应用到主 Agent 和后续 worker。`--yolo` / `--dangerously` 设置本次启动初值，`/yolo` 仍是会话内运行期开关。
+- 顶层进程启动时会发现所有合并预设后 `discovery.enabled == true` 的 provider；task worker 不执行 discovery。
+- `/config` 新建自定义 OpenAI 兼容 provider 时默认使用 `models` + `openai-list`；服务商新增或修改后会显式刷新一次。
+- 普通模型切换和被动文件热重载不重复发起请求，只复用已确认结果或 endpoint/path/format 指纹匹配的缓存。
+- 发现需要合法同源 HTTP(S) URL、受支持格式，以及可从 `auth.env` 解析的凭据；失败只产生安全化 warning，并回退到匹配缓存或手工模型。
+- JSONC 定向更新保留注释、尾随逗号和未知字段，并通过 revision + 文件内容 CAS 防止并发覆盖。
 
 #### `registerTools(registry, root, readRoots, subagentManager, sessionID, broker) error`
 
@@ -546,7 +583,7 @@ main (-subagent-worker)
 
 文件: [config.go](./internal/model/config.go)
 
-持久化、迁移、Schema、凭据与热重载已经迁到 `internal/config`；本包只保留解析后的运行时请求配置，以及 v1 调用方的兼容读取函数。v2 文档见 [配置系统 v2](./docs/configuration-v2.md)。
+持久化、Schema、凭据、模型发现与热重载统一由 `internal/config` 管理；本包只保留从 `config.jsonc` 快照合成的运行时请求配置，不再读取或写入旧 `~/.paw/config.json`。完整契约见上文“配置系统 v2”。
 
 ##### `type Config struct`
 
@@ -580,32 +617,11 @@ main (-subagent-worker)
 - `Timeout` / `RetryCount` / `Stream` / `StreamSet`
 - `CredentialID`
 
-##### `LoadConfigFromEnv() (Config, error)`
+##### 配置来源
 
-这是 v1 兼容 API，不再由应用启动链调用。新启动链通过 `internal/config.Manager` 读取 v2 JSONC、迁移 v1，并把不可变运行时快照注入 `model.Client`。
+应用启动链只通过 `internal/config.Manager` 读取全局 `config.jsonc`，合并项目级 `.paw/config.jsonc`，再把不可变运行时快照注入 `model.Client`。旧 `~/.paw/config.json` 不再自动迁移、读取或回写。
 
-以下仅为需要兼容旧调用方时的 v1 结构；新配置不要继续使用：
-
-```json
-{
-  "schemaVersion": 1,
-  "modelProfiles": [
-    {
-      "id": "local-gateway",
-      "name": "Local Gateway",
-      "provider": "local-gateway",
-      "transport": "openai-compatible",
-      "baseUrl": "http://127.0.0.1:8317/v1",
-      "apiPath": "/chat/completions",
-      "apiKeyEnvName": "LOCAL_GATEWAY_API_KEY",
-      "models": ["model-a", "model-b"]
-    }
-  ],
-  "activeModelProfileId": "local-gateway"
-}
-```
-
-代码只负责按 `transport` 和 profile 中的 endpoint 发请求；不会内置 provider、API URL、API path、API key 或模型名。
+provider 的 `discovery.enabled` 为 `true` 时，顶层进程会在启动时执行模型发现；`/config` 中修改 provider 或切换“模型发现”后会显式刷新。普通模型切换和被动文件重载只复用已确认结果或匹配缓存。
 
 ##### `type RequestBody map[string]any`
 

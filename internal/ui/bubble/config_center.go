@@ -466,7 +466,19 @@ func (m appModel) advanceConfigCenter() appModel {
 			m.addPresetProvider(presets[state.selected])
 		} else {
 			retries := 3
-			state.draftProvider = configv2.Provider{Transport: configv2.TransportOpenAICompatible, Endpoint: "http://127.0.0.1:8000/v1", TimeoutSeconds: 60, Retries: &retries}
+			enabled := true
+			state.draftProvider = configv2.Provider{
+				Transport:      configv2.TransportOpenAICompatible,
+				Endpoint:       "http://127.0.0.1:8000/v1",
+				TimeoutSeconds: 60,
+				Retries:        &retries,
+				Discovery: &configv2.DiscoveryConfig{
+					Enabled: &enabled,
+					Path:    "models",
+					PathSet: true,
+					Format:  configv2.DiscoveryFormatOpenAIList,
+				},
+			}
 			m.openConfigEdit(configEditCustomProviderID, "", "")
 		}
 	case configCenterProviderActions:
@@ -586,6 +598,22 @@ func (m *appModel) advanceProviderAction(snapshot configv2.Snapshot) {
 		}
 		m.openConfigEdit(configEditProviderProxyURL, value, "代理地址（custom 模式，如 http://127.0.0.1:7890）")
 	case 10:
+		enabled := !providerDiscoveryEnabled(state.targetID, provider)
+		if provider.Discovery == nil {
+			provider.Discovery = &configv2.DiscoveryConfig{}
+		}
+		provider.Discovery.Enabled = &enabled
+		if enabled {
+			if !provider.Discovery.PathSet && strings.TrimSpace(provider.Discovery.Path) == "" {
+				provider.Discovery.Path = "models"
+				provider.Discovery.PathSet = true
+			}
+			if strings.TrimSpace(provider.Discovery.Format) == "" {
+				provider.Discovery.Format = configv2.DiscoveryFormatOpenAIList
+			}
+		}
+		m.applyConfigOperations(configv2.UpsertProvider(state.targetID, provider))
+	case 11:
 		if !state.confirmDestructive("delete-provider:"+state.targetID, "再次按 Enter 删除该服务商及其全部模型") {
 			return
 		}
@@ -1104,10 +1132,24 @@ func (m *appModel) applyConfigOperations(operations ...configv2.Operation) {
 	if state == nil {
 		return
 	}
+	refreshDiscovery := false
+	for _, operation := range operations {
+		if operation.Kind == configv2.OperationUpsertProvider {
+			refreshDiscovery = true
+			break
+		}
+	}
 	snapshot, err := m.configCenterController.UpdateConfig(context.Background(), state.revision, operations)
 	if err != nil {
 		state.err = err.Error()
 		return
+	}
+	if refreshDiscovery {
+		snapshot, err = m.configCenterController.RefreshModelDiscovery(context.Background())
+		if err != nil {
+			state.err = err.Error()
+			return
+		}
 	}
 	state.revision = snapshot.Revision
 	state.err = ""
@@ -1207,7 +1249,7 @@ func (m appModel) configCenterOptions() []configCenterOption {
 		return append(result, configCenterOption{"+ 添加服务商", "使用预设或自定义配置"})
 	case configCenterProviderActions:
 		p := snapshot.Document.Providers[state.targetID]
-		return []configCenterOption{{"编辑端点", firstNonEmptyUI(p.Endpoint, "使用预设默认值")}, {"切换传输协议", firstNonEmptyUI(p.Transport, "使用预设默认值")}, {"编辑超时", optionalIntLabel(p.TimeoutSeconds, "继承")}, {"编辑重试次数", optionalIntPointerLabel(p.Retries)}, {"切换流式输出", optionalBoolLabel(p.Stream)}, {"编辑凭据环境变量", firstNonEmptyUI(strings.Join(p.Auth.Env, ", "), "预设/继承")}, {"编辑请求头", "高级 JSONC"}, {"编辑请求体", "高级 JSONC"}, {"代理模式", providerProxyModeLabel(snapshot.Document.Proxy, p.Proxy)}, {"代理地址", providerProxyURLLabel(p.Proxy)}, {"删除服务商", "同时删除其模型"}}
+		return []configCenterOption{{"编辑端点", firstNonEmptyUI(p.Endpoint, "使用预设默认值")}, {"切换传输协议", firstNonEmptyUI(p.Transport, "使用预设默认值")}, {"编辑超时", optionalIntLabel(p.TimeoutSeconds, "继承")}, {"编辑重试次数", optionalIntPointerLabel(p.Retries)}, {"切换流式输出", optionalBoolLabel(p.Stream)}, {"编辑凭据环境变量", firstNonEmptyUI(strings.Join(p.Auth.Env, ", "), "预设/继承")}, {"编辑请求头", "高级 JSONC"}, {"编辑请求体", "高级 JSONC"}, {"代理模式", providerProxyModeLabel(snapshot.Document.Proxy, p.Proxy)}, {"代理地址", providerProxyURLLabel(p.Proxy)}, {"模型发现", boolConfigLabel(providerDiscoveryEnabled(state.targetID, p))}, {"删除服务商", "同时删除其模型"}}
 	case configCenterAddProvider:
 		ids := sortedPresetIDs()
 		result := make([]configCenterOption, 0, len(ids)+1)
@@ -1318,7 +1360,13 @@ func (m appModel) renderConfigCenterBox() string {
 	}
 	// renderFullscreenPanelWithFooter 的可用 body 行数：上下边框 2、顶部
 	// padding 1、footer 与其上方空行 2。
-	rowBudget := maxInt(1, m.currentLayout().frameHeight-5-len(lines)-statusReserve)
+	rowBudget := m.currentLayout().frameHeight - 5 - len(lines) - statusReserve
+	if statusReserve > 0 {
+		// Status rows sit directly above the footer; reserve one additional spacer
+		// so success/error feedback cannot be clipped when an action page is full.
+		rowBudget--
+	}
+	rowBudget = maxInt(1, rowBudget)
 	if state.page == configCenterGeneral {
 		lines = append(lines, m.renderConfigCenterGeneral(contentWidth, rowBudget)...)
 	} else {
@@ -1337,6 +1385,11 @@ func (m appModel) renderConfigCenterBox() string {
 			}
 		}
 		maxItems := clampInt(rowBudget, 1, maxInt(1, len(matches)))
+		if statusReserve > 0 && maxItems == len(matches) && maxItems > 1 {
+			// A full action list can otherwise consume the final body row that the
+			// fullscreen renderer needs for status feedback.
+			maxItems--
+		}
 		start := maxInt(0, selectedPosition-maxItems+1)
 		end := minInt(len(matches), start+maxItems)
 		for i := start; i < end; i++ {
@@ -1553,6 +1606,22 @@ func optionalBoolLabel(value *bool) string {
 		return "开启"
 	}
 	return "关闭"
+}
+
+func boolConfigLabel(value bool) string {
+	if value {
+		return "开启"
+	}
+	return "关闭"
+}
+
+func providerDiscoveryEnabled(providerID string, provider configv2.Provider) bool {
+	if provider.Discovery != nil && provider.Discovery.Enabled != nil {
+		return *provider.Discovery.Enabled
+	}
+	presetID := firstNonEmptyUI(provider.Preset, providerID)
+	preset, ok := configv2.BuiltinPresets()[presetID]
+	return ok && preset.Provider.Discovery != nil && preset.Provider.Discovery.Enabled != nil && *preset.Provider.Discovery.Enabled
 }
 
 func optionalIntLabel(value int, fallback string) string {
