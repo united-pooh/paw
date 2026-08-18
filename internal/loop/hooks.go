@@ -22,7 +22,7 @@ type SessionLoadedHooker interface {
 // sessionLoadedFunc 让既有 func(sessionID) 回调直接入链（兼容糖）。
 type sessionLoadedFunc func(sessionID string)
 
-func (f sessionLoadedFunc) HookName() string                  { return "session-loaded" }
+func (f sessionLoadedFunc) HookName() string                 { return "session-loaded" }
 func (f sessionLoadedFunc) OnSessionLoaded(sessionID string) { f(sessionID) }
 
 // hookChain 持有注册顺序稳定的钩子集合，按能力接口分发。

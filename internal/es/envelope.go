@@ -13,7 +13,23 @@ type Envelope struct {
 	Type          string          `json:"type"`
 	OccurredAt    time.Time       `json:"occurred_at"`
 	SchemaVersion int             `json:"schema_version"`
+	Kind          string          `json:"kind,omitempty"` // runtime(sys.*) | domain；空=legacy，视为 domain
 	Payload       json.RawMessage `json:"payload"`
+}
+
+// 事件命名空间（actor 运行时两段式 fold 使用；spec ADR-9）。
+const (
+	KindRuntime = "runtime"
+	KindDomain  = "domain"
+)
+
+// ValidKinds 校验事件命名空间：空（legacy 视为 domain）、runtime、domain。
+func validKind(kind string) bool {
+	switch kind {
+	case "", KindRuntime, KindDomain:
+		return true
+	}
+	return false
 }
 
 // Validate 校验信封结构。seq 允许 0 基线（session 域历史流从 0 开始）；
@@ -25,6 +41,9 @@ func (e Envelope) Validate() error {
 	}
 	if e.Type == "" {
 		return fmt.Errorf("es: type is required")
+	}
+	if !validKind(e.Kind) {
+		return fmt.Errorf("es: invalid kind %q", e.Kind)
 	}
 	if e.SchemaVersion < 0 {
 		return fmt.Errorf("es: schema_version must not be negative, got %d", e.SchemaVersion)
