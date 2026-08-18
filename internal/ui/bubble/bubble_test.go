@@ -1549,7 +1549,7 @@ func TestRenderTranscriptContentCachesUnchangedEntries(t *testing.T) {
 	cachedSecond := model.transcriptRenderCache[1]
 
 	model.transcript[1].body = "second updated"
-	touchTranscriptEntry(&model.transcript[1])
+	model.touchTranscriptEntryAt(1)
 	second := model.renderTranscriptContent()
 
 	if !strings.Contains(second, "second updated") {
@@ -1599,7 +1599,7 @@ func TestTranscriptInteractionCachesReuseRenderedLongTranscript(t *testing.T) {
 	}
 
 	model.transcript[0].body = "updated history"
-	touchTranscriptEntry(&model.transcript[0])
+	model.touchTranscriptEntryAt(0)
 	model.refreshViewportPreservingOffset()
 	if model.transcriptLineCacheReady || model.transcriptLocationsReady {
 		t.Fatal("transcript refresh did not invalidate interaction caches")
@@ -7078,12 +7078,12 @@ func TestTaskTaskUpdateMsgRefreshesToolEntryImmediately(t *testing.T) {
 	}}}
 	model := newTestModel(&fakeRunner{})
 	model.taskController = controller
-	model.transcript = []transcriptEntry{{
+	model.replaceTranscript([]transcriptEntry{{
 		kind:       entryTool,
 		toolName:   "Task",
 		toolStatus: "ok",
 		toolResult: `{"id":"task-1","session_id":"task-1"}`,
-	}}
+	}})
 
 	controller.tasks[0].Status = taskpkg.TaskCompleted
 	controller.tasks[0].Content = "done"
@@ -7094,6 +7094,44 @@ func TestTaskTaskUpdateMsgRefreshesToolEntryImmediately(t *testing.T) {
 	}
 	if !strings.Contains(model.transcript[0].toolResult, `"status":"completed"`) {
 		t.Fatalf("tool result = %q, want refreshed completed snapshot", model.transcript[0].toolResult)
+	}
+}
+
+func TestTaskUpdateMaintainsRunningIndexWithoutRebuildingHistory(t *testing.T) {
+	controller := &fakeTaskController{tasks: []taskpkg.TaskSnapshot{{
+		ID: "task-1", SessionID: "task-1", ParentSessionID: "session-1", Name: "worker", Status: taskpkg.TaskRunning,
+	}}}
+	entries := make([]transcriptEntry, 5_000, 5_001)
+	for index := range entries {
+		entries[index] = transcriptEntry{kind: entryAssistant, title: "assistant", body: "history"}
+	}
+	entries = append(entries, transcriptEntry{
+		kind: entryTool, toolUseID: "task-call", toolName: "Task", toolStatus: "running",
+		toolResult: `{"id":"task-1","session_id":"task-1"}`,
+	})
+	model := newTestModel(&fakeRunner{})
+	model.taskController = controller
+	model.replaceTranscript(entries)
+	model.toolRuntimeRebuildVisits = 0
+	model.refreshViewport()
+	refreshes := model.transcriptRefreshCount
+
+	controller.tasks[0].Status = taskpkg.TaskCompleted
+	controller.tasks[0].Content = "done"
+	next, _ := model.Update(taskUpdateMsg{})
+	model = next.(appModel)
+
+	if got := model.toolRuntimeRebuildVisits; got != 0 {
+		t.Fatalf("task update rebuilt %d historical runtime entries, want 0", got)
+	}
+	if got := model.taskToolUpdateVisits; got != 1 {
+		t.Fatalf("task update visited %d transcript entries, want indexed task entry only", got)
+	}
+	if got := model.transcriptRefreshCount - refreshes; got != 1 {
+		t.Fatalf("task update viewport refreshes = %d, want 1", got)
+	}
+	if len(model.toolRuntime.running) != 0 {
+		t.Fatalf("completed task remained in running index: %#v", model.toolRuntime.running)
 	}
 }
 

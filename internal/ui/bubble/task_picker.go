@@ -135,8 +135,11 @@ func (m *appModel) refreshActivityFromTasks(now time.Time) bool {
 	if m.lastActivityPollAt.IsZero() || now.Sub(m.lastActivityPollAt) >= interval {
 		m.lastActivityPollAt = now
 		m.refreshActivityTasks()
-		m.refreshTaskPreviewFromTasks()
-		m.refreshTaskToolEntriesFromTasks()
+		previewChanged := m.refreshTaskPreviewFromTasks()
+		toolEntriesChanged := m.refreshTaskToolEntriesFromTasks()
+		if previewChanged || toolEntriesChanged {
+			m.refreshViewport()
+		}
 		return true
 	}
 	return false
@@ -389,7 +392,6 @@ func mergeTranscriptToolEntries(entries []transcriptEntry) []transcriptEntry {
 		entry.toolStatus = toolEntryStatus(entry)
 		entry.toolName = toolEntryDisplayName(entry)
 		entry.toolFocused = false
-		entry.toolHovered = false
 
 		if entry.toolResultOnly {
 			matchIndex := -1
@@ -421,7 +423,7 @@ func mergeTranscriptToolEntries(entries []transcriptEntry) []transcriptEntry {
 						call.toolTarget = presentation.target
 					}
 				}
-				touchTranscriptEntry(call)
+				touchDetachedTranscriptEntry(call)
 				delete(pendingByID, entry.toolUseID)
 				continue
 			}
@@ -494,56 +496,57 @@ func (m *appModel) refreshTaskToolEntriesFromTasks() bool {
 	if m == nil || m.taskController == nil {
 		return false
 	}
+	m.taskToolUpdateVisits = 0
 	tasks := m.taskController.ListTasks()
 	if len(tasks) == 0 {
 		return false
 	}
+	m.ensureToolRuntimeIndex()
 	changed := false
-	for index := range m.transcript {
+	visited := make(map[int]struct{})
+	updateEntry := func(index int, task taskpkg.TaskSnapshot) {
+		if _, ok := visited[index]; ok || index < 0 || index >= len(m.transcript) {
+			return
+		}
+		visited[index] = struct{}{}
+		m.taskToolUpdateVisits++
 		entry := &m.transcript[index]
-		if !isToolTransaction(*entry) || !isTaskToolEntry(*entry) || strings.TrimSpace(entry.toolResult) == "" {
-			continue
+		data, err := json.Marshal(task)
+		if err != nil {
+			return
 		}
-		var reference struct {
-			ID        string `json:"id"`
-			SessionID string `json:"session_id"`
+		status := "ok"
+		if task.Status == taskpkg.TaskRunning {
+			status = "running"
 		}
-		if json.Unmarshal([]byte(entry.toolResult), &reference) != nil {
-			continue
+		isError := strings.TrimSpace(task.Error) != "" || task.Status == taskpkg.TaskFailed || task.Status == taskpkg.TaskInterrupted
+		if isError {
+			status = "error"
 		}
-		for _, task := range tasks {
-			if reference.ID == "" || (task.ID != reference.ID && task.SessionID != reference.SessionID) {
-				continue
+		if string(data) != entry.toolResult || entry.toolStatus != status || entry.isError != isError {
+			entry.toolResult = string(data)
+			entry.toolStatus = status
+			entry.isError = isError
+			entry.body = completeToolCallBody(entry.toolName, entry.body, status, entry.toolResult)
+			if status != "running" {
+				entry.toolFinishedAt = m.animationNow()
 			}
-			data, err := json.Marshal(task)
-			if err != nil {
-				break
+			m.touchTranscriptEntryAt(index)
+			if transcriptEntryIsRunningTool(*entry) {
+				m.trackRunningToolAt(index)
+			} else {
+				m.untrackRunningToolAt(index)
 			}
-			status := "ok"
-			if task.Status == taskpkg.TaskRunning {
-				status = "running"
-			}
-			isError := strings.TrimSpace(task.Error) != "" || task.Status == taskpkg.TaskFailed || task.Status == taskpkg.TaskInterrupted
-			if isError {
-				status = "error"
-			}
-			if string(data) != entry.toolResult || entry.toolStatus != status || entry.isError != isError {
-				entry.toolResult = string(data)
-				entry.toolStatus = status
-				entry.isError = isError
-				entry.body = completeToolCallBody(entry.toolName, entry.body, status, entry.toolResult)
-				if status != "running" {
-					entry.toolFinishedAt = m.animationNow()
-				}
-				touchTranscriptEntry(entry)
-				changed = true
-			}
-			break
+			changed = true
 		}
 	}
-	if changed {
-		m.transcriptRenderCache = nil
-		m.refreshViewport()
+	for _, task := range tasks {
+		for _, index := range m.toolRuntime.taskByID[strings.TrimSpace(task.ID)] {
+			updateEntry(index, task)
+		}
+		for _, index := range m.toolRuntime.taskBySession[strings.TrimSpace(task.SessionID)] {
+			updateEntry(index, task)
+		}
 	}
 	return changed
 }
@@ -566,8 +569,7 @@ func (m *appModel) refreshTaskPreviewFromTasks() bool {
 	m.taskPreview.task = task
 	m.taskPreview.liveContent = live
 	m.resetToolInspect()
-	m.transcript = renderTaskPreviewTranscript(m.taskPreview, m.animationNow())
-	m.refreshViewport()
+	m.replaceTranscript(renderTaskPreviewTranscript(m.taskPreview, m.animationNow()))
 	return true
 }
 
@@ -611,7 +613,6 @@ func copyTranscriptEntries(entries []transcriptEntry) []transcriptEntry {
 		out[i].citations = append([]toolCitation(nil), out[i].citations...)
 		out[i].inputTokens = cloneInputTokens(out[i].inputTokens)
 		out[i].toolFocused = false
-		out[i].toolHovered = false
 	}
 	return out
 }
@@ -627,7 +628,7 @@ func (m *appModel) finalizeRestoredRunningTools() {
 		return
 	}
 	if finalizeRestoredRunningToolEntries(m.transcript, m.animationNow()) {
-		m.lastToolProgressSecond = -1
+		m.rebuildToolRuntimeIndex()
 	}
 }
 
@@ -646,7 +647,7 @@ func finalizeRestoredRunningToolEntries(entries []transcriptEntry, now time.Time
 		entry.toolGroupPending = false
 		entry.toolGroupOpen = false
 		entry.toolFinishedAt = now
-		touchTranscriptEntry(entry)
+		touchDetachedTranscriptEntry(entry)
 		changed = true
 	}
 	return changed
@@ -660,7 +661,7 @@ func (m *appModel) applySessionPickerRestore(msg sessionRestoredMsg) {
 	m.taskPicker = nil
 	m.taskPreview = nil
 	m.syncInputPlaceholder()
-	m.transcript = mergeTranscriptToolEntries(copyTranscriptEntries(msg.entries))
+	m.replaceTranscript(mergeTranscriptToolEntries(copyTranscriptEntries(msg.entries)))
 	m.finalizeRestoredRunningTools()
 	m.currentTodo = msg.currentTodo.Clone()
 	m.hasCurrentTodo = msg.hasCurrentTodo
@@ -683,7 +684,7 @@ func (m *appModel) applyTaskPreviewRestore(msg sessionRestoredMsg) {
 		finalizeRestoredRunningToolEntries(preview.entries, m.animationNow())
 		m.taskPreview = &preview
 	}
-	m.transcript = renderTaskPreviewTranscript(m.taskPreview, m.animationNow())
+	m.replaceTranscript(renderTaskPreviewTranscript(m.taskPreview, m.animationNow()))
 	m.relayout()
 	m.refreshViewport()
 }
@@ -699,7 +700,7 @@ func (m *appModel) restoreMainTranscriptFromTaskPreview() {
 	m.resetToolInspect()
 	m.clearNewMessageNotice()
 	m.sessionID = preview.parentSessionID
-	m.transcript = copyTranscriptEntries(preview.parentTranscript)
+	m.replaceTranscript(copyTranscriptEntries(preview.parentTranscript))
 	m.syncInputPlaceholder()
 	m.syncInputMode()
 	m.relayout()

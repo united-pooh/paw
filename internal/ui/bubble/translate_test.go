@@ -261,11 +261,11 @@ func TestTranslateChineseWordPromptsEnglishDirection(t *testing.T) {
 	}()
 
 	model := translateTestModel(t)
-	model.transcript = []transcriptEntry{{
+	model.replaceTranscript([]transcriptEntry{{
 		kind:  entryUser,
 		title: "you",
 		body:  "世界 你好",
-	}}
+	}})
 	model.refreshViewport()
 	model.viewport.GotoTop()
 

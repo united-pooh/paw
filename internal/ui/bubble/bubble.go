@@ -282,7 +282,15 @@ func filterIdleMouseMotion(model tea.Model, msg tea.Msg) tea.Msg {
 	}
 	inside := m.transcriptNoticeBounds().contains(mouse.X, mouse.Y)
 	noticeHoverChanged := inside != m.newMessageNoticeHovered
-	toolHoverChanged := m.toolHoverIndexAtMouse(mouse.X, mouse.Y) != m.toolHoverIndex
+	toolHoverIndex := -1
+	interactionValid := true
+	if !inside {
+		toolHoverIndex, interactionValid = m.toolHoverIndexAtMouse(mouse.X, mouse.Y)
+		if !interactionValid {
+			return msg
+		}
+	}
+	toolHoverChanged := toolHoverIndex != m.toolHoverIndex
 	if noticeHoverChanged || toolHoverChanged {
 		return msg
 	}
@@ -330,6 +338,7 @@ func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 	// [[[[[[[ 泄漏。reader 内嵌 *os.File，MakeRaw 与 kqueue 路径不受影响。
 	output := newAnchoredOutput(os.Stdout, anchor)
 	defer output.Close()
+	eventFilter := newProgramEventFilter(scheduleTranscriptWheelFlush)
 	program := tea.NewProgram(
 		appModel,
 		tea.WithContext(ctx),
@@ -337,7 +346,7 @@ func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 		tea.WithOutput(output),
 		tea.WithAltScreen(),
 		tea.WithMouseAllMotion(),
-		tea.WithFilter(filterIdleMouseMotion),
+		tea.WithFilter(eventFilter.Filter),
 	)
 
 	u.mu.Lock()

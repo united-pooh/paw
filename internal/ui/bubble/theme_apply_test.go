@@ -23,7 +23,7 @@ func TestNewModelUsesConfiguredTheme(t *testing.T) {
 	}
 }
 
-func TestApplyThemeClearsRenderCacheAndRefreshesViewport(t *testing.T) {
+func TestApplyThemeRebuildsRenderCacheAndRefreshesViewport(t *testing.T) {
 	model := newThemedTestModel(t, theme.Default)
 	model.addEntry(transcriptEntry{kind: entryAssistant, body: "hello"})
 	_ = model.renderTranscriptContent()
@@ -36,8 +36,11 @@ func TestApplyThemeClearsRenderCacheAndRefreshesViewport(t *testing.T) {
 	if model.theme.ID != theme.TokyoNight {
 		t.Fatalf("theme = %q", model.theme.ID)
 	}
-	if len(model.transcriptRenderCache) != 0 {
-		t.Fatalf("cache length = %d, want 0", len(model.transcriptRenderCache))
+	if len(model.transcriptRenderCache) != len(model.transcript) {
+		t.Fatalf("cache length = %d, want rebuilt length %d", len(model.transcriptRenderCache), len(model.transcript))
+	}
+	if model.transcriptInvalidation.dirty {
+		t.Fatalf("theme refresh left transcript dirty: %#v", model.transcriptInvalidation)
 	}
 	if !strings.Contains(model.viewport.View(), "hello") {
 		t.Fatal("viewport was not refreshed")

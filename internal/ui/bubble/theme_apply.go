@@ -25,12 +25,9 @@ func (m *appModel) applyTheme(id theme.ThemeID) error {
 	m.styles = NewStyleSet(next.Colors)
 	m.activateThemeStyles()
 	m.applyTextareaTheme()
-	m.transcriptRenderCache = nil
+	m.invalidateTranscriptRender()
 	m.transcriptRefreshPending = false
 	m.refreshViewportPreservingOffset()
-	// The viewport now contains the new theme; leave the entry cache empty so no
-	// caller can reuse an ANSI fragment produced before this application boundary.
-	m.transcriptRenderCache = nil
 	m.applyCursorAnimation()
 	return nil
 }

@@ -78,6 +78,91 @@ func BenchmarkTranscriptRegionCacheHit(b *testing.B) {
 	}
 }
 
+// BenchmarkTranscriptViewportCacheHit measures the normal viewport seam. A
+// warm hit must not join all rendered lines or walk every transcript entry.
+func BenchmarkTranscriptViewportCacheHit(b *testing.B) {
+	now := time.Now()
+	for _, count := range []int{100, 1_000, 5_000} {
+		b.Run(fmt.Sprintf("n=%d", count), func(b *testing.B) {
+			model := appModel{
+				transcript:   benchTranscriptEntries(count),
+				viewport:     benchViewport(120, 30),
+				width:        120,
+				height:       30,
+				showThinking: true,
+			}
+			model.ensureTranscriptLinesAt(120, true, now)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				model.ensureTranscriptLinesAt(120, true, now)
+			}
+		})
+	}
+}
+
+func BenchmarkTranscriptTailMutation(b *testing.B) {
+	now := time.Now()
+	for _, count := range []int{1_000, 5_000} {
+		b.Run(fmt.Sprintf("n=%d", count), func(b *testing.B) {
+			model := appModel{
+				transcript:   benchTranscriptEntries(count),
+				viewport:     benchViewport(120, 30),
+				width:        120,
+				height:       30,
+				showThinking: true,
+			}
+			last := len(model.transcript) - 1
+			model.transcript[last].kind = entryAssistant
+			model.transcript[last].title = "assistant"
+			model.transcript[last].body = "tail-a"
+			model.ensureTranscriptLinesAt(120, true, now)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if i%2 == 0 {
+					model.transcript[last].body = "tail-b"
+				} else {
+					model.transcript[last].body = "tail-a"
+				}
+				model.touchTranscriptEntryAt(last)
+				model.ensureTranscriptLinesAt(120, true, now)
+			}
+		})
+	}
+}
+
+func BenchmarkTranscriptToolBurst(b *testing.B) {
+	for _, running := range []int{1, 50} {
+		b.Run(fmt.Sprintf("history=5000/running=%d", running), func(b *testing.B) {
+			started := time.Now()
+			entries := benchTranscriptEntries(5_000)
+			for i := 0; i < running; i++ {
+				entries = append(entries, transcriptEntry{
+					kind: entryTool, title: "tool", toolUseID: fmt.Sprintf("call-%d", i),
+					toolName: "Read", toolStatus: "running", body: "running", toolStartedAt: started,
+					toolGroupPending: i == 0,
+				})
+			}
+			model := appModel{
+				viewport:     benchViewport(120, 30),
+				width:        120,
+				height:       30,
+				showThinking: true,
+			}
+			model.replaceTranscript(entries)
+			model.cursorFrameAt = started
+			model.refreshViewport()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				model.cursorFrameAt = started.Add(time.Duration(i+1) * time.Second)
+				model.refreshRunningToolProgress(model.cursorFrameAt)
+			}
+		})
+	}
+}
+
 func benchViewport(width, height int) viewportx.Model {
 	vp := viewportx.New(width, height)
 	return vp

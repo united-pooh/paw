@@ -51,16 +51,17 @@ func renderMarkdown(markdown string, width int) string {
 			continue
 		}
 		if text, ok := strings.CutPrefix(trimmed, ">"); ok {
-			parts = append(parts, leading+markdownQuoteStyle.Width(maxInt(1, width-2)).Render(renderInlineMarkdown(strings.TrimSpace(text))))
+			parts = append(parts, leading+markdownQuoteStyle.Width(maxInt(1, width-2)).Render(restoreForegroundAfterANSIReset(renderInlineMarkdown(strings.TrimSpace(text)), colorManager.Hex(colorMarkdownQuote))))
 			continue
 		}
 		if marker, text, ok := markdownListItem(trimmed); ok {
-			body := renderInlineMarkdown(text)
+			body := restoreForegroundAfterANSIReset(renderInlineMarkdown(text), colorManager.Hex(colorBody))
 			parts = append(parts, leading+markdownBulletStyle.Render(marker)+" "+bodyStyle.Width(maxInt(1, width-terminalCellWidth(marker)-1)).Render(body))
 			continue
 		}
 
-		parts = append(parts, bodyStyle.Width(width).Render(wrapCompact(leading+renderInlineMarkdown(strings.TrimRight(line, " \t")), width)))
+		body := restoreForegroundAfterANSIReset(renderInlineMarkdown(strings.TrimRight(line, " \t")), colorManager.Hex(colorBody))
+		parts = append(parts, bodyStyle.Width(width).Render(wrapCompact(leading+body, width)))
 	}
 
 	return strings.TrimRight(strings.Join(parts, "\n"), "\n")
@@ -489,7 +490,7 @@ func renderMarkdownTableRowLines(row []string, widths []int, header bool, alignm
 	for i, width := range widths {
 		cell := ""
 		if i < len(row) {
-			cell = renderInlineMarkdown(row[i])
+			cell = restoreForegroundAfterANSIReset(renderInlineMarkdown(row[i]), colorManager.Hex(colorBody))
 		}
 		wrapped[i] = wrapStyledCellText(cell, width)
 		if len(wrapped[i]) > lineCount {
@@ -580,7 +581,7 @@ func markdownHeading(line string) (int, string, bool) {
 
 // renderMarkdownHeading 根据标题等级渲染标题，标题标记只用于解析，不显示在终端中；一级标题会额外带下划线。
 func renderMarkdownHeading(level int, text string, width int) string {
-	text = renderInlineMarkdown(text)
+	text = restoreForegroundAfterANSIReset(renderInlineMarkdown(text), colorManager.Hex(colorMarkdownHeading))
 	if level == 1 {
 		rule := strings.Repeat("─", maxInt(8, minInt(width, terminalCellWidth(text)+4)))
 		return markdownHeadingStyle.Render(text) + "\n" + markdownRuleStyle.Render(rule)
@@ -640,6 +641,49 @@ func markdownTaskText(text string) (string, string, bool) {
 		}
 	}
 	return "", "", false
+}
+
+// restoreForegroundAfterANSIReset 在行内样式自带的全量 SGR reset（\x1b[0m，
+// lipgloss Style.Render 结束时输出）之后立即重设段落前景色。行内加粗/代码/
+// 斜体/高亮/链接的 reset 会把外层 bodyStyle/quoteStyle/headingStyle 设置的前
+// 景色一并清掉，使标记之后的同一行正文回退为终端默认色（如用户主题正文色与
+// 终端默认前景不一致时肉眼可见）；本函数在 reset 后补回 foreground 指定的前
+// 景 SGR，保证整行延续段落前景色。
+//
+// 若 reset 之后紧跟另一条 CSI SGR（\x1b[，如代码 span 的 padding 空格背景或
+// 相邻行的样式），说明马上有新样式接管，不需要插入恢复；OSC 超链接序列
+// （\x1b]8;;）与正文文本不属于 SGR 前瞻，仍会插入。与
+// layout.restoreBackgroundAfterANSIReset 同源，这里只恢复前景（正文段落无背景）。
+func restoreForegroundAfterANSIReset(text, foreground string) string {
+	restore := foregroundSGR(foreground)
+	if restore == "" || !strings.Contains(text, "\x1b[") {
+		return text
+	}
+	var out strings.Builder
+	out.Grow(len(text) + 8)
+	for i := 0; i < len(text); {
+		if text[i] != '\x1b' {
+			out.WriteByte(text[i])
+			i++
+			continue
+		}
+		end := i + 1
+		for end < len(text) && text[end] != 'm' {
+			end++
+		}
+		if end >= len(text) {
+			out.WriteString(text[i:])
+			break
+		}
+		seq := text[i : end+1]
+		out.WriteString(seq)
+		if (seq == "\x1b[0m" || seq == "\x1b[m") &&
+			!(end+1 < len(text) && text[end+1] == '\x1b' && text[end+2] == '[') {
+			out.WriteString(restore)
+		}
+		i = end + 1
+	}
+	return out.String()
 }
 
 // renderInlineMarkdown 渲染行内 Markdown。代码、粗体、斜体和高亮标记

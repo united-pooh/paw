@@ -3,9 +3,11 @@ package bubble
 
 import (
 	"fmt"
-	tea "github.com/charmbracelet/bubbletea"
-	"paw/internal/model"
 	"strings"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"paw/internal/model"
 )
 
 // currentModelConfig 返回当前模型配置；没有控制器时返回空配置。
@@ -36,6 +38,7 @@ func (m *appModel) prepareModelWizardStep() {
 	cfg := m.configForProfile(option.profile)
 	wizard.modelOptions = nil
 	wizard.modelSelections = nil
+	wizard.search = ""
 	if wizard.catalogBound {
 		for _, selection := range wizard.catalogSelections {
 			if selection.ProviderKey != option.id && selection.ProviderKey != option.profile.Provider {
@@ -107,33 +110,61 @@ func (m appModel) handleModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case modelWizardModel:
-		count := len(m.modelWizard.modelOptions)
+		searching := m.modelWizard.search != ""
 		switch msg.String() {
-		case "ctrl+c", "esc":
+		case "ctrl+c":
 			m.modelWizard = nil
 			return m, nil
-		case "b", "backspace":
+		case "esc":
+			if searching {
+				m.modelWizard.search = ""
+				m.modelWizard.resetModelSelectionForSearch()
+				return m, nil
+			}
+			m.modelWizard = nil
+			return m, nil
+		case "backspace":
+			if searching {
+				runes := []rune(m.modelWizard.search)
+				m.modelWizard.search = string(runes[:len(runes)-1])
+				m.modelWizard.resetModelSelectionForSearch()
+				return m, nil
+			}
 			m.modelWizard.step = modelWizardProvider
 			m.modelWizard.err = ""
 			return m, nil
-		case "up", "k":
-			if count > 0 {
-				m.modelWizard.selectedModel--
-				if m.modelWizard.selectedModel < 0 {
-					m.modelWizard.selectedModel = count - 1
-				}
+		case "b":
+			if !searching {
+				m.modelWizard.step = modelWizardProvider
+				m.modelWizard.err = ""
+				return m, nil
 			}
+		case "up":
+			m.modelWizard.moveModelSelection(-1)
 			return m, nil
-		case "down", "j":
-			if count > 0 {
-				m.modelWizard.selectedModel++
-				if m.modelWizard.selectedModel >= count {
-					m.modelWizard.selectedModel = 0
-				}
+		case "down":
+			m.modelWizard.moveModelSelection(1)
+			return m, nil
+		case "k":
+			if !searching {
+				m.modelWizard.moveModelSelection(-1)
+				return m, nil
 			}
-			return m, nil
+		case "j":
+			if !searching {
+				m.modelWizard.moveModelSelection(1)
+				return m, nil
+			}
 		case "enter":
+			if len(m.modelWizard.modelIndicesForSearch()) == 0 {
+				return m, nil
+			}
 			m.modelWizard.step = modelWizardConfirm
+			return m, nil
+		}
+		if len(msg.Runes) > 0 && !msg.Alt {
+			m.modelWizard.search += string(msg.Runes)
+			m.modelWizard.resetModelSelectionForSearch()
 			return m, nil
 		}
 	case modelWizardConfirm:
@@ -154,6 +185,47 @@ func (m appModel) handleModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (w *modelWizard) modelIndicesForSearch() []int {
+	if w == nil {
+		return nil
+	}
+	query := strings.ToLower(strings.TrimSpace(w.search))
+	indices := make([]int, 0, len(w.modelOptions))
+	for index, name := range w.modelOptions {
+		if query != "" && !strings.Contains(strings.ToLower(name), query) {
+			continue
+		}
+		indices = append(indices, index)
+	}
+	return indices
+}
+
+func (w *modelWizard) resetModelSelectionForSearch() {
+	indices := w.modelIndicesForSearch()
+	if len(indices) == 0 {
+		w.selectedModel = -1
+		return
+	}
+	w.selectedModel = indices[0]
+}
+
+func (w *modelWizard) moveModelSelection(delta int) {
+	indices := w.modelIndicesForSearch()
+	if len(indices) == 0 {
+		w.selectedModel = -1
+		return
+	}
+	position := 0
+	for index, modelIndex := range indices {
+		if modelIndex == w.selectedModel {
+			position = index
+			break
+		}
+	}
+	position = (position + delta + len(indices)) % len(indices)
+	w.selectedModel = indices[position]
 }
 
 // applyModelWizardSelection persists and applies the selected model. A
@@ -244,21 +316,45 @@ func (m appModel) renderModelStep() string {
 		wizardTitleStyle.Render("Choose model"),
 		fmt.Sprintf("Provider: %s", m.modelWizard.selectedProvider().label),
 	}
-	maxItems := clampInt(m.currentLayout().transcriptHeight-7, 1, len(m.modelWizard.modelOptions))
-	start := maxInt(0, m.modelWizard.selectedModel-maxItems+1)
-	end := minInt(len(m.modelWizard.modelOptions), start+maxItems)
-	for i := start; i < end; i++ {
-		name := m.modelWizard.modelOptions[i]
-		if i == m.modelWizard.selectedModel {
-			lines = append(lines, selectedProviderStyle.Render("> "+name))
-		} else {
-			lines = append(lines, unselectedProviderStyle.Render("  "+name))
+
+	icon := m.styles.InputPrompt.Copy().Bold(true).Render("⌕")
+	var searchText string
+	if m.modelWizard.search == "" {
+		searchText = m.styles.StatusMuted.Render("搜索模型…")
+	} else {
+		searchText = m.styles.Body.Render(m.modelWizard.search)
+	}
+	searchStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(m.styles.InputPrompt.GetForeground()).
+		Padding(0, 1)
+	lines = append(lines, renderFixedStyledPanel(searchStyle, m.modalPanelBodyWidth(), 3, icon+" "+searchText))
+
+	indices := m.modelWizard.modelIndicesForSearch()
+	if len(indices) == 0 {
+		lines = append(lines, labelErrorStyle.Render("No matching models"))
+	} else {
+		selectedPosition := 0
+		for position, index := range indices {
+			if index == m.modelWizard.selectedModel {
+				selectedPosition = position
+				break
+			}
+		}
+		maxItems := clampInt(m.currentLayout().transcriptHeight-10, 1, len(indices))
+		start := maxInt(0, selectedPosition-maxItems+1)
+		end := minInt(len(indices), start+maxItems)
+		for position := start; position < end; position++ {
+			index := indices[position]
+			name := m.modelWizard.modelOptions[index]
+			if index == m.modelWizard.selectedModel {
+				lines = append(lines, selectedProviderStyle.Render("> "+name))
+			} else {
+				lines = append(lines, unselectedProviderStyle.Render("  "+name))
+			}
 		}
 	}
-	if len(m.modelWizard.modelOptions) == 0 {
-		lines = append(lines, labelErrorStyle.Render("No configured models"))
-	}
-	lines = append(lines, "Press enter to continue, b to choose another provider.")
+	lines = append(lines, "输入筛选 · Enter 选择 · Esc 清除/关闭 · b 返回服务商")
 	return strings.Join(lines, "\n")
 }
 

@@ -200,6 +200,19 @@ func TestNoticeHoverChangesCopyWithoutStartingSelection(t *testing.T) {
 	}
 }
 
+func TestNewMessageNoticeCellWidthMatchesRenderedText(t *testing.T) {
+	for _, count := range []int{1, 12, 9999} {
+		for _, hovered := range []bool{false, true} {
+			for _, width := range []int{1, 8, 20, 80} {
+				text := newMessageNoticeText(count, hovered, width)
+				if got, want := newMessageNoticeTextCellWidth(count, hovered, width), terminalCellWidth(text); got != want {
+					t.Fatalf("count=%d hovered=%v width=%d: cell width=%d, rendered text width=%d (%q)", count, hovered, width, got, want, text)
+				}
+			}
+		}
+	}
+}
+
 func TestNoticeHoverClearsWhenPointerLeaves(t *testing.T) {
 	model := newTranscriptScrollTestModel()
 	model.newMessageNoticeCount = 1

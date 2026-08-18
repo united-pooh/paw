@@ -22,19 +22,70 @@ const transcriptEntryGutter = "  "
 type transcriptRenderCacheEntry struct {
 	key               transcriptRenderCacheKey
 	rendered          string
+	toolRows          *transcriptToolRenderRows
 	renderable        bool
 	renderableVersion int
-	// sourceSignature 折叠渲染该条目时的输入版本（entry version + 关键字段长度）。
-	// 增量渲染用它做轻量变化检测：组条目折叠组内全部条目的签名。
-	sourceSignature uint64
+}
+
+type transcriptRenderConfig struct {
+	width         int
+	showThinking  bool
+	groupExpanded bool
+	fullResult    bool
+}
+
+type transcriptInvalidation struct {
+	dirty bool
+	full  bool
+	from  int
+}
+
+type transcriptToolRuntimeIndex struct {
+	initialized   bool
+	byID          map[string]int
+	running       map[int]int64
+	taskByID      map[string][]int
+	taskBySession map[string][]int
+}
+
+func (i *transcriptInvalidation) markFrom(index int) {
+	if i == nil || i.full {
+		return
+	}
+	if index < 0 {
+		index = 0
+	}
+	if !i.dirty || index < i.from {
+		i.from = index
+	}
+	i.dirty = true
+}
+
+func (i *transcriptInvalidation) markFull() {
+	if i == nil {
+		return
+	}
+	i.dirty = true
+	i.full = true
+	i.from = 0
+}
+
+func (i *transcriptInvalidation) clear() {
+	if i == nil {
+		return
+	}
+	*i = transcriptInvalidation{}
 }
 
 // transcriptEntrySpan 记录一条 transcript 条目在渲染行缓存中的行区间。
 // startRow<0 表示该条目未渲染（被隐藏/跳过/渲染为空）。
 type transcriptEntrySpan struct {
-	startRow int
-	height   int
-	kind     entryKind // 实际渲染 kind（工具组统一为 entryTool）
+	startRow           int
+	height             int
+	kind               entryKind // 实际渲染 kind（工具组统一为 entryTool）
+	hasRenderedContent bool
+	contentEndRow      int
+	lastRenderedKind   entryKind
 }
 
 type transcriptRenderCacheKey struct {
@@ -55,7 +106,6 @@ type transcriptRenderCacheKey struct {
 	toolGroupPending     bool
 	toolGroupOpen        bool
 	toolFocused          bool
-	toolHovered          bool
 	toolResultOnly       bool
 	citations            string
 	width                int
@@ -73,15 +123,15 @@ type transcriptRenderCacheKey struct {
 
 func (m *appModel) ensureAssistantStreamEntry() {
 	if m.activeAssistant < 0 || m.activeAssistant >= len(m.transcript) || m.transcript[m.activeAssistant].kind != entryAssistant {
-		m.transcript = append(m.transcript, transcriptEntry{
+		m.activeAssistant = m.appendTranscriptEntry(transcriptEntry{
 			kind:      entryAssistant,
 			title:     "assistant",
 			citations: m.consumePendingToolCitations(),
 			createdAt: m.animationNow(),
 		})
-		m.activeAssistant = len(m.transcript) - 1
 	} else if len(m.pendingToolCites) > 0 {
 		m.transcript[m.activeAssistant].citations = append(m.transcript[m.activeAssistant].citations, m.consumePendingToolCitations()...)
+		m.touchTranscriptEntryAt(m.activeAssistant)
 	}
 }
 
@@ -98,7 +148,7 @@ func (m *appModel) appendAssistantDelta(delta string) {
 	for _, line := range strings.SplitAfter(delta, "\n") {
 		m.ensureAssistantStreamEntry()
 		m.transcript[m.activeAssistant].body += line
-		touchTranscriptEntry(&m.transcript[m.activeAssistant])
+		m.touchTranscriptEntryAt(m.activeAssistant)
 		m.recordAssistantActivity(m.activeAssistant)
 	}
 	m.refreshViewportForStreaming()
@@ -108,14 +158,13 @@ func (m *appModel) ensureThinkingStreamEntry() {
 	m.activeAssistant = -1
 	if m.activeThinking < 0 || m.activeThinking >= len(m.transcript) || m.transcript[m.activeThinking].kind != entryReasoning {
 		now := m.animationNow()
-		m.transcript = append(m.transcript, transcriptEntry{
+		m.activeThinking = m.appendTranscriptEntry(transcriptEntry{
 			kind:               entryReasoning,
 			title:              "reasoning",
 			reasoningPartIndex: -len(m.transcript) - 1,
 			reasoningStartedAt: &now,
 			createdAt:          now,
 		})
-		m.activeThinking = len(m.transcript) - 1
 	}
 }
 
@@ -166,7 +215,7 @@ func (m *appModel) ensureReasoningEntry(blockIndex int, redacted bool) {
 	}
 	m.activeAssistant = -1
 	now := m.animationNow()
-	m.transcript = append(m.transcript, transcriptEntry{
+	m.activeReasoning = m.appendTranscriptEntry(transcriptEntry{
 		kind:               entryReasoning,
 		title:              "reasoning",
 		body:               "",
@@ -175,11 +224,10 @@ func (m *appModel) ensureReasoningEntry(blockIndex int, redacted bool) {
 		reasoningStartedAt: &now,
 		createdAt:          now,
 	})
-	m.activeReasoning = len(m.transcript) - 1
 	if redacted {
 		// redacted block 没有可读正文；开始事件即可建立不可展开的完成占位。
 		m.transcript[m.activeReasoning].reasoningFinishedAt = &now
-		touchTranscriptEntry(&m.transcript[m.activeReasoning])
+		m.touchTranscriptEntryAt(m.activeReasoning)
 		m.refreshViewportForStreaming()
 	}
 }
@@ -194,7 +242,7 @@ func (m *appModel) appendReasoningDelta(blockIndex int, delta string) {
 		m.ensureReasoningEntry(blockIndex, false)
 	}
 	m.transcript[m.activeReasoning].body += delta
-	touchTranscriptEntry(&m.transcript[m.activeReasoning])
+	m.touchTranscriptEntryAt(m.activeReasoning)
 	m.refreshViewportForStreaming()
 }
 
@@ -213,7 +261,7 @@ func (m *appModel) finalizeReasoningEntry(blockIndex int) {
 		entry.reasoningStartedAt = &started
 	}
 	entry.reasoningFinishedAt = &now
-	touchTranscriptEntry(entry)
+	m.touchTranscriptEntryAt(idx)
 	if m.activeReasoning == idx {
 		m.activeReasoning = -1
 	}
@@ -227,7 +275,7 @@ func (m *appModel) appendThinkingDelta(delta string) {
 	}
 	m.ensureThinkingStreamEntry()
 	m.transcript[m.activeThinking].body += delta
-	touchTranscriptEntry(&m.transcript[m.activeThinking])
+	m.touchTranscriptEntryAt(m.activeThinking)
 	m.refreshViewportForStreaming()
 }
 
@@ -312,7 +360,7 @@ func (m *appModel) finalizeThinkingStream() {
 	if thinkingIndex >= 0 && thinkingIndex < len(m.transcript) && m.transcript[thinkingIndex].kind == entryReasoning && m.transcript[thinkingIndex].reasoningFinishedAt == nil {
 		now := m.animationNow()
 		m.transcript[thinkingIndex].reasoningFinishedAt = &now
-		touchTranscriptEntry(&m.transcript[thinkingIndex])
+		m.touchTranscriptEntryAt(thinkingIndex)
 		m.refreshViewportForStreaming()
 	}
 	m.activeThinking = -1
@@ -349,9 +397,7 @@ func (m *appModel) addEntry(entry transcriptEntry) {
 	if entry.createdAt.IsZero() {
 		entry.createdAt = m.animationNow()
 	}
-	touchTranscriptEntry(&entry)
-	m.transcript = append(m.transcript, entry)
-	index := len(m.transcript) - 1
+	index := m.appendTranscriptEntry(entry)
 	if entry.kind != entryUser && (entry.kind != entryTool || entry.toolStatus != "running") {
 		m.recordTranscriptEntryActivity(index, true)
 	}
@@ -365,7 +411,7 @@ func (m appModel) animationNow() time.Time {
 	return time.Now()
 }
 
-func touchTranscriptEntry(entry *transcriptEntry) {
+func touchDetachedTranscriptEntry(entry *transcriptEntry) {
 	if entry == nil {
 		return
 	}
@@ -373,6 +419,216 @@ func touchTranscriptEntry(entry *transcriptEntry) {
 	if entry.version <= 0 {
 		entry.version = 1
 	}
+}
+
+func (m *appModel) touchTranscriptEntryAt(index int) {
+	if m == nil || index < 0 || index >= len(m.transcript) {
+		return
+	}
+	touchDetachedTranscriptEntry(&m.transcript[index])
+	m.transcriptInvalidation.markFrom(index)
+}
+
+func (m *appModel) appendTranscriptEntry(entry transcriptEntry) int {
+	if m == nil {
+		return -1
+	}
+	touchDetachedTranscriptEntry(&entry)
+	m.transcript = append(m.transcript, entry)
+	index := len(m.transcript) - 1
+	m.transcriptInvalidation.markFrom(index)
+	if transcriptEntryIsRunningTool(entry) {
+		if !m.toolRuntime.initialized {
+			m.toolRuntime = transcriptToolRuntimeIndex{initialized: true}
+		}
+		m.trackRunningToolAt(index)
+	}
+	m.trackTaskToolAt(index)
+	return index
+}
+
+func (m *appModel) invalidateTranscriptRender() {
+	if m == nil {
+		return
+	}
+	m.transcriptRenderCache = nil
+	m.transcriptContentCached = false
+	m.transcriptInvalidation.markFull()
+}
+
+func (m *appModel) invalidateTranscriptStructure() {
+	if m == nil {
+		return
+	}
+	m.invalidateTranscriptRender()
+	m.transcriptLinesValid = false
+	m.transcriptInteraction.invalidate()
+	m.toolHoverIndex = -1
+	m.transcriptHoverPatch = transcriptHoverPatchCache{}
+	m.rebuildToolRuntimeIndex()
+}
+
+func (m *appModel) replaceTranscript(entries []transcriptEntry) {
+	if m == nil {
+		return
+	}
+	m.transcript = entries
+	m.invalidateTranscriptStructure()
+}
+
+func (m *appModel) normalizeTranscriptDirtyIndex(index int) int {
+	if m == nil || index < 0 || index >= len(m.transcript) {
+		return index
+	}
+	if first, ok := toolSegmentStart(m.transcript, index); ok && !m.transcript[first].toolGroupPending {
+		return first
+	}
+	return index
+}
+
+func transcriptEntryIsRunningTool(entry transcriptEntry) bool {
+	return entry.taskWaitRunning || (isToolTransaction(entry) && toolEntryStatus(entry) == "running")
+}
+
+func (m *appModel) ensureToolRuntimeIndex() {
+	if m != nil && !m.toolRuntime.initialized {
+		m.rebuildToolRuntimeIndex()
+	}
+}
+
+func (m *appModel) earliestRunningToolIndex() (int, bool) {
+	if m == nil {
+		return -1, false
+	}
+	m.ensureToolRuntimeIndex()
+	first := len(m.transcript)
+	for index := range m.toolRuntime.running {
+		if index < 0 || index >= len(m.transcript) {
+			continue
+		}
+		entry := m.transcript[index]
+		if isToolTransaction(entry) && toolEntryStatus(entry) == "running" && index < first {
+			first = index
+		}
+	}
+	if first >= len(m.transcript) {
+		return -1, false
+	}
+	return first, true
+}
+
+func (m *appModel) rebuildToolRuntimeIndex() {
+	if m == nil {
+		return
+	}
+	m.toolRuntimeRebuildVisits = 0
+	m.toolRuntime = transcriptToolRuntimeIndex{initialized: true}
+	for index, entry := range m.transcript {
+		m.toolRuntimeRebuildVisits++
+		if transcriptEntryIsRunningTool(entry) {
+			m.trackRunningToolAt(index)
+		}
+		m.trackTaskToolAt(index)
+	}
+}
+
+func (m *appModel) trackTaskToolAt(index int) {
+	if m == nil || index < 0 || index >= len(m.transcript) {
+		return
+	}
+	reference, ok := taskToolReference(m.transcript[index])
+	if !ok {
+		return
+	}
+	if !m.toolRuntime.initialized {
+		m.toolRuntime = transcriptToolRuntimeIndex{initialized: true}
+	}
+	m.toolRuntime.taskByID = appendRuntimeIndex(m.toolRuntime.taskByID, reference.ID, index)
+	m.toolRuntime.taskBySession = appendRuntimeIndex(m.toolRuntime.taskBySession, reference.SessionID, index)
+}
+
+func appendRuntimeIndex(index map[string][]int, key string, transcriptIndex int) map[string][]int {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return index
+	}
+	if index == nil {
+		index = make(map[string][]int)
+	}
+	entries := index[key]
+	for _, existing := range entries {
+		if existing == transcriptIndex {
+			return index
+		}
+	}
+	index[key] = append(entries, transcriptIndex)
+	return index
+}
+
+type transcriptTaskToolReference struct {
+	ID        string `json:"id"`
+	SessionID string `json:"session_id"`
+}
+
+func taskToolReference(entry transcriptEntry) (transcriptTaskToolReference, bool) {
+	if !isToolTransaction(entry) || !isTaskToolEntry(entry) || strings.TrimSpace(entry.toolResult) == "" {
+		return transcriptTaskToolReference{}, false
+	}
+	var reference transcriptTaskToolReference
+	if json.Unmarshal([]byte(entry.toolResult), &reference) != nil {
+		return transcriptTaskToolReference{}, false
+	}
+	reference.ID = strings.TrimSpace(reference.ID)
+	reference.SessionID = strings.TrimSpace(reference.SessionID)
+	return reference, reference.ID != ""
+}
+
+func (m *appModel) trackRunningToolAt(index int) {
+	if m == nil || index < 0 || index >= len(m.transcript) {
+		return
+	}
+	if m.toolRuntime.running == nil {
+		m.toolRuntime.running = make(map[int]int64)
+	}
+	m.toolRuntime.running[index] = toolElapsedSeconds(m.transcript[index], m.animationNow())
+	if toolUseID := strings.TrimSpace(m.transcript[index].toolUseID); toolUseID != "" {
+		if m.toolRuntime.byID == nil {
+			m.toolRuntime.byID = make(map[string]int)
+		}
+		m.toolRuntime.byID[toolUseID] = index
+	}
+}
+
+func (m *appModel) untrackRunningToolAt(index int) {
+	if m == nil {
+		return
+	}
+	delete(m.toolRuntime.running, index)
+	if index >= 0 && index < len(m.transcript) {
+		toolUseID := strings.TrimSpace(m.transcript[index].toolUseID)
+		if m.toolRuntime.byID[toolUseID] == index {
+			delete(m.toolRuntime.byID, toolUseID)
+		}
+	}
+}
+
+func (m *appModel) findRunningToolEntry(result toolEntryResult) int {
+	if m == nil {
+		return -1
+	}
+	m.ensureToolRuntimeIndex()
+	if result.toolUseID != "" {
+		if index, ok := m.toolRuntime.byID[result.toolUseID]; ok && index >= 0 && index < len(m.transcript) && toolEntryMatchesResult(m.transcript[index], result) {
+			return index
+		}
+	}
+	for index := len(m.transcript) - 1; index >= 0; index-- {
+		if toolEntryMatchesResult(m.transcript[index], result) {
+			m.trackRunningToolAt(index)
+			return index
+		}
+	}
+	return -1
 }
 
 func (m *appModel) consumePendingToolCitations() []toolCitation {
@@ -388,7 +644,7 @@ func (m *appModel) recordToolCallCitation(toolUseID, name string, input json.Raw
 	cite := newToolCallCitation(toolUseID, name, input, m.workspaceRoot)
 	if idx := m.lastAssistantCitationHostIndex(); idx >= 0 {
 		m.transcript[idx].citations = append(m.transcript[idx].citations, cite)
-		touchTranscriptEntry(&m.transcript[idx])
+		m.touchTranscriptEntryAt(idx)
 	} else {
 		entry := transcriptEntry{
 			kind:      entryAssistant,
@@ -396,8 +652,7 @@ func (m *appModel) recordToolCallCitation(toolUseID, name string, input json.Raw
 			citations: []toolCitation{cite},
 			createdAt: m.animationNow(),
 		}
-		touchTranscriptEntry(&entry)
-		m.transcript = append(m.transcript, entry)
+		m.appendTranscriptEntry(entry)
 	}
 	m.refreshViewport()
 }
@@ -490,6 +745,7 @@ func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMes
 	if selectTarget, ok := selectToolCallTarget(name, input); ok {
 		target = selectTarget
 	}
+	m.toolGroupExpanded = true
 	m.addEntry(transcriptEntry{
 		kind:              entryTool,
 		title:             "tool",
@@ -505,9 +761,6 @@ func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMes
 		createdAt:         m.animationNow(),
 		toolStartedAt:     m.animationNow(),
 	})
-	m.toolGroupExpanded = true
-	m.transcriptRenderCache = nil
-	m.refreshViewport()
 }
 
 func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string, isError, mutationKnown, isMutation bool, mutation *ui.FileMutationSnapshot) {
@@ -517,7 +770,6 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 	}
 	if isTaskWaitTool(name) {
 		if m.removeTaskWaitEntry(strings.TrimSpace(toolUseID), name) {
-			m.lastToolProgressSecond = -1
 			if isError {
 				body := strings.TrimSpace(content)
 				if body == "" {
@@ -544,11 +796,9 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 		status:    status,
 		isError:   isError,
 	}
-	for idx := len(m.transcript) - 1; idx >= 0; idx-- {
+	if idx := m.findRunningToolEntry(result); idx >= 0 {
 		entry := &m.transcript[idx]
-		if !toolEntryMatchesResult(*entry, result) {
-			continue
-		}
+		m.untrackRunningToolAt(idx)
 		entry.title = "tool"
 		effectiveKnown := mutationKnown || entry.fileMutationKnown
 		effectiveMutation := entry.isFileMutation
@@ -576,6 +826,7 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 		entry.isError = isError
 		entry.toolStatus = status
 		entry.toolResult = content
+		m.trackTaskToolAt(idx)
 		if strings.EqualFold(name, "question") && strings.EqualFold(status, "ok") {
 			if presentation, ok := parseSelectToolPresentation(entry.toolInput, content); ok {
 				entry.toolTarget = presentation.target
@@ -592,7 +843,7 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 		}
 		entry.toolResultOnly = false
 		entry.toolFinishedAt = m.animationNow()
-		touchTranscriptEntry(entry)
+		m.touchTranscriptEntryAt(idx)
 		m.recordTranscriptEntryActivity(idx, true)
 		m.refreshViewport()
 		return
@@ -602,7 +853,11 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 		target = compactUpdateTodoResult(content)
 	}
 	segmentPending := appendedToolEntryStartsPendingSegment(m.transcript)
-	m.addEntry(transcriptEntry{
+	segmentIsPending := segmentPending
+	if !segmentIsPending && len(m.transcript) > 0 {
+		segmentIsPending = toolSegmentIsPending(m.transcript, len(m.transcript)-1)
+	}
+	entry := transcriptEntry{
 		kind:             entryTool,
 		title:            "tool",
 		body:             formatToolResultBody(name, status, ""),
@@ -616,15 +871,14 @@ func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string
 		toolGroupPending: segmentPending,
 		toolResultOnly:   true,
 		createdAt:        m.animationNow(),
-	})
-	if status == "ok" {
-		if last := len(m.transcript) - 1; last >= 0 && toolSegmentIsPending(m.transcript, last) && toolEntryShowsMutationDetail(m.transcript[last], name, mutationKnown, isMutation) {
-			m.collapsePendingToolDetailsInCurrentTurn(last)
-			m.transcript[last].toolExpanded = true
-			touchTranscriptEntry(&m.transcript[last])
-			m.refreshViewport()
-		}
 	}
+	if status == "ok" && segmentIsPending && toolEntryShowsMutationDetail(entry, name, mutationKnown, isMutation) {
+		if len(m.transcript) > 0 {
+			m.collapsePendingToolDetailsInCurrentTurn(-1)
+		}
+		entry.toolExpanded = true
+	}
+	m.addEntry(entry)
 }
 
 func (m *appModel) recordToolResultCitation(toolUseID, name, status, content string, isError bool) {
@@ -642,7 +896,7 @@ func (m *appModel) recordToolResultCitation(toolUseID, name, status, content str
 				entry.citations[citeIdx].status = cite.status
 				entry.citations[citeIdx].preview = cite.preview
 				entry.citations[citeIdx].isError = cite.isError
-				touchTranscriptEntry(entry)
+				m.touchTranscriptEntryAt(entryIdx)
 				m.refreshViewport()
 				return
 			}
@@ -650,7 +904,7 @@ func (m *appModel) recordToolResultCitation(toolUseID, name, status, content str
 	}
 	if idx := m.lastAssistantCitationHostIndex(); idx >= 0 {
 		m.transcript[idx].citations = append(m.transcript[idx].citations, cite)
-		touchTranscriptEntry(&m.transcript[idx])
+		m.touchTranscriptEntryAt(idx)
 	} else {
 		entry := transcriptEntry{
 			kind:      entryAssistant,
@@ -658,8 +912,7 @@ func (m *appModel) recordToolResultCitation(toolUseID, name, status, content str
 			citations: []toolCitation{cite},
 			createdAt: m.animationNow(),
 		}
-		touchTranscriptEntry(&entry)
-		m.transcript = append(m.transcript, entry)
+		m.appendTranscriptEntry(entry)
 	}
 	m.refreshViewport()
 }
@@ -684,6 +937,17 @@ func toolEntryMatchesResult(entry transcriptEntry, result toolEntryResult) bool 
 // removeTaskWaitEntry 从 transcript 中移除匹配的 TaskWait 状态行，
 // 使等待结束（成功或失败）后该行直接消失而不折叠为工具块。
 func (m *appModel) removeTaskWaitEntry(toolUseID, name string) bool {
+	m.ensureToolRuntimeIndex()
+	if toolUseID != "" {
+		if index, ok := m.toolRuntime.byID[toolUseID]; ok && index >= 0 && index < len(m.transcript) {
+			entry := m.transcript[index]
+			if entry.taskWaitRunning && entry.toolUseID == toolUseID {
+				m.transcript = append(m.transcript[:index], m.transcript[index+1:]...)
+				m.invalidateTranscriptStructure()
+				return true
+			}
+		}
+	}
 	for index := len(m.transcript) - 1; index >= 0; index-- {
 		entry := &m.transcript[index]
 		if !entry.taskWaitRunning {
@@ -697,8 +961,7 @@ func (m *appModel) removeTaskWaitEntry(toolUseID, name string) bool {
 			continue
 		}
 		m.transcript = append(m.transcript[:index], m.transcript[index+1:]...)
-		m.transcriptRenderCache = nil
-		m.transcriptLinesValid = false
+		m.invalidateTranscriptStructure()
 		return true
 	}
 	return false
@@ -754,7 +1017,7 @@ func (m *appModel) collapsePendingToolDetailsInCurrentTurn(skipIndex int) {
 			if entry.toolExpanded || entry.toolGroupOpen {
 				entry.toolExpanded = false
 				entry.toolGroupOpen = false
-				touchTranscriptEntry(entry)
+				m.touchTranscriptEntryAt(segmentIndex)
 			}
 		}
 		index = segmentEnd + 1
@@ -789,7 +1052,7 @@ func (m *appModel) readyPendingToolSegmentsInCurrentTurn() bool {
 			entry.toolGroupPending = false
 			entry.toolExpanded = false
 			entry.toolGroupOpen = false
-			touchTranscriptEntry(entry)
+			m.touchTranscriptEntryAt(segmentIndex)
 			changed = true
 		}
 		index = segmentEnd + 1
@@ -850,7 +1113,24 @@ func assistantEntryIsRenderable(entry transcriptEntry) bool {
 // 如果刷新前 viewport 位于底部，则继续跟随新内容；否则保留手动滚动位置。
 // 文字选区只影响渲染，不影响用户已经回到底部后的自动跟随。
 func (m *appModel) refreshViewport() {
+	if m.transcriptRefreshBatchDepth > 0 {
+		m.transcriptRefreshBatched = true
+		return
+	}
 	m.refreshViewportWithBottomState(m.viewport.AtBottom())
+}
+
+func (m *appModel) batchTranscriptRefresh(fn func()) {
+	if m == nil || fn == nil {
+		return
+	}
+	m.transcriptRefreshBatchDepth++
+	fn()
+	m.transcriptRefreshBatchDepth--
+	if m.transcriptRefreshBatchDepth == 0 && m.transcriptRefreshBatched {
+		m.transcriptRefreshBatched = false
+		m.refreshViewport()
+	}
 }
 
 func (m *appModel) refreshViewportWithBottomState(wasAtBottom bool) {
@@ -866,6 +1146,10 @@ func (m *appModel) refreshViewportWithBottomState(wasAtBottom bool) {
 
 // refreshViewportPreservingOffset 刷新 transcript 内容，但保留用户当前滚动位置。
 func (m *appModel) refreshViewportPreservingOffset() {
+	if m.transcriptRefreshBatchDepth > 0 {
+		m.transcriptRefreshBatched = true
+		return
+	}
 	offset := m.viewport.YOffset
 	m.applyTranscriptToViewport(maxInt(20, m.viewport.Width), m.showThinking, m.animationNow())
 	m.viewport.SetYOffset(offset)
@@ -916,16 +1200,40 @@ func (m *appModel) ensureTranscriptLinesAt(width int, showThinking bool, at time
 	if m == nil {
 		return false, -1, nil
 	}
-	if len(m.transcriptRenderCache) != len(m.transcript) {
-		next := make([]transcriptRenderCacheEntry, len(m.transcript))
-		copy(next, m.transcriptRenderCache)
-		m.transcriptRenderCache = next
+	m.ensureToolRuntimeIndex()
+	m.transcriptRenderVisits = 0
+	m.transcriptPrefixAnchorVisits = 0
+	config := transcriptRenderConfig{
+		width:         width,
+		showThinking:  showThinking,
+		groupExpanded: m.toolGroupExpanded,
+		fullResult:    m.toolGroupFullResult,
 	}
-	if m.transcriptLinesValid && m.transcriptContentCached {
-		sig := transcriptRenderSignature(m.transcript, width, showThinking, m.toolGroupExpanded, m.toolGroupFullResult, at)
-		if sig == m.transcriptRenderSignature {
-			return false, -1, nil
+	if !m.transcriptRenderConfigSet ||
+		m.transcriptRenderConfig.width != config.width ||
+		m.transcriptRenderConfig.showThinking != config.showThinking ||
+		m.transcriptRenderConfig.fullResult != config.fullResult {
+		m.transcriptInvalidation.markFull()
+	} else if m.transcriptRenderConfig.groupExpanded != config.groupExpanded {
+		if index, ok := m.earliestRunningToolIndex(); ok {
+			m.transcriptInvalidation.markFrom(index)
 		}
+	}
+	if !m.transcriptLinesValid || !m.transcriptContentCached {
+		m.transcriptInvalidation.markFull()
+	}
+	if len(m.transcriptRenderCache) < len(m.transcript) {
+		firstNew := len(m.transcriptRenderCache)
+		m.transcriptRenderCache = append(m.transcriptRenderCache, make([]transcriptRenderCacheEntry, len(m.transcript)-firstNew)...)
+		m.transcriptInvalidation.markFrom(firstNew)
+	} else if len(m.transcriptRenderCache) > len(m.transcript) {
+		m.transcriptRenderCache = make([]transcriptRenderCacheEntry, len(m.transcript))
+		m.transcriptInvalidation.markFull()
+	}
+	if !m.transcriptInvalidation.dirty {
+		m.transcriptRenderConfig = config
+		m.transcriptRenderConfigSet = true
+		return false, -1, nil
 	}
 	// 内容确实变化：交互缓存（行快照/条目位置）全部失效。
 	m.transcriptLineCache = nil
@@ -936,19 +1244,25 @@ func (m *appModel) ensureTranscriptLinesAt(width int, showThinking bool, at time
 	if len(m.transcript) == 0 {
 		m.transcriptLines = nil
 		m.transcriptEntrySpans = nil
+		m.transcriptInteraction.set(nil, nil, true)
 		m.transcriptLinesValid = true
 		m.transcriptContentCached = true
-		m.transcriptRenderSignature = transcriptRenderSignature(m.transcript, width, showThinking, m.toolGroupExpanded, m.toolGroupFullResult, at)
+		m.transcriptRenderConfig = config
+		m.transcriptRenderConfigSet = true
+		m.transcriptInvalidation.clear()
 		return true, -1, nil
 	}
 
-	if !m.transcriptLinesValid {
+	if m.transcriptInvalidation.full {
 		segment, spans := m.renderTranscriptEntriesFrom(0, width, showThinking, at)
 		m.transcriptLines = transcriptSegmentLines(segment)
 		m.transcriptEntrySpans = spans
+		m.setTranscriptInteractionRows(m.transcriptLines, 0)
 		m.transcriptLinesValid = true
 		m.transcriptContentCached = true
-		m.transcriptRenderSignature = transcriptRenderSignature(m.transcript, width, showThinking, m.toolGroupExpanded, m.toolGroupFullResult, at)
+		m.transcriptRenderConfig = config
+		m.transcriptRenderConfigSet = true
+		m.transcriptInvalidation.clear()
 		return true, -1, nil
 	}
 	// 条目追加后对齐 spans 长度（新条目的 span 无效，firstChanged 会从新条目
@@ -964,24 +1278,24 @@ func (m *appModel) ensureTranscriptLinesAt(width int, showThinking bool, at time
 		m.transcriptEntrySpans = m.transcriptEntrySpans[:len(m.transcript)]
 	}
 
-	startIdx := m.firstChangedTranscriptIndex(width, showThinking, at)
-	if startIdx < 0 {
-		// 签名不同但条目级签名全命中：兜底全量重建（正常不会发生）。
+	startIdx := m.normalizeTranscriptDirtyIndex(m.transcriptInvalidation.from)
+	if startIdx < 0 || startIdx >= len(m.transcript) {
+		m.invalidateTranscriptStructure()
 		segment, spans := m.renderTranscriptEntriesFrom(0, width, showThinking, at)
 		m.transcriptLines = transcriptSegmentLines(segment)
 		m.transcriptEntrySpans = spans
+		m.setTranscriptInteractionRows(m.transcriptLines, 0)
+		m.transcriptLinesValid = true
 		m.transcriptContentCached = true
-		m.transcriptRenderSignature = transcriptRenderSignature(m.transcript, width, showThinking, m.toolGroupExpanded, m.toolGroupFullResult, at)
+		m.transcriptRenderConfig = config
+		m.transcriptRenderConfigSet = true
+		m.transcriptInvalidation.clear()
 		return true, -1, nil
 	}
 	startRow = 0
 	if startIdx > 0 {
-		for i := startIdx - 1; i >= 0; i-- {
-			if span := m.transcriptEntrySpans[i]; span.startRow >= 0 && span.height > 0 {
-				startRow = span.startRow + span.height
-				break
-			}
-		}
+		m.transcriptPrefixAnchorVisits++
+		startRow = m.transcriptEntrySpans[startIdx-1].contentEndRow
 	}
 	segment, spans := m.renderTranscriptEntriesFrom(startIdx, width, showThinking, at)
 	for i := startIdx; i < len(m.transcript); i++ {
@@ -1003,8 +1317,11 @@ func (m *appModel) ensureTranscriptLinesAt(width int, showThinking bool, at time
 	} else {
 		m.transcriptLines = append(m.transcriptLines[:replaceStart], newLines...)
 	}
+	m.replaceTranscriptInteractionRows(replaceStart, newLines, startIdx)
 	m.transcriptContentCached = true
-	m.transcriptRenderSignature = transcriptRenderSignature(m.transcript, width, showThinking, m.toolGroupExpanded, m.toolGroupFullResult, at)
+	m.transcriptRenderConfig = config
+	m.transcriptRenderConfigSet = true
+	m.transcriptInvalidation.clear()
 	return true, replaceStart, newLines
 }
 
@@ -1017,39 +1334,6 @@ func transcriptSegmentLines(segment string) []string {
 	lines := strings.Split(segment, "\n")
 	lines = append(lines, "")
 	return lines
-}
-
-// transcriptEntrySignature 折叠渲染单条 entry 所需的输入版本。所有会改变
-// 渲染结果的字段变更路径都会 touchTranscriptEntry（version++），因此
-// version + 关键长度足以作为轻量变化检测；完整校验由 cache key 承担。
-func transcriptEntrySignature(entry transcriptEntry) uint64 {
-	var h uint64 = 1469598103934665603 // FNV-1a offset
-	mix := func(v uint64) {
-		h ^= v
-		h *= 1099511628211
-	}
-	mix(uint64(entry.kind))
-	mix(uint64(entry.version))
-	mix(uint64(len(entry.body)))
-	mix(uint64(len(entry.toolResult)))
-	mix(uint64(len(entry.citations)))
-	return h
-}
-
-// transcriptGroupSourceSignature 折叠工具组内全部条目的版本签名：组渲染
-// 依赖组内任意条目，任一变化都必须使组缓存失效。
-func transcriptGroupSourceSignature(entries []transcriptEntry, first, last int) uint64 {
-	var h uint64 = 1469598103934665603
-	mix := func(v uint64) {
-		h ^= v
-		h *= 1099511628211
-	}
-	mix(1) // 标记组
-	for i := first; i <= last; i++ {
-		h ^= transcriptEntrySignature(entries[i])
-		h *= 1099511628211
-	}
-	return h
 }
 
 // transcriptEntryRenderable 返回条目 idx 是否参与渲染，结果缓存在渲染缓存
@@ -1069,35 +1353,12 @@ func (m *appModel) transcriptEntryRenderable(idx int, showThinking bool) bool {
 	return cache.renderable
 }
 
-// firstChangedTranscriptIndex 返回第一个渲染输入发生变化的条目索引；没有
-// 变化返回 -1。判断基于条目级轻量签名（渲染循环的完整 cache key 是权威）。
-func (m *appModel) firstChangedTranscriptIndex(width int, showThinking bool, at time.Time) int {
-	for idx := range m.transcript {
-		if !m.transcriptEntryRenderable(idx, showThinking) {
-			continue
-		}
-		if toolEntryUsesReadyGroup(m.transcript, idx) {
-			first, last := toolGroupRange(m.transcript, idx)
-			if first != idx {
-				continue
-			}
-			if m.transcriptRenderCache[idx].sourceSignature != transcriptGroupSourceSignature(m.transcript, first, last) {
-				return first
-			}
-			continue
-		}
-		if m.transcriptRenderCache[idx].sourceSignature != transcriptEntrySignature(m.transcript[idx]) {
-			return idx
-		}
-	}
-	return -1
-}
-
 // renderTranscriptEntriesFrom 渲染 [startIdx, len(transcript)) 的条目段，
 // 复用 per-entry 渲染缓存，并同步输出每个条目的渲染行区间（spans）。
 // 返回段字符串（不含底部空隙行）与 spans。调用方保证 startIdx 之前的
 // 条目已渲染且 m.transcriptEntrySpans 有效（用于分隔符与前缀行数）。
 func (m *appModel) renderTranscriptEntriesFrom(startIdx int, width int, showThinking bool, at time.Time) (string, []transcriptEntrySpan) {
+	m.transcriptSegmentRangeCalls = 0
 	var rendered strings.Builder
 	hasPrevious := false
 	var previousKind entryKind
@@ -1105,31 +1366,47 @@ func (m *appModel) renderTranscriptEntriesFrom(startIdx int, width int, showThin
 	totalRows := 0
 	spans := make([]transcriptEntrySpan, len(m.transcript)-startIdx)
 	if startIdx > 0 {
-		for i := startIdx - 1; i >= 0; i-- {
-			if span := m.transcriptEntrySpans[i]; span.startRow >= 0 && span.height > 0 {
-				hasPrevious = true
-				previousKind = span.kind
-				totalRows = span.startRow + span.height
-				break
+		m.transcriptPrefixAnchorVisits++
+		prefix := m.transcriptEntrySpans[startIdx-1]
+		hasPrevious = prefix.hasRenderedContent
+		previousKind = prefix.lastRenderedKind
+		totalRows = prefix.contentEndRow
+	}
+	pendingToolSegment := false
+	if startIdx < len(m.transcript) && isToolTransaction(m.transcript[startIdx]) {
+		if startIdx > 0 && isToolTransaction(m.transcript[startIdx-1]) {
+			m.transcriptSegmentRangeCalls++
+			if first, ok := toolSegmentStart(m.transcript, startIdx); ok {
+				pendingToolSegment = m.transcript[first].toolGroupPending
 			}
+		} else {
+			pendingToolSegment = m.transcript[startIdx].toolGroupPending
 		}
 	}
 	for idx := startIdx; idx < len(m.transcript); idx++ {
+		m.transcriptRenderVisits++
 		entry := m.transcript[idx]
 		span := &spans[idx-startIdx]
 		span.startRow = -1
 		if !m.transcriptEntryRenderable(idx, showThinking) {
+			span.hasRenderedContent = hasPrevious
+			span.contentEndRow = totalRows
+			span.lastRenderedKind = previousKind
 			continue
 		}
 		var renderedEntry string
+		var toolRows transcriptToolRenderRows
 		kind := entry.kind
-		if toolEntryUsesReadyGroup(m.transcript, idx) {
-			first, last := toolGroupRange(m.transcript, idx)
-			if first != idx {
-				continue
-			}
+		groupLast := idx
+		if isToolTransaction(entry) && idx > startIdx && !isToolTransaction(m.transcript[idx-1]) {
+			pendingToolSegment = entry.toolGroupPending
+		}
+		if isToolTransaction(entry) && !pendingToolSegment {
+			first := idx
+			last := toolSegmentEnd(m.transcript, idx)
+			groupLast = last
 			key := transcriptRenderKey(entry, width, at, showThinking)
-			groupEntries := toolEntriesForGroup(m.transcript, idx)
+			groupEntries := m.transcript[first : last+1]
 			groupExpanded := m.toolGroupExpanded
 			if !toolGroupHasRunning(m.transcript, first, last) {
 				groupExpanded = m.transcript[first].toolExpanded
@@ -1143,12 +1420,14 @@ func (m *appModel) renderTranscriptEntriesFrom(startIdx int, width int, showThin
 			key.toolFocused = key.toolFocused || m.toolGroupFullResult
 			if m.transcriptRenderCache[idx].key == key {
 				renderedEntry = m.transcriptRenderCache[idx].rendered
-			} else {
-				renderedEntry = renderToolsGroup(groupEntries, width, at, groupExpanded, m.toolGroupFullResult)
-				if renderedEntry == "" {
-					continue
+				if cachedRows := m.transcriptRenderCache[idx].toolRows; cachedRows != nil {
+					toolRows = *cachedRows
 				}
-				m.storeTranscriptRenderCacheEntry(idx, key, renderedEntry, transcriptGroupSourceSignature(m.transcript, first, last), entry.version)
+			} else {
+				renderedEntry, toolRows = renderToolsGroupWithRows(groupEntries, width, at, groupExpanded, m.toolGroupFullResult)
+				if renderedEntry != "" {
+					m.storeTranscriptRenderCacheEntry(idx, key, renderedEntry, entry.version, toolRows)
+				}
 			}
 			kind = entryTool
 		} else {
@@ -1157,14 +1436,21 @@ func (m *appModel) renderTranscriptEntriesFrom(startIdx int, width int, showThin
 				renderedEntry = m.transcriptRenderCache[idx].rendered
 			} else {
 				renderedEntry = renderEntryAt(entry, width, at, showThinking)
-				if renderedEntry == "" {
-					continue
+				if renderedEntry != "" {
+					m.storeTranscriptRenderCacheEntry(idx, key, renderedEntry, entry.version, nil)
 				}
-				m.storeTranscriptRenderCacheEntry(idx, key, renderedEntry, transcriptEntrySignature(entry), entry.version)
 			}
 		}
 		renderedEntry = strings.TrimRight(renderedEntry, "\n")
 		if renderedEntry == "" {
+			for skipped := idx; skipped <= groupLast; skipped++ {
+				groupSpan := &spans[skipped-startIdx]
+				groupSpan.startRow = -1
+				groupSpan.hasRenderedContent = hasPrevious
+				groupSpan.contentEndRow = totalRows
+				groupSpan.lastRenderedKind = previousKind
+			}
+			idx = groupLast
 			continue
 		}
 		sep := ""
@@ -1190,19 +1476,34 @@ func (m *appModel) renderTranscriptEntriesFrom(startIdx int, width int, showThin
 		hasPrevious = true
 		previousKind = kind
 		wroteAny = true
+		for renderedIndex := idx; renderedIndex <= groupLast; renderedIndex++ {
+			groupSpan := &spans[renderedIndex-startIdx]
+			if renderedIndex != idx {
+				groupSpan.startRow = -1
+			}
+			groupSpan.hasRenderedContent = true
+			groupSpan.contentEndRow = totalRows
+			groupSpan.lastRenderedKind = previousKind
+		}
+		idx = groupLast
 	}
 	return rendered.String(), spans
 }
 
 // storeTranscriptRenderCacheEntry 写入条目渲染缓存，保留可渲染性缓存的
 // 现值（渲染循环调用方已经判断过该条目可渲染）。
-func (m *appModel) storeTranscriptRenderCacheEntry(idx int, key transcriptRenderCacheKey, rendered string, sourceSignature uint64, version int) {
+func (m *appModel) storeTranscriptRenderCacheEntry(idx int, key transcriptRenderCacheKey, rendered string, version int, toolRows []transcriptToolRenderRow) {
+	var cachedToolRows *transcriptToolRenderRows
+	if toolRows != nil {
+		rows := transcriptToolRenderRows(toolRows)
+		cachedToolRows = &rows
+	}
 	entry := transcriptRenderCacheEntry{
 		key:               key,
 		rendered:          rendered,
+		toolRows:          cachedToolRows,
 		renderable:        true,
 		renderableVersion: version,
-		sourceSignature:   sourceSignature,
 	}
 	if version == 0 {
 		entry.renderable = assistantEntryIsRenderable(m.transcript[idx])
@@ -1212,6 +1513,9 @@ func (m *appModel) storeTranscriptRenderCacheEntry(idx int, key transcriptRender
 
 func (m *appModel) refreshViewportForStreaming() {
 	if m == nil {
+		return
+	}
+	if m.transcriptRefreshDeferred {
 		return
 	}
 	now := time.Now()
@@ -1234,7 +1538,7 @@ func (m *appModel) refreshViewportForStreaming() {
 // flushTranscriptRefreshIfDue 由 cursorFrameMsg 帧驱动调用：pending 置位后至少
 // 等待一个流式刷新窗口再真正刷新，避免每个 cursor tick 都重建 transcript。
 func (m *appModel) flushTranscriptRefreshIfDue(now time.Time) {
-	if m == nil || !m.transcriptRefreshPending {
+	if m == nil || !m.transcriptRefreshPending || m.transcriptRefreshDeferred {
 		return
 	}
 	if m.transcriptRefreshPendingAt.IsZero() {
@@ -1256,51 +1560,48 @@ func (m *appModel) markTranscriptRefreshed() {
 	}
 	m.transcriptRefreshPending = false
 	m.transcriptRefreshPendingAt = time.Time{}
+	if m.transcriptRefreshDeferred {
+		m.transcriptRefreshDeferred = false
+		m.transcriptRefreshDeferredGeneration++
+	}
 	m.lastTranscriptRefreshAt = time.Now()
+	m.transcriptRefreshCount++
 }
 
 func (m *appModel) refreshRunningToolProgress(now time.Time) {
 	if m == nil {
 		return
 	}
-	maxElapsed := int64(-1)
-	for index := range m.transcript {
+	m.toolProgressVisits = 0
+	m.ensureToolRuntimeIndex()
+	changed := false
+	for index, lastElapsed := range m.toolRuntime.running {
+		m.toolProgressVisits++
+		if index < 0 || index >= len(m.transcript) {
+			delete(m.toolRuntime.running, index)
+			continue
+		}
 		entry := &m.transcript[index]
-		switch {
-		case entry.taskWaitRunning:
-			elapsed := toolElapsedSeconds(*entry, now)
-			if elapsed > maxElapsed {
-				maxElapsed = elapsed
-			}
+		if !transcriptEntryIsRunningTool(*entry) {
+			m.untrackRunningToolAt(index)
+			continue
+		}
+		elapsed := toolElapsedSeconds(*entry, now)
+		if elapsed == lastElapsed {
+			continue
+		}
+		m.toolRuntime.running[index] = elapsed
+		if entry.taskWaitRunning {
 			body := taskWaitRunningBody(entry.taskWaitNames, elapsed)
 			if entry.body != body {
 				entry.body = body
-				touchTranscriptEntry(entry)
-			}
-		case isToolTransaction(*entry) && toolEntryStatus(*entry) == "running":
-			elapsed := toolElapsedSeconds(*entry, now)
-			if elapsed > maxElapsed {
-				maxElapsed = elapsed
 			}
 		}
+		m.touchTranscriptEntryAt(index)
+		changed = true
 	}
-	if maxElapsed < 0 {
-		m.lastToolProgressSecond = -1
+	if !changed {
 		return
-	}
-	if maxElapsed == m.lastToolProgressSecond {
-		return
-	}
-	m.lastToolProgressSecond = maxElapsed
-	// running tool 的 elapsed 是时间相关渲染输入，而严格 revision cache 的
-	// 签名只折叠 entry 版本与 body 长度，不含时间；不 touch 的话每秒的
-	// refreshViewport 都会命中缓存，计时永远冻结。这里让所有仍在运行的
-	// 工具条目版本递增，使缓存失效后重渲染刷新计时。
-	for index := range m.transcript {
-		entry := &m.transcript[index]
-		if entry.taskWaitRunning || (isToolTransaction(*entry) && toolEntryStatus(*entry) == "running") {
-			touchTranscriptEntry(entry)
-		}
 	}
 	if m.viewport.AtBottom() {
 		m.refreshViewport()
@@ -1324,8 +1625,7 @@ func (m *appModel) markRunningToolsError(err error) {
 			// turn 意外失败时 TaskWait 不会再收到结果：直接移除状态行，
 			// 由后续 entryError 呈现失败原因，不保留悬挂的工具块。
 			m.transcript = append(m.transcript[:index], m.transcript[index+1:]...)
-			m.transcriptRenderCache = nil
-			m.transcriptLinesValid = false
+			m.invalidateTranscriptStructure()
 			changed = true
 			continue
 		}
@@ -1339,10 +1639,10 @@ func (m *appModel) markRunningToolsError(err error) {
 		entry.toolExpanded = false
 		entry.toolGroupOpen = false
 		entry.toolFinishedAt = m.animationNow()
-		touchTranscriptEntry(entry)
+		m.touchTranscriptEntryAt(index)
 		changed = true
 	}
-	m.lastToolProgressSecond = -1
+	m.rebuildToolRuntimeIndex()
 	if changed {
 		m.refreshViewport()
 	}
@@ -1350,38 +1650,6 @@ func (m *appModel) markRunningToolsError(err error) {
 
 func (m *appModel) renderTranscriptContent() string {
 	return m.renderTranscriptContentAt(maxInt(20, m.viewport.Width), m.showThinking, m.animationNow())
-}
-
-// transcriptRenderSignature folds every input that can change the rendered
-// transcript into a cheap scalar. Per-entry body/tool/status fields are
-// captured through the version counter (touchTranscriptEntry bumps it on every
-// mutation); the remaining inputs are explicit parameters.
-func transcriptRenderSignature(entries []transcriptEntry, width int, showThinking, groupExpanded, fullResult bool, at time.Time) uint64 {
-	var h uint64 = 1469598103934665603 // FNV-1a offset
-	mix := func(v uint64) {
-		h ^= v
-		h *= 1099511628211
-	}
-	mix(uint64(width))
-	if showThinking {
-		mix(1)
-	} else {
-		mix(0)
-	}
-	if groupExpanded {
-		mix(2)
-	}
-	if fullResult {
-		mix(4)
-	}
-	for _, entry := range entries {
-		mix(uint64(entry.kind))
-		mix(uint64(entry.version))
-		mix(uint64(len(entry.body)))
-		mix(uint64(len(entry.toolResult)))
-		mix(uint64(len(entry.citations)))
-	}
-	return h
 }
 
 // renderTranscriptContentAt 渲染完整 transcript 内容（兼容入口，供测试与
@@ -1410,7 +1678,6 @@ func transcriptRenderKey(entry transcriptEntry, width int, at time.Time, showThi
 		toolGroupPending:     entry.toolGroupPending,
 		toolGroupOpen:        entry.toolGroupOpen,
 		toolFocused:          entry.toolFocused,
-		toolHovered:          entry.toolHovered,
 		toolResultOnly:       entry.toolResultOnly,
 		width:                width,
 		version:              entry.version,
@@ -1656,18 +1923,28 @@ func toolGroupHasRunning(entries []transcriptEntry, first, last int) bool {
 // toolSegmentRange returns the raw contiguous tool segment containing index.
 // Segments stay within a single user turn and break on any non-tool entry.
 func toolSegmentRange(entries []transcriptEntry, index int) (int, int, bool) {
-	if index < 0 || index >= len(entries) || !isToolTransaction(entries[index]) {
+	first, ok := toolSegmentStart(entries, index)
+	if !ok {
 		return index, index, false
 	}
-	first := index
-	for first > 0 && entries[first-1].kind != entryUser && isToolTransaction(entries[first-1]) {
-		first--
+	return first, toolSegmentEnd(entries, index), true
+}
+
+func toolSegmentStart(entries []transcriptEntry, index int) (int, bool) {
+	if index < 0 || index >= len(entries) || !isToolTransaction(entries[index]) {
+		return index, false
 	}
-	last := index
-	for last+1 < len(entries) && entries[last+1].kind != entryUser && isToolTransaction(entries[last+1]) {
-		last++
+	for index > 0 && entries[index-1].kind != entryUser && isToolTransaction(entries[index-1]) {
+		index--
 	}
-	return first, last, true
+	return index, true
+}
+
+func toolSegmentEnd(entries []transcriptEntry, index int) int {
+	for index+1 < len(entries) && entries[index+1].kind != entryUser && isToolTransaction(entries[index+1]) {
+		index++
+	}
+	return index
 }
 
 func toolSegmentIsPending(entries []transcriptEntry, index int) bool {
@@ -1690,6 +1967,10 @@ func toolGroupBorderStyle(entries []transcriptEntry) lipgloss.Style {
 }
 
 func groupedToolBorderStyle(entry transcriptEntry) lipgloss.Style {
+	return groupedToolBorderStyleWithHover(entry, false)
+}
+
+func groupedToolBorderStyleWithHover(entry transcriptEntry, hovered bool) lipgloss.Style {
 	status := toolEntryStatus(entry)
 	borderStyle := toolResultBorderStyle
 	switch status {
@@ -1698,7 +1979,7 @@ func groupedToolBorderStyle(entry transcriptEntry) lipgloss.Style {
 	case "error":
 		borderStyle = toolErrorBorderStyle
 	}
-	if entry.toolHovered && !entry.toolFocused {
+	if hovered && !entry.toolFocused {
 		borderStyle = borderStyle.
 			BorderStyle(lipgloss.Border{Left: "┃"}).
 			BorderLeft(true)
@@ -1707,8 +1988,17 @@ func groupedToolBorderStyle(entry transcriptEntry) lipgloss.Style {
 }
 
 func renderToolsGroup(entries []transcriptEntry, width int, at time.Time, expanded, fullResult bool) string {
+	rendered, _ := renderToolsGroupWithRows(entries, width, at, expanded, fullResult)
+	return rendered
+}
+
+func renderToolsGroupWithRows(entries []transcriptEntry, width int, at time.Time, expanded, fullResult bool) (string, transcriptToolRenderRows) {
+	return renderToolsGroupWithHoverRows(entries, width, at, expanded, fullResult, -1)
+}
+
+func renderToolsGroupWithHoverRows(entries []transcriptEntry, width int, at time.Time, expanded, fullResult bool, hoveredOffset int) (string, transcriptToolRenderRows) {
 	if len(entries) == 0 {
-		return ""
+		return "", nil
 	}
 	status := "ok"
 	for _, entry := range entries {
@@ -1751,19 +2041,36 @@ func renderToolsGroup(entries []transcriptEntry, width int, at time.Time, expand
 	innerWidth := maxInt(1, contentWidth-style.GetHorizontalFrameSize())
 	header := toolHeaderStyle.Render(truncateStyledCellLine(label, innerWidth))
 	lines := []string{indentLines(header, transcriptEntryGutter)}
+	toolRows := transcriptToolRenderRows{{
+		toolOffset:   0,
+		header:       true,
+		hoverVisible: expanded,
+	}}
 	if expanded {
-		for _, entry := range entries {
-			lines = append(lines, indentLines(renderGroupedToolEntry(entry, innerWidth, at, fullResult), transcriptEntryGutter))
+		for offset, entry := range entries {
+			renderedEntry := indentLines(renderGroupedToolEntryWithHover(entry, innerWidth, at, fullResult, offset == hoveredOffset), transcriptEntryGutter)
+			entryLines := strings.Split(renderedEntry, "\n")
+			lines = append(lines, entryLines...)
+			for range entryLines {
+				toolRows = append(toolRows, transcriptToolRenderRow{
+					toolOffset:   offset,
+					hoverVisible: true,
+				})
+			}
 		}
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(lines, "\n"), toolRows
 }
 
 func renderGroupedToolEntry(entry transcriptEntry, width int, at time.Time, fullResult bool) string {
-	borderStyle := groupedToolBorderStyle(entry)
+	return renderGroupedToolEntryWithHover(entry, width, at, fullResult, false)
+}
+
+func renderGroupedToolEntryWithHover(entry transcriptEntry, width int, at time.Time, fullResult, hovered bool) string {
+	borderStyle := groupedToolBorderStyleWithHover(entry, hovered)
 	contentWidth := toolEntryContentWidth(width, borderStyle)
 	innerWidth := maxInt(1, contentWidth-borderStyle.GetHorizontalFrameSize())
-	summary := renderCompactToolSummary(entry, innerWidth, at)
+	summary := renderCompactToolSummaryWithHover(entry, innerWidth, at, hovered)
 	if entry.toolFocused {
 		summary = toolFocusedStyle.Width(innerWidth).Render(summary)
 	}
@@ -2334,6 +2641,10 @@ func toolEntryDisplayName(entry transcriptEntry) string {
 }
 
 func renderToolTransactionEntry(entry transcriptEntry, width int, at time.Time) string {
+	return renderToolTransactionEntryWithHover(entry, width, at, false)
+}
+
+func renderToolTransactionEntryWithHover(entry transcriptEntry, width int, at time.Time, hovered bool) string {
 	status := toolEntryStatus(entry)
 	borderStyle := toolResultBorderStyle
 	switch status {
@@ -2342,7 +2653,7 @@ func renderToolTransactionEntry(entry transcriptEntry, width int, at time.Time) 
 	case "error":
 		borderStyle = toolErrorBorderStyle
 	}
-	if entry.toolHovered && !entry.toolFocused {
+	if hovered && !entry.toolFocused {
 		borderStyle = borderStyle.
 			BorderStyle(lipgloss.Border{Left: "┃"}).
 			BorderLeft(true)
@@ -2350,7 +2661,7 @@ func renderToolTransactionEntry(entry transcriptEntry, width int, at time.Time) 
 
 	contentWidth := toolEntryContentWidth(width, borderStyle)
 	innerWidth := maxInt(1, contentWidth-borderStyle.GetHorizontalFrameSize())
-	summary := renderCompactToolSummary(entry, innerWidth, at)
+	summary := renderCompactToolSummaryWithHover(entry, innerWidth, at, hovered)
 	if entry.toolFocused {
 		summary = toolFocusedStyle.Width(innerWidth).Render(summary)
 	}
@@ -2384,6 +2695,10 @@ func renderToolTransactionEntry(entry transcriptEntry, width int, at time.Time) 
 }
 
 func renderCompactToolSummary(entry transcriptEntry, width int, at time.Time) string {
+	return renderCompactToolSummaryWithHover(entry, width, at, false)
+}
+
+func renderCompactToolSummaryWithHover(entry transcriptEntry, width int, at time.Time, hovered bool) string {
 	width = maxInt(1, width)
 	status := toolEntryStatus(entry)
 	icon := "✓"
@@ -2398,7 +2713,7 @@ func renderCompactToolSummary(entry transcriptEntry, width int, at time.Time) st
 		icon = "×"
 		iconStyle = toolCitationErrorStyle
 	}
-	if entry.toolHovered && !entry.toolFocused {
+	if hovered && !entry.toolFocused {
 		iconStyle = iconStyle.Underline(true)
 		nameStyle = nameStyle.Underline(true)
 		targetStyle = targetStyle.Underline(true)
@@ -2422,7 +2737,7 @@ func renderCompactToolSummary(entry transcriptEntry, width int, at time.Time) st
 		duration = formatToolDuration(entry.toolStartedAt, entry.toolFinishedAt)
 	}
 	statusStyle := toolStatusStyle(status)
-	if entry.toolHovered && !entry.toolFocused {
+	if hovered && !entry.toolFocused {
 		statusStyle = statusStyle.Underline(true)
 	}
 	statusSeparator := "  "

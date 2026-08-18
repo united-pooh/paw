@@ -144,8 +144,8 @@ func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.C
 			}
 		}
 		hoverIndex, _ := m.toolIndexAtTranscriptRow(point.row)
-		hoverChanged := m.setToolHover(hoverIndex)
-		if hadSelection || hoverChanged || m.clickCount >= 2 {
+		m.setToolHover(hoverIndex)
+		if hadSelection || m.clickCount >= 2 {
 			// 双击/三击在按下瞬间建立了词/行选区：必须立刻刷新视口，
 			// 否则选区高亮要等下一次鼠标移动/按键才出现，看起来像没反应。
 			m.refreshViewportPreservingOffset()
@@ -153,11 +153,13 @@ func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.C
 		return m, true, translateCmd
 	case tea.MouseActionMotion:
 		if !m.selecting {
-			hoverIndex := m.toolHoverIndexAtMouse(msg.X, msg.Y)
-			changed := m.setToolHover(hoverIndex)
-			if changed {
-				m.refreshViewportPreservingOffset()
+			hoverIndex, valid := m.toolHoverIndexAtMouse(msg.X, msg.Y)
+			if !valid {
+				if point, ok := m.transcriptPointForMouse(msg.X, msg.Y); ok {
+					hoverIndex, _ = m.toolIndexAtTranscriptRow(point.row)
+				}
 			}
+			changed := m.setToolHover(hoverIndex)
 			return m, changed || hoverIndex >= 0, nil
 		}
 		if point, ok := m.transcriptPointForMouse(msg.X, msg.Y); ok {
@@ -476,6 +478,22 @@ func (m appModel) transcriptPointForMouse(x, y int) (selectionPoint, bool) {
 	if !ok {
 		return selectionPoint{}, false
 	}
+	if m.transcriptInteraction.valid {
+		if len(m.transcriptInteraction.rows) == 0 {
+			return selectionPoint{}, false
+		}
+		line := minInt(len(m.transcriptInteraction.rows)-1, maxInt(0, m.viewport.YOffset+row))
+		interactionRow, ok := m.transcriptInteraction.rowAt(line)
+		if !ok {
+			return selectionPoint{}, false
+		}
+		if interactionRow.width > 0 {
+			col = minInt(col, interactionRow.width)
+		} else {
+			col = 0
+		}
+		return selectionPoint{row: line, col: col}, true
+	}
 	lines := m.transcriptLineSnapshots()
 	if len(lines) == 0 {
 		return selectionPoint{}, false
@@ -491,13 +509,40 @@ func (m appModel) transcriptPointForMouse(x, y int) (selectionPoint, bool) {
 	return selectionPoint{row: line, col: col}, true
 }
 
-func (m appModel) toolHoverIndexAtMouse(x, y int) int {
-	point, ok := m.transcriptPointForMouse(x, y)
+func (m appModel) toolHoverIndexAtMouse(x, y int) (int, bool) {
+	row, ok := m.transcriptContentRow(y)
 	if !ok {
-		return -1
+		return -1, true
 	}
-	index, _ := m.toolIndexAtTranscriptRow(point.row)
-	return index
+	if _, ok := m.transcriptContentColumn(x); !ok {
+		return -1, true
+	}
+	if !m.transcriptInteraction.valid {
+		return -1, false
+	}
+	if len(m.transcriptInteraction.rows) == 0 {
+		return -1, true
+	}
+	line := minInt(len(m.transcriptInteraction.rows)-1, maxInt(0, m.viewport.YOffset+row))
+	interactionRow, ok := m.transcriptInteraction.rowAt(line)
+	if !ok {
+		return -1, false
+	}
+	return interactionRow.toolIndex, true
+}
+
+func (m *appModel) reconcileToolHoverAtMouse(x, y int) {
+	if m == nil || m.selecting {
+		return
+	}
+	if m.transcriptNoticeBounds().contains(x, y) {
+		m.setToolHover(-1)
+		return
+	}
+	toolIndex, valid := m.toolHoverIndexAtMouse(x, y)
+	if valid {
+		m.setToolHover(toolIndex)
+	}
 }
 
 // transcriptContentRow 返回 y 坐标在 transcript 内容区内的行号。
@@ -724,8 +769,8 @@ func (m appModel) selectedTranscriptText() string {
 }
 
 // selectionRenderSignature 折叠当前选区状态（激活标志、吸附模式、起止点）
-// 为轻量签名。拖拽/双击/三击只修改这些字段，不改变 transcript 内容签名
-// （transcriptRenderSignature），applyTranscriptToViewport 用本签名判断
+// 为轻量签名。拖拽/双击/三击只修改这些字段，不触发 transcript 内容失效，
+// applyTranscriptToViewport 用本签名判断
 // 选区高亮是否需要重绘，避免拖拽中途视口停留在旧选区。
 func (m appModel) selectionRenderSignature() uint64 {
 	var h uint64 = 1469598103934665603 // FNV-1a offset

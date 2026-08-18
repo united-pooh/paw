@@ -122,6 +122,13 @@ func (m appModel) toolIndexAtTranscriptRow(row int) (int, bool) {
 // row to the group; an expanded group maps the header to the group and each
 // summary/detail row to its owning tool entry.
 func (m appModel) toolHitAtTranscriptRow(row int) (index int, isHeaderRow bool, ok bool) {
+	if m.transcriptInteraction.valid {
+		interactionRow, found := m.transcriptInteraction.rowAt(row)
+		if !found || interactionRow.toolIndex < 0 || interactionRow.toolIndex >= len(m.transcript) {
+			return -1, false, false
+		}
+		return interactionRow.toolIndex, interactionRow.header, true
+	}
 	for _, location := range m.transcriptEntryLocationsAt() {
 		if row < location.startRow || row >= location.startRow+location.height {
 			continue
@@ -179,7 +186,7 @@ func (m *appModel) toggleReasoningExpansion(index int) bool {
 	}
 	entry.reasoningExpansionSet = true
 	entry.reasoningExpanded = !entry.reasoningExpanded
-	touchTranscriptEntry(entry)
+	m.touchTranscriptEntryAt(index)
 	m.refreshViewportPreservingOffset()
 	return true
 }
@@ -277,7 +284,7 @@ func (m *appModel) openToolInspect() (tea.Model, tea.Cmd) {
 	m.toolInspectActive = true
 	m.toolInspectIndex = index
 	m.transcript[index].toolFocused = true
-	touchTranscriptEntry(&m.transcript[index])
+	m.touchTranscriptEntryAt(index)
 	m.input.Blur()
 	m.completion = nil
 	m.relayout()
@@ -311,7 +318,6 @@ func (m *appModel) handleToolInspectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *appModel) touchToolGroupRender() {
-	m.transcriptRenderCache = nil
 	m.refreshViewportPreservingOffset()
 	if m.toolInspectActive {
 		m.ensureInspectedToolVisible()
@@ -352,12 +358,8 @@ func (m *appModel) setToolHover(index int) bool {
 	if m.toolHoverIndex == index {
 		return false
 	}
-	m.clearToolHover()
 	m.toolHoverIndex = index
-	if index >= 0 {
-		m.transcript[index].toolHovered = true
-		touchTranscriptEntry(&m.transcript[index])
-	}
+	m.rebuildTranscriptHoverPatch()
 	return true
 }
 
@@ -365,28 +367,18 @@ func (m *appModel) clearToolHover() {
 	if m == nil {
 		return
 	}
-	if m.toolHoverIndex >= 0 && m.toolHoverIndex < len(m.transcript) {
-		entry := &m.transcript[m.toolHoverIndex]
-		if entry.toolHovered {
-			entry.toolHovered = false
-			touchTranscriptEntry(entry)
-		}
-	} else {
-		for index := range m.transcript {
-			if m.transcript[index].toolHovered {
-				m.transcript[index].toolHovered = false
-				touchTranscriptEntry(&m.transcript[index])
-			}
-		}
+	if m.toolHoverIndex < 0 {
+		return
 	}
 	m.toolHoverIndex = -1
+	m.transcriptHoverPatch = transcriptHoverPatchCache{}
 }
 
 func (m *appModel) clearToolFocus() {
 	for index := range m.transcript {
 		if m.transcript[index].toolFocused {
 			m.transcript[index].toolFocused = false
-			touchTranscriptEntry(&m.transcript[index])
+			m.touchTranscriptEntryAt(index)
 		}
 	}
 }
@@ -408,7 +400,7 @@ func (m *appModel) moveToolInspection(direction int) {
 	m.clearToolFocus()
 	m.toolInspectIndex = next
 	m.transcript[next].toolFocused = true
-	touchTranscriptEntry(&m.transcript[next])
+	m.touchTranscriptEntryAt(next)
 	m.refreshViewportPreservingOffset()
 	m.ensureInspectedToolVisible()
 }
@@ -437,8 +429,7 @@ func (m *appModel) toggleToolGroupSubEntry(index int) bool {
 		return false
 	}
 	entry.toolGroupOpen = !entry.toolGroupOpen
-	touchTranscriptEntry(entry)
-	m.transcriptRenderCache = nil
+	m.touchTranscriptEntryAt(index)
 	m.refreshViewportPreservingOffset()
 	if m.toolInspectActive {
 		m.ensureInspectedToolVisible()
@@ -462,8 +453,7 @@ func (m *appModel) toggleToolExpansion(index int, isHeaderRow bool) bool {
 	if !toolEntryUsesReadyGroup(m.transcript, index) {
 		entry.toolExpanded = !entry.toolExpanded
 		entry.toolGroupOpen = false
-		touchTranscriptEntry(entry)
-		m.transcriptRenderCache = nil
+		m.touchTranscriptEntryAt(index)
 		m.refreshViewportPreservingOffset()
 		if m.toolInspectActive {
 			m.ensureInspectedToolVisible()
@@ -486,7 +476,7 @@ func (m *appModel) toggleToolExpansion(index int, isHeaderRow bool) bool {
 		entry = &m.transcript[first]
 		entry.toolExpanded = !entry.toolExpanded
 		entry.toolGroupOpen = false
-		touchTranscriptEntry(entry)
+		m.touchTranscriptEntryAt(first)
 	} else if isHeaderRow {
 		// Expanded group, click on the group header row: collapse the group.
 		entry = &m.transcript[first]
@@ -494,15 +484,14 @@ func (m *appModel) toggleToolExpansion(index int, isHeaderRow bool) bool {
 		entry.toolGroupOpen = false
 		for i := first + 1; i <= last; i++ {
 			m.transcript[i].toolGroupOpen = false
-			touchTranscriptEntry(&m.transcript[i])
+			m.touchTranscriptEntryAt(i)
 		}
-		touchTranscriptEntry(entry)
+		m.touchTranscriptEntryAt(first)
 	} else {
 		// Expanded group, click on a tool's own summary/detail row: toggle just
 		// that tool's result detail, leaving the group expanded.
 		return m.toggleToolGroupSubEntry(index)
 	}
-	m.transcriptRenderCache = nil
 	m.refreshViewportPreservingOffset()
 	if m.toolInspectActive {
 		m.ensureInspectedToolVisible()
@@ -517,13 +506,14 @@ func (m *appModel) selectInspectedTool(index int) {
 	m.clearToolFocus()
 	m.toolInspectIndex = index
 	m.transcript[index].toolFocused = true
-	touchTranscriptEntry(&m.transcript[index])
+	m.touchTranscriptEntryAt(index)
 }
 
 func (m *appModel) ensureInspectedToolVisible() {
 	if m == nil || !m.toolInspectActive || m.viewport.Height <= 0 {
 		return
 	}
+	beforeOffset := m.viewport.YOffset
 	targetIndex := m.toolInspectIndex
 	if targetIndex >= 0 && targetIndex < len(m.transcript) && toolEntryUsesReadyGroup(m.transcript, targetIndex) {
 		targetIndex, _ = toolGroupRange(m.transcript, targetIndex)
@@ -537,6 +527,9 @@ func (m *appModel) ensureInspectedToolVisible() {
 			m.viewport.SetYOffset(location.startRow)
 		case location.startRow >= m.viewport.YOffset+m.viewport.Height:
 			m.viewport.SetYOffset(maxInt(0, location.startRow-m.viewport.Height+1))
+		}
+		if m.viewport.YOffset != beforeOffset {
+			m.clearToolHover()
 		}
 		return
 	}

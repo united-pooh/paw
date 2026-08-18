@@ -1224,11 +1224,12 @@ func TestToolTrackMouseHoverHighlightsAndClears(t *testing.T) {
 	model.width = 80
 	model.height = 24
 	model.transcript = []transcriptEntry{{
-		kind:       entryTool,
-		title:      "tool",
-		toolName:   "Read",
-		toolTarget: "README.md",
-		toolStatus: "ok",
+		kind:             entryTool,
+		title:            "tool",
+		toolName:         "Read",
+		toolTarget:       "README.md",
+		toolStatus:       "ok",
+		toolGroupPending: true,
 	}}
 	model.relayout()
 	model.refreshViewport()
@@ -1237,19 +1238,19 @@ func TestToolTrackMouseHoverHighlightsAndClears(t *testing.T) {
 
 	next, _ := model.Update(tea.MouseMsg{X: 5, Y: y, Action: tea.MouseActionMotion})
 	model = next.(appModel)
-	if model.toolHoverIndex != 0 || !model.transcript[0].toolHovered {
+	if model.toolHoverIndex != 0 {
 		t.Fatalf("hover state = index:%d entry:%#v", model.toolHoverIndex, model.transcript[0])
 	}
 	if model.transcriptKeyScrollActive {
 		t.Fatalf("hover must not steal keyboard scroll focus")
 	}
-	if rendered := ansi.Strip(renderTranscript(model.transcript, 80, true)); !strings.Contains(rendered, "┃ ✓ Read: README.md  完成") {
+	if rendered := ansi.Strip(model.View()); !strings.Contains(rendered, "┃ ✓ Read: README.md  完成") {
 		t.Fatalf("hover marker missing:\n%s", rendered)
 	}
 
 	next, _ = model.Update(tea.MouseMsg{X: 5, Y: model.height - 2, Action: tea.MouseActionMotion})
 	model = next.(appModel)
-	if model.toolHoverIndex != -1 || model.transcript[0].toolHovered {
+	if model.toolHoverIndex != -1 {
 		t.Fatalf("hover did not clear outside transcript: index:%d entry:%#v", model.toolHoverIndex, model.transcript[0])
 	}
 }
@@ -1296,14 +1297,14 @@ func TestToolTrackHoverDoesNotLeakANSISequences(t *testing.T) {
 		lipgloss.SetColorProfile(previousProfile)
 	})
 
-	rendered := renderEntry(transcriptEntry{
-		kind:        entryTool,
-		title:       "tool",
-		toolName:    "Read",
-		toolTarget:  "README.md",
-		toolStatus:  "ok",
-		toolHovered: true,
-	}, 80)
+	entry := transcriptEntry{
+		kind:       entryTool,
+		title:      "tool",
+		toolName:   "Read",
+		toolTarget: "README.md",
+		toolStatus: "ok",
+	}
+	rendered := indentLines(renderToolTransactionEntryWithHover(entry, transcriptBodyWidth(80), time.Time{}, true), transcriptEntryGutter)
 	plain := ansi.Strip(rendered)
 	if !strings.Contains(plain, "┃ ✓ Read: README.md  完成") {
 		t.Fatalf("hovered tool = %q, want intact summary", plain)

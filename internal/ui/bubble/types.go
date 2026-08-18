@@ -63,7 +63,6 @@ type transcriptEntry struct {
 	toolGroupPending      bool
 	toolGroupOpen         bool
 	toolFocused           bool
-	toolHovered           bool
 	toolResultOnly        bool
 	citations             []toolCitation
 	// taskWaitRunning 标记一条 TaskWait 状态行：运行中显示
@@ -261,6 +260,7 @@ type modelWizard struct {
 	providerOptions   []modelProviderOption
 	selectedIndex     int
 	selectedModel     int
+	search            string
 	modelOptions      []string
 	modelSelections   []configv2.CatalogSelection
 	catalogSelections []configv2.CatalogSelection
@@ -448,143 +448,161 @@ type taskTranscriptPreview struct {
 
 // appModel 是 Bubble Tea TUI 的唯一状态中心。
 type appModel struct {
-	ctx                        context.Context
-	theme                      theme.Theme
-	styles                     StyleSet
-	themePicker                *themePickerState
-	runner                     Runner
-	workspaceRoot              string
-	selectionBroker            *selecttool.Broker
-	selectionDock              *selectionDock
-	todoBroker                 *todo.Broker
-	currentTodo                todo.Snapshot
-	hasCurrentTodo             bool
-	todoWasCleared             bool
-	latestTodoIndex            int
-	sessionID                  string
-	modelConfig                ModelConfigController
-	configCenterController     ConfigCenterController
-	configCenter               *configCenterState
-	settingsConfig             SettingsController
-	taskController             TaskController
-	taskUpdates                <-chan struct{}
-	taskUpdatesStop            func()
-	sessionStore               SessionStore
-	mcpController              MCPStatusController
-	goalController             GoalController
-	planController             PlanController
-	commandRegistry            *CommandRegistry
-	skillRegistry              *skill.Registry
-	queryGuard                 QueryGuard
-	chatQueue                  CommandQueue
-	queueMode                  queueInteractionMode
-	queueSelectedID            string
-	queueEdit                  *queueEditState
-	inputSource                inputSource
-	cursorAnchor               *terminalCursorAnchor
-	input                      textarea.Model
-	viewport                   viewportx.Model
-	width                      int
-	height                     int
-	ready                      bool
-	running                    bool
-	runningTerminal            bool
-	terminalMode               bool
-	goalMode                   bool
-	planMode                   bool
-	terminalPreview            bool
-	hasInteracted              bool
-	showThinking               bool
-	selecting                  bool
-	selectionActive            bool
-	selectionStart             selectionPoint
-	selectionEnd               selectionPoint
-	selectionMode              selectionMode
-	selectionAnchor            selectionPoint
-	selectionMoved             bool
-	clickCount                 int
-	lastClickAt                time.Time
-	lastClickPoint             selectionPoint
-	clickActionSeq             uint64
-	clickActionPending         bool
-	copyToast                  string
-	copyToastUntil             time.Time
-	translatePanel             *translatePanel
-	translateSeq               uint64
-	cursorFrameAt              time.Time
-	uiAnimationFrameScheduled  bool
-	clockTickScheduled         bool      // 空闲时钟链去重标志
-	lastKeyEventAt             time.Time // 最后键盘输入时刻（IME 安全窗口用）
-	turnStartedAt              time.Time
-	turnID                     string
-	goalWorking                bool
-	planWorking                bool
-	pending                    []inputDraft
-	inputTokens                []inputToken
-	submittedDraft             inputDraft
-	inputHistory               []inputDraft
-	historyIndex               int
-	historyDraft               inputDraft
-	historyDownLock            bool
-	inputPasteFoldActive       bool
-	transcript                 []transcriptEntry
-	transcriptRenderCache      []transcriptRenderCacheEntry
-	transcriptRenderSignature  uint64
-	transcriptContentCached    bool
-	transcriptLines            []string              // 增量渲染行缓存：与 viewport 行同步（末尾保留一行空隙）
-	transcriptEntrySpans       []transcriptEntrySpan // 每条目渲染行区间，与 transcript 等长；startRow<0 表示未渲染
-	transcriptLinesValid       bool                  // 行缓存与 transcript 结构对齐（条目数一致）
-	viewportShowsSelection     bool                  // viewport 当前显示的是选择高亮版内容
-	lastSelectionRenderSig     uint64                // 上次实际渲染进 viewport 的选区签名（selectionRenderSignature）
-	transcriptLineCache        []transcriptLineSnapshot
-	transcriptLineCacheReady   bool
-	transcriptLocationCache    []transcriptEntryLocation
-	transcriptLocationsReady   bool
-	transcriptRefreshPending   bool
-	transcriptRefreshPendingAt time.Time // pending 置位时刻，用于帧窗口判定（不早于 interval 才刷）
-	transcriptKeyScrollActive  bool
-	newMessageNoticeCycle      uint64
-	newMessageNoticeCount      int
-	newMessageNoticeHovered    bool
-	newMessageNoticePressed    bool
-	rawMouseEscapePending      string
-	toolInspectActive          bool
-	toolInspectIndex           int
-	toolHoverIndex             int
-	toolGroupExpanded          bool
-	toolGroupFullResult        bool
-	lastTranscriptRefreshAt    time.Time
-	lastToolProgressSecond     int64
-	activeAssistant            int
-	activeThinking             int
-	activeReasoning            int
-	activeTurnUserEntry        int
-	doneAssistant              int
-	assistantStream            streamLineBuffer
-	thinkingStream             streamLineBuffer
-	pendingToolCites           []toolCitation
-	isGenerating               bool
-	turnHasModelOutput         bool
-	modelCancelRequested       bool
-	activeModelCancel          context.CancelFunc
-	toolCancelRequested        bool
-	lastCtrlCAt                time.Time // 追踪双击 Ctrl+C 退出
-	modelWizard                *modelWizard
-	settingWizard              *settingWizard
-	sessionPicker              *sessionPicker
-	taskPicker                 *taskPicker
-	taskPreview                *taskTranscriptPreview
-	completion                 *completion
-	lastActivityPollAt         time.Time // Activity 面板 ListTasks 刷新的节流时间戳
-	spinnerFrameIdx            int       // Activity 中 running 条目的动画帧索引，由 cursorFrameMsg 驱动
-	waveAmpTarget              bool      // 均衡器波浪振幅目标态（= isGenerating），翻转时更新
-	waveAmpStartedAt           time.Time // 振幅目标态确立时刻，用于缓动进度
-	waveAmpFrom                float64   // 过渡起点振幅，反向退场时从此值缓降
-	waveAmpCurrent             float64   // 当前振幅（cursorFrameMsg 每帧更新，渲染只读）
-	tokenRippleExitAt          time.Time // 任务结束后 Ripple 越界退场的起始时刻
-	worktreeCWD                string
-	worktree                   worktreeSnapshot
-	worktreeReader             worktreeStatusReader
+	ctx                                 context.Context
+	theme                               theme.Theme
+	styles                              StyleSet
+	themePicker                         *themePickerState
+	runner                              Runner
+	workspaceRoot                       string
+	selectionBroker                     *selecttool.Broker
+	selectionDock                       *selectionDock
+	todoBroker                          *todo.Broker
+	currentTodo                         todo.Snapshot
+	hasCurrentTodo                      bool
+	todoWasCleared                      bool
+	latestTodoIndex                     int
+	sessionID                           string
+	modelConfig                         ModelConfigController
+	configCenterController              ConfigCenterController
+	configCenter                        *configCenterState
+	settingsConfig                      SettingsController
+	taskController                      TaskController
+	taskUpdates                         <-chan struct{}
+	taskUpdatesStop                     func()
+	sessionStore                        SessionStore
+	mcpController                       MCPStatusController
+	goalController                      GoalController
+	planController                      PlanController
+	commandRegistry                     *CommandRegistry
+	skillRegistry                       *skill.Registry
+	queryGuard                          QueryGuard
+	chatQueue                           CommandQueue
+	queueMode                           queueInteractionMode
+	queueSelectedID                     string
+	queueEdit                           *queueEditState
+	inputSource                         inputSource
+	cursorAnchor                        *terminalCursorAnchor
+	input                               textarea.Model
+	viewport                            viewportx.Model
+	width                               int
+	height                              int
+	ready                               bool
+	running                             bool
+	runningTerminal                     bool
+	terminalMode                        bool
+	goalMode                            bool
+	planMode                            bool
+	terminalPreview                     bool
+	hasInteracted                       bool
+	showThinking                        bool
+	selecting                           bool
+	selectionActive                     bool
+	selectionStart                      selectionPoint
+	selectionEnd                        selectionPoint
+	selectionMode                       selectionMode
+	selectionAnchor                     selectionPoint
+	selectionMoved                      bool
+	clickCount                          int
+	lastClickAt                         time.Time
+	lastClickPoint                      selectionPoint
+	clickActionSeq                      uint64
+	clickActionPending                  bool
+	copyToast                           string
+	copyToastUntil                      time.Time
+	translatePanel                      *translatePanel
+	translateSeq                        uint64
+	cursorFrameAt                       time.Time
+	uiAnimationFrameScheduled           bool
+	clockTickScheduled                  bool      // 空闲时钟链去重标志
+	lastKeyEventAt                      time.Time // 最后键盘输入时刻（IME 安全窗口用）
+	turnStartedAt                       time.Time
+	turnID                              string
+	goalWorking                         bool
+	planWorking                         bool
+	pending                             []inputDraft
+	inputTokens                         []inputToken
+	submittedDraft                      inputDraft
+	inputHistory                        []inputDraft
+	historyIndex                        int
+	historyDraft                        inputDraft
+	historyDownLock                     bool
+	inputPasteFoldActive                bool
+	transcript                          []transcriptEntry
+	transcriptRenderCache               []transcriptRenderCacheEntry
+	transcriptRenderConfig              transcriptRenderConfig
+	transcriptRenderConfigSet           bool
+	transcriptInvalidation              transcriptInvalidation
+	transcriptContentCached             bool
+	transcriptLines                     []string              // 增量渲染行缓存：与 viewport 行同步（末尾保留一行空隙）
+	transcriptEntrySpans                []transcriptEntrySpan // 每条目渲染行区间，与 transcript 等长；startRow<0 表示未渲染
+	transcriptInteraction               transcriptInteractionIndex
+	transcriptLinesValid                bool   // 行缓存与 transcript 结构对齐（条目数一致）
+	viewportShowsSelection              bool   // viewport 当前显示的是选择高亮版内容
+	lastSelectionRenderSig              uint64 // 上次实际渲染进 viewport 的选区签名（selectionRenderSignature）
+	transcriptLineCache                 []transcriptLineSnapshot
+	transcriptLineCacheReady            bool
+	transcriptLocationCache             []transcriptEntryLocation
+	transcriptLocationsReady            bool
+	transcriptRefreshPending            bool
+	transcriptRefreshPendingAt          time.Time // pending 置位时刻，用于帧窗口判定（不早于 interval 才刷）
+	transcriptRefreshDeferred           bool
+	transcriptRefreshDeferredGeneration uint64
+	transcriptKeyScrollActive           bool
+	newMessageNoticeCycle               uint64
+	newMessageNoticeCount               int
+	newMessageNoticeHovered             bool
+	newMessageNoticePressed             bool
+	rawMouseEscapePending               string
+	toolInspectActive                   bool
+	toolInspectIndex                    int
+	toolHoverIndex                      int
+	transcriptHoverPatch                transcriptHoverPatchCache
+	toolGroupExpanded                   bool
+	toolGroupFullResult                 bool
+	lastTranscriptRefreshAt             time.Time
+	transcriptRefreshCount              uint64
+	transcriptRefreshBatchDepth         int
+	transcriptRefreshBatched            bool
+	transcriptRenderVisits              int
+	transcriptPrefixAnchorVisits        int
+	transcriptSegmentRangeCalls         int
+	transcriptInteractionVisits         int
+	transcriptInteractionRangeCalls     int
+	transcriptHoverPatchRenderSpy       *int
+	toolProgressVisits                  int
+	toolRuntimeRebuildVisits            int
+	taskToolUpdateVisits                int
+	toolRuntime                         transcriptToolRuntimeIndex
+	activeAssistant                     int
+	activeThinking                      int
+	activeReasoning                     int
+	activeTurnUserEntry                 int
+	doneAssistant                       int
+	assistantStream                     streamLineBuffer
+	thinkingStream                      streamLineBuffer
+	pendingToolCites                    []toolCitation
+	isGenerating                        bool
+	turnHasModelOutput                  bool
+	modelCancelRequested                bool
+	activeModelCancel                   context.CancelFunc
+	toolCancelRequested                 bool
+	lastCtrlCAt                         time.Time // 追踪双击 Ctrl+C 退出
+	modelWizard                         *modelWizard
+	settingWizard                       *settingWizard
+	sessionPicker                       *sessionPicker
+	taskPicker                          *taskPicker
+	taskPreview                         *taskTranscriptPreview
+	completion                          *completion
+	lastActivityPollAt                  time.Time // Activity 面板 ListTasks 刷新的节流时间戳
+	spinnerFrameIdx                     int       // Activity 中 running 条目的动画帧索引，由 cursorFrameMsg 驱动
+	waveAmpTarget                       bool      // 均衡器波浪振幅目标态（= isGenerating），翻转时更新
+	waveAmpStartedAt                    time.Time // 振幅目标态确立时刻，用于缓动进度
+	waveAmpFrom                         float64   // 过渡起点振幅，反向退场时从此值缓降
+	waveAmpCurrent                      float64   // 当前振幅（cursorFrameMsg 每帧更新，渲染只读）
+	tokenRippleExitAt                   time.Time // 任务结束后 Ripple 越界退场的起始时刻
+	worktreeCWD                         string
+	worktree                            worktreeSnapshot
+	worktreeReader                      worktreeStatusReader
 }
 
 type activityTab int

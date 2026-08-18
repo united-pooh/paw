@@ -14,6 +14,56 @@ type transcriptNoticeBounds struct {
 	height int
 }
 
+var (
+	newMessageNoticeFullFixedWidth     = terminalCellWidth("↓  条新消息")
+	newMessageNoticeCompactFixedWidth  = terminalCellWidth("↓  条消息")
+	newMessageNoticeHoverSuffixWidth   = terminalCellWidth("  回到底部")
+	newMessageNoticeCompactPrefixWidth = terminalCellWidth("↓  ")
+	newMessageNoticeCompactGlyphWidths = [...]int{
+		terminalCellWidth("条"),
+		terminalCellWidth("消"),
+		terminalCellWidth("息"),
+	}
+)
+
+func decimalDigitCount(value int) int {
+	if value < 0 {
+		value = -value
+	}
+	digits := 1
+	for value >= 10 {
+		value /= 10
+		digits++
+	}
+	return digits
+}
+
+func newMessageNoticeTextCellWidth(count int, hovered bool, width int) int {
+	if count <= 0 || width <= 0 {
+		return 0
+	}
+	fullWidth := newMessageNoticeFullFixedWidth + decimalDigitCount(count)
+	if hovered {
+		fullWidth += newMessageNoticeHoverSuffixWidth
+	}
+	if fullWidth <= width {
+		return fullWidth
+	}
+	compactWidth := newMessageNoticeCompactFixedWidth + decimalDigitCount(count)
+	if compactWidth <= width {
+		return compactWidth
+	}
+	contentBudget := width - terminalCellWidth("…")
+	contentWidth := minInt(contentBudget, newMessageNoticeCompactPrefixWidth+decimalDigitCount(count))
+	for _, glyphWidth := range newMessageNoticeCompactGlyphWidths {
+		if contentWidth+glyphWidth > contentBudget {
+			break
+		}
+		contentWidth += glyphWidth
+	}
+	return contentWidth + terminalCellWidth("…")
+}
+
 func newMessageNoticeText(count int, hovered bool, width int) string {
 	if count <= 0 || width <= 0 {
 		return ""
@@ -64,16 +114,11 @@ func (m appModel) transcriptNoticeBounds() transcriptNoticeBounds {
 		return transcriptNoticeBounds{}
 	}
 	style := m.styles.Notice
-	hoverStyle := m.styles.NoticeHover
 	textWidth := maxInt(1, layout.contentWidth-style.GetHorizontalPadding())
-	width := terminalCellWidth(style.Render(
-		newMessageNoticeText(m.newMessageNoticeCount, false, textWidth),
-	))
 	if m.newMessageNoticeHovered {
-		width = terminalCellWidth(hoverStyle.Render(
-			newMessageNoticeText(m.newMessageNoticeCount, true, textWidth),
-		))
+		style = m.styles.NoticeHover
 	}
+	width := newMessageNoticeTextCellWidth(m.newMessageNoticeCount, m.newMessageNoticeHovered, textWidth) + style.GetHorizontalFrameSize()
 	if width <= 0 {
 		return transcriptNoticeBounds{}
 	}
@@ -101,11 +146,26 @@ func (m appModel) handleNewMessageNoticeMouse(msg tea.MouseMsg) (appModel, bool,
 	case tea.MouseActionMotion:
 		changed := m.newMessageNoticeHovered != inside
 		m.newMessageNoticeHovered = inside
-		return m, changed, nil
+		if inside {
+			m.setToolHover(-1)
+			return m, true, nil
+		}
+		if changed {
+			toolIndex, valid := m.toolHoverIndexAtMouse(msg.X, msg.Y)
+			if !valid {
+				if point, ok := m.transcriptPointForMouse(msg.X, msg.Y); ok {
+					toolIndex, _ = m.toolIndexAtTranscriptRow(point.row)
+				}
+			}
+			m.setToolHover(toolIndex)
+			return m, true, nil
+		}
+		return m, false, nil
 	case tea.MouseActionPress:
 		if msg.Button != tea.MouseButtonLeft || !inside {
 			return m, false, nil
 		}
+		m.setToolHover(-1)
 		m.newMessageNoticePressed = true
 		m.newMessageNoticeHovered = true
 		return m, true, nil

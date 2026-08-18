@@ -84,6 +84,7 @@ func (m *appModel) cancelModelWork() {
 		return
 	}
 	m.modelCancelRequested = true
+	m.transcriptRefreshDeferred = true
 	if m.activeModelCancel != nil {
 		m.activeModelCancel()
 	}

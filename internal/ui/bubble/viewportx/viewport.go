@@ -62,10 +62,12 @@ type Model struct {
 	// Deprecated: high performance rendering is now deprecated in Bubble Tea.
 	HighPerformanceRendering bool
 
-	initialized      bool
-	lines            []string
-	lineWidths       []int
-	longestLineWidth int
+	initialized        bool
+	lines              []string
+	lineWidths         []int
+	linePrefixMax      []int
+	longestLineWidth   int
+	replaceWidthVisits int
 }
 
 func (m *Model) setInitialValues() {
@@ -132,8 +134,9 @@ func (m *Model) SetContent(s string) {
 // It is equivalent to SetContent(strings.Join(lines, "\n")) but avoids the
 // intermediate string allocation and re-split.
 func (m *Model) SetLines(lines []string) {
-	m.lines = lines
+	m.lines = append([]string(nil), lines...)
 	m.lineWidths = make([]int, len(lines))
+	m.linePrefixMax = make([]int, len(lines))
 	m.longestLineWidth = 0
 	for i, line := range lines {
 		w := ansi.StringWidth(line)
@@ -141,7 +144,9 @@ func (m *Model) SetLines(lines []string) {
 		if w > m.longestLineWidth {
 			m.longestLineWidth = w
 		}
+		m.linePrefixMax[i] = m.longestLineWidth
 	}
+	m.SetXOffset(m.xOffset)
 	if m.YOffset > len(m.lines)-1 {
 		m.GotoBottom()
 	}
@@ -154,10 +159,11 @@ func (m *Model) SetLines(lines []string) {
 // count changes as it grows). An empty newLines truncates the content to
 // start lines.
 //
-// Only the width of the new lines is computed; the previous per-line width
-// cache keeps the longest-line scan O(N) integer comparisons instead of
-// re-parsing ANSI sequences.
+// Only the width of the new lines is computed. The prefix maximum aligned with
+// lineWidths makes the longest-line update proportional to the replacement
+// suffix instead of all retained history.
 func (m *Model) ReplaceLines(start int, newLines []string) {
+	m.replaceWidthVisits = 0
 	if start < 0 {
 		start = 0
 	}
@@ -166,6 +172,7 @@ func (m *Model) ReplaceLines(start int, newLines []string) {
 	}
 	newWidths := make([]int, len(newLines))
 	for i, line := range newLines {
+		m.replaceWidthVisits++
 		newWidths[i] = ansi.StringWidth(line)
 	}
 	oldLen := len(m.lines)
@@ -175,18 +182,26 @@ func (m *Model) ReplaceLines(start int, newLines []string) {
 		copy(m.lineWidths[start:], newWidths)
 		m.lines = m.lines[:newLen]
 		m.lineWidths = m.lineWidths[:newLen]
+		m.linePrefixMax = m.linePrefixMax[:newLen]
 	} else {
 		// append(m.lines[:start], newLines...) 的结果长度恰好是 newLen
 		// （start 之后的旧行被 newLines 覆盖），不需要再补差值。
 		m.lines = append(m.lines[:start], newLines...)
 		m.lineWidths = append(m.lineWidths[:start], newWidths...)
+		m.linePrefixMax = append(m.linePrefixMax[:start], make([]int, len(newLines))...)
 	}
-	m.longestLineWidth = 0
-	for _, w := range m.lineWidths {
-		if w > m.longestLineWidth {
-			m.longestLineWidth = w
+	maxWidth := 0
+	if start > 0 {
+		maxWidth = m.linePrefixMax[start-1]
+	}
+	for i := start; i < newLen; i++ {
+		if m.lineWidths[i] > maxWidth {
+			maxWidth = m.lineWidths[i]
 		}
+		m.linePrefixMax[i] = maxWidth
 	}
+	m.longestLineWidth = maxWidth
+	m.SetXOffset(m.xOffset)
 	if m.YOffset > len(m.lines)-1 {
 		m.GotoBottom()
 	}
@@ -369,7 +384,7 @@ func (m *Model) SetHorizontalStep(n int) {
 
 // SetXOffset sets the X offset.
 func (m *Model) SetXOffset(n int) {
-	m.xOffset = clamp(n, 0, m.longestLineWidth-m.Width)
+	m.xOffset = clamp(n, 0, max(0, m.longestLineWidth-m.Width))
 }
 
 // ScrollLeft moves the viewport to the left by the given number of columns.

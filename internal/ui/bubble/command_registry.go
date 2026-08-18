@@ -253,7 +253,7 @@ func NewCommandRegistry() *CommandRegistry {
 			if m.runner != nil {
 				m.runner.ResetHistory()
 			}
-			m.transcript = nil
+			m.replaceTranscript(nil)
 			m.resetToolInspect()
 			m.pending = nil
 			m.chatQueue.Clear()

@@ -98,6 +98,7 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 		newMessageNoticeCycle:     1,
 		toolInspectIndex:          -1,
 		toolHoverIndex:            -1,
+		toolRuntime:               transcriptToolRuntimeIndex{initialized: true},
 		historyIndex:              -1,
 		transcript:                nil,
 	}
@@ -135,6 +136,24 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case transcriptWheelBatchMsg:
+		m = m.applyTranscriptWheelBatch(msg.lines, msg.x, msg.y)
+		deferredRefresh := m.renewDeferredTranscriptRefresh()
+		switch {
+		case msg.flush != nil && deferredRefresh != nil:
+			return m, tea.Batch(msg.flush, deferredRefresh)
+		case deferredRefresh != nil:
+			return m, deferredRefresh
+		default:
+			return m, msg.flush
+		}
+	case transcriptDeferredRefreshMsg:
+		if !m.transcriptRefreshDeferred || msg.generation != m.transcriptRefreshDeferredGeneration {
+			return m, nil
+		}
+		m.transcriptRefreshDeferred = false
+		m.refreshViewport()
+		return m, nil
 	case todoBrokerEventMsg:
 		next, cmd := todoBrokerEventCommand(m, msg)
 		return next, cmd
@@ -171,9 +190,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case taskUpdateMsg:
 		m.refreshActivityTasks()
-		m.refreshTaskPreviewFromTasks()
-		m.refreshTaskToolEntriesFromTasks()
-		m.refreshViewport()
+		previewChanged := m.refreshTaskPreviewFromTasks()
+		toolEntriesChanged := m.refreshTaskToolEntriesFromTasks()
+		if previewChanged || toolEntriesChanged {
+			m.refreshViewport()
+		}
 		if m.taskUpdates != nil && !msg.closed {
 			return m, waitTaskUpdateCmd(m.ctx, m.taskUpdates)
 		}
@@ -245,19 +266,23 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case toolCallMsg:
 		m.turnHasModelOutput = true
-		m.finalizeThinkingStream()
-		m.finalizeAssistantStream()
-		m.isGenerating = false
-		m.recordToolCallEntry(msg.ID, msg.Name, json.RawMessage(msg.Input), msg.FileMutationKnown, msg.IsFileMutation, msg.FileMutation)
+		m.batchTranscriptRefresh(func() {
+			m.finalizeThinkingStream()
+			m.finalizeAssistantStream()
+			m.isGenerating = false
+			m.recordToolCallEntry(msg.ID, msg.Name, json.RawMessage(msg.Input), msg.FileMutationKnown, msg.IsFileMutation, msg.FileMutation)
+		})
 		return m, nil
 	case toolResultMsg:
-		m.finalizeThinkingStream()
-		m.finalizeAssistantStream()
 		status := "ok"
 		if msg.IsError {
 			status = "error"
 		}
-		m.recordToolResultEntry(msg.ToolUseID, msg.Name, status, msg.Content, msg.IsError, msg.FileMutationKnown, msg.IsFileMutation, msg.FileMutation)
+		m.batchTranscriptRefresh(func() {
+			m.finalizeThinkingStream()
+			m.finalizeAssistantStream()
+			m.recordToolResultEntry(msg.ToolUseID, msg.Name, status, msg.Content, msg.IsError, msg.FileMutationKnown, msg.IsFileMutation, msg.FileMutation)
+		})
 		return m, nil
 	case systemEventMsg:
 		title := strings.TrimSpace(msg.Title)
@@ -272,9 +297,20 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 		return m, nil
 	case doneMsg:
+		var deferredRefresh tea.Cmd
+		deferCanceledRefresh := m.modelCancelRequested
+		if deferCanceledRefresh {
+			if !m.transcriptRefreshDeferred {
+				m.transcriptRefreshDeferred = true
+			}
+			deferredRefresh = m.renewDeferredTranscriptRefresh()
+		}
 		m.finalizeThinkingStream()
 		m.doneAssistant = m.finalizeAssistantStream()
 		m.isGenerating = false
+		if deferCanceledRefresh {
+			return m, deferredRefresh
+		}
 		m.refreshViewport()
 		return m, nil
 	case planFinalizedMsg:
@@ -344,6 +380,14 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		wasWorking := m.isAgentWorking()
 		hadModelOutput := m.turnHasModelOutput
 		expectedCancel := m.modelCancelRequested && errors.Is(msg.err, context.Canceled)
+		if expectedCancel && hadModelOutput {
+			if !m.transcriptRefreshDeferred {
+				m.transcriptRefreshDeferred = true
+			}
+			if deferredRefresh := m.renewDeferredTranscriptRefresh(); deferredRefresh != nil {
+				cmds = append(cmds, deferredRefresh)
+			}
+		}
 		m.finalizeThinkingStream()
 		assistantIndex := m.doneAssistant
 		if msg.err != nil {
@@ -355,7 +399,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.metadata != nil && assistantIndex >= 0 && assistantIndex < len(m.transcript) && m.transcript[assistantIndex].kind == entryAssistant {
 				metadata := *msg.metadata
 				m.transcript[assistantIndex].turnMetadata = &metadata
-				touchTranscriptEntry(&m.transcript[assistantIndex])
+				m.touchTranscriptEntryAt(assistantIndex)
 				m.refreshViewport()
 			}
 			_ = hadModelOutput
@@ -719,10 +763,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "up":
 				m.viewport.ScrollUp(1)
+				m.clearToolHover()
 				m.syncNewMessageNoticeAfterScroll()
 				return m, nil
 			case "down":
 				m.viewport.ScrollDown(1)
+				m.clearToolHover()
 				m.syncNewMessageNoticeAfterScroll()
 				if m.viewport.AtBottom() {
 					m.transcriptKeyScrollActive = false
@@ -828,8 +874,15 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if isMouseWheel(msg) {
 			if m.isTranscriptViewportMouse(msg) {
+				if lines, ok := transcriptWheelLines(m, msg); ok {
+					return m.applyTranscriptWheelBatch(lines, msg.X, msg.Y), nil
+				}
 				var viewportCmd tea.Cmd
+				beforeOffset := m.viewport.YOffset
 				m.viewport, viewportCmd = m.viewport.Update(msg)
+				if m.viewport.YOffset != beforeOffset {
+					m.reconcileToolHoverAtMouse(msg.X, msg.Y)
+				}
 				m.syncNewMessageNoticeAfterScroll()
 				m.transcriptKeyScrollActive = true
 				return m, viewportCmd
@@ -844,7 +897,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	var viewportCmd tea.Cmd
+	beforeViewportOffset := m.viewport.YOffset
 	m.viewport, viewportCmd = m.viewport.Update(msg)
+	if m.viewport.YOffset != beforeViewportOffset {
+		m.clearToolHover()
+	}
 	m.syncNewMessageNoticeAfterScroll()
 	cmds = append(cmds, viewportCmd)
 

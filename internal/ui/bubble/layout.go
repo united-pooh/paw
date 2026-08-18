@@ -252,6 +252,11 @@ func (m appModel) renderTranscriptRegion(layout tuiLayout) string {
 	}
 
 	content := m.viewport.View()
+	if !m.selectionActive && !m.viewportShowsSelection {
+		if unit, ok := m.currentTranscriptHoverPatchUnit(); ok && m.transcriptHoverPatch.valid && m.transcriptHoverPatch.unit == unit {
+			content = overlayTranscriptViewport(content, m.transcriptHoverPatch.lines, true, unit, m.viewport.YOffset, m.viewport.Width)
+		}
+	}
 	if !m.hasRenderableTranscript() {
 		content = renderEmptyState(layout.contentWidth, layout.transcriptHeight)
 	}
