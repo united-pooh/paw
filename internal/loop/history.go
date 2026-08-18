@@ -8,6 +8,7 @@ import (
 	"paw/internal/model"
 	"paw/internal/session"
 	"strings"
+	"sync"
 )
 
 func buildUserMessages(input string) []message.Message {
@@ -19,14 +20,73 @@ func buildUserMessages(input string) []message.Message {
 	}
 }
 
+// promptState 收敛系统提示增补与轮间 supplements（用户在 turn 运行中提交
+// 的追加指令），自带锁。P2 从 Runner 字段提取。
+type promptState struct {
+	mu               sync.RWMutex
+	supplements      []string
+	systemSupplement string
+}
+
+func (p *promptState) appendSupplement(input string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.supplements = append(p.supplements, input)
+}
+
+func (p *promptState) pendingCount() int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return len(p.supplements)
+}
+
+func (p *promptState) drain() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.supplements) == 0 {
+		return nil
+	}
+	supplements := append([]string(nil), p.supplements...)
+	p.supplements = nil
+	return supplements
+}
+
+func (p *promptState) prepend(supplements []string) {
+	if len(supplements) == 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	combined := make([]string, 0, len(supplements)+len(p.supplements))
+	combined = append(combined, supplements...)
+	combined = append(combined, p.supplements...)
+	p.supplements = combined
+}
+
+func (p *promptState) setSystemSupplement(supplement string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.systemSupplement = strings.TrimSpace(supplement)
+}
+
+func (p *promptState) currentSystemSupplement() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.systemSupplement
+}
+
+func (p *promptState) resetSupplements() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.supplements = nil
+}
+
 func (runner *Runner) SubmitSupplement(input string) bool {
 	input = strings.TrimSpace(input)
 	if runner == nil || input == "" {
 		return false
 	}
-	runner.mu.Lock()
-	runner.supplements = append(runner.supplements, input)
-	runner.mu.Unlock()
+	runner.promptCtx.appendSupplement(input)
 	return true
 }
 
@@ -34,9 +94,7 @@ func (runner *Runner) PendingSupplementCount() int {
 	if runner == nil {
 		return 0
 	}
-	runner.mu.RLock()
-	defer runner.mu.RUnlock()
-	return len(runner.supplements)
+	return runner.promptCtx.pendingCount()
 }
 
 func (runner *Runner) buildTurnHistory(input message.Message) ([]message.Message, []string) {
@@ -61,26 +119,14 @@ func (runner *Runner) drainSupplements() []string {
 	if runner == nil {
 		return nil
 	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	if len(runner.supplements) == 0 {
-		return nil
-	}
-	supplements := append([]string(nil), runner.supplements...)
-	runner.supplements = nil
-	return supplements
+	return runner.promptCtx.drain()
 }
 
 func (runner *Runner) prependSupplements(supplements []string) {
 	if runner == nil || len(supplements) == 0 {
 		return
 	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	combined := make([]string, 0, len(supplements)+len(runner.supplements))
-	combined = append(combined, supplements...)
-	combined = append(combined, runner.supplements...)
-	runner.supplements = combined
+	runner.promptCtx.prepend(supplements)
 }
 
 func buildSupplementMessages(supplements []string) []message.Message {
@@ -163,10 +209,7 @@ func (runner *Runner) syncContextUsageFromHistory(history []message.Message) {
 		messages = append(messages, history...)
 		usage = usageFromTotals(tokenUsageTotals{used: estimateMessageTokens(messages)})
 	}
-	runner.mu.Lock()
-	runner.usage = usage
-	runner.usageKnown = known
-	runner.mu.Unlock()
+	runner.usage.setContextKnown(usage, known)
 }
 
 func (runner *Runner) setRecovery(recovery *session.RecoveryState) {
@@ -307,14 +350,11 @@ func (runner *Runner) commitHistory(ctx context.Context, history []message.Messa
 
 func (runner *Runner) ResetHistory() {
 	runner.mu.Lock()
-	defer runner.mu.Unlock()
 	runner.history = []message.Message{}
-	runner.usage = model.Usage{}
-	runner.usageKnown = false
-	runner.sessionUsage = model.Usage{}
-	runner.sessionUsageKnown = false
-	runner.supplements = nil
 	runner.recovery = nil
+	runner.mu.Unlock()
+	runner.usage.resetAll()
+	runner.promptCtx.resetSupplements()
 }
 
 func (runner *Runner) LoadSession(ctx context.Context, sessionID string) (SessionLoadResult, error) {
@@ -352,18 +392,12 @@ func (runner *Runner) LoadSession(ctx context.Context, sessionID string) (Sessio
 	runner.setHistory(activeHistory)
 	runner.mu.Lock()
 	runner.sessionID = sessionID
-	runner.sessionUsage = model.Usage{}
-	runner.sessionUsageKnown = false
-	runner.supplements = nil
 	runner.recovery = copyRecoveryState(result.Recovery)
 	runner.mu.Unlock()
+	runner.usage.resetSession()
+	runner.promptCtx.resetSupplements()
 	runner.syncContextUsageFromHistory(activeHistory)
-	runner.mu.RLock()
-	hooks := append([]SessionLoadedHook(nil), runner.sessionLoadedHooks...)
-	runner.mu.RUnlock()
-	for _, hook := range hooks {
-		hook(sessionID)
-	}
+	runner.hooks.dispatchSessionLoaded(sessionID)
 	return result, nil
 }
 

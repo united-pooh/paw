@@ -29,10 +29,8 @@ func (runner *Runner) maintainContextProjection(ctx context.Context, history []m
 		return runner.maintainStateProjection(ctx, history)
 	}
 
-	runner.mu.RLock()
-	limit := runner.contextLimitTokens
-	cfg := runner.contextMaintenance
-	runner.mu.RUnlock()
+	limit := runner.compact.limit()
+	cfg := runner.compact.currentMaintenance()
 	if limit <= 0 {
 		return result, nil
 	}
@@ -125,11 +123,10 @@ func (runner *Runner) maintainToolResultsByPressure(ctx context.Context, history
 	}
 
 	runner.mu.RLock()
-	usage := runner.usage
-	usageKnown := runner.usageKnown
-	archive := runner.compactionArchive
 	registry := runner.registry
 	runner.mu.RUnlock()
+	usage, usageKnown := runner.usage.contextUsage()
+	archive := runner.compact.currentArchive()
 
 	estimated := estimateMessageTokens(history)
 	promptTokens := estimated
@@ -254,45 +251,21 @@ func (runner *Runner) markSoftContextPressure() bool {
 	if runner == nil {
 		return false
 	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	if runner.softCompactNoticed {
-		return false
-	}
-	runner.softCompactNoticed = true
-	return true
+	return runner.compact.markSoftPressure()
 }
 
 func (runner *Runner) automaticSummaryAllowed() bool {
 	if runner == nil {
 		return false
 	}
-	runner.mu.RLock()
-	defer runner.mu.RUnlock()
-	return !runner.compactStuck
+	return runner.compact.summaryAllowed()
 }
 
 func (runner *Runner) recordAutomaticCompaction(performed bool, belowThreshold bool) bool {
 	if runner == nil {
 		return false
 	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	if belowThreshold {
-		runner.softCompactNoticed = false
-		runner.consecutiveCompacts = 0
-		runner.compactStuck = false
-		return false
-	}
-	if !performed {
-		return false
-	}
-	wasStuck := runner.compactStuck
-	runner.consecutiveCompacts++
-	if runner.consecutiveCompacts >= 2 {
-		runner.compactStuck = true
-	}
-	return !wasStuck && runner.compactStuck
+	return runner.compact.recordAutomatic(performed, belowThreshold)
 }
 
 func defaultContextMaintenanceConfig() contextMaintenanceConfig {

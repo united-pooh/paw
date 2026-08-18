@@ -20,14 +20,14 @@ func TestSetContextMaintenanceConfigInitializesArchive(t *testing.T) {
 	if err := runner.SetContextMaintenanceConfig(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if runner.compactionArchive == nil || !runner.contextMaintenance.archiveEnabled {
+	if runner.compact.currentArchive() == nil || !runner.compact.currentMaintenance().archiveEnabled {
 		t.Fatalf("runner not configured: %+v", runner)
 	}
-	if runner.contextMaintenance.tailTokens != 4096 {
-		t.Fatalf("tail tokens = %d, want 4096", runner.contextMaintenance.tailTokens)
+	if runner.compact.currentMaintenance().tailTokens != 4096 {
+		t.Fatalf("tail tokens = %d, want 4096", runner.compact.currentMaintenance().tailTokens)
 	}
-	if strings.Contains(filepath.ToSlash(runner.compactionArchive.dir), "session/unsafe") {
-		t.Fatalf("archive path is unsafe: %s", runner.compactionArchive.dir)
+	if archive := runner.compact.currentArchive(); archive == nil || strings.Contains(filepath.ToSlash(archive.dir), "session/unsafe") {
+		t.Fatalf("archive path is unsafe: %v", archive)
 	}
 }
 

@@ -1716,8 +1716,7 @@ func TestContextStatsUsesActualUsageWhenKnown(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			runner := NewRunner(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), nil, "")
-			runner.usage = tt.usage
-			runner.usageKnown = true
+			runner.usage.setCurrent(tt.usage)
 
 			stats := runner.ContextStats(1024, "draft should not be estimated")
 			if stats.UsedTokens != tt.wantUsed {
@@ -1737,8 +1736,7 @@ func TestLoadSessionRebuildsContextUsageFromActiveHistory(t *testing.T) {
 	}
 	store := &fakeStore{history: history}
 	runner := NewRunner(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), store, "old-session")
-	runner.usage = model.Usage{TotalTokens: 9999, PromptCacheHitTokens: 100}
-	runner.usageKnown = true
+	runner.usage.setCurrent(model.Usage{TotalTokens: 9999, PromptCacheHitTokens: 100})
 
 	if _, err := runner.LoadSession(context.Background(), "restored-session"); err != nil {
 		t.Fatalf("LoadSession() error = %v", err)
@@ -1758,10 +1756,8 @@ func TestLoadSessionRebuildsContextUsageFromActiveHistory(t *testing.T) {
 
 func TestResetHistoryClearsContextUsage(t *testing.T) {
 	runner := NewRunner(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), nil, "")
-	runner.usage = model.Usage{PromptTokens: 100, CompletionTokens: 20, PromptCacheHitTokens: 10}
-	runner.usageKnown = true
-	runner.sessionUsage = model.Usage{PromptTokens: 200, CompletionTokens: 40, PromptCacheHitTokens: 20}
-	runner.sessionUsageKnown = true
+	runner.usage.setCurrent(model.Usage{PromptTokens: 100, CompletionTokens: 20, PromptCacheHitTokens: 10})
+	runner.usage.setSessionKnown(model.Usage{PromptTokens: 200, CompletionTokens: 40, PromptCacheHitTokens: 20}, true)
 
 	runner.ResetHistory()
 

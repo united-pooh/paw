@@ -166,7 +166,7 @@ func TestManualCompactionArchiveFailureLeavesHistoryUnchanged(t *testing.T) {
 		{Role: message.RoleUser, Content: "continue"},
 	}
 	runner.setHistory(history)
-	runner.compactionArchive.syncFile = func(*os.File) error { return errors.New("disk full") }
+	runner.compact.currentArchive().syncFile = func(*os.File) error { return errors.New("disk full") }
 
 	if _, err := runner.CompactContext(context.Background(), ""); err == nil || !strings.Contains(err.Error(), "disk full") {
 		t.Fatalf("CompactContext() error = %v", err)
@@ -208,8 +208,7 @@ func TestCompactContextSynchronizesCurrentContextUsage(t *testing.T) {
 	instructions.homeDir = t.TempDir()
 	runner.prompt = NewPromptBuilder(instructions)
 	runner.setHistory(original)
-	runner.usage = model.Usage{TotalTokens: 9000, PromptCacheHitTokens: 4000}
-	runner.usageKnown = true
+	runner.usage.setCurrent(model.Usage{TotalTokens: 9000, PromptCacheHitTokens: 4000})
 
 	if _, err := runner.CompactContext(context.Background(), ""); err != nil {
 		t.Fatalf("CompactContext() error = %v", err)

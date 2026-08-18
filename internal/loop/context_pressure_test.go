@@ -71,7 +71,7 @@ func TestPruneAvoidsSummaryWhenReestimatedBelowThreshold(t *testing.T) {
 	if got.prunedResults != 1 || got.summaryPerformed || len(modelClient.calls) != 0 {
 		t.Fatalf("maintenance = %+v calls=%d", got, len(modelClient.calls))
 	}
-	if estimateMessageTokens(got.history) >= int(float64(limit)*runner.contextMaintenance.compactRatio) {
+	if estimateMessageTokens(got.history) >= int(float64(limit)*runner.compact.currentMaintenance().compactRatio) {
 		t.Fatal("prune did not clear context pressure")
 	}
 }
@@ -85,8 +85,7 @@ func TestNonForcedCompactionSkipsUneconomicFold(t *testing.T) {
 	}
 	modelClient := &fakeModel{}
 	runner := newPressureTestRunner(t, modelClient, 1000)
-	runner.usage = model.Usage{PromptTokens: 850}
-	runner.usageKnown = true
+	runner.usage.setCurrent(model.Usage{PromptTokens: 850})
 
 	got, err := runner.maintainContextProjection(context.Background(), history, true)
 	if err != nil {
@@ -106,8 +105,7 @@ func TestForcedCompactionBypassesEconomics(t *testing.T) {
 	}
 	modelClient := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{{Delta: "forced summary"}, {Done: true}}}}}
 	runner := newPressureTestRunner(t, modelClient, 1000)
-	runner.usage = model.Usage{PromptTokens: 950}
-	runner.usageKnown = true
+	runner.usage.setCurrent(model.Usage{PromptTokens: 950})
 
 	got, err := runner.maintainContextProjection(context.Background(), history, true)
 	if err != nil {
@@ -143,8 +141,7 @@ func TestSoftPressureNoticeOnlyOnceAndResetsBelowThreshold(t *testing.T) {
 	runner.SetContextLimitTokens(1000)
 	history := []message.Message{{Role: message.RoleUser, Content: "small"}}
 
-	runner.usage = model.Usage{PromptTokens: 550}
-	runner.usageKnown = true
+	runner.usage.setCurrent(model.Usage{PromptTokens: 550})
 	if _, err := runner.maintainContextProjection(context.Background(), history, false); err != nil {
 		t.Fatal(err)
 	}
@@ -155,11 +152,11 @@ func TestSoftPressureNoticeOnlyOnceAndResetsBelowThreshold(t *testing.T) {
 		t.Fatalf("soft notices = %d, want 1: %#v", got, output.system)
 	}
 
-	runner.usage = model.Usage{PromptTokens: 400}
+	runner.usage.setCurrent(model.Usage{PromptTokens: 400})
 	if _, err := runner.maintainContextProjection(context.Background(), history, false); err != nil {
 		t.Fatal(err)
 	}
-	runner.usage = model.Usage{PromptTokens: 550}
+	runner.usage.setCurrent(model.Usage{PromptTokens: 550})
 	if _, err := runner.maintainContextProjection(context.Background(), history, false); err != nil {
 		t.Fatal(err)
 	}
@@ -223,8 +220,7 @@ func newPressureTestRunner(t *testing.T, modelClient ModelStreamer, limit int) *
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner.contextMaintenance = cfg
-	runner.compactionArchive = archive
-	runner.contextLimitTokens = limit
+	runner.compact.configure(cfg, archive)
+	runner.compact.setLimitTokens(limit)
 	return runner
 }

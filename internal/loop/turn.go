@@ -36,16 +36,14 @@ func (runner *Runner) runTurnWithTiming(ctx context.Context, userInput message.M
 	turnCtx, finishTurn := runner.beginActiveTurn(ctx)
 	defer finishTurn()
 	ctx = turnCtx
-	config, broker := runner.autoContinueState()
+	config, broker := runner.gate.state()
 
 	var execution TurnExecution
 	var err error
 	if !config.Enabled || broker == nil {
 		execution, err = runner.runSingleTurnWithTiming(ctx, userInput, timing)
 	} else {
-		runner.mu.Lock()
-		runner.lastProgressHash = ""
-		runner.mu.Unlock()
+		runner.gate.resetProgress()
 		execution, err = runner.runTask(ctx, userInput, timing)
 	}
 	// 工具配对损坏类 400 不可重试，附加修复提示后交给 UI 展示
@@ -156,10 +154,7 @@ func (runner *Runner) runSingleTurnWithTiming(ctx context.Context, userInput mes
 	ctx = WithTurnOwner(ctx, runner.sessionID, turnID)
 	defer func() {
 		if !settled {
-			runner.mu.RLock()
-			cleaner := runner.turnOwnedTaskCleaner
-			runner.mu.RUnlock()
-			if cleaner != nil {
+			if cleaner := runner.taskEnv.cleaner(); cleaner != nil {
 				failure := err
 				if failure == nil {
 					failure = fmt.Errorf("turn ended before completion")

@@ -8,8 +8,6 @@ import (
 	"paw/internal/model"
 	"paw/internal/session"
 	"paw/internal/skill"
-	"paw/internal/todo"
-	"paw/internal/tokentracer"
 	"paw/internal/tool"
 	"paw/internal/ui"
 	"strings"
@@ -72,6 +70,9 @@ type modelUsageReceiver interface {
 	OnModelUsage(usage model.Usage)
 }
 
+// Runner 是会话执行内核：驱动“模型 → 工具 → 模型”循环。核心字段只保留
+// 身份与直接协作者；横切状态按下述内聚协作者拆分（P2 解耦，各自持锁，
+// 避免一把大锁保护一切）。
 type Runner struct {
 	mu        sync.RWMutex
 	model     ModelStreamer
@@ -81,48 +82,26 @@ type Runner struct {
 	sessionID string
 	workRoot  string // 工具使用的 workspace 根目录，用于解析相对文件路径
 	prompt    *PromptBuilder
-	// history 保存”已经成功完成”的多轮对话消息。
+	// history 保存“已经成功完成”的多轮对话消息。
 	// 当前调用路径是串行的，因此这里先不引入锁。
 	// TODO: 如果后续要把 Runner 暴露给并发调用方，需要为 history 增加互斥保护。
-	history              []message.Message
-	usage                model.Usage
-	usageKnown           bool
-	sessionUsage         model.Usage
-	sessionUsageKnown    bool
-	supplements          []string
-	systemSupplement     string
-	compactToolPrompt    bool
-	contextLimitTokens   int
-	contextMaintenance   contextMaintenanceConfig
-	compactionArchive    *compactionArchive
-	softCompactNoticed   bool
-	consecutiveCompacts  int
-	compactStuck         bool
-	streamMAEnabled      bool
-	streamMATasks        StreamMATaskRunner
-	taskTokensProvider   TaskTokensProvider
-	turnOwnedTaskCleaner TurnOwnedTaskCleaner
-	recovery             *session.RecoveryState
-	skillRegistry        *skill.Registry
-	activeSkillContext   string
-	tokenTracer          *tokentracer.Tracer
-	traceStageID         string
-	traceAgentID         string
-	yoloModeHandler      func(bool)
-	nowFn                func() time.Time
-	autoContinueConfig   AutoContinueConfig
-	todoBroker           *todo.Broker
-	stateBlockProvider   StateBlockProvider
-	contextMode          string
-	recentTurns          int
-	stateCompactionRatio float64
-	sessionLoadedHooks   []SessionLoadedHook
-	lastProgressHash     string
-	lastTodoHash         string
-	staleTodoTurns       int
-	activeTool           activeToolState
-	activeTurnCancel     context.CancelFunc
-	turnToolFilter       ToolFilter
+	history []message.Message
+
+	usage     usageMeter      // token 用量账本（上下文/会话两本）
+	hooks     hookChain       // 生命周期钩子链（会话切换等）
+	trace     traceSession    // tokentracer 会话（tracer + 当前 stage/agent）
+	gate      progressGate    // 完成门：自动续跑配置 + todo 进展/陈旧追踪
+	skills    skillState      // 技能注册表与激活上下文
+	streamMA  streamMAState   // StreamMA 开关与任务运行器
+	compact   compactionState // 上下文压缩：配置/归档/窗口限值/卡死检测/工具提示压缩
+	stateCfg  stateConfig     // 模式 B 恢复：压缩模式/近邻轮数/压缩比/状态块提供者
+	promptCtx promptState     // 系统提示增补与轮间 supplements
+	taskEnv   taskEnv         // 后台任务适配（token 统计 / turn 归属清理）
+	turnCtl   turnCtl         // 活动工具与 turn 取消句柄
+	toolGate  toolGateState   // 工具门：yolo 通知回调 + turn 工具过滤器
+
+	recovery *session.RecoveryState
+	nowFn    func() time.Time
 }
 
 type activeToolState struct {
@@ -357,51 +336,46 @@ func NewRunnerWithInstructionRoot(model ModelStreamer, output ui.UI, registry *t
 	maintenance := defaultContextMaintenanceConfig()
 	archive, _ := newCompactionArchive(instructionRoot, sessionID, maintenance.archiveEnabled)
 	return &Runner{
-		model:              model,
-		ui:                 output,
-		registry:           registry,
-		store:              store,
-		sessionID:          sessionID,
-		workRoot:           instructionRoot,
-		prompt:             NewPromptBuilder(NewInstructionManager(instructionRoot)),
-		skillRegistry:      skill.NewRegistry(skill.DefaultRoots(instructionRoot)),
-		contextLimitTokens: initialContextLimitTokens(model),
-		contextMaintenance: maintenance,
-		compactionArchive:  archive,
-		streamMAEnabled:    true,
-		nowFn:              time.Now,
-		autoContinueConfig: DefaultAutoContinueConfig(),
+		model:     model,
+		ui:        output,
+		registry:  registry,
+		store:     store,
+		sessionID: sessionID,
+		workRoot:  instructionRoot,
+		prompt:    NewPromptBuilder(NewInstructionManager(instructionRoot)),
+		skills:    skillState{registry: skill.NewRegistry(skill.DefaultRoots(instructionRoot))},
+		compact:   newCompactionState(maintenance, archive, initialContextLimitTokens(model)),
+		gate:      progressGate{autoContinue: DefaultAutoContinueConfig()},
+		streamMA:  streamMAState{enabled: true},
+		nowFn:     time.Now,
 	}
 }
 
-func (runner *Runner) registerActiveTool(id, name string, cancel context.CancelFunc) {
-	if runner == nil {
-		return
-	}
-	runner.mu.Lock()
-	runner.activeTool = activeToolState{id: id, name: name, cancel: cancel, stream: true}
-	runner.mu.Unlock()
+// turnCtl 收敛 turn 生命周期的活动工具与取消句柄，自带锁。
+type turnCtl struct {
+	mu         sync.Mutex
+	activeTool activeToolState
+	turnCancel context.CancelFunc
 }
 
-func (runner *Runner) clearActiveTool(id string) {
-	if runner == nil {
-		return
-	}
-	runner.mu.Lock()
-	if id == "" || runner.activeTool.id == id {
-		runner.activeTool = activeToolState{}
-	}
-	runner.mu.Unlock()
+func (t *turnCtl) registerTool(id, name string, cancel context.CancelFunc) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.activeTool = activeToolState{id: id, name: name, cancel: cancel, stream: true}
 }
 
-// CancelCurrentTool cancels the active streaming tool, if one is registered.
-func (runner *Runner) CancelCurrentTool() bool {
-	if runner == nil {
-		return false
+func (t *turnCtl) clearTool(id string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if id == "" || t.activeTool.id == id {
+		t.activeTool = activeToolState{}
 	}
-	runner.mu.RLock()
-	active := runner.activeTool
-	runner.mu.RUnlock()
+}
+
+func (t *turnCtl) cancelActiveTool() bool {
+	t.mu.Lock()
+	active := t.activeTool
+	t.mu.Unlock()
 	if !active.stream || active.cancel == nil {
 		return false
 	}
@@ -409,33 +383,63 @@ func (runner *Runner) CancelCurrentTool() bool {
 	return true
 }
 
-// CancelTurn cancels the active turn context, if one is registered.
-func (runner *Runner) CancelTurn() {
-	if runner == nil {
-		return
-	}
-	runner.mu.RLock()
-	cancel := runner.activeTurnCancel
-	runner.mu.RUnlock()
+func (t *turnCtl) cancelTurn() {
+	t.mu.Lock()
+	cancel := t.turnCancel
+	t.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
 }
 
-func (runner *Runner) beginActiveTurn(ctx context.Context) (context.Context, func()) {
+func (t *turnCtl) beginTurn(ctx context.Context) (context.Context, func()) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	turnCtx, cancel := context.WithCancel(ctx)
-	runner.mu.Lock()
-	runner.activeTurnCancel = cancel
-	runner.mu.Unlock()
+	t.mu.Lock()
+	t.turnCancel = cancel
+	t.mu.Unlock()
 	return turnCtx, func() {
 		cancel()
-		runner.mu.Lock()
-		runner.activeTurnCancel = nil
-		runner.mu.Unlock()
+		t.mu.Lock()
+		t.turnCancel = nil
+		t.mu.Unlock()
 	}
+}
+
+func (runner *Runner) registerActiveTool(id, name string, cancel context.CancelFunc) {
+	if runner == nil {
+		return
+	}
+	runner.turnCtl.registerTool(id, name, cancel)
+}
+
+func (runner *Runner) clearActiveTool(id string) {
+	if runner == nil {
+		return
+	}
+	runner.turnCtl.clearTool(id)
+}
+
+// CancelCurrentTool cancels the active streaming tool, if one is registered.
+func (runner *Runner) CancelCurrentTool() bool {
+	if runner == nil {
+		return false
+	}
+	return runner.turnCtl.cancelActiveTool()
+}
+
+// CancelTurn cancels the active turn context, if one is registered.
+func (runner *Runner) CancelTurn() {
+	if runner == nil {
+		return
+	}
+	runner.turnCtl.cancelTurn()
+}
+
+func (runner *Runner) beginActiveTurn(ctx context.Context) (context.Context, func()) {
+	return runner.turnCtl.beginTurn(ctx)
 }
 
 func (runner *Runner) WorkspaceRoot() string {
@@ -451,37 +455,71 @@ func (runner *Runner) ReplaceToolNamespace(namespace string, tools []tool.Tool) 
 	return runner.registry.ReplaceNamespace(namespace, tools)
 }
 
+// toolGateState 收敛工具门控：yolo 模式通知回调与 turn 级工具过滤器。
+type toolGateState struct {
+	mu          sync.RWMutex
+	yoloHandler func(bool)
+	turnFilter  ToolFilter
+}
+
+func (g *toolGateState) setYoloHandler(handler func(bool)) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.yoloHandler = handler
+}
+
+func (g *toolGateState) currentYoloHandler() func(bool) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.yoloHandler
+}
+
+func (g *toolGateState) setTurnFilter(filter ToolFilter) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.turnFilter = filter
+}
+
+func (g *toolGateState) currentTurnFilter() ToolFilter {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.turnFilter
+}
+
 func (runner *Runner) SetYoloModeHandler(handler func(bool)) {
 	if runner == nil {
 		return
 	}
-	runner.mu.Lock()
-	runner.yoloModeHandler = handler
-	runner.mu.Unlock()
+	runner.toolGate.setYoloHandler(handler)
 }
 
-// SetStateBlockProvider 挂载模式 B 恢复用的状态块提供者（cmd/agent 实现）。
 // SessionLoadedHook 在 LoadSession 切换会话后回调（cmd/agent 用它重绑
 // 会话相关工具：/resume 切换后 wire* 与状态文件跟随新会话）。
 type SessionLoadedHook func(sessionID string)
 
 // SetSessionLoadedHook 注册会话切换回调（可多次调用，全部执行）。
+// P2 起为 hookChain 上的兼容糖；新代码优先实现 Hook 能力接口并经
+// RegisterHook 挂载（钩子间禁止互调，按注册顺序执行）。
 func (runner *Runner) SetSessionLoadedHook(hook SessionLoadedHook) {
 	if runner == nil || hook == nil {
 		return
 	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	runner.sessionLoadedHooks = append(runner.sessionLoadedHooks, hook)
+	runner.hooks.register(sessionLoadedFunc(hook))
+}
+
+// RegisterHook 挂载生命周期钩子（会话切换等能力接口按需实现）。
+func (runner *Runner) RegisterHook(hook Hook) {
+	if runner == nil {
+		return
+	}
+	runner.hooks.register(hook)
 }
 
 func (runner *Runner) SetStateBlockProvider(provider StateBlockProvider) {
 	if runner == nil {
 		return
 	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	runner.stateBlockProvider = provider
+	runner.stateCfg.setBlockProvider(provider)
 }
 
 // SetContextMode 设置上下文压缩模式："summary"（对话摘要，现状）或
@@ -490,11 +528,7 @@ func (runner *Runner) SetContextMode(mode string) {
 	if runner == nil {
 		return
 	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	if mode == "state" || mode == "summary" {
-		runner.contextMode = mode
-	}
+	runner.stateCfg.setMode(mode)
 }
 
 // contextModeState 返回是否处于状态压缩模式。
@@ -502,9 +536,7 @@ func (runner *Runner) contextModeState() bool {
 	if runner == nil {
 		return false
 	}
-	runner.mu.RLock()
-	defer runner.mu.RUnlock()
-	return runner.contextMode == "state"
+	return runner.stateCfg.isStateMode()
 }
 
 // buildStateContext 通过 provider 获取状态块（模式 B 恢复/压缩用）。
@@ -512,13 +544,7 @@ func (runner *Runner) buildStateContext(ctx context.Context) (string, error) {
 	if runner == nil {
 		return "", nil
 	}
-	runner.mu.RLock()
-	provider := runner.stateBlockProvider
-	runner.mu.RUnlock()
-	if provider == nil {
-		return "", nil
-	}
-	return provider.BuildStateContext(ctx)
+	return runner.stateCfg.buildBlock(ctx)
 }
 
 // SetTurnToolFilter scopes the tool set for subsequent turns. A nil filter
@@ -528,9 +554,7 @@ func (runner *Runner) SetTurnToolFilter(filter ToolFilter) {
 	if runner == nil {
 		return
 	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	runner.turnToolFilter = filter
+	runner.toolGate.setTurnFilter(filter)
 }
 
 // currentToolFilter returns the active turn tool filter, if any.
@@ -538,9 +562,7 @@ func (runner *Runner) currentToolFilter() ToolFilter {
 	if runner == nil {
 		return nil
 	}
-	runner.mu.RLock()
-	defer runner.mu.RUnlock()
-	return runner.turnToolFilter
+	return runner.toolGate.currentTurnFilter()
 }
 
 // SystemSupplement returns the current additional system instructions.
@@ -548,9 +570,7 @@ func (runner *Runner) SystemSupplement() string {
 	if runner == nil {
 		return ""
 	}
-	runner.mu.RLock()
-	defer runner.mu.RUnlock()
-	return runner.systemSupplement
+	return runner.promptCtx.currentSystemSupplement()
 }
 
 func (runner *Runner) SetYoloMode(enabled bool) (bool, error) {
@@ -569,10 +589,7 @@ func (runner *Runner) SetYoloMode(enabled bool) (bool, error) {
 		return false, fmt.Errorf("Read tool does not support yolo mode")
 	}
 	controller.SetAllowOutsideRoot(enabled)
-	runner.mu.RLock()
-	handler := runner.yoloModeHandler
-	runner.mu.RUnlock()
-	if handler != nil {
+	if handler := runner.toolGate.currentYoloHandler(); handler != nil {
 		handler(enabled)
 	}
 	return controller.OutsideRootAllowed(), nil
@@ -597,13 +614,48 @@ func (runner *Runner) validate() error {
 	return nil
 }
 
+// skillState 收敛技能注册表与本 turn 激活的技能上下文，自带锁。
+type skillState struct {
+	mu            sync.RWMutex
+	registry      *skill.Registry
+	activeContext string
+}
+
+func (s *skillState) setRegistry(registry *skill.Registry) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.registry = registry
+}
+
+func (s *skillState) currentRegistry() *skill.Registry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.registry
+}
+
+func (s *skillState) setActiveContext(contextText string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.activeContext = contextText
+}
+
+func (s *skillState) clearActiveContext() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.activeContext = ""
+}
+
+func (s *skillState) currentActiveContext() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.activeContext
+}
+
 func (runner *Runner) SetSkillRegistry(registry *skill.Registry) {
 	if runner == nil {
 		return
 	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	runner.skillRegistry = registry
+	runner.skills.setRegistry(registry)
 }
 
 func (runner *Runner) SkillRoots() []string {
@@ -620,13 +672,11 @@ func (runner *Runner) activateSkillContext(input string) {
 	}
 	registry := runner.currentSkillRegistry()
 	if registry == nil {
-		runner.clearActiveSkillContext()
+		runner.skills.clearActiveContext()
 		return
 	}
 	contextText, _, errs := registry.InstructionContext(input)
-	runner.mu.Lock()
-	runner.activeSkillContext = contextText
-	runner.mu.Unlock()
+	runner.skills.setActiveContext(contextText)
 	for _, err := range errs {
 		if err != nil {
 			runner.notifySystem("skills", err.Error())
@@ -638,27 +688,21 @@ func (runner *Runner) clearActiveSkillContext() {
 	if runner == nil {
 		return
 	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	runner.activeSkillContext = ""
+	runner.skills.clearActiveContext()
 }
 
 func (runner *Runner) currentSkillRegistry() *skill.Registry {
 	if runner == nil {
 		return nil
 	}
-	runner.mu.RLock()
-	defer runner.mu.RUnlock()
-	return runner.skillRegistry
+	return runner.skills.currentRegistry()
 }
 
 func (runner *Runner) currentSkillContext() string {
 	if runner == nil {
 		return ""
 	}
-	runner.mu.RLock()
-	defer runner.mu.RUnlock()
-	return runner.activeSkillContext
+	return runner.skills.currentActiveContext()
 }
 
 func (runner *Runner) ContextStats(limitTokens int, _ string) ContextStats {
@@ -670,21 +714,18 @@ func (runner *Runner) ContextStats(limitTokens int, _ string) ContextStats {
 	}
 
 	runner.mu.RLock()
-	usage := runner.usage
-	usageKnown := runner.usageKnown
 	sessionID := runner.sessionID
-	provider := runner.taskTokensProvider
 	runner.mu.RUnlock()
 
-	current := usageTotalsFromUsage(usage, usageKnown)
+	contextUsage, contextKnown := runner.usage.contextUsage()
+	current := usageTotalsFromUsage(contextUsage, contextKnown)
 	taskTokens := 0
-	if provider != nil {
+	if provider := runner.taskEnv.tokens(); provider != nil {
 		taskTokens = provider.TotalTaskTokens(sessionID)
 	}
 
-	runner.mu.RLock()
-	sessionTotals := usageTotalsFromUsage(runner.sessionUsage, runner.sessionUsageKnown)
-	runner.mu.RUnlock()
+	sessionUsage, sessionKnown := runner.usage.sessionUsage()
+	sessionTotals := usageTotalsFromUsage(sessionUsage, sessionKnown)
 
 	return ContextStats{
 		UsedTokens:        current.used + taskTokens,

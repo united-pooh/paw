@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"paw/internal/message"
 	"paw/internal/session"
@@ -23,6 +24,70 @@ const stateBlockHeader = "[工作状态（State Context）——由系统在恢�
 // recentTurnsLoader 是 session.JSONLStore 的清洗最近轮次读取能力。
 type recentTurnsLoader interface {
 	LoadRecentTurns(ctx context.Context, sessionID string, n int) ([]message.Message, error)
+}
+
+// stateConfig 收敛模式 B 恢复配置：压缩模式、近邻轮数、压缩比与状态块
+// 提供者。P2 从 Runner 字段提取，自带锁。
+type stateConfig struct {
+	mu            sync.RWMutex
+	mode          string
+	recentTurns   int
+	ratio         float64
+	blockProvider StateBlockProvider
+}
+
+func (c *stateConfig) setMode(mode string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if mode == "state" || mode == "summary" {
+		c.mode = mode
+	}
+}
+
+func (c *stateConfig) isStateMode() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.mode == "state"
+}
+
+func (c *stateConfig) setRecentTurns(n int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.recentTurns = n
+}
+
+func (c *stateConfig) recentTurnsValue() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.recentTurns
+}
+
+func (c *stateConfig) setRatio(ratio float64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ratio = ratio
+}
+
+func (c *stateConfig) ratioValue() float64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.ratio
+}
+
+func (c *stateConfig) setBlockProvider(provider StateBlockProvider) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.blockProvider = provider
+}
+
+func (c *stateConfig) buildBlock(ctx context.Context) (string, error) {
+	c.mu.RLock()
+	provider := c.blockProvider
+	c.mu.RUnlock()
+	if provider == nil {
+		return "", nil
+	}
+	return provider.BuildStateContext(ctx)
 }
 
 // loadStateModeHistory 实现模式 B 恢复：状态块 + 最近 N 轮清洗对话
@@ -64,12 +129,10 @@ func (runner *Runner) resumeRecentTurns() int {
 	if runner == nil {
 		return 3
 	}
-	runner.mu.RLock()
-	defer runner.mu.RUnlock()
-	if runner.recentTurns <= 0 {
-		return 3
+	if turns := runner.stateCfg.recentTurnsValue(); turns > 0 {
+		return turns
 	}
-	return runner.recentTurns
+	return 3
 }
 
 // SetStateCompactionRatio 设置模式 B 压缩触发阈值（0~1，默认 0.9）。
@@ -77,9 +140,7 @@ func (runner *Runner) SetStateCompactionRatio(ratio float64) {
 	if runner == nil || ratio <= 0 || ratio >= 1 {
 		return
 	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	runner.stateCompactionRatio = ratio
+	runner.stateCfg.setRatio(ratio)
 }
 
 // SetResumeRecentTurns 设置恢复时保留的完整轮数（T5 由 settings 接入）。
@@ -87,9 +148,7 @@ func (runner *Runner) SetResumeRecentTurns(n int) {
 	if runner == nil || n <= 0 {
 		return
 	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	runner.recentTurns = n
+	runner.stateCfg.setRecentTurns(n)
 }
 
 // stateRefreshInstruction 是状态压缩触发时注入的刷新指令（随下一轮请求
@@ -110,12 +169,10 @@ func (runner *Runner) maintainStateProjection(ctx context.Context, history []mes
 	if runner == nil || len(history) == 0 {
 		return result, nil
 	}
-	runner.mu.RLock()
-	limit := runner.contextLimitTokens
-	ratio := runner.stateCompactionRatio
-	turns := runner.recentTurns
-	cfg := runner.contextMaintenance
-	runner.mu.RUnlock()
+	limit := runner.compact.limit()
+	ratio := runner.stateCfg.ratioValue()
+	turns := runner.stateCfg.recentTurnsValue()
+	cfg := runner.compact.currentMaintenance()
 	if limit <= 0 {
 		return result, nil
 	}

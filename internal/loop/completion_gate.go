@@ -7,6 +7,7 @@ import (
 	"paw/internal/message"
 	"paw/internal/todo"
 	"strings"
+	"sync"
 )
 
 // CompletionAction is the action the task-level completion gate recommends
@@ -173,24 +174,70 @@ func (runner *Runner) SetAutoContinueConfig(config AutoContinueConfig) {
 	if runner == nil {
 		return
 	}
-	runner.mu.Lock()
-	runner.autoContinueConfig = config
-	runner.mu.Unlock()
+	runner.gate.setConfig(config)
 }
 
 func (runner *Runner) SetTodoBroker(broker *todo.Broker) {
 	if runner == nil {
 		return
 	}
-	runner.mu.Lock()
-	runner.todoBroker = broker
-	runner.mu.Unlock()
+	runner.gate.setBroker(broker)
 }
 
 func (runner *Runner) autoContinueState() (AutoContinueConfig, *todo.Broker) {
-	runner.mu.RLock()
-	defer runner.mu.RUnlock()
-	return runner.autoContinueConfig, runner.todoBroker
+	return runner.gate.state()
+}
+
+// progressGate 收敛完成门状态：自动续跑配置、todo broker、进展指纹与
+// 陈旧 todo 计数。P2 从 Runner 字段提取，自带锁。
+type progressGate struct {
+	mu               sync.Mutex
+	autoContinue     AutoContinueConfig
+	broker           *todo.Broker
+	lastProgressHash string
+	lastTodoHash     string
+	staleTodoTurns   int
+}
+
+func (g *progressGate) setConfig(config AutoContinueConfig) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.autoContinue = config
+}
+
+func (g *progressGate) setBroker(broker *todo.Broker) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.broker = broker
+}
+
+func (g *progressGate) state() (AutoContinueConfig, *todo.Broker) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.autoContinue, g.broker
+}
+
+// resetProgress 在新外层 turn 开始时清零进展指纹（runTask 路径）。
+func (g *progressGate) resetProgress() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.lastProgressHash = ""
+}
+
+// recordProgress 记录本轮进展/todo 指纹，返回上一轮进展指纹与陈旧 todo
+// 轮数，供完成门评估无进展与提醒。
+func (g *progressGate) recordProgress(progressHash, todoHash string) (previousHash string, staleTodoTurns int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	previousHash = g.lastProgressHash
+	g.lastProgressHash = progressHash
+	if g.lastTodoHash != "" && todoHash == g.lastTodoHash {
+		g.staleTodoTurns++
+	} else {
+		g.staleTodoTurns = 0
+	}
+	g.lastTodoHash = todoHash
+	return previousHash, g.staleTodoTurns
 }
 
 func (runner *Runner) evaluateCompletion(assistant message.Message, hadToolCalls bool, used, noProgress int) (CompletionDecision, todo.Snapshot, bool, int) {
@@ -204,17 +251,7 @@ func (runner *Runner) evaluateCompletion(assistant message.Message, hadToolCalls
 	}
 	hash := progressFingerprint(snapshot, assistant, hadToolCalls)
 	todoHash := todoFingerprint(snapshot)
-	runner.mu.Lock()
-	previousHash := runner.lastProgressHash
-	runner.lastProgressHash = hash
-	if runner.lastTodoHash != "" && todoHash == runner.lastTodoHash {
-		runner.staleTodoTurns++
-	} else {
-		runner.staleTodoTurns = 0
-	}
-	runner.lastTodoHash = todoHash
-	staleTodoTurns := runner.staleTodoTurns
-	runner.mu.Unlock()
+	previousHash, staleTodoTurns := runner.gate.recordProgress(hash, todoHash)
 	if used > 0 && hash == previousHash {
 		noProgress++
 	} else {

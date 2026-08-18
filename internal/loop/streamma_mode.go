@@ -62,58 +62,109 @@ type StreamMATaskRunner interface {
 	StreamTask(ctx context.Context, req StreamMATaskRequest) (StreamMATaskStream, error)
 }
 
+// streamMAState 收敛 StreamMA 开关与任务运行器，自带锁。
+type streamMAState struct {
+	mu      sync.RWMutex
+	enabled bool
+	tasks   StreamMATaskRunner
+}
+
+func (s *streamMAState) setTasks(tasks StreamMATaskRunner) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tasks = tasks
+}
+
+func (s *streamMAState) currentTasks() StreamMATaskRunner {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.tasks
+}
+
+func (s *streamMAState) setEnabled(enabled bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.enabled = enabled
+}
+
+func (s *streamMAState) isEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.enabled
+}
+
+// taskEnv 收敛后台任务适配器（token 统计提供者与 turn 归属清理器），
+// 两者总由同一个 task.Manager 提供，自带锁。
+type taskEnv struct {
+	mu             sync.RWMutex
+	tokensProvider TaskTokensProvider
+	ownedCleaner   TurnOwnedTaskCleaner
+}
+
+func (e *taskEnv) setTokensProvider(p TaskTokensProvider) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.tokensProvider = p
+}
+
+func (e *taskEnv) tokens() TaskTokensProvider {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.tokensProvider
+}
+
+func (e *taskEnv) setOwnedCleaner(c TurnOwnedTaskCleaner) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.ownedCleaner = c
+}
+
+func (e *taskEnv) cleaner() TurnOwnedTaskCleaner {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.ownedCleaner
+}
+
 func (runner *Runner) SetStreamMATaskRunner(taskController StreamMATaskRunner) {
 	if runner == nil {
 		return
 	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	runner.streamMATasks = taskController
+	runner.streamMA.setTasks(taskController)
 }
 
 func (runner *Runner) SetStreamMAEnabled(enabled bool) {
 	if runner == nil {
 		return
 	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	runner.streamMAEnabled = enabled
+	runner.streamMA.setEnabled(enabled)
 }
 
 func (runner *Runner) SetTaskTokensProvider(p TaskTokensProvider) {
 	if runner == nil {
 		return
 	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	runner.taskTokensProvider = p
+	runner.taskEnv.setTokensProvider(p)
 }
 
 func (runner *Runner) SetTurnOwnedTaskCleaner(cleaner TurnOwnedTaskCleaner) {
 	if runner == nil {
 		return
 	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	runner.turnOwnedTaskCleaner = cleaner
+	runner.taskEnv.setOwnedCleaner(cleaner)
 }
 
 func (runner *Runner) SetSystemSupplement(supplement string) {
 	if runner == nil {
 		return
 	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	runner.systemSupplement = strings.TrimSpace(supplement)
+	runner.promptCtx.setSystemSupplement(supplement)
 }
 
 func (runner *Runner) SetCompactToolPrompt(enabled bool) {
 	if runner == nil {
 		return
 	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	runner.compactToolPrompt = enabled
+	runner.compact.setToolPrompt(enabled)
 }
 
 type streamMAInvocation struct {
@@ -473,18 +524,14 @@ func (runner *Runner) currentStreamMAtasks() StreamMATaskRunner {
 	if runner == nil {
 		return nil
 	}
-	runner.mu.RLock()
-	defer runner.mu.RUnlock()
-	return runner.streamMATasks
+	return runner.streamMA.currentTasks()
 }
 
 func (runner *Runner) currentStreamMAEnabled() bool {
 	if runner == nil {
 		return false
 	}
-	runner.mu.RLock()
-	defer runner.mu.RUnlock()
-	return runner.streamMAEnabled
+	return runner.streamMA.isEnabled()
 }
 
 func streamMAGraphKindFromPlan(kind string, fallback streamMAGraphKind) streamMAGraphKind {

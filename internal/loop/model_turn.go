@@ -196,10 +196,8 @@ func (runner *Runner) buildSystemPrompt() string {
 func (runner *Runner) buildSystemPromptForTurn(turn *TurnState) string {
 	descriptions := []string{}
 	if runner.registry != nil {
-		runner.mu.RLock()
-		compactToolPrompt := runner.compactToolPrompt
-		filter := runner.turnToolFilter
-		runner.mu.RUnlock()
+		compactToolPrompt := runner.compact.toolPrompt()
+		filter := runner.toolGate.currentTurnFilter()
 		if compactToolPrompt {
 			descriptions = runner.registry.DescribeBrief()
 		} else {
@@ -229,10 +227,8 @@ func (runner *Runner) buildSystemPromptForTurn(turn *TurnState) string {
 		runner.prompt = NewPromptBuilder(NewInstructionManager(""))
 	}
 	prompt := runner.prompt.Build(descriptions)
-	runner.mu.RLock()
-	supplement := runner.systemSupplement
-	skillContext := runner.activeSkillContext
-	runner.mu.RUnlock()
+	supplement := runner.promptCtx.currentSystemSupplement()
+	skillContext := runner.currentSkillContext()
 	if turn != nil {
 		if turn.SkillContext != "" {
 			skillContext = turn.SkillContext
@@ -484,20 +480,11 @@ func (runner *Runner) emitModelUsage(usage model.Usage) {
 }
 
 func (runner *Runner) setCurrentUsage(usage model.Usage) {
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	runner.usage = usage
-	runner.usageKnown = true
+	runner.usage.setCurrent(usage)
 }
 
 func (runner *Runner) addSessionUsage(delta tokenUsageTotals) {
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-
-	current := usageTotalsFromUsage(runner.sessionUsage, runner.sessionUsageKnown)
-	current = current.add(delta)
-	runner.sessionUsage = usageFromTotals(current)
-	runner.sessionUsageKnown = true
+	runner.usage.addSession(delta)
 }
 
 func mergeUsageSnapshot(current, next model.Usage) model.Usage {

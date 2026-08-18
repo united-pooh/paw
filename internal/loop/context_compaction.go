@@ -69,20 +69,15 @@ func (runner *Runner) SetContextLimitTokens(limit int) {
 	if runner == nil {
 		return
 	}
-	runner.mu.Lock()
-	runner.contextLimitTokens = maxInt(0, limit)
-	runner.mu.Unlock()
+	runner.compact.setLimitTokens(limit)
 }
 
 func (runner *Runner) maybeCompactHistory(ctx context.Context, history []message.Message) ([]message.Message, *ContextCompactionResult, error) {
 	if runner == nil || len(history) == 0 {
 		return history, nil, nil
 	}
-	runner.mu.RLock()
-	limit := runner.contextLimitTokens
-	usage := runner.usage
-	usageKnown := runner.usageKnown
-	runner.mu.RUnlock()
+	limit := runner.compact.limit()
+	usage, usageKnown := runner.usage.contextUsage()
 	if limit <= 0 {
 		return history, nil, nil
 	}
@@ -161,10 +156,10 @@ func (runner *Runner) compactHistoryWithProtectedTail(ctx context.Context, histo
 	}
 
 	archiveRequests := foldArchiveRequests(fold, head)
-	archive := runner.compactionArchive
+	archive := runner.compact.currentArchive()
 	if archive == nil {
 		var archiveErr error
-		archive, archiveErr = newCompactionArchive(runner.workRoot, runner.sessionID, runner.contextMaintenance.archiveEnabled)
+		archive, archiveErr = newCompactionArchive(runner.workRoot, runner.sessionID, runner.compact.currentMaintenance().archiveEnabled)
 		if archiveErr != nil {
 			return history, nil, archiveErr
 		}
@@ -209,9 +204,7 @@ func (runner *Runner) contextLimit() int {
 	if runner == nil {
 		return model.DefaultContextLimitTokens
 	}
-	runner.mu.RLock()
-	limit := runner.contextLimitTokens
-	runner.mu.RUnlock()
+	limit := runner.compact.limit()
 	if limit <= 0 {
 		return model.DefaultContextLimitTokens
 	}
