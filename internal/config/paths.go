@@ -17,6 +17,7 @@ type Paths struct {
 	Schema              string
 	ModelDiscoveryCache string
 	LegacyAssetsHome    string
+	LegacyV2Home        string
 	WorkspaceRoot       string
 	WorkspaceConfig     string
 }
@@ -27,35 +28,53 @@ type PathOptions struct {
 	ConfigHome    string
 	UserConfigDir string
 	UserHomeDir   string
+	LegacyV2Home  string
 	WorkspaceRoot string
 }
 
 func ResolvePaths(options PathOptions) (Paths, error) {
-	root := strings.TrimSpace(options.ConfigHome)
-	if root == "" {
-		root = strings.TrimSpace(os.Getenv("PAW_CONFIG_HOME"))
-	}
-	if root == "" {
-		base := strings.TrimSpace(options.UserConfigDir)
-		if base == "" {
-			var err error
-			base, err = os.UserConfigDir()
-			if err != nil {
-				return Paths{}, fmt.Errorf("resolve user config directory: %w", err)
-			}
+	userHome := strings.TrimSpace(options.UserHomeDir)
+	if userHome == "" {
+		var err error
+		userHome, err = os.UserHomeDir()
+		if err != nil {
+			return Paths{}, fmt.Errorf("resolve user home directory: %w", err)
 		}
-		root = filepath.Join(base, "Paw")
 	}
-	root, err := filepath.Abs(root)
+	userHome, err := filepath.Abs(userHome)
+	if err != nil {
+		return Paths{}, fmt.Errorf("resolve user home directory: %w", err)
+	}
+
+	configuredRoot := strings.TrimSpace(options.ConfigHome)
+	if configuredRoot == "" {
+		configuredRoot = strings.TrimSpace(os.Getenv("PAW_CONFIG_HOME"))
+	}
+	explicitRoot := configuredRoot != ""
+	root := configuredRoot
+	userConfigDir := strings.TrimSpace(options.UserConfigDir)
+	if userConfigDir == "" && !explicitRoot {
+		userConfigDir, err = os.UserConfigDir()
+		if err != nil {
+			return Paths{}, fmt.Errorf("resolve user config directory: %w", err)
+		}
+	}
+	if root == "" {
+		root = filepath.Join(userHome, ".paw")
+	}
+	root, err = filepath.Abs(root)
 	if err != nil {
 		return Paths{}, fmt.Errorf("resolve Paw config directory: %w", err)
 	}
 
-	userHome := strings.TrimSpace(options.UserHomeDir)
-	if userHome == "" {
-		userHome, err = os.UserHomeDir()
+	legacyV2Home := strings.TrimSpace(options.LegacyV2Home)
+	if legacyV2Home == "" && !explicitRoot && userConfigDir != "" {
+		legacyV2Home = filepath.Join(userConfigDir, "Paw")
+	}
+	if legacyV2Home != "" {
+		legacyV2Home, err = filepath.Abs(legacyV2Home)
 		if err != nil {
-			return Paths{}, fmt.Errorf("resolve user home directory: %w", err)
+			return Paths{}, fmt.Errorf("resolve legacy Paw v2 directory: %w", err)
 		}
 	}
 
@@ -69,6 +88,7 @@ func ResolvePaths(options PathOptions) (Paths, error) {
 		Schema:              filepath.Join(root, "schemas", "config-v2.schema.json"),
 		ModelDiscoveryCache: filepath.Join(root, "model-discovery-cache.json"),
 		LegacyAssetsHome:    filepath.Join(userHome, ".paw"),
+		LegacyV2Home:        legacyV2Home,
 	}
 	if work := strings.TrimSpace(options.WorkspaceRoot); work != "" {
 		work, err = filepath.Abs(work)

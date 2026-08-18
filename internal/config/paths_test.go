@@ -23,16 +23,20 @@ func TestResolvePathsUsesExplicitConfigAndWorkspaceRoots(t *testing.T) {
 	}
 }
 
-func TestResolvePathsUsesInjectedUserConfigDirectory(t *testing.T) {
+func TestResolvePathsDefaultsToUserHomePawDirectory(t *testing.T) {
 	t.Setenv("PAW_CONFIG_HOME", "")
 	root := t.TempDir()
 	paths, err := ResolvePaths(PathOptions{UserConfigDir: root, UserHomeDir: filepath.Join(root, "home")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(root, "Paw", "config.jsonc")
+	want := filepath.Join(root, "home", ".paw", "config.jsonc")
 	if paths.GlobalConfig != want {
 		t.Fatalf("config=%q want=%q", paths.GlobalConfig, want)
+	}
+	legacyV2 := filepath.Join(root, "Paw")
+	if paths.LegacyV2Home != legacyV2 {
+		t.Fatalf("legacy v2 home=%q want=%q", paths.LegacyV2Home, legacyV2)
 	}
 }
 
