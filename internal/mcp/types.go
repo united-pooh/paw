@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"strings"
 )
 
 type ServerConfig struct {
@@ -10,8 +11,17 @@ type ServerConfig struct {
 	Command string
 	Args    []string
 	WorkDir string
+	URL     string
+	Headers map[string]string
 	Enabled bool
 	Env     map[string]string
+}
+
+// IsHTTP reports whether the server uses the HTTP/SSE transport (Streamable
+// HTTP per the 2025-06-18 MCP spec). When true, Command/Args/WorkDir must be
+// empty and URL must be a valid http(s) URL.
+func (c ServerConfig) IsHTTP() bool {
+	return strings.TrimSpace(c.URL) != ""
 }
 
 type Config struct {

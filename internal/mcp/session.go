@@ -20,6 +20,23 @@ type RPCSession interface {
 	Close(context.Context) error
 }
 
+// managedSession adds lifecycle diagnostics used by Manager on top of the
+// transport-neutral RPC surface. Both stdio processes and HTTP sessions
+// implement it; HTTP sessions report PID 0 and remain alive until Close.
+type managedSession interface {
+	RPCSession
+	PID() int
+	StderrTail() string
+	WaitError() error
+}
+
+func startConfiguredSession(ctx context.Context, config ServerConfig) (managedSession, error) {
+	if config.IsHTTP() {
+		return newHTTPSession(config)
+	}
+	return startSession(ctx, config)
+}
+
 // processSession owns one MCP server process and the stdio JSON-RPC transport
 // attached to it. MCP initialization and capability discovery are deliberately
 // kept above this layer so the same transport can be used by every manager.

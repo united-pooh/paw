@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,6 +52,8 @@ type rawServerConfig struct {
 	Command string            `toml:"command"`
 	Args    []string          `toml:"args"`
 	CWD     string            `toml:"cwd"`
+	URL     string            `toml:"url"`
+	Headers map[string]string `toml:"headers"`
 	Enabled *bool             `toml:"enabled"`
 	Env     map[string]string `toml:"env"`
 }
@@ -123,8 +126,20 @@ func LoadConfigFile(path, workspaceRoot string) (Config, error) {
 			enabled = *raw.Enabled
 		}
 		command := strings.TrimSpace(raw.Command)
-		if enabled && command == "" {
-			return Config{}, fmt.Errorf("MCP server %q has an empty command", name)
+		serverURL := strings.TrimSpace(os.ExpandEnv(raw.URL))
+		if serverURL != "" {
+			if command != "" {
+				return Config{}, fmt.Errorf("MCP server %q cannot configure both command and url", name)
+			}
+			if len(raw.Args) > 0 || strings.TrimSpace(raw.CWD) != "" {
+				return Config{}, fmt.Errorf("MCP HTTP server %q cannot configure args or cwd", name)
+			}
+			parsed, parseErr := url.Parse(serverURL)
+			if parseErr != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+				return Config{}, fmt.Errorf("MCP server %q has invalid HTTP url %q", name, serverURL)
+			}
+		} else if enabled && command == "" {
+			return Config{}, fmt.Errorf("MCP server %q has an empty command or url", name)
 		}
 
 		workDir := workspaceRoot
@@ -144,6 +159,8 @@ func LoadConfigFile(path, workspaceRoot string) (Config, error) {
 			Command: command,
 			Args:    expandEnvList(raw.Args),
 			WorkDir: workDir,
+			URL:     serverURL,
+			Headers: expandEnvMap(raw.Headers),
 			Enabled: enabled,
 			Env:     expandEnvMap(raw.Env),
 		}

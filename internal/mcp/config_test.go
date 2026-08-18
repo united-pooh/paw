@@ -210,6 +210,61 @@ command = "server"
 	}
 }
 
+func TestLoadConfigReadsHTTPServerAndExpandsHeaders(t *testing.T) {
+	t.Setenv("JINA_API_KEY", "jina-test-key")
+
+	home := t.TempDir()
+	workspace := t.TempDir()
+	writeMCPConfig(t, home, `
+[mcp_servers.jina]
+url = "https://mcp.jina.ai/v1"
+headers = { Authorization = "Bearer ${JINA_API_KEY}" }
+enabled = true
+`)
+
+	cfg, err := LoadConfig(home, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, ok := cfg.Servers["jina"]
+	if !ok {
+		t.Fatal("jina server not found")
+	}
+	if server.URL != "https://mcp.jina.ai/v1" || server.Headers["Authorization"] != "Bearer jina-test-key" {
+		t.Fatalf("server=%#v", server)
+	}
+	if !server.IsHTTP() || server.Command != "" || len(server.Args) != 0 {
+		t.Fatalf("HTTP server transport fields=%#v", server)
+	}
+}
+
+func TestLoadConfigRejectsMixedHTTPAndStdioServer(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	writeMCPConfig(t, home, `
+[mcp_servers.mixed]
+url = "https://example.com/mcp"
+command = "npx"
+`)
+
+	if _, err := LoadConfig(home, workspace); err == nil {
+		t.Fatal("expected mixed transport validation error")
+	}
+}
+
+func TestLoadConfigRejectsInvalidHTTPServerURL(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	writeMCPConfig(t, home, `
+[mcp_servers.bad]
+url = "ftp://example.com/mcp"
+`)
+
+	if _, err := LoadConfig(home, workspace); err == nil {
+		t.Fatal("expected invalid HTTP URL validation error")
+	}
+}
+
 func writeMCPConfig(t *testing.T, home, content string) {
 	t.Helper()
 	path := filepath.Join(home, ".paw", "mcp.toml")

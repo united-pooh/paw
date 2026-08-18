@@ -42,7 +42,7 @@ type Manager struct {
 
 type managedServer struct {
 	config       ServerConfig
-	session      *processSession
+	session      managedSession
 	capabilities map[string]any
 	tools        []ToolSpec
 	status       ServerStatus
@@ -106,7 +106,7 @@ func Start(ctx context.Context, config Config) (*Manager, error) {
 
 type startupResult struct {
 	name         string
-	session      *processSession
+	session      managedSession
 	capabilities map[string]any
 	tools        []ToolSpec
 	counts       capabilityCounts
@@ -121,7 +121,7 @@ func (m *Manager) startServers(names []string) {
 			result := startupResult{name: name}
 			startupCtx, cancelStartup := context.WithTimeout(m.ctx, startupTimeout)
 			defer cancelStartup()
-			session, err := startSession(context.Background(), server.config)
+			session, err := startConfiguredSession(context.Background(), server.config)
 			if err != nil {
 				result.err = startupError(server.config, "start", err, "")
 				results <- result
@@ -184,7 +184,7 @@ func (m *Manager) applyStartupResult(result startupResult) {
 	m.publishSnapshot()
 }
 
-func (m *Manager) markStartupFailed(server *managedServer, message string, session *processSession) {
+func (m *Manager) markStartupFailed(server *managedServer, message string, session managedSession) {
 	m.mu.Lock()
 	server.status.State = "unavailable"
 	server.status.LastError = truncateDiagnostic(message)
@@ -230,7 +230,7 @@ func (m *Manager) Ready() bool {
 	}
 }
 
-func initializeAndDiscover(ctx context.Context, config ServerConfig, session *processSession) ([]ToolSpec, capabilityCounts, map[string]any, error) {
+func initializeAndDiscover(ctx context.Context, config ServerConfig, session RPCSession) ([]ToolSpec, capabilityCounts, map[string]any, error) {
 	params := map[string]any{
 		"protocolVersion": protocolVersion,
 		"capabilities":    map[string]any{},
