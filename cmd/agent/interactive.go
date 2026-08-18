@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"paw/internal/goal"
 	"paw/internal/loop"
 	"paw/internal/plan"
 	"paw/internal/session"
@@ -28,22 +29,19 @@ func runSingleTurnMode(ctx context.Context, opts options) error {
 	output := headless.New(os.Stdout)
 	todoBroker := todo.NewBroker()
 	defer todoBroker.Close()
-	runner, sessionID, _, configController, settingsController, _, store, mcpManager, err := buildRunner(ctx, opts.sessionID, output, opts.allowOutsideRead, false, func(registry *tool.Registry) error {
+	app, err := buildRunner(ctx, opts.sessionID, output, opts.allowOutsideRead, false, func(registry *tool.Registry) error {
 		return registerMainAgentTools(registry, todoBroker)
 	})
 	if err != nil {
 		return err
 	}
-	defer func() { _ = configController.Close() }()
-	wireSessionTools(runner, store, todoBroker, sessionID)
-	applyCompressionSettings(runner, settingsController)
-	if mcpManager != nil {
-		defer func() { _ = mcpManager.Close(context.Background()) }()
-	}
-	runner.SetStreamMAEnabled(opts.streamMA)
+	defer func() { _ = app.Close() }()
+	wireSessionTools(app.Runner, app.Store, todoBroker, app.SessionID)
+	applyCompressionSettings(app.Runner, app.SettingsController)
+	app.Runner.SetStreamMAEnabled(opts.streamMA)
 
-	fmt.Fprintf(os.Stderr, "session: %s\n", sessionID)
-	_, err = runner.RunTurn(ctx, opts.prompt)
+	fmt.Fprintf(os.Stderr, "session: %s\n", app.SessionID)
+	_, err = app.Runner.RunTurn(ctx, opts.prompt)
 	return err
 }
 
@@ -57,7 +55,7 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	defer todoBroker.Close()
 	output.SetSelectionBroker(selectionBroker)
 	output.SetTodoBroker(todoBroker)
-	runner, sessionID, _, configController, settingsController, taskManager, store, mcpManager, err := buildRunner(ctx, opts.sessionID, output, opts.allowOutsideRead, true, func(registry *tool.Registry) error {
+	app, err := buildRunner(ctx, opts.sessionID, output, opts.allowOutsideRead, true, func(registry *tool.Registry) error {
 		if err := registerMainAgentTools(registry, todoBroker); err != nil {
 			return err
 		}
@@ -70,16 +68,15 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = configController.Close() }()
-	wireSessionTools(runner, store, todoBroker, sessionID)
+	defer func() { _ = app.Close() }()
+	runner := app.Runner
+	sessionID := app.SessionID
+	wireSessionTools(runner, app.Store, todoBroker, sessionID)
 	runner.SetSessionLoadedHook(func(sid string) {
 		// /resume 切换会话后：会话相关工具、todo 事件、状态块全部跟随新会话。
-		wireSessionTools(runner, store, todoBroker, sid)
+		wireSessionTools(runner, app.Store, todoBroker, sid)
 	})
-	applyCompressionSettings(runner, settingsController)
-	if mcpManager != nil {
-		defer func() { _ = mcpManager.Close(context.Background()) }()
-	}
+	applyCompressionSettings(runner, app.SettingsController)
 	runner.SetStreamMAEnabled(opts.streamMA)
 	if opts.tokenTracer {
 		tracer, server, err := startTokenTracer(ctx, sessionID, opts)
@@ -92,21 +89,26 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 			_ = server.Shutdown(shutdownCtx)
 		}()
 		runner.SetTokenTracer(tracer)
-		taskManager.SetTokenTracer(tracer)
+		app.TaskManager.SetTokenTracer(tracer)
 	}
 
-	output.SetModelConfigController(configController)
-	output.SetConfigCenterController(configController)
-	output.SetSettingsController(settingsController)
-	output.SetTaskController(taskManager)
-	output.SetSessionStore(store)
-	output.SetMCPStatusController(mcpManager)
-	goalController := newSessionGoalController(sessionID, runner, todoBroker, store)
+	output.SetModelConfigController(app.ConfigController)
+	output.SetConfigCenterController(app.ConfigController)
+	output.SetSettingsController(app.SettingsController)
+	output.SetTaskController(app.TaskManager)
+	output.SetSessionStore(app.Store)
+	output.SetMCPStatusController(app.MCPManager)
+	// store 目录作为 goal/plan 事件流的根；无 store 时两控制器自行降级。
+	sessionBase := ""
+	if app.Store != nil {
+		sessionBase = app.Store.Dir()
+	}
+	goalController := goal.NewSessionController(sessionID, runner, todoBroker, sessionBase)
 	goalController.SetStopped(func(reason string) {
 		_ = output.NotifyGoalStopped(reason)
 	})
 	output.SetGoalController(goalController)
-	planController := newSessionPlanController(sessionID, runner, plansDir(runner), store)
+	planController := plan.NewSessionController(sessionID, runner, plansDir(runner), sessionBase)
 	planController.SetNotify(func(doc plan.PlanDoc) {
 		_ = output.NotifyPlanFinalized(doc.Path)
 	})

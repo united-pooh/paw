@@ -1,50 +1,51 @@
-package main
+package plan
 
 import (
 	"context"
 	"fmt"
 	"paw/internal/loop"
-	"paw/internal/plan"
-	"paw/internal/session"
 	"strings"
 	"sync"
 )
 
-// sessionPlanController adapts the plan Runtime to the small Bubble Tea
+// SessionController adapts the plan Runtime to the small Bubble Tea
 // controller interface. Plans are fully independent of Goals: the controller
 // only needs a turn executor (the shared runner) and the plans directory.
-type sessionPlanController struct {
-	runtime   *plan.Runtime
+type SessionController struct {
+	runtime   *Runtime
 	sessionID string
 	mu        sync.Mutex
-	activeID  plan.PlanID
-	notify    func(plan.PlanDoc)
+	activeID  PlanID
+	notify    func(PlanDoc)
 	stopped   func(reason string)
 }
 
-func newSessionPlanController(sessionID string, runner *loop.Runner, plansDir string, store *session.JSONLStore) *sessionPlanController {
-	c := &sessionPlanController{sessionID: sessionID}
-	// 事件溯源存储：文档变更走 plan 事件流（<store>/plans/），.md 文件保持
-	// 为投影产物；store 为 nil 时回退到纯文件存储。
-	var docStore plan.DocStore = plan.NewFileStore(plansDir)
-	if store != nil {
-		if esStore, err := plan.NewEventStore(plansDir, store.Dir()); err == nil {
+// NewSessionController builds the session-scoped plan controller.
+// storeDir is the session store root (~/.paw/projects/<project>); an empty
+// value falls back to plain file storage without the event-sourced journal.
+func NewSessionController(sessionID string, runner *loop.Runner, plansDir, storeDir string) *SessionController {
+	c := &SessionController{sessionID: sessionID}
+	// 事件溯源存储：文档变更走 plan 事件流（<storeDir>/plans/），.md 文件保持
+	// 为投影产物；storeDir 为空时回退到纯文件存储。
+	var docStore DocStore = NewFileStore(plansDir)
+	if storeDir != "" {
+		if esStore, err := NewEventStore(plansDir, storeDir); err == nil {
 			docStore = esStore
 		}
 	}
-	c.runtime = plan.NewRuntime(plan.RuntimeConfig{
+	c.runtime = NewRuntime(RuntimeConfig{
 		Store:    docStore,
 		Executor: runner.GoalTurnExecutor(),
-		Filter:   plan.ModeFilter(plansDir),
-		Events: func(e plan.Event) {
+		Filter:   ModeFilter(plansDir),
+		Events: func(e Event) {
 			switch e.Type {
-			case plan.EventPaused, plan.EventFailed, plan.EventCancelled:
+			case EventPaused, EventFailed, EventCancelled:
 				if c.stopped != nil {
 					c.stopped(fmt.Sprintf("%s", e.Status))
 				}
 			}
 		},
-		OnFinalized: func(doc plan.PlanDoc) {
+		OnFinalized: func(doc PlanDoc) {
 			c.mu.Lock()
 			c.activeID = ""
 			c.mu.Unlock()
@@ -57,25 +58,26 @@ func newSessionPlanController(sessionID string, runner *loop.Runner, plansDir st
 }
 
 // SetNotify wires the approved-plan callback (TUI switches to chat execution).
-func (c *sessionPlanController) SetNotify(fn func(plan.PlanDoc)) {
+func (c *SessionController) SetNotify(fn func(PlanDoc)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.notify = fn
 }
 
 // SetStopped wires the non-final end callback (TUI releases working state).
-func (c *sessionPlanController) SetStopped(fn func(reason string)) {
+func (c *SessionController) SetStopped(fn func(reason string)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.stopped = fn
 }
 
 // Finalize approves the plan document; used as the plan_finalize tool hook.
-func (c *sessionPlanController) Finalize(ctx context.Context, id plan.PlanID, path string) (plan.PlanDoc, error) {
+func (c *SessionController) Finalize(ctx context.Context, id PlanID, path string) (PlanDoc, error) {
 	return c.runtime.Finalize(ctx, id, path)
 }
 
-func (c *sessionPlanController) Start(requirement string) (string, error) {
+// Start launches a plan session for the trimmed requirement and remembers its ID.
+func (c *SessionController) Start(requirement string) (string, error) {
 	requirement = strings.TrimSpace(requirement)
 	if requirement == "" {
 		return "", fmt.Errorf("plan requirement is empty")
@@ -90,7 +92,8 @@ func (c *sessionPlanController) Start(requirement string) (string, error) {
 	return string(session.ID), nil
 }
 
-func (c *sessionPlanController) Status() string {
+// Status renders the active plan session status, or a placeholder when idle.
+func (c *SessionController) Status() string {
 	c.mu.Lock()
 	id := c.activeID
 	c.mu.Unlock()
@@ -112,7 +115,8 @@ func (c *sessionPlanController) Status() string {
 	return b.String()
 }
 
-func (c *sessionPlanController) List() string {
+// List renders every stored plan document as a one-line summary.
+func (c *SessionController) List() string {
 	docs, err := c.runtime.List(context.Background())
 	if err != nil {
 		return err.Error()
@@ -127,8 +131,9 @@ func (c *sessionPlanController) List() string {
 	return strings.Join(lines, "\n")
 }
 
-func (c *sessionPlanController) Show(id string) string {
-	doc, found, err := c.runtime.Show(context.Background(), plan.PlanID(strings.TrimSpace(id)))
+// Show renders one plan document by ID (trimmed), including its content.
+func (c *SessionController) Show(id string) string {
+	doc, found, err := c.runtime.Show(context.Background(), PlanID(strings.TrimSpace(id)))
 	if err != nil {
 		return err.Error()
 	}
@@ -138,7 +143,8 @@ func (c *sessionPlanController) Show(id string) string {
 	return fmt.Sprintf("id: %s\nstatus: %s\ntitle: %s\npath: %s\n\n%s", doc.ID, doc.Status, doc.Title, doc.Path, doc.Content)
 }
 
-func (c *sessionPlanController) Cancel() error {
+// Cancel aborts the active plan session, if one exists.
+func (c *SessionController) Cancel() error {
 	c.mu.Lock()
 	id := c.activeID
 	c.mu.Unlock()
@@ -154,10 +160,12 @@ func (c *sessionPlanController) Cancel() error {
 	return nil
 }
 
+// Compile-time assertion: satisfies the Bubble Tea plan controller interface
+// (Start/Status/List/Show/Cancel) without importing the UI package.
 var _ interface {
 	Start(string) (string, error)
 	Status() string
 	List() string
 	Show(string) string
 	Cancel() error
-} = (*sessionPlanController)(nil)
+} = (*SessionController)(nil)

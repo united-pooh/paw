@@ -113,7 +113,7 @@ func validateWorkerRequest(req task.WorkerRequest) error {
 // 每次任务之间的运行时状态完全隔离（仅 model.Client 在池内按需复用）。
 func runWorkerTurn(ctx context.Context, req task.WorkerRequest, broker *workerMCPBroker, allowOutsideRead bool) task.WorkerResult {
 	workerUI := &workerUsageUI{UI: headless.New(io.Discard)}
-	runner, sessionID, _, configController, _, _, _, _, err := buildRunnerWithTaskContext(ctx, req.SessionID, workerUI, allowOutsideRead, false, taskRuntimeContext{
+	app, err := buildRunnerWithTaskContext(ctx, req.SessionID, workerUI, allowOutsideRead, false, taskRuntimeContext{
 		workerMode:      true,
 		depth:           req.Depth,
 		maxDepth:        req.MaxDepth,
@@ -121,13 +121,12 @@ func runWorkerTurn(ctx context.Context, req task.WorkerRequest, broker *workerMC
 		disableMainTodo: true,
 		mcpBroker:       broker,
 	})
-	result := task.WorkerResult{TaskID: req.TaskID, SessionID: sessionID, ExitCode: 0}
 	if err != nil {
-		result.Error = err.Error()
-		result.ExitCode = 1
-		return result
+		return task.WorkerResult{TaskID: req.TaskID, Error: err.Error(), ExitCode: 1}
 	}
-	defer func() { _ = configController.Close() }()
+	defer func() { _ = app.Close() }()
+	runner, sessionID := app.Runner, app.SessionID
+	result := task.WorkerResult{TaskID: req.TaskID, SessionID: sessionID, ExitCode: 0}
 	broker.SetUpdateHandler(func(snapshot coremcp.Snapshot) {
 		adapted := toolmcp.NewSnapshotTools(snapshot, broker)
 		tools := make([]tool.Tool, 0, len(adapted))

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	configv2 "paw/internal/config"
@@ -29,6 +30,38 @@ type taskRuntimeContext struct {
 	disableMainTodo bool
 }
 
+// appContext 聚合 buildRunner 产出的全部长生命周期资源，取代此前返回给
+// 调用方的 9 元组。Close 统一收敛资源释放，调用方不再各自记忆关闭顺序。
+type appContext struct {
+	Runner             *loop.Runner
+	SessionID          string
+	Model              *model.Client
+	ConfigController   *configv2.Controller
+	SettingsController *settings.Controller
+	TaskManager        *task.Manager
+	Store              *session.JSONLStore
+	// MCPManager 可能为 nil：task worker 复用父进程传入的 broker，
+	// 不在本进程内启动 MCP 运行时。
+	MCPManager *coremcp.Manager
+}
+
+// Close 释放长生命周期资源。顺序与此前调用方 LIFO defer 等价：先停 MCP
+// 运行时（订阅协程随之退出），再关配置控制器（同时关闭底层配置管理器）。
+// settings/store/task 现状无 Close 语义，不在此引入新的关闭行为。
+func (a *appContext) Close() error {
+	if a == nil {
+		return nil
+	}
+	var errs []error
+	if a.MCPManager != nil {
+		errs = append(errs, a.MCPManager.Close(context.Background()))
+	}
+	if a.ConfigController != nil {
+		errs = append(errs, a.ConfigController.Close())
+	}
+	return errors.Join(errs...)
+}
+
 func configOpenOptions(paths configv2.Paths, subCtx taskRuntimeContext) configv2.Options {
 	return configv2.Options{
 		Paths:                 paths,
@@ -42,22 +75,22 @@ func effectiveYoloMode(commandLineEnabled bool, document configv2.Document) bool
 
 type runnerToolConfigurator func(*tool.Registry) error
 
-func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI, allowOutsideRead bool, allowIncompleteConfig bool, configurators ...runnerToolConfigurator) (*loop.Runner, string, *model.Client, *configv2.Controller, *settings.Controller, *task.Manager, *session.JSONLStore, *coremcp.Manager, error) {
+func buildRunner(ctx context.Context, sessionIDFlag string, output uiiface.UI, allowOutsideRead bool, allowIncompleteConfig bool, configurators ...runnerToolConfigurator) (*appContext, error) {
 	return buildRunnerWithTaskContext(ctx, sessionIDFlag, output, allowOutsideRead, allowIncompleteConfig, taskRuntimeContext{}, configurators...)
 }
 
-func buildRunnerWithTaskContext(ctx context.Context, sessionIDFlag string, output uiiface.UI, allowOutsideRead bool, allowIncompleteConfig bool, subCtx taskRuntimeContext, configurators ...runnerToolConfigurator) (*loop.Runner, string, *model.Client, *configv2.Controller, *settings.Controller, *task.Manager, *session.JSONLStore, *coremcp.Manager, error) {
+func buildRunnerWithTaskContext(ctx context.Context, sessionIDFlag string, output uiiface.UI, allowOutsideRead bool, allowIncompleteConfig bool, subCtx taskRuntimeContext, configurators ...runnerToolConfigurator) (*appContext, error) {
 	root, err := os.Getwd()
 	if err != nil {
-		return nil, "", nil, nil, nil, nil, nil, nil, err
+		return nil, err
 	}
 	paths, err := configv2.ResolvePaths(configv2.PathOptions{WorkspaceRoot: root})
 	if err != nil {
-		return nil, "", nil, nil, nil, nil, nil, nil, err
+		return nil, err
 	}
 	configManager, err := configv2.Open(ctx, configOpenOptions(paths, subCtx))
 	if err != nil {
-		return nil, "", nil, nil, nil, nil, nil, nil, err
+		return nil, err
 	}
 	var configController *configv2.Controller
 	success := false
@@ -72,7 +105,7 @@ func buildRunnerWithTaskContext(ctx context.Context, sessionIDFlag string, outpu
 	}()
 	if !allowIncompleteConfig {
 		if err := configManager.RequireReady(); err != nil {
-			return nil, "", nil, nil, nil, nil, nil, nil, err
+			return nil, err
 		}
 	}
 	configSnapshot := configManager.Snapshot()
@@ -81,19 +114,19 @@ func buildRunnerWithTaskContext(ctx context.Context, sessionIDFlag string, outpu
 
 	store, err := session.NewJSONLStoreInCwd()
 	if err != nil {
-		return nil, "", nil, nil, nil, nil, nil, nil, fmt.Errorf("初始化 session store 失败: %w", err)
+		return nil, fmt.Errorf("初始化 session store 失败: %w", err)
 	}
 
 	sessionID, err := resolveSessionID(ctx, store, sessionIDFlag, root)
 	if err != nil {
-		return nil, "", nil, nil, nil, nil, nil, nil, err
+		return nil, err
 	}
 
 	client := model.NewClient(cfg)
 	configController = configv2.NewController(configManager, client)
 	settingsController, err := settings.NewController(paths.Settings)
 	if err != nil {
-		return nil, "", nil, nil, nil, nil, nil, nil, err
+		return nil, err
 	}
 	var notifier task.Notifier
 	if n, ok := output.(task.Notifier); ok {
@@ -101,18 +134,18 @@ func buildRunnerWithTaskContext(ctx context.Context, sessionIDFlag string, outpu
 	}
 	executable, err := os.Executable()
 	if err != nil {
-		return nil, "", nil, nil, nil, nil, nil, nil, fmt.Errorf("resolve executable: %w", err)
+		return nil, fmt.Errorf("resolve executable: %w", err)
 	}
 	broker := subCtx.mcpBroker
 	var mcpManager *coremcp.Manager
 	if broker == nil {
 		mcpConfig, err := coremcp.LoadConfigFile(paths.MCP, root)
 		if err != nil {
-			return nil, "", nil, nil, nil, nil, nil, nil, err
+			return nil, err
 		}
 		mcpManager, err = coremcp.Start(ctx, mcpConfig)
 		if err != nil {
-			return nil, "", nil, nil, nil, nil, nil, nil, err
+			return nil, err
 		}
 		broker = mcpManager
 	}
@@ -133,7 +166,7 @@ func buildRunnerWithTaskContext(ctx context.Context, sessionIDFlag string, outpu
 		if mcpManager != nil {
 			_ = mcpManager.Close(context.Background())
 		}
-		return nil, "", nil, nil, nil, nil, nil, nil, fmt.Errorf("configure context maintenance: %w", err)
+		return nil, fmt.Errorf("configure context maintenance: %w", err)
 	}
 	taskManager := task.NewManager(task.Config{
 		Model:        client,
@@ -158,7 +191,7 @@ func buildRunnerWithTaskContext(ctx context.Context, sessionIDFlag string, outpu
 		if mcpManager != nil {
 			_ = mcpManager.Close(context.Background())
 		}
-		return nil, "", nil, nil, nil, nil, nil, nil, err
+		return nil, err
 	}
 	// worker 进程以沙箱模式覆盖文件/Bash 工具（主 agent 非 workerMode 不变）：
 	//  - Write/Edit：拒绝写入 root/.paw（仅内部会话存储写入），沿用共享 read-state；
@@ -185,7 +218,7 @@ func buildRunnerWithTaskContext(ctx context.Context, sessionIDFlag string, outpu
 			if mcpManager != nil {
 				_ = mcpManager.Close(context.Background())
 			}
-			return nil, "", nil, nil, nil, nil, nil, nil, err
+			return nil, err
 		}
 	}
 	for _, configure := range configurators {
@@ -196,7 +229,7 @@ func buildRunnerWithTaskContext(ctx context.Context, sessionIDFlag string, outpu
 			if mcpManager != nil {
 				_ = mcpManager.Close(context.Background())
 			}
-			return nil, "", nil, nil, nil, nil, nil, nil, err
+			return nil, err
 		}
 	}
 	if mcpManager != nil {
@@ -215,7 +248,16 @@ func buildRunnerWithTaskContext(ctx context.Context, sessionIDFlag string, outpu
 	}
 
 	success = true
-	return runner, sessionID, client, configController, settingsController, taskManager, store, mcpManager, nil
+	return &appContext{
+		Runner:             runner,
+		SessionID:          sessionID,
+		Model:              client,
+		ConfigController:   configController,
+		SettingsController: settingsController,
+		TaskManager:        taskManager,
+		Store:              store,
+		MCPManager:         mcpManager,
+	}, nil
 }
 
 // sandboxLimitsFlag 把生效沙箱资源限制编码为 --sandbox-limits CSV，由 worker
