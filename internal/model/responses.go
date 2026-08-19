@@ -155,6 +155,7 @@ type responsesError struct {
 type responsesStreamEvent struct {
 	Type        string                `json:"type"`
 	Delta       string                `json:"delta,omitempty"`
+	Text        string                `json:"text,omitempty"`
 	ItemID      string                `json:"item_id,omitempty"`
 	OutputIndex int                   `json:"output_index,omitempty"`
 	CallID      string                `json:"call_id,omitempty"`
@@ -838,10 +839,25 @@ func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response
 				}
 				sawOutputTextDelta = true
 			}
-		case "response.reasoning_summary_text.delta", "response.reasoning.delta":
+		case "response.reasoning_summary_text.delta", "response.reasoning.delta", "response.reasoning_text.delta":
+			// reasoning_summary_text.delta / reasoning.delta 是 OpenAI 官方事件；
+			// reasoning_text.delta 是 DeepSeek Responses API 的逐 token CoT 事件。
+			// 旧实现漏掉后者，DeepSeek 的全部思考 delta 被静默丢弃，只能从
+			// response.completed 一次性回放——表现为思考内容瞬间全量输出。
 			if event.Delta != "" {
 				result.madeProgress = true
 				if !emitStreamEvent(ctx, events, StreamEvent{Thinking: event.Delta}) {
+					result.err = ctx.Err()
+					return result
+				}
+				sawReasoningDelta = true
+			}
+		case "response.reasoning_text.done":
+			// DeepSeek 的全量 CoT 兜底：仅在一条流式 delta 都没收到时回放全文，
+			// 避免与已播放的增量重复（received 时 completed 兜底会被抑制）。
+			if !sawReasoningDelta && event.Text != "" {
+				result.madeProgress = true
+				if !emitStreamEvent(ctx, events, StreamEvent{Thinking: event.Text}) {
 					result.err = ctx.Err()
 					return result
 				}
