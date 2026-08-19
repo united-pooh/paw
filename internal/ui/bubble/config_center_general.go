@@ -99,6 +99,7 @@ func (m *appModel) switchConfigCenterTab(key string) {
 	state.page = target
 	state.selected = 0
 	state.search = ""
+	state.searchActive = false
 	state.err = ""
 	state.confirmAction = ""
 	if target == configCenterModels {
@@ -135,15 +136,19 @@ func (m appModel) renderConfigCenterTabs(contentWidth int) string {
 }
 
 // renderConfigCenterSearch 渲染真正的单行输入框，而不是旧实现里一行裸文字
-// 再跟一条横线。搜索框与 tab/footer 使用同一页面宽度和左缘。
+// 再跟一条横线。搜索框与 tab/footer 使用同一页面宽度和左缘。搜索模式下
+// 在搜索词末尾渲染反色光标块，提示当前按键都进入搜索框。
 func (m appModel) renderConfigCenterSearch(contentWidth int) string {
 	state := m.configCenter
 	query := state.search
 	icon := m.styles.InputPrompt.Copy().Bold(true).Render("⌕")
 	var text string
-	if query == "" {
-		text = m.styles.StatusMuted.Render("搜索设置…")
-	} else {
+	switch {
+	case state.searchActive:
+		text = m.styles.Body.Render(query) + m.styles.SelectionSelected.Render(" ")
+	case query == "":
+		text = m.styles.StatusMuted.Render("按 / 搜索…")
+	default:
 		text = m.styles.Body.Render(query)
 	}
 	searchStyle := lipgloss.NewStyle().
@@ -154,15 +159,19 @@ func (m appModel) renderConfigCenterSearch(contentWidth int) string {
 }
 
 // configCenterHintBar 返回底部常驻 hint。通用页使用“编辑”，其余 tab 使用
-// “选择”（Enter 是选中/激活而非编辑）。
+// “选择”（Enter 是选中/激活而非编辑）。搜索模式下提示退出方式，避免用户
+// 发现 b/j/k 突然“失灵”。
 func (m appModel) configCenterHintBar() string {
+	if m.configCenter.searchActive {
+		return m.styles.StatusMuted.Render("输入筛选 · ↑/↓ 选择 · Enter 确认 · Esc 退出搜索")
+	}
 	switch m.configCenter.page {
 	case configCenterGeneral:
-		return m.styles.StatusMuted.Render("输入筛选 · Enter 编辑 · ↑/↓ 选择 · Tab/←/→ 切换 · Esc 清除/关闭")
+		return m.styles.StatusMuted.Render("/ 搜索 · Enter 编辑 · ↑/↓ 选择 · Tab/←/→ 切换 · Esc 关闭")
 	case configCenterModels:
-		return m.styles.StatusMuted.Render("输入筛选 · Enter 设为当前 · Space 管理 · ↑/↓ 选择 · Tab/←/→ 切换 · Esc 清除/关闭")
+		return m.styles.StatusMuted.Render("/ 搜索 · Enter 设为当前 · Space 管理 · ↑/↓ 选择 · Tab/←/→ 切换 · Esc 关闭")
 	default:
-		return m.styles.StatusMuted.Render("输入筛选 · Enter 选择 · ↑/↓ 选择 · Tab/←/→ 切换 · b 返回 · Esc 清除/关闭")
+		return m.styles.StatusMuted.Render("/ 搜索 · Enter 选择 · ↑/↓ 选择 · Tab/←/→ 切换 · b 返回 · Esc 关闭")
 	}
 }
 

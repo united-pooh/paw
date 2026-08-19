@@ -161,7 +161,7 @@ func TestCustomProviderDraftEnablesOpenAIModelDiscovery(t *testing.T) {
 	}
 }
 
-func TestIncompleteFirstRunOpensProviderThenCredentialSetup(t *testing.T) {
+func TestIncompleteFirstRunDefaultsToDeepSeekCredentialSetup(t *testing.T) {
 	for _, name := range []string{"PAW_MODEL", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "OLLAMA_HOST", "OLLAMA_MODEL"} {
 		t.Setenv(name, "")
 	}
@@ -181,15 +181,26 @@ func TestIncompleteFirstRunOpensProviderThenCredentialSetup(t *testing.T) {
 	model.configCenterController = controller
 
 	model.openConfigCenter()
-	if model.configCenter.page != configCenterAddProvider {
-		t.Fatalf("first-run page=%v, want provider selection", model.configCenter.page)
-	}
-	model.addPresetProvider("openai")
+	// 零凭据 first-run：starter 已默认 deepseek（内置默认 provider），打开
+	// 配置中心不再需要先选 provider，直接引导凭据设置。
 	if model.configCenter.page != configCenterCredentials {
-		t.Fatalf("post-provider page=%v, want credential setup; err=%q", model.configCenter.page, model.configCenter.err)
+		t.Fatalf("first-run page=%v, want credential setup; diagnostics=%#v", model.configCenter.page, controller.Snapshot().Diagnostics)
 	}
-	if _, exists := controller.Snapshot().Document.Providers["openai"]; !exists {
-		t.Fatal("selected provider was not persisted")
+	if _, exists := controller.Snapshot().Document.Providers["deepseek"]; !exists {
+		t.Fatal("default provider deepseek missing from starter document")
+	}
+	if model.configCenter.selected != 0 {
+		t.Fatalf("credential page selected=%d, want 0 (deepseek)", model.configCenter.selected)
+	}
+
+	model = model.advanceConfigCenter()
+	if model.configCenter.page != configCenterCredentialActions || model.configCenter.targetID != "deepseek" {
+		t.Fatalf("post-select page=%v target=%v, want credential actions for deepseek", model.configCenter.page, model.configCenter.targetID)
+	}
+
+	model = model.advanceConfigCenter()
+	if model.configCenter.page != configCenterEdit || model.configCenter.editKind != configEditCredential {
+		t.Fatalf("credential editor not opened: page=%v kind=%v", model.configCenter.page, model.configCenter.editKind)
 	}
 }
 

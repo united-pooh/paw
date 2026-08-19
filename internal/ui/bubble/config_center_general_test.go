@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 
 	"paw/internal/settings"
 )
@@ -172,6 +174,7 @@ func TestConfigCenterNonGeneralSearchPreservesActionIndex(t *testing.T) {
 	model, _, _ := openGeneralCenter(t)
 	model.configCenter.page = configCenterProviders
 	model.configCenter.selected = 0
+	model = press(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
 	model = press(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("添加服务商")})
 
 	// Providers 有一个已配置 provider，Add provider 是原始下标 1。过滤后仍
@@ -187,12 +190,15 @@ func TestConfigCenterNonGeneralSearchPreservesActionIndex(t *testing.T) {
 	if model.configCenter.page != configCenterAddProvider {
 		t.Fatalf("filtered Enter opened page %v, want Add provider", model.configCenter.page)
 	}
+	if model.configCenter.searchActive {
+		t.Fatal("Enter did not exit search mode")
+	}
 }
 
 func TestConfigCenterHintBarRenderedPerTab(t *testing.T) {
 	model, _, _ := openGeneralCenter(t)
 	general := ansi.Strip(model.renderConfigCenterBox())
-	if !strings.Contains(general, "输入筛选 · Enter 编辑 · ↑/↓ 选择 · Tab/←/→ 切换 · Esc 清除/关闭") {
+	if !strings.Contains(general, "/ 搜索 · Enter 编辑 · ↑/↓ 选择 · Tab/←/→ 切换 · Esc 关闭") {
 		t.Fatalf("General hint missing:\n%s", general)
 	}
 	// 非 General tab 用 Enter 选择变体。
@@ -343,5 +349,152 @@ func TestConfigCenterGeneralEditFloatInline(t *testing.T) {
 	}
 	if got := settingsController.saved[0].ContextCompression.StateCompactionRatio; got != 0.85 {
 		t.Fatalf("state_compaction_ratio = %v, want 0.85", got)
+	}
+}
+
+// TestConfigCenterSearchModeTreatsNavKeysAsText 验证 / 显式进入搜索模式后，
+// b/j/k/space 一律作为搜索字符，不再触发返回或移动；Esc 退出搜索并清空。
+func TestConfigCenterSearchModeTreatsNavKeysAsText(t *testing.T) {
+	model, _, _ := openGeneralCenter(t)
+	model.configCenter.page = configCenterModels
+
+	// 非搜索态：b 仍是返回键（顶层页直接关闭面板），普通字符不会隐式开搜。
+	model = press(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if model.configCenter.search != "" || model.configCenter.searchActive {
+		t.Fatalf("plain rune implicitly started search: %#v", model.configCenter)
+	}
+	model = press(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	if model.configCenter != nil {
+		t.Fatal("b outside search mode should navigate back (close on top page)")
+	}
+
+	model, _, _ = openGeneralCenter(t)
+	model.configCenter.page = configCenterModels
+	model = press(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	if !model.configCenter.searchActive {
+		t.Fatal("/ did not enter search mode")
+	}
+	for _, r := range "bjk 32b" {
+		model = press(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	if model.configCenter == nil || model.configCenter.page != configCenterModels {
+		t.Fatalf("search input navigated away: %#v", model.configCenter)
+	}
+	if model.configCenter.search != "bjk 32b" {
+		t.Fatalf("search query = %q, want %q", model.configCenter.search, "bjk 32b")
+	}
+
+	// Backspace 删空后再按一次退出搜索模式。
+	for range []rune("bjk 32b") {
+		model = press(model, tea.KeyMsg{Type: tea.KeyBackspace})
+	}
+	if model.configCenter.searchActive {
+		t.Fatal("backspace past empty query did not exit search mode")
+	}
+
+	// Esc 在搜索非空时清空并退出搜索。
+	model = press(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	model = press(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("local")})
+	model = press(model, tea.KeyMsg{Type: tea.KeyEsc})
+	if model.configCenter == nil || model.configCenter.searchActive || model.configCenter.search != "" {
+		t.Fatalf("Esc did not exit search cleanly: %#v", model.configCenter)
+	}
+}
+
+// TestConfigCenterEditCursorMovementAndInsertion 验证编辑页的光标移动、光标处
+// 插入/删除和 Ctrl+U/K/W、Alt+←/→ 词级操作。
+func TestConfigCenterEditCursorMovementAndInsertion(t *testing.T) {
+	model, _, _ := openGeneralCenter(t)
+	model.configCenter.page = configCenterProviderActions
+	model.configCenter.targetID = "local"
+	model.openConfigEdit(configEditProviderEndpoint, "ac", "Endpoint")
+	if model.configCenter.editCursor != 2 {
+		t.Fatalf("initial cursor = %d, want end of value (2)", model.configCenter.editCursor)
+	}
+
+	// 光标移中间后插入：ac → a|bc → abc。
+	model = press(model, tea.KeyMsg{Type: tea.KeyLeft})
+	model = press(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	if model.configCenter.editValue != "abc" || model.configCenter.editCursor != 2 {
+		t.Fatalf("insert at cursor = %q cursor=%d, want abc@2", model.configCenter.editValue, model.configCenter.editCursor)
+	}
+	// Backspace 删光标前字符：abc@2 → ac@1。
+	model = press(model, tea.KeyMsg{Type: tea.KeyBackspace})
+	if model.configCenter.editValue != "ac" || model.configCenter.editCursor != 1 {
+		t.Fatalf("backspace = %q cursor=%d, want ac@1", model.configCenter.editValue, model.configCenter.editCursor)
+	}
+	// Home 后 Delete 前向删除：ac@0 → c@0。
+	model = press(model, tea.KeyMsg{Type: tea.KeyHome})
+	model = press(model, tea.KeyMsg{Type: tea.KeyDelete})
+	if model.configCenter.editValue != "c" || model.configCenter.editCursor != 0 {
+		t.Fatalf("delete = %q cursor=%d, want c@0", model.configCenter.editValue, model.configCenter.editCursor)
+	}
+	// End 后 Ctrl+K 截尾无副作用，Ctrl+U 清到行首。
+	model = press(model, tea.KeyMsg{Type: tea.KeyEnd})
+	model = press(model, tea.KeyMsg{Type: tea.KeyCtrlK})
+	if model.configCenter.editValue != "c" {
+		t.Fatalf("ctrl+k at end changed value: %q", model.configCenter.editValue)
+	}
+	model = press(model, tea.KeyMsg{Type: tea.KeyCtrlU})
+	if model.configCenter.editValue != "" || model.configCenter.editCursor != 0 {
+		t.Fatalf("ctrl+u = %q cursor=%d, want empty@0", model.configCenter.editValue, model.configCenter.editCursor)
+	}
+
+	// 词级移动与删除：foo bar baz。
+	model.configCenter.editValue = "foo bar baz"
+	model.configCenter.editCursor = len([]rune("foo bar baz"))
+	model = press(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}, Alt: true}) // alt+b
+	if model.configCenter.editCursor != 8 {
+		t.Fatalf("alt+b cursor = %d, want 8 (start of baz)", model.configCenter.editCursor)
+	}
+	model = press(model, tea.KeyMsg{Type: tea.KeyCtrlW})
+	if model.configCenter.editValue != "foo baz" || model.configCenter.editCursor != 4 {
+		t.Fatalf("ctrl+w = %q cursor=%d, want \"foo baz\"@4", model.configCenter.editValue, model.configCenter.editCursor)
+	}
+	model = press(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}, Alt: true}) // alt+f
+	if model.configCenter.editCursor != len([]rune("foo baz")) {
+		t.Fatalf("alt+f cursor = %d, want end", model.configCenter.editCursor)
+	}
+}
+
+// TestConfigCenterEditRendersCursorAtCorrectCell 验证编辑页用反色块在正确
+// 位置渲染光标；凭据始终掩码；光标在行尾时渲染为反色空格。
+func TestConfigCenterEditRendersCursorAtCorrectCell(t *testing.T) {
+	// 样式断言需要真彩色 profile；默认测试环境无 TTY 会退化为无 ANSI 输出。
+	previousProfile := lipgloss.ColorProfile()
+	defer lipgloss.SetColorProfile(previousProfile)
+	lipgloss.SetColorProfile(termenv.TrueColor)
+
+	model, _, _ := openGeneralCenter(t)
+	model.configCenter.page = configCenterEdit
+	model.configCenter.editKind = configEditProviderEndpoint
+	model.configCenter.editValue = "hello"
+
+	model.configCenter.editCursor = 0
+	first := model.renderConfigEditValueLine(model.configCenter)
+	model.configCenter.editCursor = 4
+	fourth := model.renderConfigEditValueLine(model.configCenter)
+	if ansi.Strip(first) != "> hello" || ansi.Strip(fourth) != "> hello" {
+		t.Fatalf("stripped value lines = %q / %q, want \"> hello\"", ansi.Strip(first), ansi.Strip(fourth))
+	}
+	if first == fourth {
+		t.Fatal("cursor position did not change rendered styling")
+	}
+
+	model.configCenter.editCursor = 5
+	end := model.renderConfigEditValueLine(model.configCenter)
+	if ansi.Strip(end) != "> hello " {
+		t.Fatalf("end-of-line cursor stripped = %q, want trailing cursor block", ansi.Strip(end))
+	}
+
+	model.configCenter.editKind = configEditCredential
+	model.configCenter.editValue = "super-secret"
+	model.configCenter.editCursor = 3
+	masked := model.renderConfigEditValueLine(model.configCenter)
+	if strings.Contains(ansi.Strip(masked), "super-secret") {
+		t.Fatalf("credential leaked in edit line: %q", masked)
+	}
+	if !strings.Contains(ansi.Strip(masked), "••••") {
+		t.Fatalf("masked credential missing bullets: %q", ansi.Strip(masked))
 	}
 }

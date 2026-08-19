@@ -65,8 +65,32 @@ func TestConfigCenterRendersFullscreenPage(t *testing.T) {
 	if strings.Contains(plain, "Paw 配置") || strings.Contains(plain, "通用设置") {
 		t.Fatalf("detached Home page was rendered instead of General:\n%s", plain)
 	}
-	if !strings.Contains(lines[len(lines)-2], "输入筛选") {
+	if !strings.Contains(lines[len(lines)-2], "/ 搜索") {
 		t.Fatalf("footer is not fixed above bottom border: %q", lines[len(lines)-2])
+	}
+}
+
+// TestConfigCenterFullscreenHidesTerminalCursor 验证全屏覆盖层打开时真实终端
+// 光标被隐藏（编辑页光标由渲染层的反色块表达）；恢复为可见会让它停在帧
+// 末尾的左下角，形成"两个光标"。
+func TestConfigCenterFullscreenHidesTerminalCursor(t *testing.T) {
+	controller, _ := newConfigCenterHarness(t)
+	anchor := newTerminalCursorAnchor()
+	model := newModel(context.Background(), &fakeRunner{}, "session", controller, &fakeSettingsController{}, nil, nil, anchor)
+	model.configCenterController = controller
+	model.ready = true
+	model.width = 101
+	model.height = 30
+	model.relayout()
+	model.openConfigCenter()
+
+	_ = model.View()
+	position, ok := anchor.consume()
+	if !ok {
+		t.Fatal("View did not publish a cursor anchor update")
+	}
+	if !position.hidden || position.active {
+		t.Fatalf("fullscreen modal cursor position = %#v, want hidden and inactive", position)
 	}
 }
 

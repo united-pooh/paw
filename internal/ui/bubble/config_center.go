@@ -80,6 +80,11 @@ type configCenterState struct {
 	credentialID      string
 	confirmAction     string
 	search            string
+	// searchActive 为 true 时按键全部进入搜索框（含 b/j/k/space），由 /
+	// 显式开启、Esc 退出，避免搜索词与导航/返回快捷键冲突。
+	searchActive bool
+	// editCursor 是编辑页光标在 editValue 中的 rune 下标（0..len(runes)）。
+	editCursor int
 }
 
 type configCenterOption struct {
@@ -246,19 +251,24 @@ func (m appModel) handleConfigCenterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if state.page == configCenterEdit {
 		return m.handleConfigEditKey(msg)
 	}
-	searching := state.search != ""
+	if state.searchActive {
+		return m.handleConfigSearchKey(msg)
+	}
 	switch msg.String() {
 	case "ctrl+c":
 		m.configCenter = nil
 		return m, nil
 	case "esc":
-		// 搜索非空时 Esc 清搜索，否则关闭配置中心。
-		if searching {
-			state.search = ""
-			m.resetConfigCenterSelectionForSearch()
+		// 残留搜索词时 Esc 先清搜索，否则关闭配置中心。
+		if state.search != "" {
+			m.clearConfigCenterSearch()
 			return m, nil
 		}
 		m.configCenter = nil
+		return m, nil
+	case "/":
+		// 显式进入搜索模式：此后 b/j/k/space 都是搜索字符而非导航键。
+		state.searchActive = true
 		return m, nil
 	case "tab", "left", "right":
 		m.switchConfigCenterTab(msg.String())
@@ -277,24 +287,7 @@ func (m appModel) handleConfigCenterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case " ":
 		return m.advanceConfigCenter(), nil
 	case "backspace":
-		// 搜索非空时退格删字符，否则回退一页。
-		if searching {
-			r := []rune(state.search)
-			if len(r) > 0 {
-				state.search = string(r[:len(r)-1])
-				m.resetConfigCenterSelectionForSearch()
-			}
-			return m, nil
-		}
 		m.configCenterBack()
-		return m, nil
-	}
-	// 搜索态下 b/k/j 作为输入；非搜索态下 b 回退、k/j 上下（沿用既有 vim 风格）。
-	if searching {
-		if len(msg.Runes) > 0 && !msg.Alt {
-			state.search += string(msg.Runes)
-			m.resetConfigCenterSelectionForSearch()
-		}
 		return m, nil
 	}
 	switch msg.String() {
@@ -308,12 +301,62 @@ func (m appModel) handleConfigCenterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveConfigCenterSelection(1)
 		return m, nil
 	}
-	// 其余可见字符开启搜索。
+	return m, nil
+}
+
+// handleConfigSearchKey 处理搜索模式下的按键：可打印字符（含 space/b/j/k）
+// 一律追加到搜索词；Esc 清空并退出；Backspace 删字符，删空后再按退出搜索；
+// Enter 确认当前选择并退出搜索。
+func (m appModel) handleConfigSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	state := m.configCenter
+	switch msg.String() {
+	case "ctrl+c":
+		m.configCenter = nil
+		return m, nil
+	case "esc":
+		m.clearConfigCenterSearch()
+		return m, nil
+	case "enter":
+		state.searchActive = false
+		if state.page == configCenterModels {
+			return m.activateSelectedConfigCenterModel(), nil
+		}
+		return m.advanceConfigCenter(), nil
+	case "up":
+		m.moveConfigCenterSelection(-1)
+		return m, nil
+	case "down":
+		m.moveConfigCenterSelection(1)
+		return m, nil
+	case "backspace":
+		r := []rune(state.search)
+		if len(r) > 0 {
+			state.search = string(r[:len(r)-1])
+			m.resetConfigCenterSelectionForSearch()
+		}
+		if state.search == "" {
+			// 搜索词删空后再退格视为退出搜索模式，恢复 b/j/k 导航。
+			state.searchActive = false
+		}
+		return m, nil
+	}
 	if len(msg.Runes) > 0 && !msg.Alt {
 		state.search += string(msg.Runes)
 		m.resetConfigCenterSelectionForSearch()
 	}
 	return m, nil
+}
+
+// clearConfigCenterSearch 清空搜索词并退出搜索模式，同时把选择复位到过滤
+// 后的第一项。
+func (m *appModel) clearConfigCenterSearch() {
+	state := m.configCenter
+	if state == nil {
+		return
+	}
+	state.search = ""
+	state.searchActive = false
+	m.resetConfigCenterSelectionForSearch()
 }
 
 func (m *appModel) moveConfigCenterSelection(delta int) {
@@ -489,12 +532,14 @@ func (m appModel) advanceConfigCenter() appModel {
 			state.page = configCenterAddModelProvider
 			state.selected = 0
 			state.search = ""
+			state.searchActive = false
 		} else if state.selected < len(selections) {
 			state.targetSelection = selections[state.selected]
 			state.targetID = state.targetSelection.ID
 			state.page = configCenterModelActions
 			state.selected = 0
 			state.search = ""
+			state.searchActive = false
 		}
 	case configCenterAddModelProvider:
 		ids := sortedProviderIDs(snapshot.Document.Providers)
@@ -519,6 +564,7 @@ func (m appModel) advanceConfigCenter() appModel {
 		state.page = configCenterGeneral
 		state.selected = 0
 		state.search = ""
+		state.searchActive = false
 	}
 	return m
 }
@@ -818,31 +864,103 @@ func (m *appModel) openConfigEdit(kind configEditKind, value, label string) {
 	state.page = configCenterEdit
 	state.editKind = kind
 	state.editValue = value
+	// 光标初始停在值末尾，与「打开后接着输入/退格」的直觉一致。
+	state.editCursor = len([]rune(value))
 	state.err = label
 }
 
+// handleConfigEditKey 编辑页按键：维护 rune 级光标（state.editCursor），支持
+// 左右/Home/End 移动、词级移动（Alt+←/→/b/f）、光标处插入与前后删除、
+// Ctrl+U/K/W 行编辑，与常见单行输入框行为一致。
 func (m appModel) handleConfigEditKey(msg tea.KeyMsg) (appModel, tea.Cmd) {
 	state := m.configCenter
 	if state == nil {
 		return m, nil
 	}
+	runes := []rune(state.editValue)
+	state.editCursor = clampInt(state.editCursor, 0, len(runes))
 	switch msg.String() {
 	case "ctrl+c", "esc":
 		m.finishConfigEdit(false)
 		return m, nil
 	case "enter", "ctrl+s", "cmd+s", "command+s", "super+s":
 		return m, m.saveConfigEdit()
-	case "backspace":
-		if len(state.editValue) > 0 {
-			r := []rune(state.editValue)
-			state.editValue = string(r[:len(r)-1])
+	case "left", "ctrl+b":
+		state.editCursor = maxInt(0, state.editCursor-1)
+		return m, nil
+	case "right", "ctrl+f":
+		state.editCursor = minInt(len(runes), state.editCursor+1)
+		return m, nil
+	case "home", "ctrl+a":
+		state.editCursor = 0
+		return m, nil
+	case "end", "ctrl+e":
+		state.editCursor = len(runes)
+		return m, nil
+	case "alt+left", "alt+b":
+		state.editCursor = configEditWordLeft(runes, state.editCursor)
+		return m, nil
+	case "alt+right", "alt+f":
+		state.editCursor = configEditWordRight(runes, state.editCursor)
+		return m, nil
+	case "backspace", "ctrl+h":
+		if state.editCursor > 0 {
+			state.editValue = string(runes[:state.editCursor-1]) + string(runes[state.editCursor:])
+			state.editCursor--
 		}
+		return m, nil
+	case "delete", "ctrl+d":
+		if state.editCursor < len(runes) {
+			state.editValue = string(runes[:state.editCursor]) + string(runes[state.editCursor+1:])
+		}
+		return m, nil
+	case "ctrl+u":
+		state.editValue = string(runes[state.editCursor:])
+		state.editCursor = 0
+		return m, nil
+	case "ctrl+k":
+		state.editValue = string(runes[:state.editCursor])
+		return m, nil
+	case "ctrl+w":
+		start := configEditWordLeft(runes, state.editCursor)
+		state.editValue = string(runes[:start]) + string(runes[state.editCursor:])
+		state.editCursor = start
 		return m, nil
 	}
 	if len(msg.Runes) > 0 && !msg.Alt {
-		state.editValue += string(msg.Runes)
+		state.editValue = string(runes[:state.editCursor]) + string(msg.Runes) + string(runes[state.editCursor:])
+		state.editCursor += len(msg.Runes)
 	}
 	return m, nil
+}
+
+// configEditWordLeft 返回光标左侧前一个词的起始 rune 下标：先跳过空白，
+// 再跳过词字符。
+func configEditWordLeft(runes []rune, cursor int) int {
+	i := clampInt(cursor, 0, len(runes))
+	for i > 0 && isConfigEditSpace(runes[i-1]) {
+		i--
+	}
+	for i > 0 && !isConfigEditSpace(runes[i-1]) {
+		i--
+	}
+	return i
+}
+
+// configEditWordRight 返回光标右侧下一个词的起始 rune 下标。
+func configEditWordRight(runes []rune, cursor int) int {
+	i := clampInt(cursor, 0, len(runes))
+	for i < len(runes) && !isConfigEditSpace(runes[i]) {
+		i++
+	}
+	for i < len(runes) && isConfigEditSpace(runes[i]) {
+		i++
+	}
+	return i
+}
+
+func isConfigEditSpace(r rune) bool {
+	return r == ' ' || r == '\t' || r == '\n' || r == '\r'
 }
 
 func (m *appModel) saveConfigEdit() tea.Cmd {
@@ -892,6 +1010,7 @@ func (m *appModel) finishConfigEdit(save bool) {
 		state.err = ""
 	}
 	if !save {
+		state.editCursor = 0
 		back()
 		return
 	}
@@ -1327,18 +1446,14 @@ func (m appModel) renderConfigCenterBox() string {
 		if state.err != "" {
 			label = state.err
 		}
-		display := state.editValue
-		if state.editKind == configEditCredential {
-			display = strings.Repeat("•", len([]rune(state.editValue)))
-		}
-		lines = []string{wizardTitleStyle.Render(label), "> " + display}
+		lines = []string{wizardTitleStyle.Render(label), m.renderConfigEditValueLine(state)}
 		if snapshot := m.configCenterController.Snapshot(); snapshot.Revision != state.revision {
 			lines = append(lines, labelErrorStyle.Render(fmt.Sprintf("草稿已过期（打开时版本 %d，当前版本 %d），请重新加载后再保存。", state.revision, snapshot.Revision)))
 		}
 		if state.notice != "" {
 			lines = append(lines, m.styles.StatusSuccess.Bold(true).Render("✓ "+state.notice))
 		}
-		footer := m.styles.StatusMuted.Render("Ctrl+S/Enter 保存 · Esc 取消")
+		footer := m.styles.StatusMuted.Render("Ctrl+S/Enter 保存 · Esc 取消 · ←/→ 移动 · Alt+←/→ 词跳转")
 		return m.renderFullscreenPanelWithFooter(strings.Join(lines, "\n"), footer)
 	}
 	contentWidth := m.fullscreenContentWidth()
@@ -1418,6 +1533,57 @@ func (m appModel) renderConfigCenterBox() string {
 		lines = append(lines, m.styles.StatusSuccess.Bold(true).Render("✓ "+state.notice))
 	}
 	return m.renderFullscreenPanelWithFooter(strings.Join(lines, "\n"), m.configCenterHintBar())
+}
+
+// renderConfigEditValueLine 渲染编辑页的值行，用反色块在正确的 cell 位置
+// 标出光标。值超过可用宽度时以光标为锚点横向滚动，保证光标始终可见。
+func (m appModel) renderConfigEditValueLine(state *configCenterState) string {
+	const prompt = "> "
+	runes := []rune(state.editValue)
+	if state.editKind == configEditCredential {
+		masked := make([]rune, len(runes))
+		for i := range masked {
+			masked[i] = '•'
+		}
+		runes = masked
+	}
+	cursor := clampInt(state.editCursor, 0, len(runes))
+
+	// 每个 rune 的起始 cell（前缀和），用于按终端宽度开窗。零宽 rune 与
+	// 前一个字符同列，不影响光标位置计算。
+	cellStarts := make([]int, len(runes)+1)
+	for i, r := range runes {
+		cellStarts[i+1] = cellStarts[i] + maxInt(0, terminalCellWidth(string(r)))
+	}
+	// 预留 1 格给行尾光标块（光标在末尾时渲染为反色空格）。
+	budget := maxInt(8, m.fullscreenContentWidth()-terminalCellWidth(prompt)-1)
+	// 值超宽时以光标为锚点横向滚动：起点/终点始终对齐 rune 边界，且始终
+	// 把光标包含在窗口内，避免宽字符把光标裁出可见区。
+	start := 0
+	for start < cursor && cellStarts[len(runes)]-cellStarts[start] > budget {
+		start++
+	}
+	end := len(runes)
+	for end > cursor && cellStarts[end]-cellStarts[start] > budget {
+		end--
+	}
+	visible := runes[start:end]
+	windowCursor := cursor - start
+
+	cursorStyle := m.styles.SelectionSelected
+	before := string(visible[:windowCursor])
+	after := ""
+	at := " "
+	if windowCursor < len(visible) {
+		at = string(visible[windowCursor])
+		after = string(visible[windowCursor+1:])
+	}
+	// 光标处的字符若占两格（CJK），反色块也随之占两格，与终端渲染一致。
+	line := prompt + before + cursorStyle.Render(at) + after
+	if start > 0 {
+		line = prompt + m.styles.StatusMuted.Render("…") + before + cursorStyle.Render(at) + after
+	}
+	return line
 }
 
 // configCenterShowsPageTitle 只给二级动作页显示标题。General/Providers 等
