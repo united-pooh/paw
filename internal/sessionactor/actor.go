@@ -10,6 +10,11 @@ import (
 	"paw/internal/loop"
 )
 
+// replyError 立即应答错误，解除 Ask 方等待（否则将悬到超时）。
+func (a *SessionActor) replyError(ctx *actor.Context, kind string, err error) {
+	ctx.Reply(actor.Msg{Kind: kind, Payload: mutationError{Error: err.Error()}, Durability: actor.Ephemeral})
+}
+
 // SessionActor is the durable mailbox around one session's Engine execution.
 type SessionActor struct {
 	id    actor.ActorID
@@ -42,26 +47,39 @@ func (a *SessionActor) Receive(ctx *actor.Context, msg actor.Msg) {
 		ctx.Reply(actor.Msg{Kind: msgGetState, Payload: a.state.clone(), Durability: actor.Ephemeral})
 	case msgGoalBind:
 		var binding goalBinding
-		if err := decodePayload(msg.Payload, &binding); err != nil || binding.GoalID == "" {
+		if err := decodePayload(msg.Payload, &binding); err != nil {
+			a.replyError(ctx, msgGoalBind, err)
+			return
+		}
+		if binding.GoalID == "" {
+			a.replyError(ctx, msgGoalBind, fmt.Errorf("goal id is required"))
 			return
 		}
 		if err := ctx.Persist(EventGoalActivated, binding, actor.Durable); err != nil {
+			a.replyError(ctx, msgGoalBind, err)
 			return
 		}
 		a.state.ActiveGoalID, a.state.GoalStatus = binding.GoalID, binding.Status
 		ctx.Reply(actor.Msg{Kind: msgGoalBind, Payload: a.state.clone(), Durability: actor.Ephemeral})
 	case msgGoalClear:
 		if err := ctx.Persist(EventGoalCleared, map[string]string{}, actor.Durable); err != nil {
+			a.replyError(ctx, msgGoalClear, err)
 			return
 		}
 		a.state.ActiveGoalID, a.state.GoalStatus = "", ""
 		ctx.Reply(actor.Msg{Kind: msgGoalClear, Payload: a.state.clone(), Durability: actor.Ephemeral})
 	case msgPlanSave:
 		var binding planBinding
-		if err := decodePayload(msg.Payload, &binding); err != nil || binding.PlanID == "" {
+		if err := decodePayload(msg.Payload, &binding); err != nil {
+			a.replyError(ctx, msgPlanSave, err)
+			return
+		}
+		if binding.PlanID == "" {
+			a.replyError(ctx, msgPlanSave, fmt.Errorf("plan id is required"))
 			return
 		}
 		if err := ctx.Persist(EventPlanSnapshot, binding, actor.Durable); err != nil {
+			a.replyError(ctx, msgPlanSave, err)
 			return
 		}
 		a.state.ActivePlanID, a.state.PlanStatus = binding.PlanID, binding.Status
@@ -69,6 +87,7 @@ func (a *SessionActor) Receive(ctx *actor.Context, msg actor.Msg) {
 		ctx.Reply(actor.Msg{Kind: msgPlanSave, Payload: a.state.clone(), Durability: actor.Ephemeral})
 	case msgPlanClear:
 		if err := ctx.Persist(EventPlanCleared, map[string]string{}, actor.Durable); err != nil {
+			a.replyError(ctx, msgPlanClear, err)
 			return
 		}
 		a.state.ActivePlanID, a.state.PlanStatus, a.state.PlanSnapshot = "", "", nil

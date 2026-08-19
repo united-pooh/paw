@@ -31,6 +31,7 @@ type Host struct {
 	contexts          sync.Map
 	permissionPrompts sync.Map
 	prompter          PermissionPrompter
+	closing           chan struct{}
 	closeOnce         sync.Once
 }
 
@@ -38,7 +39,7 @@ func NewHost(engine *loop.Engine, store *session.JSONLStore, sessionID string) (
 	if engine == nil || store == nil || sessionID == "" {
 		return nil, fmt.Errorf("session actor host requires engine, store, and session id")
 	}
-	host := &Host{Engine: engine, store: store, sessionID: sessionID}
+	host := &Host{Engine: engine, store: store, sessionID: sessionID, closing: make(chan struct{})}
 	host.system = actor.NewSystem(filepath.Join(store.Dir(), "actors"), actor.WithStreamStore(actorType, sessionStream{store: store}))
 	host.system.Register(actorType, func(id actor.ActorID) actor.Actor { return newSessionActor(id, host) })
 	engine.SetPermissionGate(host)
@@ -50,7 +51,11 @@ func (h *Host) Close() {
 	if h == nil {
 		return
 	}
-	h.closeOnce.Do(func() { h.system.Stop() })
+	h.closeOnce.Do(func() {
+		// 先关闭 closing：Republish 重发协程不再发起新的 Decide。
+		close(h.closing)
+		h.system.Stop()
+	})
 }
 
 func (h *Host) RunTurn(ctx context.Context, input string) (message.Message, error) {
@@ -355,6 +360,13 @@ func (h *Host) RepublishPendingPermissions(sessionID string) {
 		request := permission.Request
 		go func(id string) {
 			defer h.permissionPrompts.Delete(id)
+			// 生命周期守卫：Host 已关闭时不再发起新的审批提示
+			// （否则会在停机的 system 上做 Suspend/Activate 空转）。
+			select {
+			case <-h.closing:
+				return
+			default:
+			}
 			_, _ = h.Decide(context.Background(), request)
 		}(permission.ID)
 	}
@@ -380,6 +392,9 @@ func (h *Host) Decide(ctx context.Context, request loop.PermissionRequest) (loop
 			return "", err
 		}
 		if err := h.appendDomain(ctx, request.SessionID, EventPermissionRequested, permissionRecord{ID: id, Request: request, At: time.Now().UTC()}); err != nil {
+			// 补偿：Suspend 已生效但请求事件未落盘。不 Resume 则 actor
+			// 永久滞留挂起态，且重启后没有 pending 权限可重发提示。
+			_ = h.system.Resume(actorID)
 			return "", err
 		}
 	}
@@ -390,6 +405,10 @@ func (h *Host) Decide(ctx context.Context, request loop.PermissionRequest) (loop
 	if prompter != nil {
 		decision, err = prompter.PromptPermission(ctx, request)
 		if err != nil {
+			// 补偿：提示失败不落 decided 事件，但必须解除挂起，否则
+			// 后续 turn 的 Ask 会滞留邮箱直到超时。权限保持 pending，
+			// 重启/下次 LoadSession 时 Republish 会重新提示。
+			_ = h.system.Resume(actorID)
 			return "", err
 		}
 	}
@@ -499,6 +518,34 @@ func (h *Host) mutate(ctx context.Context, kind string, payload any) error {
 }
 
 func (h *Host) mutateFor(ctx context.Context, sessionID, kind string, payload any) error {
-	_, err := h.system.Ref(actor.ActorID{Type: actorType, Key: sessionID}).Ask(ctx, actor.Msg{Kind: kind, Payload: payload, Durability: actor.Durable}, time.Minute)
-	return err
+	reply, err := h.system.Ref(actor.ActorID{Type: actorType, Key: sessionID}).Ask(ctx, actor.Msg{Kind: kind, Payload: payload, Durability: actor.Durable}, time.Minute)
+	if err != nil {
+		return err
+	}
+	return replyErrorOf(reply.Payload)
+}
+
+// replyErrorOf 解析 goal/plan 变更应答中的错误（mutationError 载体；
+// 成功应答是 State 投影，不含 error 字段）。
+func replyErrorOf(payload any) error {
+	if payload == nil {
+		return nil
+	}
+	if failure, ok := payload.(mutationError); ok {
+		if failure.Error != "" {
+			return fmt.Errorf("%s", failure.Error)
+		}
+		return nil
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil
+	}
+	var probe struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(data, &probe) != nil || probe.Error == "" {
+		return nil
+	}
+	return fmt.Errorf("%s", probe.Error)
 }

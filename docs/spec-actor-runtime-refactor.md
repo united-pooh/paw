@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | Approved · P0–P4 完成（2026-08-18；P4 TaskActor/RegistryActor 换壳完成，构建/vet/全量测试/指定 `-race` 全绿） |
+| 状态 | Approved · P0–P5 完成（2026-08-18 落地；2026-08-19 第三轮审查修复轮：H2/H3/H4/M1/M2 修复、system.go/cell.go 拆分达标、内核管理端口单测、P5 事件流级 golden、flaky 测试确定性化，构建/vet/全量测试/race 绿；遗留债务见 §15） |
 | 日期 | 2026-08-18 |
 | 范围 | internal/loop、internal/task、internal/session、新建 internal/actor |
 | 前置文档 | 架构评审结论（loop 扇出 11 包、Runner 40+ 字段、eventing 死包、装配根 9 元组） |
@@ -145,7 +145,7 @@ I6 L2 运行时禁止 import 任何 L3/L4 领域包（CI 用 go list 依赖审�
 | P2 hook 收编 ✅ | sessionLoadedHooks 泛化为 Hook 链（hooks.go，RegisterHook + 能力接口）；观察型关注点提取为 12 个内聚协作者（usage/trace/gate/skills/streamMA/compact/stateCfg/promptCtx/taskEnv/turnCtl/toolGate，各自持锁）；yolo 回调并入 toolGate 协作者。实测：Runner 字段 51→**23**，loop 测试/`-race`/全仓库测试全绿（行为等价）。遗留：tracer/todo/skill 完全 Hook 化与 yolo 决策落事件随 P3/P5 actor 化一并收益 | Runner 字段 ≤ 25；行为 golden 流一致 | hook 关闭开关（SetSessionLoadedHook 兼容糖保留，行为不变） |
 | P3 actor 内核 ✅ | 新建 internal/actor（含测试三件套） | 不变量属性测试全绿、覆盖 ≥90%（实测 92.4%）、崩溃矩阵全过 | 纯新增，直接删 |
 | P4 TaskActor ✅ | task/manager 换壳；StopOwnedTasks→Tell(Stop)；task 流事件化；Manager 保留 facade 配置与外部 adapter，删除 lifecycle maps/channels/cache | 后台任务行为等价；golden/崩溃恢复/metadata 兼容用例与全量门禁通过（ADR-11） | 上一个 tag |
-| P5 SessionActor | loop 引擎入住；session JSONL 与 es 合流；权限门→Suspend+Decision 消息；goal/plan 会话恢复（见 §13.5：fold 重建 activeGoalID/activePlanID） | golden 事件流等价；Runner（Engine）字段 ≤15；context_recovery 语义保持 | feature flag 双跑一迭代 |
+| P5 SessionActor ✅ | loop 引擎入住；session JSONL 与 es 合流；权限门→Suspend+Decision 消息；goal/plan 会话恢复（见 §13.5：fold 重建 activeGoalID/activePlanID）。实测：Engine 顶层字段 ≤15（AST 守卫）、SessionActor 薄壳 ≤200 行（守卫）、装配唯一经 NewHost（AST 扫描守卫）、恢复矩阵 5 场景 + 事件流级 golden 三路径（见 §15） | golden 事件流等价（UI 视图级 + 事件流级）；Engine 字段 ≤15；context_recovery 语义保持 | ~~feature flag 双跑一迭代~~ 实际采用原子切换 + git revert（owner 2026-08-19 审查知情，与 P1 同例：单仓库、装配点唯一且已被 AST 守卫锁定、回滚 = revert 单提交；双跑两套 turn 路径的维护成本 > 收益） |
 
 Phase 6（可选、非本 spec 承诺）：存储接口多实现（SQLite/PG）+ 激活租约 → 多机。
 
@@ -158,12 +158,12 @@ Phase 6（可选、非本 spec 承诺）：存储接口多实现（SQLite/PG）+
 
 ## 10. 性能预算
 
-| 指标 | 预算 |
-|---|---|
-| Durable 消息摊销开销 | < 1ms（本地 NVMe，group commit） |
-| 激活延迟 | < 50ms（快照 + ≤1k 尾事件） |
-| 流式 delta 端到端 | 不劣于现状 ±10%（Ephemeral 通道） |
-| 常驻内存 | 热 actor ≤ 512KB 状态 + 邮箱 256 消息上限 |
+| 指标 | 预算 | 实测（2026-08-19，M4 Pro / APFS，scripts/bench_actor.sh） |
+|---|---|---|
+| Durable 消息摊销开销 | < 1ms（本地 NVMe，group commit） | 串行 Ask 往返 7.7ms/条（含 inbox.received + inbox.done 两次 fsync）；**未达**——跨消息 group commit 未实现，APFS 单次 fsync ~3.8ms。登记 P6 债务：批量组提交/合并 fsync |
+| 激活延迟 | < 50ms（快照 + ≤1k 尾事件） | 22ms（1k 消息 ≈ 2k+ 事件、关闭快照、纯 fold 路径）✅ |
+| 流式 delta 端到端 | 不劣于现状 ±10%（Ephemeral 通道） | 未测（登记 P6 债务：补流式端到端基准） |
+| 常驻内存 | 热 actor ≤ 512KB 状态 + 邮箱 256 消息上限 | 未测（登记 P6 债务：钝化/激活循环内存基准） |
 
 ## 11. 风险登记册
 
@@ -182,13 +182,13 @@ Phase 6（可选、非本 spec 承诺）：存储接口多实现（SQLite/PG）+
 3. internal/actor 覆盖率 ≥ 90%，I1-I6 属性测试进入 CI；
 4. 崩溃注入矩阵（SIGKILL × 4 协议步 × 3 actor 类型）全部恢复正确；
 5. golden 事件流等价（P4、P5 各一组）；
-6. 性能预算全部达标（基准脚本入库 scripts/）。
+6. 性能预算全部达标（基准脚本入库 scripts/；实测与偏差见 §10，未达项债务见 §15）。
 
 ## 13. 开放问题（需 owner 拍板）
 
 1. SessionActor 的用户输入消息是否 Durable（影响离线 headless 恢复语义）；
 2. 【已落实，2026-08-18】TaskActor/RegistryActor 直接使用 `internal/actor` 分片调度器；Host 当前固定单 shard，Process 句柄仅保存在 ephemeral Host table；
-3. P5 双跑 feature flag 的默认开向（建议默认旧路径，一个迭代后翻转）；
+3. 【已拍板 2026-08-19】P5 未采用双跑 feature flag：原子切换 + git revert 回滚（见 §8 P5 行注记，与 P1 同例）；
 4. 时间盒：P0-P5 建议跨度 ≤ 2 个迭代，超时触发 spec 复审；
 5. 【已拍板 2026-08-18，Owner 选 B】goal/plan 的会话恢复：现状为 MVP 已知限制（goal/plan 控制器固化初始 sessionID，/resume 后不跟随；goal.Store 按 sessionID 查询能力已存在但未接线）。决定推至 P5：SessionActor 激活时经事件流 fold 重建 activeGoalID/activePlanID，goal=按 SessionID 找回最新未终结 goal，plan=找回最近未终结文档的交互现场。在 P5 落地前，/resume 后新建 goal 仍归旧会话（数据不丢失，仅归属不跟随）。
 
@@ -202,3 +202,31 @@ Phase 6（可选、非本 spec 承诺）：存储接口多实现（SQLite/PG）+
 | P1-4 ui 端口发胖 | ADR-6 订阅总线（端口维持现状，后续独立 spec） |
 | P1-5 session 硬编码领域 | P5 事件合流 + Kind 命名空间 |
 | P1-6 goal/plan 双胞胎 | 不在本 spec 范围；P4 后提取聚合骨架（另立 spec） |
+
+## 15. P4–P5 第三轮审查处置记录（2026-08-19）
+
+对 `9808e5c`（P4-P5 落地提交）的三轮深审（内核 / TaskActor / SessionActor）结论与处置：
+
+**已修复（2026-08-19 修复轮提交）**
+
+| # | 位置 | 处置 |
+|---|---|---|
+| H2 | sessionactor Decide | Suspend 后 appendDomain 失败 → 补偿 Resume（否则 actor 永久挂起且重启后无 pending 权限可重发）；prompter 失败同样补偿（否则后续 turn 的 Ask 悬到超时） |
+| H3 | actor Resume | 硬编码 `"runtime"` → `es.KindRuntime` 常量 |
+| H4 | sessionactor Host | Republish 协程加 closing 守卫，Host 关闭后不再发起新的审批提示 |
+| M1 | actor deadLetter | 隔离终态落盘失败由静默吞掉改为日志可见 |
+| M2 | sessionactor actor | goal/plan 变更持久化失败立即错误应答（mutationError 载体），Ask 方不再悬到超时 |
+| 新发现 | session recordToEnvelope | 对话事件落盘 Kind 为空（与 legacy 行转出的 domain 不一致，同一语义两种物理表示）→ 写侧补 `Kind=domain` + 读侧归一兜底 |
+| 结构 | system.go/cell.go | 345/258 行 → 201/147 行（拆出 admin.go / ref.go / pump.go），达标 §5 单件 <250 行 |
+| 测试 | 多处 | System.Suspend/Activate/PersistDomain 内核单测（补齐 0% 覆盖端口）；P5 事件流级 golden 三路径（正常 / 审批放行 / 审批失败中断+补偿续 turn）；sync interval 测试受控时钟化（消除 -race 高负载 flake） |
+
+**误报澄清（含证据，防再犯）**
+
+- H1「execute 丢调用方取消信号」：host.go execute 按 msgID 从 contexts map 加载调用方 ctx（context.Background() 仅为崩溃重放兜底），取消信号可传播；
+- H5「wheel.fire 读 ledger TOCTOU」：fire 闭包与 reactivate/evict 均经 scheduler.submit(id) 落同一分片串行执行（I1 单写者），ledger 交换不可能与 fire 交错；timers.go 已加注释固化该不变量。
+
+**遗留债务（P6 前清偿，挂 §10/§12）**
+
+1. loop 包扇出 11 > 8（message/model/pipeline/session/settings/skill/streamma/todo/tokentracer/tool/ui）——需收敛 3 个（候选：todo/tokentracer 经端口下沉、pipeline 并入）；
+2. Durable 消息跨消息 group commit 未实现（§10 实测串行往返 7.7ms vs <1ms 预算）；
+3. 流式 delta 端到端与常驻内存两项基准未测（§10）。

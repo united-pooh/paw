@@ -7,8 +7,6 @@ import (
 	"runtime"
 	"sync"
 	"time"
-
-	"paw/internal/es"
 )
 
 // System 是组合根（spec §5 上帝类防线：仅做组合，逻辑在各组件）：
@@ -149,98 +147,6 @@ func (s *System) routeAfterRecovery(id ActorID, msg Msg) {
 	}
 }
 
-// Resume 恢复挂起的 actor（human-in-the-loop 决策完成后调用）。
-func (s *System) Suspend(id ActorID, reason string) error {
-	select {
-	case <-s.stopped:
-		return ErrStopped
-	default:
-	}
-	if err := id.Validate(); err != nil {
-		return err
-	}
-	if _, ok := s.providers[id.Type]; !ok {
-		return fmt.Errorf("%w: %s", ErrNoProvider, id.Type)
-	}
-	c := s.router.ensure(s, id)
-	if err := c.ensureActivated(context.Background()); err != nil {
-		return err
-	}
-	return c.suspend(reason)
-}
-
-// Activate restores an actor and its ledger without changing suspension state.
-func (s *System) Activate(id ActorID) error {
-	select {
-	case <-s.stopped:
-		return ErrStopped
-	default:
-	}
-	if err := id.Validate(); err != nil {
-		return err
-	}
-	if _, ok := s.providers[id.Type]; !ok {
-		return fmt.Errorf("%w: %s", ErrNoProvider, id.Type)
-	}
-	c := s.router.ensure(s, id)
-	return c.ensureActivated(context.Background())
-}
-
-// PersistDomain appends one durable domain event without mutating live actor
-// state. Synchronous host ports may call it from inside Receive; live state
-// changes must still cross the actor mailbox, while activation and snapshots
-// rebuild from the durable stream.
-func (s *System) PersistDomain(ctx context.Context, id ActorID, eventType string, payload any) error {
-	if err := id.Validate(); err != nil {
-		return err
-	}
-	env, err := s.journal.append(ctx, id, es.KindDomain, eventType, payload)
-	if err != nil {
-		return err
-	}
-	if c := s.router.get(id); c != nil {
-		c.noteSeq(env.Seq)
-		c.noteDomainEvents(1)
-	}
-	return nil
-}
-
-// Resume 恢复挂起的 actor（human-in-the-loop 决策完成后调用）。
-func (s *System) Resume(id ActorID) error {
-	select {
-	case <-s.stopped:
-		return ErrStopped
-	default:
-	}
-	if err := id.Validate(); err != nil {
-		return err
-	}
-	if _, ok := s.providers[id.Type]; !ok {
-		return fmt.Errorf("%w: %s", ErrNoProvider, id.Type)
-	}
-	c := s.router.get(id)
-	if c == nil {
-		envelopes, err := s.journal.load(context.Background(), id)
-		if err != nil {
-			return err
-		}
-		ledger := newRuntimeLedger()
-		for _, envelope := range envelopes {
-			if envelope.Kind == "runtime" {
-				if err := ledger.foldRuntime(envelope); err != nil {
-					return err
-				}
-			}
-		}
-		if len(envelopes) == 0 || !ledger.suspended {
-			return fmt.Errorf("actor: %s is not active or suspended", id)
-		}
-		c = s.router.ensure(s, id)
-	}
-	_ = c.ensureActivated(context.Background())
-	return c.resume()
-}
-
 // DeadLetters 返回监督隔离记录。
 func (s *System) DeadLetters() []DeadLetter { return s.supervisor.DeadLetters() }
 
@@ -279,56 +185,6 @@ func (s *System) submitCell(c *cell, task func()) { s.scheduler.submit(c.id, tas
 
 // submitByID 同上（按 id 哈希）。
 func (s *System) submitByID(id ActorID, task func()) { s.scheduler.submit(id, task) }
-
-// deliverPromise 投递 Ask 回执（按 MsgID 去重：首个到达者生效）。
-func (s *System) deliverPromise(correlation string, msg Msg) {
-	s.mu.Lock()
-	ch, ok := s.promises[correlation]
-	if ok {
-		delete(s.promises, correlation)
-	}
-	s.mu.Unlock()
-	if ok {
-		select {
-		case ch <- msg:
-		default: // Ask 已超时放弃，回执丢弃（ADR-3）
-		}
-	}
-}
-
-// sysRef 是 System 级 Ref 实现。
-type sysRef struct {
-	s  *System
-	id ActorID
-}
-
-func (r sysRef) Tell(ctx context.Context, msg Msg) error { return r.s.Tell(ctx, r.id, msg) }
-
-func (r sysRef) Ask(ctx context.Context, msg Msg, timeout time.Duration) (Msg, error) {
-	if msg.MsgID == "" {
-		msg.MsgID = newMsgID()
-	}
-	ch := make(chan Msg, 1)
-	r.s.mu.Lock()
-	r.s.promises[msg.MsgID] = ch
-	r.s.mu.Unlock()
-	if err := r.s.Tell(ctx, r.id, msg); err != nil {
-		r.s.mu.Lock()
-		delete(r.s.promises, msg.MsgID)
-		r.s.mu.Unlock()
-		return Msg{}, err
-	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case reply := <-ch:
-		return reply, nil
-	case <-timer.C:
-		return Msg{}, ErrAskTimeout // 仅放弃等待，消息继续处理（ADR-3）
-	case <-ctx.Done():
-		return Msg{}, ctx.Err()
-	}
-}
 
 // once 挂在 cell 上（ctx.Once 委托）。
 func (c *cell) once(key string) bool {

@@ -410,7 +410,9 @@ func (s *JSONLStore) syncAfterAppend(f *os.File, sessionID string, turnBoundary 
 	last, ok := s.lastSync[sessionID]
 	s.mu.Unlock()
 
-	if policy == SyncPolicyAlways || turnBoundary || !ok || time.Since(last) >= interval {
+	// 间隔判定用 nowFn 而非 time.Since：默认两者等价（真实时钟），
+	// 但测试可注入受控时钟，使 interval 到期判定确定性可复现。
+	if policy == SyncPolicyAlways || turnBoundary || !ok || s.nowFn().Sub(last) >= interval {
 		if err := s.syncFile(f); err != nil {
 			return err
 		}

@@ -40,6 +40,12 @@ type turnReply struct {
 	Error     string
 }
 
+// mutationError 是 goal/plan 变更失败时的应答载体：携带 Error 立即
+// 解除 Ask 等待，避免调用方悬到超时（mutateFor 会在对端解析）。
+type mutationError struct {
+	Error string `json:"error"`
+}
+
 type goalBinding struct {
 	GoalID string `json:"goal_id"`
 	Status string `json:"status,omitempty"`

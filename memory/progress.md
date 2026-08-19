@@ -27,4 +27,5 @@
   - [x] P5-4 权限门：工作区外 Read allow-once/deny、批次预检与 Bubble selection dock <!-- todo:p5-4 -->
   - [x] P5-5 Goal/Plan：会话绑定、Plan snapshot、控制器重绑定、恢复提示与 `/plan resume` <!-- todo:p5-5 -->
   - [x] P5-6 原子切换与验收：生产调用方只经 SessionActor，旧执行路径删除，全量门禁通过 <!-- todo:p5-6 -->
-- [ ] P6 loopRunner 接入换壳 <!-- todo:p6 -->
+- [x] P4–P5 第三轮审查修复轮（spec §15）：H2/H3/H4/M1/M2 修复、Kind 空值归一、system.go/cell.go 拆分（<250 行）、内核管理端口单测、P5 事件流级 golden 三路径、flaky 测试受控时钟化、bench 基准入库 <!-- todo:review-round -->
+- [ ] P6 loopRunner 接入换壳（前置债务：loop 包扇出 11→≤8；Durable 跨消息 group commit；流式端到端与常驻内存基准，见 spec §10/§15） <!-- todo:p6 -->

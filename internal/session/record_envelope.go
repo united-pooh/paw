@@ -92,6 +92,7 @@ func recordToEnvelope(rec Record) (es.Envelope, error) {
 	}
 	return es.Envelope{
 		Seq:           rec.Seq,
+		Kind:          es.KindDomain,
 		Type:          typ,
 		OccurredAt:    rec.CreatedAt,
 		SchemaVersion: 1,

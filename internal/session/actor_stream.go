@@ -126,6 +126,12 @@ func (s *JSONLStore) LoadEnvelopes(ctx context.Context, sessionID string) ([]es.
 				}
 				return nil, false, fmt.Errorf("解析 transcript 失败(%s): %w", path, err)
 			}
+			// 归一：早期版本写盘的对话事件 Kind 为空（与 legacy Record
+			// 行转出的 domain 不一致）；session 流上除 runtime 外皆为
+			// 领域事件，统一补齐保证单一物理表示。
+			if env.Kind == "" {
+				env.Kind = es.KindDomain
+			}
 		} else {
 			var record Record
 			if err := json.Unmarshal(line, &record); err != nil {

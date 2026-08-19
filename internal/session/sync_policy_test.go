@@ -173,6 +173,9 @@ func TestSyncPolicyInterval_PerSessionSyncState(t *testing.T) {
 }
 
 // TestSyncPolicyInterval_ExpiryTriggersSync 验证间隔到期后下一次 append 会同步。
+// 用受控时钟驱动 interval 判定（syncAfterAppend 读 nowFn），消除真实
+// 时序抖动：-race 高负载下两次 append 的实际间隔可能超过 50ms，导致
+// "want 1" 断言随机失败（曾出现于全量 -race 门禁）。
 func TestSyncPolicyInterval_ExpiryTriggersSync(t *testing.T) {
 	store := newTestStoreWithSyncPolicy(t, SyncPolicyInterval, 50*time.Millisecond)
 	ctx := context.Background()
@@ -180,6 +183,9 @@ func TestSyncPolicyInterval_ExpiryTriggersSync(t *testing.T) {
 	if _, err := store.CreateRoot(ctx, CreateRootRequest{SessionID: sessionID}); err != nil {
 		t.Fatal(err)
 	}
+
+	current := time.Now()
+	store.nowFn = func() time.Time { return current }
 
 	var syncCount atomic.Int64
 	store.syncFile = func(f *os.File) error {
@@ -200,7 +206,7 @@ func TestSyncPolicyInterval_ExpiryTriggersSync(t *testing.T) {
 		t.Fatalf("second sync = %d, want 1 (within interval)", got)
 	}
 
-	time.Sleep(80 * time.Millisecond)
+	current = current.Add(60 * time.Millisecond)
 	if err := store.Append(ctx, sessionID, message.Message{Role: message.RoleUser, Content: "three"}); err != nil {
 		t.Fatal(err)
 	}

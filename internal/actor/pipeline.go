@@ -226,9 +226,14 @@ func (c *cell) resume() error {
 // deadLetter 终结一条消息并隔离 cell（监督器调用）。同步闭合收件账本
 // （该消息 done），隔离终态经 sysDeadLetter 持久化，跨重启生效。
 func (c *cell) deadLetter(msg Msg, cause error) {
-	_ = c.system.journal.appendSysMsg(context.Background(), c.id, sysDeadLetter, map[string]string{
+	if err := c.system.journal.appendSysMsg(context.Background(), c.id, sysDeadLetter, map[string]string{
 		"msg_id": msg.MsgID, "error": cause.Error(),
-	})
+	}); err != nil {
+		// 隔离终态落盘失败必须可见：若静默丢失，重启后毒消息可能被
+		// 重新投递而再次触发监督循环。这里保留隔离的内存态并记录，
+		// 运维可据此人工核账。
+		c.system.logger("actor: dead letter journal write for %s FAILED (quarantine kept in memory only): %v", c.id, err)
+	}
 	if msg.MsgID != "" {
 		_ = c.system.journal.appendSysMsg(context.Background(), c.id, sysInboxDone, inboxDonePayload{MsgID: msg.MsgID})
 		c.mu.Lock()

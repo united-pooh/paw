@@ -69,6 +69,10 @@ func (w *wheel) fire(id ActorID, timerID string, msg Msg) {
 			return
 		}
 		cell.mu.Lock()
+		// 串行性说明：本闭包经 submitByID 落在该 actor 的分片上，与
+		// reactivate/evict/activateLocked（均经 submitCell，同一分片哈希）
+		// 串行执行，因此 ledger 读取与使用之间不存在交错交换窗口；
+		// cell.mu 仅防御分片外线程（如 PersistDomain 的 noteSeq）。
 		ledger := cell.ledger
 		cell.mu.Unlock()
 		if ledger != nil {
