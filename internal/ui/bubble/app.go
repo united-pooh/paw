@@ -211,7 +211,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshActivityFromTasks(time.Time(msg))
 		m.refreshRunningToolProgress(time.Time(msg))
 		animationNow := time.Time(msg)
-		m.releaseAssistantCharacters()
+		m.releaseStreamCharacters()
 		m.flushTranscriptRefreshIfDue(animationNow)
 		var frameCmd tea.Cmd
 		if m.needsUIAnimationFrames(time.Time(msg)) {

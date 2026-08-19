@@ -145,6 +145,7 @@ func (m *appModel) appendAssistantDelta(delta string) {
 	if delta == "" {
 		return
 	}
+	m.lastModelVisibleActivityAt = m.animationNow()
 	for _, line := range strings.SplitAfter(delta, "\n") {
 		m.ensureAssistantStreamEntry()
 		m.transcript[m.activeAssistant].body += line
@@ -154,15 +155,32 @@ func (m *appModel) appendAssistantDelta(delta string) {
 	m.refreshViewportForStreaming()
 }
 
+// reasoningWindowStart 返回当前 reasoning 块计时的起点，即「本次模型请求
+// 发出」的近似时刻：首个块取 turn 开始，后续块（工具结果后的新请求、交错
+// thinking 后的新块）取最近一次模型可见活动时刻。旧实现从首条思考 delta
+// 到达起算：网关把整段 reasoning 缓冲到最后一次性下发时，起点≈终点，时长
+// 恒被钳成 1s。改用窗口起点后，时长覆盖从请求发出到思考结束的真实等待。
+func (m appModel) reasoningWindowStart(now time.Time) time.Time {
+	start := m.turnStartedAt
+	if m.lastModelVisibleActivityAt.After(start) {
+		start = m.lastModelVisibleActivityAt
+	}
+	if start.IsZero() || start.After(now) {
+		return now
+	}
+	return start
+}
+
 func (m *appModel) ensureThinkingStreamEntry() {
 	m.activeAssistant = -1
 	if m.activeThinking < 0 || m.activeThinking >= len(m.transcript) || m.transcript[m.activeThinking].kind != entryReasoning {
 		now := m.animationNow()
+		started := m.reasoningWindowStart(now)
 		m.activeThinking = m.appendTranscriptEntry(transcriptEntry{
 			kind:               entryReasoning,
 			title:              "reasoning",
 			reasoningPartIndex: -len(m.transcript) - 1,
-			reasoningStartedAt: &now,
+			reasoningStartedAt: &started,
 			createdAt:          now,
 		})
 	}
@@ -215,13 +233,14 @@ func (m *appModel) ensureReasoningEntry(blockIndex int, redacted bool) {
 	}
 	m.activeAssistant = -1
 	now := m.animationNow()
+	started := m.reasoningWindowStart(now)
 	m.activeReasoning = m.appendTranscriptEntry(transcriptEntry{
 		kind:               entryReasoning,
 		title:              "reasoning",
 		body:               "",
 		redacted:           redacted,
 		reasoningPartIndex: blockIndex,
-		reasoningStartedAt: &now,
+		reasoningStartedAt: &started,
 		createdAt:          now,
 	})
 	if redacted {
@@ -261,6 +280,7 @@ func (m *appModel) finalizeReasoningEntry(blockIndex int) {
 		entry.reasoningStartedAt = &started
 	}
 	entry.reasoningFinishedAt = &now
+	m.lastModelVisibleActivityAt = now
 	m.touchTranscriptEntryAt(idx)
 	if m.activeReasoning == idx {
 		m.activeReasoning = -1
@@ -326,6 +346,29 @@ func (m *appModel) releaseAssistantCharacters() {
 	}
 }
 
+// releaseThinkingCharacters 按与正文相同的自适应节奏播放 thinking 队列。
+// 思考先于正文到达，两条队列独立释放；网关一次性下发整段 reasoning 时，
+// 也能以逐字打字机效果播出而不是瞬间全量上屏。
+func (m *appModel) releaseThinkingCharacters() {
+	if m == nil || m.currentSettings().UI.TranscriptOutputMode != settings.TranscriptOutputModeChar {
+		return
+	}
+	release := 1
+	if pending := m.thinkingStream.PendingCharacters(); pending > charPlaybackTargetFrames {
+		release = minInt(pending/charPlaybackTargetFrames, charPlaybackMaxPerFrame)
+	}
+	if committed := m.thinkingStream.ReleaseCharacters(release); committed != "" {
+		m.ensureThinkingStreamEntry()
+		m.appendThinkingDelta(committed)
+	}
+}
+
+// releaseStreamCharacters 是帧驱动的统一播放入口：先思考后正文。
+func (m *appModel) releaseStreamCharacters() {
+	m.releaseThinkingCharacters()
+	m.releaseAssistantCharacters()
+}
+
 func (m *appModel) consumeThinkingStreamDelta(delta string) {
 	if delta == "" {
 		return
@@ -333,7 +376,12 @@ func (m *appModel) consumeThinkingStreamDelta(delta string) {
 	if m.assistantStream.HasContent() {
 		m.finalizeAssistantStream()
 	}
-	committed := m.thinkingStream.Push(delta, m.streamingBodyWidth())
+	var committed string
+	if m.currentSettings().UI.TranscriptOutputMode == settings.TranscriptOutputModeChar {
+		committed = m.thinkingStream.PushCharacters(delta)
+	} else {
+		committed = m.thinkingStream.Push(delta, m.streamingBodyWidth())
+	}
 	if m.thinkingStream.HasContent() {
 		m.ensureThinkingStreamEntry()
 	}
@@ -367,7 +415,12 @@ func (m *appModel) finalizeThinkingStream() {
 	if hadContent {
 		m.recordTranscriptEntryActivity(thinkingIndex, true)
 	}
-	committed := m.thinkingStream.Flush(m.streamingBodyWidth())
+	var committed string
+	if m.currentSettings().UI.TranscriptOutputMode == settings.TranscriptOutputModeChar {
+		committed = m.thinkingStream.FlushCharacters(m.streamingBodyWidth())
+	} else {
+		committed = m.thinkingStream.Flush(m.streamingBodyWidth())
+	}
 	if hadContent {
 		m.ensureThinkingStreamEntry()
 	}
@@ -375,6 +428,7 @@ func (m *appModel) finalizeThinkingStream() {
 	if thinkingIndex >= 0 && thinkingIndex < len(m.transcript) && m.transcript[thinkingIndex].kind == entryReasoning && m.transcript[thinkingIndex].reasoningFinishedAt == nil {
 		now := m.animationNow()
 		m.transcript[thinkingIndex].reasoningFinishedAt = &now
+		m.lastModelVisibleActivityAt = now
 		m.touchTranscriptEntryAt(thinkingIndex)
 		m.refreshViewportForStreaming()
 	}
@@ -735,6 +789,7 @@ func taskWaitRunningBody(names []string, elapsed int64) string {
 }
 
 func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMessage, mutationKnown, isMutation bool, mutation *ui.FileMutationSnapshot) {
+	m.lastModelVisibleActivityAt = m.animationNow()
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = "tool"
@@ -779,6 +834,9 @@ func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMes
 }
 
 func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string, isError, mutationKnown, isMutation bool, mutation *ui.FileMutationSnapshot) {
+	// 工具结果落地≈下一次模型请求发出：更新 reasoning 计时窗口起点，
+	// 让工具链后续思考块的时长不再回溯到 turn 开始。
+	m.lastModelVisibleActivityAt = m.animationNow()
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = "tool"

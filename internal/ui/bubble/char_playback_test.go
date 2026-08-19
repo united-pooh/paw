@@ -9,6 +9,52 @@ import (
 	"paw/internal/settings"
 )
 
+// TestThinkingCharModePlaysBackIncrementally 验证 char 模式下 thinking 流同样
+// 走逐字播放：一大段被网关缓冲的思考不会瞬间全量上屏，而是随帧推进逐字释放，
+// finalizeThinkingStream 时一次性收尾剩余内容。
+func TestThinkingCharModePlaysBackIncrementally(t *testing.T) {
+	settingsController := &fakeSettingsController{current: settings.Config{
+		UI: settings.UIConfig{TranscriptOutputMode: settings.TranscriptOutputModeChar},
+	}}
+	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, settingsController, nil, nil, newTerminalCursorAnchor())
+	model.ready = true
+	model.width = 80
+	model.height = 20
+	model.relayout()
+	frame := time.Unix(100, 0)
+
+	next, _ := model.Update(thinkingDeltaMsg("abcdef"))
+	model = next.(appModel)
+	if !model.thinkingStream.HasPendingCharacters() {
+		t.Fatal("thinking delta was not buffered for char playback")
+	}
+	thinkingIndex := model.activeThinking
+	if thinkingIndex < 0 {
+		t.Fatal("thinking entry was not created on first delta")
+	}
+
+	next, _ = model.Update(cursorFrameMsg(frame.Add(cursorFrameInterval)))
+	model = next.(appModel)
+	if got := model.transcript[thinkingIndex].body; got != "a" {
+		t.Fatalf("first frame thinking body = %q, want exactly one char", got)
+	}
+	next, _ = model.Update(cursorFrameMsg(frame.Add(2*cursorFrameInterval)))
+	model = next.(appModel)
+	if got := model.transcript[thinkingIndex].body; got != "ab" {
+		t.Fatalf("second frame thinking body = %q, want typewriter pace", got)
+	}
+
+	// 收尾（正文开始/工具调用/turn 结束）时剩余字符一次性 flush。
+	next, _ = model.Update(assistantDeltaMsg("answer"))
+	model = next.(appModel)
+	if got := model.transcript[thinkingIndex].body; got != "abcdef" {
+		t.Fatalf("finalized thinking body = %q, want full content after flush", got)
+	}
+	if model.transcript[thinkingIndex].reasoningFinishedAt == nil {
+		t.Fatal("thinking entry was not finalized when assistant text started")
+	}
+}
+
 // TestAssistantCharModeAcceleratesPlaybackWhenBacklogged 验证 char 模式播放
 // 速率自适应：积压超过目标播放窗口（charPlaybackTargetFrames 帧）时按比例
 // 加速，且单帧释放封顶 charPlaybackMaxPerFrame。这是"连续输入滚动后延迟

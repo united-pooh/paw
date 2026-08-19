@@ -518,6 +518,11 @@ type appModel struct {
 	lastKeyEventAt                      time.Time // 最后键盘输入时刻（IME 安全窗口用）
 	turnStartedAt                       time.Time
 	turnID                              string
+	// lastModelVisibleActivityAt 是本轮最近一次模型可见活动（正文 delta、
+	// 工具调用/结果、思考块收尾）的时刻。与 turnStartedAt 一起界定当前
+	// reasoning 块的计时窗口起点：思考内容被网关缓冲、最后才一次性到达时，
+	// 时长仍能覆盖从请求发出到思考结束的真实等待。
+	lastModelVisibleActivityAt          time.Time
 	goalWorking                         bool
 	planWorking                         bool
 	pending                             []inputDraft

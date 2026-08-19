@@ -11,6 +11,59 @@ import (
 	"paw/internal/message"
 )
 
+// TestBufferedReasoningDurationMeasuredFromTurnStart 验证思考内容被网关缓冲、
+// 最后才一次性到达时，"Thought for N s" 从请求发出（turn 开始）计时而非首条
+// delta 到达时刻。回归：旧实现起点≈终点，任何缓冲下发的思考都显示 1s。
+func TestBufferedReasoningDurationMeasuredFromTurnStart(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 20
+	turnStart := time.Unix(1000, 0)
+	model.turnStartedAt = turnStart
+	// 请求发出 30 秒后，被缓冲的思考才随正文前一次性到达。
+	model.cursorFrameAt = turnStart.Add(30 * time.Second)
+	model.relayout()
+
+	next, _ := model.Update(thinkingDeltaMsg("buffered reasoning"))
+	model = next.(appModel)
+	next, _ = model.Update(assistantDeltaMsg("answer"))
+	model = next.(appModel)
+	model.refreshViewport()
+
+	got := ansi.Strip(model.viewport.View())
+	if !strings.Contains(got, "Thought for 30 s") {
+		t.Fatalf("buffered reasoning duration did not measure from turn start:\n%s", got)
+	}
+}
+
+// TestReasoningWindowStartPrefersLatestActivity 验证工具链后续思考块的计时
+// 起点取最近一次模型可见活动（≈下一次请求发出），不回溯到 turn 开始。
+func TestReasoningWindowStartPrefersLatestActivity(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	turnStart := time.Unix(2000, 0)
+	toolResultAt := turnStart.Add(60 * time.Second)
+	model.turnStartedAt = turnStart
+	model.lastModelVisibleActivityAt = toolResultAt
+
+	now := toolResultAt.Add(5 * time.Second)
+	if got := model.reasoningWindowStart(now); !got.Equal(toolResultAt) {
+		t.Fatalf("reasoningWindowStart = %v, want latest activity %v", got, toolResultAt)
+	}
+
+	// 上一 turn 的残留活动不污染新 turn：turn 开始后起点被 turnStartedAt 覆盖。
+	model.turnStartedAt = toolResultAt.Add(70 * time.Second)
+	if got := model.reasoningWindowStart(model.turnStartedAt.Add(time.Second)); !got.Equal(model.turnStartedAt) {
+		t.Fatalf("reasoningWindowStart = %v, want new turn start %v", got, model.turnStartedAt)
+	}
+
+	// 无任何计时锚点时回退为当前时刻。
+	empty := appModel{}
+	if got := empty.reasoningWindowStart(now); !got.Equal(now) {
+		t.Fatalf("reasoningWindowStart without anchors = %v, want now %v", got, now)
+	}
+}
+
 func TestBubbleReasoningReceiverRoutesLifecycle(t *testing.T) {
 	output := New()
 	var received []tea.Msg

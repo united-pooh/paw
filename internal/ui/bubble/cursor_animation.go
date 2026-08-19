@@ -102,7 +102,7 @@ func (m *appModel) scheduleClockTick() tea.Cmd {
 
 // Bubble Tea redraws. Cursor color itself is animated directly by anchoredOutput.
 func (m appModel) needsUIAnimationFrames(now time.Time) bool {
-	if m.isWorkRunning() || m.isGenerating || m.transcriptRefreshPending || m.assistantStream.HasPendingCharacters() {
+	if m.isWorkRunning() || m.isGenerating || m.transcriptRefreshPending || m.assistantStream.HasPendingCharacters() || m.thinkingStream.HasPendingCharacters() {
 		return true
 	}
 	if m.tokenRippleActive(now) {
