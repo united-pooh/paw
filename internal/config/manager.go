@@ -439,7 +439,11 @@ func (m *Manager) parseCandidateWithWorkspace(raw []byte, workspaceState configF
 		return parsedCandidate{}, err
 	}
 	workspace := WorkspaceDocument{}
-	if workspaceState.exists {
+	if workspaceState.exists && !blankConfigRaw(workspaceState.raw) {
+		// 空的工作区配置（0 字节/纯空白/仅注释，例如写盘被中断）不包含任何
+		// 覆盖：按无覆盖处理，避免解析层 EOF 阻塞所有加载与 /config 更新。
+		// 注意 workspaceExists/workspaceRaw 仍按真实文件状态记录，乐观并发
+		// 校验（verifyConfigFilesUnchanged）不受影响。
 		workspace, err = parseAndValidateWorkspace(workspaceState.raw, m.paths.WorkspaceConfig, document)
 		if err != nil {
 			return parsedCandidate{}, err

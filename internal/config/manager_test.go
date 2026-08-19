@@ -1790,6 +1790,46 @@ func TestUpdateHealsBlankBaseSnapshot(t *testing.T) {
 	}
 }
 
+// TestBlankWorkspaceConfigIsIgnored 验证空的工作区配置（0 字节/纯空白/仅
+// 注释，例如写盘被中断）按无覆盖处理：全局配置正常生效，加载与 /config
+// 更新都不会被 "<workspace>/config.jsonc: EOF" 阻塞。
+func TestBlankWorkspaceConfigIsIgnored(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, true)
+	initial := emptyDocument()
+	initial.Providers["local"] = Provider{Transport: TransportOpenAICompatible, Endpoint: "http://127.0.0.1:1234/v1"}
+	initial.Models["local/one"] = Model{Provider: "local", Name: "one"}
+	initial.Models["local/two"] = Model{Provider: "local", Name: "two"}
+	initial.ActiveModel = "local/one"
+	writeManagerDocument(t, paths, initial)
+	if err := os.MkdirAll(filepath.Dir(paths.WorkspaceConfig), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.WorkspaceConfig, []byte(" \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := openTestManager(t, paths, &FakeCredentialStore{Unavailable: true}, false)
+	snapshot := manager.Snapshot()
+	for _, diagnostic := range snapshot.Diagnostics {
+		if strings.Contains(diagnostic.Message, "EOF") {
+			t.Fatalf("blank workspace config surfaced EOF: %#v", snapshot.Diagnostics)
+		}
+	}
+	if snapshot.ActiveModelID != "local/one" {
+		t.Fatalf("blank workspace changed active model: %q", snapshot.ActiveModelID)
+	}
+
+	// 更新（如选择服务商/模型）必须能越过空工作区文件直接成功。
+	updated, err := manager.Update(context.Background(), snapshot.Revision, []Operation{SetActiveModel("local/two")})
+	if err != nil {
+		t.Fatalf("update with blank workspace config failed: %v", err)
+	}
+	if updated.ActiveModelID != "local/two" {
+		t.Fatalf("update active model = %q", updated.ActiveModelID)
+	}
+}
+
 func TestFirstRunIgnoresLegacyConfigJSONButCopiesNonConfigAssets(t *testing.T) {
 	clearDetectionEnv(t)
 	root := t.TempDir()
