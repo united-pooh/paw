@@ -24,7 +24,7 @@ func (s *attachmentTestStore) ReadAttachment(_ context.Context, _ string) (strin
 func TestRunRichTurnPersistsAndMaterializesImageParts(t *testing.T) {
 	store := &attachmentTestStore{}
 	model := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{{Delta: "ok"}, {Done: true}}}}}
-	runner := NewRunner(model, &fakeUI{}, nil, store, "session-1")
+	runner := NewEngine(model, &fakeUI{}, nil, store, "session-1")
 
 	_, err := runner.RunRichTurn(context.Background(), message.Message{
 		Role:    message.RoleUser,

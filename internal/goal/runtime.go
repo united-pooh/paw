@@ -25,6 +25,8 @@ type RuntimeConfig struct {
 	Evidence    EvidenceStore
 	Checkpoints CheckpointStore
 	Inputs      GoalInputQueue
+	Bind        func(context.Context, GoalSnapshot) error
+	Clear       func(context.Context) error
 }
 
 type Runtime struct {
@@ -37,6 +39,8 @@ type Runtime struct {
 	evidence    EvidenceStore
 	checkpoints CheckpointStore
 	inputs      GoalInputQueue
+	bind        func(context.Context, GoalSnapshot) error
+	clear       func(context.Context) error
 	mu          sync.Mutex
 	active      bool
 	activeID    GoalID
@@ -63,7 +67,7 @@ func NewRuntime(cfg RuntimeConfig) *Runtime {
 	return &Runtime{
 		store: store, executor: cfg.Executor, todo: cfg.Todo, policy: policy.Normalize(),
 		events: cfg.Events, now: nowFn, evidence: cfg.Evidence,
-		checkpoints: cfg.Checkpoints, inputs: cfg.Inputs,
+		checkpoints: cfg.Checkpoints, inputs: cfg.Inputs, bind: cfg.Bind, clear: cfg.Clear,
 	}
 }
 
@@ -100,7 +104,7 @@ func (r *Runtime) Start(ctx context.Context, goal Goal) (GoalSnapshot, error) {
 		r.mu.Unlock()
 		return GoalSnapshot{}, err
 	}
-	if err := r.store.Update(ctx, goal); err != nil {
+	if err := r.updateGoal(ctx, goal); err != nil {
 		r.mu.Unlock()
 		return GoalSnapshot{}, err
 	}
@@ -151,7 +155,7 @@ func (r *Runtime) Run(ctx context.Context, id GoalID) error {
 	}()
 	goal.CurrentTaskID = fmt.Sprintf("task-%d", atomic.AddUint64(&r.sequence, 1))
 	goal.UpdatedAt = r.now()
-	if err := r.store.Update(ctx, goal); err != nil {
+	if err := r.updateGoal(ctx, goal); err != nil {
 		return err
 	}
 	r.emit(Event{Type: EventTaskStarted, GoalID: id, TaskID: goal.CurrentTaskID, Snapshot: goal.Snapshot(), At: r.now()})
@@ -184,7 +188,7 @@ func (r *Runtime) Run(ctx context.Context, id GoalID) error {
 			return err
 		}
 		goal.LastDecision = decision.Reason
-		if err := r.store.Update(context.Background(), goal); err != nil {
+		if err := r.updateGoal(context.Background(), goal); err != nil {
 			return err
 		}
 		r.emit(Event{Type: EventCompleted, GoalID: id, Decision: decision, Snapshot: goal.Snapshot(), At: r.now()})
@@ -194,7 +198,7 @@ func (r *Runtime) Run(ctx context.Context, id GoalID) error {
 			return err
 		}
 		goal.LastDecision = decision.Reason
-		if err := r.store.Update(context.Background(), goal); err != nil {
+		if err := r.updateGoal(context.Background(), goal); err != nil {
 			return err
 		}
 		r.emit(Event{Type: EventFailed, GoalID: id, Decision: decision, Snapshot: goal.Snapshot(), At: r.now()})
@@ -204,7 +208,7 @@ func (r *Runtime) Run(ctx context.Context, id GoalID) error {
 			return err
 		}
 		goal.LastDecision = decision.Reason
-		if err := r.store.Update(context.Background(), goal); err != nil {
+		if err := r.updateGoal(context.Background(), goal); err != nil {
 			return err
 		}
 		r.emit(Event{Type: EventBlocked, GoalID: id, Decision: decision, Snapshot: goal.Snapshot(), At: r.now()})
@@ -214,7 +218,7 @@ func (r *Runtime) Run(ctx context.Context, id GoalID) error {
 			return err
 		}
 		goal.LastDecision = decision.Reason
-		if err := r.store.Update(context.Background(), goal); err != nil {
+		if err := r.updateGoal(context.Background(), goal); err != nil {
 			return err
 		}
 		r.emit(Event{Type: EventPaused, GoalID: id, Decision: decision, Snapshot: goal.Snapshot(), At: r.now()})
@@ -229,7 +233,7 @@ func (r *Runtime) finishWithError(ctx context.Context, goal Goal, err error) err
 		return transitionErr
 	}
 	goal.LastDecision = err.Error()
-	if updateErr := r.store.Update(context.Background(), goal); updateErr != nil {
+	if updateErr := r.updateGoal(context.Background(), goal); updateErr != nil {
 		return updateErr
 	}
 	r.emit(Event{Type: EventPaused, GoalID: goal.ID, Snapshot: goal.Snapshot(), Err: err, At: r.now()})
@@ -257,7 +261,7 @@ func (r *Runtime) Resume(ctx context.Context, id GoalID) error {
 	if err := goal.Transition(GoalRunning, ""); err != nil {
 		return err
 	}
-	if err := r.store.Update(ctx, goal); err != nil {
+	if err := r.updateGoal(ctx, goal); err != nil {
 		return err
 	}
 	r.emit(Event{Type: EventResumed, GoalID: id, Snapshot: goal.Snapshot(), At: r.now()})
@@ -285,7 +289,7 @@ func (r *Runtime) Pause(ctx context.Context, id GoalID) error {
 	}
 	if goal.Status == GoalRunning {
 		_ = goal.Transition(GoalPaused, PauseUserInputRequired)
-		if err := r.store.Update(ctx, goal); err != nil {
+		if err := r.updateGoal(ctx, goal); err != nil {
 			return err
 		}
 		r.emit(Event{Type: EventPaused, GoalID: id, Snapshot: goal.Snapshot(), At: r.now()})
@@ -310,7 +314,7 @@ func (r *Runtime) Cancel(ctx context.Context, id GoalID) error {
 		if err := goal.Transition(GoalCancelled, ""); err != nil {
 			return err
 		}
-		if err := r.store.Update(ctx, goal); err != nil {
+		if err := r.updateGoal(ctx, goal); err != nil {
 			return err
 		}
 		r.emit(Event{Type: EventCancelled, GoalID: id, Snapshot: goal.Snapshot(), At: r.now()})
@@ -381,11 +385,8 @@ func (r *Runtime) Recover(ctx context.Context, id GoalID) (GoalSnapshot, error) 
 	if !ok {
 		return GoalSnapshot{}, ErrGoalNotFound
 	}
-	if g.Status == GoalRunning {
+	if g.Status == GoalRunning || g.Status == GoalPlanning || g.Status == GoalReplanning {
 		if err := g.Transition(GoalPaused, PauseUserInputRequired); err != nil {
-			return GoalSnapshot{}, err
-		}
-		if err := r.store.Update(ctx, g); err != nil {
 			return GoalSnapshot{}, err
 		}
 		if r.checkpoints != nil {
@@ -397,7 +398,26 @@ func (r *Runtime) Recover(ctx context.Context, id GoalID) (GoalSnapshot, error) 
 			}
 		}
 	}
+	if err := r.updateGoal(ctx, g); err != nil {
+		return GoalSnapshot{}, err
+	}
 	return g.Snapshot(), nil
+}
+
+func (r *Runtime) updateGoal(ctx context.Context, goal Goal) error {
+	if err := r.store.Update(ctx, goal); err != nil {
+		return err
+	}
+	if goal.Status.Terminal() {
+		if r.clear != nil {
+			return r.clear(ctx)
+		}
+		return nil
+	}
+	if r.bind != nil {
+		return r.bind(ctx, goal.Snapshot())
+	}
+	return nil
 }
 
 // Retry resumes a paused or blocked goal explicitly.
@@ -470,7 +490,7 @@ func (r *Runtime) taskEvents(e loop.TaskEvent) {
 			if g, ok, err := r.store.Get(context.Background(), goalID); err == nil && ok {
 				g.TurnsUsed++
 				g.UpdatedAt = r.now()
-				if err := r.store.Update(context.Background(), g); err == nil {
+				if err := r.updateGoal(context.Background(), g); err == nil {
 					r.checkpointBestEffort(context.Background(), goalID, Decision{Reason: fmt.Sprintf("turn %d completed", e.TurnNumber)})
 				}
 			}
@@ -482,7 +502,7 @@ func (r *Runtime) taskEvents(e loop.TaskEvent) {
 			if g, ok, err := r.store.Get(context.Background(), goalID); err == nil && ok {
 				g.ContinuationUsed = e.ContinuationUsed
 				g.UpdatedAt = r.now()
-				_ = r.store.Update(context.Background(), g)
+				_ = r.updateGoal(context.Background(), g)
 			}
 		}
 		r.emit(Event{Type: EventContinued, GoalID: goalID, TaskID: e.TaskID, TurnNumber: e.TurnNumber, At: r.now()})

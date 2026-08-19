@@ -41,7 +41,7 @@ func contextMaintenanceConfigFromSettings(in settings.ContextMaintenanceConfig) 
 
 // SetContextMaintenanceConfig atomically replaces the runtime maintenance
 // policy and its archive destination. It does not rewrite existing history.
-func (runner *Runner) SetContextMaintenanceConfig(in settings.ContextMaintenanceConfig) error {
+func (runner *Engine) SetContextMaintenanceConfig(in settings.ContextMaintenanceConfig) error {
 	cfg, err := contextMaintenanceConfigFromSettings(in)
 	if err != nil {
 		return err
@@ -55,7 +55,7 @@ func (runner *Runner) SetContextMaintenanceConfig(in settings.ContextMaintenance
 }
 
 // compactionState 收敛上下文压缩域状态：维护配置、归档器、窗口限值、
-// 压力档位标志与工具提示压缩开关。P2 从 Runner 字段提取，自带锁。
+// 压力档位标志与工具提示压缩开关。P2 从 Engine 字段提取，自带锁。
 type compactionState struct {
 	mu                  sync.RWMutex
 	maintenance         contextMaintenanceConfig

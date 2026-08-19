@@ -187,6 +187,52 @@ func TestMixedLegacyAndEnvelopeLines(t *testing.T) {
 	}
 }
 
+func TestActorEnvelopesShareTranscriptWithoutEnteringMessageProjection(t *testing.T) {
+	s := newTestJSONLStore(t)
+	ctx := context.Background()
+	if _, err := s.CreateRoot(ctx, CreateRootRequest{SessionID: "s1"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	now := time.Now().UTC()
+	legacy, _ := json.Marshal(Record{Seq: 0, Kind: JournalMessage, Message: msg(message.RoleUser, "legacy"), CreatedAt: now})
+	if err := os.WriteFile(s.TranscriptPath("s1"), append(legacy, '\n'), 0o644); err != nil {
+		t.Fatalf("write legacy: %v", err)
+	}
+
+	first, last, err := s.AppendEnvelopes(ctx, "s1", []es.Envelope{
+		{Type: "sys.inbox.received", Kind: es.KindRuntime, SchemaVersion: 1, OccurredAt: now, Payload: json.RawMessage(`{"msg_id":"m1"}`)},
+		{Type: "session.goal_activated", Kind: es.KindDomain, SchemaVersion: 1, OccurredAt: now, Payload: json.RawMessage(`{"goal_id":"g1"}`)},
+	})
+	if err != nil {
+		t.Fatalf("AppendEnvelopes: %v", err)
+	}
+	if first != 1 || last != 2 {
+		t.Fatalf("actor seq = %d..%d, want 1..2", first, last)
+	}
+	first, last, err = s.AppendWithSequences(ctx, "s1", msg(message.RoleAssistant, "visible"))
+	if err != nil {
+		t.Fatalf("AppendWithSequences: %v", err)
+	}
+	if first != 3 || last != 3 {
+		t.Fatalf("message seq = %d..%d, want 3..3", first, last)
+	}
+
+	history, err := s.LoadResolvedHistory(ctx, "s1")
+	if err != nil {
+		t.Fatalf("LoadResolvedHistory: %v", err)
+	}
+	if len(history) != 2 || history[0].Content != "legacy" || history[1].Content != "visible" {
+		t.Fatalf("history includes control events: %+v", history)
+	}
+	envelopes, truncated, err := s.LoadEnvelopes(ctx, "s1")
+	if err != nil || truncated {
+		t.Fatalf("LoadEnvelopes = truncated:%t err:%v", truncated, err)
+	}
+	if len(envelopes) != 4 || envelopes[1].Kind != es.KindRuntime || envelopes[2].Type != "session.goal_activated" {
+		t.Fatalf("mixed envelopes = %+v", envelopes)
+	}
+}
+
 func TestAppendTodoSnapshot(t *testing.T) {
 	s := newTestJSONLStore(t)
 	ctx := context.Background()

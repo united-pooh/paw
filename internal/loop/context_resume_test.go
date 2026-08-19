@@ -14,7 +14,7 @@ import (
 )
 
 func TestSetContextMaintenanceConfigInitializesArchive(t *testing.T) {
-	runner := NewRunnerWithInstructionRoot(nil, nil, tool.NewRegistry(), nil, "session/unsafe", t.TempDir())
+	runner := NewEngineWithInstructionRoot(nil, nil, tool.NewRegistry(), nil, "session/unsafe", t.TempDir())
 	cfg := settings.DefaultContextMaintenanceConfig()
 	cfg.TailTokens = 4096
 	if err := runner.SetContextMaintenanceConfig(cfg); err != nil {
@@ -51,7 +51,7 @@ func TestColdResumePrunesBeforeFirstModelRequestAndKeepsJournal(t *testing.T) {
 	}
 
 	modelClient := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{{Delta: "done"}, {Done: true}}}}}
-	runner := NewRunnerWithInstructionRoot(modelClient, &fakeUI{}, tool.NewRegistry(), store, sessionID, root)
+	runner := NewEngineWithInstructionRoot(modelClient, &fakeUI{}, tool.NewRegistry(), store, sessionID, root)
 	runner.SetContextLimitTokens(int(float64(estimateMessageTokens(history)) / 0.82))
 	if _, err := runner.RunTurn(context.Background(), "continue"); err != nil {
 		t.Fatal(err)

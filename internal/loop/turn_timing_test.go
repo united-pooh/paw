@@ -49,7 +49,7 @@ func TestRunTurnWithTimingPersistsAfterAssistantCommit(t *testing.T) {
 	response := started.Add(95*time.Second + 700*time.Millisecond)
 	store := &timingStore{}
 	model := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{{Delta: "hello"}, {Done: true}}}}}
-	runner := NewRunner(model, &fakeUI{}, tool.NewRegistry(), store, "session-1")
+	runner := NewEngine(model, &fakeUI{}, tool.NewRegistry(), store, "session-1")
 	runner.nowFn = func() time.Time { return response }
 
 	execution, err := runner.RunTurnWithTiming(context.Background(), "hi", "turn-1", started)
@@ -78,7 +78,7 @@ func TestRunTurnWithTimingPersistsAfterAssistantCommit(t *testing.T) {
 
 func TestRunTurnWithTimingMetadataFailureDoesNotFailAnswer(t *testing.T) {
 	store := &timingStore{metadataErr: errors.New("sidecar unavailable")}
-	runner := NewRunner(&fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{{Delta: "ok"}, {Done: true}}}}}, &fakeUI{}, tool.NewRegistry(), store, "session-1")
+	runner := NewEngine(&fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{{Delta: "ok"}, {Done: true}}}}}, &fakeUI{}, tool.NewRegistry(), store, "session-1")
 	started := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
 	runner.nowFn = func() time.Time { return started.Add(time.Second) }
 
@@ -97,7 +97,7 @@ func TestRunTurnWithTimingUsesJournalAssistantSequence(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{{Delta: "journal answer"}, {Done: true}}}}}
-	runner := NewRunner(model, &fakeUI{}, tool.NewRegistry(), store, "session-1")
+	runner := NewEngine(model, &fakeUI{}, tool.NewRegistry(), store, "session-1")
 	started := time.Date(2026, 7, 30, 7, 45, 0, 0, time.UTC)
 	runner.nowFn = func() time.Time { return started.Add(95 * time.Second) }
 
@@ -128,7 +128,7 @@ func TestRunTurnWithTimingUsesJournalAssistantSequence(t *testing.T) {
 }
 
 func TestRunTurnLegacyPathStillReturnsMessage(t *testing.T) {
-	runner := NewRunner(&fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{{Delta: "legacy"}, {Done: true}}}}}, &fakeUI{}, tool.NewRegistry(), &fakeStore{}, "session-1")
+	runner := NewEngine(&fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{{Delta: "legacy"}, {Done: true}}}}}, &fakeUI{}, tool.NewRegistry(), &fakeStore{}, "session-1")
 	msg, err := runner.RunTurn(context.Background(), "hi")
 	if err != nil || msg.Content != "legacy" {
 		t.Fatalf("message = %#v, err = %v", msg, err)

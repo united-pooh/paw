@@ -16,6 +16,7 @@ type evaluator struct {
 	session  *Session
 	last     string
 	repeated int
+	err      error
 }
 
 func (e *evaluator) EvaluateCompletion(assistant message.Message, used, noProgress int) loop.CompletionEvaluation {
@@ -26,7 +27,10 @@ func (e *evaluator) EvaluateCompletion(assistant message.Message, used, noProgre
 		if doc.Status == PlanApproved {
 			session.Status = SessionApproved
 			session.LastDecision = "plan finalized and approved"
-			e.runtime.storeSession(session)
+			if err := e.runtime.storeSession(context.Background(), session); err != nil {
+				e.err = err
+				return loop.CompletionEvaluation{Decision: loop.CompletionDecision{Action: loop.CompletionPause, Reason: err.Error()}, HasSignal: true}
+			}
 			return loop.CompletionEvaluation{
 				Decision:  loop.CompletionDecision{Action: loop.CompletionComplete, Reason: "plan finalized and approved"},
 				HasSignal: true,
@@ -36,7 +40,9 @@ func (e *evaluator) EvaluateCompletion(assistant message.Message, used, noProgre
 	if session.MaxTurns > 0 && session.TurnsUsed >= session.MaxTurns {
 		session.Status = SessionPaused
 		session.LastDecision = "plan session turn budget exhausted"
-		e.runtime.storeSession(session)
+		if err := e.runtime.storeSession(context.Background(), session); err != nil {
+			e.err = err
+		}
 		return loop.CompletionEvaluation{
 			Decision:  loop.CompletionDecision{Action: loop.CompletionPause, Reason: session.LastDecision},
 			HasSignal: true,
@@ -45,7 +51,9 @@ func (e *evaluator) EvaluateCompletion(assistant message.Message, used, noProgre
 	if session.MaxContinuations > 0 && used >= session.MaxContinuations {
 		session.Status = SessionPaused
 		session.LastDecision = "plan session continuation budget exhausted"
-		e.runtime.storeSession(session)
+		if err := e.runtime.storeSession(context.Background(), session); err != nil {
+			e.err = err
+		}
 		return loop.CompletionEvaluation{
 			Decision:  loop.CompletionDecision{Action: loop.CompletionPause, Reason: session.LastDecision},
 			HasSignal: true,
@@ -61,7 +69,9 @@ func (e *evaluator) EvaluateCompletion(assistant message.Message, used, noProgre
 	if session.MaxNoProgress > 0 && e.repeated >= session.MaxNoProgress {
 		session.Status = SessionPaused
 		session.LastDecision = "no verifiable progress in plan session"
-		e.runtime.storeSession(session)
+		if err := e.runtime.storeSession(context.Background(), session); err != nil {
+			e.err = err
+		}
 		return loop.CompletionEvaluation{
 			Decision:  loop.CompletionDecision{Action: loop.CompletionPause, Reason: session.LastDecision},
 			HasSignal: true,

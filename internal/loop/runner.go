@@ -46,6 +46,15 @@ type HistoryStore interface {
 type SessionLoadResult struct {
 	Messages []message.Message
 	Recovery *session.RecoveryState
+	Modes    *SessionModeSnapshot
+}
+
+type SessionModeSnapshot struct {
+	ActiveGoalID        string
+	GoalStatus          string
+	ActivePlanID        string
+	PlanStatus          string
+	PendingPermissionID string
 }
 
 type AttachmentStore interface {
@@ -70,22 +79,31 @@ type modelUsageReceiver interface {
 	OnModelUsage(usage model.Usage)
 }
 
-// Runner 是会话执行内核：驱动“模型 → 工具 → 模型”循环。核心字段只保留
-// 身份与直接协作者；横切状态按下述内聚协作者拆分（P2 解耦，各自持锁，
-// 避免一把大锁保护一切）。
-type Runner struct {
+type enginePorts struct {
+	model    ModelStreamer
+	display  *DisplayBus
+	registry *tool.Registry
+	store    HistoryStore
+	prompt   *PromptBuilder
+	nowFn    func() time.Time
+}
+
+type engineSessionState struct {
 	mu        sync.RWMutex
-	model     ModelStreamer
-	ui        ui.UI
-	registry  *tool.Registry
-	store     HistoryStore
 	sessionID string
 	workRoot  string // 工具使用的 workspace 根目录，用于解析相对文件路径
-	prompt    *PromptBuilder
 	// history 保存“已经成功完成”的多轮对话消息。
 	// 当前调用路径是串行的，因此这里先不引入锁。
-	// TODO: 如果后续要把 Runner 暴露给并发调用方，需要为 history 增加互斥保护。
-	history []message.Message
+	// TODO: 如果后续要把 Engine 暴露给并发调用方，需要为 history 增加互斥保护。
+	history  []message.Message
+	recovery *session.RecoveryState
+}
+
+// Engine 是会话执行内核：驱动“模型 → 工具 → 模型”循环。构造依赖与
+// 会话身份收进两个内聚状态，顶层只保留横切协作者。
+type Engine struct {
+	enginePorts
+	engineSessionState
 
 	usage     usageMeter      // token 用量账本（上下文/会话两本）
 	hooks     hookChain       // 生命周期钩子链（会话切换等）
@@ -100,8 +118,6 @@ type Runner struct {
 	turnCtl   turnCtl         // 活动工具与 turn 取消句柄
 	toolGate  toolGateState   // 工具门：yolo 通知回调 + turn 工具过滤器
 
-	recovery *session.RecoveryState
-	nowFn    func() time.Time
 }
 
 type activeToolState struct {
@@ -328,26 +344,27 @@ type toolUseEnvelope struct {
 	Input json.RawMessage `json:"input"`
 }
 
-func NewRunner(model ModelStreamer, output ui.UI, registry *tool.Registry, store HistoryStore, sessionID string) *Runner {
-	return NewRunnerWithInstructionRoot(model, output, registry, store, sessionID, "")
+func NewEngine(model ModelStreamer, output ui.UI, registry *tool.Registry, store HistoryStore, sessionID string) *Engine {
+	return NewEngineWithInstructionRoot(model, output, registry, store, sessionID, "")
 }
 
-func NewRunnerWithInstructionRoot(model ModelStreamer, output ui.UI, registry *tool.Registry, store HistoryStore, sessionID, instructionRoot string) *Runner {
+func NewEngineWithInstructionRoot(model ModelStreamer, output ui.UI, registry *tool.Registry, store HistoryStore, sessionID, instructionRoot string) *Engine {
 	maintenance := defaultContextMaintenanceConfig()
 	archive, _ := newCompactionArchive(instructionRoot, sessionID, maintenance.archiveEnabled)
-	return &Runner{
-		model:     model,
-		ui:        output,
-		registry:  registry,
-		store:     store,
-		sessionID: sessionID,
-		workRoot:  instructionRoot,
-		prompt:    NewPromptBuilder(NewInstructionManager(instructionRoot)),
-		skills:    skillState{registry: skill.NewRegistry(skill.DefaultRoots(instructionRoot))},
-		compact:   newCompactionState(maintenance, archive, initialContextLimitTokens(model)),
-		gate:      progressGate{autoContinue: DefaultAutoContinueConfig()},
-		streamMA:  streamMAState{enabled: true},
-		nowFn:     time.Now,
+	return &Engine{
+		enginePorts: enginePorts{
+			model:    model,
+			display:  newUIDisplayBus(output),
+			registry: registry,
+			store:    store,
+			prompt:   NewPromptBuilder(NewInstructionManager(instructionRoot)),
+			nowFn:    time.Now,
+		},
+		engineSessionState: engineSessionState{sessionID: sessionID, workRoot: instructionRoot},
+		skills:             skillState{registry: skill.NewRegistry(skill.DefaultRoots(instructionRoot))},
+		compact:            newCompactionState(maintenance, archive, initialContextLimitTokens(model)),
+		gate:               progressGate{autoContinue: DefaultAutoContinueConfig()},
+		streamMA:           streamMAState{enabled: true},
 	}
 }
 
@@ -408,14 +425,14 @@ func (t *turnCtl) beginTurn(ctx context.Context) (context.Context, func()) {
 	}
 }
 
-func (runner *Runner) registerActiveTool(id, name string, cancel context.CancelFunc) {
+func (runner *Engine) registerActiveTool(id, name string, cancel context.CancelFunc) {
 	if runner == nil {
 		return
 	}
 	runner.turnCtl.registerTool(id, name, cancel)
 }
 
-func (runner *Runner) clearActiveTool(id string) {
+func (runner *Engine) clearActiveTool(id string) {
 	if runner == nil {
 		return
 	}
@@ -423,7 +440,7 @@ func (runner *Runner) clearActiveTool(id string) {
 }
 
 // CancelCurrentTool cancels the active streaming tool, if one is registered.
-func (runner *Runner) CancelCurrentTool() bool {
+func (runner *Engine) CancelCurrentTool() bool {
 	if runner == nil {
 		return false
 	}
@@ -431,24 +448,24 @@ func (runner *Runner) CancelCurrentTool() bool {
 }
 
 // CancelTurn cancels the active turn context, if one is registered.
-func (runner *Runner) CancelTurn() {
+func (runner *Engine) CancelTurn() {
 	if runner == nil {
 		return
 	}
 	runner.turnCtl.cancelTurn()
 }
 
-func (runner *Runner) beginActiveTurn(ctx context.Context) (context.Context, func()) {
+func (runner *Engine) beginActiveTurn(ctx context.Context) (context.Context, func()) {
 	return runner.turnCtl.beginTurn(ctx)
 }
 
-func (runner *Runner) WorkspaceRoot() string {
+func (runner *Engine) WorkspaceRoot() string {
 	if runner == nil {
 		return ""
 	}
 	return runner.workRoot
 }
-func (runner *Runner) ReplaceToolNamespace(namespace string, tools []tool.Tool) error {
+func (runner *Engine) ReplaceToolNamespace(namespace string, tools []tool.Tool) error {
 	if runner == nil || runner.registry == nil {
 		return fmt.Errorf("runner tool registry is unavailable")
 	}
@@ -457,9 +474,11 @@ func (runner *Runner) ReplaceToolNamespace(namespace string, tools []tool.Tool) 
 
 // toolGateState 收敛工具门控：yolo 模式通知回调与 turn 级工具过滤器。
 type toolGateState struct {
-	mu          sync.RWMutex
-	yoloHandler func(bool)
-	turnFilter  ToolFilter
+	mu             sync.RWMutex
+	yoloHandler    func(bool)
+	turnFilter     ToolFilter
+	permissionGate PermissionGate
+	toolLifecycle  ToolLifecycle
 }
 
 func (g *toolGateState) setYoloHandler(handler func(bool)) {
@@ -486,7 +505,31 @@ func (g *toolGateState) currentTurnFilter() ToolFilter {
 	return g.turnFilter
 }
 
-func (runner *Runner) SetYoloModeHandler(handler func(bool)) {
+func (g *toolGateState) setPermissionGate(gate PermissionGate) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.permissionGate = gate
+}
+
+func (g *toolGateState) currentPermissionGate() PermissionGate {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.permissionGate
+}
+
+func (g *toolGateState) setToolLifecycle(lifecycle ToolLifecycle) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.toolLifecycle = lifecycle
+}
+
+func (g *toolGateState) currentToolLifecycle() ToolLifecycle {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.toolLifecycle
+}
+
+func (runner *Engine) SetYoloModeHandler(handler func(bool)) {
 	if runner == nil {
 		return
 	}
@@ -500,7 +543,7 @@ type SessionLoadedHook func(sessionID string)
 // SetSessionLoadedHook 注册会话切换回调（可多次调用，全部执行）。
 // P2 起为 hookChain 上的兼容糖；新代码优先实现 Hook 能力接口并经
 // RegisterHook 挂载（钩子间禁止互调，按注册顺序执行）。
-func (runner *Runner) SetSessionLoadedHook(hook SessionLoadedHook) {
+func (runner *Engine) SetSessionLoadedHook(hook SessionLoadedHook) {
 	if runner == nil || hook == nil {
 		return
 	}
@@ -508,14 +551,14 @@ func (runner *Runner) SetSessionLoadedHook(hook SessionLoadedHook) {
 }
 
 // RegisterHook 挂载生命周期钩子（会话切换等能力接口按需实现）。
-func (runner *Runner) RegisterHook(hook Hook) {
+func (runner *Engine) RegisterHook(hook Hook) {
 	if runner == nil {
 		return
 	}
 	runner.hooks.register(hook)
 }
 
-func (runner *Runner) SetStateBlockProvider(provider StateBlockProvider) {
+func (runner *Engine) SetStateBlockProvider(provider StateBlockProvider) {
 	if runner == nil {
 		return
 	}
@@ -524,7 +567,7 @@ func (runner *Runner) SetStateBlockProvider(provider StateBlockProvider) {
 
 // SetContextMode 设置上下文压缩模式："summary"（对话摘要，现状）或
 // "state"（状态压缩）。空值视为 summary。
-func (runner *Runner) SetContextMode(mode string) {
+func (runner *Engine) SetContextMode(mode string) {
 	if runner == nil {
 		return
 	}
@@ -532,7 +575,7 @@ func (runner *Runner) SetContextMode(mode string) {
 }
 
 // contextModeState 返回是否处于状态压缩模式。
-func (runner *Runner) contextModeState() bool {
+func (runner *Engine) contextModeState() bool {
 	if runner == nil {
 		return false
 	}
@@ -540,7 +583,7 @@ func (runner *Runner) contextModeState() bool {
 }
 
 // buildStateContext 通过 provider 获取状态块（模式 B 恢复/压缩用）。
-func (runner *Runner) buildStateContext(ctx context.Context) (string, error) {
+func (runner *Engine) buildStateContext(ctx context.Context) (string, error) {
 	if runner == nil {
 		return "", nil
 	}
@@ -550,7 +593,7 @@ func (runner *Runner) buildStateContext(ctx context.Context) (string, error) {
 // SetTurnToolFilter scopes the tool set for subsequent turns. A nil filter
 // restores unrestricted access. Higher-level runtimes set it around their own
 // turns and restore the previous value afterwards.
-func (runner *Runner) SetTurnToolFilter(filter ToolFilter) {
+func (runner *Engine) SetTurnToolFilter(filter ToolFilter) {
 	if runner == nil {
 		return
 	}
@@ -558,7 +601,7 @@ func (runner *Runner) SetTurnToolFilter(filter ToolFilter) {
 }
 
 // currentToolFilter returns the active turn tool filter, if any.
-func (runner *Runner) currentToolFilter() ToolFilter {
+func (runner *Engine) currentToolFilter() ToolFilter {
 	if runner == nil {
 		return nil
 	}
@@ -566,14 +609,14 @@ func (runner *Runner) currentToolFilter() ToolFilter {
 }
 
 // SystemSupplement returns the current additional system instructions.
-func (runner *Runner) SystemSupplement() string {
+func (runner *Engine) SystemSupplement() string {
 	if runner == nil {
 		return ""
 	}
 	return runner.promptCtx.currentSystemSupplement()
 }
 
-func (runner *Runner) SetYoloMode(enabled bool) (bool, error) {
+func (runner *Engine) SetYoloMode(enabled bool) (bool, error) {
 	if runner == nil || runner.registry == nil {
 		return false, fmt.Errorf("runner tool registry is unavailable")
 	}
@@ -595,7 +638,7 @@ func (runner *Runner) SetYoloMode(enabled bool) (bool, error) {
 	return controller.OutsideRootAllowed(), nil
 }
 
-func (runner *Runner) YoloMode() bool {
+func (runner *Engine) YoloMode() bool {
 	if runner == nil || runner.registry == nil {
 		return false
 	}
@@ -607,9 +650,9 @@ func (runner *Runner) YoloMode() bool {
 	return ok && controller.OutsideRootAllowed()
 }
 
-func (runner *Runner) validate() error {
-	if runner == nil || runner.model == nil || runner.ui == nil {
-		return fmt.Errorf("runner 未初始化: model 或 ui 为空")
+func (runner *Engine) validate() error {
+	if runner == nil || runner.model == nil || runner.display == nil {
+		return fmt.Errorf("engine 未初始化: model 或 display 为空")
 	}
 	return nil
 }
@@ -651,14 +694,14 @@ func (s *skillState) currentActiveContext() string {
 	return s.activeContext
 }
 
-func (runner *Runner) SetSkillRegistry(registry *skill.Registry) {
+func (runner *Engine) SetSkillRegistry(registry *skill.Registry) {
 	if runner == nil {
 		return
 	}
 	runner.skills.setRegistry(registry)
 }
 
-func (runner *Runner) SkillRoots() []string {
+func (runner *Engine) SkillRoots() []string {
 	registry := runner.currentSkillRegistry()
 	if registry == nil {
 		return nil
@@ -666,7 +709,7 @@ func (runner *Runner) SkillRoots() []string {
 	return registry.Roots()
 }
 
-func (runner *Runner) activateSkillContext(input string) {
+func (runner *Engine) activateSkillContext(input string) {
 	if runner == nil {
 		return
 	}
@@ -684,28 +727,28 @@ func (runner *Runner) activateSkillContext(input string) {
 	}
 }
 
-func (runner *Runner) clearActiveSkillContext() {
+func (runner *Engine) clearActiveSkillContext() {
 	if runner == nil {
 		return
 	}
 	runner.skills.clearActiveContext()
 }
 
-func (runner *Runner) currentSkillRegistry() *skill.Registry {
+func (runner *Engine) currentSkillRegistry() *skill.Registry {
 	if runner == nil {
 		return nil
 	}
 	return runner.skills.currentRegistry()
 }
 
-func (runner *Runner) currentSkillContext() string {
+func (runner *Engine) currentSkillContext() string {
 	if runner == nil {
 		return ""
 	}
 	return runner.skills.currentActiveContext()
 }
 
-func (runner *Runner) ContextStats(limitTokens int, _ string) ContextStats {
+func (runner *Engine) ContextStats(limitTokens int, _ string) ContextStats {
 	if limitTokens <= 0 {
 		limitTokens = 1024 * 1024
 	}

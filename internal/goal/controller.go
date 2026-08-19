@@ -3,81 +3,113 @@ package goal
 import (
 	"context"
 	"fmt"
-	"paw/internal/loop"
-	"paw/internal/todo"
+	"sort"
 	"strings"
 	"sync"
+
+	"paw/internal/loop"
+	"paw/internal/todo"
 )
 
-// SessionController adapts the Goal Runtime to the small Bubble Tea
-// controller interface. It deliberately keeps the active Goal ID in memory:
-// MVP Goals are session-scoped and explicit resume is required.
+type sessionHost interface {
+	GoalTurnExecutor() loop.TurnExecutor
+	CurrentSessionID() string
+	ActivateGoalFor(context.Context, string, string, string) error
+	ClearGoalFor(context.Context, string) error
+	ActiveGoal(context.Context, string) (string, string, error)
+}
+
+// SessionController adapts the Goal Runtime to Bubble Tea and resolves the
+// active Goal from the Host's current session binding.
 type SessionController struct {
+	host        sessionHost
+	store       GoalStore
+	todo        TodoSource
+	evidence    EvidenceStore
+	checkpoints CheckpointStore
+
+	mu        sync.Mutex
 	runtime   *Runtime
 	sessionID string
-	mu        sync.Mutex
 	activeID  GoalID
 	stopped   func(reason string)
 }
 
-// NewSessionController builds the session-scoped goal controller.
-// storeDir is the session store root; an empty value falls back to the
-// in-memory store (headless, no persistence; evidence/checkpoint stay off).
-func NewSessionController(sessionID string, runner *loop.Runner, broker *todo.Broker, storeDir string) *SessionController {
+func NewSessionController(host sessionHost, broker *todo.Broker, storeDir string) *SessionController {
 	var source TodoSource
 	if broker != nil {
 		source = broker.Latest
 	}
-	c := &SessionController{sessionID: sessionID}
-	// 事件溯源存储：goal 状态（含 evidence/checkpoint 子状态）持久化到
-	// <storeDir>/goals/ 事件流；storeDir 为空时回退到内存存储。
-	var docStore GoalStore
-	var evidenceStore EvidenceStore
-	var checkpointStore CheckpointStore
+	c := &SessionController{host: host, todo: source}
 	if storeDir != "" {
 		if esStore, err := NewEventStore(storeDir); err == nil {
-			docStore = esStore
-			evidenceStore = esStore.EvidenceStore()
-			checkpointStore = esStore.CheckpointStore()
+			c.store = esStore
+			c.evidence = esStore.EvidenceStore()
+			c.checkpoints = esStore.CheckpointStore()
 		}
 	}
-	c.runtime = NewRuntime(RuntimeConfig{
-		Store:       docStore,
-		Executor:    runner.GoalTurnExecutor(),
-		Todo:        source,
-		Evidence:    evidenceStore,
-		Checkpoints: checkpointStore,
-		Events: func(e Event) {
-			switch e.Type {
-			// 会话结束（完成/失败/取消）或暂停：goal 不再占用前台工作态，
-			// 通知 UI 释放 goalWorking（否则 header 永久显示 working）。
-			case EventCompleted, EventFailed, EventCancelled, EventPaused:
-				if c.stopped != nil {
-					c.stopped(string(e.Type))
-				}
-			}
-		},
-	})
+	if c.store == nil {
+		c.store = NewMemoryStore()
+	}
+	if host != nil {
+		c.bindRuntime(host.CurrentSessionID())
+	}
 	return c
 }
 
-// SetStopped wires the goal-session end callback (TUI releases working state).
+func (c *SessionController) bindRuntime(sessionID string) {
+	c.runtime = NewRuntime(RuntimeConfig{
+		Store:       c.store,
+		Executor:    c.host.GoalTurnExecutor(),
+		Todo:        c.todo,
+		Evidence:    c.evidence,
+		Checkpoints: c.checkpoints,
+		Bind: func(ctx context.Context, snapshot GoalSnapshot) error {
+			return c.host.ActivateGoalFor(ctx, sessionID, string(snapshot.ID), string(snapshot.Status))
+		},
+		Clear: func(ctx context.Context) error {
+			return c.host.ClearGoalFor(ctx, sessionID)
+		},
+		Events: func(e Event) {
+			terminal := e.Type == EventCompleted || e.Type == EventFailed || e.Type == EventCancelled
+			stoppedEvent := terminal || e.Type == EventPaused
+			c.mu.Lock()
+			current := c.sessionID == sessionID
+			if current && terminal {
+				c.activeID = ""
+			}
+			stopped := c.stopped
+			c.mu.Unlock()
+			if current && stoppedEvent && stopped != nil {
+				stopped(string(e.Type))
+			}
+		},
+	})
+	c.sessionID = sessionID
+	c.activeID = ""
+}
+
 func (c *SessionController) SetStopped(fn func(reason string)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.stopped = fn
 }
 
-// Start launches a goal session for the trimmed objective and remembers its ID.
 func (c *SessionController) Start(objective string) (string, error) {
-	if c == nil || c.runtime == nil {
+	if c == nil || c.host == nil {
 		return "", fmt.Errorf("goal runtime is unavailable")
 	}
 	objective = strings.TrimSpace(objective)
 	if objective == "" {
 		return "", fmt.Errorf("goal objective is empty")
 	}
-	snapshot, err := c.runtime.Start(context.Background(), Goal{SessionID: c.sessionID, Objective: objective})
+	if err := c.ensureCurrentSession(); err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	runtime, sessionID := c.runtime, c.sessionID
+	c.mu.Unlock()
+	snapshot, err := runtime.Start(context.Background(), Goal{SessionID: sessionID, Objective: objective})
 	if err != nil {
 		return "", err
 	}
@@ -87,27 +119,95 @@ func (c *SessionController) Start(objective string) (string, error) {
 	return string(snapshot.ID), nil
 }
 
-// current resolves the active goal snapshot, failing when no goal is active.
-func (c *SessionController) current() (GoalSnapshot, error) {
-	if c == nil || c.runtime == nil {
-		return GoalSnapshot{}, fmt.Errorf("goal runtime is unavailable")
+func (c *SessionController) Rebind(sessionID string) error {
+	if c == nil || c.host == nil {
+		return fmt.Errorf("goal runtime is unavailable")
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return fmt.Errorf("session id is empty")
+	}
+	id, _, err := c.host.ActiveGoal(context.Background(), sessionID)
+	if err != nil {
+		return err
+	}
+	if id == "" {
+		goals, listErr := c.store.List(context.Background(), sessionID)
+		if listErr != nil {
+			return listErr
+		}
+		candidates := make([]GoalSnapshot, 0, len(goals))
+		for _, snapshot := range goals {
+			if !snapshot.Status.Terminal() {
+				candidates = append(candidates, snapshot)
+			}
+		}
+		sort.Slice(candidates, func(i, j int) bool {
+			if candidates[i].UpdatedAt.Equal(candidates[j].UpdatedAt) {
+				return candidates[i].ID < candidates[j].ID
+			}
+			return candidates[i].UpdatedAt.Before(candidates[j].UpdatedAt)
+		})
+		if len(candidates) > 0 {
+			id = string(candidates[len(candidates)-1].ID)
+		}
 	}
 	c.mu.Lock()
-	id := c.activeID
+	c.bindRuntime(sessionID)
+	runtime := c.runtime
+	c.mu.Unlock()
+	if id == "" {
+		return nil
+	}
+	snapshot, err := runtime.Recover(context.Background(), GoalID(id))
+	if err != nil {
+		return err
+	}
+	if snapshot.SessionID != sessionID {
+		return fmt.Errorf("goal %s does not belong to session %s", id, sessionID)
+	}
+	if snapshot.Status.Terminal() {
+		return c.host.ClearGoalFor(context.Background(), sessionID)
+	}
+	c.mu.Lock()
+	c.activeID = snapshot.ID
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *SessionController) ensureCurrentSession() error {
+	if c == nil || c.host == nil {
+		return fmt.Errorf("goal runtime is unavailable")
+	}
+	current := c.host.CurrentSessionID()
+	c.mu.Lock()
+	bound := c.sessionID
+	c.mu.Unlock()
+	if current == bound {
+		return nil
+	}
+	return c.Rebind(current)
+}
+
+func (c *SessionController) current() (GoalSnapshot, error) {
+	if err := c.ensureCurrentSession(); err != nil {
+		return GoalSnapshot{}, err
+	}
+	c.mu.Lock()
+	id, runtime := c.activeID, c.runtime
 	c.mu.Unlock()
 	if id == "" {
 		return GoalSnapshot{}, fmt.Errorf("no active goal")
 	}
-	return c.runtime.Status(context.Background(), id)
+	return runtime.Status(context.Background(), id)
 }
 
-// Status renders the active goal snapshot as a text block.
 func (c *SessionController) Status() string {
 	snapshot, err := c.current()
 	if err != nil {
 		return err.Error()
 	}
-	body := fmt.Sprintf("id: %s\nobjective: %s\nstatus: %s\ncontinuations: %d/%d\nno-progress: %d", snapshot.ID, snapshot.Objective, snapshot.Status, snapshot.ContinuationUsed, snapshot.Budget.MaxContinuations, snapshot.NoProgressCount)
+	body := fmt.Sprintf("id: %s\nsession: %s\nobjective: %s\nstatus: %s\ncontinuations: %d/%d\nno-progress: %d", snapshot.ID, snapshot.SessionID, snapshot.Objective, snapshot.Status, snapshot.ContinuationUsed, snapshot.Budget.MaxContinuations, snapshot.NoProgressCount)
 	if snapshot.PauseReason != "" {
 		body += "\npause reason: " + string(snapshot.PauseReason)
 	}
@@ -117,34 +217,45 @@ func (c *SessionController) Status() string {
 	return body
 }
 
-// Pause suspends the active goal session.
 func (c *SessionController) Pause() error {
 	s, err := c.current()
 	if err != nil {
 		return err
 	}
-	return c.runtime.Pause(context.Background(), s.ID)
+	c.mu.Lock()
+	runtime := c.runtime
+	c.mu.Unlock()
+	return runtime.Pause(context.Background(), s.ID)
 }
 
-// Resume continues a paused goal session.
 func (c *SessionController) Resume() error {
 	s, err := c.current()
 	if err != nil {
 		return err
 	}
-	return c.runtime.Resume(context.Background(), s.ID)
+	c.mu.Lock()
+	runtime := c.runtime
+	c.mu.Unlock()
+	return runtime.Resume(context.Background(), s.ID)
 }
 
-// Cancel aborts the active goal session.
 func (c *SessionController) Cancel() error {
 	s, err := c.current()
 	if err != nil {
 		return err
 	}
-	return c.runtime.Cancel(context.Background(), s.ID)
+	c.mu.Lock()
+	runtime := c.runtime
+	c.mu.Unlock()
+	if err := runtime.Cancel(context.Background(), s.ID); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.activeID = ""
+	c.mu.Unlock()
+	return nil
 }
 
-// Budget renders the active goal budget counters and deadline.
 func (c *SessionController) Budget() string {
 	s, err := c.current()
 	if err != nil {
@@ -153,8 +264,6 @@ func (c *SessionController) Budget() string {
 	return fmt.Sprintf("turns: %d/%d\ntool calls: %d/%d\ncontinuations: %d/%d\nno-progress: %d/%d\ndeadline: %s", s.TurnsUsed, s.Budget.MaxTurns, s.ToolCallsUsed, s.Budget.MaxToolCalls, s.ContinuationUsed, s.Budget.MaxContinuations, s.NoProgressCount, s.Budget.MaxNoProgress, s.Budget.Deadline.Format("2006-01-02T15:04:05Z07:00"))
 }
 
-// Compile-time assertion: satisfies the Bubble Tea goal controller interface
-// (Start/Status/Pause/Resume/Cancel/Budget) without importing the UI package.
 var _ interface {
 	Start(string) (string, error)
 	Status() string
@@ -162,4 +271,5 @@ var _ interface {
 	Resume() error
 	Cancel() error
 	Budget() string
+	Rebind(string) error
 } = (*SessionController)(nil)

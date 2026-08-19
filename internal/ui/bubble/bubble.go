@@ -153,7 +153,12 @@ type PlanController interface {
 	Status() string
 	List() string
 	Show(id string) string
+	Resume() error
 	Cancel() error
+}
+
+type SessionControllerRebinder interface {
+	Rebind(sessionID string) error
 }
 
 // UI 是基于 Bubble Tea 的交互式终端界面实现。

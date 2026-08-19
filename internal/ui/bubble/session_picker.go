@@ -17,6 +17,10 @@ type sessionStateLoader interface {
 	LoadSession(ctx context.Context, sessionID string) (loop.SessionLoadResult, error)
 }
 
+type sessionModeLoader interface {
+	SessionModes(ctx context.Context, sessionID string) (*loop.SessionModeSnapshot, error)
+}
+
 // sessionPicker 保存 /resume 交互选择器的临时 UI 状态。
 type sessionPicker struct {
 	sessions      []sessionSummaryItem
@@ -61,6 +65,7 @@ func loadSessionHistoryCmd(ctx context.Context, runner Runner, store SessionStor
 		}
 		var messages []message.Message
 		var recovery *session.RecoveryState
+		var modes *loop.SessionModeSnapshot
 		if loader, ok := runner.(sessionStateLoader); ok {
 			result, err := loader.LoadSession(ctx, sessionID)
 			if err != nil {
@@ -68,6 +73,7 @@ func loadSessionHistoryCmd(ctx context.Context, runner Runner, store SessionStor
 			}
 			messages = result.Messages
 			recovery = result.Recovery
+			modes = result.Modes
 		} else {
 			var err error
 			messages, err = runner.LoadHistory(ctx, sessionID)
@@ -121,6 +127,7 @@ func loadSessionHistoryCmd(ctx context.Context, runner Runner, store SessionStor
 			currentTodo:    currentTodo,
 			hasCurrentTodo: hasCurrentTodo && !todoWasCleared,
 			todoWasCleared: todoWasCleared,
+			modes:          modes,
 		}
 	}
 }

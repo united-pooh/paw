@@ -36,20 +36,20 @@ type sequencedTurnJournal interface {
 }
 
 // TimedRunner is the optional UI-facing capability for recording one turn's
-// lifecycle without changing the existing Runner interface.
+// lifecycle without changing the existing Engine interface.
 type TimedRunner interface {
 	RunTurnWithTiming(ctx context.Context, input, turnID string, startedAt time.Time) (TurnExecution, error)
 	RunRichTurnWithTiming(ctx context.Context, input message.Message, turnID string, startedAt time.Time) (TurnExecution, error)
 }
 
-func (runner *Runner) RunTurnWithTiming(ctx context.Context, input, turnID string, startedAt time.Time) (TurnExecution, error) {
+func (runner *Engine) RunTurnWithTiming(ctx context.Context, input, turnID string, startedAt time.Time) (TurnExecution, error) {
 	return runner.runTurnWithTiming(ctx, message.Message{Role: message.RoleUser, Content: input}, &TurnTiming{
 		TurnID:    turnID,
 		StartedAt: startedAt,
 	})
 }
 
-func (runner *Runner) RunRichTurnWithTiming(ctx context.Context, input message.Message, turnID string, startedAt time.Time) (TurnExecution, error) {
+func (runner *Engine) RunRichTurnWithTiming(ctx context.Context, input message.Message, turnID string, startedAt time.Time) (TurnExecution, error) {
 	if input.Role == "" {
 		input.Role = message.RoleUser
 	}
@@ -62,14 +62,14 @@ func (runner *Runner) RunRichTurnWithTiming(ctx context.Context, input message.M
 	})
 }
 
-func (runner *Runner) now() time.Time {
+func (runner *Engine) now() time.Time {
 	if runner != nil && runner.nowFn != nil {
 		return runner.nowFn()
 	}
 	return time.Now()
 }
 
-func (runner *Runner) completeTurnExecution(ctx context.Context, timing *TurnTiming, assistant message.Message, assistantSeq int64) TurnExecution {
+func (runner *Engine) completeTurnExecution(ctx context.Context, timing *TurnTiming, assistant message.Message, assistantSeq int64) TurnExecution {
 	execution := TurnExecution{Message: assistant}
 	if timing == nil {
 		return execution
@@ -122,7 +122,7 @@ func persistTurnMetadata(ctx context.Context, store session.TurnMetadataStore, s
 
 // LoadTurnMetadata is used only by transcript restoration. The sidecar is
 // deliberately never folded into LoadHistory or model prompt construction.
-func (runner *Runner) LoadTurnMetadata(ctx context.Context, sessionID string) ([]session.TurnMetadata, error) {
+func (runner *Engine) LoadTurnMetadata(ctx context.Context, sessionID string) ([]session.TurnMetadata, error) {
 	if runner == nil || runner.store == nil {
 		return nil, nil
 	}

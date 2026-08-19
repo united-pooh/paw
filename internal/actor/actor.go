@@ -79,6 +79,16 @@ type EventSourced interface {
 	Restore(state json.RawMessage) error
 }
 
+// StreamStore persists one actor type's event streams. The default adapter is
+// es.JSONLStore; domains may inject a compatible store when an actor stream
+// must share an existing append-only ledger.
+type StreamStore interface {
+	Append(ctx context.Context, aggregateID string, events []es.Envelope) (firstSeq, lastSeq int64, err error)
+	Load(ctx context.Context, aggregateID string) (events []es.Envelope, truncated bool, err error)
+	WriteSnapshot(ctx context.Context, aggregateID string, seq int64, state json.RawMessage) error
+	ReadSnapshot(ctx context.Context, aggregateID string) (es.Snapshot, bool, error)
+}
+
 // Stater 暴露当前状态投影（ctx.State() 委托至此）。
 type Stater interface {
 	State() any

@@ -52,7 +52,7 @@ func TestRunTurnRecoversContextLimitWithinToolRoundWithoutRerunningTool(t *testi
 	readTool := &countingRecoveryTool{}
 	registry := tool.NewRegistry()
 	registry.Register(readTool)
-	runner := NewRunnerWithInstructionRoot(modelClient, output, registry, nil, "context-recovery", t.TempDir())
+	runner := NewEngineWithInstructionRoot(modelClient, output, registry, nil, "context-recovery", t.TempDir())
 	runner.SetContextLimitTokens(1_000_000)
 	runner.setHistory(contextRecoveryHistory())
 	readTool.onRun = func() {
@@ -103,7 +103,7 @@ func TestRunModelTurnKeepsSkillContextWhenRequestIsRejectedBeforeStream(t *testi
 		{err: contextErr},
 		{events: []model.StreamEvent{{Delta: "recovered", Done: true}}},
 	}}
-	runner := NewRunner(modelClient, &fakeUI{}, tool.NewRegistry(), nil, "skill-context-retry")
+	runner := NewEngine(modelClient, &fakeUI{}, tool.NewRegistry(), nil, "skill-context-retry")
 	turn := &TurnState{SkillContext: "Always preserve the exact tool protocol."}
 	history := []message.Message{{Role: message.RoleUser, Content: "continue"}}
 
@@ -137,7 +137,7 @@ func TestRunTurnRoundZeroRecoveryDoesNotPinStaleToolPair(t *testing.T) {
 		{events: []model.StreamEvent{{Delta: "summary", Done: true}}},
 		{events: []model.StreamEvent{{Delta: "recovered", Done: true}}},
 	}}
-	runner := NewRunnerWithInstructionRoot(modelClient, &fakeUI{}, tool.NewRegistry(), nil, "round-zero-stale-pair", t.TempDir())
+	runner := NewEngineWithInstructionRoot(modelClient, &fakeUI{}, tool.NewRegistry(), nil, "round-zero-stale-pair", t.TempDir())
 	runner.SetContextLimitTokens(1_000_000)
 	runner.setHistory([]message.Message{
 		{Role: message.RoleUser, Content: "original task"},
@@ -176,7 +176,7 @@ func TestRunTurnDoesNotRecoverContextLimitTwiceInOneModelRound(t *testing.T) {
 	readTool := &countingRecoveryTool{}
 	registry := tool.NewRegistry()
 	registry.Register(readTool)
-	runner := NewRunnerWithInstructionRoot(modelClient, output, registry, nil, "context-recovery-twice", t.TempDir())
+	runner := NewEngineWithInstructionRoot(modelClient, output, registry, nil, "context-recovery-twice", t.TempDir())
 	runner.SetContextLimitTokens(1_000_000)
 	runner.setHistory(contextRecoveryHistory())
 
@@ -203,7 +203,7 @@ func TestRunTurnDoesNotRetryUnknownBadRequest(t *testing.T) {
 	}
 	modelClient := &fakeModel{rounds: []fakeRound{{err: badRequest}}}
 	output := &fakeUI{}
-	runner := NewRunnerWithInstructionRoot(modelClient, output, tool.NewRegistry(), nil, "unknown-400", t.TempDir())
+	runner := NewEngineWithInstructionRoot(modelClient, output, tool.NewRegistry(), nil, "unknown-400", t.TempDir())
 
 	_, err := runner.RunTurn(context.Background(), "hello")
 	if !errors.Is(err, badRequest) {
@@ -224,7 +224,7 @@ func TestRunTurnExplainsUnavailableContextRecoveryAndPreservesOriginalError(t *t
 		Message:    "input is too large",
 	}
 	modelClient := &fakeModel{rounds: []fakeRound{{err: contextErr}}}
-	runner := NewRunnerWithInstructionRoot(modelClient, &fakeUI{}, tool.NewRegistry(), nil, "unavailable-recovery", t.TempDir())
+	runner := NewEngineWithInstructionRoot(modelClient, &fakeUI{}, tool.NewRegistry(), nil, "unavailable-recovery", t.TempDir())
 
 	_, err := runner.RunTurn(context.Background(), "only one message exists")
 	if !errors.Is(err, contextErr) {
@@ -249,7 +249,7 @@ func TestRunTurnDoesNotRecoverContextErrorAfterPartialSSEOutput(t *testing.T) {
 		{Err: contextErr},
 	}}}}
 	output := &fakeUI{}
-	runner := NewRunnerWithInstructionRoot(modelClient, output, tool.NewRegistry(), nil, "partial-context-error", t.TempDir())
+	runner := NewEngineWithInstructionRoot(modelClient, output, tool.NewRegistry(), nil, "partial-context-error", t.TempDir())
 	runner.SetContextLimitTokens(1_000_000)
 	runner.setHistory(contextRecoveryHistory())
 
@@ -288,7 +288,7 @@ func TestRunTurnDoesNotRecoverContextErrorAfterPartialSSEToolCall(t *testing.T) 
 	readTool := &countingRecoveryTool{}
 	registry := tool.NewRegistry()
 	registry.Register(readTool)
-	runner := NewRunnerWithInstructionRoot(modelClient, output, registry, nil, "partial-tool-context-error", t.TempDir())
+	runner := NewEngineWithInstructionRoot(modelClient, output, registry, nil, "partial-tool-context-error", t.TempDir())
 	runner.SetContextLimitTokens(1_000_000)
 	runner.setHistory(contextRecoveryHistory())
 
@@ -325,7 +325,7 @@ func TestRunTurnDoesNotRecoverContextErrorAfterPartialSSEThinking(t *testing.T) 
 		{events: []model.StreamEvent{{Delta: "incorrect replay", Done: true}}},
 	}}
 	output := &fakeUI{}
-	runner := NewRunnerWithInstructionRoot(modelClient, output, tool.NewRegistry(), nil, "partial-thinking-context-error", t.TempDir())
+	runner := NewEngineWithInstructionRoot(modelClient, output, tool.NewRegistry(), nil, "partial-thinking-context-error", t.TempDir())
 	runner.SetContextLimitTokens(1_000_000)
 	runner.setHistory(contextRecoveryHistory())
 
@@ -351,7 +351,7 @@ func TestPartialAssistantMessagePreservesToolCallsAndProviderData(t *testing.T) 
 		providerData: providerData,
 	}
 
-	msg := (&Runner{}).partialAssistantMessage(state)
+	msg := (&Engine{}).partialAssistantMessage(state)
 	calls := toolCallsFromMessage(msg)
 	if len(calls) != 1 || calls[0].ID != "partial-call" {
 		t.Fatalf("partial tool calls = %#v, want partial-call", calls)

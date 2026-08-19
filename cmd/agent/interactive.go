@@ -36,8 +36,8 @@ func runSingleTurnMode(ctx context.Context, opts options) error {
 		return err
 	}
 	defer func() { _ = app.Close() }()
-	wireSessionTools(app.Runner, app.Store, todoBroker, app.SessionID)
-	applyCompressionSettings(app.Runner, app.SettingsController)
+	wireSessionTools(app.Runner.Engine, app.Store, todoBroker, app.SessionID)
+	applyCompressionSettings(app.Runner.Engine, app.SettingsController)
 	app.Runner.SetStreamMAEnabled(opts.streamMA)
 
 	fmt.Fprintf(os.Stderr, "session: %s\n", app.SessionID)
@@ -51,7 +51,6 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	output := bubbleui.New()
 	selectionBroker := selecttool.NewBroker()
 	todoBroker := todo.NewBroker()
-	defer selectionBroker.Close()
 	defer todoBroker.Close()
 	output.SetSelectionBroker(selectionBroker)
 	output.SetTodoBroker(todoBroker)
@@ -66,17 +65,23 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 		return nil
 	})
 	if err != nil {
+		selectionBroker.Close()
 		return err
 	}
-	defer func() { _ = app.Close() }()
+	defer func() {
+		selectionBroker.Close()
+		_ = app.Close()
+	}()
 	runner := app.Runner
+	runner.SetPermissionPrompter(selectionPermissionPrompter{broker: selectionBroker})
+	runner.RepublishPendingPermissions(app.SessionID)
 	sessionID := app.SessionID
-	wireSessionTools(runner, app.Store, todoBroker, sessionID)
+	wireSessionTools(runner.Engine, app.Store, todoBroker, sessionID)
 	runner.SetSessionLoadedHook(func(sid string) {
 		// /resume 切换会话后：会话相关工具、todo 事件、状态块全部跟随新会话。
-		wireSessionTools(runner, app.Store, todoBroker, sid)
+		wireSessionTools(runner.Engine, app.Store, todoBroker, sid)
 	})
-	applyCompressionSettings(runner, app.SettingsController)
+	applyCompressionSettings(runner.Engine, app.SettingsController)
 	runner.SetStreamMAEnabled(opts.streamMA)
 	if opts.tokenTracer {
 		tracer, server, err := startTokenTracer(ctx, sessionID, opts)
@@ -103,12 +108,18 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	if app.Store != nil {
 		sessionBase = app.Store.Dir()
 	}
-	goalController := goal.NewSessionController(sessionID, runner, todoBroker, sessionBase)
+	goalController := goal.NewSessionController(runner, todoBroker, sessionBase)
+	if err := goalController.Rebind(sessionID); err != nil {
+		return fmt.Errorf("restore goal controller: %w", err)
+	}
 	goalController.SetStopped(func(reason string) {
 		_ = output.NotifyGoalStopped(reason)
 	})
 	output.SetGoalController(goalController)
-	planController := plan.NewSessionController(sessionID, runner, plansDir(runner), sessionBase)
+	planController := plan.NewSessionController(runner, plansDir(runner.Engine), sessionBase)
+	if err := planController.Rebind(sessionID); err != nil {
+		return fmt.Errorf("restore plan controller: %w", err)
+	}
 	planController.SetNotify(func(doc plan.PlanDoc) {
 		_ = output.NotifyPlanFinalized(doc.Path)
 	})
@@ -120,9 +131,40 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	return output.Run(ctx, runner, sessionID)
 }
 
+type selectionPermissionPrompter struct {
+	broker *selecttool.Broker
+}
+
+func (p selectionPermissionPrompter) PromptPermission(ctx context.Context, request loop.PermissionRequest) (loop.PermissionDecision, error) {
+	if p.broker == nil {
+		return loop.PermissionDeny, nil
+	}
+	result, err := p.broker.Ask(ctx, selecttool.Request{
+		Prompt:      "Read requests access outside the workspace:\n" + request.CanonicalPath,
+		Mode:        selecttool.ModeSingle,
+		OptionsOnly: true,
+		Options: []selecttool.Option{
+			{ID: string(loop.PermissionAllowOnce), Label: "Allow once", Description: "Allow only this exact Read path for this tool call."},
+			{ID: string(loop.PermissionDeny), Label: "Deny", Description: "Return a normal tool error without reading the file."},
+		},
+		MinSelect: 1,
+		MaxSelect: 1,
+	})
+	if err != nil {
+		return "", err
+	}
+	if result.Cancelled || len(result.SelectedOptions) == 0 {
+		return loop.PermissionDeny, nil
+	}
+	if result.SelectedOptions[0].ID == string(loop.PermissionAllowOnce) {
+		return loop.PermissionAllowOnce, nil
+	}
+	return loop.PermissionDeny, nil
+}
+
 // wireSessionTools 把会话相关工具与状态块绑定到指定 sessionID。
 // 启动时绑定一次，/resume 切换会话后经 SessionLoadedHook 重新绑定。
-func wireSessionTools(runner *loop.Runner, store *session.JSONLStore, todoBroker *todo.Broker, sessionID string) {
+func wireSessionTools(runner *loop.Engine, store *session.JSONLStore, todoBroker *todo.Broker, sessionID string) {
 	if runner == nil || store == nil {
 		return
 	}
@@ -151,7 +193,7 @@ func restoreTodoBroker(store *session.JSONLStore, broker *todo.Broker, sessionID
 }
 
 // plansDir resolves the plan document directory under the workspace root.
-func plansDir(runner *loop.Runner) string {
+func plansDir(runner *loop.Engine) string {
 	root := ""
 	if runner != nil {
 		root = runner.WorkspaceRoot()
@@ -163,7 +205,7 @@ func plansDir(runner *loop.Runner) string {
 }
 
 // applyCompressionSettings 把 settings 的 context_compression 应用到 runner。
-func applyCompressionSettings(runner *loop.Runner, settingsController *settings.Controller) {
+func applyCompressionSettings(runner *loop.Engine, settingsController *settings.Controller) {
 	if runner == nil || settingsController == nil {
 		return
 	}

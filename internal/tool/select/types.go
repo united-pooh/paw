@@ -24,6 +24,9 @@ type Question struct {
 
 type Request struct {
 	ID string `json:"id,omitempty"`
+	// OptionsOnly removes the generic custom-answer and chat actions. It is
+	// intended for fixed policy decisions such as allow-once permissions.
+	OptionsOnly bool `json:"options_only,omitempty"`
 
 	// Questions is populated for a single question-tool invocation. The legacy
 	// fields remain for callers that construct a one-question request directly.

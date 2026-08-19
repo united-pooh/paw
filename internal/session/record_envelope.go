@@ -150,6 +150,12 @@ func ParseTranscriptLine(line []byte) (Record, error) {
 		if err := env.Validate(); err != nil {
 			return Record{}, err
 		}
+		if env.Kind == es.KindRuntime {
+			return Record{}, nil
+		}
+		if _, ok := eventToKind[env.Type]; !ok {
+			return Record{}, nil
+		}
 		return envelopeToRecord(env)
 	}
 	var rec Record

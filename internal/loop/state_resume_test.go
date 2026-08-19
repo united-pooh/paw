@@ -56,7 +56,7 @@ func TestStateModeResumeInjectsStateBlockAndRecentTurns(t *testing.T) {
 	seedTurnedSession(t, store, sessionID, 5) // 5 轮，恢复只留最后 3 轮
 
 	modelClient := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{{Delta: "done"}, {Done: true}}}}}
-	runner := NewRunnerWithInstructionRoot(modelClient, &fakeUI{}, tool.NewRegistry(), store, sessionID, root)
+	runner := NewEngineWithInstructionRoot(modelClient, &fakeUI{}, tool.NewRegistry(), store, sessionID, root)
 	runner.SetContextMode("state")
 	runner.SetStateBlockProvider(&fakeStateProvider{block: "## 方向\n测试任务"})
 
@@ -106,7 +106,7 @@ func TestSummaryModeResumeSendsFullHistory(t *testing.T) {
 	seedTurnedSession(t, store, sessionID, 5)
 
 	modelClient := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{{Delta: "done"}, {Done: true}}}}}
-	runner := NewRunnerWithInstructionRoot(modelClient, &fakeUI{}, tool.NewRegistry(), store, sessionID, root)
+	runner := NewEngineWithInstructionRoot(modelClient, &fakeUI{}, tool.NewRegistry(), store, sessionID, root)
 	runner.SetStateBlockProvider(&fakeStateProvider{block: "## 方向\n不应出现"})
 
 	if _, err := runner.RunTurn(context.Background(), "continue"); err != nil {
@@ -133,7 +133,7 @@ func TestStateModeResumeWithoutProvider(t *testing.T) {
 	seedTurnedSession(t, store, sessionID, 4)
 
 	modelClient := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{{Delta: "done"}, {Done: true}}}}}
-	runner := NewRunnerWithInstructionRoot(modelClient, &fakeUI{}, tool.NewRegistry(), store, sessionID, root)
+	runner := NewEngineWithInstructionRoot(modelClient, &fakeUI{}, tool.NewRegistry(), store, sessionID, root)
 	runner.SetContextMode("state")
 
 	if _, err := runner.RunTurn(context.Background(), "continue"); err != nil {

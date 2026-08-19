@@ -20,7 +20,7 @@ type contextMaintenanceResult struct {
 	summaryPerformed     bool
 }
 
-func (runner *Runner) maintainContextProjection(ctx context.Context, history []message.Message, allowSummary bool) (contextMaintenanceResult, error) {
+func (runner *Engine) maintainContextProjection(ctx context.Context, history []message.Message, allowSummary bool) (contextMaintenanceResult, error) {
 	result := contextMaintenanceResult{history: history}
 	if runner == nil || len(history) == 0 {
 		return result, nil
@@ -113,7 +113,7 @@ type toolMaintenanceOutcome struct {
 // compactThreshold 由调用方传入：模式 A 用 cfg.compactRatio，模式 B 用
 // 状态压缩阈值（stateCompactionRatio）。soft/snip 档被钳制到不超过
 // compactThreshold，保证档位单调。
-func (runner *Runner) maintainToolResultsByPressure(ctx context.Context, history []message.Message, limit, compactThreshold int, cfg contextMaintenanceConfig) (toolMaintenanceOutcome, error) {
+func (runner *Engine) maintainToolResultsByPressure(ctx context.Context, history []message.Message, limit, compactThreshold int, cfg contextMaintenanceConfig) (toolMaintenanceOutcome, error) {
 	var outcome toolMaintenanceOutcome
 	if limit <= 0 {
 		return outcome, nil
@@ -195,7 +195,7 @@ func (runner *Runner) maintainToolResultsByPressure(ctx context.Context, history
 	return outcome, nil
 }
 
-func (runner *Runner) notifyContextMaintenance(result contextMaintenanceResult) {
+func (runner *Engine) notifyContextMaintenance(result contextMaintenanceResult) {
 	if result.snippedResults > 0 {
 		runner.notifySystem("context-compaction", fmt.Sprintf("snipped %d stale tool result(s); estimated %d tokens saved", result.snippedResults, result.estimatedTokensSaved))
 	}
@@ -247,21 +247,21 @@ func foldEconomicsForHistory(history []message.Message, limit int, cfg contextMa
 	return foldEconomics(fold)
 }
 
-func (runner *Runner) markSoftContextPressure() bool {
+func (runner *Engine) markSoftContextPressure() bool {
 	if runner == nil {
 		return false
 	}
 	return runner.compact.markSoftPressure()
 }
 
-func (runner *Runner) automaticSummaryAllowed() bool {
+func (runner *Engine) automaticSummaryAllowed() bool {
 	if runner == nil {
 		return false
 	}
 	return runner.compact.summaryAllowed()
 }
 
-func (runner *Runner) recordAutomaticCompaction(performed bool, belowThreshold bool) bool {
+func (runner *Engine) recordAutomaticCompaction(performed bool, belowThreshold bool) bool {
 	if runner == nil {
 		return false
 	}

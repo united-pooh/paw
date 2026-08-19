@@ -93,7 +93,7 @@ type TaskOrchestrator struct {
 
 // Run executes the initial input and any evaluator-approved continuations.
 // The orchestrator stops on completion, pause, blocked/failed decisions, or an
-// executor error. Existing Runner behavior is preserved by treating a missing
+// executor error. Existing Engine behavior is preserved by treating a missing
 // completion signal as completion.
 func (o TaskOrchestrator) Run(ctx context.Context, task *Task) (TurnExecution, error) {
 	if task == nil {
@@ -156,12 +156,18 @@ func (o TaskOrchestrator) emit(event TaskEvent) {
 	}
 }
 
-// runnerTurnExecutor adapts Runner's existing single-turn implementation to
-// the task orchestration boundary without exposing Runner internals publicly.
-type runnerTurnExecutor struct{ runner *Runner }
+// runnerTurnExecutor adapts Engine's existing single-turn implementation to
+// the task orchestration boundary without exposing Engine internals publicly.
+type runnerTurnExecutor struct{ runner *Engine }
 
 func (e runnerTurnExecutor) ExecuteTurn(ctx context.Context, input message.Message, timing *TurnTiming) (TurnExecution, error) {
-	return e.runner.runSingleTurnWithTiming(ctx, input, timing)
+	return e.runner.ExecuteTurn(ctx, input, timing)
+}
+
+// ExecuteTurn runs exactly one model/tool turn without task-level automatic
+// continuation. SessionActor uses this public seam for Goal/Plan runtimes.
+func (runner *Engine) ExecuteTurn(ctx context.Context, input message.Message, timing *TurnTiming) (TurnExecution, error) {
+	return runner.runSingleTurnWithTiming(ctx, input, timing)
 }
 
 func (e runnerTurnExecutor) SetTurnToolFilter(filter ToolFilter) {
@@ -177,7 +183,7 @@ func (e runnerTurnExecutor) SetSystemSupplement(supplement string) {
 }
 
 // runnerCompletionEvaluator adapts the existing Completion Gate signals.
-type runnerCompletionEvaluator struct{ runner *Runner }
+type runnerCompletionEvaluator struct{ runner *Engine }
 
 func (e runnerCompletionEvaluator) EvaluateCompletion(assistant message.Message, used, noProgress int) CompletionEvaluation {
 	decision, snapshot, hasTodo, nextNoProgress := e.runner.evaluateCompletion(assistant, false, used, noProgress)
@@ -190,7 +196,7 @@ func (e runnerCompletionEvaluator) EvaluateCompletion(assistant message.Message,
 	}
 }
 
-func (runner *Runner) taskOrchestrator() TaskOrchestrator {
+func (runner *Engine) taskOrchestrator() TaskOrchestrator {
 	return TaskOrchestrator{
 		Executor:  runnerTurnExecutor{runner: runner},
 		Evaluator: runnerCompletionEvaluator{runner: runner},
@@ -202,7 +208,7 @@ func (runner *Runner) taskOrchestrator() TaskOrchestrator {
 	}
 }
 
-func (runner *Runner) runTask(ctx context.Context, userInput message.Message, timing *TurnTiming) (TurnExecution, error) {
+func (runner *Engine) runTask(ctx context.Context, userInput message.Message, timing *TurnTiming) (TurnExecution, error) {
 	task := &Task{ID: taskIDFromTiming(timing), Input: userInput, Status: TaskRunning}
 	return runner.taskOrchestrator().Run(ctx, task)
 }
@@ -218,8 +224,8 @@ var _ TurnExecutor = runnerTurnExecutor{}
 var _ CompletionEvaluator = runnerCompletionEvaluator{}
 
 // GoalTurnExecutor exposes the existing single-turn adapter to higher-level
-// goal orchestration without exposing Runner's tool-loop internals.
-func (runner *Runner) GoalTurnExecutor() TurnExecutor {
+// goal orchestration without exposing Engine's tool-loop internals.
+func (runner *Engine) GoalTurnExecutor() TurnExecutor {
 	if runner == nil {
 		return nil
 	}

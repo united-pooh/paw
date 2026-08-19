@@ -125,42 +125,42 @@ func (e *taskEnv) cleaner() TurnOwnedTaskCleaner {
 	return e.ownedCleaner
 }
 
-func (runner *Runner) SetStreamMATaskRunner(taskController StreamMATaskRunner) {
+func (runner *Engine) SetStreamMATaskRunner(taskController StreamMATaskRunner) {
 	if runner == nil {
 		return
 	}
 	runner.streamMA.setTasks(taskController)
 }
 
-func (runner *Runner) SetStreamMAEnabled(enabled bool) {
+func (runner *Engine) SetStreamMAEnabled(enabled bool) {
 	if runner == nil {
 		return
 	}
 	runner.streamMA.setEnabled(enabled)
 }
 
-func (runner *Runner) SetTaskTokensProvider(p TaskTokensProvider) {
+func (runner *Engine) SetTaskTokensProvider(p TaskTokensProvider) {
 	if runner == nil {
 		return
 	}
 	runner.taskEnv.setTokensProvider(p)
 }
 
-func (runner *Runner) SetTurnOwnedTaskCleaner(cleaner TurnOwnedTaskCleaner) {
+func (runner *Engine) SetTurnOwnedTaskCleaner(cleaner TurnOwnedTaskCleaner) {
 	if runner == nil {
 		return
 	}
 	runner.taskEnv.setOwnedCleaner(cleaner)
 }
 
-func (runner *Runner) SetSystemSupplement(supplement string) {
+func (runner *Engine) SetSystemSupplement(supplement string) {
 	if runner == nil {
 		return
 	}
 	runner.promptCtx.setSystemSupplement(supplement)
 }
 
-func (runner *Runner) SetCompactToolPrompt(enabled bool) {
+func (runner *Engine) SetCompactToolPrompt(enabled bool) {
 	if runner == nil {
 		return
 	}
@@ -253,7 +253,7 @@ func parseStreamMAFlags(input string) streamMAInvocation {
 	return invocation
 }
 
-func (runner *Runner) runStreamMATurn(ctx context.Context, input string, invocation streamMAInvocation) (msg message.Message, err error) {
+func (runner *Engine) runStreamMATurn(ctx context.Context, input string, invocation streamMAInvocation) (msg message.Message, err error) {
 	if strings.TrimSpace(invocation.ParseError) != "" {
 		return message.Message{}, fmt.Errorf("%s", invocation.ParseError)
 	}
@@ -380,10 +380,10 @@ func (runner *Runner) runStreamMATurn(ctx context.Context, input string, invocat
 	}
 	committed = true
 
-	if err := runner.ui.OnAssistantDelta(finalText); err != nil {
+	if err := runner.display.Publish(DisplayEvent{Kind: DisplayAssistantDelta, Text: finalText}); err != nil {
 		return message.Message{}, err
 	}
-	if err := runner.ui.OnDone(); err != nil {
+	if err := runner.display.Publish(DisplayEvent{Kind: DisplayDone}); err != nil {
 		return message.Message{}, err
 	}
 	runner.recordTraceEvent("streamma_end", map[string]any{
@@ -394,18 +394,18 @@ func (runner *Runner) runStreamMATurn(ctx context.Context, input string, invocat
 	return assistant, nil
 }
 
-func (runner *Runner) writeStreamMARoutingRationale(rationale streamma.RoutingRationale) error {
+func (runner *Engine) writeStreamMARoutingRationale(rationale streamma.RoutingRationale) error {
 	return runner.writeStreamMAJSONArtifact(streamma.RoutingRationaleFileName, rationale)
 }
 
-func (runner *Runner) writeStreamMARunLogger(runID string, logger streamma.RunLogger) error {
+func (runner *Engine) writeStreamMARunLogger(runID string, logger streamma.RunLogger) error {
 	if err := runner.writeStreamMAJSONArtifact(streamma.RunLoggerFileName, logger); err != nil {
 		return err
 	}
 	return runner.writeStreamMARunJSONArtifact(runID, streamma.RunLoggerFileName, logger)
 }
 
-func (runner *Runner) appendStreamMAEvidence(record streamma.RoutingEvidenceRecord) error {
+func (runner *Engine) appendStreamMAEvidence(record streamma.RoutingEvidenceRecord) error {
 	dir := runner.streamMAArtifactDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -424,15 +424,15 @@ func (runner *Runner) appendStreamMAEvidence(record streamma.RoutingEvidenceReco
 	return err
 }
 
-func (runner *Runner) writeStreamMAJSONArtifact(fileName string, value interface{}) error {
+func (runner *Engine) writeStreamMAJSONArtifact(fileName string, value interface{}) error {
 	return runner.writeStreamMAJSONArtifactInDir(runner.streamMAArtifactDir(), fileName, value)
 }
 
-func (runner *Runner) writeStreamMARunJSONArtifact(runID, fileName string, value interface{}) error {
+func (runner *Engine) writeStreamMARunJSONArtifact(runID, fileName string, value interface{}) error {
 	return runner.writeStreamMAJSONArtifactInDir(filepath.Join(runner.streamMAArtifactDir(), "runs", streamma.SafeArtifactID(runID)), fileName, value)
 }
 
-func (runner *Runner) streamMAArtifactDir() string {
+func (runner *Engine) streamMAArtifactDir() string {
 	root := ""
 	if runner != nil {
 		root = strings.TrimSpace(runner.workRoot)
@@ -446,7 +446,7 @@ func (runner *Runner) streamMAArtifactDir() string {
 	return filepath.Join(root, ".pipeline-workspace", "streamma-routing")
 }
 
-func (runner *Runner) writeStreamMAJSONArtifactInDir(dir, fileName string, value interface{}) error {
+func (runner *Engine) writeStreamMAJSONArtifactInDir(dir, fileName string, value interface{}) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -458,7 +458,7 @@ func (runner *Runner) writeStreamMAJSONArtifactInDir(dir, fileName string, value
 	return os.WriteFile(filepath.Join(dir, fileName), data, 0o600)
 }
 
-func (runner *Runner) streamMATraceSink(enabled bool) func(streamma.Event) {
+func (runner *Engine) streamMATraceSink(enabled bool) func(streamma.Event) {
 	if !enabled {
 		return nil
 	}
@@ -520,14 +520,14 @@ func formatStreamMATraceEvent(started time.Time, event streamma.Event) string {
 	return strings.Join(parts, " ")
 }
 
-func (runner *Runner) currentStreamMAtasks() StreamMATaskRunner {
+func (runner *Engine) currentStreamMAtasks() StreamMATaskRunner {
 	if runner == nil {
 		return nil
 	}
 	return runner.streamMA.currentTasks()
 }
 
-func (runner *Runner) currentStreamMAEnabled() bool {
+func (runner *Engine) currentStreamMAEnabled() bool {
 	if runner == nil {
 		return false
 	}
@@ -966,15 +966,11 @@ func cleanStreamMAFinalText(text string) string {
 	return cleaned
 }
 
-func (runner *Runner) notifySystem(title, body string) {
-	if runner == nil || runner.ui == nil {
+func (runner *Engine) notifySystem(title, body string) {
+	if runner == nil || runner.display == nil {
 		return
 	}
-	notifier, ok := runner.ui.(ui.SystemNotifier)
-	if !ok {
-		return
-	}
-	_ = notifier.OnSystemMessage(ui.SystemEvent{Title: title, Body: body})
+	_ = runner.display.Publish(DisplayEvent{Kind: DisplaySystem, System: ui.SystemEvent{Title: title, Body: body}})
 }
 
 type streamMATaskModel struct {

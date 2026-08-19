@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | Approved · P0/P1/P2 完成（2026-08-18，构建/vet/全量测试通过；P2 后 Runner 字段 51→23，`-race` 全绿） |
+| 状态 | Approved · P0–P4 完成（2026-08-18；P4 TaskActor/RegistryActor 换壳完成，构建/vet/全量测试/指定 `-race` 全绿） |
 | 日期 | 2026-08-18 |
 | 范围 | internal/loop、internal/task、internal/session、新建 internal/actor |
 | 前置文档 | 架构评审结论（loop 扇出 11 包、Runner 40+ 字段、eventing 死包、装配根 9 元组） |
@@ -144,7 +144,7 @@ I6 L2 运行时禁止 import 任何 L3/L4 领域包（CI 用 go list 依赖审�
 | P1 装配收敛 ✅ | buildRunner 9 元组 → AppContext{…,Close()}；plan/goal_controller 迁入 internal/ | 全部调用点编译过、现有测试绿 | ~~保留旧签名一迭代~~ 实际采用原子替换 + git revert（owner 2026-08-18 审查知情：单仓库、3 调用点同批更新、未提交前可整体回退；保留旧签名一迭代的维护成本 > 收益） |
 | P2 hook 收编 ✅ | sessionLoadedHooks 泛化为 Hook 链（hooks.go，RegisterHook + 能力接口）；观察型关注点提取为 12 个内聚协作者（usage/trace/gate/skills/streamMA/compact/stateCfg/promptCtx/taskEnv/turnCtl/toolGate，各自持锁）；yolo 回调并入 toolGate 协作者。实测：Runner 字段 51→**23**，loop 测试/`-race`/全仓库测试全绿（行为等价）。遗留：tracer/todo/skill 完全 Hook 化与 yolo 决策落事件随 P3/P5 actor 化一并收益 | Runner 字段 ≤ 25；行为 golden 流一致 | hook 关闭开关（SetSessionLoadedHook 兼容糖保留，行为不变） |
 | P3 actor 内核 ✅ | 新建 internal/actor（含测试三件套） | 不变量属性测试全绿、覆盖 ≥90%（实测 92.4%）、崩溃矩阵全过 | 纯新增，直接删 |
-| P4 TaskActor | task/manager 换壳；StopOwnedTasks→Tell(Stop)；task 流事件化 | 后台任务行为等价；旧 manager 同 PR 删除（ADR-11） | 上一个 tag |
+| P4 TaskActor ✅ | task/manager 换壳；StopOwnedTasks→Tell(Stop)；task 流事件化；Manager 保留 facade 配置与外部 adapter，删除 lifecycle maps/channels/cache | 后台任务行为等价；golden/崩溃恢复/metadata 兼容用例与全量门禁通过（ADR-11） | 上一个 tag |
 | P5 SessionActor | loop 引擎入住；session JSONL 与 es 合流；权限门→Suspend+Decision 消息；goal/plan 会话恢复（见 §13.5：fold 重建 activeGoalID/activePlanID） | golden 事件流等价；Runner（Engine）字段 ≤15；context_recovery 语义保持 | feature flag 双跑一迭代 |
 
 Phase 6（可选、非本 spec 承诺）：存储接口多实现（SQLite/PG）+ 激活租约 → 多机。
@@ -187,7 +187,7 @@ Phase 6（可选、非本 spec 承诺）：存储接口多实现（SQLite/PG）+
 ## 13. 开放问题（需 owner 拍板）
 
 1. SessionActor 的用户输入消息是否 Durable（影响离线 headless 恢复语义）；
-2. TaskActor 首版用 goroutine-per-actor 还是直接分片模式（建议后者，代码更少）；
+2. 【已落实，2026-08-18】TaskActor/RegistryActor 直接使用 `internal/actor` 分片调度器；Host 当前固定单 shard，Process 句柄仅保存在 ephemeral Host table；
 3. P5 双跑 feature flag 的默认开向（建议默认旧路径，一个迭代后翻转）；
 4. 时间盒：P0-P5 建议跨度 ≤ 2 个迭代，超时触发 spec 复审；
 5. 【已拍板 2026-08-18，Owner 选 B】goal/plan 的会话恢复：现状为 MVP 已知限制（goal/plan 控制器固化初始 sessionID，/resume 后不跟随；goal.Store 按 sessionID 查询能力已存在但未接线）。决定推至 P5：SessionActor 激活时经事件流 fold 重建 activeGoalID/activePlanID，goal=按 SessionID 找回最新未终结 goal，plan=找回最近未终结文档的交互现场。在 P5 落地前，/resume 后新建 goal 仍归旧会话（数据不丢失，仅归属不跟随）。

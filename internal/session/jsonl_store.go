@@ -445,7 +445,7 @@ func (s *JSONLStore) journalNextSeq(ctx context.Context, sessionID string) (int6
 		}
 		// 文件不存在或大小变化：继续走重扫路径。
 	}
-	existing, err := s.readOwnRecords(ctx, sessionID)
+	existing, _, err := s.LoadEnvelopes(ctx, sessionID)
 	if err != nil {
 		return 0, err
 	}
@@ -864,66 +864,20 @@ func (s *JSONLStore) writeMeta(ctx context.Context, meta Meta) error {
 }
 
 func (s *JSONLStore) readOwnRecords(ctx context.Context, sessionID string) ([]Record, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	path := s.readTranscriptPath(sessionID)
-	data, err := os.ReadFile(path)
+	envelopes, _, err := s.LoadEnvelopes(ctx, sessionID)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
 		return nil, err
 	}
-	records := make([]Record, 0, 64)
-	lines := bytes.Split(data, []byte{'\n'})
-	for lineIndex, rawLine := range lines {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		line := strings.TrimSpace(string(rawLine))
-		if line == "" {
+	records := make([]Record, 0, len(envelopes))
+	for _, env := range envelopes {
+		if env.Kind == es.KindRuntime {
 			continue
 		}
-		lineBytes := []byte(line)
-		var rec Record
-		if isEnvelopeLine(lineBytes) {
-			var env es.Envelope
-			if err := json.Unmarshal(lineBytes, &env); err != nil {
-				if lineIndex == len(lines)-1 && !bytes.HasSuffix(data, []byte{'\n'}) {
-					break
-				}
-				return nil, fmt.Errorf("解析 transcript 失败(%s): %w", path, err)
-			}
-			if err := env.Validate(); err != nil {
-				if lineIndex == len(lines)-1 && !bytes.HasSuffix(data, []byte{'\n'}) {
-					break
-				}
-				return nil, fmt.Errorf("解析 transcript 失败(%s): %w", path, err)
-			}
-			var convErr error
-			rec, convErr = envelopeToRecord(env)
-			if convErr != nil {
-				if lineIndex == len(lines)-1 && !bytes.HasSuffix(data, []byte{'\n'}) {
-					break
-				}
-				return nil, fmt.Errorf("解析 transcript 失败(%s): %w", path, convErr)
-			}
-		} else {
-			if err := json.Unmarshal(lineBytes, &rec); err != nil {
-				if lineIndex == len(lines)-1 && !bytes.HasSuffix(data, []byte{'\n'}) {
-					// The final line may have been torn during a process crash. All
-					// preceding newline-terminated records are still durable.
-					break
-				}
-				return nil, fmt.Errorf("解析 transcript 失败(%s): %w", path, err)
-			}
-			if rec.Kind == "" {
-				rec.Kind = JournalMessage
-			}
+		record, err := envelopeToRecord(env)
+		if err != nil {
+			continue
 		}
-		records = append(records, rec)
+		records = append(records, record)
 	}
 	return records, nil
 }
@@ -1123,7 +1077,7 @@ func (s *JSONLStore) ensureWritableSession(sessionID string) (bool, error) {
 		return false, fmt.Errorf("创建迁移临时目录失败: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }()
-	for _, name := range []string{"meta.json", "transcript.jsonl", "turns.jsonl"} {
+	for _, name := range []string{"meta.json", "transcript.jsonl", "turns.jsonl", sessionActorSnapshotFile} {
 		src := filepath.Join(legacy, name)
 		data, err := os.ReadFile(src)
 		if err != nil {

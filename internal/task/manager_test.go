@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"paw/internal/es"
 	"paw/internal/loop"
 	coremcp "paw/internal/mcp"
 	"paw/internal/message"
@@ -31,6 +32,16 @@ type blockingLauncher struct {
 	started []WorkerRequest
 }
 
+type trackingBlockingLauncher struct {
+	process *blockingProcess
+}
+
+func (l *trackingBlockingLauncher) Start(_ context.Context, req WorkerRequest) (Process, error) {
+	l.process = newBlockingProcess(req)
+	l.process.pid = 999999
+	return l.process, nil
+}
+
 func (l *blockingLauncher) Start(ctx context.Context, req WorkerRequest) (Process, error) {
 	l.mu.Lock()
 	l.started = append(l.started, req)
@@ -40,16 +51,17 @@ func (l *blockingLauncher) Start(ctx context.Context, req WorkerRequest) (Proces
 
 type blockingProcess struct {
 	req  WorkerRequest
+	pid  int
 	once sync.Once
 	done chan struct{}
 }
 
 func newBlockingProcess(req WorkerRequest) *blockingProcess {
-	return &blockingProcess{req: req, done: make(chan struct{})}
+	return &blockingProcess{req: req, pid: os.Getpid(), done: make(chan struct{})}
 }
 
 func (p *blockingProcess) PID() int {
-	return 4242
+	return p.pid
 }
 
 func (p *blockingProcess) Wait() (WorkerResult, error) {
@@ -1196,7 +1208,7 @@ func TestWaitToolAppliesDefaultTimeoutFromSettings(t *testing.T) {
 		},
 	}
 	cfg := settings.DefaultConfig()
-	cfg.Task.WaitTimeoutMs = 42
+	cfg.Task.WaitTimeoutMs = 2000
 	manager, _, _ := newTestManager(t, modelStreamer, cfg, nil)
 	waitTool := NewWaitTool(manager)
 
@@ -1246,6 +1258,250 @@ func TestLaunchPersistsTaskRegistry(t *testing.T) {
 	}
 }
 
+func TestCompletedTaskRecoversFromActorJournalWithoutMetadata(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	newManager := func() *Manager {
+		return NewManager(Config{
+			Store:    store,
+			Root:     root,
+			Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+			Launcher: immediateLauncher{},
+		})
+	}
+
+	manager := newManager()
+	result, err := manager.Run(context.Background(), Request{Prompt: "persist through actor journal"})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.SessionID == "" {
+		t.Fatal("Run() returned an empty session id")
+	}
+
+	metaPath := filepath.Join(root, ".paw", tasksDirName, result.SessionID, "meta.json")
+	if err := os.Remove(metaPath); err != nil {
+		t.Fatalf("remove compatibility metadata: %v", err)
+	}
+
+	restarted := newManager()
+	got, ok := restarted.Status(result.SessionID)
+	if !ok {
+		t.Fatalf("Status(%q) was not recovered from the actor journal", result.SessionID)
+	}
+	if got.Status != TaskCompleted || got.SessionID != result.SessionID || got.ExitCode == nil || *got.ExitCode != 0 {
+		t.Fatalf("recovered task = %#v, want completed task %q", got, result.SessionID)
+	}
+}
+
+func TestTaskLifecycleEventFlowGolden(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	manager := NewManager(Config{
+		Store:    store,
+		Root:     root,
+		Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+		Launcher: immediateLauncher{},
+	})
+	result, err := manager.Run(context.Background(), Request{Prompt: "golden lifecycle"})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	journal, err := es.NewJSONLStore(filepath.Join(root, ".paw", "actors"), taskActorType)
+	if err != nil {
+		t.Fatalf("NewJSONLStore(actor journal) error = %v", err)
+	}
+	events, _, err := journal.Load(context.Background(), result.SessionID)
+	if err != nil {
+		t.Fatalf("Load(actor journal) error = %v", err)
+	}
+	got := make([]string, 0, 3)
+	for _, event := range events {
+		if event.Kind == es.KindDomain {
+			got = append(got, event.Type)
+		}
+	}
+	want := []string{taskEventCreated, taskEventStarted, taskEventCompleted}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("task domain event flow = %v, want %v", got, want)
+	}
+}
+
+func TestRunningTaskRecoversInterruptedFromActorJournalWithoutMetadata(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	launcher := &trackingBlockingLauncher{}
+	manager := NewManager(Config{
+		Store:    store,
+		Root:     root,
+		Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+		Launcher: launcher,
+	})
+	task, err := manager.Launch(context.Background(), Request{Prompt: "recover crash"})
+	if err != nil {
+		t.Fatalf("Launch() error = %v", err)
+	}
+	t.Cleanup(func() { _ = launcher.process.Stop() })
+	metaPath := filepath.Join(root, ".paw", tasksDirName, task.ID, "meta.json")
+	if err := os.Remove(metaPath); err != nil {
+		t.Fatalf("remove compatibility metadata: %v", err)
+	}
+	manager.actors.system.Stop()
+
+	restarted := NewManager(Config{Store: store, Root: root, Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()}})
+	got, ok := restarted.Status(task.ID)
+	if !ok || got.Status != TaskInterrupted || got.FinishedAt == nil || got.ExitCode == nil || *got.ExitCode != -1 {
+		t.Fatalf("recovered task = %#v / %v, want interrupted crash recovery", got, ok)
+	}
+}
+
+func TestListTasksRecoversActorRegistryWithoutMetadata(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	newManager := func() *Manager {
+		return NewManager(Config{
+			Store:    store,
+			Root:     root,
+			Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+			Launcher: immediateLauncher{},
+		})
+	}
+
+	manager := newManager()
+	result, err := manager.Run(context.Background(), Request{Prompt: "index through registry actor"})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	metaPath := filepath.Join(root, ".paw", tasksDirName, result.SessionID, "meta.json")
+	if err := os.Remove(metaPath); err != nil {
+		t.Fatalf("remove compatibility metadata: %v", err)
+	}
+
+	tasks := newManager().ListTasks()
+	if len(tasks) != 1 {
+		t.Fatalf("ListTasks() = %#v, want one actor-indexed task", tasks)
+	}
+	if tasks[0].ID != result.SessionID || tasks[0].Status != TaskCompleted {
+		t.Fatalf("ListTasks()[0] = %#v, want completed task %q", tasks[0], result.SessionID)
+	}
+}
+
+func TestTotalTaskTokensRecoversActorProjectionWithoutMetadata(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	manager := NewManager(Config{
+		Store:    store,
+		Root:     root,
+		Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+		Launcher: immediateLauncher{result: func(req WorkerRequest) WorkerResult {
+			return WorkerResult{TaskID: req.TaskID, SessionID: req.SessionID, ExitCode: 0, UsedTokens: 77}
+		}},
+	})
+	result, err := manager.Run(context.Background(), Request{Prompt: "project tokens", ParentSessionID: "parent"})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	metaPath := filepath.Join(root, ".paw", tasksDirName, result.SessionID, "meta.json")
+	if err := os.Remove(metaPath); err != nil {
+		t.Fatalf("remove compatibility metadata: %v", err)
+	}
+
+	restarted := NewManager(Config{Store: store, Root: root, Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()}})
+	if got := restarted.TotalTaskTokens("parent"); got != 77 {
+		t.Fatalf("TotalTaskTokens(parent) = %d, want 77 from actor projection", got)
+	}
+}
+
+func TestRunningTaskIsIndexedBeforeWorkerCompletion(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	launcher := &blockingLauncher{}
+	manager := NewManager(Config{
+		Store:    store,
+		Root:     root,
+		Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+		Launcher: launcher,
+	})
+	task, err := manager.Launch(context.Background(), Request{Prompt: "index while running"})
+	if err != nil {
+		t.Fatalf("Launch() error = %v", err)
+	}
+	t.Cleanup(func() { _, _ = manager.Stop(context.Background(), task.ID) })
+
+	metaPath := filepath.Join(root, ".paw", tasksDirName, task.ID, "meta.json")
+	if err := os.Remove(metaPath); err != nil {
+		t.Fatalf("remove compatibility metadata: %v", err)
+	}
+	restarted := NewManager(Config{Store: store, Root: root, Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()}})
+	tasks := restarted.ListTasks()
+	if len(tasks) != 1 || tasks[0].ID != task.ID || tasks[0].Status != TaskRunning || tasks[0].PID != os.Getpid() {
+		t.Fatalf("ListTasks() = %#v, want running actor-indexed task %#v", tasks, task)
+	}
+}
+
+func TestStopUsesTaskActorWhenCompatibilityMetadataIsMissing(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	launcher := &blockingLauncher{}
+	manager := NewManager(Config{
+		Store:    store,
+		Root:     root,
+		Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+		Launcher: launcher,
+	})
+	task, err := manager.Launch(context.Background(), Request{Prompt: "stop through task actor"})
+	if err != nil {
+		t.Fatalf("Launch() error = %v", err)
+	}
+	t.Cleanup(func() { _, _ = manager.Stop(context.Background(), task.ID) })
+	metaPath := filepath.Join(root, ".paw", tasksDirName, task.ID, "meta.json")
+	if err := os.Remove(metaPath); err != nil {
+		t.Fatalf("remove compatibility metadata: %v", err)
+	}
+
+	restarted := NewManager(Config{Store: store, Root: root, Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()}})
+	stopped, err := restarted.Stop(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if stopped.Status != TaskStopped || stopped.ExitCode == nil || *stopped.ExitCode != -1 {
+		t.Fatalf("Stop() = %#v, want stopped actor task", stopped)
+	}
+	got, ok := restarted.Status(task.ID)
+	if !ok || got.Status != TaskStopped {
+		t.Fatalf("Status(%q) = (%#v, %v), want stopped", task.ID, got, ok)
+	}
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read recreated compatibility metadata: %v", err)
+	}
+	if !strings.Contains(string(data), `"status": "stopped"`) {
+		t.Fatalf("compatibility metadata = %s, want stopped status", data)
+	}
+}
+
 func TestStopStopsRunningWorkerAndPersistsStoppedStatus(t *testing.T) {
 	root := t.TempDir()
 	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
@@ -1264,7 +1520,7 @@ func TestStopStopsRunningWorkerAndPersistsStoppedStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Launch() error = %v", err)
 	}
-	if task.PID != 4242 || task.OutputPath == "" || task.Depth != 1 {
+	if task.PID != os.Getpid() || task.OutputPath == "" || task.Depth != 1 {
 		t.Fatalf("launched task = %#v", task)
 	}
 
@@ -1332,6 +1588,58 @@ func TestStopOwnedTasksOnlyInterruptsExactParentTurn(t *testing.T) {
 	}
 	_, _ = manager.Stop(context.Background(), b1.ID)
 	_, _ = manager.Stop(context.Background(), legacy.ID)
+}
+
+func TestStopOwnedTasksUsesActorOwnershipAfterRestartWithoutMetadata(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	manager := NewManager(Config{
+		Store:    store,
+		Root:     root,
+		Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+		Launcher: &blockingLauncher{},
+	})
+	launch := func(turn, prompt string) TaskSnapshot {
+		t.Helper()
+		task, launchErr := manager.Launch(context.Background(), Request{
+			Prompt:          prompt,
+			ParentSessionID: "parent",
+			ParentTurnID:    turn,
+		})
+		if launchErr != nil {
+			t.Fatalf("Launch(%q) error = %v", prompt, launchErr)
+		}
+		return task
+	}
+	a1 := launch("turn-a", "a1")
+	a2 := launch("turn-a", "a2")
+	b1 := launch("turn-b", "b1")
+	t.Cleanup(func() {
+		manager.StopOwnedTasks(context.Background(), "parent", "turn-a", "cleanup")
+		manager.StopOwnedTasks(context.Background(), "parent", "turn-b", "cleanup")
+	})
+	for _, task := range []TaskSnapshot{a1, a2, b1} {
+		metaPath := filepath.Join(root, ".paw", tasksDirName, task.ID, "meta.json")
+		if err := os.Remove(metaPath); err != nil {
+			t.Fatalf("remove metadata for %s: %v", task.ID, err)
+		}
+	}
+
+	restarted := NewManager(Config{Store: store, Root: root, Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()}})
+	restarted.StopOwnedTasks(context.Background(), "parent", "turn-a", "parent failed")
+	for _, task := range []TaskSnapshot{a1, a2} {
+		got, ok := restarted.Status(task.ID)
+		if !ok || got.Status != TaskInterrupted || got.Error != "parent failed" {
+			t.Fatalf("Status(%s) = (%#v, %v), want interrupted actor task", task.ID, got, ok)
+		}
+	}
+	got, ok := restarted.Status(b1.ID)
+	if !ok || got.Status != TaskRunning {
+		t.Fatalf("Status(%s) = (%#v, %v), want untouched running task", b1.ID, got, ok)
+	}
 }
 
 func TestTaskToolPropagatesTurnOwnerFromContext(t *testing.T) {
@@ -1619,41 +1927,28 @@ func TestReconcileOrphansKeepsLivePIDRunning(t *testing.T) {
 	}
 }
 
-func TestReconcileOrphansSkipsInMemoryTasks(t *testing.T) {
+func TestReconcileOrphansSkipsActiveHostedTask(t *testing.T) {
 	root := t.TempDir()
-	registry := newTaskRegistry(root)
-	manager, _ := newStoreWithManager(t, root)
-
-	// 先于内存任务存在的磁盘 running 任务（死 pid）。
-	diskOnly := TaskSnapshot{
-		ID:        "disk-only",
-		SessionID: "disk-only",
-		Status:    TaskRunning,
-		PID:       999997,
-		StartedAt: time.Now().UTC(),
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
-	if err := registry.saveTask(context.Background(), diskOnly); err != nil {
-		t.Fatalf("saveTask(diskOnly) error = %v", err)
+	manager := NewManager(Config{
+		Store:    store,
+		Root:     root,
+		Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+		Launcher: &blockingLauncher{},
+	})
+	task, err := manager.Launch(context.Background(), Request{Prompt: "active host task"})
+	if err != nil {
+		t.Fatalf("Launch() error = %v", err)
 	}
-	// 本实例真实运行的任务（死 pid 也无关：内存任务必须被跳过）。
-	inMemory := TaskSnapshot{
-		ID:        "in-memory",
-		SessionID: "in-memory",
-		Status:    TaskRunning,
-		PID:       999996,
-		StartedAt: time.Now().UTC(),
-	}
-	manager.mu.Lock()
-	manager.tasks[inMemory.ID] = inMemory
-	manager.mu.Unlock()
+	t.Cleanup(func() { _, _ = manager.Stop(context.Background(), task.ID) })
 
 	manager.reconcileOrphanedTasks(context.Background())
 
-	if task, ok := manager.Status("in-memory"); !ok || task.Status != TaskRunning {
-		t.Fatalf("in-memory task = %#v / %v, want running", task, ok)
-	}
-	if task, ok := manager.Status("disk-only"); !ok || task.Status != TaskInterrupted {
-		t.Fatalf("disk-only task = %#v / %v, want interrupted", task, ok)
+	if got, ok := manager.Status(task.ID); !ok || got.Status != TaskRunning {
+		t.Fatalf("active hosted task = %#v / %v, want running", got, ok)
 	}
 }
 
@@ -1783,12 +2078,48 @@ func TestSubscribeTaskUpdatesCancelIsIdempotentAndStopsDelivery(t *testing.T) {
 	cancel()
 	cancel()
 
-	manager.signalTaskUpdate()
 	select {
 	case _, ok := <-updates:
 		if ok {
 			t.Fatal("unsubscribed update channel received a notification")
 		}
 	default:
+	}
+}
+
+func TestManagerCloseStopsRunningTasksAndClosesSubscriptions(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	manager := NewManager(Config{
+		Store:    store,
+		Root:     root,
+		Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+		Launcher: &blockingLauncher{},
+	})
+	updates, cancel := manager.SubscribeTaskUpdates()
+	defer cancel()
+	task, err := manager.Launch(context.Background(), Request{Prompt: "close manager"})
+	if err != nil {
+		t.Fatalf("Launch() error = %v", err)
+	}
+
+	if err := manager.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	for range updates {
+	}
+
+	got, ok, err := newTaskRegistry(root).loadTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("loadTask(%q) error = %v", task.ID, err)
+	}
+	if !ok || got.Status != TaskInterrupted {
+		t.Fatalf("closed task = %#v / %v, want interrupted", got, ok)
 	}
 }

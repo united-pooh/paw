@@ -20,6 +20,7 @@ func (c *modeTestGoalController) Budget() string               { return "budget"
 type modeTestPlanController struct {
 	started string
 	stopped bool
+	resumes int
 }
 
 func (c *modeTestPlanController) Start(requirement string) (string, error) {
@@ -29,6 +30,7 @@ func (c *modeTestPlanController) Start(requirement string) (string, error) {
 func (c *modeTestPlanController) Status() string        { return "status" }
 func (c *modeTestPlanController) List() string          { return "list" }
 func (c *modeTestPlanController) Show(id string) string { return "show " + id }
+func (c *modeTestPlanController) Resume() error         { c.resumes++; return nil }
 func (c *modeTestPlanController) Cancel() error         { c.stopped = true; return nil }
 
 func TestCycleInputModeChatGoalPlan(t *testing.T) {
@@ -97,6 +99,23 @@ func TestPlanModeSubmitsStartsPlanSession(t *testing.T) {
 	entry := model.transcript[0]
 	if entry.title != "plan" || !strings.Contains(entry.body, "fix the login flow") {
 		t.Fatalf("plan entry = %#v", entry)
+	}
+}
+
+func TestPlanResumeCommandExplicitlyRestartsAttachedPlan(t *testing.T) {
+	controller := &modeTestPlanController{}
+	model := newTestModel(&fakeRunner{})
+	model.planController = controller
+
+	handled, cmd := model.handleCommand("/plan resume")
+	if !handled {
+		t.Fatal("/plan resume was not handled")
+	}
+	if cmd != nil {
+		_ = cmd()
+	}
+	if controller.resumes != 1 || !model.planWorking || !model.planMode || model.turnStartedAt.IsZero() {
+		t.Fatalf("resume state: calls=%d working=%v mode=%v started=%v", controller.resumes, model.planWorking, model.planMode, model.turnStartedAt)
 	}
 }
 

@@ -9,7 +9,7 @@ import (
 
 const contextRecoveryFocus = "recovering from provider context limit"
 
-func (runner *Runner) recoverContextLimit(ctx context.Context, history []message.Message, providerErr error, preserveRecentToolPair bool) ([]message.Message, *ContextCompactionResult, error) {
+func (runner *Engine) recoverContextLimit(ctx context.Context, history []message.Message, providerErr error, preserveRecentToolPair bool) ([]message.Message, *ContextCompactionResult, error) {
 	protectedTail := -1
 	if preserveRecentToolPair {
 		head := pinnedHistoryPrefix(history, runner.contextLimit())

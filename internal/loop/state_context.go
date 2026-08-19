@@ -27,7 +27,7 @@ type recentTurnsLoader interface {
 }
 
 // stateConfig 收敛模式 B 恢复配置：压缩模式、近邻轮数、压缩比与状态块
-// 提供者。P2 从 Runner 字段提取，自带锁。
+// 提供者。P2 从 Engine 字段提取，自带锁。
 type stateConfig struct {
 	mu            sync.RWMutex
 	mode          string
@@ -93,7 +93,7 @@ func (c *stateConfig) buildBlock(ctx context.Context) (string, error) {
 // loadStateModeHistory 实现模式 B 恢复：状态块 + 最近 N 轮清洗对话
 // （验证实验 v2 结论），替代全量历史。返回 (messages, recovery, error)；
 // 不支持清洗读取或读取失败时返回错误，由调用方降级全量恢复。
-func (runner *Runner) loadStateModeHistory(ctx context.Context) ([]message.Message, *session.RecoveryState, error) {
+func (runner *Engine) loadStateModeHistory(ctx context.Context) ([]message.Message, *session.RecoveryState, error) {
 	journal := runner.turnJournal()
 	if journal == nil {
 		return nil, nil, nil
@@ -125,7 +125,7 @@ func (runner *Runner) loadStateModeHistory(ctx context.Context) ([]message.Messa
 }
 
 // resumeRecentTurns 返回恢复时保留的完整轮数（settings resumeRecentTurns）。
-func (runner *Runner) resumeRecentTurns() int {
+func (runner *Engine) resumeRecentTurns() int {
 	if runner == nil {
 		return 3
 	}
@@ -136,7 +136,7 @@ func (runner *Runner) resumeRecentTurns() int {
 }
 
 // SetStateCompactionRatio 设置模式 B 压缩触发阈值（0~1，默认 0.9）。
-func (runner *Runner) SetStateCompactionRatio(ratio float64) {
+func (runner *Engine) SetStateCompactionRatio(ratio float64) {
 	if runner == nil || ratio <= 0 || ratio >= 1 {
 		return
 	}
@@ -144,7 +144,7 @@ func (runner *Runner) SetStateCompactionRatio(ratio float64) {
 }
 
 // SetResumeRecentTurns 设置恢复时保留的完整轮数（T5 由 settings 接入）。
-func (runner *Runner) SetResumeRecentTurns(n int) {
+func (runner *Engine) SetResumeRecentTurns(n int) {
 	if runner == nil || n <= 0 {
 		return
 	}
@@ -164,7 +164,7 @@ const stateRefreshInstruction = "[系统] 上下文接近上限，已执行状�
 //     （prune 前置保真）后执行状态压缩——状态块 + 最近 N 轮（清洗）+
 //     刷新指令替换整个历史，不调用摘要模型
 //   - force 档：状态压缩后仍超窗口（极端）降级模式 A 摘要
-func (runner *Runner) maintainStateProjection(ctx context.Context, history []message.Message) (contextMaintenanceResult, error) {
+func (runner *Engine) maintainStateProjection(ctx context.Context, history []message.Message) (contextMaintenanceResult, error) {
 	result := contextMaintenanceResult{history: history}
 	if runner == nil || len(history) == 0 {
 		return result, nil
@@ -241,7 +241,7 @@ func (runner *Runner) maintainStateProjection(ctx context.Context, history []mes
 }
 
 // compactStateFallback 降级模式 A（摘要压缩，现状路径）。
-func (runner *Runner) compactStateFallback(ctx context.Context, history []message.Message) (contextMaintenanceResult, error) {
+func (runner *Engine) compactStateFallback(ctx context.Context, history []message.Message) (contextMaintenanceResult, error) {
 	compacted, compaction, err := runner.compactHistory(ctx, history, "", true)
 	if err != nil {
 		return contextMaintenanceResult{history: history}, err
@@ -255,7 +255,7 @@ func (runner *Runner) compactStateFallback(ctx context.Context, history []messag
 }
 
 // recordStateCompaction 记录状态压缩审计事件（best-effort）。
-func (runner *Runner) recordStateCompaction(ctx context.Context, before, after int, ratio float64) {
+func (runner *Engine) recordStateCompaction(ctx context.Context, before, after int, ratio float64) {
 	journal := runner.turnJournal()
 	recorder, ok := journal.(interface {
 		AppendStateEvent(ctx context.Context, sessionID string, kind session.StateEventKind, summary string) (int64, error)

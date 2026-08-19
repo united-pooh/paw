@@ -50,7 +50,7 @@ func TestResumeRebindsStateTools(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runner := loop.NewRunnerWithInstructionRoot(&resumeTestModel{}, headless.New(io.Discard), registry, store, "session-a", root)
+	runner := loop.NewEngineWithInstructionRoot(&resumeTestModel{}, headless.New(io.Discard), registry, store, "session-a", root)
 	wireSessionTools(runner, store, broker, "session-a")
 	runner.SetSessionLoadedHook(func(sid string) {
 		wireSessionTools(runner, store, broker, sid)
@@ -127,7 +127,7 @@ func TestResumeRestoresTodoBrokerFromSession(t *testing.T) {
 	if err := registerMainAgentTools(registry, broker); err != nil {
 		t.Fatal(err)
 	}
-	runner := loop.NewRunnerWithInstructionRoot(&resumeTestModel{}, headless.New(io.Discard), registry, store, "session-a", root)
+	runner := loop.NewEngineWithInstructionRoot(&resumeTestModel{}, headless.New(io.Discard), registry, store, "session-a", root)
 	wireSessionTools(runner, store, broker, "session-a")
 	if _, err := mainTodoTool.Run(ctx, json.RawMessage(`{"items":[{"id":"a","content":"A task","status":"pending"}]}`)); err != nil {
 		t.Fatal(err)
@@ -160,7 +160,7 @@ func TestTodoArchiveWritesProgressFile(t *testing.T) {
 	if err := registerMainAgentTools(registry, broker); err != nil {
 		t.Fatal(err)
 	}
-	runner := loop.NewRunnerWithInstructionRoot(&resumeTestModel{}, headless.New(io.Discard), registry, store, "session-a", root)
+	runner := loop.NewEngineWithInstructionRoot(&resumeTestModel{}, headless.New(io.Discard), registry, store, "session-a", root)
 	wireSessionTools(runner, store, broker, "session-a")
 
 	snap := `{"explanation":"archive test","items":[{"id":"1","content":"done item","status":"completed"},{"id":"2","content":"pending item","status":"pending"}]}`

@@ -28,12 +28,19 @@ type journal struct {
 	clock Clock
 
 	mu     sync.Mutex
-	stores map[string]*es.JSONLStore
+	stores map[string]StreamStore
+	custom map[string]StreamStore
 	hook   func(stage string, id ActorID)
 }
 
-func newJournal(dir string, clock Clock) *journal {
-	return &journal{dir: dir, clock: clock, stores: make(map[string]*es.JSONLStore)}
+func newJournal(dir string, clock Clock, overrides ...map[string]StreamStore) *journal {
+	custom := make(map[string]StreamStore)
+	if len(overrides) > 0 {
+		for actorType, store := range overrides[0] {
+			custom[actorType] = store
+		}
+	}
+	return &journal{dir: dir, clock: clock, stores: make(map[string]StreamStore), custom: custom}
 }
 
 // setHook 注册崩溃注入钩子（测试专用；nil 关闭）。
@@ -52,7 +59,7 @@ func (j *journal) fire(stage string, id ActorID) {
 	}
 }
 
-func (j *journal) store(id ActorID) (*es.JSONLStore, error) {
+func (j *journal) store(id ActorID) (StreamStore, error) {
 	if err := id.Validate(); err != nil {
 		return nil, err
 	}
@@ -60,10 +67,13 @@ func (j *journal) store(id ActorID) (*es.JSONLStore, error) {
 	defer j.mu.Unlock()
 	store, ok := j.stores[id.Type]
 	if !ok {
-		var err error
-		store, err = es.NewJSONLStore(j.dir, id.Type)
-		if err != nil {
-			return nil, err
+		store = j.custom[id.Type]
+		if store == nil {
+			var err error
+			store, err = es.NewJSONLStore(j.dir, id.Type)
+			if err != nil {
+				return nil, err
+			}
 		}
 		j.stores[id.Type] = store
 	}

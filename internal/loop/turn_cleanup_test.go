@@ -52,7 +52,7 @@ func TestFailedTurnCleansOwnedTasksAndPropagatesTurnOwner(t *testing.T) {
 	registry := tool.NewRegistry()
 	registry.Register(probe)
 	cleaner := &recordingTurnCleaner{}
-	runner := NewRunner(streamer, &fakeUI{}, registry, nil, "parent-session")
+	runner := NewEngine(streamer, &fakeUI{}, registry, nil, "parent-session")
 	runner.SetTurnOwnedTaskCleaner(cleaner)
 
 	if _, err := runner.RunTurn(context.Background(), "start work"); err == nil || !strings.Contains(err.Error(), "responses stream failed") {
@@ -73,7 +73,7 @@ func TestFailedTurnCleansOwnedTasksAndPropagatesTurnOwner(t *testing.T) {
 
 func TestCompletedTurnDoesNotCleanOwnedTasks(t *testing.T) {
 	cleaner := &recordingTurnCleaner{}
-	runner := NewRunner(&fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{{Delta: "done"}, {Done: true}}}}}, &fakeUI{}, tool.NewRegistry(), nil, "parent-session")
+	runner := NewEngine(&fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{{Delta: "done"}, {Done: true}}}}}, &fakeUI{}, tool.NewRegistry(), nil, "parent-session")
 	runner.SetTurnOwnedTaskCleaner(cleaner)
 	if _, err := runner.RunTurn(context.Background(), "finish"); err != nil {
 		t.Fatal(err)

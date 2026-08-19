@@ -529,6 +529,36 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.addEntry(transcriptEntry{kind: entryError, title: title, body: msg.err.Error()})
 		} else {
+			if msg.source != sessionRestoreTaskEnter {
+				if rebinder, ok := m.goalController.(SessionControllerRebinder); ok {
+					if err := rebinder.Rebind(msg.sessionID); err != nil {
+						msg.err = fmt.Errorf("restore goal binding: %w", err)
+					}
+				}
+				if msg.err == nil {
+					if rebinder, ok := m.planController.(SessionControllerRebinder); ok {
+						if err := rebinder.Rebind(msg.sessionID); err != nil {
+							msg.err = fmt.Errorf("restore plan binding: %w", err)
+						}
+					}
+				}
+				if msg.err == nil {
+					if loader, ok := m.runner.(sessionModeLoader); ok {
+						modes, err := loader.SessionModes(m.ctx, msg.sessionID)
+						if err != nil {
+							msg.err = fmt.Errorf("refresh restored modes: %w", err)
+						} else {
+							msg.modes = modes
+						}
+					}
+				}
+			}
+			if msg.err != nil {
+				m.sessionPicker = nil
+				m.addEntry(transcriptEntry{kind: entryError, title: "sessions", body: msg.err.Error()})
+				cmds = append(cmds, m.input.Focus())
+				return m, tea.Batch(cmds...)
+			}
 			switch msg.source {
 			case sessionRestoreTaskEnter:
 				m.applyTaskPreviewRestore(msg)

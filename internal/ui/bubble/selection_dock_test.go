@@ -344,6 +344,23 @@ func TestRenderSelectionDock(t *testing.T) {
 		t.Fatalf("ambiguous scroll text in %q", plain)
 	}
 }
+
+func TestSelectionDockOptionsOnlyHidesGenericActions(t *testing.T) {
+	r := selectionRequest("permission", selecttool.ModeSingle)
+	r.Options = r.Options[:2]
+	r.OptionsOnly = true
+	r.MinSelect, r.MaxSelect = 1, 1
+	m := newModel(context.Background(), &fakeRunner{}, "", nil, nil, nil, nil, nil)
+	m.selectionDock = newSelectionDock(r)
+	m.selectionDock.end()
+	plain := ansi.Strip(m.renderSelectionDock(60, 12))
+	if strings.Contains(plain, "Custom option") || strings.Contains(plain, "Chat about this") {
+		t.Fatalf("options-only dock exposed generic actions: %q", plain)
+	}
+	if m.selectionDock.focus.kind != selectionFocusAnswer || m.selectionDock.focus.answerIndex != 1 {
+		t.Fatalf("end focus = %#v, want final fixed option", m.selectionDock.focus)
+	}
+}
 func TestRenderSelectionDockBatchProgress(t *testing.T) {
 	m := newModel(context.Background(), &fakeRunner{}, "", nil, nil, nil, nil, nil)
 	r := selectionRequest("x", selecttool.ModeSingle)

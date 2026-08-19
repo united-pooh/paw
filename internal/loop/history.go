@@ -21,7 +21,7 @@ func buildUserMessages(input string) []message.Message {
 }
 
 // promptState 收敛系统提示增补与轮间 supplements（用户在 turn 运行中提交
-// 的追加指令），自带锁。P2 从 Runner 字段提取。
+// 的追加指令），自带锁。P2 从 Engine 字段提取。
 type promptState struct {
 	mu               sync.RWMutex
 	supplements      []string
@@ -81,7 +81,7 @@ func (p *promptState) resetSupplements() {
 	p.supplements = nil
 }
 
-func (runner *Runner) SubmitSupplement(input string) bool {
+func (runner *Engine) SubmitSupplement(input string) bool {
 	input = strings.TrimSpace(input)
 	if runner == nil || input == "" {
 		return false
@@ -90,14 +90,14 @@ func (runner *Runner) SubmitSupplement(input string) bool {
 	return true
 }
 
-func (runner *Runner) PendingSupplementCount() int {
+func (runner *Engine) PendingSupplementCount() int {
 	if runner == nil {
 		return 0
 	}
 	return runner.promptCtx.pendingCount()
 }
 
-func (runner *Runner) buildTurnHistory(input message.Message) ([]message.Message, []string) {
+func (runner *Engine) buildTurnHistory(input message.Message) ([]message.Message, []string) {
 	runner.mu.RLock()
 	history := message.CloneMessages(runner.history)
 	runner.mu.RUnlock()
@@ -107,7 +107,7 @@ func (runner *Runner) buildTurnHistory(input message.Message) ([]message.Message
 	return history, supplements
 }
 
-func (runner *Runner) appendPendingSupplements(history []message.Message) ([]message.Message, []string) {
+func (runner *Engine) appendPendingSupplements(history []message.Message) ([]message.Message, []string) {
 	supplements := runner.drainSupplements()
 	if len(supplements) == 0 {
 		return history, nil
@@ -115,14 +115,14 @@ func (runner *Runner) appendPendingSupplements(history []message.Message) ([]mes
 	return append(history, buildSupplementMessages(supplements)...), supplements
 }
 
-func (runner *Runner) drainSupplements() []string {
+func (runner *Engine) drainSupplements() []string {
 	if runner == nil {
 		return nil
 	}
 	return runner.promptCtx.drain()
 }
 
-func (runner *Runner) prependSupplements(supplements []string) {
+func (runner *Engine) prependSupplements(supplements []string) {
 	if runner == nil || len(supplements) == 0 {
 		return
 	}
@@ -146,7 +146,7 @@ func buildSupplementMessages(supplements []string) []message.Message {
 
 const recoveryMessagePrefix = "[Paw recovery]"
 
-func (runner *Runner) turnJournal() session.TurnJournal {
+func (runner *Engine) turnJournal() session.TurnJournal {
 	if runner == nil || runner.store == nil {
 		return nil
 	}
@@ -154,7 +154,7 @@ func (runner *Runner) turnJournal() session.TurnJournal {
 	return journal
 }
 
-func (runner *Runner) persistPartialAssistant(ctx context.Context, journal session.TurnJournal, turnID string, msg message.Message) error {
+func (runner *Engine) persistPartialAssistant(ctx context.Context, journal session.TurnJournal, turnID string, msg message.Message) error {
 	if journal == nil || msg.Role != message.RoleAssistant || strings.TrimSpace(msg.Content) == "" {
 		return nil
 	}
@@ -168,7 +168,7 @@ func (runner *Runner) persistPartialAssistant(ctx context.Context, journal sessi
 	return nil
 }
 
-func (runner *Runner) resolveTurnID(timing *TurnTiming) (string, error) {
+func (runner *Engine) resolveTurnID(timing *TurnTiming) (string, error) {
 	if timing != nil && strings.TrimSpace(timing.TurnID) != "" {
 		return strings.TrimSpace(timing.TurnID), nil
 	}
@@ -179,7 +179,7 @@ func (runner *Runner) resolveTurnID(timing *TurnTiming) (string, error) {
 	return "turn-" + id, nil
 }
 
-func (runner *Runner) currentHistory() []message.Message {
+func (runner *Engine) currentHistory() []message.Message {
 	if runner == nil {
 		return nil
 	}
@@ -188,7 +188,7 @@ func (runner *Runner) currentHistory() []message.Message {
 	return message.CloneMessages(runner.history)
 }
 
-func (runner *Runner) setHistory(history []message.Message) {
+func (runner *Engine) setHistory(history []message.Message) {
 	if runner == nil {
 		return
 	}
@@ -197,7 +197,7 @@ func (runner *Runner) setHistory(history []message.Message) {
 	runner.mu.Unlock()
 }
 
-func (runner *Runner) syncContextUsageFromHistory(history []message.Message) {
+func (runner *Engine) syncContextUsageFromHistory(history []message.Message) {
 	if runner == nil {
 		return
 	}
@@ -212,7 +212,7 @@ func (runner *Runner) syncContextUsageFromHistory(history []message.Message) {
 	runner.usage.setContextKnown(usage, known)
 }
 
-func (runner *Runner) setRecovery(recovery *session.RecoveryState) {
+func (runner *Engine) setRecovery(recovery *session.RecoveryState) {
 	if runner == nil {
 		return
 	}
@@ -221,7 +221,7 @@ func (runner *Runner) setRecovery(recovery *session.RecoveryState) {
 	runner.mu.Unlock()
 }
 
-func (runner *Runner) setRecoveryIfNil(recovery *session.RecoveryState) {
+func (runner *Engine) setRecoveryIfNil(recovery *session.RecoveryState) {
 	if runner == nil || recovery == nil {
 		return
 	}
@@ -232,7 +232,7 @@ func (runner *Runner) setRecoveryIfNil(recovery *session.RecoveryState) {
 	runner.mu.Unlock()
 }
 
-func (runner *Runner) takeRecovery() *session.RecoveryState {
+func (runner *Engine) takeRecovery() *session.RecoveryState {
 	if runner == nil {
 		return nil
 	}
@@ -319,7 +319,7 @@ func stripRecoveryMessages(history []message.Message) []message.Message {
 	return result
 }
 
-func (runner *Runner) commitHistory(ctx context.Context, history []message.Message) (int64, error) {
+func (runner *Engine) commitHistory(ctx context.Context, history []message.Message) (int64, error) {
 	lastSeq := int64(-1)
 	if runner.store != nil {
 		// 在更新 runner.history 之前，先用旧长度算出本轮新增的消息。
@@ -348,7 +348,7 @@ func (runner *Runner) commitHistory(ctx context.Context, history []message.Messa
 	return lastSeq, nil
 }
 
-func (runner *Runner) ResetHistory() {
+func (runner *Engine) ResetHistory() {
 	runner.mu.Lock()
 	runner.history = []message.Message{}
 	runner.recovery = nil
@@ -357,7 +357,7 @@ func (runner *Runner) ResetHistory() {
 	runner.promptCtx.resetSupplements()
 }
 
-func (runner *Runner) LoadSession(ctx context.Context, sessionID string) (SessionLoadResult, error) {
+func (runner *Engine) LoadSession(ctx context.Context, sessionID string) (SessionLoadResult, error) {
 	if runner.store == nil {
 		return SessionLoadResult{}, fmt.Errorf("runner store is nil")
 	}
@@ -401,7 +401,7 @@ func (runner *Runner) LoadSession(ctx context.Context, sessionID string) (Sessio
 	return result, nil
 }
 
-func (runner *Runner) LoadHistory(ctx context.Context, sessionID string) ([]message.Message, error) {
+func (runner *Engine) LoadHistory(ctx context.Context, sessionID string) ([]message.Message, error) {
 	result, err := runner.LoadSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
@@ -409,13 +409,13 @@ func (runner *Runner) LoadHistory(ctx context.Context, sessionID string) ([]mess
 	return result.Messages, nil
 }
 
-func (runner *Runner) historyIsNil() bool {
+func (runner *Engine) historyIsNil() bool {
 	runner.mu.RLock()
 	defer runner.mu.RUnlock()
 	return runner.history == nil
 }
 
-func (runner *Runner) setHistoryIfNil(history []message.Message) {
+func (runner *Engine) setHistoryIfNil(history []message.Message) {
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
 	if runner.history == nil {

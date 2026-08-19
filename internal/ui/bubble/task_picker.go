@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"paw/internal/loop"
 	"paw/internal/message"
 	"paw/internal/session"
 	taskpkg "paw/internal/task"
@@ -660,6 +661,12 @@ func (m *appModel) applySessionPickerRestore(msg sessionRestoredMsg) {
 	m.sessionPicker = nil
 	m.taskPicker = nil
 	m.taskPreview = nil
+	m.goalMode = false
+	m.planMode = false
+	m.goalWorking = false
+	m.planWorking = false
+	m.turnStartedAt = time.Time{}
+	m.turnID = ""
 	m.syncInputPlaceholder()
 	m.replaceTranscript(mergeTranscriptToolEntries(copyTranscriptEntries(msg.entries)))
 	m.finalizeRestoredRunningTools()
@@ -669,7 +676,27 @@ func (m *appModel) applySessionPickerRestore(msg sessionRestoredMsg) {
 	m.inputHistory = inputHistoryFromTranscript(msg.entries)
 	m.resetHistoryNavigation()
 	m.addEntry(transcriptEntry{kind: entrySystem, title: "sessions", body: fmt.Sprintf("已切换到会话: %s", msg.sessionID)})
+	if guidance := restoredModeGuidance(msg.modes); guidance != "" {
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "resume", body: guidance})
+	}
 	m.clearNewMessageNotice()
+}
+
+func restoredModeGuidance(modes *loop.SessionModeSnapshot) string {
+	if modes == nil {
+		return ""
+	}
+	var lines []string
+	if modes.ActiveGoalID != "" {
+		lines = append(lines, fmt.Sprintf("Goal %s 已恢复为 %s；使用 /goal resume 继续。", modes.ActiveGoalID, modes.GoalStatus))
+	}
+	if modes.ActivePlanID != "" {
+		lines = append(lines, fmt.Sprintf("Plan %s 已恢复为 %s；使用 /plan resume 继续。", modes.ActivePlanID, modes.PlanStatus))
+	}
+	if modes.PendingPermissionID != "" {
+		lines = append(lines, "存在待处理的 Read 权限请求，请先完成 Allow once 或 Deny。")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m *appModel) applyTaskPreviewRestore(msg sessionRestoredMsg) {

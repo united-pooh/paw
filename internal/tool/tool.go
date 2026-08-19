@@ -39,6 +39,13 @@ type ReadOnlyTool interface {
 	ReadOnly() bool
 }
 
+// PermissionReadTool lets the Engine preflight a Read without executing it,
+// then execute one exact canonical path after an allow-once decision.
+type PermissionReadTool interface {
+	PermissionReadTarget(input json.RawMessage) (canonicalPath string, outsideAllowedRoots bool, err error)
+	RunApprovedRead(ctx context.Context, input json.RawMessage, canonicalPath string) (string, error)
+}
+
 // FileMutationTarget describes the resolved workspace path a tool may mutate
 // and whether it exists before the mutation runs.
 type FileMutationTarget struct {

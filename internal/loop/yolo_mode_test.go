@@ -11,7 +11,7 @@ func TestRunnerSetYoloModeUpdatesReadAndHandler(t *testing.T) {
 	registry := tool.NewRegistry()
 	readTool := &toolfile.ReadTool{Root: t.TempDir()}
 	registry.Register(readTool)
-	runner := &Runner{registry: registry}
+	runner := &Engine{enginePorts: enginePorts{registry: registry}}
 
 	var propagated bool
 	runner.SetYoloModeHandler(func(enabled bool) {

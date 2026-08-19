@@ -27,6 +27,7 @@ func (s *esState) Apply(payload es.Payload, env es.Envelope) error {
 		}
 		s.Doc = PlanDoc{
 			ID:        PlanID(p.PlanID),
+			SessionID: p.SessionID,
 			Title:     p.Title,
 			Path:      p.Path,
 			Content:   p.Content,

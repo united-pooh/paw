@@ -2,87 +2,127 @@ package plan
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"paw/internal/loop"
 	"strings"
 	"sync"
+
+	"paw/internal/loop"
 )
 
-// SessionController adapts the plan Runtime to the small Bubble Tea
-// controller interface. Plans are fully independent of Goals: the controller
-// only needs a turn executor (the shared runner) and the plans directory.
+type sessionHost interface {
+	GoalTurnExecutor() loop.TurnExecutor
+	CurrentSessionID() string
+	SavePlanFor(context.Context, string, string, string, any) error
+	ClearPlanFor(context.Context, string) error
+	ActivePlan(context.Context, string) (string, string, json.RawMessage, error)
+}
+
+// SessionController adapts the plan Runtime to Bubble Tea and binds it to the
+// session currently selected by the Host.
 type SessionController struct {
+	host   sessionHost
+	store  DocStore
+	filter loop.ToolFilter
+
+	mu        sync.Mutex
 	runtime   *Runtime
 	sessionID string
-	mu        sync.Mutex
 	activeID  PlanID
 	notify    func(PlanDoc)
 	stopped   func(reason string)
 }
 
-// NewSessionController builds the session-scoped plan controller.
-// storeDir is the session store root (~/.paw/projects/<project>); an empty
-// value falls back to plain file storage without the event-sourced journal.
-func NewSessionController(sessionID string, runner *loop.Runner, plansDir, storeDir string) *SessionController {
-	c := &SessionController{sessionID: sessionID}
-	// 事件溯源存储：文档变更走 plan 事件流（<storeDir>/plans/），.md 文件保持
-	// 为投影产物；storeDir 为空时回退到纯文件存储。
+func NewSessionController(host sessionHost, plansDir, storeDir string) *SessionController {
 	var docStore DocStore = NewFileStore(plansDir)
 	if storeDir != "" {
 		if esStore, err := NewEventStore(plansDir, storeDir); err == nil {
 			docStore = esStore
 		}
 	}
-	c.runtime = NewRuntime(RuntimeConfig{
-		Store:    docStore,
-		Executor: runner.GoalTurnExecutor(),
-		Filter:   ModeFilter(plansDir),
+	c := &SessionController{host: host, store: docStore, filter: ModeFilter(plansDir)}
+	if host != nil {
+		c.bindRuntime(host.CurrentSessionID())
+	}
+	return c
+}
+
+func (c *SessionController) bindRuntime(sessionID string) {
+	runtime := NewRuntime(RuntimeConfig{
+		Store:     c.store,
+		Executor:  c.host.GoalTurnExecutor(),
+		SessionID: sessionID,
+		Filter:    c.filter,
+		Snapshot: func(ctx context.Context, snapshot Session) error {
+			return c.host.SavePlanFor(ctx, sessionID, string(snapshot.ID), string(snapshot.Status), snapshot)
+		},
+		ClearSnapshot: func(ctx context.Context) error {
+			return c.host.ClearPlanFor(ctx, sessionID)
+		},
 		Events: func(e Event) {
 			switch e.Type {
 			case EventPaused, EventFailed, EventCancelled:
-				if c.stopped != nil {
-					c.stopped(fmt.Sprintf("%s", e.Status))
+				c.mu.Lock()
+				stopped := c.stopped
+				current := c.sessionID == sessionID
+				c.mu.Unlock()
+				if current && stopped != nil {
+					stopped(fmt.Sprintf("%s", e.Status))
 				}
 			}
 		},
 		OnFinalized: func(doc PlanDoc) {
 			c.mu.Lock()
-			c.activeID = ""
+			current := c.sessionID == sessionID
+			if current {
+				c.activeID = ""
+			}
+			notify := c.notify
 			c.mu.Unlock()
-			if c.notify != nil {
-				c.notify(doc)
+			if current && notify != nil {
+				notify(doc)
 			}
 		},
 	})
-	return c
+	c.runtime = runtime
+	c.sessionID = sessionID
+	c.activeID = ""
 }
 
-// SetNotify wires the approved-plan callback (TUI switches to chat execution).
 func (c *SessionController) SetNotify(fn func(PlanDoc)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.notify = fn
 }
 
-// SetStopped wires the non-final end callback (TUI releases working state).
 func (c *SessionController) SetStopped(fn func(reason string)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.stopped = fn
 }
 
-// Finalize approves the plan document; used as the plan_finalize tool hook.
 func (c *SessionController) Finalize(ctx context.Context, id PlanID, path string) (PlanDoc, error) {
-	return c.runtime.Finalize(ctx, id, path)
+	c.mu.Lock()
+	runtime := c.runtime
+	c.mu.Unlock()
+	if runtime == nil {
+		return PlanDoc{}, fmt.Errorf("plan runtime is unavailable")
+	}
+	return runtime.Finalize(ctx, id, path)
 }
 
-// Start launches a plan session for the trimmed requirement and remembers its ID.
 func (c *SessionController) Start(requirement string) (string, error) {
 	requirement = strings.TrimSpace(requirement)
 	if requirement == "" {
 		return "", fmt.Errorf("plan requirement is empty")
 	}
-	session, err := c.runtime.Start(context.Background(), requirement)
+	if err := c.ensureCurrentSession(); err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	runtime := c.runtime
+	c.mu.Unlock()
+	session, err := runtime.Start(context.Background(), requirement)
 	if err != nil {
 		return "", err
 	}
@@ -92,20 +132,81 @@ func (c *SessionController) Start(requirement string) (string, error) {
 	return string(session.ID), nil
 }
 
-// Status renders the active plan session status, or a placeholder when idle.
-func (c *SessionController) Status() string {
+func (c *SessionController) Rebind(sessionID string) error {
+	if c == nil || c.host == nil {
+		return fmt.Errorf("plan runtime is unavailable")
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return fmt.Errorf("session id is empty")
+	}
+	id, _, raw, err := c.host.ActivePlan(context.Background(), sessionID)
+	if err != nil {
+		return err
+	}
 	c.mu.Lock()
-	id := c.activeID
+	c.bindRuntime(sessionID)
+	runtime := c.runtime
 	c.mu.Unlock()
 	if id == "" {
+		return nil
+	}
+	var snapshot Session
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return fmt.Errorf("restore plan snapshot: %w", err)
+	}
+	if string(snapshot.ID) != id || snapshot.SessionID != sessionID {
+		return fmt.Errorf("plan snapshot does not belong to session %s", sessionID)
+	}
+	if err := runtime.Restore(snapshot); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.activeID = snapshot.ID
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *SessionController) ensureCurrentSession() error {
+	if c == nil || c.host == nil {
+		return fmt.Errorf("plan runtime is unavailable")
+	}
+	current := c.host.CurrentSessionID()
+	c.mu.Lock()
+	bound := c.sessionID
+	c.mu.Unlock()
+	if current == bound {
+		return nil
+	}
+	return c.Rebind(current)
+}
+
+func (c *SessionController) Resume() error {
+	if err := c.ensureCurrentSession(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	id, runtime := c.activeID, c.runtime
+	c.mu.Unlock()
+	if id == "" {
+		return fmt.Errorf("no active plan session")
+	}
+	return runtime.Resume(context.Background(), id)
+}
+
+func (c *SessionController) Status() string {
+	c.mu.Lock()
+	id, runtime := c.activeID, c.runtime
+	c.mu.Unlock()
+	if id == "" || runtime == nil {
 		return "no active plan session"
 	}
-	s, err := c.runtime.Status(context.Background(), id)
+	s, err := runtime.Status(context.Background(), id)
 	if err != nil {
 		return err.Error()
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "id: %s\nstatus: %s\nrequirement: %s\nturns: %d/%d\ncontinuations: %d/%d", s.ID, s.Status, s.Requirement, s.TurnsUsed, s.MaxTurns, s.Continuations, s.MaxContinuations)
+	fmt.Fprintf(&b, "id: %s\nsession: %s\nstatus: %s\nrequirement: %s\nturns: %d/%d\ncontinuations: %d/%d", s.ID, s.SessionID, s.Status, s.Requirement, s.TurnsUsed, s.MaxTurns, s.Continuations, s.MaxContinuations)
 	if s.PauseReason != "" {
 		b.WriteString("\npause reason: " + string(s.PauseReason))
 	}
@@ -115,9 +216,14 @@ func (c *SessionController) Status() string {
 	return b.String()
 }
 
-// List renders every stored plan document as a one-line summary.
 func (c *SessionController) List() string {
-	docs, err := c.runtime.List(context.Background())
+	c.mu.Lock()
+	runtime := c.runtime
+	c.mu.Unlock()
+	if runtime == nil {
+		return "plan runtime is unavailable"
+	}
+	docs, err := runtime.List(context.Background())
 	if err != nil {
 		return err.Error()
 	}
@@ -131,27 +237,31 @@ func (c *SessionController) List() string {
 	return strings.Join(lines, "\n")
 }
 
-// Show renders one plan document by ID (trimmed), including its content.
 func (c *SessionController) Show(id string) string {
-	doc, found, err := c.runtime.Show(context.Background(), PlanID(strings.TrimSpace(id)))
+	c.mu.Lock()
+	runtime := c.runtime
+	c.mu.Unlock()
+	if runtime == nil {
+		return "plan runtime is unavailable"
+	}
+	doc, found, err := runtime.Show(context.Background(), PlanID(strings.TrimSpace(id)))
 	if err != nil {
 		return err.Error()
 	}
 	if !found {
 		return "plan not found: " + id
 	}
-	return fmt.Sprintf("id: %s\nstatus: %s\ntitle: %s\npath: %s\n\n%s", doc.ID, doc.Status, doc.Title, doc.Path, doc.Content)
+	return fmt.Sprintf("id: %s\nsession: %s\nstatus: %s\ntitle: %s\npath: %s\n\n%s", doc.ID, doc.SessionID, doc.Status, doc.Title, doc.Path, doc.Content)
 }
 
-// Cancel aborts the active plan session, if one exists.
 func (c *SessionController) Cancel() error {
 	c.mu.Lock()
-	id := c.activeID
+	id, runtime := c.activeID, c.runtime
 	c.mu.Unlock()
-	if id == "" {
+	if id == "" || runtime == nil {
 		return fmt.Errorf("no active plan session")
 	}
-	if err := c.runtime.Cancel(context.Background(), id); err != nil {
+	if err := runtime.Cancel(context.Background(), id); err != nil {
 		return err
 	}
 	c.mu.Lock()
@@ -160,12 +270,12 @@ func (c *SessionController) Cancel() error {
 	return nil
 }
 
-// Compile-time assertion: satisfies the Bubble Tea plan controller interface
-// (Start/Status/List/Show/Cancel) without importing the UI package.
 var _ interface {
 	Start(string) (string, error)
 	Status() string
 	List() string
 	Show(string) string
+	Resume() error
 	Cancel() error
+	Rebind(string) error
 } = (*SessionController)(nil)

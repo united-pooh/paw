@@ -76,14 +76,14 @@ type modelConfigReader interface {
 	CurrentModelConfig() model.Config
 }
 
-func (runner *Runner) SetTokenTracer(tracer *tokentracer.Tracer) {
+func (runner *Engine) SetTokenTracer(tracer *tokentracer.Tracer) {
 	if runner == nil {
 		return
 	}
 	runner.trace.set(tracer)
 }
 
-func (runner *Runner) TokenTracerURL() string {
+func (runner *Engine) TokenTracerURL() string {
 	tracer := runner.currentTokenTracer()
 	if tracer == nil {
 		return ""
@@ -91,29 +91,29 @@ func (runner *Runner) TokenTracerURL() string {
 	return tracer.ServerURL()
 }
 
-func (runner *Runner) currentTokenTracer() *tokentracer.Tracer {
+func (runner *Engine) currentTokenTracer() *tokentracer.Tracer {
 	if runner == nil {
 		return nil
 	}
 	return runner.trace.current()
 }
 
-func (runner *Runner) beginTraceTurn(input, mode string) traceContext {
+func (runner *Engine) beginTraceTurn(input, mode string) traceContext {
 	return runner.trace.beginTurn(input, mode)
 }
 
-func (runner *Runner) finishTraceTurn(ctx traceContext, err error) {
+func (runner *Engine) finishTraceTurn(ctx traceContext, err error) {
 	runner.trace.finishTurn(ctx, err)
 }
 
-func (runner *Runner) currentTraceIDs() (string, string) {
+func (runner *Engine) currentTraceIDs() (string, string) {
 	if runner == nil {
 		return "", ""
 	}
 	return runner.trace.currentIDs()
 }
 
-func (runner *Runner) recordTraceUsage(stageID, agentID string, usage tokentracer.Usage, data map[string]any) {
+func (runner *Engine) recordTraceUsage(stageID, agentID string, usage tokentracer.Usage, data map[string]any) {
 	tracer := runner.currentTokenTracer()
 	if tracer == nil || usage.Empty() {
 		return
@@ -122,7 +122,7 @@ func (runner *Runner) recordTraceUsage(stageID, agentID string, usage tokentrace
 	tracer.RecordAPICall(stageID, "", agentID, "", provider, modelName, usage, data)
 }
 
-func (runner *Runner) currentModelLabels() (string, string) {
+func (runner *Engine) currentModelLabels() (string, string) {
 	if runner == nil || runner.model == nil {
 		return "", ""
 	}
@@ -134,7 +134,7 @@ func (runner *Runner) currentModelLabels() (string, string) {
 	return strings.TrimSpace(cfg.Provider), strings.TrimSpace(cfg.Model)
 }
 
-func (runner *Runner) recordTraceEvent(eventType string, data map[string]any) {
+func (runner *Engine) recordTraceEvent(eventType string, data map[string]any) {
 	tracer := runner.currentTokenTracer()
 	if tracer == nil {
 		return
@@ -152,7 +152,7 @@ func (runner *Runner) recordTraceEvent(eventType string, data map[string]any) {
 	tracer.RecordEvent(eventType, data)
 }
 
-func (runner *Runner) streamMATokenTraceSink(stageID string) func(streamma.Event) {
+func (runner *Engine) streamMATokenTraceSink(stageID string) func(streamma.Event) {
 	tracer := runner.currentTokenTracer()
 	if tracer == nil || strings.TrimSpace(stageID) == "" {
 		return nil

@@ -30,7 +30,7 @@ func TestRunTurnLengthContinuationMergesDedupesUsageAndPersistsOnce(t *testing.T
 			{Done: true, FinishReason: model.FinishReasonStop},
 		}},
 	}}
-	runner := NewRunner(modelClient, ui, tool.NewRegistry(), store, "session-1")
+	runner := NewEngine(modelClient, ui, tool.NewRegistry(), store, "session-1")
 
 	msg, err := runner.RunTurn(context.Background(), "start")
 	if err != nil {
@@ -84,7 +84,7 @@ func TestRunTurnLengthContinuationDedupesOverlapSplitAcrossDeltas(t *testing.T) 
 			{Done: true, FinishReason: model.FinishReasonStop},
 		}},
 	}}
-	runner := NewRunner(modelClient, ui, tool.NewRegistry(), nil, "")
+	runner := NewEngine(modelClient, ui, tool.NewRegistry(), nil, "")
 
 	msg, err := runner.RunTurn(context.Background(), "start")
 	if err != nil {
@@ -114,7 +114,7 @@ func TestRunTurnLengthContinuationDedupesUnicodeOverlapSplitAcrossDeltas(t *test
 			{Done: true, FinishReason: model.FinishReasonStop},
 		}},
 	}}
-	runner := NewRunner(modelClient, ui, tool.NewRegistry(), nil, "")
+	runner := NewEngine(modelClient, ui, tool.NewRegistry(), nil, "")
 
 	msg, err := runner.RunTurn(context.Background(), "start")
 	if err != nil {
@@ -138,7 +138,7 @@ func TestRunTurnThreeLengthFinishesWithExplicitErrorAndOneDone(t *testing.T) {
 		{events: []model.StreamEvent{{Delta: "b"}, {Done: true, FinishReason: model.FinishReasonLength}}},
 		{events: []model.StreamEvent{{Delta: "c"}, {Done: true, FinishReason: model.FinishReasonLength}}},
 	}}
-	runner := NewRunner(modelClient, ui, tool.NewRegistry(), nil, "")
+	runner := NewEngine(modelClient, ui, tool.NewRegistry(), nil, "")
 
 	_, err := runner.RunTurn(context.Background(), "start")
 	if err == nil || !strings.Contains(err.Error(), "连续 3 次以 length 截断") {
@@ -156,7 +156,7 @@ func TestRunTurnLengthWithToolCallsFailsAndFinalizesPartialOnce(t *testing.T) {
 		{ToolCalls: []message.ToolCall{{ID: "call-read", Name: "Read"}}},
 		{Done: true, FinishReason: model.FinishReasonLength},
 	}}}}
-	runner := NewRunner(modelClient, ui, tool.NewRegistry(), nil, "")
+	runner := NewEngine(modelClient, ui, tool.NewRegistry(), nil, "")
 
 	_, err := runner.RunTurn(context.Background(), "start")
 	if err == nil || !strings.Contains(err.Error(), "包含工具调用") {
@@ -176,7 +176,7 @@ func TestRunTurnContinuationToolCallFailsAndFinalizesPartialOnce(t *testing.T) {
 			{Done: true, FinishReason: model.FinishReasonToolCalls},
 		}},
 	}}
-	runner := NewRunner(modelClient, ui, tool.NewRegistry(), nil, "")
+	runner := NewEngine(modelClient, ui, tool.NewRegistry(), nil, "")
 
 	_, err := runner.RunTurn(context.Background(), "start")
 	if err == nil || !strings.Contains(err.Error(), "续写响应包含工具调用") {
@@ -193,7 +193,7 @@ func TestRunTurnEmptyContinuationFailsAndFinalizesPartialOnce(t *testing.T) {
 		{events: []model.StreamEvent{{Delta: "partial"}, {Done: true, FinishReason: model.FinishReasonLength}}},
 		{events: []model.StreamEvent{{Done: true, FinishReason: model.FinishReasonStop}}},
 	}}
-	runner := NewRunner(modelClient, ui, tool.NewRegistry(), nil, "")
+	runner := NewEngine(modelClient, ui, tool.NewRegistry(), nil, "")
 
 	_, err := runner.RunTurn(context.Background(), "start")
 	if err == nil || !strings.Contains(err.Error(), "没有返回新文本") {
@@ -210,7 +210,7 @@ func TestRunTurnContinuationRequestErrorFailsAndFinalizesPartialOnce(t *testing.
 		{events: []model.StreamEvent{{Delta: "partial"}, {Done: true, FinishReason: model.FinishReasonLength}}},
 		{err: errors.New("dial tcp: connection reset")},
 	}}
-	runner := NewRunner(modelClient, ui, tool.NewRegistry(), nil, "")
+	runner := NewEngine(modelClient, ui, tool.NewRegistry(), nil, "")
 
 	_, err := runner.RunTurn(context.Background(), "start")
 	if err == nil || !strings.Contains(err.Error(), "connection reset") {
@@ -227,7 +227,7 @@ func TestRunTurnContinuationFlushesBufferedPrefixOnStreamError(t *testing.T) {
 		{events: []model.StreamEvent{{Delta: "hello"}, {Done: true, FinishReason: model.FinishReasonLength}}},
 		{events: []model.StreamEvent{{Delta: " wor"}, {Err: errors.New("stream died")}}},
 	}}
-	runner := NewRunner(modelClient, ui, tool.NewRegistry(), nil, "")
+	runner := NewEngine(modelClient, ui, tool.NewRegistry(), nil, "")
 
 	_, err := runner.RunTurn(context.Background(), "start")
 	if err == nil || !strings.Contains(err.Error(), "stream died") {
@@ -244,7 +244,7 @@ func TestRunTurnContinuationFlushesBufferedPrefixOnStreamError(t *testing.T) {
 func TestRunTurnStreamEOFErrorDoesNotStartContinuation(t *testing.T) {
 	ui := &fakeUI{}
 	modelClient := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{{Delta: "partial"}}}}}
-	runner := NewRunner(modelClient, ui, tool.NewRegistry(), nil, "")
+	runner := NewEngine(modelClient, ui, tool.NewRegistry(), nil, "")
 
 	_, err := runner.RunTurn(context.Background(), "start")
 	if err == nil || !strings.Contains(err.Error(), "未发送完成事件") {
@@ -264,7 +264,7 @@ func TestRunTurnContinuationFlushesBufferedPrefixOnChannelEOF(t *testing.T) {
 		{events: []model.StreamEvent{{Delta: "hello"}, {Done: true, FinishReason: model.FinishReasonLength}}},
 		{events: []model.StreamEvent{{Delta: " wor"}}},
 	}}
-	runner := NewRunner(modelClient, ui, tool.NewRegistry(), nil, "")
+	runner := NewEngine(modelClient, ui, tool.NewRegistry(), nil, "")
 
 	_, err := runner.RunTurn(context.Background(), "start")
 	if err == nil || !strings.Contains(err.Error(), "未发送完成事件") {

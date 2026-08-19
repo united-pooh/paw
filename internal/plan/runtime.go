@@ -22,12 +22,15 @@ import (
 type RuntimeConfig struct {
 	Store            DocStore
 	Executor         loop.TurnExecutor
+	SessionID        string
 	Events           EventSink
 	Now              func() time.Time
 	Filter           loop.ToolFilter
 	MaxTurns         int
 	MaxContinuations int
 	MaxNoProgress    int
+	Snapshot         func(context.Context, Session) error
+	ClearSnapshot    func(context.Context) error
 	// OnFinalized is invoked once when a plan document is approved.
 	OnFinalized func(PlanDoc)
 }
@@ -42,10 +45,13 @@ var (
 type Runtime struct {
 	store       DocStore
 	executor    loop.TurnExecutor
+	sessionID   string
 	events      EventSink
 	now         func() time.Time
 	filter      loop.ToolFilter
 	onFinalized func(PlanDoc)
+	snapshot    func(context.Context, Session) error
+	clear       func(context.Context) error
 
 	maxTurns         int
 	maxContinuations int
@@ -80,8 +86,9 @@ func NewRuntime(cfg RuntimeConfig) *Runtime {
 		maxNoProgress = 2
 	}
 	return &Runtime{
-		store: cfg.Store, executor: cfg.Executor, events: cfg.Events,
+		store: cfg.Store, executor: cfg.Executor, sessionID: cfg.SessionID, events: cfg.Events,
 		now: nowFn, filter: cfg.Filter, onFinalized: cfg.OnFinalized,
+		snapshot: cfg.Snapshot, clear: cfg.ClearSnapshot,
 		maxTurns: maxTurns, maxContinuations: maxContinuations, maxNoProgress: maxNoProgress,
 		memSessions: map[PlanID]Session{},
 	}
@@ -98,7 +105,7 @@ func (r *Runtime) Start(ctx context.Context, requirement string) (Session, error
 		return Session{}, errors.New("plan requirement is empty")
 	}
 	r.mu.Lock()
-	if r.active {
+	if r.active || r.activeID != "" {
 		r.mu.Unlock()
 		return Session{}, ErrPlanActive
 	}
@@ -109,6 +116,7 @@ func (r *Runtime) Start(ctx context.Context, requirement string) (Session, error
 	}
 	session := Session{
 		ID:               id,
+		SessionID:        r.sessionID,
 		Status:           SessionClarifying,
 		Requirement:      requirement,
 		MaxTurns:         r.maxTurns,
@@ -117,7 +125,10 @@ func (r *Runtime) Start(ctx context.Context, requirement string) (Session, error
 		CreatedAt:        r.now(),
 		UpdatedAt:        r.now(),
 	}
-	r.memSessions[id] = session
+	if err := r.persistSessionLocked(ctx, session); err != nil {
+		r.mu.Unlock()
+		return Session{}, err
+	}
 	r.active, r.activeID = true, id
 	r.mu.Unlock()
 	r.emit(Event{Type: EventStarted, PlanID: id, Status: session.Status, At: r.now()})
@@ -178,7 +189,9 @@ func (r *Runtime) Run(ctx context.Context, id PlanID, requirement string) error 
 
 	session.CurrentTaskID = fmt.Sprintf("plan-task-%d", atomic.AddUint64(&r.sequence, 1))
 	session.UpdatedAt = r.now()
-	r.storeSession(session)
+	if err := r.storeSession(ctx, session); err != nil {
+		return err
+	}
 	planPath := filepath.Join(r.store.Dir(), string(id)+".md")
 	input := message.Message{
 		Role: message.RoleUser,
@@ -186,10 +199,17 @@ func (r *Runtime) Run(ctx context.Context, id PlanID, requirement string) error 
 			"\n\n计划文件必须写入：" + planPath + "\n完成澄清与文档撰写后按流程展示并询问【执行/修改】。",
 	}
 	evaluator := &evaluator{runtime: r, id: id, session: &session}
+	var eventErr error
 	task := &loop.Task{ID: session.CurrentTaskID, Input: input, Status: loop.TaskRunning}
-	_, runErr := (loop.TaskOrchestrator{Executor: r.executor, Evaluator: evaluator, Events: r.taskEvents(id)}).Run(ctx, task)
+	_, runErr := (loop.TaskOrchestrator{Executor: r.executor, Evaluator: evaluator, Events: r.taskEvents(id, &eventErr)}).Run(ctx, task)
 	if runErr != nil {
 		return r.finishWithError(ctx, id, runErr)
+	}
+	if evaluator.err != nil {
+		return evaluator.err
+	}
+	if eventErr != nil {
+		return eventErr
 	}
 
 	latest, _ := r.loadSession(id)
@@ -219,7 +239,9 @@ func (r *Runtime) finishWithError(ctx context.Context, id PlanID, err error) err
 	}
 	_ = session.Transition(SessionFailed, PauseBlocked)
 	session.LastDecision = err.Error()
-	r.storeSession(session)
+	if storeErr := r.storeSession(ctx, session); storeErr != nil {
+		return storeErr
+	}
 	r.emit(Event{Type: EventFailed, PlanID: id, Status: session.Status, Decision: err.Error(), Err: err, At: r.now()})
 	return err
 }
@@ -260,6 +282,7 @@ func (r *Runtime) Finalize(ctx context.Context, id PlanID, path string) (PlanDoc
 		doc, _ = decodeDoc(string(data), string(id), cleanPath)
 	}
 	doc.ID = id
+	doc.SessionID = session.SessionID
 	doc.Path = cleanPath
 	doc.Status = PlanApproved
 	if err := r.store.Update(ctx, doc); err != nil {
@@ -267,7 +290,9 @@ func (r *Runtime) Finalize(ctx context.Context, id PlanID, path string) (PlanDoc
 	}
 	_ = session.Transition(SessionApproved, "")
 	session.LastDecision = "plan approved"
-	r.storeSession(session)
+	if err := r.storeSession(ctx, session); err != nil {
+		return PlanDoc{}, err
+	}
 	r.emit(Event{Type: EventFinalized, PlanID: id, Status: SessionApproved, Decision: session.LastDecision, At: r.now()})
 	return doc, nil
 }
@@ -310,15 +335,61 @@ func (r *Runtime) Resume(ctx context.Context, id PlanID) error {
 	if session.Status != SessionPaused {
 		return fmt.Errorf("plan %q is not resumable from %s", id, session.Status)
 	}
-	if err := session.Transition(SessionClarifying, ""); err != nil {
+	resumeStatus := session.ResumeStatus
+	if resumeStatus == "" || resumeStatus == SessionPaused || resumeStatus.Terminal() {
+		resumeStatus = SessionClarifying
+	}
+	if err := session.Transition(resumeStatus, ""); err != nil {
+		return err
+	}
+	session.ResumeStatus = ""
+	if err := r.storeSession(ctx, session); err != nil {
 		return err
 	}
 	r.mu.Lock()
-	r.memSessions[id] = session
 	r.active, r.activeID = true, id
 	r.mu.Unlock()
 	r.emit(Event{Type: EventResumed, PlanID: id, Status: session.Status, At: r.now()})
 	go r.runAsync(id, session.Requirement)
+	return nil
+}
+
+// Restore attaches a persisted session snapshot without executing model work.
+// Non-terminal work is made explicitly resumable from its previous status.
+func (r *Runtime) Restore(snapshot Session) error {
+	if r == nil {
+		return errors.New("plan runtime is nil")
+	}
+	if snapshot.ID == "" {
+		return errors.New("plan id is empty")
+	}
+	if snapshot.Status.Terminal() {
+		return fmt.Errorf("plan %q is terminal at %s", snapshot.ID, snapshot.Status)
+	}
+	resumeStatus := snapshot.Status
+	if resumeStatus == SessionPaused && snapshot.ResumeStatus != "" {
+		resumeStatus = snapshot.ResumeStatus
+	}
+	if resumeStatus == SessionPaused || resumeStatus.Terminal() || resumeStatus == "" {
+		resumeStatus = SessionClarifying
+	}
+	snapshot.ResumeStatus = resumeStatus
+	if snapshot.Status != SessionPaused {
+		if err := snapshot.Transition(SessionPaused, PauseUserInputRequired); err != nil {
+			return err
+		}
+	}
+	r.mu.Lock()
+	if r.active {
+		r.mu.Unlock()
+		return ErrPlanActive
+	}
+	if err := r.persistSessionLocked(context.Background(), snapshot); err != nil {
+		r.mu.Unlock()
+		return err
+	}
+	r.activeID = snapshot.ID
+	r.mu.Unlock()
 	return nil
 }
 
@@ -335,8 +406,10 @@ func (r *Runtime) Cancel(ctx context.Context, id PlanID) error {
 	}
 	if !session.Status.Terminal() {
 		_ = session.Transition(SessionCancelled, "")
-		r.memSessions[id] = session
 		r.mu.Unlock()
+		if err := r.storeSession(ctx, session); err != nil {
+			return err
+		}
 		r.emit(Event{Type: EventCancelled, PlanID: id, Status: session.Status, At: r.now()})
 		return nil
 	}
@@ -377,14 +450,33 @@ func (r *Runtime) loadSession(id PlanID) (Session, bool) {
 	return s, ok
 }
 
-func (r *Runtime) storeSession(s Session) {
+func (r *Runtime) storeSession(ctx context.Context, s Session) error {
 	r.mu.Lock()
-	r.memSessions[s.ID] = s
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+	return r.persistSessionLocked(ctx, s)
 }
 
-func (r *Runtime) taskEvents(id PlanID) loop.TaskEventSink {
+func (r *Runtime) persistSessionLocked(ctx context.Context, s Session) error {
+	if s.Status.Terminal() {
+		if r.clear != nil {
+			if err := r.clear(ctx); err != nil {
+				return err
+			}
+		}
+	} else if r.snapshot != nil {
+		if err := r.snapshot(ctx, s.Snapshot()); err != nil {
+			return err
+		}
+	}
+	r.memSessions[s.ID] = s
+	return nil
+}
+
+func (r *Runtime) taskEvents(id PlanID, sinkErr *error) loop.TaskEventSink {
 	return func(e loop.TaskEvent) {
+		if sinkErr != nil && *sinkErr != nil {
+			return
+		}
 		session, _ := r.loadSession(id)
 		if e.Type == loop.TaskEventTurnDone {
 			session.TurnsUsed++
@@ -397,13 +489,20 @@ func (r *Runtime) taskEvents(id PlanID) loop.TaskEventSink {
 				session.Status = SessionDrafting
 			}
 			session.LastDecision = fmt.Sprintf("turn %d completed", e.TurnNumber)
-			r.storeSession(session)
+			if err := r.storeSession(context.Background(), session); err != nil {
+				if sinkErr != nil {
+					*sinkErr = err
+				}
+				return
+			}
 			r.emit(Event{Type: EventTurnDone, PlanID: id, Status: session.Status, Decision: session.LastDecision, At: r.now()})
 		}
 		if e.Type == loop.TaskEventContinued {
 			session.Continuations = e.ContinuationUsed
 			session.UpdatedAt = r.now()
-			r.storeSession(session)
+			if err := r.storeSession(context.Background(), session); err != nil && sinkErr != nil {
+				*sinkErr = err
+			}
 		}
 	}
 }

@@ -137,7 +137,7 @@ func TestAutomaticCompactionStuckPausesAndClears(t *testing.T) {
 
 func TestSoftPressureNoticeOnlyOnceAndResetsBelowThreshold(t *testing.T) {
 	output := &fakeUI{}
-	runner := NewRunnerWithInstructionRoot(&fakeModel{}, output, tool.NewRegistry(), nil, "notice", t.TempDir())
+	runner := NewEngineWithInstructionRoot(&fakeModel{}, output, tool.NewRegistry(), nil, "notice", t.TempDir())
 	runner.SetContextLimitTokens(1000)
 	history := []message.Message{{Role: message.RoleUser, Content: "small"}}
 
@@ -167,7 +167,7 @@ func TestSoftPressureNoticeOnlyOnceAndResetsBelowThreshold(t *testing.T) {
 
 func TestAutomaticCompactionStuckNotificationOnlyOnTransition(t *testing.T) {
 	output := &fakeUI{}
-	runner := NewRunnerWithInstructionRoot(&fakeModel{}, output, tool.NewRegistry(), nil, "stuck", t.TempDir())
+	runner := NewEngineWithInstructionRoot(&fakeModel{}, output, tool.NewRegistry(), nil, "stuck", t.TempDir())
 	if runner.recordAutomaticCompaction(true, false) {
 		t.Fatal("entered stuck after first compaction")
 	}
@@ -209,9 +209,9 @@ func pressureFixture(toolOutput string) []message.Message {
 	}
 }
 
-func newPressureTestRunner(t *testing.T, modelClient ModelStreamer, limit int) *Runner {
+func newPressureTestRunner(t *testing.T, modelClient ModelStreamer, limit int) *Engine {
 	t.Helper()
-	runner := NewRunnerWithInstructionRoot(modelClient, &fakeUI{}, tool.NewRegistry(), nil, "pressure", t.TempDir())
+	runner := NewEngineWithInstructionRoot(modelClient, &fakeUI{}, tool.NewRegistry(), nil, "pressure", t.TempDir())
 	cfg, err := contextMaintenanceConfigFromSettings(settings.DefaultContextMaintenanceConfig())
 	if err != nil {
 		t.Fatal(err)

@@ -13,8 +13,9 @@ import (
 )
 
 // FileStore persists PlanDocs as markdown files. Each file is the source of
-// truth; the first line is an HTML-comment front matter carrying id, title
-// and status so the directory stays human-readable and git-friendly.
+// truth; the first line is an HTML-comment front matter carrying id, optional
+// session id, title and status so the directory stays human-readable and
+// git-friendly.
 type FileStore struct {
 	dir string
 	now func() time.Time
@@ -205,7 +206,11 @@ const frontMatterPrefix = "<!-- paw-plan:"
 
 func encodeDoc(doc PlanDoc) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s id=%s status=%s title=%s -->\n", frontMatterPrefix, doc.ID, doc.Status, strings.ReplaceAll(doc.Title, "-->", "—"))
+	fmt.Fprintf(&b, "%s id=%s status=%s", frontMatterPrefix, doc.ID, doc.Status)
+	if doc.SessionID != "" {
+		fmt.Fprintf(&b, " session_id=%s", strings.ReplaceAll(doc.SessionID, " ", ""))
+	}
+	fmt.Fprintf(&b, " title=%s -->\n", strings.ReplaceAll(doc.Title, "-->", "—"))
 	b.WriteString(doc.Content)
 	if !strings.HasSuffix(doc.Content, "\n") && doc.Content != "" {
 		b.WriteByte('\n')
@@ -245,6 +250,8 @@ func decodeDoc(overrideBody, id, path string) (PlanDoc, bool) {
 					}
 				case "status":
 					doc.Status = PlanStatus(kv[1])
+				case "session_id":
+					doc.SessionID = kv[1]
 				}
 			}
 			body = body[end+3:]

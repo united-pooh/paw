@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"sync"
 	"time"
+
+	"paw/internal/es"
 )
 
 // System 是组合根（spec §5 上帝类防线：仅做组合，逻辑在各组件）：
@@ -15,6 +17,7 @@ type System struct {
 	dir       string
 	clock     Clock
 	providers map[string]func(ActorID) Actor
+	streams   map[string]StreamStore
 
 	router     *router
 	scheduler  *scheduler
@@ -60,12 +63,23 @@ func WithSupervision(window time.Duration, maxPanics int) Option {
 // WithLogger 注入日志函数（默认标准日志）。
 func WithLogger(fn func(format string, args ...any)) Option { return func(s *System) { s.logger = fn } }
 
+// WithStreamStore overrides persistence for one actor type. Other actor types
+// continue using the runtime's default per-type es.JSONL streams.
+func WithStreamStore(actorType string, store StreamStore) Option {
+	return func(s *System) {
+		if actorType != "" && store != nil {
+			s.streams[actorType] = store
+		}
+	}
+}
+
 // NewSystem 在 dir 下构建运行时（流路径 {dir}/{type}/{key}.events.jsonl）。
 func NewSystem(dir string, opts ...Option) *System {
 	s := &System{
 		dir:              dir,
 		clock:            RealClock{},
 		providers:        make(map[string]func(ActorID) Actor),
+		streams:          make(map[string]StreamStore),
 		mailboxCap:       defaultMailboxCap,
 		snapshotInterval: 200,
 		passivateAfter:   5 * time.Minute,
@@ -83,7 +97,7 @@ func NewSystem(dir string, opts ...Option) *System {
 		s.supervisor = newSupervisor(time.Minute, 3)
 	}
 	s.router = newRouter()
-	s.journal = newJournal(dir, s.clock)
+	s.journal = newJournal(dir, s.clock, s.streams)
 	s.wheel = newWheel(s.clock, s)
 	return s
 }
@@ -136,11 +150,94 @@ func (s *System) routeAfterRecovery(id ActorID, msg Msg) {
 }
 
 // Resume 恢复挂起的 actor（human-in-the-loop 决策完成后调用）。
+func (s *System) Suspend(id ActorID, reason string) error {
+	select {
+	case <-s.stopped:
+		return ErrStopped
+	default:
+	}
+	if err := id.Validate(); err != nil {
+		return err
+	}
+	if _, ok := s.providers[id.Type]; !ok {
+		return fmt.Errorf("%w: %s", ErrNoProvider, id.Type)
+	}
+	c := s.router.ensure(s, id)
+	if err := c.ensureActivated(context.Background()); err != nil {
+		return err
+	}
+	return c.suspend(reason)
+}
+
+// Activate restores an actor and its ledger without changing suspension state.
+func (s *System) Activate(id ActorID) error {
+	select {
+	case <-s.stopped:
+		return ErrStopped
+	default:
+	}
+	if err := id.Validate(); err != nil {
+		return err
+	}
+	if _, ok := s.providers[id.Type]; !ok {
+		return fmt.Errorf("%w: %s", ErrNoProvider, id.Type)
+	}
+	c := s.router.ensure(s, id)
+	return c.ensureActivated(context.Background())
+}
+
+// PersistDomain appends one durable domain event without mutating live actor
+// state. Synchronous host ports may call it from inside Receive; live state
+// changes must still cross the actor mailbox, while activation and snapshots
+// rebuild from the durable stream.
+func (s *System) PersistDomain(ctx context.Context, id ActorID, eventType string, payload any) error {
+	if err := id.Validate(); err != nil {
+		return err
+	}
+	env, err := s.journal.append(ctx, id, es.KindDomain, eventType, payload)
+	if err != nil {
+		return err
+	}
+	if c := s.router.get(id); c != nil {
+		c.noteSeq(env.Seq)
+		c.noteDomainEvents(1)
+	}
+	return nil
+}
+
+// Resume 恢复挂起的 actor（human-in-the-loop 决策完成后调用）。
 func (s *System) Resume(id ActorID) error {
+	select {
+	case <-s.stopped:
+		return ErrStopped
+	default:
+	}
+	if err := id.Validate(); err != nil {
+		return err
+	}
+	if _, ok := s.providers[id.Type]; !ok {
+		return fmt.Errorf("%w: %s", ErrNoProvider, id.Type)
+	}
 	c := s.router.get(id)
 	if c == nil {
-		return fmt.Errorf("actor: %s is not active", id)
+		envelopes, err := s.journal.load(context.Background(), id)
+		if err != nil {
+			return err
+		}
+		ledger := newRuntimeLedger()
+		for _, envelope := range envelopes {
+			if envelope.Kind == "runtime" {
+				if err := ledger.foldRuntime(envelope); err != nil {
+					return err
+				}
+			}
+		}
+		if len(envelopes) == 0 || !ledger.suspended {
+			return fmt.Errorf("actor: %s is not active or suspended", id)
+		}
+		c = s.router.ensure(s, id)
 	}
+	_ = c.ensureActivated(context.Background())
 	return c.resume()
 }
 

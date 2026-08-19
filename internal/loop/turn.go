@@ -6,15 +6,16 @@ import (
 	"paw/internal/message"
 	"paw/internal/model"
 	"paw/internal/session"
+	"reflect"
 	"time"
 )
 
-func (runner *Runner) RunTurn(ctx context.Context, input string) (msg message.Message, err error) {
+func (runner *Engine) RunTurn(ctx context.Context, input string) (msg message.Message, err error) {
 	execution, err := runner.runTurn(ctx, message.Message{Role: message.RoleUser, Content: input})
 	return execution.Message, err
 }
 
-func (runner *Runner) RunRichTurn(ctx context.Context, input message.Message) (msg message.Message, err error) {
+func (runner *Engine) RunRichTurn(ctx context.Context, input message.Message) (msg message.Message, err error) {
 	if input.Role == "" {
 		input.Role = message.RoleUser
 	}
@@ -25,11 +26,11 @@ func (runner *Runner) RunRichTurn(ctx context.Context, input message.Message) (m
 	return execution.Message, err
 }
 
-func (runner *Runner) runTurn(ctx context.Context, userInput message.Message) (TurnExecution, error) {
+func (runner *Engine) runTurn(ctx context.Context, userInput message.Message) (TurnExecution, error) {
 	return runner.runTurnWithTiming(ctx, userInput, nil)
 }
 
-func (runner *Runner) runTurnWithTiming(ctx context.Context, userInput message.Message, timing *TurnTiming) (TurnExecution, error) {
+func (runner *Engine) runTurnWithTiming(ctx context.Context, userInput message.Message, timing *TurnTiming) (TurnExecution, error) {
 	if runner == nil {
 		return TurnExecution{}, fmt.Errorf("runner 未初始化")
 	}
@@ -51,7 +52,7 @@ func (runner *Runner) runTurnWithTiming(ctx context.Context, userInput message.M
 	return execution, decorateToolPairError(err)
 }
 
-func (runner *Runner) runSingleTurnWithTiming(ctx context.Context, userInput message.Message, timing *TurnTiming) (execution TurnExecution, err error) {
+func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput message.Message, timing *TurnTiming) (execution TurnExecution, err error) {
 	if err := runner.validate(); err != nil {
 		return execution, err
 	}
@@ -135,20 +136,28 @@ func (runner *Runner) runSingleTurnWithTiming(ctx context.Context, userInput mes
 	defer func() {
 		runner.finishTraceTurn(trace, err)
 	}()
+	turnID, turnIDErr := runner.resolveTurnID(timing)
+	if turnIDErr != nil {
+		return execution, turnIDErr
+	}
 
 	// 每一轮都基于“已提交的历史副本”工作。Recovery 只存在于本轮
 	// prompt，不会作为 synthetic user message 写入持久化 transcript。
-	history, injectedSupplements := runner.buildTurnHistory(userInput)
 	pendingRecovery := runner.takeRecovery()
+	retryingEmptyTurn := false
+	if pendingRecovery != nil && pendingRecovery.TurnID == turnID && len(pendingRecovery.CompletedToolResults) == 0 && len(pendingRecovery.DroppedToolCalls) == 0 {
+		current := runner.currentHistory()
+		if len(current) > 0 && reflect.DeepEqual(current[len(current)-1], userInput) {
+			runner.setHistory(current[:len(current)-1])
+			pendingRecovery = nil
+			retryingEmptyTurn = true
+		}
+	}
+	history, injectedSupplements := runner.buildTurnHistory(userInput)
 	if pendingRecovery != nil {
 		history = insertRecoveryMessage(history, pendingRecovery)
 	}
 	journal := runner.turnJournal()
-	turnID, turnIDErr := runner.resolveTurnID(timing)
-	if turnIDErr != nil {
-		runner.setRecovery(pendingRecovery)
-		return execution, turnIDErr
-	}
 	journalStarted := false
 	settled := false
 	ctx = WithTurnOwner(ctx, runner.sessionID, turnID)
@@ -190,13 +199,15 @@ func (runner *Runner) runSingleTurnWithTiming(ctx context.Context, userInput mes
 		}
 	}()
 	if journal != nil {
-		startMessages := stripRecoveryMessages(history)
-		previousLen := len(runner.currentHistory())
-		if previousLen < len(startMessages) {
-			startMessages = startMessages[previousLen:]
-		}
-		if err := journal.BeginTurn(ctx, runner.sessionID, turnID, startMessages...); err != nil {
-			return execution, fmt.Errorf("开始保存 turn 失败: %w", err)
+		if !retryingEmptyTurn {
+			startMessages := stripRecoveryMessages(history)
+			previousLen := len(runner.currentHistory())
+			if previousLen < len(startMessages) {
+				startMessages = startMessages[previousLen:]
+			}
+			if err := journal.BeginTurn(ctx, runner.sessionID, turnID, startMessages...); err != nil {
+				return execution, fmt.Errorf("开始保存 turn 失败: %w", err)
+			}
 		}
 		journalStarted = true
 	}

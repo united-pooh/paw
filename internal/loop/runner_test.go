@@ -125,7 +125,7 @@ func (u *fakeUI) systemEvents() []ui.SystemEvent {
 }
 
 func TestRunnerPreservesResponsesProviderDataOnToolMessage(t *testing.T) {
-	runner := &Runner{ui: &fakeUI{}}
+	runner := &Engine{enginePorts: enginePorts{display: newUIDisplayBus(&fakeUI{})}}
 	state := turnState{}
 	providerData := json.RawMessage(`{"transport":"openai-responses","version":1,"output_items":[{"type":"function_call","call_id":"call-1","name":"Read","arguments":"{}"}]}`)
 	_, _, done, err := runner.handleEvent(&state, model.StreamEvent{
@@ -155,7 +155,7 @@ func TestToolInputErrorDoesNotInvokeToolOrBlockOtherCalls(t *testing.T) {
 	registry := tool.NewRegistry()
 	registry.Register(bad)
 	registry.Register(good)
-	runner := &Runner{ui: &fakeUI{}, registry: registry}
+	runner := &Engine{enginePorts: enginePorts{display: newUIDisplayBus(&fakeUI{}), registry: registry}}
 	result, err := runner.runToolCalls(context.Background(), []message.ToolCall{
 		{ID: "bad-1", Name: "Bad", Input: json.RawMessage(`{}`), InputError: "tool arguments need retry"},
 		{ID: "good-1", Name: "Good", Input: json.RawMessage(`{"value":1}`)},
@@ -238,7 +238,7 @@ func writeLoopTestSkill(t *testing.T, root, name, body string) string {
 
 func TestRunnerWorkspaceRoot(t *testing.T) {
 	root := t.TempDir()
-	runner := NewRunnerWithInstructionRoot(nil, nil, nil, nil, "", root)
+	runner := NewEngineWithInstructionRoot(nil, nil, nil, nil, "", root)
 
 	if got := runner.WorkspaceRoot(); got != root {
 		t.Fatalf("WorkspaceRoot() = %q, want %q", got, root)
@@ -257,7 +257,7 @@ func TestRunToolCallEmitsCompleteEditMutationSnapshot(t *testing.T) {
 	registry := tool.NewRegistry()
 	registry.Register(&toolfile.EditTool{Root: root, ReadState: state})
 	capture := &mutationCaptureUI{}
-	runner := &Runner{ui: capture, registry: registry, workRoot: root}
+	runner := &Engine{enginePorts: enginePorts{display: newUIDisplayBus(capture), registry: registry}, engineSessionState: engineSessionState{workRoot: root}}
 	tracer := tokentracer.New("mutation-test")
 	runner.SetTokenTracer(tracer)
 
@@ -338,7 +338,7 @@ func TestRunToolCallWriteEmptySnapshotPreservesExistence(t *testing.T) {
 			registry := tool.NewRegistry()
 			registry.Register(&toolfile.WriteTool{Root: root, ReadState: readState})
 			capture := &mutationCaptureUI{}
-			runner := &Runner{ui: capture, registry: registry, workRoot: root}
+			runner := &Engine{enginePorts: enginePorts{display: newUIDisplayBus(capture), registry: registry}, engineSessionState: engineSessionState{workRoot: root}}
 
 			result, err := runner.runToolCall(context.Background(), message.ToolCall{
 				ID: "write-empty", Name: "Write", Input: []byte(`{"file_path":"empty.txt","content":""}`),
@@ -376,7 +376,7 @@ func TestRunToolCallAbsoluteMutationPathsRespectWorkspace(t *testing.T) {
 
 	t.Run("inside workspace", func(t *testing.T) {
 		capture := &mutationCaptureUI{}
-		runner := &Runner{ui: capture, registry: registry, workRoot: root}
+		runner := &Engine{enginePorts: enginePorts{display: newUIDisplayBus(capture), registry: registry}, engineSessionState: engineSessionState{workRoot: root}}
 		input, err := json.Marshal(map[string]any{"file_path": inside, "old_string": "before", "new_string": "after"})
 		if err != nil {
 			t.Fatal(err)
@@ -399,7 +399,7 @@ func TestRunToolCallAbsoluteMutationPathsRespectWorkspace(t *testing.T) {
 			t.Fatal(err)
 		}
 		capture := &mutationCaptureUI{}
-		runner := &Runner{ui: capture, registry: registry, workRoot: root}
+		runner := &Engine{enginePorts: enginePorts{display: newUIDisplayBus(capture), registry: registry}, engineSessionState: engineSessionState{workRoot: root}}
 		input, err := json.Marshal(map[string]any{"file_path": outside, "old_string": "outside", "new_string": "changed"})
 		if err != nil {
 			t.Fatal(err)
@@ -429,7 +429,7 @@ func TestRunToolCallDoesNotAttachMutationOnEditFailure(t *testing.T) {
 	registry := tool.NewRegistry()
 	registry.Register(&toolfile.EditTool{Root: root, ReadState: toolfile.NewReadStateStore()})
 	capture := &mutationCaptureUI{}
-	runner := &Runner{ui: capture, registry: registry, workRoot: root}
+	runner := &Engine{enginePorts: enginePorts{display: newUIDisplayBus(capture), registry: registry}, engineSessionState: engineSessionState{workRoot: root}}
 
 	result, err := runner.runToolCall(context.Background(), message.ToolCall{
 		ID:    "edit-fail",
@@ -452,7 +452,7 @@ func TestRunToolCallSkipsSnapshotForUIWithoutMutationConsumer(t *testing.T) {
 	registry := tool.NewRegistry()
 	registry.Register(&toolfile.WriteTool{Root: root, ReadState: toolfile.NewReadStateStore()})
 	capture := &nonMutationUI{}
-	runner := &Runner{ui: capture, registry: registry, workRoot: root}
+	runner := &Engine{enginePorts: enginePorts{display: newUIDisplayBus(capture), registry: registry}, engineSessionState: engineSessionState{workRoot: root}}
 
 	result, err := runner.runToolCall(context.Background(), message.ToolCall{
 		ID:    "write-1",
@@ -474,7 +474,7 @@ func TestRunToolCallDoesNotTreatSameNameToolAsBuiltinMutation(t *testing.T) {
 	registry := tool.NewRegistry()
 	registry.Register(&fakeTool{name: "Edit", output: "fake"})
 	capture := &mutationCaptureUI{}
-	runner := &Runner{ui: capture, registry: registry, workRoot: t.TempDir()}
+	runner := &Engine{enginePorts: enginePorts{display: newUIDisplayBus(capture), registry: registry}, engineSessionState: engineSessionState{workRoot: t.TempDir()}}
 
 	result, err := runner.runToolCall(context.Background(), message.ToolCall{
 		ID: "fake", Name: "Edit", Input: []byte(`{"file_path":"outside"}`),
@@ -494,7 +494,7 @@ func TestRunToolCallDoesNotTreatSameNameMCPToolAsBuiltinMutation(t *testing.T) {
 	registry := tool.NewRegistry()
 	registry.Register(&fakeTool{name: "mcp__Edit", output: "mcp fake"})
 	capture := &mutationCaptureUI{}
-	runner := &Runner{ui: capture, registry: registry, workRoot: t.TempDir()}
+	runner := &Engine{enginePorts: enginePorts{display: newUIDisplayBus(capture), registry: registry}, engineSessionState: engineSessionState{workRoot: t.TempDir()}}
 
 	result, err := runner.runToolCall(context.Background(), message.ToolCall{
 		ID: "mcp-fake", Name: "mcp__Edit", Input: []byte(`{"file_path":"outside"}`),
@@ -515,7 +515,7 @@ func TestRunToolCallDoesNotInspectMutationTargetForNonConsumer(t *testing.T) {
 	registry := tool.NewRegistry()
 	registry.Register(probe)
 	capture := &nonMutationUI{}
-	runner := &Runner{ui: capture, registry: registry}
+	runner := &Engine{enginePorts: enginePorts{display: newUIDisplayBus(capture), registry: registry}}
 
 	result, err := runner.runToolCall(context.Background(), message.ToolCall{ID: "probe", Name: "Probe", Input: []byte(`{}`)})
 	if err != nil || result.IsError || result.Content != "ok" {
@@ -537,7 +537,7 @@ func TestRunToolCallSnapshotFailureDoesNotChangeToolSuccess(t *testing.T) {
 	registry := tool.NewRegistry()
 	registry.Register(probe)
 	capture := &mutationCaptureUI{}
-	runner := &Runner{ui: capture, registry: registry}
+	runner := &Engine{enginePorts: enginePorts{display: newUIDisplayBus(capture), registry: registry}}
 
 	result, err := runner.runToolCall(context.Background(), message.ToolCall{ID: "probe", Name: "Probe", Input: []byte(`{}`)})
 	if err != nil || result.IsError || result.Content != "concise success" {
@@ -571,7 +571,7 @@ func TestRunToolCallBindsMutationAndRunToResolvedTool(t *testing.T) {
 	registry.Register(original)
 	capture := &mutationCaptureUI{}
 	capture.onCall = func(ui.ToolCallEvent) { registry.Register(replacement) }
-	runner := &Runner{ui: capture, registry: registry}
+	runner := &Engine{enginePorts: enginePorts{display: newUIDisplayBus(capture), registry: registry}}
 
 	result, err := runner.runToolCall(context.Background(), message.ToolCall{ID: "probe", Name: "Probe", Input: []byte(`{}`)})
 	if err != nil || result.IsError || result.Content != "original result" {
@@ -865,7 +865,7 @@ func TestRunTurnStreamsAndReturnsFinalMessage(t *testing.T) {
 			},
 		},
 	}
-	runner := NewRunner(model, ui, tool.NewRegistry(), nil, "")
+	runner := NewEngine(model, ui, tool.NewRegistry(), nil, "")
 
 	msg, err := runner.RunTurn(context.Background(), "hello")
 	if err != nil {
@@ -903,7 +903,7 @@ func TestRunTurnRecordsTokenTracerUsage(t *testing.T) {
 			{Done: true},
 		},
 	}}}
-	runner := NewRunner(streamer, &fakeUI{}, tool.NewRegistry(), &fakeStore{}, "trace-session")
+	runner := NewEngine(streamer, &fakeUI{}, tool.NewRegistry(), &fakeStore{}, "trace-session")
 	tracer := tokentracer.New("test")
 	runner.SetTokenTracer(tracer)
 
@@ -940,7 +940,7 @@ Design body line.`)
 			{events: []model.StreamEvent{{Delta: "second"}, {Done: true}}},
 		},
 	}
-	runner := NewRunner(model, ui, tool.NewRegistry(), nil, "")
+	runner := NewEngine(model, ui, tool.NewRegistry(), nil, "")
 	runner.SetSkillRegistry(skill.NewRegistry([]string{root}))
 
 	if _, err := runner.RunTurn(context.Background(), "use $design"); err != nil {
@@ -978,7 +978,7 @@ Before work, emit an investigation checklist.`)
 		}},
 		{events: []model.StreamEvent{{Delta: "finished"}, {Done: true}}},
 	}}
-	runner := NewRunner(model, &fakeUI{}, registry, nil, "")
+	runner := NewEngine(model, &fakeUI{}, registry, nil, "")
 	runner.SetSkillRegistry(skill.NewRegistry([]string{root}))
 
 	if _, err := runner.RunTurn(context.Background(), "investigate [$investigation](/unused/path)"); err != nil {
@@ -1014,7 +1014,7 @@ func TestRunTurnStreamMAWorkersReceiveSkillContext(t *testing.T) {
 	output := &fakeUI{}
 	taskController := &fakeStreamMATaskRunner{}
 	store := &fakeStore{}
-	runner := NewRunner(&fakeModel{}, output, tool.NewRegistry(), store, "streamma-skill-session")
+	runner := NewEngine(&fakeModel{}, output, tool.NewRegistry(), store, "streamma-skill-session")
 	runner.SetSkillRegistry(skill.NewRegistry([]string{root}))
 	runner.SetStreamMATaskRunner(taskController)
 
@@ -1037,7 +1037,7 @@ func TestRunTurnStreamMACommandUsesRuntime(t *testing.T) {
 	registry := tool.NewRegistry()
 	registry.Register(&fakeTool{name: "read"})
 	store := &fakeStore{}
-	runner := NewRunner(streamer, output, registry, store, "streamma-session")
+	runner := NewEngine(streamer, output, registry, store, "streamma-session")
 	runner.SetStreamMATaskRunner(taskController)
 
 	msg, err := runner.RunTurn(context.Background(), "/streamma 制作一个临时游戏")
@@ -1094,7 +1094,7 @@ func TestRunTurnStreamMACommandUsesRuntime(t *testing.T) {
 func TestRunTurnStreamMAReusesLogicalAgentSessionAndIncrementalPrompt(t *testing.T) {
 	output := &fakeUI{}
 	taskController := &fakeStreamMATaskRunner{}
-	runner := NewRunner(&fakeModel{}, output, tool.NewRegistry(), &fakeStore{}, "streamma-session")
+	runner := NewEngine(&fakeModel{}, output, tool.NewRegistry(), &fakeStore{}, "streamma-session")
 	runner.SetStreamMATaskRunner(taskController)
 
 	if _, err := runner.RunTurn(context.Background(), "/streamma 制作一个临时游戏"); err != nil {
@@ -1132,7 +1132,7 @@ func TestRunTurnStreamMAReusesLogicalAgentSessionAndIncrementalPrompt(t *testing
 func TestRunTurnStreamMATraceEmitsRuntimeEvents(t *testing.T) {
 	output := &fakeUI{}
 	taskController := &fakeStreamMATaskRunner{}
-	runner := NewRunner(&fakeModel{}, output, tool.NewRegistry(), &fakeStore{}, "streamma-session")
+	runner := NewEngine(&fakeModel{}, output, tool.NewRegistry(), &fakeStore{}, "streamma-session")
 	runner.SetStreamMATaskRunner(taskController)
 
 	if _, err := runner.RunTurn(context.Background(), "/streamma-trace 制作一个临时游戏"); err != nil {
@@ -1164,7 +1164,7 @@ func TestRunTurnStreamMATraceEmitsRuntimeEvents(t *testing.T) {
 }
 
 func TestRunTurnStreamMARecordsTokenTracerEvents(t *testing.T) {
-	runner := NewRunner(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), &fakeStore{}, "streamma-session")
+	runner := NewEngine(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), &fakeStore{}, "streamma-session")
 	runner.SetStreamMATaskRunner(&fakeStreamMATaskRunner{})
 	tracer := tokentracer.New("streamma-test")
 	runner.SetTokenTracer(tracer)
@@ -1241,7 +1241,7 @@ func TestRunnerCompactToolPromptOmitsSystemSchemasButKeepsNativeTools(t *testing
 		name:   "Huge",
 		schema: json.RawMessage(`{"type":"object","properties":{"payload":{"type":"string","description":"` + strings.Repeat("schema detail ", 80) + `"}}}`),
 	})
-	runner := NewRunner(streamer, &fakeUI{}, registry, &fakeStore{}, "session-1")
+	runner := NewEngine(streamer, &fakeUI{}, registry, &fakeStore{}, "session-1")
 	runner.SetCompactToolPrompt(true)
 
 	if _, err := runner.RunTurn(context.Background(), "hello"); err != nil {
@@ -1267,7 +1267,7 @@ func TestRunTurnStreamMARejectsRecoveredtaskStep(t *testing.T) {
 	taskController := &fakeStreamMATaskRunner{
 		omitBoundaryFor: map[string]bool{"planner": true, "scout": true},
 	}
-	runner := NewRunner(&fakeModel{}, output, tool.NewRegistry(), &fakeStore{}, "streamma-session")
+	runner := NewEngine(&fakeModel{}, output, tool.NewRegistry(), &fakeStore{}, "streamma-session")
 	runner.SetStreamMATaskRunner(taskController)
 
 	_, err := runner.RunTurn(context.Background(), "/streamma 制作一个临时游戏")
@@ -1289,7 +1289,7 @@ func TestRunTurnStreamMAFansOuttaskStepBeforeDone(t *testing.T) {
 		releasePlanner:       make(chan struct{}),
 		builderStarted:       make(chan struct{}),
 	}
-	runner := NewRunner(streamer, output, tool.NewRegistry(), &fakeStore{}, "streamma-session")
+	runner := NewEngine(streamer, output, tool.NewRegistry(), &fakeStore{}, "streamma-session")
 	runner.SetStreamMATaskRunner(taskController)
 
 	done := make(chan error, 1)
@@ -1323,7 +1323,7 @@ func TestRunTurnStreamMAFansOuttaskStepBeforeDone(t *testing.T) {
 
 func TestRunTurnStreamMARequirestaskBackend(t *testing.T) {
 	output := &fakeUI{}
-	runner := NewRunner(&fakeModel{}, output, tool.NewRegistry(), nil, "")
+	runner := NewEngine(&fakeModel{}, output, tool.NewRegistry(), nil, "")
 
 	_, err := runner.RunTurn(context.Background(), "/streamma explain the design")
 	if err == nil || !strings.Contains(err.Error(), "requires task backend") {
@@ -1334,7 +1334,7 @@ func TestRunTurnStreamMARequirestaskBackend(t *testing.T) {
 func TestRunTurnStreamMADisabledRejectsCommandBeforeRuntime(t *testing.T) {
 	output := &fakeUI{}
 	taskController := &fakeStreamMATaskRunner{}
-	runner := NewRunner(&fakeModel{}, output, tool.NewRegistry(), nil, "")
+	runner := NewEngine(&fakeModel{}, output, tool.NewRegistry(), nil, "")
 	runner.SetStreamMATaskRunner(taskController)
 	runner.SetStreamMAEnabled(false)
 
@@ -1361,7 +1361,7 @@ func TestRunTurnCreatesLazySessionOnCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
-	runner := NewRunner(model, ui, tool.NewRegistry(), store, "lazy-session")
+	runner := NewEngine(model, ui, tool.NewRegistry(), store, "lazy-session")
 
 	exists, err := store.Exists(context.Background(), "lazy-session")
 	if err != nil {
@@ -1406,7 +1406,7 @@ func TestRunTurnUsesPromptBuilderWithProjectInstructions(t *testing.T) {
 			},
 		},
 	}
-	runner := NewRunnerWithInstructionRoot(model, ui, tool.NewRegistry(), nil, "", root)
+	runner := NewEngineWithInstructionRoot(model, ui, tool.NewRegistry(), nil, "", root)
 
 	if _, err := runner.RunTurn(context.Background(), "hello"); err != nil {
 		t.Fatalf("RunTurn() error = %v", err)
@@ -1432,7 +1432,7 @@ func TestRunTurnReturnsSyncModelError(t *testing.T) {
 			{err: errors.New("boom")},
 		},
 	}
-	runner := NewRunner(model, ui, tool.NewRegistry(), nil, "")
+	runner := NewEngine(model, ui, tool.NewRegistry(), nil, "")
 
 	_, err := runner.RunTurn(context.Background(), "hello")
 	if err == nil || err.Error() != "boom" {
@@ -1458,7 +1458,7 @@ func TestRunTurnFlushesOnStreamErrorAfterOutput(t *testing.T) {
 			},
 		},
 	}
-	runner := NewRunner(model, ui, tool.NewRegistry(), nil, "")
+	runner := NewEngine(model, ui, tool.NewRegistry(), nil, "")
 
 	_, err := runner.RunTurn(context.Background(), "hello")
 	if err == nil || err.Error() != "boom" {
@@ -1482,7 +1482,7 @@ func TestRunTurnFlushesSplitMarkdownFenceOnStreamError(t *testing.T) {
 		{Delta: " {\n"},
 		{Err: errors.New("boom")},
 	}}}}
-	runner := NewRunner(model, ui, tool.NewRegistry(), nil, "")
+	runner := NewEngine(model, ui, tool.NewRegistry(), nil, "")
 
 	_, err := runner.RunTurn(context.Background(), "show partial code")
 	if err == nil || err.Error() != "boom" {
@@ -1507,7 +1507,7 @@ func TestRunTurnAllowsEmptyAssistantContent(t *testing.T) {
 			},
 		},
 	}
-	runner := NewRunner(model, ui, tool.NewRegistry(), nil, "")
+	runner := NewEngine(model, ui, tool.NewRegistry(), nil, "")
 
 	msg, err := runner.RunTurn(context.Background(), "hello")
 	if err != nil {
@@ -1533,7 +1533,7 @@ func TestRunnerForwardsThinkingEventsToUI(t *testing.T) {
 		}},
 	}}
 	output := &fakeUI{}
-	runner := NewRunner(streamer, output, tool.NewRegistry(), nil, "")
+	runner := NewEngine(streamer, output, tool.NewRegistry(), nil, "")
 
 	msg, err := runner.RunTurn(context.Background(), "hello")
 	if err != nil {
@@ -1566,7 +1566,7 @@ func TestContextStatsUsesOnlyRealUsageAndKeepsLastKnownDuringNextTurn(t *testing
 		streams: []chan model.StreamEvent{first, second},
 		started: make(chan int, 2),
 	}
-	runner := NewRunner(streamer, ui, tool.NewRegistry(), nil, "")
+	runner := NewEngine(streamer, ui, tool.NewRegistry(), nil, "")
 
 	if _, err := runner.RunTurn(context.Background(), "first"); err != nil {
 		t.Fatalf("first RunTurn() error = %v", err)
@@ -1619,7 +1619,7 @@ func TestContextStatsAccumulatesSessionUsageAcrossModelRequests(t *testing.T) {
 			},
 		},
 	}
-	runner := NewRunner(model, ui, tool.NewRegistry(), nil, "")
+	runner := NewEngine(model, ui, tool.NewRegistry(), nil, "")
 
 	if _, err := runner.RunTurn(context.Background(), "first"); err != nil {
 		t.Fatalf("first RunTurn() error = %v", err)
@@ -1648,7 +1648,7 @@ func TestContextStatsDoesNotDoubleCountCumulativeStreamUsageUpdates(t *testing.T
 			},
 		},
 	}
-	runner := NewRunner(model, ui, tool.NewRegistry(), nil, "")
+	runner := NewEngine(model, ui, tool.NewRegistry(), nil, "")
 
 	if _, err := runner.RunTurn(context.Background(), "hello"); err != nil {
 		t.Fatalf("RunTurn() error = %v", err)
@@ -1661,7 +1661,7 @@ func TestContextStatsDoesNotDoubleCountCumulativeStreamUsageUpdates(t *testing.T
 }
 
 func TestContextStatsDoesNotEstimateWhenUsageIsUnknown(t *testing.T) {
-	runner := NewRunner(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), nil, "")
+	runner := NewEngine(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), nil, "")
 
 	stats := runner.ContextStats(1024, "draft prompt")
 	if stats.UsedTokens != 0 || stats.CacheTokens != 0 || stats.LimitTokens != 1024 {
@@ -1715,7 +1715,7 @@ func TestContextStatsUsesActualUsageWhenKnown(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			runner := NewRunner(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), nil, "")
+			runner := NewEngine(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), nil, "")
 			runner.usage.setCurrent(tt.usage)
 
 			stats := runner.ContextStats(1024, "draft should not be estimated")
@@ -1735,7 +1735,7 @@ func TestLoadSessionRebuildsContextUsageFromActiveHistory(t *testing.T) {
 		{Role: message.RoleAssistant, Content: strings.Repeat("restored answer ", 20)},
 	}
 	store := &fakeStore{history: history}
-	runner := NewRunner(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), store, "old-session")
+	runner := NewEngine(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), store, "old-session")
 	runner.usage.setCurrent(model.Usage{TotalTokens: 9999, PromptCacheHitTokens: 100})
 
 	if _, err := runner.LoadSession(context.Background(), "restored-session"); err != nil {
@@ -1755,7 +1755,7 @@ func TestLoadSessionRebuildsContextUsageFromActiveHistory(t *testing.T) {
 }
 
 func TestResetHistoryClearsContextUsage(t *testing.T) {
-	runner := NewRunner(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), nil, "")
+	runner := NewEngine(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), nil, "")
 	runner.usage.setCurrent(model.Usage{PromptTokens: 100, CompletionTokens: 20, PromptCacheHitTokens: 10})
 	runner.usage.setSessionKnown(model.Usage{PromptTokens: 200, CompletionTokens: 40, PromptCacheHitTokens: 20}, true)
 
@@ -1787,7 +1787,7 @@ func TestRunTurnExecutesToolAndReturnsFinalAnswer(t *testing.T) {
 	}
 	registry := tool.NewRegistry()
 	registry.Register(&fakeTool{name: "Read", output: "module paw"})
-	runner := NewRunner(model, ui, registry, nil, "")
+	runner := NewEngine(model, ui, registry, nil, "")
 
 	msg, err := runner.RunTurn(context.Background(), "read go.mod")
 	if err != nil {
@@ -1844,7 +1844,7 @@ func TestRunTurnReadResultIsBoundedBeforeNextModelRound(t *testing.T) {
 	}}
 	registry := tool.NewRegistry()
 	registry.Register(&toolfile.ReadTool{Root: root, ReadState: toolfile.NewReadStateStore()})
-	runner := NewRunnerWithInstructionRoot(modelClient, &fakeUI{}, registry, nil, "", root)
+	runner := NewEngineWithInstructionRoot(modelClient, &fakeUI{}, registry, nil, "", root)
 	if _, err := runner.RunTurn(context.Background(), "read large.txt"); err != nil {
 		t.Fatalf("RunTurn() error = %v", err)
 	}
@@ -1888,7 +1888,7 @@ func TestRunTurnKeepsNativeToolCallAfterThinking(t *testing.T) {
 	}}
 	registry := tool.NewRegistry()
 	registry.Register(&fakeTool{name: "Read", output: "module paw"})
-	runner := NewRunner(modelClient, ui, registry, nil, "")
+	runner := NewEngine(modelClient, ui, registry, nil, "")
 
 	msg, err := runner.RunTurn(context.Background(), "read go.mod")
 	if err != nil {
@@ -1919,7 +1919,7 @@ func TestRunTurnJournalRetainsToolHistoryAfterModelFailure(t *testing.T) {
 	}}
 	registry := tool.NewRegistry()
 	registry.Register(&fakeTool{name: "Read", output: "module paw"})
-	runner := NewRunner(failingModel, &fakeUI{}, registry, store, "session-1")
+	runner := NewEngine(failingModel, &fakeUI{}, registry, store, "session-1")
 
 	if _, err := runner.RunTurn(context.Background(), "inspect"); err == nil {
 		t.Fatal("RunTurn() error = nil, want model failure")
@@ -1964,7 +1964,7 @@ func TestRunTurnJournalPersistsPartialAssistantForDisplayOnly(t *testing.T) {
 		{Delta: "partial answer"},
 		{Err: errors.New("502")},
 	}}}}
-	runner := NewRunner(failingModel, &fakeUI{}, tool.NewRegistry(), store, "session-1")
+	runner := NewEngine(failingModel, &fakeUI{}, tool.NewRegistry(), store, "session-1")
 	if _, err := runner.RunTurn(context.Background(), "hello"); err == nil {
 		t.Fatal("RunTurn() error = nil, want stream failure")
 	}
@@ -2034,7 +2034,7 @@ func TestRunTurnExecutesMultipleToolUsesAndCarriesAllResults(t *testing.T) {
 	registry := tool.NewRegistry()
 	registry.Register(&fakeTool{name: "Read", output: "module paw", safe: true})
 	registry.Register(&fakeTool{name: "Grep", output: "go.mod:1:module paw", safe: true})
-	runner := NewRunner(model, ui, registry, nil, "")
+	runner := NewEngine(model, ui, registry, nil, "")
 
 	msg, err := runner.RunTurn(context.Background(), "read and grep")
 	if err != nil {
@@ -2081,7 +2081,7 @@ func TestRunTurnRunsConcurrencySafeToolsInParallel(t *testing.T) {
 	registry := tool.NewRegistry()
 	registry.Register(first)
 	registry.Register(second)
-	runner := NewRunner(model, ui, registry, nil, "")
+	runner := NewEngine(model, ui, registry, nil, "")
 
 	done := make(chan error, 1)
 	go func() {
@@ -2134,7 +2134,7 @@ func TestRunTurnKeepsUnsafeToolsSerial(t *testing.T) {
 	registry := tool.NewRegistry()
 	registry.Register(first)
 	registry.Register(second)
-	runner := NewRunner(model, ui, registry, nil, "")
+	runner := NewEngine(model, ui, registry, nil, "")
 
 	done := make(chan error, 1)
 	go func() {
@@ -2195,7 +2195,7 @@ func TestRunTurnInjectsSupplementBeforeNextModelStep(t *testing.T) {
 	}
 	registry := tool.NewRegistry()
 	registry.Register(blocker)
-	runner := NewRunner(model, ui, registry, nil, "")
+	runner := NewEngine(model, ui, registry, nil, "")
 
 	done := make(chan error, 1)
 	go func() {
@@ -2243,7 +2243,7 @@ func TestRunTurnCarriesLateSupplementToNextPrompt(t *testing.T) {
 		streams: []chan model.StreamEvent{stream},
 		started: make(chan int, 1),
 	}
-	runner := NewRunner(blocking, &fakeUI{}, tool.NewRegistry(), nil, "")
+	runner := NewEngine(blocking, &fakeUI{}, tool.NewRegistry(), nil, "")
 
 	done := make(chan error, 1)
 	go func() {
@@ -2300,7 +2300,7 @@ func TestRunTurnCarriesLateSupplementToNextPrompt(t *testing.T) {
 
 func TestRunTurnKeepsSupplementWhenModelCallFails(t *testing.T) {
 	failingModel := &fakeModel{rounds: []fakeRound{{err: errors.New("boom")}}}
-	runner := NewRunner(failingModel, &fakeUI{}, tool.NewRegistry(), nil, "")
+	runner := NewEngine(failingModel, &fakeUI{}, tool.NewRegistry(), nil, "")
 	if !runner.SubmitSupplement("do not lose this") {
 		t.Fatal("SubmitSupplement() = false")
 	}
@@ -2347,7 +2347,7 @@ func TestRunTurnPreservesSplitMarkdownFenceAfterVisibleText(t *testing.T) {
 		{Delta: "\n"},
 		{Done: true},
 	}}}}
-	runner := NewRunner(model, ui, tool.NewRegistry(), nil, "")
+	runner := NewEngine(model, ui, tool.NewRegistry(), nil, "")
 
 	msg, err := runner.RunTurn(context.Background(), "show code")
 	if err != nil {
@@ -2371,7 +2371,7 @@ func TestRunTurnFlushesUnclosedSplitMarkdownFenceOnDone(t *testing.T) {
 		{Delta: " {\n"},
 		{Done: true},
 	}}}}
-	runner := NewRunner(model, ui, tool.NewRegistry(), nil, "")
+	runner := NewEngine(model, ui, tool.NewRegistry(), nil, "")
 
 	msg, err := runner.RunTurn(context.Background(), "show partial code")
 	if err != nil {
@@ -2402,7 +2402,7 @@ func TestRunTurnSuppressesSplitToolUseAfterVisibleText(t *testing.T) {
 	}}
 	registry := tool.NewRegistry()
 	registry.Register(&fakeTool{name: "Read", output: "module paw"})
-	runner := NewRunner(model, ui, registry, nil, "")
+	runner := NewEngine(model, ui, registry, nil, "")
 
 	if _, err := runner.RunTurn(context.Background(), "read go.mod"); err != nil {
 		t.Fatalf("RunTurn() error = %v", err)
@@ -2427,7 +2427,7 @@ func TestRunTurnSuppressesToolUseAfterVisibleText(t *testing.T) {
 	}}
 	registry := tool.NewRegistry()
 	registry.Register(&fakeTool{name: "Read", output: "module paw"})
-	runner := NewRunner(model, ui, registry, nil, "")
+	runner := NewEngine(model, ui, registry, nil, "")
 
 	if _, err := runner.RunTurn(context.Background(), "read go.mod"); err != nil {
 		t.Fatalf("RunTurn() error = %v", err)
@@ -2465,7 +2465,7 @@ func TestRunTurnExecutesToolUseWrappedInMarkdownFence(t *testing.T) {
 	}
 	registry := tool.NewRegistry()
 	registry.Register(&fakeTool{name: "Read", output: "module paw"})
-	runner := NewRunner(model, ui, registry, nil, "")
+	runner := NewEngine(model, ui, registry, nil, "")
 
 	msg, err := runner.RunTurn(context.Background(), "read go.mod")
 	if err != nil {
@@ -2507,7 +2507,7 @@ func TestRunTurnExecutesToolUseWrappedInMarkdownFenceWithPreamble(t *testing.T) 
 	}
 	registry := tool.NewRegistry()
 	registry.Register(&fakeTool{name: "LS", output: ".\n.."})
-	runner := NewRunner(model, ui, registry, nil, "")
+	runner := NewEngine(model, ui, registry, nil, "")
 
 	msg, err := runner.RunTurn(context.Background(), "尝试使用你所有的工具")
 	if err != nil {
@@ -2551,7 +2551,7 @@ func TestRunTurnExecutesInvokeDSMLToolUseWithPreamble(t *testing.T) {
 	registry := tool.NewRegistry()
 	bash := &fakeTool{name: "Bash", output: "internal/loop/runner.go"}
 	registry.Register(bash)
-	runner := NewRunner(model, ui, registry, nil, "")
+	runner := NewEngine(model, ui, registry, nil, "")
 
 	msg, err := runner.RunTurn(context.Background(), "读代码文件内容并cat 输出")
 	if err != nil {
@@ -2603,7 +2603,7 @@ func TestRunTurnParsesInvokeDSMLNonStringParameters(t *testing.T) {
 	registry := tool.NewRegistry()
 	grep := &fakeTool{name: "Grep", output: "match"}
 	registry.Register(grep)
-	runner := NewRunner(model, ui, registry, nil, "")
+	runner := NewEngine(model, ui, registry, nil, "")
 
 	if _, err := runner.RunTurn(context.Background(), "查找 cache"); err != nil {
 		t.Fatalf("RunTurn() error = %v", err)
@@ -2643,7 +2643,7 @@ func TestRunTurnParsesInvokeDSMLValueAttribute(t *testing.T) {
 	registry := tool.NewRegistry()
 	grep := &fakeTool{name: "Grep", output: "match"}
 	registry.Register(grep)
-	runner := NewRunner(model, ui, registry, nil, "")
+	runner := NewEngine(model, ui, registry, nil, "")
 
 	if _, err := runner.RunTurn(context.Background(), "查找 cache"); err != nil {
 		t.Fatalf("RunTurn() error = %v", err)
@@ -2678,7 +2678,7 @@ func TestRunTurnCarriesHistoryAcrossTurns(t *testing.T) {
 			},
 		},
 	}
-	runner := NewRunner(model, ui, tool.NewRegistry(), nil, "")
+	runner := NewEngine(model, ui, tool.NewRegistry(), nil, "")
 
 	if _, err := runner.RunTurn(context.Background(), "first question"); err != nil {
 		t.Fatalf("first RunTurn() error = %v", err)
@@ -2728,7 +2728,7 @@ func TestResetHistoryPreventsStoreReloadDuringProcess(t *testing.T) {
 			{Role: message.RoleAssistant, Content: "stale answer"},
 		},
 	}
-	runner := NewRunner(model, ui, tool.NewRegistry(), store, "session-1")
+	runner := NewEngine(model, ui, tool.NewRegistry(), store, "session-1")
 
 	runner.ResetHistory()
 
@@ -2758,7 +2758,7 @@ func TestContextStats_精简后三字段正确(t *testing.T) {
 		{Usage: &model.Usage{InputTokens: 1000, OutputTokens: 100}},
 		{Done: true},
 	}}}}
-	runner := NewRunner(m, &fakeUI{}, nil, nil, "")
+	runner := NewEngine(m, &fakeUI{}, nil, nil, "")
 	if _, err := runner.RunTurn(context.Background(), "hi"); err != nil {
 		t.Fatalf("RunTurn: %v", err)
 	}
@@ -2780,7 +2780,7 @@ func TestContextStats_CacheTokens正确反映命中缓存(t *testing.T) {
 		{Usage: &model.Usage{InputTokens: 500, CacheReadInputTokens: 300, OutputTokens: 50}},
 		{Done: true},
 	}}}}
-	runner := NewRunner(m, &fakeUI{}, nil, nil, "")
+	runner := NewEngine(m, &fakeUI{}, nil, nil, "")
 	if _, err := runner.RunTurn(context.Background(), "hi"); err != nil {
 		t.Fatalf("RunTurn: %v", err)
 	}
@@ -2796,7 +2796,7 @@ func TestContextStats_CacheTokens正确反映命中缓存(t *testing.T) {
 
 // TestContextStats_无usage时返回零值 验证未收到任何 usage 事件时安全返回零值。
 func TestContextStats_无usage时返回零值(t *testing.T) {
-	runner := NewRunner(nil, nil, nil, nil, "")
+	runner := NewEngine(nil, nil, nil, nil, "")
 	stats := runner.ContextStats(100000, "")
 	if stats.UsedTokens != 0 || stats.CacheTokens != 0 {
 		t.Errorf("空 runner ContextStats = %+v，期望 token 均为 0", stats)
@@ -2830,7 +2830,7 @@ func TestRunTurnExecutesToolCallFormatWithJSONInput(t *testing.T) {
 	registry := tool.NewRegistry()
 	bash := &fakeTool{name: "Bash", output: "ok"}
 	registry.Register(bash)
-	runner := NewRunner(m, ui, registry, nil, "")
+	runner := NewEngine(m, ui, registry, nil, "")
 
 	msg, err := runner.RunTurn(context.Background(), "list files")
 	if err != nil {
@@ -2880,7 +2880,7 @@ func TestRunTurnExecutesToolCallNameInputFormat(t *testing.T) {
 	registry := tool.NewRegistry()
 	bash := &fakeTool{name: "Bash", output: "ok"}
 	registry.Register(bash)
-	runner := NewRunner(m, ui, registry, nil, "")
+	runner := NewEngine(m, ui, registry, nil, "")
 
 	msg, err := runner.RunTurn(context.Background(), "list files")
 	if err != nil {
@@ -2928,7 +2928,7 @@ func TestRunTurnExecutesTagNameJSONFormat(t *testing.T) {
 	registry := tool.NewRegistry()
 	glob := &fakeTool{name: "glob", output: "file1.go\nfile2.go"}
 	registry.Register(glob)
-	runner := NewRunner(m, ui, registry, nil, "")
+	runner := NewEngine(m, ui, registry, nil, "")
 
 	msg, err := runner.RunTurn(context.Background(), "读取当前项目")
 	if err != nil {
@@ -2976,7 +2976,7 @@ func TestRunTurnExecutesToolCallFormatWithXMLParams(t *testing.T) {
 	registry := tool.NewRegistry()
 	readTool := &fakeTool{name: "Read", output: "content"}
 	registry.Register(readTool)
-	runner := NewRunner(m, ui, registry, nil, "")
+	runner := NewEngine(m, ui, registry, nil, "")
 
 	msg, err := runner.RunTurn(context.Background(), "read readme")
 	if err != nil {
@@ -3034,7 +3034,7 @@ func TestToolCallsPreserveBarrierAroundSerialTool(t *testing.T) {
 	registry.Register(&safeBarrierTool{&serialBarrierTool{name: "safe-before", started: started, release: beforeRelease}})
 	registry.Register(&serialBarrierTool{name: "Select", started: started, release: selectRelease})
 	registry.Register(&safeBarrierTool{&serialBarrierTool{name: "safe-after", started: started}})
-	runner := NewRunner(&fakeModel{}, &fakeUI{}, registry, nil, "")
+	runner := NewEngine(&fakeModel{}, &fakeUI{}, registry, nil, "")
 	calls := []message.ToolCall{{ID: "1", Name: "safe-before", Input: json.RawMessage(`{}`)}, {ID: "2", Name: "Select", Input: json.RawMessage(`{}`)}, {ID: "3", Name: "safe-after", Input: json.RawMessage(`{}`)}}
 	done := make(chan error, 1)
 	go func() { _, err := runner.runToolCalls(context.Background(), calls); done <- err }()
@@ -3072,7 +3072,7 @@ func TestToolCallsSerializeMultipleBarriers(t *testing.T) {
 	registry.Register(&serialBarrierTool{name: "Select-1", started: started, release: one})
 	registry.Register(&serialBarrierTool{name: "Select-2", started: started, release: two})
 	registry.Register(&safeBarrierTool{&serialBarrierTool{name: "safe-after", started: started}})
-	runner := NewRunner(&fakeModel{}, &fakeUI{}, registry, nil, "")
+	runner := NewEngine(&fakeModel{}, &fakeUI{}, registry, nil, "")
 	calls := []message.ToolCall{{ID: "1", Name: "Select-1", Input: json.RawMessage(`{}`)}, {ID: "2", Name: "Select-2", Input: json.RawMessage(`{}`)}, {ID: "3", Name: "safe-after", Input: json.RawMessage(`{}`)}}
 	done := make(chan error, 1)
 	go func() { _, e := runner.runToolCalls(context.Background(), calls); done <- e }()
@@ -3099,7 +3099,7 @@ func TestToolCallConcurrencySafetyAndRunUseResolvedTool(t *testing.T) {
 		name: "Swap", output: "original result", registry: registry, replacement: replacement,
 	}
 	registry.Register(original)
-	runner := NewRunner(&fakeModel{}, &fakeUI{}, registry, nil, "")
+	runner := NewEngine(&fakeModel{}, &fakeUI{}, registry, nil, "")
 
 	results, err := runner.runToolCalls(context.Background(), []message.ToolCall{{ID: "swap", Name: "Swap", Input: json.RawMessage(`{}`)}})
 	if err != nil {
@@ -3119,7 +3119,7 @@ func TestToolCallConcurrencySafetyAndRunUseResolvedTool(t *testing.T) {
 func TestLoadSessionTriggersSessionLoadedHooks(t *testing.T) {
 	history := []message.Message{{Role: message.RoleUser, Content: "hi"}}
 	store := &fakeStore{history: history}
-	runner := NewRunner(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), store, "old-session")
+	runner := NewEngine(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), store, "old-session")
 
 	var got []string
 	runner.SetSessionLoadedHook(func(sid string) { got = append(got, sid) })

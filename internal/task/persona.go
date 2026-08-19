@@ -86,17 +86,11 @@ func (m *Manager) occupiedPersonaNames(ctx context.Context) (map[string]struct{}
 		return occupied, nil
 	}
 
-	m.mu.RLock()
-	for _, task := range m.tasks {
-		markOccupiedPersona(occupied, task)
-	}
-	m.mu.RUnlock()
-
-	diskTasks, err := m.registry.listTasks(ctx)
+	tasks, err := m.actors.list(ctx)
 	if err != nil {
 		return nil, err
 	}
-	for _, task := range diskTasks {
+	for _, task := range tasks {
 		markOccupiedPersona(occupied, task)
 	}
 	return occupied, nil

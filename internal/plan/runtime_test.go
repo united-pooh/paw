@@ -86,6 +86,77 @@ func TestStartCreatesClarifyingSession(t *testing.T) {
 	}
 }
 
+func TestRestoreAttachesSessionSnapshotWithoutRunning(t *testing.T) {
+	store := newTestStore(t)
+	executor := &fakeExecutor{}
+	runtime := NewRuntime(RuntimeConfig{Store: store, Executor: executor, Filter: ModeFilter(store.Dir())})
+	snapshot := Session{
+		ID: "plan-restore", SessionID: "session-a", Status: SessionDrafting,
+		Requirement: "finish p5", TurnsUsed: 3, Continuations: 2,
+		MaxTurns: 8, MaxContinuations: 4, MaxNoProgress: 2,
+	}
+	if err := runtime.Restore(snapshot); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	executor.mu.Lock()
+	if executor.executions != 0 {
+		t.Fatalf("restore executed %d turns, want 0", executor.executions)
+	}
+	executor.mu.Unlock()
+	restored, err := runtime.Status(context.Background(), snapshot.ID)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if restored.Status != SessionPaused || restored.ResumeStatus != SessionDrafting || restored.SessionID != "session-a" || restored.TurnsUsed != 3 {
+		t.Fatalf("restored = %#v", restored)
+	}
+	if err := runtime.Resume(context.Background(), snapshot.ID); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		executor.mu.Lock()
+		executions := executor.executions
+		executor.mu.Unlock()
+		if executions > 0 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("resume did not continue restored session")
+}
+
+func TestRestorePreservesCompletePausedSessionSnapshot(t *testing.T) {
+	store := newTestStore(t)
+	createdAt := time.Date(2026, 8, 18, 10, 0, 0, 0, time.UTC)
+	updatedAt := createdAt.Add(3 * time.Hour)
+	want := Session{
+		ID: "plan-complete", SessionID: "session-a", Status: SessionPaused, ResumeStatus: SessionDrafting,
+		Requirement: "finish p5", Continuations: 3, NoProgress: 2,
+		PauseReason: PauseBlocked, LastDecision: "waiting for approval", CurrentTaskID: "plan-task-7",
+		TurnsUsed: 5, ToolCallsUsed: 11, MaxTurns: 12, MaxContinuations: 6, MaxNoProgress: 4,
+		CreatedAt: createdAt, UpdatedAt: updatedAt,
+	}
+	var persisted Session
+	runtime := NewRuntime(RuntimeConfig{
+		Store: store, Executor: &fakeExecutor{}, SessionID: "session-a",
+		Snapshot: func(_ context.Context, snapshot Session) error {
+			persisted = snapshot
+			return nil
+		},
+	})
+	if err := runtime.Restore(want); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	got, err := runtime.Status(context.Background(), want.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want || persisted != want {
+		t.Fatalf("restored=%#v persisted=%#v want=%#v", got, persisted, want)
+	}
+}
+
 func TestStartRejectsEmptyRequirement(t *testing.T) {
 	runtime := newTestRuntime(&fakeExecutor{}, newTestStore(t))
 	if _, err := runtime.Start(context.Background(), "   "); err == nil {

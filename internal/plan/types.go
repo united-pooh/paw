@@ -23,6 +23,7 @@ const (
 // truth; Status is derived from the session lifecycle.
 type PlanDoc struct {
 	ID        PlanID
+	SessionID string
 	Title     string
 	Path      string
 	Content   string
@@ -65,7 +66,9 @@ const (
 // Session is the in-memory lifecycle state of a plan session.
 type Session struct {
 	ID               PlanID
+	SessionID        string
 	Status           SessionStatus
+	ResumeStatus     SessionStatus
 	Requirement      string
 	Continuations    int
 	NoProgress       int

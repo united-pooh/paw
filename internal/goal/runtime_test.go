@@ -18,6 +18,70 @@ type fakeExecutor struct {
 	err     error
 }
 
+type orderedGoalStore struct {
+	GoalStore
+	record func(string)
+}
+
+func (s orderedGoalStore) Create(ctx context.Context, goal Goal) error {
+	if err := s.GoalStore.Create(ctx, goal); err != nil {
+		return err
+	}
+	s.record("store.create")
+	return nil
+}
+
+func (s orderedGoalStore) Update(ctx context.Context, goal Goal) error {
+	if err := s.GoalStore.Update(ctx, goal); err != nil {
+		return err
+	}
+	s.record("store.update")
+	return nil
+}
+
+type orderedGoalExecutor struct{ record func(string) }
+
+func (e orderedGoalExecutor) ExecuteTurn(context.Context, message.Message, *loop.TurnTiming) (loop.TurnExecution, error) {
+	e.record("executor")
+	return loop.TurnExecution{Message: message.Message{Role: message.RoleAssistant, Content: "done"}}, nil
+}
+
+func TestStartPersistsGoalThenBindingBeforeExecution(t *testing.T) {
+	var mu sync.Mutex
+	var order []string
+	record := func(event string) {
+		mu.Lock()
+		order = append(order, event)
+		mu.Unlock()
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Store:    orderedGoalStore{GoalStore: NewMemoryStore(), record: record},
+		Executor: orderedGoalExecutor{record: record},
+		Bind: func(context.Context, GoalSnapshot) error {
+			record("goal_activated")
+			return nil
+		},
+	})
+	snapshot, err := runtime.Start(context.Background(), Goal{SessionID: "session-a", Objective: "finish p5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitGoal(t, runtime, snapshot.ID, GoalCompleted)
+	mu.Lock()
+	got := append([]string(nil), order...)
+	mu.Unlock()
+	executorIndex := -1
+	for index, event := range got {
+		if event == "executor" {
+			executorIndex = index
+			break
+		}
+	}
+	if len(got) < 4 || got[0] != "store.create" || got[1] != "store.update" || got[2] != "goal_activated" || executorIndex < 3 {
+		t.Fatalf("start order = %#v", got)
+	}
+}
+
 func (f *fakeExecutor) ExecuteTurn(_ context.Context, input message.Message, _ *loop.TurnTiming) (loop.TurnExecution, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

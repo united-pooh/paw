@@ -190,6 +190,7 @@ func (s *EventStore) appendCreated(ctx context.Context, typ string, doc PlanDoc)
 	}
 	raw, err := json.Marshal(createdPayload{
 		PlanID:    string(doc.ID),
+		SessionID: doc.SessionID,
 		Title:     doc.Title,
 		Path:      doc.Path,
 		Content:   doc.Content,
@@ -242,6 +243,9 @@ func (s *EventStore) Update(ctx context.Context, doc PlanDoc) error {
 		if !fileOK {
 			return errPlanNotFound
 		}
+		if fileDoc.SessionID == "" {
+			fileDoc.SessionID = doc.SessionID
+		}
 		if err := s.appendCreated(ctx, EventBaseline, fileDoc); err != nil {
 			return err
 		}
@@ -271,6 +275,9 @@ func (s *EventStore) Update(ctx context.Context, doc PlanDoc) error {
 	}
 	if doc.CreatedAt != current.Doc.CreatedAt {
 		return fmt.Errorf("plan: created_at is immutable")
+	}
+	if doc.SessionID != current.Doc.SessionID {
+		return fmt.Errorf("plan: session_id is immutable")
 	}
 	now := doc.UpdatedAt
 	if now.IsZero() {
@@ -326,7 +333,7 @@ func planContentEqual(a, b string) bool {
 // planDocContentEqual 比较投影文件内容级字段（用户可见部分）。CreatedAt/
 // UpdatedAt/Path 等元数据不参与比较（文件 front matter 不含 created_at）。
 func planDocContentEqual(a, b PlanDoc) bool {
-	if a.Title != b.Title || a.Status != b.Status {
+	if a.SessionID != b.SessionID || a.Title != b.Title || a.Status != b.Status {
 		return false
 	}
 	return planContentEqual(a.Content, b.Content)

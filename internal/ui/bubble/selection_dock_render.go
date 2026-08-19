@@ -22,7 +22,11 @@ func (d *selectionDock) preferredHeight(width int) int {
 	for _, optionHeight := range answerHeights {
 		answerHeight += maxInt(1, optionHeight)
 	}
-	height := 7 + promptHeight + answerHeight
+	structuralRows := 7
+	if d.request.OptionsOnly {
+		structuralRows = 5
+	}
+	height := structuralRows + promptHeight + answerHeight
 	return clampInt(height, 1, selectionDockMaxVisibleLines)
 }
 
@@ -37,14 +41,16 @@ func (m appModel) renderSelectionDock(width, height int) string {
 		return renderQuestionReview(m, d, width, height)
 	}
 
-	// Seven rows are structural: title, status, exact scroll counts, separator,
-	// Custom, Chat, and the hint. At normal dock heights reserve two more rows
-	// for the current answer (label plus an optional description), then give the
-	// remaining bounded budget to the caller-controlled prompt.
-	promptBudget := maxInt(1, minInt(3, height-10))
+	// The normal dock has seven structural rows; fixed-option policy prompts
+	// omit Custom and Chat and therefore need only five.
+	structuralRows := 7
+	if d.request.OptionsOnly {
+		structuralRows = 5
+	}
+	promptBudget := maxInt(1, minInt(3, height-(structuralRows+3)))
 	promptLines := limitedWrappedLines(sanitizeTerminalText(d.request.Prompt), width, promptBudget)
 	answerLines, answerHeights := selectionAnswerRows(d, width)
-	answerBudget := maxInt(0, height-7-len(promptLines))
+	answerBudget := maxInt(0, height-structuralRows-len(promptLines))
 	start, end := d.visibleRange(answerHeights, answerBudget)
 	if start == end && answerBudget > 0 && len(answerLines) > 0 {
 		// A focused option may be taller than the available viewport because its
@@ -85,8 +91,10 @@ func (m appModel) renderSelectionDock(width, height int) string {
 
 	lines = append(lines, m.styles.StatusMuted.Render(truncateStyledCellLine(answerScrollLine(start, end, len(d.request.Options), width), width)))
 	lines = append(lines, m.styles.StatusMuted.Render(strings.Repeat("─", width)))
-	lines = append(lines, renderSelectionCustomAction(m, d, width))
-	lines = append(lines, renderSelectionChatAction(m, d, width))
+	if !d.request.OptionsOnly {
+		lines = append(lines, renderSelectionCustomAction(m, d, width))
+		lines = append(lines, renderSelectionChatAction(m, d, width))
+	}
 	hint := selectionDockHint(d)
 	if d.errorText != "" {
 		lines = append(lines, m.styles.StatusError.Render(truncateStyledCellLine(d.errorText, width)))

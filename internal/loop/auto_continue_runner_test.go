@@ -38,7 +38,7 @@ func TestRunTurnAutoContinuesUntilTodoCompletes(t *testing.T) {
 		{events: []model.StreamEvent{{Delta: `{"type":"tool_use","id":"todo-2","name":"update_todo","input":{"items":[{"id":"work","content":"finish work","status":"completed"}]}}`}, {Done: true}}},
 		{events: []model.StreamEvent{{Delta: "final answer"}, {Done: true}}},
 	}}
-	runner := NewRunner(model, &fakeUI{}, registry, nil, "")
+	runner := NewEngine(model, &fakeUI{}, registry, nil, "")
 	runner.SetTodoBroker(broker)
 
 	result, err := runner.RunTurn(context.Background(), "finish the work")
@@ -77,7 +77,7 @@ func TestAutoContinueModelRoundInputIsValid(t *testing.T) {
 func TestEvaluateCompletionTracksStaleTodoTurns(t *testing.T) {
 	broker := todo.NewBroker()
 	defer broker.Close()
-	runner := NewRunner(&autoContinueModel{}, &fakeUI{}, tool.NewRegistry(), nil, "")
+	runner := NewEngine(&autoContinueModel{}, &fakeUI{}, tool.NewRegistry(), nil, "")
 	runner.SetTodoBroker(broker)
 	runner.SetAutoContinueConfig(AutoContinueConfig{Enabled: true, BaseBudget: 100, AbsoluteMax: 100, MaxNoProgress: 100, StaleTodoThreshold: 3})
 

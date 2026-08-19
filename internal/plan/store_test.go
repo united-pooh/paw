@@ -74,6 +74,21 @@ func TestFileStoreRoundTrip(t *testing.T) {
 	}
 }
 
+func TestFileStorePreservesSessionIDInFrontMatter(t *testing.T) {
+	store := newTestStore(t)
+	doc := PlanDoc{ID: "session-plan", SessionID: "session-a", Title: "Scoped", Content: "# Scoped\n", Status: PlanDraft}
+	if err := store.Create(context.Background(), doc); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	loaded, ok, err := store.Get(context.Background(), doc.ID)
+	if err != nil || !ok {
+		t.Fatalf("Get = ok:%t err:%v", ok, err)
+	}
+	if loaded.SessionID != "session-a" {
+		t.Fatalf("SessionID = %q, want session-a", loaded.SessionID)
+	}
+}
+
 func TestFileStoreNextIDAppendsSuffix(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

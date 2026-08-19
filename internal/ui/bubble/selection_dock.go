@@ -200,9 +200,12 @@ func (d *selectionDock) setFocusPosition(position int) {
 		return
 	}
 	last := len(d.request.Options) + 1
+	if d.request.OptionsOnly {
+		last = maxInt(0, len(d.request.Options)-1)
+	}
 	position = clampInt(position, 0, last)
 	switch {
-	case position < len(d.request.Options):
+	case d.request.OptionsOnly || position < len(d.request.Options):
 		d.focus = selectionFocus{kind: selectionFocusAnswer, answerIndex: position}
 		d.lastAnswerIndex = position
 	case position == len(d.request.Options):
@@ -217,7 +220,11 @@ func (d *selectionDock) move(delta int) { d.setFocusPosition(d.focusPosition() +
 func (d *selectionDock) home()          { d.setFocusPosition(0) }
 func (d *selectionDock) end() {
 	if d != nil {
-		d.setFocusPosition(len(d.request.Options) + 1)
+		last := len(d.request.Options) + 1
+		if d.request.OptionsOnly {
+			last = maxInt(0, len(d.request.Options)-1)
+		}
+		d.setFocusPosition(last)
 	}
 }
 
@@ -304,6 +311,9 @@ func (d *selectionDock) cancel() selecttool.Result {
 }
 
 func (d *selectionDock) beginCustomEdit() {
+	if d == nil || d.request.OptionsOnly {
+		return
+	}
 	if d.request.Mode == selecttool.ModeMultiple && d.customLabel == "" && d.selectedCount() >= d.request.MaxSelect {
 		d.errorText = fmt.Sprintf("You can select at most %d %s.", d.request.MaxSelect, optionNoun(d.request.MaxSelect))
 		return
@@ -352,8 +362,14 @@ func (d *selectionDock) activateFocused() (selecttool.Result, bool) {
 	}
 	switch d.focus.kind {
 	case selectionFocusChat:
+		if d.request.OptionsOnly {
+			return selecttool.Result{}, false
+		}
 		return d.cancel(), true
 	case selectionFocusCustom:
+		if d.request.OptionsOnly {
+			return selecttool.Result{}, false
+		}
 		d.beginCustomEdit()
 		return selecttool.Result{}, false
 	case selectionFocusAnswer:

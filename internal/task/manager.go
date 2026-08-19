@@ -11,6 +11,7 @@ import (
 	coremcp "paw/internal/mcp"
 	"paw/internal/model"
 	"paw/internal/session"
+	"paw/internal/sessionactor"
 	"paw/internal/settings"
 	"paw/internal/skill"
 	"paw/internal/tokentracer"
@@ -20,7 +21,6 @@ import (
 	toolmcp "paw/internal/tool/mcp"
 	toolwebfetch "paw/internal/tool/webfetch"
 	"paw/internal/ui"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -73,28 +73,16 @@ type Manager struct {
 	maxDepth     int
 	parentTaskID string
 	mcpBroker    coremcp.Broker
+	actors       *taskActorHost
 
 	startMu sync.Mutex
 	mu      sync.RWMutex
-	tasks   map[string]TaskSnapshot
-	running map[string]Process
+	close   sync.Once
+	workers sync.WaitGroup
 
-	// notifyCh 广播任务状态转换。每次有任务进入终态（或启动失败）时在
-	// m.mu 内 close 并替换为新 channel，唤醒所有 TaskWait 等待者。
-	// WaitAny 每次迭代都在锁内获取引用并先检查终态，保证不丢失唤醒。
-	notifyCh chan struct{}
-
-	// taskUpdateSubs 接收任务状态变化通知，供 TUI 等实时消费者唤醒刷新。
-	// 通知只负责唤醒，消费者应通过 ListTasks 获取最新快照。
-	taskUpdateSubs map[chan struct{}]struct{}
-
-	// diskTaskCache avoids rescanning the task registry on every status poll.
-	// In-memory tasks are always merged so running/completed transitions remain
-	// immediately visible; disk changes are observed at most one TTL later.
-	diskTaskCacheAt time.Time
-	diskTaskCache   []TaskSnapshot
 	lastMCPSnapshot uint64
 	mcpSnapshotSet  bool
+	mcpStop         func()
 }
 
 type Request struct {
@@ -126,7 +114,6 @@ type Result struct {
 
 const (
 	streamEventBufferSize = 64
-	taskListCacheTTL      = 500 * time.Millisecond
 )
 
 type Stream struct {
@@ -234,25 +221,23 @@ type sinkUI struct{}
 var _ ui.UI = sinkUI{}
 
 func NewManager(cfg Config) *Manager {
+	registry := newTaskRegistry(cfg.Root)
 	m := &Manager{
-		model:          cfg.Model,
-		store:          cfg.Store,
-		root:           cfg.Root,
-		settings:       cfg.Settings,
-		notifier:       cfg.Notifier,
-		contextSink:    cfg.Context,
-		launcher:       cfg.Launcher,
-		tracer:         cfg.Tracer,
-		registry:       newTaskRegistry(cfg.Root),
-		depth:          cfg.Depth,
-		maxDepth:       cfg.MaxDepth,
-		parentTaskID:   strings.TrimSpace(cfg.ParentTaskID),
-		mcpBroker:      cfg.MCPBroker,
-		tasks:          make(map[string]TaskSnapshot),
-		running:        make(map[string]Process),
-		taskUpdateSubs: make(map[chan struct{}]struct{}),
-		notifyCh:       make(chan struct{}),
+		model:        cfg.Model,
+		store:        cfg.Store,
+		root:         cfg.Root,
+		settings:     cfg.Settings,
+		notifier:     cfg.Notifier,
+		contextSink:  cfg.Context,
+		launcher:     cfg.Launcher,
+		tracer:       cfg.Tracer,
+		registry:     registry,
+		depth:        cfg.Depth,
+		maxDepth:     cfg.MaxDepth,
+		parentTaskID: strings.TrimSpace(cfg.ParentTaskID),
+		mcpBroker:    cfg.MCPBroker,
 	}
+	m.actors = newTaskActorHost(cfg.Root, registry)
 	if m.maxDepth <= 0 {
 		m.maxDepth = 4
 	}
@@ -266,61 +251,79 @@ func NewManager(cfg Config) *Manager {
 		Subscribe() (<-chan coremcp.Snapshot, func())
 	}); ok {
 		updates, stopUpdates := subscriber.Subscribe()
-		go m.forwardMCPSnapshots(updates, stopUpdates)
+		m.mcpStop = stopUpdates
+		m.workers.Add(1)
+		go func() {
+			defer m.workers.Done()
+			m.forwardMCPSnapshots(updates, stopUpdates)
+		}()
 	}
 	// 孤儿回收：上一实例异常退出后磁盘上残留 running 的任务（进程已死）
 	// 立即转为 interrupted 终态，避免任务卡/活动面板/RunningTasks 把它们
 	// 当作运行中，也避免 TaskWait 对僵尸 id 一直等到超时。
+	m.importLegacyTasks(context.Background())
 	m.reconcileOrphanedTasks(context.Background())
 	return m
 }
 
-// reconcileOrphanedTasks 把磁盘上 status=running 但 worker 进程已不存在的
-// 任务标记为 TaskInterrupted 并写盘。本实例内存中的任务（m.tasks）不受影响；
-// PID 存活检查保证多实例场景下不会误杀其他实例仍在运行的任务。
-// 回收是尽力而为的：任何磁盘/进程检查失败都跳过，不影响 Manager 启动。
-func (m *Manager) reconcileOrphanedTasks(ctx context.Context) {
-	if m == nil || m.registry.root == "" {
+func (m *Manager) Close() error {
+	if m == nil {
+		return nil
+	}
+	m.close.Do(func() {
+		if m.mcpStop != nil {
+			m.mcpStop()
+		}
+		m.workers.Wait()
+		m.actors.close()
+	})
+	return nil
+}
+
+func (m *Manager) importLegacyTasks(ctx context.Context) {
+	if m == nil || m.actors == nil || m.registry.root == "" {
 		return
 	}
-	diskTasks, err := m.registry.listTasks(ctx)
+	tasks, err := m.registry.listTasks(ctx)
 	if err != nil {
 		return
 	}
-	m.mu.RLock()
-	inMemory := make(map[string]bool, len(m.tasks))
-	for id := range m.tasks {
-		inMemory[id] = true
+	for _, task := range tasks {
+		actorTask, found, statusErr := m.actors.status(ctx, task.ID)
+		if statusErr != nil {
+			continue
+		}
+		if found {
+			_ = m.registry.saveTask(ctx, actorTask)
+			continue
+		}
+		_ = m.actors.record(ctx, taskEventForStatus(task.Status), task)
 	}
-	m.mu.RUnlock()
+}
 
-	now := time.Now().UTC()
-	reconciled := false
-	for _, task := range diskTasks {
-		if task.Status != TaskRunning || inMemory[task.ID] {
+// reconcileOrphanedTasks 把磁盘上 status=running 但 worker 进程已不存在的
+// 任务标记为 TaskInterrupted 并写盘。本实例 Host 中仍有进程句柄的任务不受影响；
+// PID 存活检查保证多实例场景下不会误杀其他实例仍在运行的任务。
+// 回收是尽力而为的：任何磁盘/进程检查失败都跳过，不影响 Manager 启动。
+func (m *Manager) reconcileOrphanedTasks(ctx context.Context) {
+	if m == nil || m.actors == nil || m.registry.root == "" {
+		return
+	}
+	tasks, err := m.actors.list(ctx)
+	if err != nil {
+		return
+	}
+	for _, task := range tasks {
+		_ = m.registry.saveTask(ctx, task)
+		if task.Status != TaskRunning || m.actors.hasActiveTask(task.ID) {
 			continue
 		}
 		// 有存活 PID（可能是其他 paw 实例正在运行的任务）→ 保持 running。
 		if task.PID > 0 && processAlive(task.PID) {
 			continue
 		}
-		task.Status = TaskInterrupted
-		task.FinishedAt = &now
-		exitCode := -1
-		task.ExitCode = &exitCode
-		task.Error = "interrupted: worker process exited unexpectedly"
-		if err := m.registry.saveTask(ctx, task); err != nil {
-			continue
-		}
-		reconciled = true
+		_, _, _ = m.actors.stop(ctx, task.ID, TaskInterrupted, "interrupted: worker process exited unexpectedly")
 	}
-	if !reconciled {
-		return
-	}
-	m.mu.Lock()
-	m.diskTaskCache = nil
-	m.diskTaskCacheAt = time.Time{}
-	m.mu.Unlock()
 }
 
 func (m *Manager) forwardMCPSnapshots(updates <-chan coremcp.Snapshot, stop func()) {
@@ -331,13 +334,7 @@ func (m *Manager) forwardMCPSnapshots(updates <-chan coremcp.Snapshot, stop func
 		if m.snapshotAlreadyForwarded(snapshot) {
 			continue
 		}
-		m.mu.RLock()
-		processes := make([]Process, 0, len(m.running))
-		for _, process := range m.running {
-			processes = append(processes, process)
-		}
-		m.mu.RUnlock()
-		for _, process := range processes {
+		for _, process := range m.actors.runningProcesses() {
 			if updater, ok := process.(interface{ UpdateMCPSnapshot(coremcp.Snapshot) error }); ok {
 				_ = updater.UpdateMCPSnapshot(snapshot)
 			}
@@ -466,29 +463,28 @@ func (m *Manager) Stop(ctx context.Context, id string) (TaskSnapshot, error) {
 		return TaskSnapshot{}, fmt.Errorf("task task id is required")
 	}
 
-	m.mu.RLock()
-	process := m.running[id]
-	task, taskOK := m.tasks[id]
-	m.mu.RUnlock()
-	if !taskOK {
-		var loadErr error
-		task, taskOK, loadErr = m.registry.loadTask(ctx, id)
-		if loadErr != nil {
-			return TaskSnapshot{}, loadErr
-		}
-	}
+	task, taskOK := m.Status(id)
 	if !taskOK {
 		return TaskSnapshot{}, fmt.Errorf("task task not found: %s", id)
 	}
 	if task.Status != TaskRunning {
 		return task, fmt.Errorf("task task %s is not running (status=%s)", id, task.Status)
 	}
-	if process != nil {
-		_ = process.Stop()
+	if actorTask, actorOK, actorErr := m.actors.status(ctx, id); actorErr != nil {
+		return TaskSnapshot{}, actorErr
+	} else if !actorOK {
+		if err := m.actors.record(ctx, taskEventStarted, task); err != nil {
+			return TaskSnapshot{}, err
+		}
+	} else {
+		task = actorTask
 	}
-	stopped, changed := m.transitionTaskStopped(ctx, id, TaskStopped, "stopped")
-	if !changed {
-		return stopped, fmt.Errorf("task task %s is not running (status=%s)", id, stopped.Status)
+	stopped, changed, err := m.actors.stop(ctx, id, TaskStopped, "stopped")
+	if err != nil {
+		return stopped, err
+	}
+	if changed {
+		m.recordTaskFinished(stopped)
 	}
 	m.notifyTaskFinished(stopped)
 	return stopped, nil
@@ -514,56 +510,18 @@ func (m *Manager) StopOwnedTasks(ctx context.Context, parentSessionID, parentTur
 		reason = "interrupted: parent turn ended unexpectedly"
 	}
 
-	type ownedProcess struct {
-		id      string
-		process Process
+	owned, err := m.actors.owned(ctx, parentSessionID, parentTurnID)
+	if err != nil {
+		return
 	}
-	m.mu.RLock()
-	owned := make([]ownedProcess, 0)
-	for id, task := range m.tasks {
-		if task.Status == TaskRunning && task.RunMode == settings.RunModeBackground &&
-			task.ParentSessionID == parentSessionID && task.ParentTurnID == parentTurnID {
-			owned = append(owned, ownedProcess{id: id, process: m.running[id]})
+	for _, task := range owned {
+		stopped, changed, stopErr := m.actors.stop(ctx, task.ID, TaskInterrupted, reason)
+		if stopErr != nil || !changed {
+			continue
 		}
+		m.recordTaskFinished(stopped)
+		m.notifyTaskFinished(stopped)
 	}
-	m.mu.RUnlock()
-
-	for _, item := range owned {
-		if item.process != nil {
-			_ = item.process.Stop()
-		}
-		if task, changed := m.transitionTaskStopped(ctx, item.id, TaskInterrupted, reason); changed {
-			m.notifyTaskFinished(task)
-		}
-	}
-}
-
-func (m *Manager) transitionTaskStopped(ctx context.Context, id string, status TaskStatus, reason string) (TaskSnapshot, bool) {
-	now := time.Now().UTC()
-	exitCode := -1
-	m.mu.Lock()
-	task := m.tasks[id]
-	if task.Status != TaskRunning {
-		delete(m.running, id)
-		m.mu.Unlock()
-		return task, false
-	}
-	if status != TaskStopped && status != TaskInterrupted {
-		status = TaskInterrupted
-	}
-	task.Status = status
-	task.FinishedAt = &now
-	task.ExitCode = &exitCode
-	task.Error = reason
-	m.tasks[id] = task
-	delete(m.running, id)
-	m.mu.Unlock()
-
-	_ = m.registry.saveOutput(ctx, id, WorkerResult{TaskID: id, SessionID: task.SessionID, Error: reason, ExitCode: exitCode})
-	_ = m.registry.saveTask(ctx, task)
-	m.signalTaskUpdate()
-	m.recordTaskFinished(task)
-	return task, true
 }
 
 // SubscribeTaskUpdates returns a wakeup stream for task status changes. The
@@ -575,40 +533,7 @@ func (m *Manager) SubscribeTaskUpdates() (<-chan struct{}, func()) {
 		close(closed)
 		return closed, func() {}
 	}
-	ch := make(chan struct{}, 1)
-	m.mu.Lock()
-	if m.taskUpdateSubs == nil {
-		m.taskUpdateSubs = make(map[chan struct{}]struct{})
-	}
-	m.taskUpdateSubs[ch] = struct{}{}
-	m.mu.Unlock()
-	return ch, func() {
-		m.mu.Lock()
-		if _, ok := m.taskUpdateSubs[ch]; ok {
-			delete(m.taskUpdateSubs, ch)
-			close(ch)
-		}
-		m.mu.Unlock()
-	}
-}
-
-// signalTaskUpdate 唤醒所有阻塞在 WaitAny 上的等待者。必须在任务状态
-// 已切换为终态之后调用；close 与替换都在 m.mu 内完成，等待者每次迭代
-// 也在锁内获取 channel 引用，因此不会丢失唤醒也不会读到已关闭的旧 channel。
-func (m *Manager) signalTaskUpdate() {
-	if m == nil {
-		return
-	}
-	m.mu.Lock()
-	close(m.notifyCh)
-	m.notifyCh = make(chan struct{})
-	for ch := range m.taskUpdateSubs {
-		select {
-		case ch <- struct{}{}:
-		default:
-		}
-	}
-	m.mu.Unlock()
+	return m.actors.subscribe()
 }
 
 // WaitAny 阻塞直到任意一个给定任务进入终态（completed/failed/stopped）或
@@ -635,67 +560,16 @@ func (m *Manager) WaitAny(ctx context.Context, ids []string, timeout time.Durati
 		return WaitResult{}, fmt.Errorf("at least one task task id is required")
 	}
 
-	// 磁盘加载过的任务快照，避免每次迭代读盘。
-	loaded := make(map[string]TaskSnapshot, len(targets))
-	notFound := make(map[string]bool, len(targets))
 	deadline := time.Now().Add(timeout)
-
-	snapshot := func() WaitResult {
-		m.mu.RLock()
-		defer m.mu.RUnlock()
-		tasks := make([]TaskSummary, 0, len(targets))
-		anyTerminal := false
-		allSettled := true
-		for _, id := range targets {
-			if task, ok := m.tasks[id]; ok {
-				tasks = append(tasks, summarizeTask(task))
-				if isTerminalStatus(task.Status) {
-					anyTerminal = true
-				} else {
-					allSettled = false
-				}
-				continue
-			}
-			if task, ok := loaded[id]; ok {
-				tasks = append(tasks, summarizeTask(task))
-				if isTerminalStatus(task.Status) {
-					anyTerminal = true
-				} else {
-					allSettled = false
-				}
-				continue
-			}
-			if notFound[id] {
-				tasks = append(tasks, TaskSummary{ID: id, Status: TaskNotFound, NotFound: true})
-				continue
-			}
-			// 既不在内存也不在本地缓存：尝试从磁盘加载一次（宽容处理，
-			// 例如父进程重启后等待历史任务）。加载失败视为 not_found。
-			m.mu.RUnlock()
-			task, ok := m.Status(id)
-			m.mu.RLock()
-			if !ok {
-				notFound[id] = true
-				tasks = append(tasks, TaskSummary{ID: id, Status: TaskNotFound, NotFound: true})
-				continue
-			}
-			loaded[id] = task
-			tasks = append(tasks, summarizeTask(task))
-			if isTerminalStatus(task.Status) {
-				anyTerminal = true
-			} else {
-				allSettled = false
-			}
-		}
-		if allSettled {
-			anyTerminal = true
-		}
-		return WaitResult{TimedOut: false, Tasks: tasks, AnyTerminal: anyTerminal}
-	}
+	updates, cancel := m.actors.subscribe()
+	defer cancel()
 
 	remaining := timeout
 	for {
-		result := snapshot()
+		result, err := m.actors.waitSnapshot(ctx, targets)
+		if err != nil {
+			return WaitResult{}, err
+		}
 		if result.AnyTerminal {
 			return result, nil
 		}
@@ -704,18 +578,21 @@ func (m *Manager) WaitAny(ctx context.Context, ids []string, timeout time.Durati
 			result.AnyTerminal = false
 			return result, nil
 		}
-		m.mu.RLock()
-		ch := m.notifyCh
-		m.mu.RUnlock()
 		timer := time.NewTimer(remaining)
 		select {
-		case <-ch:
+		case _, ok := <-updates:
 			timer.Stop()
+			if !ok {
+				return WaitResult{}, fmt.Errorf("task manager is closed")
+			}
 			// 重新检查状态；循环顶部会重算剩余时间。
 			remaining = time.Until(deadline)
 			if remaining <= 0 {
-				result := snapshot()
-				result.TimedOut = true
+				result, err := m.actors.waitSnapshot(ctx, targets)
+				if err != nil {
+					return WaitResult{}, err
+				}
+				result.TimedOut = !result.AnyTerminal
 				return result, nil
 			}
 			continue
@@ -723,8 +600,11 @@ func (m *Manager) WaitAny(ctx context.Context, ids []string, timeout time.Durati
 			timer.Stop()
 			return WaitResult{}, ctx.Err()
 		case <-timer.C:
-			result := snapshot()
-			result.TimedOut = true
+			result, err := m.actors.waitSnapshot(ctx, targets)
+			if err != nil {
+				return WaitResult{}, err
+			}
+			result.TimedOut = !result.AnyTerminal
 			return result, nil
 		}
 	}
@@ -739,7 +619,7 @@ func isTerminalStatus(status TaskStatus) bool {
 	}
 }
 
-// RunningTasks 返回当前所有运行中任务的摘要列表（仅内存+磁盘中 running 的任务）。
+// RunningTasks 返回 RegistryActor 投影中的全部运行中任务。
 func (m *Manager) RunningTasks() []TaskSnapshot {
 	if m == nil {
 		return nil
@@ -755,14 +635,14 @@ func (m *Manager) RunningTasks() []TaskSnapshot {
 }
 
 func (m *Manager) Status(id string) (TaskSnapshot, bool) {
-	id = strings.TrimSpace(id)
-	m.mu.RLock()
-	task, ok := m.tasks[id]
-	m.mu.RUnlock()
-	if ok {
-		return task, true
+	if m == nil {
+		return TaskSnapshot{}, false
 	}
-	task, ok, err := m.registry.loadTask(context.Background(), id)
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return TaskSnapshot{}, false
+	}
+	task, ok, err := m.actors.status(context.Background(), id)
 	if err != nil {
 		return TaskSnapshot{}, false
 	}
@@ -770,38 +650,13 @@ func (m *Manager) Status(id string) (TaskSnapshot, bool) {
 }
 
 func (m *Manager) ListTasks() []TaskSnapshot {
-	now := time.Now()
-	m.mu.RLock()
-	tasksByID := make(map[string]TaskSnapshot, len(m.tasks))
-	for _, task := range m.tasks {
-		tasksByID[task.ID] = task
+	if m == nil {
+		return nil
 	}
-	diskTasks := append([]TaskSnapshot(nil), m.diskTaskCache...)
-	cacheFresh := !m.diskTaskCacheAt.IsZero() && now.Sub(m.diskTaskCacheAt) < taskListCacheTTL
-	m.mu.RUnlock()
-
-	if !cacheFresh {
-		if loaded, err := m.registry.listTasks(context.Background()); err == nil {
-			diskTasks = loaded
-			m.mu.Lock()
-			m.diskTaskCache = append([]TaskSnapshot(nil), loaded...)
-			m.diskTaskCacheAt = now
-			m.mu.Unlock()
-		}
+	tasks, err := m.actors.list(context.Background())
+	if err != nil {
+		return nil
 	}
-	for _, task := range diskTasks {
-		if _, ok := tasksByID[task.ID]; !ok {
-			tasksByID[task.ID] = task
-		}
-	}
-
-	tasks := make([]TaskSnapshot, 0, len(tasksByID))
-	for _, task := range tasksByID {
-		tasks = append(tasks, task)
-	}
-	sort.Slice(tasks, func(i, j int) bool {
-		return tasks[i].StartedAt.Before(tasks[j].StartedAt)
-	})
 	return tasks
 }
 
@@ -811,13 +666,9 @@ func (m *Manager) TotalTaskTokens(parentSessionID string) int {
 	if m == nil || parentSessionID == "" {
 		return 0
 	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	total := 0
-	for _, task := range m.tasks {
-		if task.ParentSessionID == parentSessionID {
-			total += task.UsedTokens
-		}
+	total, err := m.actors.totalTokens(context.Background(), parentSessionID)
+	if err != nil {
+		return 0
 	}
 	return total
 }
@@ -939,10 +790,9 @@ func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Pro
 		workerReq.MCPSnapshot = m.mcpBroker.Snapshot()
 	}
 
-	if err := m.registry.saveTask(ctx, task); err != nil {
+	if err := m.actors.record(ctx, taskEventCreated, task); err != nil {
 		return TaskSnapshot{}, nil, err
 	}
-	m.setTask(task)
 
 	process, err := m.launcher.Start(ctx, workerReq)
 	if err != nil {
@@ -952,15 +802,13 @@ func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Pro
 		exitCode := 1
 		task.FinishedAt = &now
 		task.ExitCode = &exitCode
-		m.setTask(task)
-		_ = m.registry.saveTask(ctx, task)
 		_ = m.registry.saveOutput(ctx, task.ID, WorkerResult{
 			TaskID:    task.ID,
 			SessionID: task.SessionID,
 			Error:     task.Error,
 			ExitCode:  exitCode,
 		})
-		m.signalTaskUpdate()
+		_, _, _ = m.actors.transition(ctx, taskEventFailed, task)
 		return TaskSnapshot{}, nil, err
 	}
 	task.PID = process.PID()
@@ -973,11 +821,9 @@ func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Pro
 			task.Color = color
 		}
 	}
-	m.mu.Lock()
-	m.tasks[task.ID] = task
-	m.running[task.ID] = process
-	m.mu.Unlock()
-	if err := m.registry.saveTask(ctx, task); err != nil {
+	m.actors.bind(task.ID, process)
+	if err := m.actors.record(ctx, taskEventStarted, task); err != nil {
+		m.actors.release(task.ID)
 		_ = process.Stop()
 		now := time.Now().UTC()
 		exitCode := 1
@@ -985,18 +831,13 @@ func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Pro
 		task.Error = err.Error()
 		task.FinishedAt = &now
 		task.ExitCode = &exitCode
-		m.mu.Lock()
-		m.tasks[task.ID] = task
-		delete(m.running, task.ID)
-		m.mu.Unlock()
 		_ = m.registry.saveOutput(ctx, task.ID, WorkerResult{
 			TaskID:    task.ID,
 			SessionID: task.SessionID,
 			Error:     task.Error,
 			ExitCode:  exitCode,
 		})
-		_ = m.registry.saveTask(ctx, task)
-		m.signalTaskUpdate()
+		_, _, _ = m.actors.transition(ctx, taskEventFailed, task)
 		return TaskSnapshot{}, nil, err
 	}
 	m.recordTaskStarted(task)
@@ -1044,10 +885,13 @@ func (m *Manager) startStreamingTask(ctx context.Context, req Request) (TaskSnap
 		StartedAt:       time.Now().UTC(),
 	}
 
-	if err := m.registry.saveTask(ctx, task); err != nil {
+	if err := m.actors.record(ctx, taskEventCreated, task); err != nil {
 		return TaskSnapshot{}, err
 	}
-	m.setTask(task)
+	if err := m.actors.record(ctx, taskEventStarted, task); err != nil {
+		return TaskSnapshot{}, err
+	}
+	m.actors.track(task.ID)
 	m.recordTaskStarted(task)
 	return task, nil
 }
@@ -1083,17 +927,10 @@ func (m *Manager) waitBackground(taskID string, process Process) {
 }
 
 func (m *Manager) finishTask(ctx context.Context, taskID string, result WorkerResult, err error) (TaskSnapshot, bool) {
+	m.actors.release(taskID)
 	now := time.Now().UTC()
-	m.mu.Lock()
-	task := m.tasks[taskID]
-	if task.ID == "" {
-		task.ID = taskID
-		task.SessionID = result.SessionID
-		task.OutputPath = m.registry.outputPath(taskID)
-	}
-	if task.Status != TaskRunning {
-		delete(m.running, taskID)
-		m.mu.Unlock()
+	task, found, statusErr := m.actors.status(ctx, taskID)
+	if statusErr != nil || !found || task.Status != TaskRunning {
 		return task, false
 	}
 	exitCode := result.ExitCode
@@ -1123,20 +960,12 @@ func (m *Manager) finishTask(ctx context.Context, taskID string, result WorkerRe
 	} else {
 		task.Status = TaskCompleted
 	}
-	// Claim the terminal transition while holding the manager lock. Stop and
-	// owner cleanup can no longer race in after Wait has selected a terminal
-	// result and overwrite (or be overwritten by) that result.
-	m.tasks[taskID] = task
-	delete(m.running, taskID)
-
-	// Persist before releasing the transition to observers. This is a short,
-	// bounded local write and ensures a consumer awakened by signalTaskUpdate can
-	// immediately read the matching output artifact and metadata.
 	_ = m.registry.saveOutput(ctx, taskID, result)
-	_ = m.registry.saveTask(ctx, task)
-	m.mu.Unlock()
-
-	m.signalTaskUpdate()
+	transitioned, changed, transitionErr := m.actors.transition(ctx, taskEventForStatus(task.Status), task)
+	if transitionErr != nil || !changed {
+		return transitioned, false
+	}
+	task = transitioned
 	m.submitTaskContext(task)
 	m.recordTaskFinished(task)
 	return task, true
@@ -1230,9 +1059,18 @@ func (m *Manager) ensureSessionExists(ctx context.Context, sessionID string) err
 
 func (m *Manager) runSession(ctx context.Context, sessionID, prompt string, disableTools bool) (string, int, *tokentracer.Usage, error) {
 	usageUI := &usageSinkUI{}
-	runner := loop.NewRunnerWithInstructionRoot(m.model, usageUI, m.toolRegistry(disableTools), m.store, sessionID, m.root)
-	msg, err := runner.RunTurn(ctx, prompt)
-	usedTokens := runner.ContextStats(1<<30, "").UsedTokens
+	store, ok := m.store.(*session.JSONLStore)
+	if !ok {
+		return "", 0, nil, fmt.Errorf("task session actor requires JSONL session store")
+	}
+	engine := loop.NewEngineWithInstructionRoot(m.model, usageUI, m.toolRegistry(disableTools), m.store, sessionID, m.root)
+	host, err := sessionactor.NewHost(engine, store, sessionID)
+	if err != nil {
+		return "", 0, nil, err
+	}
+	defer host.Close()
+	msg, err := host.RunTurn(ctx, prompt)
+	usedTokens := engine.ContextStats(1<<30, "").UsedTokens
 	usage := usageUI.Usage()
 	if err != nil {
 		return "", usedTokens, usage, err
@@ -1242,13 +1080,22 @@ func (m *Manager) runSession(ctx context.Context, sessionID, prompt string, disa
 
 func (m *Manager) runStreamingSession(ctx context.Context, sessionID, prompt, systemPrompt string, disableTools bool, events chan<- model.StreamEvent) (string, int, *tokentracer.Usage, bool, error) {
 	streamUI := &streamingUI{ctx: ctx, events: events}
-	runner := loop.NewRunnerWithInstructionRoot(m.model, streamUI, m.toolRegistry(disableTools), m.store, sessionID, m.root)
-	runner.SetSystemSupplement(systemPrompt)
-	if isStreamMASystemPrompt(systemPrompt) {
-		runner.SetCompactToolPrompt(true)
+	store, ok := m.store.(*session.JSONLStore)
+	if !ok {
+		return "", 0, nil, false, fmt.Errorf("task session actor requires JSONL session store")
 	}
-	msg, err := runner.RunTurn(ctx, prompt)
-	usedTokens := runner.ContextStats(1<<30, "").UsedTokens
+	engine := loop.NewEngineWithInstructionRoot(m.model, streamUI, m.toolRegistry(disableTools), m.store, sessionID, m.root)
+	engine.SetSystemSupplement(systemPrompt)
+	if isStreamMASystemPrompt(systemPrompt) {
+		engine.SetCompactToolPrompt(true)
+	}
+	host, err := sessionactor.NewHost(engine, store, sessionID)
+	if err != nil {
+		return "", 0, nil, false, err
+	}
+	defer host.Close()
+	msg, err := host.RunTurn(ctx, prompt)
+	usedTokens := engine.ContextStats(1<<30, "").UsedTokens
 	usage := streamUI.Usage()
 	done := streamUI.Done()
 	if err != nil {
@@ -1277,12 +1124,6 @@ func (m *Manager) runWorkerInProcess(ctx context.Context, req WorkerRequest) (Wo
 		return result, err
 	}
 	return result, nil
-}
-
-func (m *Manager) setTask(task TaskSnapshot) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.tasks[task.ID] = task
 }
 
 func (m *Manager) currentTokenTracer() *tokentracer.Tracer {

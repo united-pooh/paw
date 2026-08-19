@@ -7,7 +7,6 @@ import (
 	"paw/internal/message"
 	"paw/internal/model"
 	"paw/internal/tokentracer"
-	"paw/internal/ui"
 	"strings"
 )
 
@@ -17,7 +16,7 @@ const (
 	maxContinuationOverlapRunes   = 512
 )
 
-func (runner *Runner) runModelTurn(ctx context.Context, history []message.Message, turn *TurnState) (message.Message, error) {
+func (runner *Engine) runModelTurn(ctx context.Context, history []message.Message, turn *TurnState) (message.Message, error) {
 	var tools []model.ToolDefinition
 	if runner.registry != nil {
 		tools = runner.registry.Definitions()
@@ -113,7 +112,7 @@ func buildLengthContinuationMessages(base []message.Message, accumulated string)
 	return messages
 }
 
-func (runner *Runner) buildModelMessages(ctx context.Context, history []message.Message, turn *TurnState) ([]message.Message, error) {
+func (runner *Engine) buildModelMessages(ctx context.Context, history []message.Message, turn *TurnState) ([]message.Message, error) {
 	messages := make([]message.Message, 0, len(history)+1)
 	messages = append(messages, buildSystemMessage(runner.buildSystemPromptForTurn(turn)))
 	for _, msg := range history {
@@ -131,7 +130,7 @@ func (runner *Runner) buildModelMessages(ctx context.Context, history []message.
 	return messages, nil
 }
 
-func (runner *Runner) persistInputAttachments(ctx context.Context, input *message.Message) error {
+func (runner *Engine) persistInputAttachments(ctx context.Context, input *message.Message) error {
 	if input == nil || len(input.Parts) == 0 {
 		return nil
 	}
@@ -159,7 +158,7 @@ func (runner *Runner) persistInputAttachments(ctx context.Context, input *messag
 	return nil
 }
 
-func (runner *Runner) materializeAttachments(ctx context.Context, msg *message.Message) error {
+func (runner *Engine) materializeAttachments(ctx context.Context, msg *message.Message) error {
 	if msg == nil || len(msg.Parts) == 0 {
 		return nil
 	}
@@ -189,11 +188,11 @@ func (runner *Runner) materializeAttachments(ctx context.Context, msg *message.M
 	return nil
 }
 
-func (runner *Runner) buildSystemPrompt() string {
+func (runner *Engine) buildSystemPrompt() string {
 	return runner.buildSystemPromptForTurn(nil)
 }
 
-func (runner *Runner) buildSystemPromptForTurn(turn *TurnState) string {
+func (runner *Engine) buildSystemPromptForTurn(turn *TurnState) string {
 	descriptions := []string{}
 	if runner.registry != nil {
 		compactToolPrompt := runner.compact.toolPrompt()
@@ -294,7 +293,7 @@ func marshalJSON(v any) string {
 	return string(data)
 }
 
-func (runner *Runner) consumeStream(ctx context.Context, events <-chan model.StreamEvent, state *turnState, finalizeOnDone bool) (message.Message, model.FinishReason, error) {
+func (runner *Engine) consumeStream(ctx context.Context, events <-chan model.StreamEvent, state *turnState, finalizeOnDone bool) (message.Message, model.FinishReason, error) {
 	for ev := range events {
 		state.streamEstablished = true
 		msg, finishReason, done, err := runner.handleEvent(state, ev, finalizeOnDone)
@@ -313,7 +312,7 @@ func (runner *Runner) consumeStream(ctx context.Context, events <-chan model.Str
 	return msg, "", err
 }
 
-func (runner *Runner) handleEvent(state *turnState, ev model.StreamEvent, finalizeOnDone bool) (message.Message, model.FinishReason, bool, error) {
+func (runner *Engine) handleEvent(state *turnState, ev model.StreamEvent, finalizeOnDone bool) (message.Message, model.FinishReason, bool, error) {
 	if ev.Err != nil {
 		if err := runner.flushContinuationOverlap(state); err != nil {
 			return runner.partialAssistantMessage(state), "", false, err
@@ -384,7 +383,7 @@ func (runner *Runner) handleEvent(state *turnState, ev model.StreamEvent, finali
 	return msg, ev.FinishReason, true, nil
 }
 
-func (runner *Runner) handleAssistantPartEvent(state *turnState, event *model.AssistantPartEvent) error {
+func (runner *Engine) handleAssistantPartEvent(state *turnState, event *model.AssistantPartEvent) error {
 	if state.parts == nil {
 		state.parts = newPartAccumulator()
 	}
@@ -444,12 +443,12 @@ func (runner *Runner) handleAssistantPartEvent(state *turnState, event *model.As
 	return nil
 }
 
-func (runner *Runner) beginUsageRequest(state *turnState) {
+func (runner *Engine) beginUsageRequest(state *turnState) {
 	state.requestUsage = model.Usage{}
 	state.requestUsageKnown = false
 }
 
-func (runner *Runner) recordUsageEvent(state *turnState, usage model.Usage) {
+func (runner *Engine) recordUsageEvent(state *turnState, usage model.Usage) {
 	previousTrace := tokentracer.UsageFromModelUsage(state.usage)
 	requestPrevious := usageTotalsFromUsage(state.requestUsage, state.requestUsageKnown)
 	state.requestUsage = mergeUsageSnapshot(state.requestUsage, usage)
@@ -468,22 +467,18 @@ func (runner *Runner) recordUsageEvent(state *turnState, usage model.Usage) {
 	})
 }
 
-func (runner *Runner) emitModelUsage(usage model.Usage) {
-	if runner == nil || runner.ui == nil {
+func (runner *Engine) emitModelUsage(usage model.Usage) {
+	if runner == nil || runner.display == nil {
 		return
 	}
-	receiver, ok := runner.ui.(modelUsageReceiver)
-	if !ok {
-		return
-	}
-	receiver.OnModelUsage(usage)
+	_ = runner.display.Publish(DisplayEvent{Kind: DisplayModelUsage, Usage: usage})
 }
 
-func (runner *Runner) setCurrentUsage(usage model.Usage) {
+func (runner *Engine) setCurrentUsage(usage model.Usage) {
 	runner.usage.setCurrent(usage)
 }
 
-func (runner *Runner) addSessionUsage(delta tokenUsageTotals) {
+func (runner *Engine) addSessionUsage(delta tokenUsageTotals) {
 	runner.usage.addSession(delta)
 }
 
@@ -622,7 +617,7 @@ func maxInt(a, b int) int {
 	return b
 }
 
-func (runner *Runner) appendDelta(state *turnState, delta string) error {
+func (runner *Engine) appendDelta(state *turnState, delta string) error {
 	if delta == "" {
 		return nil
 	}
@@ -637,7 +632,7 @@ func (runner *Runner) appendDelta(state *turnState, delta string) error {
 	return runner.appendResolvedDelta(state, delta)
 }
 
-func (runner *Runner) appendResolvedDelta(state *turnState, delta string) error {
+func (runner *Engine) appendResolvedDelta(state *turnState, delta string) error {
 	if delta == "" {
 		return nil
 	}
@@ -685,12 +680,12 @@ const (
 	toolPayloadCandidateSuppress
 )
 
-func (runner *Runner) appendToolPayloadCandidateDelta(state *turnState, delta string) error {
+func (runner *Engine) appendToolPayloadCandidateDelta(state *turnState, delta string) error {
 	state.toolPayload.buffer.WriteString(delta)
 	return runner.resolveToolPayloadCandidate(state, false)
 }
 
-func (runner *Runner) resolveToolPayloadCandidate(state *turnState, final bool) error {
+func (runner *Engine) resolveToolPayloadCandidate(state *turnState, final bool) error {
 	if state == nil || !state.toolPayload.active {
 		return nil
 	}
@@ -802,7 +797,7 @@ func continuationBufferRuneLen(overlap *continuationOverlapState) int {
 	return len([]rune(overlap.buffer.String()))
 }
 
-func (runner *Runner) flushContinuationOverlap(state *turnState) error {
+func (runner *Engine) flushContinuationOverlap(state *turnState) error {
 	if state == nil || !state.overlap.active {
 		return nil
 	}
@@ -919,7 +914,7 @@ func looksLikeToolPreamble(trimmed string) bool {
 	return false
 }
 
-func (runner *Runner) appendThinking(state *turnState, thinking string) error {
+func (runner *Engine) appendThinking(state *turnState, thinking string) error {
 	if thinking == "" {
 		return nil
 	}
@@ -931,15 +926,10 @@ func (runner *Runner) appendThinking(state *turnState, thinking string) error {
 		"text":  thinking,
 		"bytes": len([]byte(thinking)),
 	})
-	if sink, ok := runner.ui.(ui.ThinkingDeltaReceiver); ok {
-		if err := sink.OnThinkingDelta(thinking); err != nil {
-			return err
-		}
-	}
-	return nil
+	return runner.display.Publish(DisplayEvent{Kind: DisplayThinkingDelta, Text: thinking})
 }
 
-func (runner *Runner) ensureLegacyAssistantPart(state *turnState, partType message.AssistantPartType) {
+func (runner *Engine) ensureLegacyAssistantPart(state *turnState, partType message.AssistantPartType) {
 	if state == nil {
 		return
 	}
@@ -960,7 +950,7 @@ func (runner *Runner) ensureLegacyAssistantPart(state *turnState, partType messa
 	state.parts.openPart(state.legacyActiveIndex, partType)
 }
 
-func (runner *Runner) finalizeLegacyAssistantPart(state *turnState) {
+func (runner *Engine) finalizeLegacyAssistantPart(state *turnState) {
 	if state == nil || state.parts == nil || state.legacyActiveType == "" {
 		return
 	}
@@ -968,13 +958,13 @@ func (runner *Runner) finalizeLegacyAssistantPart(state *turnState) {
 	state.legacyActiveType = ""
 }
 
-func (runner *Runner) sendReasoningStart(state *turnState, blockIndex int, redacted bool) {
-	if sink, ok := runner.ui.(ui.AssistantPartReceiver); ok {
-		_ = sink.OnReasoningStart(blockIndex, redacted)
+func (runner *Engine) sendReasoningStart(state *turnState, blockIndex int, redacted bool) {
+	if runner.display != nil {
+		_ = runner.display.Publish(DisplayEvent{Kind: DisplayReasoningStart, PartIndex: blockIndex, Redacted: redacted})
 	}
 }
 
-func (runner *Runner) sendReasoningDelta(state *turnState, blockIndex int, text string) {
+func (runner *Engine) sendReasoningDelta(state *turnState, blockIndex int, text string) {
 	if text == "" {
 		return
 	}
@@ -982,18 +972,18 @@ func (runner *Runner) sendReasoningDelta(state *turnState, blockIndex int, text 
 		"text":  text,
 		"bytes": len([]byte(text)),
 	})
-	if sink, ok := runner.ui.(ui.AssistantPartReceiver); ok {
-		_ = sink.OnReasoningDelta(blockIndex, text)
+	if runner.display != nil {
+		_ = runner.display.Publish(DisplayEvent{Kind: DisplayReasoningDelta, PartIndex: blockIndex, Text: text})
 	}
 }
 
-func (runner *Runner) sendReasoningEnd(state *turnState, blockIndex int) {
-	if sink, ok := runner.ui.(ui.AssistantPartReceiver); ok {
-		_ = sink.OnReasoningEnd(blockIndex)
+func (runner *Engine) sendReasoningEnd(state *turnState, blockIndex int) {
+	if runner.display != nil {
+		_ = runner.display.Publish(DisplayEvent{Kind: DisplayReasoningEnd, PartIndex: blockIndex})
 	}
 }
 
-func (runner *Runner) writeDelta(state *turnState, delta string) error {
+func (runner *Engine) writeDelta(state *turnState, delta string) error {
 	if delta == "" {
 		return nil
 	}
@@ -1006,7 +996,7 @@ func (runner *Runner) writeDelta(state *turnState, delta string) error {
 		"bytes": len([]byte(delta)),
 	})
 
-	if err := runner.ui.OnAssistantDelta(delta); err != nil {
+	if err := runner.display.Publish(DisplayEvent{Kind: DisplayAssistantDelta, Text: delta}); err != nil {
 		return runner.failAfterPartialOutputForState(state, err)
 	}
 	state.visibleContent.WriteString(delta)
@@ -1014,7 +1004,7 @@ func (runner *Runner) writeDelta(state *turnState, delta string) error {
 	return nil
 }
 
-func (runner *Runner) finalizeAssistantMessage(state *turnState) (message.Message, error) {
+func (runner *Engine) finalizeAssistantMessage(state *turnState) (message.Message, error) {
 	if err := runner.resolveToolPayloadCandidate(state, true); err != nil {
 		return message.Message{}, err
 	}
@@ -1039,7 +1029,7 @@ func (runner *Runner) finalizeAssistantMessage(state *turnState) (message.Messag
 		}
 	}
 	state.uiFinalized = true
-	if err := runner.ui.OnDone(); err != nil {
+	if err := runner.display.Publish(DisplayEvent{Kind: DisplayDone}); err != nil {
 		return message.Message{}, err
 	}
 
@@ -1049,7 +1039,7 @@ func (runner *Runner) finalizeAssistantMessage(state *turnState) (message.Messag
 	return msg, nil
 }
 
-func (runner *Runner) completedAssistantParts(state *turnState, calls []message.ToolCall) []message.AssistantPart {
+func (runner *Engine) completedAssistantParts(state *turnState, calls []message.ToolCall) []message.AssistantPart {
 	if state == nil {
 		return nil
 	}
@@ -1090,7 +1080,7 @@ func assistantPartsContainToolCall(parts []message.AssistantPart, want message.T
 	return false
 }
 
-func (runner *Runner) finishWithoutDone(ctx context.Context, state *turnState) (message.Message, error) {
+func (runner *Engine) finishWithoutDone(ctx context.Context, state *turnState) (message.Message, error) {
 	if ctx.Err() != nil {
 		return runner.failModelTurnWithPartial(state, ctx.Err())
 	}
@@ -1098,21 +1088,21 @@ func (runner *Runner) finishWithoutDone(ctx context.Context, state *turnState) (
 	return runner.failModelTurnWithPartial(state, fmt.Errorf("模型流在未发送完成事件时结束"))
 }
 
-func (runner *Runner) failAfterPartialOutput(wroteOutput bool, err error) error {
+func (runner *Engine) failAfterPartialOutput(wroteOutput bool, err error) error {
 	if wroteOutput {
-		_ = runner.ui.OnDone()
+		_ = runner.display.Publish(DisplayEvent{Kind: DisplayDone})
 	}
 	return err
 }
 
-func (runner *Runner) failModelTurnWithPartial(state *turnState, err error) (message.Message, error) {
+func (runner *Engine) failModelTurnWithPartial(state *turnState, err error) (message.Message, error) {
 	if flushErr := runner.resolveToolPayloadCandidate(state, true); flushErr != nil {
 		err = flushErr
 	}
 	return runner.partialAssistantMessage(state), runner.failAfterPartialOutputForState(state, err)
 }
 
-func (runner *Runner) failAfterPartialOutputForState(state *turnState, err error) error {
+func (runner *Engine) failAfterPartialOutputForState(state *turnState, err error) error {
 	if state == nil {
 		return err
 	}
@@ -1125,7 +1115,7 @@ func (runner *Runner) failAfterPartialOutputForState(state *turnState, err error
 	return runner.failAfterPartialOutput(state.wroteOutput, err)
 }
 
-func (runner *Runner) partialAssistantMessage(state *turnState) message.Message {
+func (runner *Engine) partialAssistantMessage(state *turnState) message.Message {
 	if state == nil {
 		return message.Message{}
 	}
@@ -1148,7 +1138,7 @@ func (runner *Runner) partialAssistantMessage(state *turnState) message.Message 
 	return msg
 }
 
-func (runner *Runner) protocolAssistantMessage(state *turnState) message.Message {
+func (runner *Engine) protocolAssistantMessage(state *turnState) message.Message {
 	if state == nil {
 		return message.Message{}
 	}

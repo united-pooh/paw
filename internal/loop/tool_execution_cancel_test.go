@@ -47,7 +47,7 @@ func TestRunnerCancelCurrentToolPreservesInterruptedStreamResult(t *testing.T) {
 	registry := tool.NewRegistry()
 	registry.Register(stream)
 	output := &toolOutputUI{}
-	runner := &Runner{registry: registry, ui: output}
+	runner := &Engine{enginePorts: enginePorts{registry: registry, display: newUIDisplayBus(output)}}
 
 	resultCh := make(chan message.ToolResult, 1)
 	go func() {
@@ -83,7 +83,7 @@ func TestRunnerCancelCurrentToolPreservesInterruptedStreamResult(t *testing.T) {
 func TestRunnerOrdinaryToolUsesCompatibilityRunPath(t *testing.T) {
 	registry := tool.NewRegistry()
 	registry.Register(&fakeTool{name: "Plain", output: "ordinary"})
-	runner := &Runner{registry: registry, ui: &toolOutputUI{}}
+	runner := &Engine{enginePorts: enginePorts{registry: registry, display: newUIDisplayBus(&toolOutputUI{})}}
 
 	result, err := runner.runToolCall(context.Background(), message.ToolCall{ID: "plain-1", Name: "Plain", Input: []byte(`{}`)})
 	if err != nil || result.IsError || result.Content != "ordinary" {
@@ -98,7 +98,7 @@ func TestRunnerStreamToolsRunOutsideConcurrentBatch(t *testing.T) {
 	stream := &cancelableStreamTool{started: make(chan struct{})}
 	registry := tool.NewRegistry()
 	registry.Register(stream)
-	runner := &Runner{registry: registry, ui: &toolOutputUI{}}
+	runner := &Engine{enginePorts: enginePorts{registry: registry, display: newUIDisplayBus(&toolOutputUI{})}}
 
 	resolved := runner.resolveToolCall(message.ToolCall{Name: "Stream"})
 	if isToolCallConcurrencySafe(resolved) {

@@ -405,6 +405,7 @@ type sessionRestoredMsg struct {
 	currentTodo    todo.Snapshot
 	hasCurrentTodo bool
 	todoWasCleared bool
+	modes          *loop.SessionModeSnapshot
 	err            error
 }
 

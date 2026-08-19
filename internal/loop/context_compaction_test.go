@@ -65,7 +65,7 @@ func TestRunTurnAutomaticallyCompactsOlderHistory(t *testing.T) {
 			{Done: true},
 		}},
 	}}
-	runner := NewRunner(modelClient, ui, tool.NewRegistry(), nil, "")
+	runner := NewEngine(modelClient, ui, tool.NewRegistry(), nil, "")
 	runner.SetContextLimitTokens(1000)
 	runner.setHistory([]message.Message{
 		{Role: message.RoleUser, Content: "Migrate the parser and preserve compatibility."},
@@ -114,7 +114,7 @@ func TestRunTurnAutomaticallyCompactsOlderHistory(t *testing.T) {
 }
 
 func TestCompactionSkipsLegacyAppendOnlyStore(t *testing.T) {
-	runner := NewRunner(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), &fakeStore{}, "legacy")
+	runner := NewEngine(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), &fakeStore{}, "legacy")
 	runner.SetContextLimitTokens(100)
 	runner.setHistory([]message.Message{
 		{Role: message.RoleUser, Content: "task"},
@@ -134,7 +134,7 @@ func TestCompactionSkipsLegacyAppendOnlyStore(t *testing.T) {
 func TestManualCompactionUsesMechanicalFoldAfterSummaryFailure(t *testing.T) {
 	root := t.TempDir()
 	modelClient := &fakeModel{rounds: []fakeRound{{err: errors.New("provider down")}}}
-	runner := NewRunnerWithInstructionRoot(modelClient, &fakeUI{}, tool.NewRegistry(), nil, "manual-fallback", root)
+	runner := NewEngineWithInstructionRoot(modelClient, &fakeUI{}, tool.NewRegistry(), nil, "manual-fallback", root)
 	history := []message.Message{
 		{Role: message.RoleUser, Content: "migrate parser"},
 		{Role: message.RoleAssistant, Content: strings.Repeat("old investigation ", 120)},
@@ -158,7 +158,7 @@ func TestManualCompactionUsesMechanicalFoldAfterSummaryFailure(t *testing.T) {
 }
 
 func TestManualCompactionArchiveFailureLeavesHistoryUnchanged(t *testing.T) {
-	runner := NewRunnerWithInstructionRoot(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), nil, "archive-failure", t.TempDir())
+	runner := NewEngineWithInstructionRoot(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), nil, "archive-failure", t.TempDir())
 	history := []message.Message{
 		{Role: message.RoleUser, Content: "task"},
 		{Role: message.RoleAssistant, Content: strings.Repeat("old work ", 200)},
@@ -203,7 +203,7 @@ func TestCompactContextSynchronizesCurrentContextUsage(t *testing.T) {
 		{Delta: "## Goal\nMigrate parser while preserving API names."},
 		{Done: true},
 	}}}}
-	runner := NewRunner(modelClient, &fakeUI{}, tool.NewRegistry(), nil, "manual-usage")
+	runner := NewEngine(modelClient, &fakeUI{}, tool.NewRegistry(), nil, "manual-usage")
 	instructions := NewInstructionManager(t.TempDir())
 	instructions.homeDir = t.TempDir()
 	runner.prompt = NewPromptBuilder(instructions)
@@ -248,7 +248,7 @@ func TestCompactContextUsesFocusAndOnlyRewritesProjection(t *testing.T) {
 		{Delta: "## Goal\nMigrate parser while preserving API names."},
 		{Done: true},
 	}}}}
-	runner := NewRunner(modelClient, &fakeUI{}, tool.NewRegistry(), store, "manual-compact")
+	runner := NewEngine(modelClient, &fakeUI{}, tool.NewRegistry(), store, "manual-compact")
 	runner.setHistory(original)
 	result, err := runner.CompactContext(context.Background(), "prioritize failed parser tests")
 	if err != nil {

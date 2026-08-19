@@ -19,6 +19,7 @@ const (
 
 type createdPayload struct {
 	PlanID    string     `json:"plan_id"`
+	SessionID string     `json:"session_id,omitempty"`
 	Title     string     `json:"title"`
 	Path      string     `json:"path,omitempty"`
 	Content   string     `json:"content"`

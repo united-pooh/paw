@@ -1,0 +1,40 @@
+──────────────────────────────────────────────── model-a  ready  12:00 ─────────────────────────────────────────────────
+   读取工作区外的共享设计说明，并继续当前实现。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+ QUESTION  SINGLE                                                                                  selected 0 / max 1
+ Read requests access outside the workspace:
+ /Users/example/shared/architecture.md
+ 2 answers  showing 1-2  choose 1
+ › [ ] Allow once
+       Allow only this exact Read path for this tool call.
+   [ ] Deny
+       Return a normal tool error without reading the file.
+ ↑ 0 answers above                                                                                  ↓ 0 answers below
+ ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move  space select  enter submit  esc cancel
+─chat──────────────────────────────────────────────0 / 131k────────────────────────────────────────────── go-code  dev ─

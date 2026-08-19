@@ -65,14 +65,14 @@ func initialContextLimitTokens(streamer ModelStreamer) int {
 // SetContextLimitTokens enables automatic model-history compaction. A non-positive
 // value disables it. The durable transcript is never rewritten: only the prompt
 // projection used for future model calls is compacted.
-func (runner *Runner) SetContextLimitTokens(limit int) {
+func (runner *Engine) SetContextLimitTokens(limit int) {
 	if runner == nil {
 		return
 	}
 	runner.compact.setLimitTokens(limit)
 }
 
-func (runner *Runner) maybeCompactHistory(ctx context.Context, history []message.Message) ([]message.Message, *ContextCompactionResult, error) {
+func (runner *Engine) maybeCompactHistory(ctx context.Context, history []message.Message) ([]message.Message, *ContextCompactionResult, error) {
 	if runner == nil || len(history) == 0 {
 		return history, nil, nil
 	}
@@ -95,7 +95,7 @@ func (runner *Runner) maybeCompactHistory(ctx context.Context, history []message
 // CompactContext manually compacts the in-memory model projection. The session
 // journal is intentionally untouched, so exports, restores, and audit history
 // retain every original message. focus is appended to the summarizer prompt.
-func (runner *Runner) CompactContext(ctx context.Context, focus string) (ContextCompactionResult, error) {
+func (runner *Engine) CompactContext(ctx context.Context, focus string) (ContextCompactionResult, error) {
 	if runner == nil {
 		return ContextCompactionResult{}, fmt.Errorf("runner is nil")
 	}
@@ -131,11 +131,11 @@ func (runner *Runner) CompactContext(ctx context.Context, focus string) (Context
 	return *result, nil
 }
 
-func (runner *Runner) compactHistory(ctx context.Context, history []message.Message, focus string, force bool) ([]message.Message, *ContextCompactionResult, error) {
+func (runner *Engine) compactHistory(ctx context.Context, history []message.Message, focus string, force bool) ([]message.Message, *ContextCompactionResult, error) {
 	return runner.compactHistoryWithProtectedTail(ctx, history, focus, force, -1)
 }
 
-func (runner *Runner) compactHistoryWithProtectedTail(ctx context.Context, history []message.Message, focus string, force bool, protectedTail int) ([]message.Message, *ContextCompactionResult, error) {
+func (runner *Engine) compactHistoryWithProtectedTail(ctx context.Context, history []message.Message, focus string, force bool, protectedTail int) ([]message.Message, *ContextCompactionResult, error) {
 	limit := runner.contextLimit()
 	head, tail := planHistoryCompaction(history, limit)
 	minimum := minimumCompactMessages
@@ -200,7 +200,7 @@ func (runner *Runner) compactHistoryWithProtectedTail(ctx context.Context, histo
 	}, nil
 }
 
-func (runner *Runner) contextLimit() int {
+func (runner *Engine) contextLimit() int {
 	if runner == nil {
 		return model.DefaultContextLimitTokens
 	}
@@ -329,7 +329,7 @@ func estimateTextTokens(text string) int {
 	return byBytes
 }
 
-func (runner *Runner) summarizeHistory(ctx context.Context, history []message.Message, focus string) (string, *model.Usage, error) {
+func (runner *Engine) summarizeHistory(ctx context.Context, history []message.Message, focus string) (string, *model.Usage, error) {
 	ctx, cancel := context.WithTimeout(ctx, compactionTimeout)
 	defer cancel()
 	systemPrompt := compactionSummaryPrompt
@@ -376,7 +376,7 @@ func (runner *Runner) summarizeHistory(ctx context.Context, history []message.Me
 	}
 }
 
-func (runner *Runner) summarizeHistoryWithRetry(ctx context.Context, history []message.Message, focus string) (string, *model.Usage, error) {
+func (runner *Engine) summarizeHistoryWithRetry(ctx context.Context, history []message.Message, focus string) (string, *model.Usage, error) {
 	summary, usage, err := runner.summarizeHistory(ctx, history, focus)
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return summary, usage, err

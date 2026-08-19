@@ -1,0 +1,24 @@
+──────────────────────────── model-a  ready  12:00 ─────────────────────────────
+   sessions
+   已切换到会话: session-p5
+   resume
+   Goal goal-p5 已恢复为 paused；使用 /goal resume 继续。
+   Plan plan-p5 已恢复为 paused；使用 /plan resume 继续。
+   存在待处理的 Read 权限请求，请先完成 Allow once 或 Deny。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+ › Ask anything…                                           /help @file !shell
+─chat──────────────────────────0 / 131k────────────────────────── go-code  dev ─

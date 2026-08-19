@@ -82,23 +82,25 @@ func (c *cell) activateLocked(ctx context.Context) error {
 		return err
 	}
 	var snapSeq int64
+	hasSnapshot := false
 	if sourced, ok := actor.(EventSourced); ok {
 		if snap, has, err := c.system.journal.readSnapshot(ctx, c.id); err == nil && has {
 			if err := sourced.Restore(snap.State); err != nil {
 				return err
 			}
 			snapSeq = snap.Seq
+			hasSnapshot = true
 		}
 	}
 	var domainSeen int64
 	for _, env := range envs {
-		if env.Seq <= snapSeq {
-			continue
-		}
 		if env.Kind == es.KindRuntime {
 			if err := ledger.foldRuntime(env); err != nil {
 				return err
 			}
+			continue
+		}
+		if hasSnapshot && env.Seq <= snapSeq {
 			continue
 		}
 		// 两段式 fold 第二段：domain 只进 actor（I5）。

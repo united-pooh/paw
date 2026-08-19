@@ -170,26 +170,26 @@ func buildContinuationPrompt(decision CompletionDecision, snapshot todo.Snapshot
 	return b.String()
 }
 
-func (runner *Runner) SetAutoContinueConfig(config AutoContinueConfig) {
+func (runner *Engine) SetAutoContinueConfig(config AutoContinueConfig) {
 	if runner == nil {
 		return
 	}
 	runner.gate.setConfig(config)
 }
 
-func (runner *Runner) SetTodoBroker(broker *todo.Broker) {
+func (runner *Engine) SetTodoBroker(broker *todo.Broker) {
 	if runner == nil {
 		return
 	}
 	runner.gate.setBroker(broker)
 }
 
-func (runner *Runner) autoContinueState() (AutoContinueConfig, *todo.Broker) {
+func (runner *Engine) autoContinueState() (AutoContinueConfig, *todo.Broker) {
 	return runner.gate.state()
 }
 
 // progressGate 收敛完成门状态：自动续跑配置、todo broker、进展指纹与
-// 陈旧 todo 计数。P2 从 Runner 字段提取，自带锁。
+// 陈旧 todo 计数。P2 从 Engine 字段提取，自带锁。
 type progressGate struct {
 	mu               sync.Mutex
 	autoContinue     AutoContinueConfig
@@ -240,7 +240,7 @@ func (g *progressGate) recordProgress(progressHash, todoHash string) (previousHa
 	return previousHash, g.staleTodoTurns
 }
 
-func (runner *Runner) evaluateCompletion(assistant message.Message, hadToolCalls bool, used, noProgress int) (CompletionDecision, todo.Snapshot, bool, int) {
+func (runner *Engine) evaluateCompletion(assistant message.Message, hadToolCalls bool, used, noProgress int) (CompletionDecision, todo.Snapshot, bool, int) {
 	config, broker := runner.autoContinueState()
 	if broker == nil {
 		return CompletionGate{Config: config}.Evaluate(CompletionObservation{Assistant: assistant, TurnHadToolCalls: hadToolCalls, ContinuationUsed: used, NoProgressCount: noProgress}), todo.Snapshot{}, false, noProgress
@@ -261,6 +261,6 @@ func (runner *Runner) evaluateCompletion(assistant message.Message, hadToolCalls
 	return decision, snapshot, true, noProgress
 }
 
-func (runner *Runner) notifyAutoContinue(decision CompletionDecision) {
+func (runner *Engine) notifyAutoContinue(decision CompletionDecision) {
 	runner.notifySystem("auto-continue", fmt.Sprintf("%s (%d/%d)", decision.Reason, decision.BudgetUsed, decision.BudgetLimit))
 }

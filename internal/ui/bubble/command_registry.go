@@ -541,6 +541,17 @@ func (m *appModel) handlePlanCommand(invocation string) tea.Cmd {
 			return nil
 		}
 		m.addEntry(transcriptEntry{kind: entrySystem, title: "plan show", body: m.planController.Show(fields[1])})
+	case "resume":
+		if err := m.planController.Resume(); err != nil {
+			m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: err.Error()})
+			return nil
+		}
+		m.planWorking = true
+		m.planMode = true
+		m.turnStartedAt = time.Now()
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "plan", body: "plan resumed"})
+		m.applyCursorAnimation()
+		return m.scheduleUIAnimationFrame()
 	case "stop", "cancel":
 		if err := m.planController.Cancel(); err != nil {
 			m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: err.Error()})
@@ -550,7 +561,7 @@ func (m *appModel) handlePlanCommand(invocation string) tea.Cmd {
 		m.planMode = false
 		m.addEntry(transcriptEntry{kind: entrySystem, title: "plan", body: "plan session stopped"})
 	default:
-		m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: "usage: /plan new <requirement>|status|list|show <id>|stop"})
+		m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: "usage: /plan new <requirement>|status|list|show <id>|resume|stop"})
 	}
 	return nil
 }

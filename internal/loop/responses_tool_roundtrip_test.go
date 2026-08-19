@@ -85,7 +85,7 @@ func TestDeepSeekResponsesRunnerSendsFunctionCallOutputOnSecondRound(t *testing.
 	})
 	registry := tool.NewRegistry()
 	registry.Register(&fakeTool{name: "LS", output: "README.md", schema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}}}`)})
-	runner := NewRunner(client, &fakeUI{}, registry, nil, "")
+	runner := NewEngine(client, &fakeUI{}, registry, nil, "")
 
 	response, err := runner.RunTurn(context.Background(), "list files")
 	if err != nil {

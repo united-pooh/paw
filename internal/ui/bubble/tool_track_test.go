@@ -257,7 +257,7 @@ func TestRunnerBubbleSameNameNonMutationEndToEnd(t *testing.T) {
 				{{ToolCalls: []message.ToolCall{{ID: "edit-1", Name: "Edit", Input: json.RawMessage(`{"file_path":"a.go","old_string":"return 1","new_string":"return 2"}`)}}, Done: true}},
 				{{Delta: "done", Done: true}},
 			}}
-			runner := loop.NewRunner(streamer, bubbleUI, registry, nil, "")
+			runner := loop.NewEngine(streamer, bubbleUI, registry, nil, "")
 			if _, err := runner.RunTurn(context.Background(), "test"); err != nil {
 				t.Fatal(err)
 			}

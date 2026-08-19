@@ -25,7 +25,7 @@ func TestLoadSessionRepairsToolCallPairs(t *testing.T) {
 		}},
 	}
 	store := &fakeStore{history: history}
-	runner := NewRunner(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), store, "orphan-session")
+	runner := NewEngine(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), store, "orphan-session")
 
 	result, err := runner.LoadSession(context.Background(), "orphan-session")
 	if err != nil {
@@ -59,7 +59,7 @@ func TestLoadSessionRepairsDanglingCallOnResume(t *testing.T) {
 		{Role: message.RoleUser, Content: "continue after crash"},
 	}
 	store := &fakeStore{history: history}
-	runner := NewRunner(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), store, "resume-session")
+	runner := NewEngine(&fakeModel{}, &fakeUI{}, tool.NewRegistry(), store, "resume-session")
 
 	if _, err := runner.LoadSession(context.Background(), "resume-session"); err != nil {
 		t.Fatalf("LoadSession() error = %v", err)

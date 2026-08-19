@@ -10,6 +10,7 @@ import (
 	coremcp "paw/internal/mcp"
 	"paw/internal/model"
 	"paw/internal/session"
+	"paw/internal/sessionactor"
 	"paw/internal/settings"
 	"paw/internal/skill"
 	"paw/internal/task"
@@ -33,7 +34,7 @@ type taskRuntimeContext struct {
 // appContext 聚合 buildRunner 产出的全部长生命周期资源，取代此前返回给
 // 调用方的 9 元组。Close 统一收敛资源释放，调用方不再各自记忆关闭顺序。
 type appContext struct {
-	Runner             *loop.Runner
+	Runner             *sessionactor.Host
 	SessionID          string
 	Model              *model.Client
 	ConfigController   *configv2.Controller
@@ -45,9 +46,8 @@ type appContext struct {
 	MCPManager *coremcp.Manager
 }
 
-// Close 释放长生命周期资源。顺序与此前调用方 LIFO defer 等价：先停 MCP
-// 运行时（订阅协程随之退出），再关配置控制器（同时关闭底层配置管理器）。
-// settings/store/task 现状无 Close 语义，不在此引入新的关闭行为。
+// Close 释放长生命周期资源。先停 MCP 运行时，再停 task actor/process
+// 资源，最后关闭配置控制器（同时关闭底层配置管理器）。
 func (a *appContext) Close() error {
 	if a == nil {
 		return nil
@@ -55,6 +55,12 @@ func (a *appContext) Close() error {
 	var errs []error
 	if a.MCPManager != nil {
 		errs = append(errs, a.MCPManager.Close(context.Background()))
+	}
+	if a.TaskManager != nil {
+		errs = append(errs, a.TaskManager.Close())
+	}
+	if a.Runner != nil {
+		a.Runner.Close()
 	}
 	if a.ConfigController != nil {
 		errs = append(errs, a.ConfigController.Close())
@@ -160,7 +166,16 @@ func buildRunnerWithTaskContext(ctx context.Context, sessionIDFlag string, outpu
 	launcher.JobWallTime = time.Duration(sandbox.JobWallSeconds) * time.Second
 	launcher.Args = append(launcher.Args, "--sandbox-limits="+sandboxLimitsFlag(sandbox))
 	registry := tool.NewRegistry()
-	runner := loop.NewRunnerWithInstructionRoot(client, output, registry, store, sessionID, root)
+	engine := loop.NewEngineWithInstructionRoot(client, output, registry, store, sessionID, root)
+	runner, err := sessionactor.NewHost(engine, store, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if !success {
+			runner.Close()
+		}
+	}()
 	runner.SetSkillRegistry(skill.NewRegistry([]string{paths.Skills}))
 	if err := runner.SetContextMaintenanceConfig(settingsController.CurrentSettings().ContextMaintenance); err != nil {
 		if mcpManager != nil {
@@ -181,6 +196,11 @@ func buildRunnerWithTaskContext(ctx context.Context, sessionIDFlag string, outpu
 		ParentTaskID: subCtx.parentTaskID,
 		MCPBroker:    broker,
 	})
+	defer func() {
+		if !success {
+			_ = taskManager.Close()
+		}
+	}()
 	runner.SetStreamMATaskRunner(streamMATaskAdapter{
 		manager:         taskManager,
 		parentSessionID: sessionID,

@@ -14,7 +14,7 @@ import (
 )
 
 // newStateCompactionRunner 构造模式 B runner：5 轮 transcript + 大 history。
-func newStateCompactionRunner(t *testing.T) (*Runner, *fakeModel, *session.JSONLStore, string) {
+func newStateCompactionRunner(t *testing.T) (*Engine, *fakeModel, *session.JSONLStore, string) {
 	t.Helper()
 	root := t.TempDir()
 	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
@@ -25,7 +25,7 @@ func newStateCompactionRunner(t *testing.T) (*Runner, *fakeModel, *session.JSONL
 	seedTurnedSession(t, store, sessionID, 5)
 
 	modelClient := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{{Delta: "done"}, {Done: true}}}}}
-	runner := NewRunnerWithInstructionRoot(modelClient, &fakeUI{}, tool.NewRegistry(), store, sessionID, root)
+	runner := NewEngineWithInstructionRoot(modelClient, &fakeUI{}, tool.NewRegistry(), store, sessionID, root)
 	runner.SetContextMode("state")
 	runner.SetStateCompactionRatio(0.5)
 	runner.SetContextLimitTokens(4000)
@@ -104,7 +104,7 @@ func TestStateCompactionBelowRatioKeepsHistory(t *testing.T) {
 	seedTurnedSession(t, store, sessionID, 2)
 
 	modelClient := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{{Delta: "done"}, {Done: true}}}}}
-	runner := NewRunnerWithInstructionRoot(modelClient, &fakeUI{}, tool.NewRegistry(), store, sessionID, root)
+	runner := NewEngineWithInstructionRoot(modelClient, &fakeUI{}, tool.NewRegistry(), store, sessionID, root)
 	runner.SetContextMode("state")
 	runner.SetStateCompactionRatio(0.9)
 	runner.SetContextLimitTokens(100000) // 窗口巨大，2 轮远低于阈值
@@ -139,7 +139,7 @@ func TestStateCompactionSummaryModeUnchanged(t *testing.T) {
 	seedTurnedSession(t, store, sessionID, 5)
 
 	modelClient := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{{Delta: "done"}, {Done: true}}}}}
-	runner := NewRunnerWithInstructionRoot(modelClient, &fakeUI{}, tool.NewRegistry(), store, sessionID, root)
+	runner := NewEngineWithInstructionRoot(modelClient, &fakeUI{}, tool.NewRegistry(), store, sessionID, root)
 	runner.SetContextLimitTokens(100000)
 
 	snapshot, err := store.LoadSnapshot(context.Background(), sessionID)

@@ -67,29 +67,40 @@ func (t *ReadTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 		return "", err
 	}
 
-	var in readInput
-	if err := json.Unmarshal(input, &in); err != nil {
+	in, limit, err := decodeReadInput(input)
+	if err != nil {
 		return "", err
-	}
-	if strings.TrimSpace(in.FilePath) == "" {
-		return "", fmt.Errorf("file_path is required")
-	}
-	if in.Offset < 0 {
-		return "", fmt.Errorf("offset must be >= 0")
-	}
-	limit := defaultReadLimit
-	if in.Limit != nil {
-		if *in.Limit < 1 {
-			return "", fmt.Errorf("limit must be >= 1")
-		}
-		limit = *in.Limit
 	}
 
 	target, err := t.resolveReadPath(in.FilePath)
 	if err != nil {
 		return "", err
 	}
+	return t.readTarget(ctx, in, limit, target)
+}
 
+func decodeReadInput(input json.RawMessage) (readInput, int, error) {
+	var in readInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return readInput{}, 0, err
+	}
+	if strings.TrimSpace(in.FilePath) == "" {
+		return readInput{}, 0, fmt.Errorf("file_path is required")
+	}
+	if in.Offset < 0 {
+		return readInput{}, 0, fmt.Errorf("offset must be >= 0")
+	}
+	limit := defaultReadLimit
+	if in.Limit != nil {
+		if *in.Limit < 1 {
+			return readInput{}, 0, fmt.Errorf("limit must be >= 1")
+		}
+		limit = *in.Limit
+	}
+	return in, limit, nil
+}
+
+func (t *ReadTool) readTarget(ctx context.Context, in readInput, limit int, target string) (string, error) {
 	f, err := os.Open(target)
 	if err != nil {
 		return "", err
@@ -107,6 +118,54 @@ func (t *ReadTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 		t.ReadState.RecordRead(target, page.Hash, page.Offset, page.Limit, page.Content)
 	}
 	return formatReadPage(page), nil
+}
+
+func (t *ReadTool) PermissionReadTarget(input json.RawMessage) (string, bool, error) {
+	in, _, err := decodeReadInput(input)
+	if err != nil {
+		return "", false, err
+	}
+	target := strings.TrimSpace(in.FilePath)
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(t.Root, target)
+	}
+	target, err = filepath.Abs(target)
+	if err != nil {
+		return "", false, err
+	}
+	target, err = filepath.EvalSymlinks(filepath.Clean(target))
+	if err != nil {
+		return "", false, err
+	}
+	allowed := append([]string{t.Root}, t.ReadRoots...)
+	for _, root := range allowed {
+		canonicalRoot, rootErr := filepath.Abs(root)
+		if rootErr != nil {
+			continue
+		}
+		if evaluated, evalErr := filepath.EvalSymlinks(filepath.Clean(canonicalRoot)); evalErr == nil {
+			canonicalRoot = evaluated
+		}
+		if isWithinRoot(filepath.Clean(canonicalRoot), target) {
+			return target, false, nil
+		}
+	}
+	return target, true, nil
+}
+
+func (t *ReadTool) RunApprovedRead(ctx context.Context, input json.RawMessage, canonicalPath string) (string, error) {
+	in, limit, err := decodeReadInput(input)
+	if err != nil {
+		return "", err
+	}
+	target, outside, err := t.PermissionReadTarget(input)
+	if err != nil {
+		return "", err
+	}
+	if !outside || target != filepath.Clean(canonicalPath) {
+		return "", fmt.Errorf("Read allow-once scope mismatch")
+	}
+	return t.readTarget(ctx, in, limit, target)
 }
 
 func (t *ReadTool) resolveReadPath(filePath string) (string, error) {
