@@ -126,7 +126,9 @@ func openManager(ctx context.Context, options Options, cacheWriter func(string, 
 	}
 
 	diagnostics := copyLegacyAssets(paths)
-	if _, err := os.Stat(paths.GlobalConfig); os.IsNotExist(err) {
+	globalRaw, globalErr := os.ReadFile(paths.GlobalConfig)
+	switch {
+	case os.IsNotExist(globalErr):
 		document, startupDiagnostics := firstRunDocument(ctx, paths, options.Credentials)
 		diagnostics = append(diagnostics, startupDiagnostics...)
 		raw, err := marshalStarter(document, "Paw configuration v2 — comments and trailing commas are supported")
@@ -141,8 +143,21 @@ func openManager(ctx context.Context, options Options, cacheWriter func(string, 
 				return nil, fmt.Errorf("create starter config: %w", err)
 			}
 		}
-	} else if err != nil {
-		return nil, err
+	case globalErr != nil:
+		return nil, globalErr
+	case blankConfigRaw(globalRaw):
+		// 空/被截断的配置文件（例如写盘被中断）按首次运行重建 starter：空内容
+		// 在解析层只会表现为 EOF，此后每次加载与 /config 更新都会被它阻塞。
+		document, startupDiagnostics := firstRunDocument(ctx, paths, options.Credentials)
+		diagnostics = append(diagnostics, startupDiagnostics...)
+		diagnostics = append(diagnostics, Diagnostic{Severity: "warning", File: paths.GlobalConfig, Message: "config file was empty; regenerated the starter configuration"})
+		raw, err := marshalStarter(document, "Paw configuration v2 — comments and trailing commas are supported")
+		if err != nil {
+			return nil, err
+		}
+		if err := atomicWriteFile(paths.GlobalConfig, raw, 0o600); err != nil {
+			return nil, fmt.Errorf("replace empty config with starter: %w", err)
+		}
 	}
 
 	manager := &Manager{
@@ -246,7 +261,11 @@ func firstRunDocument(ctx context.Context, paths Paths, store CredentialStore) (
 	if len(candidates) > 1 {
 		return emptyDocument(), []Diagnostic{{Severity: "warning", File: paths.GlobalConfig, Message: "multiple provider credentials were detected; choose a model in /config: " + strings.Join(candidates, ", ")}}
 	}
-	return emptyDocument(), []Diagnostic{{Severity: "warning", File: paths.GlobalConfig, Message: "no provider credentials were detected; add one in /config or set a provider API key environment variable"}}
+	// 无任何凭据：落到内置默认 provider（deepseek）。凭据可用前 Ready 仍为
+	// false（runtimeConfig 会报 credential unavailable），但 starter 已指向
+	// 默认 provider，设置 DEEPSEEK_API_KEY 后即可开箱使用。
+	preset := builtinPresets[defaultPresetID]
+	return documentForPreset(defaultPresetID), []Diagnostic{{Severity: "info", File: paths.GlobalConfig, Message: "no provider credentials were detected; defaulted to built-in " + defaultPresetID + " provider (set " + strings.Join(preset.DetectionEnv, "/") + " to enable it)"}}
 }
 
 func emptyDocument() Document {
@@ -367,6 +386,19 @@ func readConfigFileState(path string) (configFileState, error) {
 		return configFileState{}, nil
 	}
 	return configFileState{}, fmt.Errorf("read config file %s: %w", path, err)
+}
+
+// blankConfigRaw 判断配置内容是否为空（纯空白或只有注释）。空内容在 JSONC
+// 解析层只会表现为 EOF，语义上等同于文件缺失。
+func blankConfigRaw(raw []byte) bool {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return true
+	}
+	normalized, err := normalizeJSONC(raw)
+	if err != nil {
+		return false
+	}
+	return len(bytes.TrimSpace(normalized)) == 0
 }
 
 func (m *Manager) readConfigFileStates() (configFileStates, error) {
@@ -1318,6 +1350,15 @@ func (m *Manager) prepareUpdate(ctx context.Context, expectedRevision uint64, op
 		return base, nil, Snapshot{}, err
 	}
 	raw := append([]byte(nil), base.Raw...)
+	if blankConfigRaw(raw) {
+		// 基准快照是在配置文件为空（缺失/截断）时建立的：从空 v2 文档开始
+		// 打补丁，让本次更新直接修复配置文件，而不是反复以 EOF 失败。
+		starter, starterErr := marshalStarter(emptyDocument(), "Paw configuration v2 — comments and trailing commas are supported")
+		if starterErr != nil {
+			return Snapshot{}, nil, Snapshot{}, starterErr
+		}
+		raw = starter
+	}
 	for _, operation := range operations {
 		switch operation.Kind {
 		case OperationSetActiveModel:

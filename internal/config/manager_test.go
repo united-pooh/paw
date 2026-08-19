@@ -1705,6 +1705,91 @@ func TestFirstRunCreatesStarterWithoutTouchingUserHome(t *testing.T) {
 	}
 }
 
+// TestOpenRegeneratesStarterForBlankConfigFile 验证空（0 字节/纯空白/仅注释）
+// 的配置文件在启动时按首次运行重建，不再以 "EOF" 阻塞后续所有 /config 更新。
+func TestOpenRegeneratesStarterForBlankConfigFile(t *testing.T) {
+	clearDetectionEnv(t)
+	for _, content := range [][]byte{nil, []byte("  \n"), []byte("// only a comment\n")} {
+		paths := isolatedPaths(t, false)
+		if err := os.MkdirAll(paths.Home, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(paths.GlobalConfig, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		manager := openTestManager(t, paths, &FakeCredentialStore{Unavailable: true}, false)
+		snapshot := manager.Snapshot()
+		for _, diagnostic := range snapshot.Diagnostics {
+			if strings.Contains(diagnostic.Message, "EOF") {
+				t.Fatalf("blank config %q still surfaced EOF: %#v", content, snapshot.Diagnostics)
+			}
+		}
+		raw, err := os.ReadFile(paths.GlobalConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if blankConfigRaw(raw) {
+			t.Fatalf("blank config %q was not regenerated", content)
+		}
+		if _, _, err := parseAndValidateGlobal(raw, paths.GlobalConfig); err != nil {
+			t.Fatalf("regenerated config for %q does not parse: %v", content, err)
+		}
+		// 修复后 /config 的更新（如选择服务商）必须能直接成功。
+		updated, err := manager.Update(context.Background(), snapshot.Revision, []Operation{
+			UpsertProvider("local", Provider{Transport: TransportOpenAICompatible, Endpoint: "http://127.0.0.1:8000/v1"}),
+		})
+		if err != nil {
+			t.Fatalf("update after blank repair failed for %q: %v", content, err)
+		}
+		if _, ok := updated.Document.Providers["local"]; !ok {
+			t.Fatalf("provider missing after update for %q: %#v", content, updated.Document.Providers)
+		}
+	}
+}
+
+// TestUpdateHealsBlankBaseSnapshot 验证更新路径的自愈：基准快照建立时配置
+// 文件为空（启动加载以 EOF 失败的场景），更新应从空 v2 文档开始打补丁并
+// 直接修复文件，而不是反复返回 "EOF"。
+func TestUpdateHealsBlankBaseSnapshot(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, false)
+	manager := openTestManager(t, paths, &FakeCredentialStore{Unavailable: true}, false)
+
+	// 模拟「启动时配置文件为空」建立的失败快照：Raw 是空内容、文档为空。
+	blank := []byte(" \n")
+	if err := os.WriteFile(paths.GlobalConfig, blank, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.Lock()
+	manager.snapshot = Snapshot{
+		Document:           emptyDocument(),
+		Revision:           manager.snapshot.Revision,
+		Raw:                blank,
+		globalConfigExists: true,
+		LoadedAt:           time.Now(),
+	}
+	manager.mu.Unlock()
+
+	updated, err := manager.Update(context.Background(), manager.Snapshot().Revision, []Operation{
+		UpsertProvider("local", Provider{Transport: TransportOpenAICompatible, Endpoint: "http://127.0.0.1:8000/v1"}),
+		UpsertModel("local/one", Model{Provider: "local", Name: "one"}),
+		SetActiveModel("local/one"),
+	})
+	if err != nil {
+		t.Fatalf("update on blank base failed: %v", err)
+	}
+	if updated.Document.Providers["local"].Endpoint != "http://127.0.0.1:8000/v1" || updated.ActiveModelID != "local/one" {
+		t.Fatalf("healed update produced %#v active=%q", updated.Document, updated.ActiveModelID)
+	}
+	raw, err := os.ReadFile(paths.GlobalConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := parseAndValidateGlobal(raw, paths.GlobalConfig); err != nil {
+		t.Fatalf("healed config file does not parse: %v", err)
+	}
+}
+
 func TestFirstRunIgnoresLegacyConfigJSONButCopiesNonConfigAssets(t *testing.T) {
 	clearDetectionEnv(t)
 	root := t.TempDir()
@@ -1730,8 +1815,21 @@ func TestFirstRunIgnoresLegacyConfigJSONButCopiesNonConfigAssets(t *testing.T) {
 	}
 	manager := openTestManager(t, paths, &FakeCredentialStore{Unavailable: true}, false)
 	snapshot := manager.Snapshot()
-	if len(snapshot.Document.Providers) != 0 || len(snapshot.Document.Models) != 0 {
-		t.Fatalf("legacy config was imported: %#v", snapshot.Document)
+	// 零凭据时 starter 落到内置 deepseek 默认（Preset 字段标记来源），但
+	// legacy v1 的 modelProfiles（含明文 apiKey）绝不能被导入：providers
+	// 只允许内置 preset，models 只允许 deepseek/chat。
+	if len(snapshot.Document.Providers) != 1 {
+		t.Fatalf("expected only the built-in default provider, got %#v", snapshot.Document.Providers)
+	}
+	provider, ok := snapshot.Document.Providers["deepseek"]
+	if !ok || provider.Preset != "deepseek" {
+		t.Fatalf("legacy config was imported: %#v", snapshot.Document.Providers)
+	}
+	if _, ok := snapshot.Document.Models["legacy"]; ok {
+		t.Fatalf("legacy profile was imported: %#v", snapshot.Document.Models)
+	}
+	if len(snapshot.Document.Models) != 1 || snapshot.ActiveModelID != "deepseek/chat" {
+		t.Fatalf("unexpected starter models: active=%q models=%#v", snapshot.ActiveModelID, snapshot.Document.Models)
 	}
 	if got, err := os.ReadFile(legacyPath); err != nil || !bytes.Equal(got, legacy) {
 		t.Fatalf("legacy config was modified: got=%q err=%v", got, err)
@@ -1935,6 +2033,47 @@ func TestFirstRunMultipleCandidatesRequiresChoice(t *testing.T) {
 	}
 	if got := manager.Snapshot().Diagnostics[0].Message; !strings.Contains(got, "multiple") {
 		t.Fatalf("diagnostic = %q", got)
+	}
+}
+
+func TestFirstRunWithoutCredentialsDefaultsToDeepSeek(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, false)
+	manager := openTestManager(t, paths, &FakeCredentialStore{Unavailable: true}, false)
+	snapshot := manager.Snapshot()
+	if snapshot.ActiveModelID != "deepseek/chat" {
+		t.Fatalf("active = %q, want deepseek/chat", snapshot.ActiveModelID)
+	}
+	if _, ok := snapshot.Document.Providers["deepseek"]; !ok {
+		t.Fatalf("starter providers missing deepseek: %#v", snapshot.Document.Providers)
+	}
+	// 凭据尚未设置：Ready 必须仍为 false，RequireReady 仍需引导用户补凭据。
+	if snapshot.Ready {
+		t.Fatal("defaulted starter without credentials should not be ready")
+	}
+	setupErr := manager.RequireReady()
+	if !errors.As(setupErr, new(*SetupRequiredError)) {
+		t.Fatalf("RequireReady() = %v", setupErr)
+	}
+	if got := setupErr.Error(); !strings.Contains(got, paths.GlobalConfig) {
+		t.Fatalf("setup-required error lacks config path: %v", got)
+	}
+	found := false
+	for _, diagnostic := range snapshot.Diagnostics {
+		if strings.Contains(diagnostic.Message, "defaulted to built-in deepseek") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("diagnostics missing deepseek default notice: %#v", snapshot.Diagnostics)
+	}
+	// 设置凭据并 reload 后应直接就绪（开箱可用，无需 /config）。
+	t.Setenv("DEEPSEEK_API_KEY", "secret-from-env")
+	if err := manager.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if !manager.Snapshot().Ready || manager.Snapshot().ActiveModelID != "deepseek/chat" {
+		t.Fatalf("after key set: ready:%v active:%q diagnostics:%#v", manager.Snapshot().Ready, manager.Snapshot().ActiveModelID, manager.Snapshot().Diagnostics)
 	}
 }
 

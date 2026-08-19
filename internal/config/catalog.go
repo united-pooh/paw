@@ -16,6 +16,11 @@ type Preset struct {
 	RequiresAuth   bool
 }
 
+// defaultPresetID 是 first-run 时未检测到任何凭据的内置默认 provider：
+// starter 配置直接落到该 preset，用户设置对应 env 凭据（DEEPSEEK_API_KEY）
+// 即可开箱可用，无需先进 /config 选 provider。
+const defaultPresetID = "deepseek"
+
 var builtinPresets = map[string]Preset{
 	"openai": {
 		ID: "openai", Name: "OpenAI", RequiresAuth: true,
