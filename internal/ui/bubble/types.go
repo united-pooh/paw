@@ -4,7 +4,6 @@ package bubble
 import (
 	"context"
 	"encoding/json"
-	"github.com/charmbracelet/bubbles/textarea"
 	configv2 "paw/internal/config"
 	"paw/internal/loop"
 	"paw/internal/model"
@@ -16,6 +15,7 @@ import (
 	"paw/internal/todo"
 	selecttool "paw/internal/tool/select"
 	"paw/internal/ui"
+	"paw/internal/ui/bubble/textareax"
 	"paw/internal/ui/bubble/viewportx"
 	"strings"
 	"time"
@@ -483,7 +483,7 @@ type appModel struct {
 	queueEdit                           *queueEditState
 	inputSource                         inputSource
 	cursorAnchor                        *terminalCursorAnchor
-	input                               textarea.Model
+	input                               textareax.Model
 	viewport                            viewportx.Model
 	width                               int
 	height                              int

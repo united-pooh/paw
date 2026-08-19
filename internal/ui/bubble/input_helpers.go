@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
+	"paw/internal/ui/bubble/textareax"
 )
 
 const (
@@ -90,7 +90,7 @@ func inputPasteFoldHiddenRangeWithWidth(value string, width int) (int, int, bool
 
 // inputCursorInPasteFoldHiddenRangeWithWidth 判断光标是否位于折叠隐藏区间。
 // 逻辑行折叠用 input.Line()；单条长行折叠用当前逻辑行内的可视行偏移 RowOffset。
-func inputCursorInPasteFoldHiddenRangeWithWidth(input textarea.Model, width int) bool {
+func inputCursorInPasteFoldHiddenRangeWithWidth(input textareax.Model, width int) bool {
 	value := input.Value()
 	if inputPasteFoldable(value) {
 		return inputCursorInPasteFoldHiddenRange(input)
@@ -131,7 +131,7 @@ func inputPasteFoldHiddenRange(value string) (int, int, bool) {
 	return start, end, end > start
 }
 
-func inputCursorInPasteFoldHiddenRange(input textarea.Model) bool {
+func inputCursorInPasteFoldHiddenRange(input textareax.Model) bool {
 	start, end, ok := inputPasteFoldHiddenRange(input.Value())
 	return ok && input.Line() >= start && input.Line() < end
 }

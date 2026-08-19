@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"paw/internal/loop"
+	"paw/internal/ui/bubble/textareax"
 )
 
 func TestQueueSummaryKeepsBottomDockAnchors(t *testing.T) {
@@ -173,4 +173,4 @@ func TestCursorLineHighlightSurvivesTokenRendering(t *testing.T) {
 
 // Keep textarea imported in this regression file as a compile-time reminder that
 // cursor/row calculations use the Bubble textarea model rather than logical lines.
-var _ textarea.Model
+var _ textareax.Model

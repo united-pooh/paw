@@ -6,11 +6,12 @@ import (
 	"paw/internal/message"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/cursor"
-	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"paw/internal/ui/bubble/textareax"
 )
 
 // inputTokenKind describes the semantic style of a completion-created token.
@@ -111,7 +112,7 @@ func (m *appModel) clearInputTokens() {
 }
 
 func normalizeInputTokens(text string, tokens []inputToken) []inputToken {
-	runeCount := len([]rune(text))
+	runeCount := utf8.RuneCountInString(text)
 	out := make([]inputToken, 0, len(tokens))
 	for _, token := range tokens {
 		if token.Start < 0 || token.End <= token.Start || token.End > runeCount || strings.TrimSpace(token.Label) == "" {
@@ -235,7 +236,7 @@ func (m *appModel) replaceInputRangeWithToken(start, end int, raw, label string,
 	m.inputTokens = normalizeInputTokens(m.input.Value(), append(m.inputTokens, token))
 }
 
-func textareaAbsoluteCursor(input textarea.Model) int {
+func textareaAbsoluteCursor(input textareax.Model) int {
 	valueLines := strings.Split(input.Value(), "\n")
 	line := clampInt(input.Line(), 0, maxInt(0, len(valueLines)-1))
 	offset := 0
@@ -249,7 +250,7 @@ func textareaAbsoluteCursor(input textarea.Model) int {
 	return offset + info.StartColumn + info.ColumnOffset
 }
 
-func setTextareaAbsoluteCursor(input *textarea.Model, absolute int) {
+func setTextareaAbsoluteCursor(input *textareax.Model, absolute int) {
 	if input == nil {
 		return
 	}
@@ -543,11 +544,15 @@ func projectInput(raw string, tokens []inputToken, cursor, width int, folded boo
 			cluster, _ := terminalFirstGraphemeCluster(remaining)
 			remaining = remaining[len(cluster):]
 			appendCluster(cluster, kind, token, start)
-			start += len([]rune(cluster))
+			start += utf8.RuneCountInString(cluster)
 		}
 	}
 
 	tokenIndex := 0
+	// byteIdx 与 rune 索引 i 同步推进：raw[byteIdx:] 与 rawRunes[i:] 指向同一
+	// 个字符位置。按字节切片取 grapheme cluster 是 O(1)，避免每个 cluster 都
+	// 把剩余全文从 []rune 重新编码成 string 的 O(N²) 开销。
+	byteIdx := 0
 	for i := 0; i < len(rawRunes); {
 		if hasCursor && cursor == i {
 			markCursor()
@@ -555,6 +560,10 @@ func projectInput(raw string, tokens []inputToken, cursor, width int, folded boo
 		if tokenIndex < len(tokens) && tokens[tokenIndex].Start == i {
 			token := tokens[tokenIndex]
 			appendText(token.Label, token.Kind, true, i)
+			for skipped := token.End - token.Start; skipped > 0; skipped-- {
+				_, size := utf8.DecodeRuneInString(raw[byteIdx:])
+				byteIdx += size
+			}
 			i = token.End
 			tokenIndex++
 			if hasCursor && cursor > token.Start && cursor < token.End {
@@ -564,15 +573,16 @@ func projectInput(raw string, tokens []inputToken, cursor, width int, folded boo
 		}
 		if rawRunes[i] == '\n' {
 			i++
+			byteIdx++
 			logicalLine++
 			newVisualLine(logicalLine, i)
 			continue
 		}
-		cluster, _ := terminalFirstGraphemeCluster(string(rawRunes[i:]))
+		cluster, _ := terminalFirstGraphemeCluster(raw[byteIdx:])
 		if cluster == "" {
 			break
 		}
-		clusterRunes := len([]rune(cluster))
+		clusterRunes := utf8.RuneCountInString(cluster)
 		if hasCursor && cursor > i && cursor < i+clusterRunes {
 			if cursor-i > i+clusterRunes-cursor {
 				cursor = i + clusterRunes
@@ -583,6 +593,7 @@ func projectInput(raw string, tokens []inputToken, cursor, width int, folded boo
 		}
 		appendCluster(cluster, inputTokenCommand, false, i)
 		i += clusterRunes
+		byteIdx += len(cluster)
 	}
 	if hasCursor && cursor == len(rawRunes) {
 		markCursor()

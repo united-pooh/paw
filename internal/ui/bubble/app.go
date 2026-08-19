@@ -13,20 +13,20 @@ import (
 
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"paw/internal/model"
 	"paw/internal/settings"
 	"paw/internal/skill"
 	"paw/internal/theme"
 	selecttool "paw/internal/tool/select"
+	"paw/internal/ui/bubble/textareax"
 	"paw/internal/ui/bubble/viewportx"
 )
 
 // newModel 创建完整的 TUI 状态模型，并初始化输入框、滚动区和系统消息。
 func newModel(ctx context.Context, runner Runner, sessionID string, controller ModelConfigController, settingsController SettingsController, taskController TaskController, sessionStore SessionStore, anchor *terminalCursorAnchor) appModel {
 	now := time.Now()
-	input := textarea.New()
+	input := textareax.New()
 	input.Prompt = ""
 	input.Placeholder = "Ask anything…"
 	input.ShowLineNumbers = false

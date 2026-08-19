@@ -2,8 +2,8 @@
 package bubble
 
 import (
-	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
+	"paw/internal/ui/bubble/textareax"
 	"strings"
 	"time"
 )
@@ -508,19 +508,19 @@ func (m appModel) inputCursorAtStart() bool {
 }
 
 // canMoveTextareaUp 判断 textarea 光标是否还能向上移动到上一行或上方可视行。
-func canMoveTextareaUp(input textarea.Model) bool {
+func canMoveTextareaUp(input textareax.Model) bool {
 	lineInfo := input.LineInfo()
 	return input.Line() > 0 || lineInfo.RowOffset > 0
 }
 
 // canMoveTextareaDown 判断 textarea 光标是否还能向下移动到下一行或下方可视行。
-func canMoveTextareaDown(input textarea.Model) bool {
+func canMoveTextareaDown(input textareax.Model) bool {
 	lineInfo := input.LineInfo()
 	return input.Line() < input.LineCount()-1 || lineInfo.RowOffset < lineInfo.Height-1
 }
 
 // textareaCursorAtStart 判断 textarea 光标是否位于当前输入的逻辑开头。
-func textareaCursorAtStart(input textarea.Model) bool {
+func textareaCursorAtStart(input textareax.Model) bool {
 	if canMoveTextareaUp(input) {
 		return false
 	}
@@ -531,7 +531,7 @@ func textareaCursorAtStart(input textarea.Model) bool {
 }
 
 // textareaCursorAtEnd 判断 textarea 光标是否位于当前输入的逻辑末尾。
-func textareaCursorAtEnd(input textarea.Model) bool {
+func textareaCursorAtEnd(input textareax.Model) bool {
 	if canMoveTextareaDown(input) {
 		return false
 	}

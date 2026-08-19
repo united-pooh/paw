@@ -3,17 +3,26 @@ package bubble
 import (
 	"fmt"
 
-	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/lipgloss"
 	"paw/internal/theme"
+	"paw/internal/ui/bubble/textareax"
 )
+
+// activePalette 记录全局 legacy 样式当前对应的调色板。View() 每帧都会
+// 调用 activateThemeStyles 兜底；调色板未变化时跳过 50+ 个 lipgloss 样式
+// 的重建，避免给每帧渲染增加固定开销。
+var activePalette theme.Palette
 
 func (m *appModel) activateThemeStyles() {
 	if m == nil || m.theme.ID == "" {
 		return
 	}
+	if m.styles.Colors.palette == activePalette {
+		return
+	}
 	colorManager = m.styles.Colors
 	rebuildLegacyStyles()
+	activePalette = m.styles.Colors.palette
 }
 
 func (m *appModel) applyTheme(id theme.ThemeID) error {
@@ -43,7 +52,7 @@ func (m *appModel) applyTextareaTheme() {
 	applyTextareaStyles(&m.input, base, text, placeholder)
 }
 
-func applyTextareaStyles(input *textarea.Model, base, text, placeholder lipgloss.Style) {
+func applyTextareaStyles(input *textareax.Model, base, text, placeholder lipgloss.Style) {
 	if input == nil {
 		return
 	}
