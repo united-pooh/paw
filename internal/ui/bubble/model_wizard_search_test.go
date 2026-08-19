@@ -92,6 +92,39 @@ func TestModelWizardSearchEscAndBackspaceFollowConfigCenterSemantics(t *testing.
 	}
 }
 
+func TestModelWizardSearchPrintableKeysNeverHijackedAsShortcuts(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.modelWizard = &modelWizard{
+		step:            modelWizardModel,
+		providerOptions: []modelProviderOption{{id: "gateway", label: "Gateway"}},
+		modelOptions:    []string{"beta", "jamba", "kimi"},
+	}
+
+	// 逐个按键输入 "bjk"：b/j/k 都必须进入搜索内容，而不是触发返回或移动。
+	for _, r := range []rune("bjk") {
+		next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = next.(appModel)
+		if model.modelWizard == nil || model.modelWizard.step != modelWizardModel {
+			t.Fatalf("typing %q left the model step: %#v", r, model.modelWizard)
+		}
+	}
+	if got := model.modelWizard.search; got != "bjk" {
+		t.Fatalf("search = %q, want bjk", got)
+	}
+
+	// 清空搜索后，Backspace 才承担返回服务商的职责。
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = next.(appModel)
+	if model.modelWizard == nil || model.modelWizard.search != "" {
+		t.Fatalf("Esc should clear search: %#v", model.modelWizard)
+	}
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	model = next.(appModel)
+	if model.modelWizard == nil || model.modelWizard.step != modelWizardProvider {
+		t.Fatalf("Backspace with empty search should return to provider step: %#v", model.modelWizard)
+	}
+}
+
 func TestModelWizardSearchWithNoMatchCannotConfirmHiddenModel(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.modelWizard = &modelWizard{

@@ -110,6 +110,9 @@ func (m appModel) handleModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case modelWizardModel:
+		// 搜索框在本步骤始终激活：所有可打印字符一律进入搜索内容，
+		// 不再把 b/j/k 等字母劫持为快捷键，避免与搜索输入冲突。
+		// 列表移动只用方向键，返回服务商由空搜索时的 Backspace 承担。
 		searching := m.modelWizard.search != ""
 		switch msg.String() {
 		case "ctrl+c":
@@ -133,28 +136,12 @@ func (m appModel) handleModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.modelWizard.step = modelWizardProvider
 			m.modelWizard.err = ""
 			return m, nil
-		case "b":
-			if !searching {
-				m.modelWizard.step = modelWizardProvider
-				m.modelWizard.err = ""
-				return m, nil
-			}
 		case "up":
 			m.modelWizard.moveModelSelection(-1)
 			return m, nil
 		case "down":
 			m.modelWizard.moveModelSelection(1)
 			return m, nil
-		case "k":
-			if !searching {
-				m.modelWizard.moveModelSelection(-1)
-				return m, nil
-			}
-		case "j":
-			if !searching {
-				m.modelWizard.moveModelSelection(1)
-				return m, nil
-			}
 		case "enter":
 			if len(m.modelWizard.modelIndicesForSearch()) == 0 {
 				return m, nil
@@ -354,7 +341,7 @@ func (m appModel) renderModelStep() string {
 			}
 		}
 	}
-	lines = append(lines, "输入筛选 · Enter 选择 · Esc 清除/关闭 · b 返回服务商")
+	lines = append(lines, "输入筛选 · ↑/↓ 移动 · Enter 选择 · Esc 清除/关闭 · Backspace 返回服务商")
 	return strings.Join(lines, "\n")
 }
 
