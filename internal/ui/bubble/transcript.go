@@ -298,14 +298,29 @@ func (m *appModel) consumeAssistantStreamDelta(delta string) {
 	m.appendAssistantDelta(committed)
 }
 
-// releaseAssistantCharacters advances char-mode playback by one complete display
-// token. The stream buffer retains every unreleased token, so a large upstream
-// delta is never lost or appended to the transcript in one operation.
+// char 模式播放窗口参数：积压超过 charPlaybackTargetFrames 帧容量时按
+// pending/target 比例加速释放，封顶 charPlaybackMaxPerFrame。
+// 旧实现恒为 1 字符/帧（30fps = 30 字符/s），远低于模型流式生产速率
+// （典型 100-800 字符/s），长回答下播放队列随内容量无限积压——用户
+// 感知为连续对话/滚动后显示与操作延迟持续积累。自适应后播放延迟有界
+// （稳态 ≤ 目标窗口时长），无积压时保持逐字打字机效果。
+const (
+	charPlaybackTargetFrames = 60 // 2 秒 @ 30fps 目标播放窗口
+	charPlaybackMaxPerFrame  = 40 // 稳态消费上限 1200 字符/s，高于生产峰值
+)
+
+// releaseAssistantCharacters advances char-mode playback. The stream buffer
+// retains every unreleased token, so a large upstream delta is never lost or
+// appended to the transcript in one operation.
 func (m *appModel) releaseAssistantCharacters() {
 	if m == nil || m.currentSettings().UI.TranscriptOutputMode != settings.TranscriptOutputModeChar {
 		return
 	}
-	if committed := m.assistantStream.ReleaseCharacters(1); committed != "" {
+	release := 1
+	if pending := m.assistantStream.PendingCharacters(); pending > charPlaybackTargetFrames {
+		release = minInt(pending/charPlaybackTargetFrames, charPlaybackMaxPerFrame)
+	}
+	if committed := m.assistantStream.ReleaseCharacters(release); committed != "" {
 		m.ensureAssistantStreamEntry()
 		m.appendAssistantDelta(committed)
 	}

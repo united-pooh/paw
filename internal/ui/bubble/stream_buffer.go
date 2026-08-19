@@ -246,6 +246,11 @@ func (b *streamLineBuffer) HasPendingCharacters() bool {
 	return len(b.characterQueue) > 0
 }
 
+// PendingCharacters 返回待播放的完整显示 token 数（供自适应释放速率决策）。
+func (b *streamLineBuffer) PendingCharacters() int {
+	return len(b.characterQueue)
+}
+
 func (b *streamLineBuffer) FlushCharacters(width int) string {
 	width = maxInt(1, width)
 	b.width = width
