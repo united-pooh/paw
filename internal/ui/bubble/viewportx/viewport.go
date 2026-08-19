@@ -68,6 +68,28 @@ type Model struct {
 	linePrefixMax      []int
 	longestLineWidth   int
 	replaceWidthVisits int
+
+	// linesVersion 在内容变更（SetContent/SetLines/ReplaceLines）时递增，
+// 作为 View 渲染缓存的内容指纹。
+	linesVersion uint64
+
+	// cache 指向跨拷贝共享的渲染缓存。View 是值接收者，只有通过指针
+// 写入的缓存才能在下一次 View 调用（从 bubbletea 存储的模型发起）中
+// 复用。setInitialValues/New 分配；零值 Model（cache==nil）则不缓存。
+	cache *viewRenderCache
+}
+
+// viewRenderCache 记录 View() 输出对应的输入状态。任一字段不匹配则重渲染。
+// 该结构体仅从事件循环单线程访问（View/变更方法同串行调用），无需加锁。
+type viewRenderCache struct {
+	valid     bool
+	version   uint64
+	yOffset   int
+	xOffset   int
+	width     int
+	height    int
+	frameSize int
+	output    string
 }
 
 func (m *Model) setInitialValues() {
@@ -75,6 +97,9 @@ func (m *Model) setInitialValues() {
 	m.MouseWheelEnabled = true
 	m.MouseWheelDelta = 3
 	m.initialized = true
+	if m.cache == nil {
+		m.cache = &viewRenderCache{}
+	}
 }
 
 // Init exists to satisfy the tea.Model interface for composability purposes.
@@ -146,6 +171,7 @@ func (m *Model) SetLines(lines []string) {
 		}
 		m.linePrefixMax[i] = m.longestLineWidth
 	}
+	m.linesVersion++
 	m.SetXOffset(m.xOffset)
 	if m.YOffset > len(m.lines)-1 {
 		m.GotoBottom()
@@ -201,6 +227,7 @@ func (m *Model) ReplaceLines(start int, newLines []string) {
 		m.linePrefixMax[i] = maxWidth
 	}
 	m.longestLineWidth = maxWidth
+	m.linesVersion++
 	m.SetXOffset(m.xOffset)
 	if m.YOffset > len(m.lines)-1 {
 		m.GotoBottom()
@@ -588,6 +615,95 @@ func (m Model) View() string {
 	if sh := m.Style.GetHeight(); sh != 0 {
 		h = min(h, sh)
 	}
+	if !m.viewCacheApplicable(w, h) {
+		return m.viewLegacy(w, h)
+	}
+
+	frameSize := m.Style.GetVerticalFrameSize()
+	if m.cache == nil {
+		return m.renderViewFast(w, h, frameSize)
+	}
+	c := m.cache
+	if c.valid &&
+		c.version == m.linesVersion &&
+		c.yOffset == m.YOffset &&
+		c.xOffset == m.xOffset &&
+		c.width == w &&
+		c.height == h &&
+		c.frameSize == frameSize {
+		return c.output
+	}
+
+	output := m.renderViewFast(w, h, frameSize)
+	*c = viewRenderCache{
+		valid:     true,
+		version:   m.linesVersion,
+		yOffset:   m.YOffset,
+		xOffset:   m.xOffset,
+		width:     w,
+		height:    h,
+		frameSize: frameSize,
+		output:    output,
+	}
+	return output
+}
+
+// viewCacheApplicable reports whether the fast render path can be used:
+// the style must carry no visual properties the fast path would drop,
+// and the geometry must be positive.
+func (m Model) viewCacheApplicable(w, h int) bool {
+	if w <= 0 || h <= 0 {
+		return false
+	}
+	return m.Style.GetWidth() == 0 &&
+		m.Style.GetHeight() == 0 &&
+		m.Style.GetHorizontalFrameSize() == 0 &&
+		m.Style.GetVerticalFrameSize() == 0 &&
+		m.Style.GetForeground() == nil &&
+		m.Style.GetBackground() == nil
+}
+
+// renderViewFast renders without lipgloss: it is semantically equivalent to
+// lipgloss.NewStyle().Width(w).Height(h).MaxHeight(h).MaxWidth(w).Render(join(visibleLines))
+// followed by a plain Style render: every line is truncated/padded to exactly
+// w cells and the block is padded with blank (space-filled) lines to h rows.
+func (m Model) renderViewFast(w, h, frameSize int) string {
+	contentHeight := h - frameSize
+	if contentHeight <= 0 {
+		return ""
+	}
+	lines := m.visibleLines()
+	if len(lines) > contentHeight {
+		lines = lines[:contentHeight]
+	}
+	out := make([]string, len(lines), contentHeight)
+	for i, line := range lines {
+		out[i] = fitViewLine(line, w)
+	}
+	blank := strings.Repeat(" ", w)
+	for len(out) < contentHeight {
+		out = append(out, blank)
+	}
+	return strings.Join(out, "\n")
+}
+
+// fitViewLine truncates or pads a styled line to exactly width terminal
+// cells. ansi.Truncate mirrors the lipgloss MaxWidth behavior (cell-boundary
+// cut without ellipsis).
+func fitViewLine(line string, width int) string {
+	lw := ansi.StringWidth(line)
+	if lw > width {
+		return ansi.Truncate(line, width, "")
+	}
+	if lw < width {
+		return line + strings.Repeat(" ", width-lw)
+	}
+	return line
+}
+
+// viewLegacy is the original lipgloss-based render, kept for styles the fast
+// path does not cover.
+func (m Model) viewLegacy(w, h int) string {
 	contentWidth := w - m.Style.GetHorizontalFrameSize()
 	contentHeight := h - m.Style.GetVerticalFrameSize()
 	contents := lipgloss.NewStyle().

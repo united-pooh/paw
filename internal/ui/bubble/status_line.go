@@ -123,7 +123,12 @@ func (m appModel) renderBottomDockLine(width int) string {
 	if modeHex := m.currentModeHex(); modeHex != "" {
 		lineStyle = lineStyle.Foreground(lipgloss.Color(modeHex))
 	}
-	line := lineStyle.Render(strings.Repeat("─", width))
+	dash := func(n int) string {
+		if n <= 0 {
+			return ""
+		}
+		return lineStyle.Render(strings.Repeat("─", n))
+	}
 
 	left := m.renderModeIndicator()
 	right := m.renderBottomDockWorktree(width)
@@ -145,27 +150,38 @@ func (m appModel) renderBottomDockLine(width int) string {
 		rightAt = maxInt(leftEnd, width-rightWidth-1)
 	}
 
-	if leftWidth > 0 {
-		line = composeStyledCellOverlay(line, left, leftAt, width)
-	}
-	if rightWidth > 0 {
-		line = composeStyledCellOverlay(line, right, rightAt, width)
-	}
-
 	middleLeft := minInt(width, leftEnd+1)
 	middleRight := maxInt(middleLeft, width-1)
 	if rightWidth > 0 {
 		middleRight = maxInt(middleLeft, rightAt-1)
 	}
+	middle := ""
+	middleAt := -1
+	middleWidth := 0
 	if middleRight > middleLeft {
-		middle := m.renderBottomDockMiddle(middleRight - middleLeft)
+		middle = m.renderBottomDockMiddle(middleRight - middleLeft)
 		if middle != "" {
-			middleWidth := terminalCellWidth(middle)
-			middleAt := middleLeft + maxInt(0, (middleRight-middleLeft-middleWidth)/2)
-			line = composeStyledCellOverlay(line, middle, middleAt, width)
+			middleWidth = terminalCellWidth(middle)
+			middleAt = middleLeft + maxInt(0, (middleRight-middleLeft-middleWidth)/2)
 		}
 	}
-	return fitStyledCellLine(line, width)
+
+	// 分段直接拼接：上游截断保证 left/middle/right 区间互不重叠且落在
+	// [0,width) 内，无需对整条 200-cell 基线做 cell 级切割合成
+	//（旧实现每帧 3 次全行 parse+cut 是 View 最大的分配源）。
+	var b strings.Builder
+	b.WriteString(dash(leftAt))
+	b.WriteString(left)
+	if middleAt >= 0 {
+		b.WriteString(dash(middleAt - leftEnd))
+		b.WriteString(middle)
+		b.WriteString(dash(rightAt - middleAt - middleWidth))
+	} else {
+		b.WriteString(dash(rightAt - leftEnd))
+	}
+	b.WriteString(right)
+	b.WriteString(dash(width - rightAt - rightWidth))
+	return fitStyledCellLine(b.String(), width)
 }
 
 func (m appModel) renderBottomDockUsage() string {
@@ -266,37 +282,42 @@ func (m appModel) renderTokenFrontierWith(width, used, cache, limit int, modeHex
 		freeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(interpolateHexColor(colorManager.Hex(colorTerminalBackground), modeHex, 0.45)))
 		rippleHex = modeHex
 	}
-	cells := make([]string, width)
-	for i := range cells {
-		switch {
-		case i < cacheCells:
-			cells[i] = cacheStyle.Render(tokenCacheGlyph)
-		case i < usedCells:
-			cells[i] = usedStyle.Render(tokenUsedGlyph)
-		default:
-			cells[i] = freeStyle.Render(tokenFreeGlyph)
-		}
+
+	// 按段批量渲染：同一连续段只做一次 lipgloss Render，而不是逐 cell
+	//（200 列终端下旧实现每帧 200 次 Render 是固定大头）。
+	var front strings.Builder
+	if cacheCells > 0 {
+		front.WriteString(cacheStyle.Render(strings.Repeat(tokenCacheGlyph, cacheCells)))
 	}
-	if usedCells >= width {
-		return strings.Join(cells, "")
+	if usedCells > cacheCells {
+		front.WriteString(usedStyle.Render(strings.Repeat(tokenUsedGlyph, usedCells-cacheCells)))
+	}
+	freeCells := width - usedCells
+	if freeCells <= 0 {
+		return front.String()
 	}
 
 	now := m.animationNow()
 	if !m.tokenRippleActive(now) {
-		return strings.Join(cells, "")
+		front.WriteString(freeStyle.Render(strings.Repeat(tokenFreeGlyph, freeCells)))
+		return front.String()
 	}
+
 	background := colorManager.Hex(colorTerminalBackground)
-	freeCells := width - usedCells
 	looping := m.isAgentWorking()
 	head := m.tokenRippleHead(usedCells, freeCells, now)
 
+	// free 区内逐 cell 布局：空串表示普通 free glyph（最后按连续段批量
+	// 渲染），非空为已染色的波纹 cell。
+	free := make([]string, freeCells)
 	if looping && freeCells < tokenRippleTail {
 		// 窄 free 区：波纹块比 free 区长，整个 free 区都是波纹。
 		for offset := 0; offset < freeCells; offset++ {
 			distance := positiveModulo(head-usedCells-offset, tokenRippleTail)
-			cells[usedCells+offset] = renderTokenRippleCell(distance, background, rippleHex)
+			free[offset] = renderTokenRippleCell(distance, background, rippleHex)
 		}
-		return strings.Join(cells, "")
+		front.WriteString(joinStyledCellRuns(free, freeStyle))
+		return front.String()
 	}
 
 	// 宽 free 区（或退场态）：波纹块 = head 及之前 tail-1 格。
@@ -309,9 +330,34 @@ func (m appModel) renderTokenFrontierWith(width, used, cache, limit int, modeHex
 		if cell < usedCells || cell >= width {
 			continue
 		}
-		cells[cell] = renderTokenRippleCell(head-i, background, rippleHex)
+		free[cell-usedCells] = renderTokenRippleCell(head-i, background, rippleHex)
 	}
-	return strings.Join(cells, "")
+	front.WriteString(joinStyledCellRuns(free, freeStyle))
+	return front.String()
+}
+
+// joinStyledCellRuns 把逐 cell 布局拼成一行：空串 cell 归并为一次批量
+// Render，非空 cell（已带样式）原样输出。每个 glyph 固定 1 cell 宽。
+func joinStyledCellRuns(cells []string, plainStyle lipgloss.Style) string {
+	var b strings.Builder
+	runStart := -1
+	for i, cell := range cells {
+		if cell == "" {
+			if runStart < 0 {
+				runStart = i
+			}
+			continue
+		}
+		if runStart >= 0 {
+			b.WriteString(plainStyle.Render(strings.Repeat(tokenFreeGlyph, i-runStart)))
+			runStart = -1
+		}
+		b.WriteString(cell)
+	}
+	if runStart >= 0 {
+		b.WriteString(plainStyle.Render(strings.Repeat(tokenFreeGlyph, len(cells)-runStart)))
+	}
+	return b.String()
 }
 
 // tokenRippleHead 返回当前波纹头 cell 索引。循环态在 free 区内首尾相接；

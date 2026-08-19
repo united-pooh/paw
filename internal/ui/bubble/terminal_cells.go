@@ -114,11 +114,13 @@ func fitStyledCellLine(line string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	if terminalCellWidth(line) > width {
-		line = cutStyledCellsExact(line, 0, width)
+	w := terminalCellWidth(line)
+	if w > width {
+		// cutStyledCellsExact 保证返回恰好 width 个 cell，无需二次测量。
+		return cutStyledCellsExact(line, 0, width)
 	}
-	if visible := terminalCellWidth(line); visible < width {
-		line += strings.Repeat(" ", width-visible)
+	if w < width {
+		return line + strings.Repeat(" ", width-w)
 	}
 	return line
 }

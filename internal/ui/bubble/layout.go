@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/lipgloss"
+	"paw/internal/ui/bubble/textareax"
 )
 
 const (
@@ -110,7 +110,10 @@ func (m appModel) View() string {
 	// 小居中 modal 盒。其余 modal（model 向导 / theme picker 等）仍走 overlay。
 	if m.configCenter != nil || m.settingWizard != nil {
 		if m.cursorAnchor != nil {
-			m.cursorAnchor.clear()
+			// 全屏覆盖层没有可锚定的 textarea（编辑页的光标由渲染层的反色块
+			// 表达）。必须隐藏真实终端光标：clear 只会把它恢复为可见，帧输出
+			// 结束后它就停在左下角闪烁，形成"两个光标"。
+			m.cursorAnchor.hide()
 		}
 		return m.renderFullscreenModal()
 	}
@@ -128,7 +131,10 @@ func (m appModel) View() string {
 		parts = append(parts, m.renderQueuePanel(layout.contentWidth, layout.queueHeight))
 	}
 
-	inner := fitStyledRect(strings.Join(parts, "\n"), layout.contentWidth, layout.contentHeight)
+	// 各 part 由各自的渲染函数保证精确到 contentWidth×自身高度；这里的
+	// join 结果已符合 contentWidth×contentHeight，无需再整体 fit 一遍
+	// （renderDockedFrame 内部还会按 frame 尺寸做一次 fit）。
+	inner := strings.Join(parts, "\n")
 	// 顶边框线嵌入 header（模型名/状态/时间）；底边框左侧嵌入输入模式，
 	// 中间显示 token usage，右侧显示项目/分支。边框颜色随 agentmode 变化。
 	view := renderDockedFrame(
@@ -148,23 +154,56 @@ func (m appModel) View() string {
 			terminalCellWidth(m.renderBottomDockWorktree(layout.frameWidth))+2,
 		)
 	}
-	view = paintStyledBackground(view, layout.frameWidth, layout.frameHeight, m.styles.Frame, m.theme.Colors.TerminalBackground)
+	// renderDockedFrame/renderQueueInlineBottomBorder 的输出已是精确的
+	// frameWidth×frameHeight 矩形，跳过整体重测。
+	view = paintStyledBackgroundBody(view, layout.frameWidth, layout.frameHeight, m.styles.Frame, m.theme.Colors.TerminalBackground, true)
 	m.updateTerminalCursorAnchor(layout)
 	return view
 }
 
 func paintStyledBackground(text string, width, height int, style lipgloss.Style, background string) string {
-	text = fitStyledRect(text, width, height)
+	return paintStyledBackgroundBody(text, width, height, style, background, false)
+}
+
+// paintStyledBackgroundBody 背景喷涂。preFitted=true 时调用方保证 text 已是
+// 精确的 width×height 矩形（renderDockedFrame 输出），跳过整体重测的
+// fit pass；逐行 fitStyledCellLine 仍保留作为宽度兼容保底。
+func paintStyledBackgroundBody(text string, width, height int, style lipgloss.Style, background string, preFitted bool) string {
+	if !preFitted {
+		text = fitStyledRect(text, width, height)
+	}
 	foreground := ""
 	if fg, ok := style.GetForeground().(lipgloss.Color); ok {
 		foreground = string(fg)
 	}
 	lines := strings.Split(text, "\n")
+	if paintStyleIsFlat(style) {
+		// 纯 fg/bg 样式 + 已精确到 width 的行：lipgloss Render 只会做一次
+		// 全行对齐/重新测宽后包一层 SGR。直接拼接等价序列，省掉逐行
+		// lipgloss 渲染（grapheme 迭代是整帧 View 的最大热点）。
+		bgSGR := backgroundSGR(background)
+		fgSGR := foregroundSGR(foreground)
+		for i, line := range lines {
+			painted := fgSGR + bgSGR + fitStyledCellLine(line, width) + "\x1b[0m"
+			lines[i] = restoreBackgroundAfterANSIReset(painted, background, foreground)
+		}
+		return strings.Join(lines, "\n")
+	}
 	for i, line := range lines {
 		painted := style.Width(width).Render(fitStyledCellLine(line, width))
 		lines[i] = restoreBackgroundAfterANSIReset(painted, background, foreground)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// paintStyleIsFlat 报告样式是否只携带颜色（无 padding/margin/border/尺寸），
+// 此时对精确宽度的行，Style.Width(w).Render(line) 等价于
+// fgSGR+bgSGR+line+reset。
+func paintStyleIsFlat(style lipgloss.Style) bool {
+	return style.GetWidth() == 0 &&
+		style.GetHeight() == 0 &&
+		style.GetHorizontalFrameSize() == 0 &&
+		style.GetVerticalFrameSize() == 0
 }
 
 // restoreBackgroundAfterANSIReset keeps the application canvas opaque and
@@ -252,6 +291,7 @@ func (m appModel) renderTranscriptRegion(layout tuiLayout) string {
 	}
 
 	content := m.viewport.View()
+	contentFromViewport := true
 	if !m.selectionActive && !m.viewportShowsSelection {
 		if unit, ok := m.currentTranscriptHoverPatchUnit(); ok && m.transcriptHoverPatch.valid && m.transcriptHoverPatch.unit == unit {
 			content = overlayTranscriptViewport(content, m.transcriptHoverPatch.lines, true, unit, m.viewport.YOffset, m.viewport.Width)
@@ -259,20 +299,38 @@ func (m appModel) renderTranscriptRegion(layout tuiLayout) string {
 	}
 	if !m.hasRenderableTranscript() {
 		content = renderEmptyState(layout.contentWidth, layout.transcriptHeight)
+		contentFromViewport = false
 	}
-	base := renderFixedStyledPanel(
-		transcriptContentStyle,
-		layout.contentWidth,
-		layout.transcriptHeight,
-		content,
-	)
+	var base string
+	if contentFromViewport {
+		// viewport.View() 输出恒为 viewport.Width×viewport.Height 的精确矩形
+		//（逐行 pad/cut）；尺寸与面板 body 一致时跳过逐行重测的 fit pass。
+		bodyWidth := maxInt(1, layout.contentWidth-transcriptContentStyle.GetHorizontalPadding())
+		preFitted := m.viewport.Width == bodyWidth && m.viewport.Height == layout.transcriptHeight
+		base = renderFixedStyledPanelBody(
+			transcriptContentStyle,
+			layout.contentWidth,
+			layout.transcriptHeight,
+			content,
+			preFitted,
+		)
+	} else {
+		base = renderFixedStyledPanel(
+			transcriptContentStyle,
+			layout.contentWidth,
+			layout.transcriptHeight,
+			content,
+		)
+	}
 
 	// 运行中 task 任务卡：贴在 transcript 右边界内侧、垂直居中。
 	// Activity 面板打开时任务卡不重复渲染（面板自身含任务列表）。
 	// modal / completion 浮层在其之后合成，必要时覆盖卡片。
+	overlaid := false
 	if m.taskPicker == nil {
 		if card := m.renderTaskCard(m.animationNow()); card != "" {
 			base = placeRightCenteredOverlay(base, card, layout.contentWidth, layout.transcriptHeight)
+			overlaid = true
 		}
 	}
 
@@ -286,6 +344,7 @@ func (m appModel) renderTranscriptRegion(layout tuiLayout) string {
 			layout.transcriptHeight,
 			overlayAlignRight,
 		)
+		overlaid = true
 	}
 
 	if modal := m.renderActiveModalBox(layout); modal != "" {
@@ -315,6 +374,12 @@ func (m appModel) renderTranscriptRegion(layout tuiLayout) string {
 			layout.transcriptHeight,
 			overlayAlignBottom,
 		)
+		overlaid = true
+	}
+	if !overlaid {
+		// 无任何浮层时 renderFixedStyledPanel 已输出精确的
+		// contentWidth×transcriptHeight 矩形，末尾 fit 只会重测每一行。
+		return base
 	}
 	return fitStyledRect(base, layout.contentWidth, layout.transcriptHeight)
 }
@@ -495,6 +560,13 @@ func (m appModel) renderCompletionPanel(body string) string {
 }
 
 func renderFixedStyledPanel(style lipgloss.Style, totalWidth, totalHeight int, body string) string {
+	return renderFixedStyledPanelBody(style, totalWidth, totalHeight, body, false)
+}
+
+// renderFixedStyledPanelBody 渲染固定尺寸面板。bodyPreFitted=true 时调用方
+// 保证 body 已经是精确的 bodyWidth×bodyHeight（如 viewport.View() 输出），
+// 跳过逐行重测的 fit pass。尺寸不匹配时仍回退到 fit 保底。
+func renderFixedStyledPanelBody(style lipgloss.Style, totalWidth, totalHeight int, body string, bodyPreFitted bool) string {
 	totalWidth = maxInt(1, totalWidth)
 	totalHeight = maxInt(1, totalHeight)
 	horizontalBorder := style.GetHorizontalBorderSize()
@@ -508,12 +580,62 @@ func renderFixedStyledPanel(style lipgloss.Style, totalWidth, totalHeight int, b
 	styleHeight := maxInt(1, totalHeight-verticalBorder)
 	bodyWidth := maxInt(1, styleWidth-horizontalPadding)
 	bodyHeight := maxInt(1, styleHeight-verticalPadding)
-	body = fitStyledRect(body, bodyWidth, bodyHeight)
+	if !bodyPreFitted {
+		body = fitStyledRect(body, bodyWidth, bodyHeight)
+	}
+	if horizontalBorder == 0 && verticalBorder == 0 && verticalPadding == 0 &&
+		style.GetHorizontalMargins() == 0 && style.GetVerticalMargins() == 0 &&
+		style.GetAlignHorizontal() == lipgloss.Left && style.GetAlignVertical() == lipgloss.Top {
+		// 无边框、无纵向 padding、无 margin 的「水平 padding + 颜色」面板
+		//（transcript / input dock 等）可直接构造：body 行已精确到 bodyWidth，
+		// lipgloss Render 的对齐/换行/边距 pass 全是固定开销。
+		return renderSimpleStyledPanel(style, styleWidth, styleHeight, horizontalPadding, body, bodyHeight)
+	}
 	rendered := style.
 		Width(styleWidth).
 		Height(styleHeight).
 		Render(body)
+	if horizontalBorder == 0 && verticalBorder == 0 {
+		// 无边框时 Width/Height 已把渲染结果锁定在 styleWidth×styleHeight
+		//（= totalWidth×totalHeight），末尾的 fitStyledRect 只会重测每一行。
+		return rendered
+	}
 	return fitStyledRect(rendered, totalWidth, totalHeight)
+}
+
+// renderSimpleStyledPanel 直接构造「水平 padding + 颜色」面板：
+// 每行 = SGR + 左 padding + body 行 + 右 padding + reset；补齐行整行空格。
+// body 行必须已精确到 (styleWidth - 左右 padding 之和) 个 cell。
+func renderSimpleStyledPanel(style lipgloss.Style, styleWidth, styleHeight, horizontalPadding int, body string, bodyHeight int) string {
+	foreground := ""
+	if fg, ok := style.GetForeground().(lipgloss.Color); ok {
+		foreground = string(fg)
+	}
+	background := ""
+	if bg, ok := style.GetBackground().(lipgloss.Color); ok {
+		background = string(bg)
+	}
+	sgr := foregroundSGR(foreground) + backgroundSGR(background)
+	reset := ""
+	if sgr != "" {
+		reset = "\x1b[0m"
+	}
+	leftPad := strings.Repeat(" ", style.GetPaddingLeft())
+	rightPad := strings.Repeat(" ", style.GetPaddingRight())
+	lines := strings.Split(body, "\n")
+	if len(lines) > bodyHeight {
+		lines = lines[:bodyHeight]
+	}
+	out := make([]string, styleHeight)
+	fullRow := sgr + strings.Repeat(" ", styleWidth) + reset
+	for i := range out {
+		if i < len(lines) {
+			out[i] = sgr + leftPad + lines[i] + rightPad + reset
+		} else {
+			out[i] = fullRow
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // fitStyledRect 对带 ANSI 样式的矩形按终端 cell 宽度裁剪并补齐。
@@ -604,13 +726,13 @@ func (m appModel) visibleInputCursorColumn() int {
 	return maxInt(0, m.inputTokenProjection().cursorColumn)
 }
 
-func visibleTextareaCursorRow(input textarea.Model) int {
+func visibleTextareaCursorRow(input textareax.Model) int {
 	lineInfo := input.LineInfo()
 	row := input.Line() + lineInfo.RowOffset
 	return minInt(maxInt(0, row), maxInt(0, input.Height()-1))
 }
 
-func visibleTextareaCursorColumn(input textarea.Model) int {
+func visibleTextareaCursorColumn(input textareax.Model) int {
 	return maxInt(0, input.LineInfo().CharOffset)
 }
 
@@ -679,7 +801,7 @@ func (m appModel) renderInputContent() string {
 
 // applyTextareaTerminalStyle 显式覆盖 textarea 自己的子样式，避免灰色 Placeholder
 // 遮蔽 terminal Dock 的父级前景色。
-func applyTextareaTerminalStyle(input *textarea.Model) {
+func applyTextareaTerminalStyle(input *textareax.Model) {
 	if input == nil {
 		return
 	}
