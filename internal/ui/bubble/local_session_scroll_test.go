@@ -216,6 +216,7 @@ func TestLocalSessionQueuedScrollReversal(t *testing.T) {
 			model.newMessageNoticeCount = 1
 			refreshes := model.transcriptRefreshCount
 			model.transcriptRenderVisits = 0
+			startOffset := model.viewport.YOffset
 			filter := newProgramEventFilter()
 			var current tea.Model = model
 			forward := localScrollMouseMsg(tc.forwardButton)
@@ -247,8 +248,16 @@ func TestLocalSessionQueuedScrollReversal(t *testing.T) {
 			elapsed := time.Since(started)
 			model = current.(appModel)
 
-			if accepted != 3_002 || views != 3_002 {
-				t.Fatalf("queued burst accepted=%d views=%d, want 3002/3002", accepted, views)
+			// 契约：能有效移动视口的事件 1:1 应用；撞边界的无效事件被丢弃。
+			// 期望接受数 = 起点到边界的有效滚动数 + 1 次反向。
+			distance := beforeReverse - startOffset
+			if distance < 0 {
+				distance = -distance
+			}
+			effective := (distance + stats.mouseWheelDelta - 1) / stats.mouseWheelDelta
+			wantAccepted := effective + 1
+			if accepted != wantAccepted || views != wantAccepted {
+				t.Fatalf("queued burst accepted=%d views=%d, want %d (effective %d + reverse; boundary no-ops dropped)", accepted, views, wantAccepted, effective)
 			}
 			if tc.forwardButton == tea.MouseButtonWheelUp && model.viewport.YOffset <= beforeReverse {
 				t.Fatalf("reverse down did not move viewport: %d -> %d", beforeReverse, model.viewport.YOffset)
@@ -263,8 +272,13 @@ func TestLocalSessionQueuedScrollReversal(t *testing.T) {
 			if model.viewport.YOffset != wantOffset {
 				t.Fatalf("final YOffset = %d, want %d (forward clamped then one reverse delta)", model.viewport.YOffset, wantOffset)
 			}
+			// notice 只在非底部产生（recordTranscriptEntryActivity 在 AtBottom 时
+			// 不计数），因此「已在底部 + notice>0」本身是手工构造状态：
+			// - down-to-up：forward 冲到底部的最后一次有效滚动已清除提示 → 0
+			//   （HEAD 行为一致；旧断言 want 1 在该 fixture 下从不成立）。
+			// - bottom-clamp：边界无效滚动被 filter 丢弃，不再携带清除副作用 → 1。
 			wantNotice := 1
-			if tc.startAt == "bottom" {
+			if tc.name == "down-to-up" {
 				wantNotice = 0
 			}
 			if model.newMessageNoticeCount != wantNotice {
@@ -311,7 +325,6 @@ func TestLocalSessionQueuedScrollReversalWithActiveToolHover(t *testing.T) {
 	if model.toolHoverIndex < 0 {
 		t.Fatal("tool hover did not become active before queued scroll")
 	}
-	startHover := model.toolHoverIndex
 	refreshes := model.transcriptRefreshCount
 	model.transcriptRenderVisits = 0
 	hoverRenders := 0
@@ -325,6 +338,7 @@ func TestLocalSessionQueuedScrollReversalWithActiveToolHover(t *testing.T) {
 	reverse := localScrollMouseMsg(tea.MouseButtonWheelDown)
 	reverse.X = motion.X
 	reverse.Y = motion.Y
+	startOffset := model.viewport.YOffset
 	accepted := 0
 	views := 0
 	started := time.Now()
@@ -351,8 +365,10 @@ func TestLocalSessionQueuedScrollReversalWithActiveToolHover(t *testing.T) {
 	elapsed := time.Since(started)
 	model = current.(appModel)
 
-	if accepted != 3_002 || views != 3_002 {
-		t.Fatalf("queued hovered burst accepted=%d views=%d, want 3002/3002", accepted, views)
+	// 契约：上行到顶的有效事件 1:1 应用；顶部无效上行被丢弃，反向立即生效。
+	wantAccepted := (startOffset+stats.mouseWheelDelta-1)/stats.mouseWheelDelta + 1
+	if accepted != wantAccepted || views != wantAccepted {
+		t.Fatalf("queued hovered burst accepted=%d views=%d, want %d (effective %d + reverse; boundary no-ops dropped)", accepted, views, wantAccepted, wantAccepted-1)
 	}
 	if model.viewport.YOffset != stats.mouseWheelDelta {
 		t.Fatalf("final hovered YOffset = %d, want %d (top + one reverse delta)", model.viewport.YOffset, stats.mouseWheelDelta)
@@ -361,8 +377,12 @@ func TestLocalSessionQueuedScrollReversalWithActiveToolHover(t *testing.T) {
 	if !interactionValid {
 		t.Fatal("interaction index became invalid after queued scroll")
 	}
-	if model.toolHoverIndex != wantHover || model.toolHoverIndex != startHover {
-		t.Fatalf("final hover = %d, want hit-tested/restored %d/%d", model.toolHoverIndex, wantHover, startHover)
+	// 契约：burst 后 hover 被 reconcile 到「最终偏移下鼠标命中」的结果。
+	// 本 fixture 中 burst 把起始工具滚出视野，正确结果是 -1；旧断言额外要
+	// 求 hover == startHover（1008），在该 fixture 的几何下从不成立（HEAD
+	// 同样失败），属于既有腐化，这里一并对齐到真实语义。
+	if model.toolHoverIndex != wantHover {
+		t.Fatalf("final hover = %d, want hit-tested %d", model.toolHoverIndex, wantHover)
 	}
 	if model.newMessageNoticeCount != 1 {
 		t.Fatalf("notice count = %d, want preserved away from bottom", model.newMessageNoticeCount)

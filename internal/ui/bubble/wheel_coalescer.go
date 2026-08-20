@@ -4,6 +4,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"paw/internal/ui/bubble/viewportx"
 )
 
 // A canceled active tail can be expensive to finalize. Let manual scrolling
@@ -42,11 +43,24 @@ func (f *programEventFilter) Filter(model tea.Model, msg tea.Msg) tea.Msg {
 		m, modelOK := transcriptWheelFilterModel(model)
 		if modelOK {
 			if lines, wheelOK := transcriptWheelLines(m, mouse); wheelOK {
+				if wheelClampsAtBoundary(m.viewport, lines) {
+					// 边界无效滚动（底部继续下滑/顶部继续上滑）：视口不可能
+					// 移动，直接丢弃不占队列槽位。惯性滚动在边界的连发不再
+					// 积压，紧随其后的反向滚动零等待生效。
+					return nil
+				}
 				return transcriptWheelBatchMsg{lines: lines, x: mouse.X, y: mouse.Y}
 			}
 		}
 	}
 	return filterIdleMouseMotion(model, msg)
+}
+
+// wheelClampsAtBoundary 报告本次滚动是否撞边界：底部继续下滑或顶部继续上滑。
+// 撞边界的事件不可能改变 YOffset（ScrollUp/ScrollDown 提前返回），在 filter
+// 层丢弃是语义等价的，同时消掉队列占用。
+func wheelClampsAtBoundary(vp viewportx.Model, lines int) bool {
+	return (lines > 0 && vp.AtBottom()) || (lines < 0 && vp.AtTop())
 }
 
 func transcriptWheelLines(m appModel, msg tea.MouseMsg) (int, bool) {

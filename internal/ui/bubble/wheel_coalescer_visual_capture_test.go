@@ -47,6 +47,8 @@ func TestCaptureWheelCoalescerVisualFixture(t *testing.T) {
 	var current tea.Model = model
 	forward := wheelFilterMouse(tea.MouseButtonWheelUp)
 	reverse := wheelFilterMouse(tea.MouseButtonWheelDown)
+	startOffset := model.viewport.YOffset
+	wheelDelta := model.viewport.MouseWheelDelta
 	accepted := 0
 	for range 3_001 {
 		filtered := filter.Filter(current, forward)
@@ -65,8 +67,10 @@ func TestCaptureWheelCoalescerVisualFixture(t *testing.T) {
 	current = next
 	accepted++
 	updated := current.(appModel)
-	if accepted != 3_002 || updated.viewport.YOffset != 3 {
-		t.Fatalf("visual fixture accepted=%d offset=%d, want 3002/3", accepted, updated.viewport.YOffset)
+	// 契约：上行到顶的有效事件 1:1 应用；顶部无效上行被丢弃，反向立即生效。
+	wantAccepted := (startOffset+wheelDelta-1)/wheelDelta + 1
+	if accepted != wantAccepted || updated.viewport.YOffset != 3 {
+		t.Fatalf("visual fixture accepted=%d offset=%d, want %d/3", accepted, updated.viewport.YOffset, wantAccepted)
 	}
 	next, _ = updated.Update(assistantDeltaMsg("Canceled output remains complete after wheel input.\n"))
 	updated = next.(appModel)

@@ -88,12 +88,11 @@ func (m wheelProgramModel) View() string {
 
 // TestProgramEventFilterLetsEachWheelEventThrough 验证事件驱动语义：每个滚轮
 // 事件都立即转成 batch（不再合并到 60fps flush），反转也立即生效。
+// 模型必须处于可滚动的中部位置：边界无效事件会被 filter 丢弃（见
+// TestWheelFilterDropsBoundaryNoOpWheel）。
 func TestProgramEventFilterLetsEachWheelEventThrough(t *testing.T) {
-	model := newTestModel(&fakeRunner{})
-	model.ready = true
-	model.width = 120
-	model.height = 40
-	model.relayout()
+	model := newBoundaryScrollModel()
+	model.viewport.SetYOffset(100)
 
 	filter := newProgramEventFilter()
 	up := tea.MouseMsg{
@@ -308,7 +307,10 @@ func TestProgramEventFilterPassesThroughUnsupportedWheelEvents(t *testing.T) {
 	})
 }
 
-func TestBubbleTeaRawWheelBurstAppliesEveryEvent(t *testing.T) {
+// TestBubbleTeaRawWheelBurstAppliesEffectiveEventsAndDropsBoundary 端到端验证
+// 滚轮契约：能有效移动视口的事件 1:1 立即应用（不合并到固定帧率 flush）；
+// 撞边界的无效事件被 filter 丢弃、不占队列；紧随连发的反向事件立即生效。
+func TestBubbleTeaRawWheelBurstAppliesEffectiveEventsAndDropsBoundary(t *testing.T) {
 	for _, burst := range []int{100, 1_000} {
 		for _, forwardButton := range []tea.MouseButton{tea.MouseButtonWheelUp, tea.MouseButtonWheelDown} {
 			name := fmt.Sprintf("%d/button-%d", burst, forwardButton)
@@ -320,6 +322,13 @@ func TestBubbleTeaRawWheelBurstAppliesEveryEvent(t *testing.T) {
 				}
 				app.viewport.SetLines(lines)
 				app.viewport.SetYOffset(100)
+				maxOffset := maxInt(0, len(lines)-app.viewport.Height)
+				delta := maxInt(1, app.viewport.MouseWheelDelta)
+				distance := maxOffset - 100
+				if forwardButton == tea.MouseButtonWheelUp {
+					distance = 100
+				}
+				effective := (distance + delta - 1) / delta
 				trace := &wheelProgramTrace{}
 				filter := newProgramEventFilter()
 				forward := wheelSGR(forwardButton)
@@ -340,8 +349,8 @@ func TestBubbleTeaRawWheelBurstAppliesEveryEvent(t *testing.T) {
 				if trace.rawWheelUpdates != 0 {
 					t.Fatalf("raw wheel updates = %d, want 0", trace.rawWheelUpdates)
 				}
-				if trace.batchUpdates != burst+1 {
-					t.Fatalf("wheel batch updates = %d, want %d (every event applied)", trace.batchUpdates, burst+1)
+				if trace.batchUpdates != effective+1 {
+					t.Fatalf("wheel batch updates = %d, want %d (effective scrolls %d + reverse; boundary no-ops dropped)", trace.batchUpdates, effective+1, effective)
 				}
 				if !trace.reverseSeen {
 					t.Fatal("reverse never reached Update")
