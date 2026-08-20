@@ -24,6 +24,19 @@ import (
 
 type scriptedModel struct{}
 
+type capturingRichModel struct {
+	messages []message.Message
+}
+
+func (m *capturingRichModel) StreamMessage(_ context.Context, messages []message.Message, _ []model.ToolDefinition) (<-chan model.StreamEvent, error) {
+	m.messages = message.CloneMessages(messages)
+	events := make(chan model.StreamEvent, 2)
+	events <- model.StreamEvent{Delta: "hello"}
+	events <- model.StreamEvent{Done: true}
+	close(events)
+	return events, nil
+}
+
 func (*scriptedModel) StreamMessage(context.Context, []message.Message, []model.ToolDefinition) (<-chan model.StreamEvent, error) {
 	events := make(chan model.StreamEvent, 2)
 	events <- model.StreamEvent{Delta: "hello"}
@@ -176,6 +189,45 @@ func TestHostRunsDurableTurnThroughSessionActor(t *testing.T) {
 	want := []string{"assistant:hello", "done"}
 	if len(output.events) != len(want) || output.events[0] != want[0] || output.events[1] != want[1] {
 		t.Fatalf("display events = %#v, want %#v", output.events, want)
+	}
+}
+
+func TestHostPreservesRichImageDataThroughSessionActor(t *testing.T) {
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	model := &capturingRichModel{}
+	host, err := NewHost(loop.NewEngine(model, &recordingUI{}, tool.NewRegistry(), store, "s1"), store, "s1")
+	if err != nil {
+		t.Fatalf("NewHost: %v", err)
+	}
+	defer host.Close()
+
+	input := message.Message{
+		Role:    message.RoleUser,
+		Content: "describe [Image 1]",
+		Parts: []message.ContentPart{
+			{Type: message.ContentPartText, Text: "describe "},
+			{Type: message.ContentPartImage, Image: &message.ImagePart{
+				MIMEType: "image/png",
+				Data:     []byte("png"),
+			}},
+		},
+	}
+	if _, err := host.RunRichTurn(context.Background(), input); err != nil {
+		t.Fatalf("RunRichTurn: %v", err)
+	}
+	var imageData []byte
+	for _, msg := range model.messages {
+		for _, part := range msg.Parts {
+			if part.Type == message.ContentPartImage && part.Image != nil {
+				imageData = part.Image.Data
+			}
+		}
+	}
+	if string(imageData) != "png" {
+		t.Fatalf("model image data = %q, want %q; messages = %#v", imageData, "png", model.messages)
 	}
 }
 

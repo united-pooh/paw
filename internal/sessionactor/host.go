@@ -68,6 +68,30 @@ func (h *Host) RunRichTurn(ctx context.Context, input message.Message) (message.
 	return execution.Message, err
 }
 
+func (h *Host) persistInputAttachments(ctx context.Context, input *message.Message) error {
+	if h == nil || input == nil || len(input.Parts) == 0 {
+		return nil
+	}
+	for i := range input.Parts {
+		part := &input.Parts[i]
+		if part.Type != message.ContentPartImage || part.Image == nil {
+			continue
+		}
+		if len(part.Image.Data) == 0 {
+			if strings.TrimSpace(part.Image.Attachment) == "" {
+				return fmt.Errorf("图片附件缺少数据或引用")
+			}
+			continue
+		}
+		reference, err := h.store.SaveAttachment(ctx, part.Image.MIMEType, part.Image.Data)
+		if err != nil {
+			return fmt.Errorf("保存图片附件失败: %w", err)
+		}
+		part.Image.Attachment = reference
+	}
+	return nil
+}
+
 func (h *Host) RunTurnWithTiming(ctx context.Context, input, turnID string, startedAt time.Time) (loop.TurnExecution, error) {
 	return h.run(ctx, message.Message{Role: message.RoleUser, Content: input}, turnID, startedAt, false)
 }
@@ -94,6 +118,9 @@ func (h *Host) run(ctx context.Context, input message.Message, turnID string, st
 	}
 	if input.Role != message.RoleUser {
 		return loop.TurnExecution{}, fmt.Errorf("rich turn 必须使用 user role")
+	}
+	if err := h.persistInputAttachments(ctx, &input); err != nil {
+		return loop.TurnExecution{}, err
 	}
 	if turnID == "" {
 		id, err := session.GenerateSessionID()

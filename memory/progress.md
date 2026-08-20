@@ -39,3 +39,10 @@
 - [x] bubble.go：简化 programEventFilter 构造 <!-- todo:c-bubble -->
 - [x] 重写/修正 wheel_coalescer 相关测试与 delta 断言 <!-- todo:c-tests -->
 - [x] go test ./internal/ui/bubble 验证 <!-- todo:c-verify -->
+- [x] 阅读项目结构、项目文档与持久化记忆，确认相关模块和约束 <!-- todo:investigate-context -->
+- [x] 定位剪贴板粘贴、图片附件创建、会话初始化/消息发送代码路径 <!-- todo:investigate-flow -->
+- [x] 检查新会话与已有会话的状态差异，并用现有测试确认图片数据丢失边界 <!-- todo:investigate-state-tests -->
+- [x] 基于调查结论实施最小修复 <!-- todo:implement-fix -->
+- [x] 运行 go test ./... 及相关回归验证 <!-- todo:verify-fix -->
+- [x] 图片粘贴生产路径修复：在 SessionActor Durable 消息序列化前保存图片附件引用，补充 SessionActor 回归测试；`go test ./... -count=1`、相关 race/build/vet/gofmt/diff 检查全通过 <!-- todo:clipboard-image-fix -->
+- [x] 沉淀阶段结果与教训到项目记忆 <!-- todo:archive-results -->
