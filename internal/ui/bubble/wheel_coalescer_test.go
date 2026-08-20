@@ -2,7 +2,6 @@ package bubble
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -10,8 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-type wheelFlushTestMsg struct{}
-
+// wheelEventReader 把 SGR 滚轮序列切成单字节读，逼 Bubble Tea 逐事件解析。
 type wheelEventReader struct {
 	source *strings.Reader
 }
@@ -23,38 +21,17 @@ func (r *wheelEventReader) Read(p []byte) (int, error) {
 	return r.source.Read(p)
 }
 
-type pacedWheelEventReader struct {
-	source     *strings.Reader
-	reads      int
-	pauseAfter int
-}
-
-func (r *pacedWheelEventReader) Read(p []byte) (int, error) {
-	if len(p) > len("\x1b[<64;11;4M") {
-		p = p[:len("\x1b[<64;11;4M")]
-	}
-	n, err := r.source.Read(p)
-	if n > 0 {
-		r.reads++
-		if r.reads == r.pauseAfter {
-			time.Sleep(2 * transcriptWheelFlushInterval)
-		}
-	}
-	return n, err
-}
-
 type wheelProgramTrace struct {
-	views              int
-	batchUpdates       int
-	rawWheelUpdates    int
-	keyUpdates         int
-	otherMouseUpdates  int
-	otherUpdates       int
-	viewsBeforeReverse int
-	firstDirection     int
-	reverseSeen        bool
-	reverseBefore      int
-	reverseAfter       int
+	views             int
+	batchUpdates      int
+	rawWheelUpdates   int
+	keyUpdates        int
+	otherMouseUpdates int
+	otherUpdates      int
+	firstDirection    int
+	reverseSeen       bool
+	reverseBefore     int
+	reverseAfter      int
 }
 
 type wheelProgramModel struct {
@@ -80,7 +57,6 @@ func (m wheelProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.trace.batchUpdates == 0 {
 			m.trace.firstDirection = direction
 		} else if direction != m.trace.firstDirection && !m.trace.reverseSeen {
-			m.trace.viewsBeforeReverse = m.trace.views
 			m.trace.reverseBefore = m.app.viewport.YOffset
 			reverse = true
 		}
@@ -110,18 +86,16 @@ func (m wheelProgramModel) View() string {
 	return m.app.View()
 }
 
-func TestProgramEventFilterLetsWheelReversalPreemptPendingBurst(t *testing.T) {
+// TestProgramEventFilterLetsEachWheelEventThrough 验证事件驱动语义：每个滚轮
+// 事件都立即转成 batch（不再合并到 60fps flush），反转也立即生效。
+func TestProgramEventFilterLetsEachWheelEventThrough(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
 	model.width = 120
 	model.height = 40
 	model.relayout()
 
-	scheduled := 0
-	filter := newProgramEventFilter(func(generation uint64) tea.Cmd {
-		scheduled++
-		return func() tea.Msg { return transcriptWheelFlushMsg{generation: generation} }
-	})
+	filter := newProgramEventFilter()
 	up := tea.MouseMsg{
 		X:      10,
 		Y:      3,
@@ -137,12 +111,14 @@ func TestProgramEventFilterLetsWheelReversalPreemptPendingBurst(t *testing.T) {
 	if !ok {
 		t.Fatalf("first wheel = %T, want transcriptWheelBatchMsg", first)
 	}
-	if first.lines != -1 || first.flush == nil {
-		t.Fatalf("first wheel batch = lines %d flush %v, want -1/non-nil", first.lines, first.flush != nil)
+	if first.lines != -3 {
+		t.Fatalf("first wheel lines = %d, want -3 (delta)", first.lines)
 	}
+
 	for range 3_000 {
-		if got := filter.Filter(model, up); got != nil {
-			t.Fatalf("same-direction queued wheel = %T, want filtered", got)
+		got, ok := filter.Filter(model, up).(transcriptWheelBatchMsg)
+		if !ok || got.lines != -3 {
+			t.Fatalf("queued wheel = %T lines=%d, want batch with -3", got, got.lines)
 		}
 	}
 
@@ -150,18 +126,12 @@ func TestProgramEventFilterLetsWheelReversalPreemptPendingBurst(t *testing.T) {
 	if !ok {
 		t.Fatalf("reverse wheel = %T, want transcriptWheelBatchMsg", reversed)
 	}
-	if reversed.lines != 1 || reversed.flush != nil {
-		t.Fatalf("reverse wheel batch = lines %d flush %v, want 1/nil", reversed.lines, reversed.flush != nil)
-	}
-	if got := filter.Filter(model, transcriptWheelFlushMsg{generation: first.generation}); got != nil {
-		t.Fatalf("flush after reversal = %T, want old-direction pending discarded", got)
-	}
-	if scheduled != 1 {
-		t.Fatalf("scheduled flushes = %d, want 1", scheduled)
+	if reversed.lines != 3 {
+		t.Fatalf("reverse wheel lines = %d, want 3", reversed.lines)
 	}
 }
 
-func TestWheelBatchScrollsViewportOnceAndReturnsFlush(t *testing.T) {
+func TestWheelBatchScrollsViewport(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
 	model.width = 120
@@ -177,30 +147,22 @@ func TestWheelBatchScrollsViewportOnceAndReturnsFlush(t *testing.T) {
 	beforeOffset := model.viewport.YOffset
 	refreshes := model.transcriptRefreshCount
 
-	next, cmd := model.Update(transcriptWheelBatchMsg{
-		lines: -25,
-		x:     10,
-		y:     3,
-		flush: func() tea.Msg { return wheelFlushTestMsg{} },
-	})
+	next, cmd := model.Update(transcriptWheelBatchMsg{lines: -25, x: 10, y: 3})
 	updated := next.(appModel)
 	if got := beforeOffset - updated.viewport.YOffset; got != 25 {
-		t.Fatalf("batched scroll distance = %d, want 25", got)
+		t.Fatalf("wheel scroll distance = %d, want 25", got)
 	}
 	if !updated.transcriptKeyScrollActive {
-		t.Fatal("batched wheel did not activate transcript key scrolling")
+		t.Fatal("wheel did not activate transcript key scrolling")
 	}
 	if updated.newMessageNoticeCount != 1 {
 		t.Fatalf("notice count = %d, want preserved away from bottom", updated.newMessageNoticeCount)
 	}
 	if got := updated.transcriptRefreshCount - refreshes; got != 0 {
-		t.Fatalf("batched scroll refreshed transcript %d times, want 0", got)
+		t.Fatalf("wheel scroll refreshed transcript %d times, want 0", got)
 	}
-	if cmd == nil {
-		t.Fatal("batched wheel did not return its flush command")
-	}
-	if _, ok := cmd().(wheelFlushTestMsg); !ok {
-		t.Fatalf("flush command returned unexpected message")
+	if cmd != nil {
+		t.Fatalf("wheel batch returned a command, want nil (no flush timer)")
 	}
 }
 
@@ -303,76 +265,9 @@ func TestSuccessfulDoneStillRefreshesTranscriptImmediately(t *testing.T) {
 	}
 }
 
-func TestProgramEventFilterFlushesQuietWheelTail(t *testing.T) {
-	model := wheelFilterTestModel()
-	filter := newProgramEventFilter(func(generation uint64) tea.Cmd {
-		return func() tea.Msg { return transcriptWheelFlushMsg{generation: generation} }
-	})
-	up := wheelFilterMouse(tea.MouseButtonWheelUp)
-	first := filter.Filter(model, up).(transcriptWheelBatchMsg)
-	for range 9 {
-		if got := filter.Filter(model, up); got != nil {
-			t.Fatalf("queued wheel = %T, want filtered", got)
-		}
-	}
-
-	flushed, ok := filter.Filter(model, first.flush()).(transcriptWheelBatchMsg)
-	if !ok {
-		t.Fatalf("quiet-tail flush = %T, want transcriptWheelBatchMsg", flushed)
-	}
-	if flushed.lines != -9 || flushed.flush == nil {
-		t.Fatalf("quiet-tail batch = lines %d flush %v, want -9/non-nil", flushed.lines, flushed.flush != nil)
-	}
-	if got := filter.Filter(model, flushed.flush()); got != nil {
-		t.Fatalf("empty follow-up flush = %T, want nil", got)
-	}
-}
-
-func TestProgramEventFilterEmptyFlushClosesBurstWithoutSkippingGeneration(t *testing.T) {
-	model := wheelFilterTestModel()
-	filter := newProgramEventFilter(func(generation uint64) tea.Cmd {
-		return func() tea.Msg { return transcriptWheelFlushMsg{generation: generation} }
-	})
-	up := wheelFilterMouse(tea.MouseButtonWheelUp)
-
-	first := filter.Filter(model, up).(transcriptWheelBatchMsg)
-	if got := filter.Filter(model, first.flush()); got != nil {
-		t.Fatalf("empty flush = %T, want nil", got)
-	}
-	second := filter.Filter(model, up).(transcriptWheelBatchMsg)
-	if second.generation != first.generation+1 {
-		t.Fatalf("next generation = %d, want %d", second.generation, first.generation+1)
-	}
-}
-
-func TestProgramEventFilterIgnoresStaleFlushWithoutDroppingCurrentTail(t *testing.T) {
-	model := wheelFilterTestModel()
-	filter := newProgramEventFilter(func(generation uint64) tea.Cmd {
-		return func() tea.Msg { return transcriptWheelFlushMsg{generation: generation} }
-	})
-	up := wheelFilterMouse(tea.MouseButtonWheelUp)
-	down := wheelFilterMouse(tea.MouseButtonWheelDown)
-
-	first := filter.Filter(model, up).(transcriptWheelBatchMsg)
-	filter.Filter(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
-	current := filter.Filter(model, down).(transcriptWheelBatchMsg)
-	filter.Filter(model, down)
-
-	if got := filter.Filter(model, first.flush()); got != nil {
-		t.Fatalf("stale flush = %T, want nil", got)
-	}
-	flushed, ok := filter.Filter(model, current.flush()).(transcriptWheelBatchMsg)
-	if !ok {
-		t.Fatalf("current flush = %T, want transcriptWheelBatchMsg", flushed)
-	}
-	if flushed.lines != 1 {
-		t.Fatalf("current pending tail = %d, want 1", flushed.lines)
-	}
-}
-
 func TestProgramEventFilterPassesThroughUnsupportedWheelEvents(t *testing.T) {
 	model := wheelFilterTestModel()
-	filter := newProgramEventFilter(nil)
+	filter := newProgramEventFilter()
 	shifted := wheelFilterMouse(tea.MouseButtonWheelUp)
 	shifted.Shift = true
 	horizontal := wheelFilterMouse(tea.MouseButtonWheelLeft)
@@ -413,51 +308,8 @@ func TestProgramEventFilterPassesThroughUnsupportedWheelEvents(t *testing.T) {
 	})
 }
 
-func TestProgramEventFilterCancelsPendingWheelForNewUserInputOnly(t *testing.T) {
-	model := wheelFilterTestModel()
-	newFilter := func() *programEventFilter {
-		return newProgramEventFilter(func(generation uint64) tea.Cmd {
-			return func() tea.Msg { return transcriptWheelFlushMsg{generation: generation} }
-		})
-	}
-	up := wheelFilterMouse(tea.MouseButtonWheelUp)
-
-	filter := newFilter()
-	first := filter.Filter(model, up).(transcriptWheelBatchMsg)
-	filter.Filter(model, up)
-	internal := assistantDeltaMsg("delta")
-	if got := filter.Filter(model, internal); got != internal {
-		t.Fatalf("internal message = %#v, want preserved", got)
-	}
-	if flushed := filter.Filter(model, first.flush()).(transcriptWheelBatchMsg); flushed.lines != -1 {
-		t.Fatalf("pending after internal message = %d, want -1", flushed.lines)
-	}
-
-	filter = newFilter()
-	first = filter.Filter(model, up).(transcriptWheelBatchMsg)
-	filter.Filter(model, up)
-	key := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}}
-	if got, ok := filter.Filter(model, key).(tea.KeyMsg); !ok || got.String() != key.String() {
-		t.Fatalf("key message = %#v, want preserved", got)
-	}
-	if got := filter.Filter(model, first.flush()); got != nil {
-		t.Fatalf("flush after key = %T, want canceled", got)
-	}
-
-	filter = newFilter()
-	first = filter.Filter(model, up).(transcriptWheelBatchMsg)
-	filter.Filter(model, up)
-	click := tea.MouseMsg{X: 10, Y: 3, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}
-	if got, ok := filter.Filter(model, click).(tea.MouseMsg); !ok || got != click {
-		t.Fatalf("click message = %#v, want preserved", got)
-	}
-	if got := filter.Filter(model, first.flush()); got != nil {
-		t.Fatalf("flush after click = %T, want canceled", got)
-	}
-}
-
-func TestBubbleTeaRawWheelBurstReachesReverseWithoutIntermediateViews(t *testing.T) {
-	for _, burst := range []int{3_000, 10_000} {
+func TestBubbleTeaRawWheelBurstAppliesEveryEvent(t *testing.T) {
+	for _, burst := range []int{100, 1_000} {
 		for _, forwardButton := range []tea.MouseButton{tea.MouseButtonWheelUp, tea.MouseButtonWheelDown} {
 			name := fmt.Sprintf("%d/button-%d", burst, forwardButton)
 			t.Run(name, func(t *testing.T) {
@@ -468,12 +320,11 @@ func TestBubbleTeaRawWheelBurstReachesReverseWithoutIntermediateViews(t *testing
 				}
 				app.viewport.SetLines(lines)
 				app.viewport.SetYOffset(100)
-				startOffset := app.viewport.YOffset
 				trace := &wheelProgramTrace{}
-				filter := newProgramEventFilter(nil)
+				filter := newProgramEventFilter()
 				forward := wheelSGR(forwardButton)
 				reverse := wheelSGR(oppositeWheelButton(forwardButton))
-				input := strings.Repeat(forward, burst+1) + reverse + "q"
+				input := strings.Repeat(forward, burst) + reverse + "q"
 				program := tea.NewProgram(
 					wheelProgramModel{app: app, trace: trace},
 					tea.WithInput(&wheelEventReader{source: strings.NewReader(input)}),
@@ -485,69 +336,24 @@ func TestBubbleTeaRawWheelBurstReachesReverseWithoutIntermediateViews(t *testing
 				if err != nil {
 					t.Fatalf("run raw wheel program: %v", err)
 				}
-				got := final.(wheelProgramModel)
+				_ = final.(wheelProgramModel)
 				if trace.rawWheelUpdates != 0 {
 					t.Fatalf("raw wheel updates = %d, want 0", trace.rawWheelUpdates)
 				}
-				if trace.batchUpdates != 2 {
-					t.Fatalf("wheel batch updates = %d, want first+reverse only (raw=%d key=%d mouse=%d other=%d)", trace.batchUpdates, trace.rawWheelUpdates, trace.keyUpdates, trace.otherMouseUpdates, trace.otherUpdates)
+				if trace.batchUpdates != burst+1 {
+					t.Fatalf("wheel batch updates = %d, want %d (every event applied)", trace.batchUpdates, burst+1)
 				}
-				if trace.viewsBeforeReverse != 2 {
-					t.Fatalf("views before reverse = %d, want initial+first batch", trace.viewsBeforeReverse)
+				if !trace.reverseSeen {
+					t.Fatal("reverse never reached Update")
 				}
-				if got.app.viewport.YOffset != startOffset {
-					t.Fatalf("final YOffset = %d, want restored %d after forward then reverse", got.app.viewport.YOffset, startOffset)
+				if trace.firstDirection < 0 && trace.reverseAfter <= trace.reverseBefore {
+					t.Fatalf("reverse down did not move viewport: %d -> %d", trace.reverseBefore, trace.reverseAfter)
+				}
+				if trace.firstDirection > 0 && trace.reverseAfter >= trace.reverseBefore {
+					t.Fatalf("reverse up did not move viewport: %d -> %d", trace.reverseBefore, trace.reverseAfter)
 				}
 			})
 		}
-	}
-}
-
-func TestBubbleTeaRawWheelBurstWithProductionSchedulerStaysBatched(t *testing.T) {
-	if os.Getenv("PAW_WHEEL_TIMING_TEST") != "1" {
-		t.Skip("set PAW_WHEEL_TIMING_TEST=1 to exercise the real 60fps scheduler")
-	}
-	const burst = 256
-	for _, forwardButton := range []tea.MouseButton{tea.MouseButtonWheelUp, tea.MouseButtonWheelDown} {
-		name := fmt.Sprintf("button-%d", forwardButton)
-		t.Run(name, func(t *testing.T) {
-			app := wheelFilterTestModel()
-			lines := make([]string, 240)
-			for index := range lines {
-				lines[index] = fmt.Sprintf("line %03d", index)
-			}
-			app.viewport.SetLines(lines)
-			app.viewport.SetYOffset(100)
-			trace := &wheelProgramTrace{}
-			filter := newProgramEventFilter(scheduleTranscriptWheelFlush)
-			input := strings.Repeat(wheelSGR(forwardButton), burst+1) + wheelSGR(oppositeWheelButton(forwardButton)) + "q"
-			program := tea.NewProgram(
-				wheelProgramModel{app: app, trace: trace},
-				tea.WithInput(&pacedWheelEventReader{source: strings.NewReader(input), pauseAfter: 32}),
-				tea.WithoutRenderer(),
-				tea.WithoutSignalHandler(),
-				tea.WithFilter(filter.Filter),
-			)
-			if _, err := program.Run(); err != nil {
-				t.Fatalf("run scheduled raw wheel program: %v", err)
-			}
-			if trace.rawWheelUpdates != 0 {
-				t.Fatalf("raw wheel updates = %d, want 0", trace.rawWheelUpdates)
-			}
-			maxBatches := 16
-			if trace.batchUpdates < 3 || trace.batchUpdates > maxBatches {
-				t.Fatalf("scheduled batch updates = %d, want 3..%d for %d raw events", trace.batchUpdates, maxBatches, burst+2)
-			}
-			if !trace.reverseSeen {
-				t.Fatal("reverse batch never reached Update")
-			}
-			if trace.firstDirection < 0 && trace.reverseAfter <= trace.reverseBefore {
-				t.Fatalf("reverse down did not move viewport: %d -> %d", trace.reverseBefore, trace.reverseAfter)
-			}
-			if trace.firstDirection > 0 && trace.reverseAfter >= trace.reverseBefore {
-				t.Fatalf("reverse up did not move viewport: %d -> %d", trace.reverseBefore, trace.reverseAfter)
-			}
-		})
 	}
 }
 
@@ -599,10 +405,10 @@ func TestWheelBatchReconcilesHoverOnlyAtFinalOffset(t *testing.T) {
 		t.Fatalf("hover patch renders = %d, want one final-offset render", renders)
 	}
 	if got := updated.transcriptRefreshCount - refreshes; got != 0 {
-		t.Fatalf("batched hover reconciliation refreshed transcript %d times, want 0", got)
+		t.Fatalf("wheel hover reconciliation refreshed transcript %d times, want 0", got)
 	}
 	if updated.transcriptRenderVisits != 0 {
-		t.Fatalf("batched hover reconciliation rendered %d transcript entries, want 0", updated.transcriptRenderVisits)
+		t.Fatalf("wheel hover reconciliation rendered %d transcript entries, want 0", updated.transcriptRenderVisits)
 	}
 }
 
@@ -616,13 +422,13 @@ func TestWheelBatchToBottomClearsNoticeAndPreservesSelection(t *testing.T) {
 	next, _ := model.Update(transcriptWheelBatchMsg{lines: 10_000, x: 10, y: 3})
 	updated := next.(appModel)
 	if !updated.viewport.AtBottom() {
-		t.Fatalf("batched scroll YOffset = %d, want bottom", updated.viewport.YOffset)
+		t.Fatalf("wheel scroll YOffset = %d, want bottom", updated.viewport.YOffset)
 	}
 	if updated.newMessageNoticeCount != 0 || updated.newMessageNoticeHovered {
 		t.Fatalf("notice after bottom batch = count %d hovered %v, want cleared", updated.newMessageNoticeCount, updated.newMessageNoticeHovered)
 	}
 	if !updated.selectionActive {
-		t.Fatal("batched wheel cleared the existing selection")
+		t.Fatal("wheel cleared the existing selection")
 	}
 }
 

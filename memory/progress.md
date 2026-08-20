@@ -29,3 +29,13 @@
   - [x] P5-6 原子切换与验收：生产调用方只经 SessionActor，旧执行路径删除，全量门禁通过 <!-- todo:p5-6 -->
 - [x] P4–P5 第三轮审查修复轮（spec §15）：H2/H3/H4/M1/M2 修复、Kind 空值归一、system.go/cell.go 拆分（<250 行）、内核管理端口单测、P5 事件流级 golden 三路径、flaky 测试受控时钟化、bench 基准入库 <!-- todo:review-round -->
 - [ ] P6 loopRunner 接入换壳（前置债务：loop 包扇出 11→≤8；Durable 跨消息 group commit；流式端到端与常驻内存基准，见 spec §10/§15） <!-- todo:p6 -->
+- [x] 读取项目说明与持久化记忆，确认调研范围和验证方式 <!-- todo:survey-context -->
+- [x] 分析多 worker/agent 的核心架构与任务传递流程 <!-- todo:survey-workers -->
+- [x] 分析插件、MCP、工具注册与扩展机制 <!-- todo:survey-plugins -->
+- [x] 分析项目目录、入口、运行流程和关键文档 <!-- todo:survey-structure -->
+- [x] 汇总 worker 结果，给出当前项目快速概览与结论 <!-- todo:survey-summary -->
+- [x] wheel_coalescer：删 60fps 合并，改为每滚轮事件立即滚动 <!-- todo:c-coalescer -->
+- [x] app.go：delta 1→3，简化 transcriptWheelBatchMsg 分支 <!-- todo:c-app -->
+- [x] bubble.go：简化 programEventFilter 构造 <!-- todo:c-bubble -->
+- [x] 重写/修正 wheel_coalescer 相关测试与 delta 断言 <!-- todo:c-tests -->
+- [x] go test ./internal/ui/bubble 验证 <!-- todo:c-verify -->

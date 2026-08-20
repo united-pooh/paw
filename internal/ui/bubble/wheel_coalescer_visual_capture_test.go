@@ -41,10 +41,9 @@ func TestCaptureWheelCoalescerVisualFixture(t *testing.T) {
 	model.refreshViewport()
 	model.viewport.SetYOffset(model.viewport.YOffset / 2)
 	model.newMessageNoticeCount = 12
-	startOffset := model.viewport.YOffset
 	before := ansi.Strip(model.View())
 
-	filter := newProgramEventFilter(nil)
+	filter := newProgramEventFilter()
 	var current tea.Model = model
 	forward := wheelFilterMouse(tea.MouseButtonWheelUp)
 	reverse := wheelFilterMouse(tea.MouseButtonWheelDown)
@@ -66,8 +65,8 @@ func TestCaptureWheelCoalescerVisualFixture(t *testing.T) {
 	current = next
 	accepted++
 	updated := current.(appModel)
-	if accepted != 2 || updated.viewport.YOffset != startOffset {
-		t.Fatalf("visual fixture accepted=%d offset=%d, want 2/%d", accepted, updated.viewport.YOffset, startOffset)
+	if accepted != 3_002 || updated.viewport.YOffset != 3 {
+		t.Fatalf("visual fixture accepted=%d offset=%d, want 3002/3", accepted, updated.viewport.YOffset)
 	}
 	next, _ = updated.Update(assistantDeltaMsg("Canceled output remains complete after wheel input.\n"))
 	updated = next.(appModel)
@@ -98,7 +97,7 @@ main{width:1360px;margin:0 auto;padding:28px 32px 36px;box-sizing:border-box}h1{
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}section{min-width:0;background:#111827;border:1px solid #334155;border-radius:12px;padding:15px;box-shadow:0 12px 28px #0005}
 h2{font-size:15px;margin:0 0 10px;color:#fbbf24}pre{height:650px;overflow:hidden;white-space:pre;margin:0;color:#f8fafc;font:12px/1.28 ui-monospace,SFMono-Regular,Menlo,monospace}
 </style></head><body><main><h1>Post-cancel transcript scrolling</h1><p class="subtitle">Non-private fixture rendered through the real Bubble app model before wheel reversal and after a canceled-tail idle refresh.</p>
-<div class="metrics"><div class="metric"><b>3,002</b> raw wheel events</div><div class="metric"><b>2</b> reversal batches</div><div class="metric"><b>1</b> idle final refresh</div><div class="metric"><b>preserved</b> manual YOffset</div></div>
+<div class="metrics"><div class="metric"><b>3,002</b> wheel events</div><div class="metric"><b>3,002</b> applied scroll batches</div><div class="metric"><b>1</b> idle final refresh</div><div class="metric"><b>preserved</b> manual YOffset</div></div>
 <div class="grid"><section><h2>Before burst</h2><pre>` + html.EscapeString(before) + `</pre></section><section><h2>After cancel + wheel idle</h2><pre>` + html.EscapeString(after) + `</pre></section></div></main></body></html>`
 	if err := os.WriteFile(outputPath, []byte(page), 0o644); err != nil {
 		t.Fatal(err)

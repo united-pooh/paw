@@ -343,7 +343,7 @@ func (u *UI) Run(ctx context.Context, runner Runner, sessionID string) error {
 	// [[[[[[[ 泄漏。reader 内嵌 *os.File，MakeRaw 与 kqueue 路径不受影响。
 	output := newAnchoredOutput(os.Stdout, anchor)
 	defer output.Close()
-	eventFilter := newProgramEventFilter(scheduleTranscriptWheelFlush)
+	eventFilter := newProgramEventFilter()
 	program := tea.NewProgram(
 		appModel,
 		tea.WithContext(ctx),

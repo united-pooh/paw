@@ -59,7 +59,7 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 	styles := NewStyleSet(selectedTheme.Colors)
 
 	vp := viewportx.New(80, 20)
-	vp.MouseWheelDelta = 1
+	vp.MouseWheelDelta = 3
 	// viewport 默认 KeyMap 把空格、j/k/u/d/f/b/h/l 和 ctrl+u/ctrl+d 等绑定为
 	// 滚动键。输入框常驻聚焦时，这些按键必须原样交给 textarea（打字与编辑），
 	// 否则输入字符会连带滚动 transcript（ctrl+u/ctrl+d 还会同时删字和滚屏）。
@@ -138,15 +138,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case transcriptWheelBatchMsg:
 		m = m.applyTranscriptWheelBatch(msg.lines, msg.x, msg.y)
-		deferredRefresh := m.renewDeferredTranscriptRefresh()
-		switch {
-		case msg.flush != nil && deferredRefresh != nil:
-			return m, tea.Batch(msg.flush, deferredRefresh)
-		case deferredRefresh != nil:
-			return m, deferredRefresh
-		default:
-			return m, msg.flush
-		}
+		return m, m.renewDeferredTranscriptRefresh()
 	case transcriptDeferredRefreshMsg:
 		if !m.transcriptRefreshDeferred || msg.generation != m.transcriptRefreshDeferredGeneration {
 			return m, nil

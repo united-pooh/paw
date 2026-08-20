@@ -2929,8 +2929,8 @@ func TestMouseWheelScrollsTranscriptViewport(t *testing.T) {
 		Action: tea.MouseActionPress,
 	})
 	model = next.(appModel)
-	if delta := bottomOffset - model.viewport.YOffset; delta != 1 {
-		t.Fatalf("wheel delta = %d (YOffset %d -> %d), want 1", delta, bottomOffset, model.viewport.YOffset)
+	if delta := bottomOffset - model.viewport.YOffset; delta != 3 {
+		t.Fatalf("wheel delta = %d (YOffset %d -> %d), want 3", delta, bottomOffset, model.viewport.YOffset)
 	}
 }
 

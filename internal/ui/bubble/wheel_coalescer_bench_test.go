@@ -20,27 +20,13 @@ func BenchmarkProgramEventFilterQueuedWheelBurst(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
 				filter := programEventFilter{}
-				wheelFilterBenchmarkSink = filter.Filter(current, upMsg)
 				for range burst {
 					wheelFilterBenchmarkSink = filter.Filter(current, upMsg)
 				}
 				wheelFilterBenchmarkSink = filter.Filter(current, downMsg)
 			}
-			b.ReportMetric(float64(burst+2), "raw-events/op")
-			b.ReportMetric(2, "batch-updates/op")
+			b.ReportMetric(float64(burst+1), "batch-updates/op")
 		})
-	}
-}
-
-func BenchmarkProgramEventFilterMergedWheel(b *testing.B) {
-	model := wheelFilterTestModel()
-	var current tea.Model = model
-	var up tea.Msg = wheelFilterMouse(tea.MouseButtonWheelUp)
-	filter := programEventFilter{}
-	filter.Filter(current, up)
-	b.ReportAllocs()
-	for b.Loop() {
-		wheelFilterBenchmarkSink = filter.Filter(current, up)
 	}
 }
 

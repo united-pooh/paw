@@ -213,11 +213,10 @@ func TestLocalSessionQueuedScrollReversal(t *testing.T) {
 			case "bottom":
 				model.viewport.GotoBottom()
 			}
-			startOffset := model.viewport.YOffset
 			model.newMessageNoticeCount = 1
 			refreshes := model.transcriptRefreshCount
 			model.transcriptRenderVisits = 0
-			filter := newProgramEventFilter(nil)
+			filter := newProgramEventFilter()
 			var current tea.Model = model
 			forward := localScrollMouseMsg(tc.forwardButton)
 			reverse := localScrollMouseMsg(oppositeWheelButton(tc.forwardButton))
@@ -248,8 +247,8 @@ func TestLocalSessionQueuedScrollReversal(t *testing.T) {
 			elapsed := time.Since(started)
 			model = current.(appModel)
 
-			if accepted != 2 || views != 2 {
-				t.Fatalf("queued burst accepted=%d views=%d, want 2/2", accepted, views)
+			if accepted != 3_002 || views != 3_002 {
+				t.Fatalf("queued burst accepted=%d views=%d, want 3002/3002", accepted, views)
 			}
 			if tc.forwardButton == tea.MouseButtonWheelUp && model.viewport.YOffset <= beforeReverse {
 				t.Fatalf("reverse down did not move viewport: %d -> %d", beforeReverse, model.viewport.YOffset)
@@ -257,15 +256,12 @@ func TestLocalSessionQueuedScrollReversal(t *testing.T) {
 			if tc.forwardButton == tea.MouseButtonWheelDown && model.viewport.YOffset >= beforeReverse {
 				t.Fatalf("reverse up did not move viewport: %d -> %d", beforeReverse, model.viewport.YOffset)
 			}
-			wantOffset := startOffset
-			switch tc.startAt {
-			case "top":
-				wantOffset += stats.mouseWheelDelta
-			case "bottom":
-				wantOffset -= stats.mouseWheelDelta
+			wantOffset := beforeReverse + stats.mouseWheelDelta
+			if tc.forwardButton == tea.MouseButtonWheelDown {
+				wantOffset = beforeReverse - stats.mouseWheelDelta
 			}
 			if model.viewport.YOffset != wantOffset {
-				t.Fatalf("final YOffset = %d, want %d", model.viewport.YOffset, wantOffset)
+				t.Fatalf("final YOffset = %d, want %d (forward clamped then one reverse delta)", model.viewport.YOffset, wantOffset)
 			}
 			wantNotice := 1
 			if tc.startAt == "bottom" {
@@ -316,14 +312,13 @@ func TestLocalSessionQueuedScrollReversalWithActiveToolHover(t *testing.T) {
 		t.Fatal("tool hover did not become active before queued scroll")
 	}
 	startHover := model.toolHoverIndex
-	startOffset := model.viewport.YOffset
 	refreshes := model.transcriptRefreshCount
 	model.transcriptRenderVisits = 0
 	hoverRenders := 0
 	model.transcriptHoverPatchRenderSpy = &hoverRenders
 	current = model
 
-	filter := newProgramEventFilter(nil)
+	filter := newProgramEventFilter()
 	forward := localScrollMouseMsg(tea.MouseButtonWheelUp)
 	forward.X = motion.X
 	forward.Y = motion.Y
@@ -356,11 +351,11 @@ func TestLocalSessionQueuedScrollReversalWithActiveToolHover(t *testing.T) {
 	elapsed := time.Since(started)
 	model = current.(appModel)
 
-	if accepted != 2 || views != 2 {
-		t.Fatalf("queued hovered burst accepted=%d views=%d, want 2/2", accepted, views)
+	if accepted != 3_002 || views != 3_002 {
+		t.Fatalf("queued hovered burst accepted=%d views=%d, want 3002/3002", accepted, views)
 	}
-	if model.viewport.YOffset != startOffset {
-		t.Fatalf("final hovered YOffset = %d, want restored %d", model.viewport.YOffset, startOffset)
+	if model.viewport.YOffset != stats.mouseWheelDelta {
+		t.Fatalf("final hovered YOffset = %d, want %d (top + one reverse delta)", model.viewport.YOffset, stats.mouseWheelDelta)
 	}
 	wantHover, interactionValid := model.toolHoverIndexAtMouse(motion.X, motion.Y)
 	if !interactionValid {
@@ -368,9 +363,6 @@ func TestLocalSessionQueuedScrollReversalWithActiveToolHover(t *testing.T) {
 	}
 	if model.toolHoverIndex != wantHover || model.toolHoverIndex != startHover {
 		t.Fatalf("final hover = %d, want hit-tested/restored %d/%d", model.toolHoverIndex, wantHover, startHover)
-	}
-	if hoverRenders > 2 {
-		t.Fatalf("hover patch renders = %d, want at most one per visible batch", hoverRenders)
 	}
 	if model.newMessageNoticeCount != 1 {
 		t.Fatalf("notice count = %d, want preserved away from bottom", model.newMessageNoticeCount)
@@ -448,10 +440,9 @@ func BenchmarkLocalSessionQueuedScrollReversal(b *testing.B) {
 				model := base
 				model.viewport.GotoBottom()
 				model.viewport.SetYOffset(model.viewport.YOffset / 2)
-				startOffset := model.viewport.YOffset
 				refreshes := model.transcriptRefreshCount
 				model.transcriptRenderVisits = 0
-				filter := newProgramEventFilter(nil)
+				filter := newProgramEventFilter()
 				var current tea.Model = model
 				accepted := 0
 				for range burst + 1 {
@@ -473,8 +464,8 @@ func BenchmarkLocalSessionQueuedScrollReversal(b *testing.B) {
 				localScrollViewSink = current.View()
 				accepted++
 				model = current.(appModel)
-				if accepted != 2 || model.viewport.YOffset != startOffset {
-					b.Fatalf("accepted=%d final YOffset=%d, want 2/%d", accepted, model.viewport.YOffset, startOffset)
+				if accepted != burst+2 {
+					b.Fatalf("accepted=%d, want %d (every event)", accepted, burst+2)
 				}
 				if got := model.transcriptRefreshCount - refreshes; got != 0 {
 					b.Fatalf("queued scrolling refreshed transcript %d times, want 0", got)
@@ -484,8 +475,8 @@ func BenchmarkLocalSessionQueuedScrollReversal(b *testing.B) {
 				}
 			}
 			b.ReportMetric(burst+2, "raw-events/op")
-			b.ReportMetric(2, "batch-updates/op")
-			b.ReportMetric(2, "views/op")
+			b.ReportMetric(burst+2, "batch-updates/op")
+			b.ReportMetric(burst+2, "views/op")
 			b.ReportMetric(burst+2, "reverse-position/op")
 			b.ReportMetric(float64(stats.fileBytes)/(1024*1024), "session-MiB")
 			b.ReportMetric(float64(stats.records), "records")
@@ -512,7 +503,7 @@ func BenchmarkLocalSessionScheduledRawWheelReversal(b *testing.B) {
 				model.viewport.GotoBottom()
 				model.viewport.SetYOffset(model.viewport.YOffset / 2)
 				trace := &wheelProgramTrace{}
-				filter := newProgramEventFilter(scheduleTranscriptWheelFlush)
+				filter := newProgramEventFilter()
 				program := tea.NewProgram(
 					wheelProgramModel{app: model, trace: trace},
 					tea.WithInput(&wheelEventReader{source: strings.NewReader(input)}),
@@ -523,8 +514,8 @@ func BenchmarkLocalSessionScheduledRawWheelReversal(b *testing.B) {
 				if _, err := program.Run(); err != nil {
 					b.Fatalf("run scheduled local wheel program: %v", err)
 				}
-				if trace.rawWheelUpdates != 0 || trace.batchUpdates < 2 || trace.batchUpdates > burst/100 {
-					b.Fatalf("raw=%d batches=%d, want 0 and 2..%d", trace.rawWheelUpdates, trace.batchUpdates, burst/100)
+				if trace.rawWheelUpdates != 0 || trace.batchUpdates != burst+2 {
+					b.Fatalf("raw=%d batches=%d, want 0 and %d (every event)", trace.rawWheelUpdates, trace.batchUpdates, burst+2)
 				}
 				if !trace.reverseSeen {
 					b.Fatal("reverse batch never reached Update")
