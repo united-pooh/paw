@@ -19,6 +19,15 @@ func (c *cell) processOne(msg Msg) {
 	if c.quarantine.Load() || c.poisoned.Load() {
 		return
 	}
+	c.mu.Lock()
+	ready := c.activated && c.actor != nil && c.ledger != nil
+	c.mu.Unlock()
+	if !ready {
+		// pump 的激活守卫是主防线，此处兜底：激活失败或重激活窗口内
+		// 绝不以 nil actor/ledger 消费（否则 nil pointer panic → 监督
+		// 退避重启 → 激活再次失败的重启风暴）。
+		return
+	}
 	ctx := &Context{sys: c.system, cell: c, msg: msg}
 	defer func() {
 		if r := recover(); r != nil {

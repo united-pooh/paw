@@ -78,6 +78,14 @@ func (c *cell) activateLocked(ctx context.Context) error {
 	ledger := newRuntimeLedger()
 
 	envs, err := c.system.journal.load(ctx, c.id)
+	if err != nil && errors.Is(err, es.ErrSeqGap) {
+		// 多实例双写者/崩溃交错在流里留下重复或回退序号，Load 必然失败。
+		// 截掉违例尾部是唯一自愈路径；恢复动作必须日志可见。
+		if dropped, ok, rerr := c.system.journal.repairSeqGaps(ctx, c.id); rerr == nil && ok {
+			c.system.logger("actor: journal for %s had a seq gap; dropped %d tail events and recovered", c.id, dropped)
+			envs, err = c.system.journal.load(ctx, c.id)
+		}
+	}
 	if err != nil {
 		return err
 	}

@@ -146,6 +146,23 @@ func (j *journal) load(ctx context.Context, id ActorID) ([]es.Envelope, error) {
 	return envs, err
 }
 
+// repairSeqGaps 截掉流中首个 seq 违例起的尾部（es.ErrSeqGap 自愈）。
+// 底层 store 不支持修复时 ok=false（注入的自定义 StreamStore 不强制实现）。
+func (j *journal) repairSeqGaps(ctx context.Context, id ActorID) (dropped int, ok bool, err error) {
+	store, err := j.store(id)
+	if err != nil {
+		return 0, false, err
+	}
+	repairer, ok := store.(interface {
+		RepairSeqGaps(context.Context, string) (int, error)
+	})
+	if !ok {
+		return 0, false, nil
+	}
+	dropped, err = repairer.RepairSeqGaps(ctx, id.Key)
+	return dropped, true, err
+}
+
 func (j *journal) writeSnapshot(ctx context.Context, id ActorID, seq int64, state json.RawMessage) error {
 	store, err := j.store(id)
 	if err != nil {

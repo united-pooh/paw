@@ -17,14 +17,16 @@ func (c *cell) pump() {
 		defer func() {
 			c.pumpLock.Store(false)
 			// 复位后复查：释放窗口内新入队的消息可能无人泵送，补一轮。
-			// 隔离/挂起态不补（隔离终态不处理；挂起消息有意驻留）。
+			// 隔离/挂起/未激活不补（隔离终态不处理；挂起消息有意驻留；
+			// 未激活时消息驻留等待激活，补泵只会空转）。
 			if c.quarantine.Load() {
 				return
 			}
 			c.mu.Lock()
 			suspended := c.suspended
+			activated := c.activated
 			c.mu.Unlock()
-			if !suspended && c.mbox.len() > 0 {
+			if !suspended && activated && c.mbox.len() > 0 {
 				c.pump()
 			}
 		}()
@@ -34,9 +36,16 @@ func (c *cell) pump() {
 			}
 			c.mu.Lock()
 			suspended := c.suspended
+			activated := c.activated
 			c.mu.Unlock()
 			if suspended {
 				return // 消息滞留邮箱，Resume 重新泵送
+			}
+			if !activated {
+				// 激活未完成（首次激活失败/重激活进行中或失败）：消息驻留
+				// 邮箱，由下次 route 或成功激活后的 pump 接手。此时消费会以
+				// nil actor/ledger 触发 panic 和监督重启风暴。
+				return
 			}
 			item, ok := c.mbox.pop()
 			if !ok {
