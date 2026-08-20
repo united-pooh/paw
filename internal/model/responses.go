@@ -326,6 +326,37 @@ func validateResponsesInputItems(items []json.RawMessage) error {
 	return nil
 }
 
+// responsesInputReplayStrippedFields 是 provider 在 output item 上返回、但
+// Responses input 端不接受的字段。status 由捕获方 provider 合法产出，
+// 但跨 provider 切换模型时（如 deepseek 产生的历史切到 GPT 系网关），
+// 严格校验的端点对 item 级未知字段直接报 unknown_parameter
+// （input[N].status），导致带思考/工具历史的请求全部 400。
+var responsesInputReplayStrippedFields = []string{"status"}
+
+// stripResponsesOutputOnlyFields 清洗回放 item 中仅 output 侧合法的字段。
+// 解析或重编码失败时原样返回：宁可让 provider 报错也不静默改写内容。
+func stripResponsesOutputOnlyFields(item json.RawMessage) json.RawMessage {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(item, &fields); err != nil {
+		return item
+	}
+	changed := false
+	for _, key := range responsesInputReplayStrippedFields {
+		if _, ok := fields[key]; ok {
+			delete(fields, key)
+			changed = true
+		}
+	}
+	if !changed {
+		return item
+	}
+	cleaned, err := json.Marshal(fields)
+	if err != nil {
+		return item
+	}
+	return cleaned
+}
+
 func buildResponsesInput(messages []message.Message) ([]json.RawMessage, error) {
 	items := make([]json.RawMessage, 0, len(messages))
 	for _, msg := range messages {
@@ -333,10 +364,14 @@ func buildResponsesInput(messages []message.Message) ([]json.RawMessage, error) 
 		results := messageToolResults(msg)
 
 		// 有效 ProviderData 时权威重放原始 output items，跳过通用投影，
-		// 避免重复生成 assistant message / function_call。
+		// 避免重复生成 assistant message / function_call。回放前剥离仅
+		// output 侧合法的字段（status），兼容严格校验入参的端点（如跨
+		// provider 切换后的 GPT 系网关）。
 		if len(results) == 0 && len(msg.ProviderData) != 0 {
 			if replayed, ok := decodeResponsesProviderData(msg.ProviderData); ok {
-				items = append(items, replayed...)
+				for _, item := range replayed {
+					items = append(items, stripResponsesOutputOnlyFields(item))
+				}
 				continue
 			}
 		}

@@ -311,6 +311,46 @@ func TestBuildResponsesInputReplaysProviderOutputItems(t *testing.T) {
 	}
 }
 
+// TestBuildResponsesInputStripsOutputOnlyStatusOnReplay 验证 ProviderData 回放
+// 的原始 output items 在上线前剥离仅 output 侧合法的 status 字段。回归：
+// 跨 provider 切换（deepseek 历史 → GPT 系网关）时严格端点对 item 级未知
+// 字段报 unknown_parameter（input[N].status），带历史的请求全部 400。
+func TestBuildResponsesInputStripsOutputOnlyStatusOnReplay(t *testing.T) {
+	assistant := message.Message{
+		Role:    message.RoleAssistant,
+		Content: "visible fallback",
+		ProviderData: json.RawMessage(`{
+			"transport":"openai-responses",
+			"version":1,
+			"output_items":[
+				{"type":"reasoning","id":"rs_1","status":"completed","content":[{"type":"reasoning_text","text":"思考"}]},
+				{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer"}]}
+			]
+		}`),
+	}
+
+	items, err := buildResponsesInput([]message.Message{assistant})
+	if err != nil {
+		t.Fatalf("buildResponsesInput() error = %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("items = %#v, want reasoning/message", items)
+	}
+	for i, item := range items {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(item, &fields); err != nil {
+			t.Fatalf("items[%d] is not a JSON object: %v", i, err)
+		}
+		if _, ok := fields["status"]; ok {
+			t.Fatalf("items[%d] still carries output-only status: %s", i, item)
+		}
+	}
+	// 其余字段必须原样保留（id/role/content 等不回溯改写）。
+	if got := string(items[1]); !strings.Contains(got, `"msg_1"`) || !strings.Contains(got, `"output_text"`) {
+		t.Fatalf("items[1] = %s, want message item content preserved", got)
+	}
+}
+
 func TestBuildResponsesInputFallsBackForLegacyAssistant(t *testing.T) {
 	assistant := message.Message{
 		Role:    message.RoleAssistant,
