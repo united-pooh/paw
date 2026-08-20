@@ -1,8 +1,9 @@
 package main
 
 import (
-	"context"
-	"fmt"
+"context"
+"errors"
+"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -186,6 +187,10 @@ func restoreTodoBroker(store *session.JSONLStore, broker *todo.Broker, sessionID
 		// visible to the new session. Clear it and keep the transcript error
 		// observable in logs for diagnosis.
 		broker.Restore(todo.Snapshot{}, false)
+		if errors.Is(err, session.ErrSessionNotFound) {
+			// 会话文件已被删除（如清理旧会话后重启）：属正常状态，静默空恢复。
+			return
+		}
 		fmt.Fprintf(os.Stderr, "restore todo snapshot for %s: %v\n", sessionID, err)
 		return
 	}

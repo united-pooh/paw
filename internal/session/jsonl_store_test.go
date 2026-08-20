@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,17 @@ func newTestStore(t *testing.T) *JSONLStore {
 		t.Fatalf("NewJSONLStore: %v", err)
 	}
 	return store
+}
+
+// TestGetMetaMissingSessionReturnsSentinel 验证不存在的 session 返回可识别的
+// ErrSessionNotFound（启动时 todo 恢复据此静默降级，不再向 stderr 打噪音）。
+func TestGetMetaMissingSessionReturnsSentinel(t *testing.T) {
+	store := newTestStore(t)
+	if _, err := store.GetMeta(context.Background(), "deleted-session"); err == nil {
+		t.Fatal("missing session should return an error")
+	} else if !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("error = %v, want errors.Is ErrSessionNotFound", err)
+	}
 }
 
 // createTestSession 创建一个会话并可选地追加消息。

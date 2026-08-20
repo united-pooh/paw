@@ -84,6 +84,9 @@ var _ TurnMetadataStore = (*JSONLStore)(nil)
 var _ TurnJournal = (*JSONLStore)(nil)
 var _ PartialAssistantJournal = (*JSONLStore)(nil)
 
+// ErrSessionNotFound 表示指定 session 在存储中不存在（如已被删除）。
+var ErrSessionNotFound = errors.New("session 不存在")
+
 // NewJSONLStore 在指定目录下创建存储。
 // baseDir 是存放所有会话数据的根目录，通常传项目 cwd。
 func NewJSONLStore(baseDir string) (*JSONLStore, error) {
@@ -258,7 +261,7 @@ func (s *JSONLStore) GetMeta(ctx context.Context, sessionID string) (Meta, error
 	data, err := os.ReadFile(s.readMetaPath(sessionID))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return Meta{}, fmt.Errorf("session 不存在: %s", sessionID)
+			return Meta{}, fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
 		}
 		return Meta{}, err
 	}
