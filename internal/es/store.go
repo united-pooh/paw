@@ -33,12 +33,16 @@ type Snapshot struct {
 // JSONLStore is an append-only per-aggregate event store. Each aggregate owns
 // one <id>.events.jsonl stream; a <id>.snapshot.json holds the optional
 // cached state. All files are written 0600.
+//
+// 并发模型：进程内由 mu 串行化；跨进程（多个 paw 实例指向同一工作区）由
+// 每流一把 flock 串行化「读尾序 → 追加」临界区，尾序始终以磁盘文件为准——
+// 旧实现的进程内 lastSeq 缓存在多实例交错追加时会产生重复/回退序号（seq
+// gap），因此已移除。
 type JSONLStore struct {
 	baseDir string
 	kind    string
 
-	mu      sync.Mutex
-	lastSeq map[string]int64
+	mu sync.Mutex
 }
 
 func NewJSONLStore(baseDir, kind string) (*JSONLStore, error) {
@@ -51,12 +55,15 @@ func NewJSONLStore(baseDir, kind string) (*JSONLStore, error) {
 	return &JSONLStore{
 		baseDir: baseDir,
 		kind:    kind,
-		lastSeq: make(map[string]int64),
 	}, nil
 }
 
 func (s *JSONLStore) streamPath(id string) string {
 	return filepath.Join(s.baseDir, s.kind, id+".events.jsonl")
+}
+
+func (s *JSONLStore) lockPath(id string) string {
+	return s.streamPath(id) + ".lock"
 }
 
 func (s *JSONLStore) snapshotPath(id string) string {
@@ -92,13 +99,23 @@ func (s *JSONLStore) Append(ctx context.Context, aggregateID string, events []En
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 崩溃可能在行中间截断文件（无换行结尾）。物理截掉 torn 尾部，
-	// 否则后续 O_APPEND 会把新事件拼进损坏行。
-	if err := s.repairTornTail(aggregateID); err != nil {
-		return 0, 0, err
+	path := s.streamPath(aggregateID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return 0, 0, fmt.Errorf("es: create stream dir: %w", err)
 	}
 
-	next := s.nextSeqLocked(ctx, aggregateID)
+	// 跨进程互斥：尾序读取与追加必须在同一把流锁内完成，否则两个进程可能
+	// 读到同一个尾序、写出重复 seq（seq gap 的典型成因）。
+	lock, err := lockStreamFile(s.lockPath(aggregateID))
+	if err != nil {
+		return 0, 0, fmt.Errorf("es: lock stream: %w", err)
+	}
+	defer unlockStreamFile(lock)
+
+	next, err := s.prepareAppendLocked(aggregateID)
+	if err != nil {
+		return 0, 0, err
+	}
 	assigned := make([]Envelope, len(events))
 	for i, e := range events {
 		e.Seq = next + int64(i) + 1
@@ -108,10 +125,6 @@ func (s *JSONLStore) Append(ctx context.Context, aggregateID string, events []En
 		assigned[i] = e
 	}
 
-	path := s.streamPath(aggregateID)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return 0, 0, fmt.Errorf("es: create stream dir: %w", err)
-	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return 0, 0, fmt.Errorf("es: open stream: %w", err)
@@ -133,42 +146,25 @@ func (s *JSONLStore) Append(ctx context.Context, aggregateID string, events []En
 	if err := f.Sync(); err != nil {
 		return 0, 0, fmt.Errorf("es: sync stream: %w", err)
 	}
-	s.lastSeq[aggregateID] = assigned[len(assigned)-1].Seq
 	return assigned[0].Seq, assigned[len(assigned)-1].Seq, nil
 }
 
-func (s *JSONLStore) nextSeqLocked(ctx context.Context, id string) int64 {
-	if n, ok := s.lastSeq[id]; ok {
-		return n
-	}
-	last, _, err := s.Load(ctx, id)
-	if err != nil {
-		return 0
-	}
-	if len(last) == 0 {
-		return 0
-	}
-	n := last[len(last)-1].Seq
-	s.lastSeq[id] = n
-	return n
-}
-
-// repairTornTail 物理截掉崩溃留下的未完成尾部。仅当文件末尾没有换行且
-// 最后一行解析失败时截断（完整但无换行的最后一行被保留）；中部损坏报错。
-func (s *JSONLStore) repairTornTail(aggregateID string) error {
+// prepareAppendLocked 在持有流锁的前提下检查文件并返回当前尾序（无事件为 0）。
+// 崩溃可能在行中间截断文件（无换行结尾）：物理截掉 torn 尾部，否则
+// O_APPEND 会把新事件拼进损坏行；中部损坏报错。磁盘文件是唯一事实源——
+// 不再使用进程内缓存序号，多进程交错追加也不会产生重复 seq。
+func (s *JSONLStore) prepareAppendLocked(aggregateID string) (int64, error) {
 	path := s.streamPath(aggregateID)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil
+			return 0, nil
 		}
-		return fmt.Errorf("es: read stream for repair: %w", err)
+		return 0, fmt.Errorf("es: read stream for repair: %w", err)
 	}
-	if len(data) == 0 || bytes.HasSuffix(data, []byte{'\n'}) {
-		return nil
-	}
-	lines := bytes.Split(data, []byte{'\n'})
+	var tail int64
 	offset := 0
+	lines := bytes.Split(data, []byte{'\n'})
 	for i, line := range lines {
 		trimmed := bytes.TrimSpace(line)
 		if len(trimmed) == 0 {
@@ -180,15 +176,73 @@ func (s *JSONLStore) repairTornTail(aggregateID string) error {
 			if i == len(lines)-1 {
 				// torn 尾部：截到该行起始
 				if err := os.Truncate(path, int64(offset)); err != nil {
-					return fmt.Errorf("es: truncate torn tail: %w", err)
+					return 0, fmt.Errorf("es: truncate torn tail: %w", err)
 				}
-				return nil
+				return tail, nil
 			}
-			return fmt.Errorf("es: mid-stream corruption at offset %d: %w", offset, err)
+			return 0, fmt.Errorf("es: mid-stream corruption at offset %d: %w", offset, err)
 		}
+		tail = env.Seq
 		offset += len(line) + 1
 	}
-	return nil
+	return tail, nil
+}
+
+// RepairSeqGaps 截掉首个 seq 违例（重复或回退）开始的尾部，保留合法前缀。
+// 多进程双写者交错追加或崩溃交错会在流里留下重复/回退序号，Load 因此拒绝
+// 整个流；截尾会丢弃尾部事件，但对「唯一事实源已不可读」的流而言是唯一
+// 自愈路径。返回丢弃的非空行数；0 表示流合法。torn 尾部一并截除（与 Load
+// 的容忍语义一致）；中部 JSON 损坏不是序号问题，仍然报错。
+func (s *JSONLStore) RepairSeqGaps(ctx context.Context, aggregateID string) (int, error) {
+	if err := validateAggregateID(aggregateID); err != nil {
+		return 0, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	path := s.streamPath(aggregateID)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("es: read stream for seq repair: %w", err)
+	}
+	expect := int64(1)
+	offset := 0
+	lines := bytes.Split(data, []byte{'\n'})
+	for i, line := range lines {
+		trimmed := bytes.TrimSpace(line)
+		if len(trimmed) == 0 {
+			offset += len(line) + 1
+			continue
+		}
+		var env Envelope
+		if err := json.Unmarshal(trimmed, &env); err != nil {
+			if i == len(lines)-1 {
+				if err := os.Truncate(path, int64(offset)); err != nil {
+					return 0, fmt.Errorf("es: truncate torn tail: %w", err)
+				}
+				return 1, nil
+			}
+			return 0, fmt.Errorf("es: malformed event at line %d: %w", i+1, err)
+		}
+		if env.Seq != expect {
+			dropped := 0
+			for _, rest := range lines[i:] {
+				if len(bytes.TrimSpace(rest)) != 0 {
+					dropped++
+				}
+			}
+			if err := os.Truncate(path, int64(offset)); err != nil {
+				return 0, fmt.Errorf("es: truncate seq-violating tail: %w", err)
+			}
+			return dropped, nil
+		}
+		expect++
+		offset += len(line) + 1
+	}
+	return 0, nil
 }
 
 // Load returns the intact event prefix of a stream. A malformed or truncated
