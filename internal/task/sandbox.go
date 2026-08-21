@@ -3,8 +3,11 @@ package task
 // SandboxLimits 是 worker 进程资源上限的数值。任何字段 <=0 时回落默认值。
 // 该结构经 --sandbox-limits 标志从宿主（config 生效值）传入 worker 进程。
 type SandboxLimits struct {
-	CPUSeconds     int
-	FileSizeMiB    int
+	CPUSeconds  int
+	FileSizeMiB int
+	// MaxProcesses 历史上映射 RLIMIT_NPROC；因 NPROC 是按真实 UID 统计的
+	// 全系统进程数，在 worker 内调低会误伤自身 fork（EAGAIN），已不再生效。
+	// 字段保留以兼容 --sandbox-limits CSV 与配置结构。
 	MaxProcesses   int
 	OpenFiles      int
 	JobWallSeconds int
