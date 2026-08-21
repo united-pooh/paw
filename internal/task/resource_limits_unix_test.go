@@ -42,8 +42,59 @@ func TestWorkerResourceLimitsApplied(t *testing.T) {
 
 	apply(int(unix.RLIMIT_CPU), uint64(resolved.CPUSeconds))
 	apply(int(unix.RLIMIT_FSIZE), uint64(resolved.FileSizeMiB)*1024*1024)
-	apply(int(unix.RLIMIT_NPROC), uint64(resolved.MaxProcesses))
+	applyNPROC(t, uint64(resolved.MaxProcesses))
 	apply(int(unix.RLIMIT_NOFILE), uint64(resolved.OpenFiles))
+}
+
+// applyNPROC 断言 RLIMIT_NPROC 采用增量语义：软上限 === 当前 UID 进程数 + 余量
+// （夹到硬上限）。直接压绝对值会让已有进程数超额的用户 fork 立即 EAGAIN。
+func applyNPROC(t *testing.T, configured uint64) {
+	t.Helper()
+	var before unix.Rlimit
+	if err := unix.Getrlimit(unix.RLIMIT_NPROC, &before); err != nil {
+		t.Fatalf("Getrlimit(NPROC): %v", err)
+	}
+	if err := ApplyWorkerResourceLimits(SandboxLimits{}); err != nil {
+		t.Fatalf("ApplyWorkerResourceLimits: %v", err)
+	}
+	var after unix.Rlimit
+	if err := unix.Getrlimit(unix.RLIMIT_NPROC, &after); err != nil {
+		t.Fatalf("Getrlimit after(NPROC): %v", err)
+	}
+	current, err := countCurrentUserProcesses()
+	if err != nil {
+		t.Fatalf("countCurrentUserProcesses: %v", err)
+	}
+	want := current + configured
+	if want > before.Max {
+		want = before.Max
+	}
+	// 计数与 setrlimit 之间存在竞态窗口（测试进程自身 goroutine 不 fork，
+	// 但系统侧可能并行增减），允许 ±4 的抖动。
+	if diff := int64(after.Cur) - int64(want); diff < -4 || diff > 4 {
+		t.Errorf("RLIMIT_NPROC Cur = %d, want %d (±4)", after.Cur, want)
+	}
+	if err := unix.Setrlimit(unix.RLIMIT_NPROC, &before); err != nil {
+		t.Fatalf("restore NPROC: %v", err)
+	}
+}
+
+// TestCountCurrentUserProcesses 验证计数基线非零且口径稳定（连续两次计数接近）。
+func TestCountCurrentUserProcesses(t *testing.T) {
+	first, err := countCurrentUserProcesses()
+	if err != nil {
+		t.Fatalf("countCurrentUserProcesses: %v", err)
+	}
+	if first == 0 {
+		t.Fatal("countCurrentUserProcesses = 0, 至少应包含测试进程自身")
+	}
+	second, err := countCurrentUserProcesses()
+	if err != nil {
+		t.Fatalf("countCurrentUserProcesses second: %v", err)
+	}
+	if diff := int64(first) - int64(second); diff < -8 || diff > 8 {
+		t.Errorf("consecutive counts drift too much: %d vs %d", first, second)
+	}
 }
 
 // TestResolveSandboxLimitsDefaults 验证字段 <=0 时回落默认值、显式值透传。
