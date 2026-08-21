@@ -11,8 +11,19 @@ import (
 // TestWorkerResourceLimitsApplied 验证 worker 只设置软上限、且不越过硬上限，并在
 // 结束后把软上限还原为原值，避免影响同进程内的其他测试。limits 传入零值以验证
 // 默认路径；显式值路径由数值断言覆盖。
+//
+// RLIMIT_NPROC 回归：NPROC 在 Linux/macOS 上按真实 UID 统计全系统进程数，不是
+// 单 worker 预算；worker 内调低它会让同 UID 的所有 fork 直接 EAGAIN（即
+// “fork/exec /bin/bash: resource temporarily unavailable” 的根因）。因此
+// ApplyWorkerResourceLimits 必须完全不触碰 NPROC。
 func TestWorkerResourceLimitsApplied(t *testing.T) {
 	resolved := resolveSandboxLimits(SandboxLimits{})
+
+	// NPROC 基线必须在任何 Apply 之前采集——旧实现会把 NPROC 压到默认值 64。
+	var nprocBefore unix.Rlimit
+	if err := unix.Getrlimit(unix.RLIMIT_NPROC, &nprocBefore); err != nil {
+		t.Fatalf("Getrlimit(RLIMIT_NPROC): %v", err)
+	}
 
 	apply := func(resource int, configured uint64) {
 		var before unix.Rlimit
@@ -42,8 +53,19 @@ func TestWorkerResourceLimitsApplied(t *testing.T) {
 
 	apply(int(unix.RLIMIT_CPU), uint64(resolved.CPUSeconds))
 	apply(int(unix.RLIMIT_FSIZE), uint64(resolved.FileSizeMiB)*1024*1024)
-	apply(int(unix.RLIMIT_NPROC), uint64(resolved.MaxProcesses))
 	apply(int(unix.RLIMIT_NOFILE), uint64(resolved.OpenFiles))
+
+	if err := ApplyWorkerResourceLimits(SandboxLimits{}); err != nil {
+		t.Fatalf("ApplyWorkerResourceLimits: %v", err)
+	}
+	var nprocAfter unix.Rlimit
+	if err := unix.Getrlimit(unix.RLIMIT_NPROC, &nprocAfter); err != nil {
+		t.Fatalf("Getrlimit after(RLIMIT_NPROC): %v", err)
+	}
+	if nprocAfter != nprocBefore {
+		t.Errorf("RLIMIT_NPROC changed: before={Cur:%d Max:%d} after={Cur:%d Max:%d}",
+			nprocBefore.Cur, nprocBefore.Max, nprocAfter.Cur, nprocAfter.Max)
+	}
 }
 
 // TestResolveSandboxLimitsDefaults 验证字段 <=0 时回落默认值、显式值透传。

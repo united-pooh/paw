@@ -11,6 +11,12 @@ import (
 // ApplyWorkerResourceLimits 在 worker 进程内设置软资源上限，作为 task 沙箱
 // 资源限制（阶段三）的一部分。只应在 worker 入口调用，主 agent 进程不受影响。
 // 传入的 limits 中 <=0 的字段回落默认值；设置失败返回错误，由调用方 fail-closed。
+//
+// 刻意不设置 RLIMIT_NPROC：NPROC 在 Linux/macOS 上都是「按真实 UID 统计的
+// 全系统进程数」，并非单 worker 子树的预算。在 worker 内把它调低（默认 64）
+// 后，只要宿主上同 UID 的进程总数达到该值，worker 内一切 fork 都会 EAGAIN，
+// 表现为 Bash 工具报 “fork/exec /bin/bash: resource temporarily unavailable”。
+// limits.MaxProcesses 字段保留用于配置/协议兼容，但不再经 rlimit 生效。
 func ApplyWorkerResourceLimits(limits SandboxLimits) error {
 	limits = resolveSandboxLimits(limits)
 	resources := []struct {
@@ -20,7 +26,6 @@ func ApplyWorkerResourceLimits(limits SandboxLimits) error {
 	}{
 		{unix.RLIMIT_CPU, uint64(limits.CPUSeconds), "RLIMIT_CPU"},
 		{unix.RLIMIT_FSIZE, uint64(limits.FileSizeMiB) * 1024 * 1024, "RLIMIT_FSIZE"},
-		{unix.RLIMIT_NPROC, uint64(limits.MaxProcesses), "RLIMIT_NPROC"},
 		{unix.RLIMIT_NOFILE, uint64(limits.OpenFiles), "RLIMIT_NOFILE"},
 	}
 	for _, item := range resources {
