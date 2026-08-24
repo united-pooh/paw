@@ -175,6 +175,36 @@ func TestRenderTaskCardListsRunningOnly(t *testing.T) {
 	}
 }
 
+type activeTaskController struct {
+	*fakeTaskController
+	active []task.TaskSnapshot
+}
+
+func (c *activeTaskController) ActiveTasks() []task.TaskSnapshot {
+	return append([]task.TaskSnapshot(nil), c.active...)
+}
+
+func TestRenderTaskCardUsesActiveTasksInsteadOfStaleRunningProjection(t *testing.T) {
+	stale := task.TaskSnapshot{ID: "stale-running", Name: "stale worker", Status: task.TaskRunning}
+	controller := &activeTaskController{
+		fakeTaskController: &fakeTaskController{tasks: []task.TaskSnapshot{stale}},
+	}
+	model := newTestModel(&fakeRunner{})
+	model.taskController = controller
+
+	if card := model.renderTaskCard(time.Now()); card != "" {
+		t.Fatalf("task card = %q, want stale projected task hidden after its process ended", ansi.Strip(card))
+	}
+	if model.hasRunningTasks() {
+		t.Fatal("hasRunningTasks = true, want process liveness to override stale running projection")
+	}
+
+	controller.active = []task.TaskSnapshot{stale}
+	if card := ansi.Strip(model.renderTaskCard(time.Now())); !strings.Contains(card, "stale worker") {
+		t.Fatalf("task card = %q, want active task visible", card)
+	}
+}
+
 func TestSpinnerFrameIndexRotates(t *testing.T) {
 	base := time.Unix(0, 0)
 	if spinnerFrameIndex(base) != 0 {

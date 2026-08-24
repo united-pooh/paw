@@ -1846,6 +1846,65 @@ func newStoreWithManager(t *testing.T, root string) (*Manager, *session.JSONLSto
 	return manager, store
 }
 
+func TestActiveTasksTracksHostedProcessLifecycle(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	manager := NewManager(Config{
+		Store:    store,
+		Root:     root,
+		Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+		Launcher: &blockingLauncher{},
+	})
+	defer manager.Close()
+
+	launched, err := manager.Launch(context.Background(), Request{Prompt: "active task"})
+	if err != nil {
+		t.Fatalf("Launch() error = %v", err)
+	}
+	if active := manager.ActiveTasks(); len(active) != 1 || active[0].ID != launched.ID {
+		t.Fatalf("ActiveTasks() = %#v, want launched task", active)
+	}
+	if _, err := manager.Stop(context.Background(), launched.ID); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if active := manager.ActiveTasks(); len(active) != 0 {
+		t.Fatalf("ActiveTasks() after stop = %#v, want empty", active)
+	}
+}
+
+func TestActiveTasksExcludesRunningProjectionWithoutHostedProcess(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	manager := NewManager(Config{
+		Store:    store,
+		Root:     root,
+		Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+	})
+	defer manager.Close()
+
+	stale := TaskSnapshot{
+		ID:        "stale-running",
+		SessionID: "stale-running",
+		Status:    TaskRunning,
+		StartedAt: time.Now().UTC(),
+	}
+	if err := manager.actors.record(context.Background(), taskEventStarted, stale); err != nil {
+		t.Fatalf("record stale running projection: %v", err)
+	}
+	if tasks := manager.ListTasks(); len(tasks) != 1 || tasks[0].Status != TaskRunning {
+		t.Fatalf("ListTasks() = %#v, want stale running projection", tasks)
+	}
+	if active := manager.ActiveTasks(); len(active) != 0 {
+		t.Fatalf("ActiveTasks() = %#v, want no task without a hosted process", active)
+	}
+}
+
 func TestReconcileOrphansMarksDeadPIDInterrupted(t *testing.T) {
 	root := t.TempDir()
 	registry := newTaskRegistry(root)

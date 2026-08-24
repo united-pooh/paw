@@ -634,6 +634,23 @@ func (m *Manager) RunningTasks() []TaskSnapshot {
 	return out
 }
 
+// ActiveTasks returns running tasks that still have a live process owned by
+// this manager. The UI uses this liveness view so a lagging durable projection
+// cannot leave the transient task card visible after the process has ended.
+func (m *Manager) ActiveTasks() []TaskSnapshot {
+	if m == nil || m.actors == nil {
+		return nil
+	}
+	tasks := m.ListTasks()
+	out := make([]TaskSnapshot, 0, len(tasks))
+	for _, task := range tasks {
+		if task.Status == TaskRunning && m.actors.hasActiveTask(task.ID) {
+			out = append(out, task)
+		}
+	}
+	return out
+}
+
 func (m *Manager) Status(id string) (TaskSnapshot, bool) {
 	if m == nil {
 		return TaskSnapshot{}, false

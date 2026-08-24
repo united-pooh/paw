@@ -17,10 +17,14 @@ var taskSpinnerFrames = []string{"◐", "◓", "◑", "◒"}
 // taskCardMaxWidth 是任务卡的显示宽度上限（含边框）。
 const taskCardMaxWidth = 32
 
-// runningTasks 返回当前所有 running 任务；nil controller 或空列表返回 nil。
+// runningTasks 返回当前所有仍有本地执行进程的 running 任务。Manager 的
+// durable projection 可能在进程退出后短暂滞后；悬浮卡使用进程存活视图避免残留。
 func (m appModel) runningTasks() []taskpkg.TaskSnapshot {
 	if m.taskController == nil {
 		return nil
+	}
+	if active, ok := m.taskController.(ActiveTaskController); ok {
+		return active.ActiveTasks()
 	}
 	tasks := m.taskController.ListTasks()
 	running := make([]taskpkg.TaskSnapshot, 0, len(tasks))
@@ -35,15 +39,7 @@ func (m appModel) runningTasks() []taskpkg.TaskSnapshot {
 // hasRunningTasks 报告是否存在运行中的 task 任务。
 // 供动画帧驱动判断是否需要持续重绘（spinner 与任务状态变化）。
 func (m appModel) hasRunningTasks() bool {
-	if m.taskController == nil {
-		return false
-	}
-	for _, task := range m.taskController.ListTasks() {
-		if task.Status == taskpkg.TaskRunning {
-			return true
-		}
-	}
-	return false
+	return len(m.runningTasks()) > 0
 }
 
 // renderTaskCard 渲染运行中任务卡；没有 running 任务时返回空串。

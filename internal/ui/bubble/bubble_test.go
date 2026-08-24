@@ -46,6 +46,8 @@ type fakeRunner struct {
 	compactFocus     string
 	compactResult    loop.ContextCompactionResult
 	compactErr       error
+	newSessionCalls  int
+	newSessionErr    error
 }
 
 type ctrlCRunner struct {
@@ -86,6 +88,14 @@ func (r *fakeRunner) ResetHistory() {
 func (r *fakeRunner) LoadHistory(ctx context.Context, sessionID string) ([]message.Message, error) {
 	r.loadHistoryCalls = append(r.loadHistoryCalls, sessionID)
 	return append([]message.Message(nil), r.loadHistoryMsgs...), r.loadHistoryErr
+}
+
+func (r *fakeRunner) NewSession(context.Context) (string, loop.SessionLoadResult, error) {
+	r.newSessionCalls++
+	if r.newSessionErr != nil {
+		return "", loop.SessionLoadResult{}, r.newSessionErr
+	}
+	return fmt.Sprintf("new-session-%d", r.newSessionCalls), loop.SessionLoadResult{}, nil
 }
 
 func (r *fakeRunner) SubmitSupplement(input string) bool {
@@ -378,14 +388,56 @@ func TestCommandsHandleStatusAndClear(t *testing.T) {
 	}
 
 	handled, cmd = model.handleCommand("/clear")
-	if !handled || cmd != nil {
-		t.Fatalf("/clear handled/cmd = %v/%v", handled, cmd)
+	if !handled || cmd == nil {
+		t.Fatalf("/clear handled/cmd = %v/%v, want async new-session command", handled, cmd)
 	}
-	if runner.resetCalls != 1 {
-		t.Fatalf("resetCalls = %d", runner.resetCalls)
+	msg, ok := cmd().(sessionRestoredMsg)
+	if !ok {
+		t.Fatalf("/clear cmd returned unexpected message")
 	}
-	if len(model.transcript) != 1 || model.transcript[0].body != "history cleared" {
-		t.Fatalf("transcript = %#v", model.transcript)
+	next, _ := model.Update(msg)
+	model = next.(appModel)
+	if runner.resetCalls != 0 {
+		t.Fatalf("resetCalls = %d, /clear must not reuse the current session", runner.resetCalls)
+	}
+	if runner.newSessionCalls != 1 || model.sessionID != "new-session-1" {
+		t.Fatalf("newSessionCalls/sessionID = %d/%q", runner.newSessionCalls, model.sessionID)
+	}
+	if len(model.transcript) != 1 || !strings.Contains(model.transcript[0].body, "new-session-1") {
+		t.Fatalf("transcript = %#v, want fresh-session status only", model.transcript)
+	}
+}
+
+func TestClearAndNewShareFreshSessionBehavior(t *testing.T) {
+	for _, command := range []string{"/clear", "/new"} {
+		t.Run(command, func(t *testing.T) {
+			runner := &fakeRunner{}
+			model := newTestModel(runner)
+			model.transcript = []transcriptEntry{{kind: entryUser, body: "dirty history"}}
+			model.inputHistory = []inputDraft{{Text: "dirty prompt"}}
+
+			handled, cmd := model.handleCommand(command)
+			if !handled || cmd == nil {
+				t.Fatalf("%s handled/cmd = %v/%v", command, handled, cmd)
+			}
+			msg, ok := cmd().(sessionRestoredMsg)
+			if !ok || msg.source != sessionRestoreNew || msg.err != nil {
+				t.Fatalf("%s result = %#v, want successful new-session restore", command, msg)
+			}
+			next, _ := model.Update(msg)
+			model = next.(appModel)
+			if model.sessionID != "new-session-1" || runner.newSessionCalls != 1 {
+				t.Fatalf("%s session = %q calls=%d", command, model.sessionID, runner.newSessionCalls)
+			}
+			if len(model.inputHistory) != 0 {
+				t.Fatalf("%s retained input history: %#v", command, model.inputHistory)
+			}
+			for _, entry := range model.transcript {
+				if strings.Contains(entry.body, "dirty history") {
+					t.Fatalf("%s retained dirty transcript: %#v", command, model.transcript)
+				}
+			}
+		})
 	}
 }
 

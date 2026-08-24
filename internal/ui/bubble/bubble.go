@@ -122,6 +122,12 @@ type TaskController interface {
 	ListTasks() []task.TaskSnapshot
 }
 
+// ActiveTaskController exposes process-liveness state for transient UI. Its
+// result may be narrower than ListTasks, which is a durable history projection.
+type ActiveTaskController interface {
+	ActiveTasks() []task.TaskSnapshot
+}
+
 // TaskUpdateSubscriber is an optional live-update capability. It lets
 // the TUI wake immediately when a background task changes state instead of
 // waiting for the animation/poll interval.

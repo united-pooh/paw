@@ -46,3 +46,26 @@
 - [x] 运行 go test ./... 及相关回归验证 <!-- todo:verify-fix -->
 - [x] 图片粘贴生产路径修复：在 SessionActor Durable 消息序列化前保存图片附件引用，补充 SessionActor 回归测试；`go test ./... -count=1`、相关 race/build/vet/gofmt/diff 检查全通过 <!-- todo:clipboard-image-fix -->
 - [x] 沉淀阶段结果与教训到项目记忆 <!-- todo:archive-results -->
+- [x] 调查并修复 worker fork/exec EAGAIN（a622bad，已验证） <!-- todo:bug-worker-eagain -->
+- [x] go test ./... 全量验证修复并提交（a622bad） <!-- todo:bug-verify -->
+- [x] 任务 1：<model> 块格式与解析（9b0a367） <!-- todo:task-1-recover -->
+- [x] 任务 2：renderModelSwitchCard 圆角状态卡（0ce7940） <!-- todo:task-2 -->
+- [x] 任务 3：transcript 集成分支（03df929） <!-- todo:task-3 -->
+- [x] 任务 4：四处调用点统一切换（611e68f） <!-- todo:task-4 -->
+- [x] 移除 /model Confirm 步骤：选择模型后直接应用（ebd3ae8） <!-- todo:remove-confirm -->
+- [x] 合入 worker fork/exec EAGAIN 修复（e5a2471） <!-- todo:merge-worker-fix -->
+- [x] 全量 go test ./... + go vet ./... 回归 <!-- todo:full-verify -->
+- [x] 定位 ox-alpha 相关配置、模型适配器与调用入口 <!-- todo:scope -->
+- [x] 检查流式事件到可见消息的完整处理链路及空响应判定 <!-- todo:pipeline -->
+- [x] 检查当前会话日志/持久化记录，提取连续空响应的一手证据 <!-- todo:evidence -->
+- [x] 整理事实、关键约束与基于证据的结论 <!-- todo:conclusion -->
+- [x] 修复 duplicate finish_reason 问题（internal/model/stream.go） <!-- todo:fix-duplicate-finish-reason -->
+- [x] 调查 /clear 指令无法创建新 session、携带脏上下文的原因 <!-- todo:investigate-clear-session -->
+- [x] 确认并测试 ox-alpha duplicate finish_reason 兼容修复 <!-- todo:verify-stream-fix -->
+- [x] 调查现有 session 创建/切换流程与 /clear、/new 命令约束 <!-- todo:map-new-session-flow -->
+- [x] 实现 /clear 与 /new 共享的新 session 创建行为 <!-- todo:implement-new-session-command -->
+- [x] duplicate finish_reason 与新 session 相关包测试、10 次重复回归、定向 race、`go vet ./...`、diff 检查通过；`go test ./...` 仍有无关失败：actor 用例单跑通过、UI reasoning 用例定向运行仍失败 <!-- todo:verify-all -->
+- [x] 定位 task 完成事件、taskController 状态与侧边块渲染链路 <!-- todo:investigate-task-sidebar -->
+- [x] 添加或定位可复现侧边块未消失的失败测试 <!-- todo:reproduce-task-sidebar -->
+- [x] 实施最小修复，确保 task 结束后侧边块消失 <!-- todo:fix-task-sidebar -->
+- [x] taskController 悬浮卡改用本地进程存活视图；task/UI 定向测试、race、`go vet ./...` 与 diff 检查通过；`go test ./...` 仅剩未触及的 reasoning UI 用例失败 <!-- todo:verify-task-sidebar -->
