@@ -242,8 +242,6 @@ const (
 	modelWizardProvider modelWizardStep = iota
 	// modelWizardModel 表示正在选择 provider 下的具体模型。
 	modelWizardModel
-	// modelWizardConfirm 表示正在确认将要应用的模型配置。
-	modelWizardConfirm
 )
 
 // modelProviderOption 描述 /model 向导中的一个 provider 选项。
@@ -381,13 +379,6 @@ func (w *modelWizard) selectedCatalogSelection() (configv2.CatalogSelection, boo
 	}
 	selection := w.modelSelections[w.selectedModel]
 	return selection, selection.ID != ""
-}
-
-func (w *modelWizard) selectedModelNameOr(fallback string) string {
-	if selected := w.selectedModelName(); selected != "" {
-		return selected
-	}
-	return fallback
 }
 
 // sessionsLoadedMsg 携带异步加载完成的会话列表。

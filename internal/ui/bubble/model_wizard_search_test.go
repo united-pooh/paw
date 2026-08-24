@@ -58,8 +58,13 @@ func TestModelWizardSearchFiltersModelsAndPreservesCatalogSelection(t *testing.T
 
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
-	if model.modelWizard.step != modelWizardConfirm {
-		t.Fatalf("step after filtered Enter = %v, want confirm", model.modelWizard.step)
+	if model.modelWizard != nil {
+		t.Fatalf("filtered Enter should apply and close wizard: %#v", model.modelWizard)
+	}
+	last := model.transcript[len(model.transcript)-1]
+	info, ok := parseModelCardBlock(last.body)
+	if !ok || info.Model != "beta" {
+		t.Fatalf("applied model card = %#v, ok=%v; want beta", info, ok)
 	}
 }
 

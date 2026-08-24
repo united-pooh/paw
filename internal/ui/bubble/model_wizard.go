@@ -71,12 +71,10 @@ func (m *appModel) prepareModelWizardStep() {
 		}
 	}
 	wizard.err = ""
-	// A profile with one available model does not need an extra stop. Profiles
-	// with multiple models use the explicit second step.
+	// 多模型 provider 进入显式模型选择；零个或一个模型时由 provider Enter
+	// 直接应用，避免再停一层没有决策价值的确认页面。
 	if len(wizard.modelOptions) > 1 {
 		wizard.step = modelWizardModel
-	} else {
-		wizard.step = modelWizardConfirm
 	}
 }
 
@@ -107,6 +105,9 @@ func (m appModel) handleModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "enter":
 			m.prepareModelWizardStep()
+			if m.modelWizard != nil && m.modelWizard.step != modelWizardModel {
+				return m.applyModelWizardSelection(), nil
+			}
 			return m, nil
 		}
 	case modelWizardModel:
@@ -146,28 +147,12 @@ func (m appModel) handleModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if len(m.modelWizard.modelIndicesForSearch()) == 0 {
 				return m, nil
 			}
-			m.modelWizard.step = modelWizardConfirm
-			return m, nil
+			return m.applyModelWizardSelection(), nil
 		}
 		if len(msg.Runes) > 0 && !msg.Alt {
 			m.modelWizard.search += string(msg.Runes)
 			m.modelWizard.resetModelSelectionForSearch()
 			return m, nil
-		}
-	case modelWizardConfirm:
-		switch msg.String() {
-		case "ctrl+c", "esc":
-			m.modelWizard = nil
-			return m, nil
-		case "b", "backspace":
-			if len(m.modelWizard.modelOptions) > 0 {
-				m.modelWizard.step = modelWizardModel
-			} else {
-				m.modelWizard.step = modelWizardProvider
-			}
-			return m, nil
-		case "enter":
-			return m.applyModelWizardSelection(), nil
 		}
 	}
 
@@ -217,7 +202,7 @@ func (w *modelWizard) moveModelSelection(delta int) {
 
 // applyModelWizardSelection persists and applies the selected model. A
 // config-v2 wizard activates the exact origin-bound catalog selection captured
-// for the displayed row; it never re-resolves provider/model text at confirm.
+// for the displayed row; it never re-resolves provider/model text at apply time.
 func (m appModel) applyModelWizardSelection() appModel {
 	if m.modelWizard == nil {
 		return m
@@ -289,10 +274,11 @@ func (m appModel) renderModelWizardBox() string {
 		body = m.renderProviderStep()
 	case modelWizardModel:
 		body = m.renderModelStep()
-	case modelWizardConfirm:
-		body = m.renderModelConfirmStep()
 	default:
 		body = "Unknown model wizard step"
+	}
+	if m.modelWizard.err != "" {
+		body += "\n" + labelErrorStyle.Render(m.modelWizard.err)
 	}
 	return m.renderModalPanel(body)
 }
@@ -366,27 +352,6 @@ func (m appModel) renderProviderStep() string {
 	}
 	if maxItems < len(m.modelWizard.providerOptions) {
 		lines = append(lines, fmt.Sprintf("(%d/%d) Use up/down to scroll", m.modelWizard.selectedIndex+1, len(m.modelWizard.providerOptions)))
-	}
-	return strings.Join(lines, "\n")
-}
-
-// renderModelConfirmStep 渲染 provider 配置确认步骤和错误提示。
-func (m appModel) renderModelConfirmStep() string {
-	option := m.modelWizard.selectedProvider()
-	cfg := m.configForProfile(option.profile)
-	lines := []string{wizardTitleStyle.Render("Confirm model")}
-
-	lines = append(lines,
-		fmt.Sprintf("provider: %s", cfg.Provider),
-		fmt.Sprintf("base url: %s", cfg.APIBaseURL),
-		fmt.Sprintf("path: %s", cfg.APIPath),
-		fmt.Sprintf("model: %s", m.modelWizard.selectedModelNameOr(cfg.Model)),
-		fmt.Sprintf("models: %s", strings.Join(model.AvailableModels(cfg), ", ")),
-		fmt.Sprintf("key env: %s", cfg.APIKeyEnvName),
-		"Press enter to apply, b to go back, esc to cancel.",
-	)
-	if m.modelWizard.err != "" {
-		lines = append(lines, labelErrorStyle.Render(m.modelWizard.err))
 	}
 	return strings.Join(lines, "\n")
 }

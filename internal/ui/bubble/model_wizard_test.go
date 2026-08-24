@@ -60,7 +60,6 @@ func TestModelWizardPreservesProfileExtraBodiesWhenSwitchingProviderAndModel(t *
 		t.Fatalf("selected model = %q, want backup-safe", got)
 	}
 	app = advanceModelWizard(t, app, tea.KeyMsg{Type: tea.KeyEnter})
-	app = advanceModelWizard(t, app, tea.KeyMsg{Type: tea.KeyEnter})
 
 	if app.modelWizard != nil || len(controller.saved) != 1 || len(controller.applied) != 1 {
 		t.Fatalf("wizard/saved/applied = %#v/%d/%d", app.modelWizard, len(controller.saved), len(controller.applied))
@@ -101,7 +100,6 @@ func TestModelWizardAppliesCurrentModelMissingFromModels(t *testing.T) {
 		t.Fatalf("model options/selection = %#v", app.modelWizard)
 	}
 	app = advanceModelWizard(t, app, tea.KeyMsg{Type: tea.KeyEnter})
-	app = advanceModelWizard(t, app, tea.KeyMsg{Type: tea.KeyEnter})
 
 	if app.modelWizard != nil || len(controller.saved) != 1 || len(controller.applied) != 1 {
 		t.Fatalf("wizard/saved/applied = %#v/%d/%d", app.modelWizard, len(controller.saved), len(controller.applied))
@@ -111,7 +109,7 @@ func TestModelWizardAppliesCurrentModelMissingFromModels(t *testing.T) {
 	}
 }
 
-func TestModelWizardRejectsDiscoveredSelectionRemappedBeforeConfirmation(t *testing.T) {
+func TestModelWizardRejectsDiscoveredSelectionRemappedBeforeApply(t *testing.T) {
 	controller, _ := newConfigCenterHarnessWithDiscovery(t, []configv2.DiscoveredModel{{ProviderID: "local", Name: "live"}})
 	recorder := &recordingCatalogController{Controller: controller}
 	app := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
@@ -127,7 +125,6 @@ func TestModelWizardRejectsDiscoveredSelectionRemappedBeforeConfirmation(t *test
 		t.Fatalf("displayed model options=%#v", app.modelWizard.modelOptions)
 	}
 	app.modelWizard.selectedModel = liveIndex
-	app = advanceModelWizard(t, app, tea.KeyMsg{Type: tea.KeyEnter})
 	observed := controller.Snapshot()
 
 	if _, err := controller.UpdateConfig(context.Background(), observed.Revision, []configv2.Operation{

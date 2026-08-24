@@ -7,7 +7,7 @@ import (
 func TestApplyModelWizardSelectionEmitsModelCardBlock(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.modelWizard = &modelWizard{
-		step:            modelWizardConfirm,
+		step:            modelWizardModel,
 		providerOptions: []modelProviderOption{{id: "gateway", label: "Gateway"}},
 		selectedIndex:   0,
 		selectedModel:   0,

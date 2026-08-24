@@ -731,8 +731,6 @@ func TestModelWizardSelectsConfiguredModelUnderProvider(t *testing.T) {
 	}
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = next.(appModel)
 
 	if model.modelWizard != nil {
 		t.Fatalf("model wizard remains open: %#v", model.modelWizard)
@@ -4207,8 +4205,6 @@ func TestModelWizardAppliesConfiguredProfile(t *testing.T) {
 
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = next.(appModel)
 
 	if model.modelWizard != nil {
 		t.Fatalf("modelWizard = %#v", model.modelWizard)
@@ -4246,8 +4242,6 @@ func TestModelWizardUsesConfiguredAPIKey(t *testing.T) {
 
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = next.(appModel)
 
 	if model.modelWizard != nil {
 		t.Fatalf("modelWizard = %#v", model.modelWizard)
@@ -4280,8 +4274,6 @@ func TestModelWizardDoesNotApplyConfigWhenSaveFails(t *testing.T) {
 	model.modelWizard.selectedIndex = 0
 
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = next.(appModel)
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
 
 	if model.modelWizard == nil || !strings.Contains(model.modelWizard.err, "disk full") {
