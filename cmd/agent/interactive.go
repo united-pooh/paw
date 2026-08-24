@@ -1,9 +1,9 @@
 package main
 
 import (
-"context"
-"errors"
-"fmt"
+	"context"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -95,6 +95,9 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 			_ = server.Shutdown(shutdownCtx)
 		}()
 		runner.SetTokenTracer(tracer)
+		runner.SetSessionLoadedHook(func(sid string) {
+			tracer.SetSessionID(sid)
+		})
 		app.TaskManager.SetTokenTracer(tracer)
 	}
 

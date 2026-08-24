@@ -662,6 +662,13 @@ func finalizeRestoredRunningToolEntries(entries []transcriptEntry, now time.Time
 func (m *appModel) applySessionPickerRestore(msg sessionRestoredMsg) {
 	m.resetToolInspect()
 	m.clearNewMessageNotice()
+	m.pending = nil
+	m.chatQueue.Clear()
+	m.activeAssistant = -1
+	m.activeThinking = -1
+	m.activeReasoning = -1
+	m.activeTurnUserEntry = -1
+	m.doneAssistant = -1
 	m.sessionID = msg.sessionID
 	m.sessionPicker = nil
 	m.taskPicker = nil
@@ -680,7 +687,13 @@ func (m *appModel) applySessionPickerRestore(msg sessionRestoredMsg) {
 	m.todoWasCleared = msg.todoWasCleared
 	m.inputHistory = inputHistoryFromTranscript(msg.entries)
 	m.resetHistoryNavigation()
-	m.addEntry(transcriptEntry{kind: entrySystem, title: "sessions", body: fmt.Sprintf("已切换到会话: %s", msg.sessionID)})
+	title := "sessions"
+	body := fmt.Sprintf("已切换到会话: %s", msg.sessionID)
+	if msg.source == sessionRestoreNew {
+		title = "session"
+		body = fmt.Sprintf("已创建新会话: %s", msg.sessionID)
+	}
+	m.addEntry(transcriptEntry{kind: entrySystem, title: title, body: body})
 	if guidance := restoredModeGuidance(msg.modes); guidance != "" {
 		m.addEntry(transcriptEntry{kind: entrySystem, title: "resume", body: guidance})
 	}

@@ -17,6 +17,10 @@ type sessionStateLoader interface {
 	LoadSession(ctx context.Context, sessionID string) (loop.SessionLoadResult, error)
 }
 
+type newSessionStarter interface {
+	NewSession(ctx context.Context) (string, loop.SessionLoadResult, error)
+}
+
 type sessionModeLoader interface {
 	SessionModes(ctx context.Context, sessionID string) (*loop.SessionModeSnapshot, error)
 }
@@ -54,6 +58,25 @@ func loadSessionsCmd(ctx context.Context, store SessionStore) tea.Cmd {
 			})
 		}
 		return sessionsLoadedMsg{sessions: items}
+	}
+}
+
+// startNewSessionCmd 创建并激活一个空的持久化会话。
+func startNewSessionCmd(ctx context.Context, runner Runner) tea.Cmd {
+	return func() tea.Msg {
+		starter, ok := runner.(newSessionStarter)
+		if !ok {
+			return sessionRestoredMsg{source: sessionRestoreNew, err: fmt.Errorf("runner does not support new sessions")}
+		}
+		sessionID, result, err := starter.NewSession(ctx)
+		if err != nil {
+			return sessionRestoredMsg{source: sessionRestoreNew, err: err}
+		}
+		return sessionRestoredMsg{
+			sessionID: sessionID,
+			source:    sessionRestoreNew,
+			modes:     result.Modes,
+		}
 	}
 }
 

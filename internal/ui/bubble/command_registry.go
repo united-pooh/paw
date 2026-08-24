@@ -31,6 +31,13 @@ type CommandRegistry struct {
 // NewCommandRegistry creates the default TUI command registry.
 func NewCommandRegistry() *CommandRegistry {
 	registry := &CommandRegistry{}
+	newSessionHandler := func(m *appModel, _ string) tea.Cmd {
+		m.sessionPicker = nil
+		m.pending = nil
+		m.chatQueue.Clear()
+		m.clearNewMessageNotice()
+		return startNewSessionCmd(m.ctx, m.runner)
+	}
 	registry.Register(Command{
 		Name:              "/help",
 		Description:       "show available commands",
@@ -247,23 +254,15 @@ func NewCommandRegistry() *CommandRegistry {
 	})
 	registry.Register(Command{
 		Name:              "/clear",
-		Description:       "clear in-process chat history",
+		Description:       "start a new session with clean context",
 		AllowWhileRunning: false,
-		Handler: func(m *appModel, invocation string) tea.Cmd {
-			if m.runner != nil {
-				m.runner.ResetHistory()
-			}
-			m.replaceTranscript(nil)
-			m.resetToolInspect()
-			m.pending = nil
-			m.chatQueue.Clear()
-			m.activeAssistant = -1
-			m.syncInputMode()
-			m.clearNewMessageNotice()
-			m.addEntry(transcriptEntry{kind: entrySystem, title: "system", body: "history cleared"})
-			m.clearNewMessageNotice()
-			return nil
-		},
+		Handler:           newSessionHandler,
+	})
+	registry.Register(Command{
+		Name:              "/new",
+		Description:       "start a new session with clean context",
+		AllowWhileRunning: false,
+		Handler:           newSessionHandler,
 	})
 	registry.Register(Command{
 		Name:              "/resume",

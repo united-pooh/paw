@@ -203,7 +203,7 @@ func buildRunnerWithTaskContext(ctx context.Context, sessionIDFlag string, outpu
 	}()
 	runner.SetStreamMATaskRunner(streamMATaskAdapter{
 		manager:         taskManager,
-		parentSessionID: sessionID,
+		parentSessionID: runner.CurrentSessionID,
 	})
 	runner.SetTaskTokensProvider(taskManager)
 	runner.SetTurnOwnedTaskCleaner(taskManager)
@@ -290,16 +290,20 @@ func sandboxLimitsFlag(effective configv2.EffectiveSandbox) string {
 
 type streamMATaskAdapter struct {
 	manager         *task.Manager
-	parentSessionID string
+	parentSessionID func() string
 }
 
 func (a streamMATaskAdapter) StreamTask(ctx context.Context, req loop.StreamMATaskRequest) (loop.StreamMATaskStream, error) {
 	if a.manager == nil {
 		return loop.StreamMATaskStream{}, fmt.Errorf("streamma task manager is nil")
 	}
+	parentSessionID := ""
+	if a.parentSessionID != nil {
+		parentSessionID = a.parentSessionID()
+	}
 	stream, err := a.manager.Stream(ctx, task.Request{
 		SessionID:       req.SessionID,
-		ParentSessionID: a.parentSessionID,
+		ParentSessionID: parentSessionID,
 		Prompt:          req.Prompt,
 		SystemPrompt:    req.SystemPrompt,
 		Description:     req.Description,

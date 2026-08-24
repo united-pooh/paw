@@ -192,6 +192,56 @@ func TestHostRunsDurableTurnThroughSessionActor(t *testing.T) {
 	}
 }
 
+func TestHostNewSessionCreatesEmptyIsolatedConversation(t *testing.T) {
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	modelClient := &capturingRichModel{}
+	host, err := NewHost(loop.NewEngine(modelClient, &recordingUI{}, tool.NewRegistry(), store, "s1"), store, "s1")
+	if err != nil {
+		t.Fatalf("NewHost: %v", err)
+	}
+	defer host.Close()
+
+	if _, err := host.RunTurn(context.Background(), "old prompt"); err != nil {
+		t.Fatalf("old RunTurn: %v", err)
+	}
+	newID, loaded, err := host.NewSession(context.Background())
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if newID == "" || newID == "s1" || host.CurrentSessionID() != newID {
+		t.Fatalf("new/current session = %q/%q", newID, host.CurrentSessionID())
+	}
+	if len(loaded.Messages) != 0 || loaded.Recovery != nil {
+		t.Fatalf("new session load result = %#v, want empty", loaded)
+	}
+	if exists, err := store.Exists(context.Background(), newID); err != nil || !exists {
+		t.Fatalf("new session root exists=%v err=%v", exists, err)
+	}
+
+	if _, err := host.RunTurn(context.Background(), "fresh prompt"); err != nil {
+		t.Fatalf("fresh RunTurn: %v", err)
+	}
+	for _, msg := range modelClient.messages {
+		if strings.Contains(msg.Content, "old prompt") {
+			t.Fatalf("new model request retained old context: %#v", modelClient.messages)
+		}
+	}
+	oldHistory, err := store.LoadResolvedHistory(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("old history: %v", err)
+	}
+	newHistory, err := store.LoadResolvedHistory(context.Background(), newID)
+	if err != nil {
+		t.Fatalf("new history: %v", err)
+	}
+	if len(oldHistory) != 2 || len(newHistory) != 2 || newHistory[0].Content != "fresh prompt" {
+		t.Fatalf("old/new history = %#v / %#v", oldHistory, newHistory)
+	}
+}
+
 func TestHostPreservesRichImageDataThroughSessionActor(t *testing.T) {
 	store, err := session.NewJSONLStore(t.TempDir())
 	if err != nil {

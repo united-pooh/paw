@@ -436,6 +436,7 @@ type sessionRestoreSource int
 const (
 	sessionRestorePicker sessionRestoreSource = iota
 	sessionRestoreTaskEnter
+	sessionRestoreNew
 )
 
 // fileCompletionLoadedMsg 携带异步加载完成的文件补全列表。

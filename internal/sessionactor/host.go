@@ -277,6 +277,30 @@ func (h *Host) CurrentSessionID() string {
 	return h.sessionID
 }
 
+// NewSession creates and activates an empty durable session. It intentionally
+// goes through LoadSession so history, recovery state, usage, todo/state-tool
+// bindings, and session lifecycle hooks switch together.
+func (h *Host) NewSession(ctx context.Context) (string, loop.SessionLoadResult, error) {
+	if h == nil || h.store == nil {
+		return "", loop.SessionLoadResult{}, fmt.Errorf("session actor host is unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	sessionID, err := session.GenerateSessionID()
+	if err != nil {
+		return "", loop.SessionLoadResult{}, fmt.Errorf("generate session id: %w", err)
+	}
+	if _, err := h.store.CreateRoot(ctx, session.CreateRootRequest{SessionID: sessionID}); err != nil {
+		return "", loop.SessionLoadResult{}, fmt.Errorf("create session: %w", err)
+	}
+	result, err := h.LoadSession(ctx, sessionID)
+	if err != nil {
+		return "", result, fmt.Errorf("activate session: %w", err)
+	}
+	return sessionID, result, nil
+}
+
 func (h *Host) LoadSession(ctx context.Context, sessionID string) (loop.SessionLoadResult, error) {
 	h.mu.Lock()
 	previous := h.sessionID
