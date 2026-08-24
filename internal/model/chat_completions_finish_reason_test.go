@@ -48,6 +48,38 @@ func TestChatCompletionsStreamTrailingUsageAfterFinishReason(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsStreamDuplicateFinishReasonIsIdempotent(t *testing.T) {
+	client := newChatCompletionsSSETestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"ok"}}]}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}`+"\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	})
+
+	result := collectChatCompletionEvents(t, client)
+	if result.err != nil || result.delta != "ok" {
+		t.Fatalf("result=%#v, want duplicate stop accepted", result)
+	}
+	if result.doneCount != 1 || result.doneReason != FinishReasonStop {
+		t.Fatalf("doneCount=%d doneReason=%q, want one stop Done", result.doneCount, result.doneReason)
+	}
+	if result.usage == nil || result.usage.TotalTokens != 12 {
+		t.Fatalf("usage=%#v, want usage from duplicate finish tail", result.usage)
+	}
+}
+
+func TestChatCompletionsStreamConflictingDuplicateFinishReasonErrors(t *testing.T) {
+	client := newChatCompletionsSSETestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, `data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"choices":[{"delta":{},"finish_reason":"length"}]}`+"\n\n")
+	})
+
+	result := collectChatCompletionEvents(t, client)
+	assertChatCompletionStreamError(t, result, "conflicting finish_reason")
+}
+
 func TestChatCompletionsStreamCleanEOFAfterFinishReasonEmitsDoneOnce(t *testing.T) {
 	client := newChatCompletionsSSETestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

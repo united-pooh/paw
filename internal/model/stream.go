@@ -645,16 +645,21 @@ func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events 
 		}
 
 		// finish_reason：先验证并 flush 工具调用，但继续读取可能存在的 usage-only 尾块。
+		// 部分 OpenAI-compatible provider（如 ox/alpha）会在尾块中重复同一个
+		// finish_reason；相同值按幂等事件处理，冲突值仍作为协议错误暴露。
 		rawFinishReason := chunk.Choices[0].FinishReason
 		if rawFinishReason != nil && *rawFinishReason != "" {
-			if finishSeen {
-				_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("Chat Completions stream returned duplicate finish_reason")})
-				return
-			}
 			reason, err := chatCompletionFinishReason(rawFinishReason, false)
 			if err != nil {
 				_ = emitStreamEvent(ctx, events, StreamEvent{Err: err})
 				return
+			}
+			if finishSeen {
+				if reason != finishReason {
+					_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("Chat Completions stream returned conflicting finish_reason %q after %q", reason, finishReason)})
+					return
+				}
+				continue
 			}
 			calls, err := openAIToolCallsFromAccumulated(accumulated)
 			if err != nil {
