@@ -129,3 +129,19 @@ func TestRenderModelSwitchCardFallsBackOnPlainBody(t *testing.T) {
 		t.Fatalf("fallback lost body: %q", rendered)
 	}
 }
+
+func TestRenderEntryRendersModelCardWithoutLabel(t *testing.T) {
+	body := formatModelSwitchBlock(model.Config{Provider: "p1", Model: "m1"})
+	entry := transcriptEntry{kind: entrySystem, title: "model", body: body}
+	rendered := ansi.Strip(renderEntry(entry, 80))
+	trimmed := strings.TrimLeft(rendered, " ")
+	if !strings.HasPrefix(trimmed, "╭") {
+		t.Fatalf("model card entry should start with rounded border:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "✓ 模型已生效") {
+		t.Fatalf("missing card title:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "\nmodel\n") {
+		t.Fatalf("legacy model label should be replaced by card title:\n%s", rendered)
+	}
+}

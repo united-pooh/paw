@@ -2320,6 +2320,15 @@ func renderEntryAt(entry transcriptEntry, width int, at time.Time, showThinking 
 		}
 		return indentLines(card, transcriptEntryGutter)
 	}
+	// 结构化 <model> 切换块：整块渲染为绿框状态卡，不显示 "model" 标签
+	// （卡片标题自带 ✓ 状态标记），与 <task> 完成卡同一套视觉语言。
+	if entry.kind == entrySystem && isModelCardBlock(entry.body) {
+		card := renderModelSwitchCard(entry.body, bodyWidth)
+		if card == "" {
+			return ""
+		}
+		return indentLines(card, transcriptEntryGutter)
+	}
 	body := renderEntryBodyAt(entry, bodyWidth, at, showThinking)
 	if entry.kind == entryAssistant && entry.turnMetadata != nil {
 		footer := contextFreeStyle.Render(formatTurnFooter(*entry.turnMetadata))
