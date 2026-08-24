@@ -5,10 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"paw/internal/message"
 	"strings"
+	"time"
 )
 
 const (
@@ -113,7 +113,7 @@ func (c *Client) streamAnthropicMessage(ctx context.Context, cfg Config, message
 	}
 
 	events := make(chan StreamEvent)
-	go c.consumeAnthropicStream(ctx, resp, events)
+	go c.consumeAnthropicStream(ctx, resp, events, streamIdleTimeout(cfg))
 	return events, nil
 }
 
@@ -201,13 +201,14 @@ type activeAnthropicToolCall struct {
 	sawDelta     bool
 }
 
-func (c *Client) consumeAnthropicStream(ctx context.Context, resp *http.Response, events chan<- StreamEvent) {
+func (c *Client) consumeAnthropicStream(ctx context.Context, resp *http.Response, events chan<- StreamEvent, idleTimeout time.Duration) {
 	defer close(events)
-	defer func(Body io.ReadCloser) {
-		_ = Body.Close()
-	}(resp.Body)
+	body := newStreamIdleWatchdog(ctx, resp.Body, idleTimeout)
+	defer func() {
+		_ = body.Close()
+	}()
 
-	scanner := newStreamScanner(resp.Body)
+	scanner := newStreamScanner(body)
 	// 索引映射：block index → part type
 	blockTypes := map[int]string{}
 	// 追踪每个 block index 的工具调用累积状态
@@ -382,6 +383,10 @@ func (c *Client) consumeAnthropicStream(ctx context.Context, resp *http.Response
 		}
 	}
 
+	if body.TimedOut() {
+		_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("模型流 %s 无任何数据，连接已中断（可能是 provider 网络抖动），请重试", idleTimeout)})
+		return
+	}
 	if err := scanner.Err(); err != nil {
 		_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("读取 Anthropic 流式响应失败: %w", err)})
 		return

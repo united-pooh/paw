@@ -7,6 +7,7 @@ import (
 	"paw/internal/model"
 	"paw/internal/session"
 	"reflect"
+	"strings"
 	"time"
 )
 
@@ -236,23 +237,34 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 
 		var assistantMessage message.Message
 		var modelErr error
-		for recoveryAttempt := 0; ; recoveryAttempt++ {
-			assistantMessage, modelErr = runner.runModelTurn(ctx, history, turnState)
-			if modelErr == nil || recoveryAttempt > 0 || assistantMessageHasPartialStream(assistantMessage) || !model.IsContextOverflowError(modelErr) {
-				break
-			}
+		// 空响应（无工具调用且正文为空）是病态回合：用户将看不到任何输出，
+		// 完成门还会把它计为无进展。静默重试有限次后再接受。
+		for emptyAttempt := 0; ; emptyAttempt++ {
+			for recoveryAttempt := 0; ; recoveryAttempt++ {
+				assistantMessage, modelErr = runner.runModelTurn(ctx, history, turnState)
+				if modelErr == nil || recoveryAttempt > 0 || assistantMessageHasPartialStream(assistantMessage) || !model.IsContextOverflowError(modelErr) {
+					break
+				}
 
-			var compaction *ContextCompactionResult
-			history, compaction, modelErr = runner.recoverContextLimit(ctx, history, modelErr, round > 0)
-			if modelErr != nil {
+				var compaction *ContextCompactionResult
+				history, compaction, modelErr = runner.recoverContextLimit(ctx, history, modelErr, round > 0)
+				if modelErr != nil {
+					break
+				}
+				runner.notifySystem("context-recovery", fmt.Sprintf(
+					"provider context limit reached; compacted %d messages (%d → %d) and retrying the current model round",
+					compaction.FoldedMessages,
+					compaction.BeforeMessages,
+					compaction.AfterMessages,
+				))
+			}
+			if modelErr != nil || !emptyFinalAssistantMessage(assistantMessage) {
 				break
 			}
-			runner.notifySystem("context-recovery", fmt.Sprintf(
-				"provider context limit reached; compacted %d messages (%d → %d) and retrying the current model round",
-				compaction.FoldedMessages,
-				compaction.BeforeMessages,
-				compaction.AfterMessages,
-			))
+			if emptyAttempt >= maxEmptyResponseRetries {
+				runner.notifySystem("model", "模型连续返回空响应（已自动重试），本轮没有可见输出")
+				break
+			}
 		}
 		if modelErr != nil {
 			if persistErr := runner.persistPartialAssistant(context.WithoutCancel(ctx), journal, turnID, assistantMessage); persistErr != nil {
@@ -307,6 +319,14 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 	}
 
 	return execution, fmt.Errorf("tool loop exceeded max rounds: %d", maxToolRounds)
+}
+
+// maxEmptyResponseRetries 是空响应回合的静默重试次数。
+const maxEmptyResponseRetries = 1
+
+// emptyFinalAssistantMessage 报告回合是否以“无工具调用且正文为空”结束。
+func emptyFinalAssistantMessage(msg message.Message) bool {
+	return len(toolCallsFromMessage(msg)) == 0 && strings.TrimSpace(msg.Content) == ""
 }
 
 func assistantMessageHasPartialStream(msg message.Message) bool {

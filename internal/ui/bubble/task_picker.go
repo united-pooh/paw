@@ -260,6 +260,11 @@ func loadTaskTranscriptEntries(ctx context.Context, store SessionStore, task tas
 }
 
 func transcriptEntriesFromMessage(msg message.Message, createdAt time.Time, workspaceRoot string) []transcriptEntry {
+	// auto-continue 等合成消息只服务于模型上下文，对用户透明：不进入
+	// 可见 transcript，也不会被还原成输入历史。
+	if msg.Synthetic != "" {
+		return nil
+	}
 	if len(msg.AssistantParts) > 0 && msg.Role == message.RoleAssistant {
 		return transcriptEntriesFromAssistantParts(msg, createdAt, workspaceRoot)
 	}

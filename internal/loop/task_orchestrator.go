@@ -192,7 +192,11 @@ func (e runnerCompletionEvaluator) EvaluateCompletion(assistant message.Message,
 		Snapshot:   snapshot,
 		HasSignal:  hasTodo,
 		NoProgress: nextNoProgress,
-		NextInput:  message.Message{Role: message.RoleUser, Content: buildContinuationPrompt(decision, snapshot, nextNoProgress)},
+		NextInput: message.Message{
+			Role:      message.RoleUser,
+			Content:   buildContinuationPrompt(decision, snapshot, nextNoProgress),
+			Synthetic: message.SyntheticAutoContinue,
+		},
 	}
 }
 
@@ -201,8 +205,11 @@ func (runner *Engine) taskOrchestrator() TaskOrchestrator {
 		Executor:  runnerTurnExecutor{runner: runner},
 		Evaluator: runnerCompletionEvaluator{runner: runner},
 		Events: func(event TaskEvent) {
-			if event.Type == TaskEventContinued || event.Type == TaskEventPaused {
-				runner.notifyAutoContinue(event.Decision)
+			// 续行本身对用户无感：不在 transcript 里刷系统条目，模型的持续
+			// 输出即表现为“仍在工作”。只有暂停（预算耗尽/无进展/需要上下
+			// 文维护）才需要用户知晓并介入。
+			if event.Type == TaskEventPaused {
+				runner.notifyAutoContinuePaused(event.Decision)
 			}
 		},
 	}

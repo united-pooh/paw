@@ -76,6 +76,8 @@ type SandboxPool struct {
 
 // SandboxLimits 是 worker 进程资源上限的安全基线。仅出现在全局配置；
 // 工作区配置不允许包含 limits（安全硬 cap 不可关）。
+// MaxProcesses 为兼容既有配置保留；worker 不通过 RLIMIT_NPROC 应用它，
+// 因为 NPROC 按真实 UID 统计全系统进程数，并非单 worker 的进程预算。
 type SandboxLimits struct {
 	CPUSeconds     *int `json:"cpuSeconds,omitempty"`
 	FileSizeMiB    *int `json:"fileSizeMiB,omitempty"`

@@ -50,6 +50,22 @@ func TestLoadTaskTranscriptEntriesViaStore(t *testing.T) {
 	}
 }
 
+func TestTranscriptEntriesFromMessageSkipsSynthetic(t *testing.T) {
+	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	synthetic := transcriptEntriesFromMessage(message.Message{
+		Role:      message.RoleUser,
+		Content:   "任务尚未完成，请继续执行，不要只做总结。",
+		Synthetic: message.SyntheticAutoContinue,
+	}, now, "")
+	if len(synthetic) != 0 {
+		t.Fatalf("synthetic entries = %#v, want hidden from transcript", synthetic)
+	}
+	normal := transcriptEntriesFromMessage(message.Message{Role: message.RoleUser, Content: "真实输入"}, now, "")
+	if len(normal) != 1 || normal[0].kind != entryUser {
+		t.Fatalf("normal entries = %#v, want one user entry", normal)
+	}
+}
+
 func TestLoadTaskTranscriptEntriesFallsBackToEnvelopeFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "transcript.jsonl")

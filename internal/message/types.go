@@ -10,6 +10,11 @@ const (
 	RoleAssistant Role = "assistant"
 )
 
+// Synthetic 标记由 agent 自己生成（而非用户输入）的消息，例如 auto-continue
+// 的续行提示。它们保留在模型上下文与持久化历史中，但不应在用户可见的
+// transcript 里渲染为用户消息。
+const SyntheticAutoContinue = "auto-continue"
+
 type Message struct {
 	Role    Role   `json:"role"`
 	Content string `json:"content,omitempty"`
@@ -24,6 +29,7 @@ type Message struct {
 	ToolResult     *ToolResult     `json:"tool_result,omitempty"`
 	ToolResults    []ToolResult    `json:"tool_results,omitempty"`
 	ProviderData   json.RawMessage `json:"provider_data,omitempty"`
+	Synthetic      string          `json:"synthetic,omitempty"`
 }
 
 // ContentPartType identifies one ordered part in a multimodal message.

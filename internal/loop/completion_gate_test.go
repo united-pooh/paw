@@ -43,6 +43,22 @@ func TestCompletionGatePausesAfterNoProgress(t *testing.T) {
 	if decision.Action != CompletionPause {
 		t.Fatalf("action = %q, want %q", decision.Action, CompletionPause)
 	}
+	if decision.PauseKind != PauseNoProgress {
+		t.Fatalf("pause kind = %q, want %q", decision.PauseKind, PauseNoProgress)
+	}
+}
+
+func TestCompletionGatePauseKindClassified(t *testing.T) {
+	gate := CompletionGate{Config: AutoContinueConfig{Enabled: true, BaseBudget: 1, AbsoluteMax: 12, MaxNoProgress: 2}}
+	pending := todo.Snapshot{Items: []todo.Item{{ID: "one", Status: todo.StatusPending}}}
+	budget := gate.Evaluate(CompletionObservation{HasTodo: true, Todo: pending, ContinuationUsed: 2})
+	if budget.Action != CompletionPause || budget.PauseKind != PauseBudgetExhausted {
+		t.Fatalf("budget decision = %#v, want pause/%q", budget, PauseBudgetExhausted)
+	}
+	maintenance := gate.Evaluate(CompletionObservation{HasTodo: true, Todo: pending, ContextNeedsMaintenance: true})
+	if maintenance.Action != CompletionCompact || maintenance.PauseKind != PauseContextMaintenance {
+		t.Fatalf("maintenance decision = %#v, want compact/%q", maintenance, PauseContextMaintenance)
+	}
 }
 
 func TestProgressFingerprintChangesWithTodo(t *testing.T) {
@@ -60,6 +76,10 @@ func TestBuildContinuationPromptIncludesPendingItems(t *testing.T) {
 	}}, 0)
 	if prompt == "" || !containsAll(prompt, "run tests", "todo remains") {
 		t.Fatalf("prompt = %q", prompt)
+	}
+	// 续行回合必须先有一句对用户可见的进展说明，避免“无声续行”。
+	if !containsAll(prompt, "用一句话向用户说明") {
+		t.Fatalf("prompt = %q, want visible-progress instruction", prompt)
 	}
 }
 
