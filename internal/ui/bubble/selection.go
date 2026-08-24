@@ -240,6 +240,10 @@ func (m appModel) performTranscriptClick(point selectionPoint) (appModel, bool, 
 		m.toggleReasoningExpansion(index)
 		return m, true, nil
 	}
+	if index, ok := m.workSegmentHitAtTranscriptRow(point.row); ok {
+		m.toggleWorkSegmentExpansion(index)
+		return m, true, nil
+	}
 	if index, header, ok := m.toolHitAtTranscriptRow(point.row); ok {
 		if m.toolInspectActive {
 			m.selectInspectedTool(index)

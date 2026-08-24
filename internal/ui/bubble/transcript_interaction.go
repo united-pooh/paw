@@ -92,7 +92,7 @@ func (m *appModel) buildTranscriptInteractionRows(startRow int, lines []string, 
 	}
 	toolCount := 0
 	if m != nil && startIdx >= 0 && startIdx <= len(m.transcript) {
-		toolCount = len(m.transcript) - startIdx
+		toolCount = len(m.viewEntries) - startIdx
 	}
 	tools := make([]transcriptToolInteraction, toolCount)
 	for index := range tools {
@@ -105,17 +105,17 @@ func (m *appModel) buildTranscriptInteractionRows(startRow int, lines []string, 
 	endRow := startRow + len(rows)
 	valid := true
 	pendingToolSegment := false
-	if startIdx >= 0 && startIdx < len(m.transcript) && isToolTransaction(m.transcript[startIdx]) {
-		if startIdx > 0 && isToolTransaction(m.transcript[startIdx-1]) {
+	if startIdx >= 0 && startIdx < len(m.viewEntries) && isToolTransaction(m.viewEntries[startIdx]) {
+		if startIdx > 0 && isToolTransaction(m.viewEntries[startIdx-1]) {
 			m.transcriptInteractionRangeCalls++
-			if first, ok := toolSegmentStart(m.transcript, startIdx); ok {
-				pendingToolSegment = m.transcript[first].toolGroupPending
+			if first, ok := toolSegmentStart(m.viewEntries, startIdx); ok {
+				pendingToolSegment = m.viewEntries[first].toolGroupPending
 			}
 		} else {
-			pendingToolSegment = m.transcript[startIdx].toolGroupPending
+			pendingToolSegment = m.viewEntries[startIdx].toolGroupPending
 		}
 	}
-	for index := maxInt(0, startIdx); index < len(m.transcript); index++ {
+	for index := maxInt(0, startIdx); index < len(m.viewEntries); index++ {
 		m.transcriptInteractionVisits++
 		if index >= len(m.transcriptEntrySpans) {
 			valid = false
@@ -128,14 +128,14 @@ func (m *appModel) buildTranscriptInteractionRows(startRow int, lines []string, 
 		if span.startRow >= endRow {
 			break
 		}
-		if span.startRow+span.height <= startRow || !isToolTransaction(m.transcript[index]) {
+		if span.startRow+span.height <= startRow || !isToolTransaction(m.viewEntries[index]) {
 			continue
 		}
-		if index > startIdx && !isToolTransaction(m.transcript[index-1]) {
-			pendingToolSegment = m.transcript[index].toolGroupPending
+		if index > startIdx && !isToolTransaction(m.viewEntries[index-1]) {
+			pendingToolSegment = m.viewEntries[index].toolGroupPending
 		}
 		if !pendingToolSegment {
-			last := toolSegmentEnd(m.transcript, index)
+			last := toolSegmentEnd(m.viewEntries, index)
 			cachedToolRows := m.transcriptRenderCache[index].toolRows
 			if cachedToolRows == nil {
 				valid = false
@@ -227,7 +227,7 @@ type transcriptHoverPatchCache struct {
 }
 
 func (m appModel) currentTranscriptHoverPatchUnit() (transcriptHoverPatchUnit, bool) {
-	if m.toolHoverIndex < 0 || !m.transcriptInteraction.valid || m.toolHoverIndex >= len(m.transcript) || m.transcript[m.toolHoverIndex].toolFocused {
+	if m.toolHoverIndex < 0 || !m.transcriptInteraction.valid || m.toolHoverIndex >= len(m.viewEntries) || m.viewEntries[m.toolHoverIndex].toolFocused {
 		return transcriptHoverPatchUnit{}, false
 	}
 	interaction, ok := m.transcriptInteraction.toolAt(m.toolHoverIndex)
@@ -280,14 +280,14 @@ func (m appModel) renderTranscriptHoverPatch(unit transcriptHoverPatchUnit) ([]s
 	at := m.animationNow()
 	var rendered string
 	if unit.groupStart >= 0 {
-		if unit.groupStart >= len(m.transcript) {
+		if unit.groupStart >= len(m.viewEntries) {
 			return nil, false
 		}
-		first, last := toolGroupRange(m.transcript, unit.groupStart)
-		entries := toolEntriesForGroup(m.transcript, first)
+		first, last := toolGroupRange(m.viewEntries, unit.groupStart)
+		entries := toolEntriesForGroup(m.viewEntries, first)
 		expanded := m.toolGroupExpanded
-		if !toolGroupHasRunning(m.transcript, first, last) {
-			expanded = m.transcript[first].toolExpanded
+		if !toolGroupHasRunning(m.viewEntries, first, last) {
+			expanded = m.viewEntries[first].toolExpanded
 		}
 		hoveredOffset := -1
 		if unit.hoverActive && m.toolHoverIndex >= first && m.toolHoverIndex <= last {
@@ -295,10 +295,10 @@ func (m appModel) renderTranscriptHoverPatch(unit transcriptHoverPatchUnit) ([]s
 		}
 		rendered, _ = renderToolsGroupWithHoverRows(entries, width, at, expanded, m.toolGroupFullResult, hoveredOffset)
 	} else {
-		if unit.toolIndex < 0 || unit.toolIndex >= len(m.transcript) {
+		if unit.toolIndex < 0 || unit.toolIndex >= len(m.viewEntries) {
 			return nil, false
 		}
-		entry := m.transcript[unit.toolIndex]
+		entry := m.viewEntries[unit.toolIndex]
 		body := renderToolTransactionEntryWithHover(entry, transcriptBodyWidth(width), at, unit.hoverActive)
 		if body != "" {
 			rendered = indentLines(body, transcriptEntryGutter)

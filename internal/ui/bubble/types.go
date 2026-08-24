@@ -4,6 +4,7 @@ package bubble
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	configv2 "paw/internal/config"
 	"paw/internal/loop"
 	"paw/internal/model"
@@ -40,6 +41,9 @@ const (
 	entryTool
 	// entryError 表示错误消息。
 	entryError
+	// entryWorkSegment 表示一个折叠的工作段视图条目（reasoning + 工具事务
+	// 的连续运行），由 foldWorkSegments 在视图层生成，不进入原始 transcript。
+	entryWorkSegment
 )
 
 // transcriptEntry 是聊天历史区的一条可渲染记录。
@@ -82,6 +86,29 @@ type transcriptEntry struct {
 	reasoningFinishedAt   *time.Time
 	reasoningExpansionSet bool // UI-only local override; never persisted
 	reasoningExpanded     bool // value used when reasoningExpansionSet is true
+	// segment 仅在 kind == entryWorkSegment 时非空，持有收编的子条目与聚合统计。
+	segment *workSegmentData
+}
+
+// workSegmentData 是一个工作段的视图数据：子条目为原始 reasoning/tool 条目
+// 的视图引用，统计口径见 foldWorkSegments。
+type workSegmentData struct {
+	children     []transcriptEntry
+	toolCalls    int // 不含 update_todo 等簿记工具
+	failed       int
+	hasReasoning bool
+	startedAt    time.Time
+	finishedAt   time.Time
+	header       bool // 展开态下作为段标题行内联在视图中（子条目跟随其后平铺）
+	live         bool // foldLive 下仅尾部段为 true
+}
+
+// workSegmentKey 生成段的稳定身份：用于跨视图重建保留展开状态。
+func workSegmentKey(data *workSegmentData) string {
+	if data == nil {
+		return ""
+	}
+	return fmt.Sprintf("%d/%d/%d/%d/%t", data.startedAt.UnixNano(), len(data.children), data.toolCalls, data.failed, data.hasReasoning)
 }
 
 type toolCitation struct {
@@ -525,6 +552,15 @@ type appModel struct {
 	historyDownLock                     bool
 	inputPasteFoldActive                bool
 	transcript                          []transcriptEntry
+	// viewEntries 是 transcript 的视图投影（工作段折叠后的渲染序列），由
+	// recomputeViewEntries 在渲染前重建；渲染管线（render cache/spans/交互
+	// 坐标）一律基于 viewEntries 下标，transcript 保持原始条目不动。
+	viewEntries                         []transcriptEntry
+	transcriptToViewMap                 []int // transcript 下标 → 视图下标（被收编条目指向所属段）
+	viewToTranscriptMap                 []int // 视图下标 → transcript 下标（段条目为 -1）
+	foldModeSet                         bool
+	lastFoldMode                        foldMode
+	segmentExpanded                     map[string]bool // 工作段身份（workSegmentKey）→ 手动展开态
 	transcriptRenderCache               []transcriptRenderCacheEntry
 	transcriptRenderConfig              transcriptRenderConfig
 	transcriptRenderConfigSet           bool

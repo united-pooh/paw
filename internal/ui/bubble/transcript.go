@@ -119,6 +119,7 @@ type transcriptRenderCacheKey struct {
 	toolElapsedSecond    int64
 	turnMetadata         string
 	showThinking         bool
+	segmentSnapshot      string
 }
 
 func (m *appModel) ensureAssistantStreamEntry() {
@@ -1259,6 +1260,69 @@ func (m *appModel) applyTranscriptToViewport(width int, showThinking bool, at ti
 	m.lastSelectionRenderSig = 0
 }
 
+// recomputeViewEntries 重建 transcript 的视图投影（工作段折叠）。每次渲染
+// 前调用：折叠是纯函数 O(条目数)，成本远低于渲染本身。mode 翻转（live →
+// resting）会改变视图结构，必须全量重渲染。
+func (m *appModel) recomputeViewEntries() {
+	if m == nil {
+		return
+	}
+	mode := foldResting
+	if m.isModelWorkRunning() {
+		mode = foldLive
+	}
+	if m.foldModeSet && m.lastFoldMode != mode {
+		m.transcriptInvalidation.markFull()
+	}
+	m.foldModeSet = true
+	m.lastFoldMode = mode
+	expandedFor := func(data *workSegmentData) bool {
+		if m.showThinking {
+			return true
+		}
+		return m.segmentExpanded[workSegmentKey(data)]
+	}
+	m.viewEntries, m.transcriptToViewMap, m.viewToTranscriptMap = foldWorkSegmentsView(m.transcript, mode, expandedFor)
+}
+
+// setWorkSegmentExpanded 记录某个工作段的手动展开态（跨视图重建保留）。
+func (m *appModel) setWorkSegmentExpanded(data *workSegmentData, expanded bool) {
+	if m == nil || data == nil {
+		return
+	}
+	if m.segmentExpanded == nil {
+		m.segmentExpanded = make(map[string]bool)
+	}
+	key := workSegmentKey(data)
+	if expanded {
+		m.segmentExpanded[key] = true
+	} else {
+		delete(m.segmentExpanded, key)
+	}
+}
+
+// viewIndexForTranscriptEntry 把 transcript 空间的失效下标翻译为视图下标。
+// 被收编的条目指向所属段；下标越界时返回视图长度（调用方退化为全量重建）。
+func (m *appModel) viewIndexForTranscriptEntry(index int) int {
+	if m == nil || index < 0 {
+		return index
+	}
+	if index >= len(m.transcriptToViewMap) {
+		return len(m.viewEntries)
+	}
+	return m.transcriptToViewMap[index]
+}
+
+// transcriptIndexForViewEntry 把视图下标翻译回 transcript 下标，供交互层
+// 写回（展开/聚焦等状态修改必须落在原始条目上）。段条目返回 ok=false。
+func (m *appModel) transcriptIndexForViewEntry(index int) (int, bool) {
+	if m == nil || index < 0 || index >= len(m.viewToTranscriptMap) {
+		return 0, false
+	}
+	transcriptIndex := m.viewToTranscriptMap[index]
+	return transcriptIndex, transcriptIndex >= 0
+}
+
 // ensureTranscriptLinesAt 保证 m.transcriptLines / m.transcriptEntrySpans 与
 // 当前 transcript 内容同步，并返回如何更新 viewport：
 //   - changed=false：无内容变化，viewport 无需更新；
@@ -1273,6 +1337,7 @@ func (m *appModel) ensureTranscriptLinesAt(width int, showThinking bool, at time
 	if m == nil {
 		return false, -1, nil
 	}
+	m.recomputeViewEntries()
 	m.ensureToolRuntimeIndex()
 	m.transcriptRenderVisits = 0
 	m.transcriptPrefixAnchorVisits = 0
@@ -1295,12 +1360,12 @@ func (m *appModel) ensureTranscriptLinesAt(width int, showThinking bool, at time
 	if !m.transcriptLinesValid || !m.transcriptContentCached {
 		m.transcriptInvalidation.markFull()
 	}
-	if len(m.transcriptRenderCache) < len(m.transcript) {
+	if len(m.transcriptRenderCache) < len(m.viewEntries) {
 		firstNew := len(m.transcriptRenderCache)
-		m.transcriptRenderCache = append(m.transcriptRenderCache, make([]transcriptRenderCacheEntry, len(m.transcript)-firstNew)...)
+		m.transcriptRenderCache = append(m.transcriptRenderCache, make([]transcriptRenderCacheEntry, len(m.viewEntries)-firstNew)...)
 		m.transcriptInvalidation.markFrom(firstNew)
-	} else if len(m.transcriptRenderCache) > len(m.transcript) {
-		m.transcriptRenderCache = make([]transcriptRenderCacheEntry, len(m.transcript))
+	} else if len(m.transcriptRenderCache) > len(m.viewEntries) {
+		m.transcriptRenderCache = make([]transcriptRenderCacheEntry, len(m.viewEntries))
 		m.transcriptInvalidation.markFull()
 	}
 	if !m.transcriptInvalidation.dirty {
@@ -1314,7 +1379,7 @@ func (m *appModel) ensureTranscriptLinesAt(width int, showThinking bool, at time
 	m.transcriptLocationCache = nil
 	m.transcriptLocationsReady = false
 
-	if len(m.transcript) == 0 {
+	if len(m.viewEntries) == 0 {
 		m.transcriptLines = nil
 		m.transcriptEntrySpans = nil
 		m.transcriptInteraction.set(nil, nil, true)
@@ -1343,16 +1408,16 @@ func (m *appModel) ensureTranscriptLinesAt(width int, showThinking bool, at time
 	// 走全量重建，否则后续 span 的行号会错位。注意新 span 必须显式置
 	// startRow=-1：零值 startRow=0 会被误认为有效渲染条目，把替换起点
 	// 错算到内容顶部。
-	if len(m.transcriptEntrySpans) < len(m.transcript) {
-		for len(m.transcriptEntrySpans) < len(m.transcript) {
+	if len(m.transcriptEntrySpans) < len(m.viewEntries) {
+		for len(m.transcriptEntrySpans) < len(m.viewEntries) {
 			m.transcriptEntrySpans = append(m.transcriptEntrySpans, transcriptEntrySpan{startRow: -1})
 		}
-	} else if len(m.transcriptEntrySpans) > len(m.transcript) {
-		m.transcriptEntrySpans = m.transcriptEntrySpans[:len(m.transcript)]
+	} else if len(m.transcriptEntrySpans) > len(m.viewEntries) {
+		m.transcriptEntrySpans = m.transcriptEntrySpans[:len(m.viewEntries)]
 	}
 
-	startIdx := m.normalizeTranscriptDirtyIndex(m.transcriptInvalidation.from)
-	if startIdx < 0 || startIdx >= len(m.transcript) {
+	startIdx := m.viewIndexForTranscriptEntry(m.normalizeTranscriptDirtyIndex(m.transcriptInvalidation.from))
+	if startIdx < 0 || startIdx >= len(m.viewEntries) {
 		m.invalidateTranscriptStructure()
 		segment, spans := m.renderTranscriptEntriesFrom(0, width, showThinking, at)
 		m.transcriptLines = transcriptSegmentLines(segment)
@@ -1371,7 +1436,7 @@ func (m *appModel) ensureTranscriptLinesAt(width int, showThinking bool, at time
 		startRow = m.transcriptEntrySpans[startIdx-1].contentEndRow
 	}
 	segment, spans := m.renderTranscriptEntriesFrom(startIdx, width, showThinking, at)
-	for i := startIdx; i < len(m.transcript); i++ {
+	for i := startIdx; i < len(m.viewEntries); i++ {
 		m.transcriptEntrySpans[i] = spans[i-startIdx]
 	}
 	// 替换起点 = 段内第一个渲染条目的 startRow：条目间的分隔符空行属于
@@ -1414,7 +1479,10 @@ func transcriptSegmentLines(segment string) []string {
 // 刷新的变化检测里重算。version 为 0（未 touch 的直构条目）时缓存零值
 // 不可信，总是重算。
 func (m *appModel) transcriptEntryRenderable(idx int, showThinking bool) bool {
-	entry := m.transcript[idx]
+	entry := m.viewEntries[idx]
+	if entry.kind == entryWorkSegment {
+		return entry.segment != nil
+	}
 	if entry.kind == entryThinking && !showThinking {
 		return false
 	}
@@ -1426,18 +1494,24 @@ func (m *appModel) transcriptEntryRenderable(idx int, showThinking bool) bool {
 	return cache.renderable
 }
 
-// renderTranscriptEntriesFrom 渲染 [startIdx, len(transcript)) 的条目段，
+// renderTranscriptEntriesFrom 渲染 [startIdx, len(viewEntries)) 的条目段，
 // 复用 per-entry 渲染缓存，并同步输出每个条目的渲染行区间（spans）。
 // 返回段字符串（不含底部空隙行）与 spans。调用方保证 startIdx 之前的
 // 条目已渲染且 m.transcriptEntrySpans 有效（用于分隔符与前缀行数）。
+// 渲染序列是 transcript 的视图投影（工作段折叠后），下标为视图空间。
 func (m *appModel) renderTranscriptEntriesFrom(startIdx int, width int, showThinking bool, at time.Time) (string, []transcriptEntrySpan) {
+	if m.viewEntries == nil && len(m.transcript) > 0 {
+		// 直接调用渲染的调用方（含测试）未经过 ensureTranscriptLinesAt 时
+		// 兜底重建视图，保证渲染序列与 transcript 一致。
+		m.recomputeViewEntries()
+	}
 	m.transcriptSegmentRangeCalls = 0
 	var rendered strings.Builder
 	hasPrevious := false
 	var previousKind entryKind
 	wroteAny := false
 	totalRows := 0
-	spans := make([]transcriptEntrySpan, len(m.transcript)-startIdx)
+	spans := make([]transcriptEntrySpan, len(m.viewEntries)-startIdx)
 	if startIdx > 0 {
 		m.transcriptPrefixAnchorVisits++
 		prefix := m.transcriptEntrySpans[startIdx-1]
@@ -1446,19 +1520,19 @@ func (m *appModel) renderTranscriptEntriesFrom(startIdx int, width int, showThin
 		totalRows = prefix.contentEndRow
 	}
 	pendingToolSegment := false
-	if startIdx < len(m.transcript) && isToolTransaction(m.transcript[startIdx]) {
-		if startIdx > 0 && isToolTransaction(m.transcript[startIdx-1]) {
+	if startIdx < len(m.viewEntries) && isToolTransaction(m.viewEntries[startIdx]) {
+		if startIdx > 0 && isToolTransaction(m.viewEntries[startIdx-1]) {
 			m.transcriptSegmentRangeCalls++
-			if first, ok := toolSegmentStart(m.transcript, startIdx); ok {
-				pendingToolSegment = m.transcript[first].toolGroupPending
+			if first, ok := toolSegmentStart(m.viewEntries, startIdx); ok {
+				pendingToolSegment = m.viewEntries[first].toolGroupPending
 			}
 		} else {
-			pendingToolSegment = m.transcript[startIdx].toolGroupPending
+			pendingToolSegment = m.viewEntries[startIdx].toolGroupPending
 		}
 	}
-	for idx := startIdx; idx < len(m.transcript); idx++ {
+	for idx := startIdx; idx < len(m.viewEntries); idx++ {
 		m.transcriptRenderVisits++
-		entry := m.transcript[idx]
+		entry := m.viewEntries[idx]
 		span := &spans[idx-startIdx]
 		span.startRow = -1
 		if !m.transcriptEntryRenderable(idx, showThinking) {
@@ -1471,18 +1545,18 @@ func (m *appModel) renderTranscriptEntriesFrom(startIdx int, width int, showThin
 		var toolRows transcriptToolRenderRows
 		kind := entry.kind
 		groupLast := idx
-		if isToolTransaction(entry) && idx > startIdx && !isToolTransaction(m.transcript[idx-1]) {
+		if isToolTransaction(entry) && idx > startIdx && !isToolTransaction(m.viewEntries[idx-1]) {
 			pendingToolSegment = entry.toolGroupPending
 		}
 		if isToolTransaction(entry) && !pendingToolSegment {
 			first := idx
-			last := toolSegmentEnd(m.transcript, idx)
+			last := toolSegmentEnd(m.viewEntries, idx)
 			groupLast = last
 			key := transcriptRenderKey(entry, width, at, showThinking)
-			groupEntries := m.transcript[first : last+1]
+			groupEntries := m.viewEntries[first : last+1]
 			groupExpanded := m.toolGroupExpanded
-			if !toolGroupHasRunning(m.transcript, first, last) {
-				groupExpanded = m.transcript[first].toolExpanded
+			if !toolGroupHasRunning(m.viewEntries, first, last) {
+				groupExpanded = m.viewEntries[first].toolExpanded
 			}
 			key.body = toolGroupRenderSnapshot(groupEntries, width, at)
 			key.version = 0
@@ -1579,7 +1653,7 @@ func (m *appModel) storeTranscriptRenderCacheEntry(idx int, key transcriptRender
 		renderableVersion: version,
 	}
 	if version == 0 {
-		entry.renderable = assistantEntryIsRenderable(m.transcript[idx])
+		entry.renderable = assistantEntryIsRenderable(m.viewEntries[idx])
 	}
 	m.transcriptRenderCache[idx] = entry
 }
@@ -1765,6 +1839,9 @@ func transcriptRenderKey(entry transcriptEntry, width int, at time.Time, showThi
 	}
 	if toolEntryStatus(entry) == "running" {
 		key.toolElapsedSecond = toolElapsedSeconds(entry, at)
+	}
+	if entry.kind == entryWorkSegment {
+		key.segmentSnapshot = workSegmentKeySnapshot(entry.segment, at)
 	}
 	if entry.version == 0 {
 		key.body = entry.body
@@ -2286,10 +2363,10 @@ func transcriptEntrySeparator(previousKind, currentKind entryKind) string {
 	if previousKind == currentKind {
 		return "\n"
 	}
-	if currentKind == entryReasoning && (previousKind == entryAssistant || previousKind == entryReasoning) {
+	if (currentKind == entryReasoning || currentKind == entryWorkSegment) && (previousKind == entryAssistant || previousKind == entryReasoning || previousKind == entryWorkSegment) {
 		return "\n"
 	}
-	if previousKind == entryReasoning && currentKind == entryAssistant {
+	if (previousKind == entryReasoning || previousKind == entryWorkSegment) && currentKind == entryAssistant {
 		return "\n"
 	}
 	return "\n\n"
@@ -2301,6 +2378,10 @@ func renderEntry(entry transcriptEntry, width int) string {
 }
 
 func renderEntryAt(entry transcriptEntry, width int, at time.Time, showThinking bool) string {
+	// 工作段视图条目：resting 折叠标题 / 展开平铺 / live 实时块。
+	if entry.kind == entryWorkSegment {
+		return renderWorkSegmentEntry(entry, width, at, showThinking)
+	}
 	// TaskWait 状态行：渲染为单行状态文字（如
 	// "worker 高松灯 正在运行 13s"），没有工具块边框、不可折叠。
 	if entry.taskWaitRunning {
