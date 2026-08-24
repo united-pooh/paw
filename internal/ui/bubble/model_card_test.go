@@ -4,6 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+
 	"paw/internal/model"
 )
 
@@ -73,5 +76,56 @@ func TestIsModelCardBlockBoundaries(t *testing.T) {
 		if got := isModelCardBlock(input); got != want {
 			t.Fatalf("isModelCardBlock(%q) = %v, want %v", input, got, want)
 		}
+	}
+}
+
+func TestRenderModelSwitchCardLayout(t *testing.T) {
+	cfg := model.Config{
+		Provider:           "openrouter",
+		Model:              "stealth/ox-alpha",
+		APIBaseURL:         "https://openrouter.ai/api/v1",
+		ContextLimitTokens: 131072,
+		RetryCount:         3,
+		APIKeyEnvName:      "OPENROUTER_API_KEY",
+	}
+	rendered := renderModelSwitchCard(formatModelSwitchBlock(cfg), 60)
+	plain := ansi.Strip(rendered)
+	for _, want := range []string{
+		"✓ 模型已生效",
+		"stealth/ox-alpha",
+		"openrouter · 131072 ctx · retry ×3",
+		"base",
+		"https://openrouter.ai/api/v1",
+		"key env",
+		"OPENROUTER_API_KEY",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("card missing %q:\n%s", want, plain)
+		}
+	}
+	for _, line := range strings.Split(rendered, "\n") {
+		if lipgloss.Width(line) > 60 {
+			t.Fatalf("card line exceeds width 60: %q", line)
+		}
+	}
+}
+
+func TestRenderModelSwitchCardHidesEmptyDetails(t *testing.T) {
+	body := formatModelSwitchBlock(model.Config{Provider: "p1", Model: "m1"})
+	plain := ansi.Strip(renderModelSwitchCard(body, 40))
+	for _, banned := range []string{"base", "path", "key env"} {
+		if strings.Contains(plain, banned) {
+			t.Fatalf("empty detail %q leaked:\n%s", banned, plain)
+		}
+	}
+	if !strings.Contains(plain, "✓ 模型已生效") || !strings.Contains(plain, "m1") {
+		t.Fatalf("card missing essentials:\n%s", plain)
+	}
+}
+
+func TestRenderModelSwitchCardFallsBackOnPlainBody(t *testing.T) {
+	rendered := renderModelSwitchCard("plain text", 40)
+	if !strings.Contains(ansi.Strip(rendered), "plain text") {
+		t.Fatalf("fallback lost body: %q", rendered)
 	}
 }

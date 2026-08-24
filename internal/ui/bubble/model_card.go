@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"paw/internal/model"
 )
 
@@ -94,4 +96,74 @@ func parseModelCardBlock(body string) (modelCardInfo, bool) {
 		}
 	}
 	return info, true
+}
+
+// renderModelSwitchCard 把 <model> 切换块渲染为绿框状态卡，
+// 边框与宽度算法对齐 renderTaskCompletionCard。
+func renderModelSwitchCard(body string, width int) string {
+	info, ok := parseModelCardBlock(body)
+	if !ok {
+		return bodyStyle.Width(width).Render(sanitizeTerminalText(body))
+	}
+	borderColor := colorManager.LipglossColor(colorWorktreeClean)
+	titleStyle := lipgloss.NewStyle().Foreground(borderColor).Bold(true)
+	nameStyle := lipgloss.NewStyle().Bold(true)
+	mutedStyle := lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorContextFree))
+
+	lines := []string{titleStyle.Render("✓ 模型已生效"), ""}
+	name := strings.TrimSpace(info.Model)
+	if name == "" {
+		name = "unknown"
+	}
+	lines = append(lines, nameStyle.Render(name))
+
+	metaParts := make([]string, 0, 3)
+	if info.Provider != "" {
+		metaParts = append(metaParts, info.Provider)
+	}
+	if info.Context > 0 {
+		metaParts = append(metaParts, fmt.Sprintf("%d ctx", info.Context))
+	}
+	if info.Retries > 0 {
+		metaParts = append(metaParts, fmt.Sprintf("retry ×%d", info.Retries))
+	}
+	if len(metaParts) > 0 {
+		lines = append(lines, mutedStyle.Render(strings.Join(metaParts, " · ")))
+	}
+
+	type detailRow struct{ label, value string }
+	details := make([]detailRow, 0, 3)
+	if info.Base != "" {
+		details = append(details, detailRow{"base", info.Base})
+	}
+	if info.Path != "" {
+		details = append(details, detailRow{"path", info.Path})
+	}
+	if info.KeyEnv != "" {
+		details = append(details, detailRow{"key env", info.KeyEnv})
+	}
+	if len(details) > 0 {
+		lines = append(lines, "")
+		labelWidth := 0
+		for _, r := range details {
+			labelWidth = maxInt(labelWidth, len(r.label))
+		}
+		labelWidth += 2
+		for _, r := range details {
+			lines = append(lines, mutedStyle.Render(fmt.Sprintf("%-*s", labelWidth, r.label))+r.value)
+		}
+	}
+
+	cardStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Padding(0, 1)
+	horizontalBorder := cardStyle.GetHorizontalBorderSize()
+	styleWidth := maxInt(1, width-horizontalBorder)
+	bodyWidth := maxInt(1, styleWidth-cardStyle.GetHorizontalPadding())
+	content := make([]string, 0, len(lines))
+	for _, line := range lines {
+		content = append(content, fitStyledCellLine(truncateStyledCellLine(line, bodyWidth), bodyWidth))
+	}
+	return cardStyle.Width(styleWidth).Render(strings.Join(content, "\n"))
 }
