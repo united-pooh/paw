@@ -66,11 +66,11 @@ func TestModelCardBlockEscapeRoundTrip(t *testing.T) {
 func TestIsModelCardBlockBoundaries(t *testing.T) {
 	block := "<model provider=\"p\">\n</model>"
 	cases := map[string]bool{
-		block:                    true,
-		"  \n" + block + "  ":    true,
+		block:                     true,
+		"  \n" + block + "  ":     true,
 		"<modelx provider=\"p\">": false,
-		"plain key=value":        false,
-		"<model provider=\"p\">": false,
+		"plain key=value":         false,
+		"<model provider=\"p\">":  false,
 	}
 	for input, want := range cases {
 		if got := isModelCardBlock(input); got != want {

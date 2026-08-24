@@ -243,7 +243,7 @@ func (m appModel) applyModelWizardSelection() appModel {
 		m.addEntry(transcriptEntry{
 			kind:  entrySystem,
 			title: "model",
-			body:  fmt.Sprintf("id=%s provider=%s base=%s path=%s model=%s context=%d retries=%d key=%s", selection.ID, cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, model.EffectiveContextLimitTokens(cfg), cfg.RetryCount, cfg.APIKeyEnvName),
+			body:  formatModelSwitchBlock(cfg),
 		})
 		return m
 	}
@@ -273,7 +273,7 @@ func (m appModel) applyModelWizardSelection() appModel {
 	m.addEntry(transcriptEntry{
 		kind:  entrySystem,
 		title: "model",
-		body:  fmt.Sprintf("provider=%s base=%s path=%s model=%s context=%d retries=%d key=%s", cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, model.EffectiveContextLimitTokens(cfg), cfg.RetryCount, cfg.APIKeyEnvName),
+		body:  formatModelSwitchBlock(cfg),
 	})
 	return m
 }

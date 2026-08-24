@@ -55,7 +55,7 @@ func (m *appModel) handleModelCommand(invocation string) tea.Cmd {
 				}
 				cfg := m.currentModelConfig()
 				m.syncRunnerModelContextLimit(cfg)
-				m.addEntry(transcriptEntry{kind: entrySystem, title: "model", body: fmt.Sprintf("id=%s provider=%s model=%s", args, cfg.Provider, cfg.Model)})
+				m.addEntry(transcriptEntry{kind: entrySystem, title: "model", body: formatModelSwitchBlock(cfg)})
 				return nil
 			}
 		}
@@ -100,7 +100,7 @@ func (m *appModel) applyModelConfigFromCommand(cfg model.Config) {
 	m.addEntry(transcriptEntry{
 		kind:  entrySystem,
 		title: "model",
-		body:  fmt.Sprintf("provider=%s base=%s path=%s model=%s models=%s context=%d retries=%d key=%s", cfg.Provider, cfg.APIBaseURL, cfg.APIPath, cfg.Model, strings.Join(model.AvailableModels(cfg), ","), model.EffectiveContextLimitTokens(cfg), cfg.RetryCount, cfg.APIKeyEnvName),
+		body:  formatModelSwitchBlock(cfg),
 	})
 }
 

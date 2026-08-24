@@ -661,6 +661,15 @@ func TestModelCommandVariantsKeepWizardAndShortcuts(t *testing.T) {
 	if len(controller.applied) != 2 || controller.applied[1].Provider != "backup" {
 		t.Fatalf("applied configs = %#v", controller.applied)
 	}
+
+	switchEntry := model.transcript[len(model.transcript)-1]
+	if !isModelCardBlock(switchEntry.body) {
+		t.Fatalf("switch entry body not a model card block: %q", switchEntry.body)
+	}
+	switchInfo, ok := parseModelCardBlock(switchEntry.body)
+	if !ok || switchInfo.Model != "model-b" || switchInfo.Provider != "backup" {
+		t.Fatalf("switch card info = %#v, ok=%v", switchInfo, ok)
+	}
 }
 
 // TestModelCommandSwitchesConfiguredModel verifies that one endpoint can expose
