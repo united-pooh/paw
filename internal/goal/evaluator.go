@@ -157,7 +157,7 @@ func continuationPrompt(o Observation) message.Message {
 		}
 	}
 	b.WriteString("\n请先检查当前状态，直接执行下一项最有价值的工作；完成后执行验证。")
-	return message.Message{Role: message.RoleUser, Content: b.String()}
+	return message.Message{Role: message.RoleUser, Content: b.String(), Synthetic: message.SyntheticAutoContinue}
 }
 func now() time.Time { return time.Now() }
 

@@ -1496,10 +1496,16 @@ func TestRunTurnFlushesSplitMarkdownFenceOnStreamError(t *testing.T) {
 	}
 }
 
+// 空响应回合不再直接接受：先静默重试一次，仍为空才按空内容结束并提示。
 func TestRunTurnAllowsEmptyAssistantContent(t *testing.T) {
 	ui := &fakeUI{}
 	model := &fakeModel{
 		rounds: []fakeRound{
+			{
+				events: []model.StreamEvent{
+					{Done: true},
+				},
+			},
 			{
 				events: []model.StreamEvent{
 					{Done: true},
@@ -1519,8 +1525,11 @@ func TestRunTurnAllowsEmptyAssistantContent(t *testing.T) {
 	if msg.Content != "" {
 		t.Fatalf("msg.Content = %q, want empty", msg.Content)
 	}
-	if ui.doneCount != 1 {
-		t.Fatalf("ui.doneCount = %d, want 1", ui.doneCount)
+	if len(model.calls) != 2 {
+		t.Fatalf("model calls = %d, want initial + one retry", len(model.calls))
+	}
+	if ui.doneCount != 2 {
+		t.Fatalf("ui.doneCount = %d, want 2 (empty attempt + accepted retry)", ui.doneCount)
 	}
 }
 
@@ -1555,13 +1564,13 @@ func TestRunnerForwardsThinkingEventsToUI(t *testing.T) {
 
 func TestContextStatsUsesOnlyRealUsageAndKeepsLastKnownDuringNextTurn(t *testing.T) {
 	ui := &fakeUI{}
-	first := make(chan model.StreamEvent, 1)
+	first := make(chan model.StreamEvent, 2)
 	first <- model.StreamEvent{
 		Usage: &model.Usage{PromptTokens: 100, CompletionTokens: 5, PromptCacheHitTokens: 12},
-		Done:  true,
 	}
+	first <- model.StreamEvent{Delta: "done", Done: true}
 	close(first)
-	second := make(chan model.StreamEvent, 1)
+	second := make(chan model.StreamEvent, 2)
 	streamer := &blockingModel{
 		streams: []chan model.StreamEvent{first, second},
 		started: make(chan int, 2),
@@ -1593,7 +1602,7 @@ func TestContextStatsUsesOnlyRealUsageAndKeepsLastKnownDuringNextTurn(t *testing
 		t.Fatalf("ContextStats() = %#v, want last real usage without draft estimate", stats)
 	}
 
-	second <- model.StreamEvent{Done: true}
+	second <- model.StreamEvent{Delta: "done", Done: true}
 	close(second)
 	if err := <-errCh; err != nil {
 		t.Fatalf("second RunTurn() error = %v", err)
@@ -1608,13 +1617,13 @@ func TestContextStatsAccumulatesSessionUsageAcrossModelRequests(t *testing.T) {
 				events: []model.StreamEvent{
 					{Usage: &model.Usage{InputTokens: 100, CacheReadInputTokens: 40}},
 					{Usage: &model.Usage{OutputTokens: 5}},
-					{Done: true},
+					{Delta: "first answer", Done: true},
 				},
 			},
 			{
 				events: []model.StreamEvent{
 					{Usage: &model.Usage{PromptTokens: 150, CompletionTokens: 7, TotalTokens: 157, PromptCacheHitTokens: 30}},
-					{Done: true},
+					{Delta: "second answer", Done: true},
 				},
 			},
 		},
@@ -1643,7 +1652,7 @@ func TestContextStatsDoesNotDoubleCountCumulativeStreamUsageUpdates(t *testing.T
 					{Usage: &model.Usage{InputTokens: 100, CacheReadInputTokens: 10}},
 					{Usage: &model.Usage{OutputTokens: 2}},
 					{Usage: &model.Usage{OutputTokens: 5}},
-					{Done: true},
+					{Delta: "done", Done: true},
 				},
 			},
 		},
@@ -2756,7 +2765,7 @@ func TestResetHistoryPreventsStoreReloadDuringProcess(t *testing.T) {
 func TestContextStats_精简后三字段正确(t *testing.T) {
 	m := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{
 		{Usage: &model.Usage{InputTokens: 1000, OutputTokens: 100}},
-		{Done: true},
+		{Delta: "done", Done: true},
 	}}}}
 	runner := NewEngine(m, &fakeUI{}, nil, nil, "")
 	if _, err := runner.RunTurn(context.Background(), "hi"); err != nil {
@@ -2778,7 +2787,7 @@ func TestContextStats_精简后三字段正确(t *testing.T) {
 func TestContextStats_CacheTokens正确反映命中缓存(t *testing.T) {
 	m := &fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{
 		{Usage: &model.Usage{InputTokens: 500, CacheReadInputTokens: 300, OutputTokens: 50}},
-		{Done: true},
+		{Delta: "done", Done: true},
 	}}}}
 	runner := NewEngine(m, &fakeUI{}, nil, nil, "")
 	if _, err := runner.RunTurn(context.Background(), "hi"); err != nil {

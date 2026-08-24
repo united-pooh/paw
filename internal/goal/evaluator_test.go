@@ -18,6 +18,9 @@ func TestEvaluatorContinuesForPendingTodo(t *testing.T) {
 	if d.Action != ActionContinue || d.NextPrompt.Content == "" {
 		t.Fatalf("decision = %+v", d)
 	}
+	if d.NextPrompt.Synthetic != message.SyntheticAutoContinue {
+		t.Fatalf("next prompt synthetic = %q, want %q", d.NextPrompt.Synthetic, message.SyntheticAutoContinue)
+	}
 }
 
 func TestEvaluatorCompletesOnlyWithoutPendingTodo(t *testing.T) {

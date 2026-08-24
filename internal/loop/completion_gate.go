@@ -31,7 +31,17 @@ type CompletionDecision struct {
 	NoProgress        int
 	StaleTodoTurns    int
 	StaleTodoReminder bool
+	// PauseKind 仅在 Action 为 pause/compact 时设置，用于面向用户的
+	// 通知文案分类，避免解析 Reason 机器串。
+	PauseKind string
 }
+
+// 暂停原因分类（面向用户通知用）。
+const (
+	PauseNoProgress         = "no-progress"
+	PauseBudgetExhausted    = "budget-exhausted"
+	PauseContextMaintenance = "context-maintenance"
+)
 
 type CompletionObservation struct {
 	Assistant               message.Message
@@ -90,6 +100,7 @@ func (g CompletionGate) Evaluate(observation CompletionObservation) CompletionDe
 	if observation.ContextNeedsMaintenance {
 		decision.Action = CompletionCompact
 		decision.Reason = "context maintenance is required"
+		decision.PauseKind = PauseContextMaintenance
 		return decision
 	}
 	pending := observation.HasTodo && pendingTodoCount(observation.Todo) > 0
@@ -101,11 +112,13 @@ func (g CompletionGate) Evaluate(observation CompletionObservation) CompletionDe
 	if observation.NoProgressCount >= config.MaxNoProgress {
 		decision.Action = CompletionPause
 		decision.Reason = fmt.Sprintf("no verifiable progress for %d turns", observation.NoProgressCount)
+		decision.PauseKind = PauseNoProgress
 		return decision
 	}
 	if observation.ContinuationUsed >= limit {
 		decision.Action = CompletionPause
 		decision.Reason = fmt.Sprintf("automatic continuation budget exhausted (%d/%d)", observation.ContinuationUsed, limit)
+		decision.PauseKind = PauseBudgetExhausted
 		return decision
 	}
 	decision.Action = CompletionContinue
@@ -166,7 +179,7 @@ func buildContinuationPrompt(decision CompletionDecision, snapshot todo.Snapshot
 	if decision.StaleTodoReminder {
 		fmt.Fprintf(&b, "提醒：todo 快照已连续 %d 轮未更新。如任务状态有变化（含已完成项），请立即调用 update_todo 标记，不要攒到最后一次性更新。\n", decision.StaleTodoTurns)
 	}
-	b.WriteString("\n请先检查当前状态，直接执行下一项最有价值的工作；必要时更新 todo，修改代码后执行相关验证。只有确认全部目标完成后才输出最终总结。")
+	b.WriteString("\n请先检查当前状态，用一句话向用户说明你接下来要做什么，然后直接执行下一项最有价值的工作；必要时更新 todo，修改代码后执行相关验证。只有确认全部目标完成后才输出最终总结。")
 	return b.String()
 }
 
@@ -261,6 +274,29 @@ func (runner *Engine) evaluateCompletion(assistant message.Message, hadToolCalls
 	return decision, snapshot, true, noProgress
 }
 
-func (runner *Engine) notifyAutoContinue(decision CompletionDecision) {
-	runner.notifySystem("auto-continue", fmt.Sprintf("%s (%d/%d)", decision.Reason, decision.BudgetUsed, decision.BudgetLimit))
+// notifyAutoContinuePaused 是 auto-continue 唯一对用户可见的通知：续行本身
+// 是无感的（模型持续输出即表现为继续工作），只有停下来时才需要告知用户，
+// 并给出可操作的下一步。
+func (runner *Engine) notifyAutoContinuePaused(decision CompletionDecision) {
+	var reason string
+	switch decision.PauseKind {
+	case PauseNoProgress:
+		reason = fmt.Sprintf("连续 %d 轮没有可验证的进展", decision.NoProgress)
+	case PauseBudgetExhausted:
+		reason = fmt.Sprintf("续行次数已达上限（%d/%d）", decision.BudgetUsed, decision.BudgetLimit)
+	default:
+		reason = decision.Reason
+	}
+	var b strings.Builder
+	b.WriteString("自动续行已暂停：")
+	b.WriteString(reason)
+	if _, broker := runner.autoContinueState(); broker != nil {
+		if snapshot, ok := broker.Latest(); ok {
+			if pending := pendingTodoCount(snapshot); pending > 0 {
+				fmt.Fprintf(&b, "，还有 %d 项 todo 未完成", pending)
+			}
+		}
+	}
+	b.WriteString("。回复「继续」即可接着执行。")
+	runner.notifySystem("auto-continue", b.String())
 }
