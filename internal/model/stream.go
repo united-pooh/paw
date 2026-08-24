@@ -12,6 +12,8 @@ import (
 	"paw/internal/message"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 )
 
 type AssistantPartLifecycle string
@@ -320,7 +322,7 @@ func (c *Client) streamOpenAIMessage(ctx context.Context, cfg Config, adapter Mo
 	// - 调用方立即拿到 channel，不阻塞当前 goroutine
 	// - 后台 goroutine 负责解析 SSE 并投递事件
 	events := make(chan StreamEvent)
-	go c.consumeStream(ctx, resp, events)
+	go c.consumeStream(ctx, resp, events, streamIdleTimeout(cfg))
 	return events, nil
 }
 
@@ -474,14 +476,95 @@ func errChatCompletionToolCallsWithoutCalls() error {
 	return fmt.Errorf("Chat Completions finish_reason tool_calls without tool calls")
 }
 
-// consumeStream 负责把 SSE 文本行转换为 StreamEvent，并累积原生 tool_calls。
-func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events chan<- StreamEvent) {
-	defer close(events)
-	defer func(Body io.ReadCloser) {
-		_ = Body.Close()
-	}(resp.Body)
+// defaultStreamIdleTimeout 是流式响应的空闲看门狗窗口：流式请求的整体超时
+// 被刻意置 0（httpClientForConfig），provider 一旦半开连接不再发送任何
+// 字节，scanner 会永远阻塞在 Read 上，表现为回合“卡住”。看门狗在窗口
+// 内没有任何数据到达时关闭 body，把无限挂起转换为可重试/可见的错误。
+const defaultStreamIdleTimeout = 90 * time.Second
 
-	scanner := newStreamScanner(resp.Body)
+func streamIdleTimeout(cfg Config) time.Duration {
+	if cfg.StreamIdleTimeout > 0 {
+		return cfg.StreamIdleTimeout
+	}
+	return defaultStreamIdleTimeout
+}
+
+// streamIdleWatchdog 包装流式响应 body：任何字节到达都会重置空闲计时器；
+// 计时器到期或 ctx 取消（ESC/回合结束）都会关闭 body，使阻塞中的
+// scanner.Scan 立即返回。
+type streamIdleWatchdog struct {
+	body    io.ReadCloser
+	timeout time.Duration
+
+	mu       sync.Mutex
+	timer    *time.Timer
+	timedOut bool
+	closed   bool
+}
+
+func newStreamIdleWatchdog(ctx context.Context, body io.ReadCloser, timeout time.Duration) *streamIdleWatchdog {
+	watcher := &streamIdleWatchdog{body: body, timeout: timeout}
+	if timeout > 0 {
+		watcher.timer = time.AfterFunc(timeout, watcher.expire)
+	}
+	if ctx != nil {
+		context.AfterFunc(ctx, func() { _ = watcher.Close() })
+	}
+	return watcher
+}
+
+func (w *streamIdleWatchdog) expire() {
+	w.mu.Lock()
+	w.timedOut = true
+	w.mu.Unlock()
+	_ = w.body.Close()
+}
+
+func (w *streamIdleWatchdog) Read(p []byte) (int, error) {
+	n, err := w.body.Read(p)
+	if n > 0 {
+		w.kick()
+	}
+	return n, err
+}
+
+func (w *streamIdleWatchdog) kick() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.timer != nil {
+		w.timer.Reset(w.timeout)
+	}
+}
+
+func (w *streamIdleWatchdog) Close() error {
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return nil
+	}
+	w.closed = true
+	if w.timer != nil {
+		w.timer.Stop()
+	}
+	w.mu.Unlock()
+	return w.body.Close()
+}
+
+func (w *streamIdleWatchdog) TimedOut() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.timedOut
+}
+
+// consumeStream 负责把 SSE 文本行转换为 StreamEvent，并累积原生 tool_calls。
+func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events chan<- StreamEvent, idleTimeout time.Duration) {
+	defer close(events)
+	body := newStreamIdleWatchdog(ctx, resp.Body, idleTimeout)
+	defer func() {
+		_ = body.Close()
+	}()
+
+	scanner := newStreamScanner(body)
 	// 按 index 累积 tool_calls，支持单次响应中多个工具调用
 	accumulated := map[int]*activeOpenAIToolCall{}
 	var finishReason FinishReason
@@ -594,6 +677,10 @@ func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events 
 		}
 	}
 
+	if body.TimedOut() {
+		_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("模型流 %s 无任何数据，连接已中断（可能是 provider 网络抖动），请重试", idleTimeout)})
+		return
+	}
 	if err := scanner.Err(); err != nil {
 		_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("读取流式响应失败: %w", err)})
 		return

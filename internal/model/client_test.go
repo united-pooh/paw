@@ -6,12 +6,20 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"paw/internal/message"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
+
+// TestMain 把测试进程的重试退避压缩到毫秒级，避免 10s/15s/30s 阶梯拖慢
+// 套件；阶梯取值本身由 TestRequestRetryDelaySchedule 直接验证。
+func TestMain(m *testing.M) {
+	requestRetryDelays = []time.Duration{time.Millisecond}
+	os.Exit(m.Run())
+}
 
 func TestSetRequestHeadersOmitsAuthorizationWhenAPIKeyEmpty(t *testing.T) {
 	t.Setenv("TEST_API_KEY", "")
@@ -302,5 +310,31 @@ func TestRunMessageStopsAfterConfiguredRetries(t *testing.T) {
 	}
 	if requests != 2 {
 		t.Fatalf("requests=%d, want 2", requests)
+	}
+}
+
+func TestRequestRetryDelaySchedule(t *testing.T) {
+	original := requestRetryDelays
+	requestRetryDelays = []time.Duration{10 * time.Second, 15 * time.Second, 30 * time.Second}
+	t.Cleanup(func() { requestRetryDelays = original })
+
+	cases := []struct {
+		attempt    int
+		retryAfter time.Duration
+		want       time.Duration
+	}{
+		{0, 0, 10 * time.Second},
+		{1, 0, 15 * time.Second},
+		{2, 0, 30 * time.Second},
+		{3, 0, 30 * time.Second},                // 超出阶梯后保持最后一档
+		{-1, 0, 10 * time.Second},               // 负数按第一次对待
+		{0, 20 * time.Second, 20 * time.Second}, // provider Retry-After 更大时从其值
+		{0, 5 * time.Second, 10 * time.Second},  // Retry-After 更小时用阶梯
+		{2, 2 * time.Minute, retryAfterCap},     // Retry-After 封顶 60s
+	}
+	for _, tt := range cases {
+		if got := requestRetryDelay(tt.attempt, tt.retryAfter); got != tt.want {
+			t.Errorf("requestRetryDelay(%d, %s) = %s, want %s", tt.attempt, tt.retryAfter, got, tt.want)
+		}
 	}
 }

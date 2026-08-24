@@ -38,7 +38,10 @@ type Config struct {
 	Stream                  bool
 	StreamSet               bool
 	streamSet               bool
-	Profiles                []Profile
+	// StreamIdleTimeout 是流式响应的空闲看门狗窗口（无任何字节的最长容忍
+	// 时间）；<=0 时使用默认值 defaultStreamIdleTimeout。
+	StreamIdleTimeout time.Duration
+	Profiles          []Profile
 }
 
 // ProxyMode 描述出站 HTTP 请求的代理解析方式。

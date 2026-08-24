@@ -3,12 +3,15 @@ package model
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"paw/internal/message"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -996,5 +999,110 @@ func TestNonStreamingMessageRejectsInvalidChatCompletionsArguments(t *testing.T)
 	}
 	if !strings.Contains(err.Error(), "invalid JSON object arguments") {
 		t.Fatalf("error = %v, want invalid arguments error", err)
+	}
+}
+
+// stalledBody 模拟 provider 接受请求后不再发送任何字节的半开连接：
+// Read 一直阻塞，直到 Close 被调用。
+type stalledBody struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newStalledBody() *stalledBody {
+	return &stalledBody{closed: make(chan struct{})}
+}
+
+func (b *stalledBody) Read([]byte) (int, error) {
+	<-b.closed
+	return 0, fmt.Errorf("read on closed stalled body")
+}
+
+func (b *stalledBody) Close() error {
+	b.once.Do(func() { close(b.closed) })
+	return nil
+}
+
+func TestStreamIdleWatchdogClosesStalledBody(t *testing.T) {
+	body := newStalledBody()
+	watcher := newStreamIdleWatchdog(context.Background(), body, 20*time.Millisecond)
+	start := time.Now()
+	_, err := watcher.Read(make([]byte, 1))
+	if err == nil {
+		t.Fatal("Read() error = nil, want error after idle timeout")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("Read() unblocked after %s, want prompt idle abort", elapsed)
+	}
+	if !watcher.TimedOut() {
+		t.Fatal("TimedOut() = false, want true after idle expiry")
+	}
+}
+
+func TestStreamIdleWatchdogClosesOnContextCancel(t *testing.T) {
+	body := newStalledBody()
+	ctx, cancel := context.WithCancel(context.Background())
+	watcher := newStreamIdleWatchdog(ctx, body, time.Minute)
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	start := time.Now()
+	_, _ = watcher.Read(make([]byte, 1))
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("Read() unblocked after %s, want prompt cancel abort", elapsed)
+	}
+	if watcher.TimedOut() {
+		t.Fatal("TimedOut() = true after context cancel, want false")
+	}
+}
+
+func TestStreamIdleWatchdogResetsOnData(t *testing.T) {
+	reader, writer := io.Pipe()
+	watcher := newStreamIdleWatchdog(context.Background(), reader, 60*time.Millisecond)
+	go func() {
+		for i := 0; i < 5; i++ {
+			_, _ = writer.Write([]byte("chunk"))
+			time.Sleep(20 * time.Millisecond)
+		}
+		_ = writer.Close()
+	}()
+	received := 0
+	buffer := make([]byte, 5)
+	for {
+		n, err := watcher.Read(buffer)
+		received += n
+		if err != nil {
+			break
+		}
+	}
+	if received != 25 {
+		t.Fatalf("received = %d bytes, want 25 (watchdog must not fire on active stream)", received)
+	}
+	if watcher.TimedOut() {
+		t.Fatal("TimedOut() = true on active stream, want false")
+	}
+}
+
+func TestConsumeResponsesStreamIdleTimeoutIsRetryable(t *testing.T) {
+	resp := &http.Response{Body: newStalledBody(), Header: make(http.Header)}
+	events := make(chan StreamEvent, 1)
+	client := NewClient(Config{Provider: "gateway", Transport: "openai-responses", Model: "gpt-test", Timeout: time.Second})
+	result := client.consumeResponsesStream(context.Background(), resp, events, 20*time.Millisecond)
+	if result.err == nil {
+		t.Fatal("consumeResponsesStream() err = nil, want idle timeout failure")
+	}
+	var failure *responsesStreamFailure
+	if !errors.As(result.err, &failure) || !failure.Retryable {
+		t.Fatalf("err = %#v, want retryable responsesStreamFailure", result.err)
+	}
+	if !strings.Contains(result.err.Error(), "无任何数据") {
+		t.Fatalf("err = %v, want idle timeout message", result.err)
+	}
+	if result.madeProgress {
+		t.Fatal("madeProgress = true, want false for stalled stream (retry allowed)")
+	}
+	if !isRetryableResponsesStreamError(context.Background(), result.err) {
+		t.Fatalf("isRetryableResponsesStreamError() = false for %v", result.err)
 	}
 }

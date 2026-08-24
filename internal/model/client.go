@@ -67,10 +67,14 @@ func proxyMode(proxy *ProxyConfig) ProxyMode {
 	return proxy.Mode
 }
 
-const (
-	requestRetryBaseDelay = 200 * time.Millisecond
-	requestRetryMaxDelay  = 2 * time.Second
-)
+// requestRetryDelays 是可重试失败（EOF/连接重置/429/5xx 等）的固定退避
+// 阶梯：默认 RetryCount=3，即三次重试分别等待 10s/15s/30s。provider 网络
+// 抖动需要秒级恢复窗口，毫秒级退避只会连续撞墙。
+var requestRetryDelays = []time.Duration{10 * time.Second, 15 * time.Second, 30 * time.Second}
+
+// retryAfterCap 限制 provider Retry-After 头的最大生效值，避免异常值让回合
+// 挂起过久（等待过程始终可被 ctx 取消）。
+const retryAfterCap = 60 * time.Second
 
 // doRequestWithRetry executes only the request-establishment phase with retry.
 // Once a streaming response has been accepted, the caller owns the body and
@@ -144,17 +148,7 @@ func waitForRequestRetry(ctx context.Context, attempt int) error {
 }
 
 func waitForRequestRetryAfter(ctx context.Context, attempt int, retryAfter time.Duration) error {
-	shift := attempt
-	if shift > 3 {
-		shift = 3
-	}
-	delay := requestRetryBaseDelay * time.Duration(1<<shift)
-	if retryAfter > delay {
-		delay = retryAfter
-	}
-	if delay > requestRetryMaxDelay {
-		delay = requestRetryMaxDelay
-	}
+	delay := requestRetryDelay(attempt, retryAfter)
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	if ctx == nil {
@@ -167,6 +161,25 @@ func waitForRequestRetryAfter(ctx context.Context, attempt int, retryAfter time.
 	case <-timer.C:
 		return nil
 	}
+}
+
+// requestRetryDelay 返回第 attempt 次（0 起）重试前的等待时长：固定阶梯
+// 10s/15s/30s，provider Retry-After 更大时从其值，整体封顶 retryAfterCap。
+func requestRetryDelay(attempt int, retryAfter time.Duration) time.Duration {
+	if attempt < 0 {
+		attempt = 0
+	}
+	delay := requestRetryDelays[len(requestRetryDelays)-1]
+	if attempt < len(requestRetryDelays) {
+		delay = requestRetryDelays[attempt]
+	}
+	if retryAfter > delay {
+		delay = retryAfter
+	}
+	if delay > retryAfterCap {
+		delay = retryAfterCap
+	}
+	return delay
 }
 
 func drainAndClose(body io.ReadCloser) error {

@@ -605,7 +605,7 @@ func (c *Client) streamResponsesMessage(ctx context.Context, cfg Config, message
 				return
 			}
 
-			result := c.consumeResponsesStream(ctx, resp, events)
+			result := c.consumeResponsesStream(ctx, resp, events, streamIdleTimeout(cfg))
 			if result.err == nil {
 				return
 			}
@@ -840,11 +840,14 @@ func responsesFailureFromEvent(event responsesStreamEvent, header http.Header) *
 	return failure
 }
 
-func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response, events chan<- StreamEvent) responsesStreamResult {
-	defer resp.Body.Close()
+func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response, events chan<- StreamEvent, idleTimeout time.Duration) responsesStreamResult {
+	body := newStreamIdleWatchdog(ctx, resp.Body, idleTimeout)
+	defer func() {
+		_ = body.Close()
+	}()
 	result := responsesStreamResult{retryAfter: providerRetryAfter(resp.Header, time.Now())}
 
-	scanner := bufio.NewScanner(resp.Body)
+	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, streamScannerInitialBufferBytes), streamScannerMaxTokenBytes)
 	active := make(map[int]*activeResponseToolCall)
 	sawOutputTextDelta := false
@@ -969,6 +972,10 @@ func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response
 			result.err = responsesFailureFromEvent(event, resp.Header)
 			return result
 		}
+	}
+	if body.TimedOut() {
+		result.err = &responsesStreamFailure{EventType: "stream_idle", Message: fmt.Sprintf("模型流 %s 无任何数据，连接已中断（可能是 provider 网络抖动）", idleTimeout), RequestID: providerRequestID(resp.Header), Retryable: true}
+		return result
 	}
 	if err := scanner.Err(); err != nil {
 		if ctx != nil && ctx.Err() != nil {
