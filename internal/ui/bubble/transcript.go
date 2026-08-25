@@ -1360,15 +1360,17 @@ func (m *appModel) ensureTranscriptLinesAt(width int, showThinking bool, at time
 	if !m.transcriptLinesValid || !m.transcriptContentCached {
 		m.transcriptInvalidation.markFull()
 	}
+	// 缓存与视图对齐：扩展产生的新视图条目尚无渲染缓存，需要作为增量起点
+	// （viewFrom 是视图空间下标，不能再经 transcriptToViewMap 翻译）。
+	viewFrom := -1
 	if len(m.transcriptRenderCache) < len(m.viewEntries) {
-		firstNew := len(m.transcriptRenderCache)
-		m.transcriptRenderCache = append(m.transcriptRenderCache, make([]transcriptRenderCacheEntry, len(m.viewEntries)-firstNew)...)
-		m.transcriptInvalidation.markFrom(firstNew)
+		viewFrom = len(m.transcriptRenderCache)
+		m.transcriptRenderCache = append(m.transcriptRenderCache, make([]transcriptRenderCacheEntry, len(m.viewEntries)-viewFrom)...)
 	} else if len(m.transcriptRenderCache) > len(m.viewEntries) {
 		m.transcriptRenderCache = make([]transcriptRenderCacheEntry, len(m.viewEntries))
 		m.transcriptInvalidation.markFull()
 	}
-	if !m.transcriptInvalidation.dirty {
+	if !m.transcriptInvalidation.dirty && viewFrom < 0 {
 		m.transcriptRenderConfig = config
 		m.transcriptRenderConfigSet = true
 		return false, -1, nil
@@ -1416,19 +1418,18 @@ func (m *appModel) ensureTranscriptLinesAt(width int, showThinking bool, at time
 		m.transcriptEntrySpans = m.transcriptEntrySpans[:len(m.viewEntries)]
 	}
 
-	startIdx := m.viewIndexForTranscriptEntry(m.normalizeTranscriptDirtyIndex(m.transcriptInvalidation.from))
+	startIdx := len(m.viewEntries)
+	if m.transcriptInvalidation.dirty && !m.transcriptInvalidation.full {
+		startIdx = m.viewIndexForTranscriptEntry(m.normalizeTranscriptDirtyIndex(m.transcriptInvalidation.from))
+	}
+	if viewFrom >= 0 && viewFrom < startIdx {
+		startIdx = viewFrom
+	}
 	if startIdx < 0 || startIdx >= len(m.viewEntries) {
+		// 越界回退：invalidate 会清空渲染缓存，不能直接接着渲染——重新
+		// 进入本函数，让缓存重建后走全量分支。
 		m.invalidateTranscriptStructure()
-		segment, spans := m.renderTranscriptEntriesFrom(0, width, showThinking, at)
-		m.transcriptLines = transcriptSegmentLines(segment)
-		m.transcriptEntrySpans = spans
-		m.setTranscriptInteractionRows(m.transcriptLines, 0)
-		m.transcriptLinesValid = true
-		m.transcriptContentCached = true
-		m.transcriptRenderConfig = config
-		m.transcriptRenderConfigSet = true
-		m.transcriptInvalidation.clear()
-		return true, -1, nil
+		return m.ensureTranscriptLinesAt(width, showThinking, at)
 	}
 	startRow = 0
 	if startIdx > 0 {

@@ -396,3 +396,64 @@ func TestWorkSegmentRenderKeySensitive(t *testing.T) {
 		t.Fatal("live render key did not tick with seconds")
 	}
 }
+
+func TestToggleWorkSegmentExpansionRenders(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 24
+	model.relayout()
+	model.transcript = []transcriptEntry{
+		{kind: entryUser, body: "q", createdAt: wsAt(0)},
+		wsReasoning("think", 1),
+		wsToolWithBody("Read", "ok", "Read ok go.mod", 3),
+		wsAssistant("done", 5),
+	}
+	model.refreshViewport()
+	segIdx := -1
+	for i, entry := range model.viewEntries {
+		if entry.kind == entryWorkSegment {
+			segIdx = i
+			break
+		}
+	}
+	if segIdx < 0 {
+		t.Fatalf("no folded segment in view: %#v", model.viewEntries)
+	}
+	if !model.toggleWorkSegmentExpansion(segIdx) {
+		t.Fatal("toggle returned false")
+	}
+	hasHeader, hasInlineTool := false, false
+	for _, entry := range model.viewEntries {
+		if entry.kind == entryWorkSegment && entry.segment != nil && entry.segment.header {
+			hasHeader = true
+		}
+		if entry.kind == entryTool && entry.toolGroupPending {
+			hasInlineTool = true
+		}
+	}
+	if !hasHeader || !hasInlineTool {
+		t.Fatalf("view after expand = %#v", model.viewEntries)
+	}
+	if !model.toggleWorkSegmentExpansion(segIdx) {
+		t.Fatal("collapse returned false")
+	}
+}
+
+func TestEnsureTranscriptLinesOutOfRangeDirtyIndexRebuilds(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.relayout()
+	model.transcript = []transcriptEntry{
+		{kind: entryUser, body: "q", createdAt: wsAt(0)},
+		wsAssistant("a", 1),
+	}
+	model.refreshViewport()
+	// 越界失效下标：原 panic 路径（invalidate 清空缓存后直接渲染）。
+	model.transcriptInvalidation.markFrom(len(model.transcript) + 5)
+	changed, _, _ := model.ensureTranscriptLinesAt(80, false, model.animationNow())
+	if !changed {
+		t.Fatal("want full rebuild for out-of-range dirty index")
+	}
+}
