@@ -125,3 +125,18 @@ func TestSyntaxLanguageFromLinesFindsKnownExtension(t *testing.T) {
 		t.Fatalf("syntaxLanguageFromLines = %q, want go", got)
 	}
 }
+
+// markdown 代码块按 fence 语言做 token 级语法高亮；无语言标签时保持纯文本。
+func TestCodeBlockPanelAppliesSyntaxHighlighting(t *testing.T) {
+	enableSyntaxColor(t)
+	const src = "package main\n\nfunc main() { return }\n"
+	colored := renderCodeBlock("go", src, 80)
+	plain := renderCodeBlock("", src, 80)
+	if colored == plain {
+		t.Fatal("go fence did not change code block rendering (no syntax highlighting)")
+	}
+	stripped := ansi.Strip(colored)
+	if !strings.Contains(stripped, "package main") || !strings.Contains(stripped, "func main() { return }") {
+		t.Fatalf("highlighted code block lost content:\n%s", stripped)
+	}
+}

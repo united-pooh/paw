@@ -54,6 +54,9 @@ type Palette struct {
 	MarkdownHeading, MarkdownRule, MarkdownBullet, MarkdownBold, MarkdownHighlight, MarkdownHighlightForeground string
 	MarkdownCodeForeground, MarkdownCodeBackground, MarkdownCodeBorder                                          string
 	MarkdownLink, MarkdownQuote, MarkdownQuoteBorder                                                            string
+	// 语法高亮专用色：独立于 UI 语义角色，避免代码 token 与界面元素撞色。
+	SyntaxKeyword, SyntaxString, SyntaxNumber, SyntaxComment string
+	SyntaxBrackets                                           [4]string // 彩虹括号，按嵌套深度循环
 	PanelBorder, InputFocusedBorder, InputWaitingBorder, InputMultilineBorder                                   string
 	InputTerminal, InputTokenCommand, InputTokenFile                                                            string
 	SelectedProviderBG, SelectedProviderFG, UnselectedProvider                                                  string
@@ -78,6 +81,8 @@ func (p Palette) Values() map[string]string {
 		"body": p.Body, "tool.detail.background": p.ToolDetailBackground, "markdown.heading": p.MarkdownHeading, "markdown.rule": p.MarkdownRule, "markdown.bullet": p.MarkdownBullet, "markdown.bold": p.MarkdownBold, "markdown.highlight": p.MarkdownHighlight, "markdown.highlight.foreground": p.MarkdownHighlightForeground,
 		"markdown.code.foreground": p.MarkdownCodeForeground, "markdown.code.background": p.MarkdownCodeBackground, "markdown.code.border": p.MarkdownCodeBorder,
 		"markdown.link": p.MarkdownLink, "markdown.quote": p.MarkdownQuote, "markdown.quote.border": p.MarkdownQuoteBorder,
+		"syntax.keyword": p.SyntaxKeyword, "syntax.string": p.SyntaxString, "syntax.number": p.SyntaxNumber, "syntax.comment": p.SyntaxComment,
+		"syntax.bracket.1": p.SyntaxBrackets[0], "syntax.bracket.2": p.SyntaxBrackets[1], "syntax.bracket.3": p.SyntaxBrackets[2], "syntax.bracket.4": p.SyntaxBrackets[3],
 		"panel.border": p.PanelBorder, "input.focused.border": p.InputFocusedBorder, "input.waiting.border": p.InputWaitingBorder, "input.multiline.border": p.InputMultilineBorder,
 		"input.terminal": p.InputTerminal, "input.token.command": p.InputTokenCommand, "input.token.file": p.InputTokenFile,
 		"provider.selected.background": p.SelectedProviderBG, "provider.selected.foreground": p.SelectedProviderFG, "provider.unselected": p.UnselectedProvider,

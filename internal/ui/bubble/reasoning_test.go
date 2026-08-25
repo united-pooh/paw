@@ -106,6 +106,9 @@ func TestLiveReasoningIsVisibleThenFoldsByDefault(t *testing.T) {
 	started := time.Unix(100, 0)
 	model.cursorFrameAt = started
 	model.relayout()
+	if !model.queryGuard.StartModel() {
+		t.Fatal("StartModel failed")
+	}
 
 	next, _ := model.Update(assistantPartMsg{lifecycle: "start", blockIndex: 3, partType: "reasoning"})
 	model = next.(appModel)
@@ -119,6 +122,8 @@ func TestLiveReasoningIsVisibleThenFoldsByDefault(t *testing.T) {
 	model.cursorFrameAt = started.Add(2 * time.Second)
 	next, _ = model.Update(assistantPartMsg{lifecycle: "end", blockIndex: 3, partType: "reasoning"})
 	model = next.(appModel)
+	// 回合结束（resting）：思考块折叠为时长标题。
+	model.queryGuard.FinishModel()
 	model.refreshViewport()
 	got := ansi.Strip(model.viewport.View())
 	if !strings.Contains(got, "Thought for 2 s") {
@@ -151,8 +156,13 @@ func TestCtrlOTogglesCompletedReasoningBodies(t *testing.T) {
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
 	model = next.(appModel)
 	got := ansi.Strip(model.viewport.View())
-	if !strings.Contains(got, "Thought for 3 s") || !strings.Contains(got, "restored reasoning body") {
+	if !strings.Contains(got, "restored reasoning body") {
 		t.Fatalf("Ctrl+O did not expand completed reasoning:\n%s", got)
+	}
+	// 展开后思考块只渲染正文：整个视图只剩段头一行 Thought 摘要，
+	// 块自身不再重复第二行标题。
+	if occurrences := strings.Count(got, "Thought for"); occurrences != 1 {
+		t.Fatalf("expanded reasoning renders %d Thought titles, want exactly one segment header:\n%s", occurrences, got)
 	}
 
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
@@ -163,7 +173,8 @@ func TestCtrlOTogglesCompletedReasoningBodies(t *testing.T) {
 	}
 }
 
-func TestCompletedReasoningHeaderClickTogglesOneEntry(t *testing.T) {
+// 已完成的 reasoning 折叠为工作段后，点击段标题展开内联正文，再次点击折叠。
+func TestCompletedReasoningClickTogglesSegment(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
 	model.width = 80
@@ -183,17 +194,26 @@ func TestCompletedReasoningHeaderClickTogglesOneEntry(t *testing.T) {
 	if len(model.transcriptEntrySpans) != 1 || model.transcriptEntrySpans[0].startRow < 0 {
 		t.Fatalf("reasoning span = %#v", model.transcriptEntrySpans)
 	}
+	if got := ansi.Strip(model.viewport.View()); strings.Contains(got, "clickable reasoning") {
+		t.Fatalf("collapsed segment leaked reasoning body:\n%s", got)
+	}
 
 	updated, handled, _ := model.performTranscriptClick(selectionPoint{row: model.transcriptEntrySpans[0].startRow, col: 1})
 	if !handled {
-		t.Fatal("reasoning header click was not handled")
+		t.Fatal("segment header click was not handled")
 	}
 	model = updated
-	if !model.transcript[0].reasoningExpanded {
-		t.Fatal("reasoning entry did not expand")
-	}
 	if got := ansi.Strip(model.viewport.View()); !strings.Contains(got, "clickable reasoning") {
-		t.Fatalf("expanded body is missing:\n%s", got)
+		t.Fatalf("expanded segment did not reveal reasoning body:\n%s", got)
+	}
+
+	updated, handled, _ = model.performTranscriptClick(selectionPoint{row: model.transcriptEntrySpans[0].startRow, col: 1})
+	if !handled {
+		t.Fatal("second segment header click was not handled")
+	}
+	model = updated
+	if got := ansi.Strip(model.viewport.View()); strings.Contains(got, "clickable reasoning") {
+		t.Fatalf("collapsed segment still shows reasoning body:\n%s", got)
 	}
 }
 

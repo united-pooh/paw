@@ -168,6 +168,9 @@ func renderCodeBlock(lang, code string, width int) string {
 func renderCodeBlockPanel(code string, width int, label string) string {
 	width = maxInt(1, width)
 	blockWidth := markdownCodeBlockWidth(code, label, width)
+	// 代码块按 fence 语言做 token 级语法高亮（base 叠加代码块底色，避免
+	// token 的 SGR reset 丢背景）；未知语言保持纯文本，不做猜测性上色。
+	code = highlightCodeBlockLines(code, syntaxLanguageFromText("", label))
 	if blockWidth < 6 {
 		lines := limitRenderedCodeBlockLines(wrapStyledCellText(code, width), maxRenderedCodeBlockLines)
 		return markdownCodeBlockStyle.Render(strings.Join(lines, "\n"))
@@ -184,6 +187,18 @@ func renderCodeBlockPanel(code string, width int, label string) string {
 	}
 	rendered = append(rendered, renderCodeBlockBorderLine("╰", "─", "╯", blockWidth))
 	return strings.Join(rendered, "\n")
+}
+
+// highlightCodeBlockLines 对代码块逐行做语法高亮；language 为空时原样返回。
+func highlightCodeBlockLines(code, language string) string {
+	if language == "" {
+		return code
+	}
+	lines := strings.Split(code, "\n")
+	for i, line := range lines {
+		lines[i] = highlightToolDetailLineWithBase(line, language, markdownCodeBlockStyle)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func limitRenderedCodeBlockLines(lines []string, maxLines int) []string {

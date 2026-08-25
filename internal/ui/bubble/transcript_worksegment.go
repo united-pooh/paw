@@ -14,7 +14,8 @@ import (
 type foldMode int
 
 const (
-	// foldLive 用于回合进行中：仅尾部连续运行折叠为 live 块，其余条目保持原样。
+	// foldLive 用于回合进行中：已完成的运行按 resting 语义折叠（Thought 保
+	// 留在真实推理位置），仅尾部仍在进行的连续运行保留为 live 实时块。
 	foldLive foldMode = iota
 	// foldResting 用于回合结束与历史渲染：全部连续运行折叠为一行摘要块。
 	foldResting
@@ -75,8 +76,17 @@ func buildWorkSegmentEntry(children []transcriptEntry) (transcriptEntry, bool) {
 	if !data.hasReasoning && data.toolCalls == 0 {
 		return transcriptEntry{}, false
 	}
+	// 段时长取真实工作窗口：reasoning 的计时窗口（reasoningWindowStart，从请求
+	// 发出起算）可能显著早于条目落库时刻 createdAt（网关缓冲场景），仅用
+	// createdAt 会把 30s 的思考显示成 1s，与子条目自身的时长口径矛盾。
 	data.startedAt = children[0].createdAt
+	if started := children[0].reasoningStartedAt; started != nil && started.Before(data.startedAt) {
+		data.startedAt = *started
+	}
 	data.finishedAt = children[len(children)-1].createdAt
+	if finished := children[len(children)-1].reasoningFinishedAt; finished != nil && finished.After(data.finishedAt) {
+		data.finishedAt = *finished
+	}
 	return transcriptEntry{
 		kind:      entryWorkSegment,
 		createdAt: data.startedAt,
@@ -85,8 +95,8 @@ func buildWorkSegmentEntry(children []transcriptEntry) (transcriptEntry, bool) {
 }
 
 // foldWorkSegments 把 entries 中的工作段连续运行在视图层折叠。
-// foldResting 折叠所有连续运行；foldLive 只折叠尾部连续运行并标记 live，
-// 其余条目原样保留（回合进行中不折旧段）。
+// foldResting 折叠所有连续运行；foldLive 下已完成的运行同样折叠，仅尾部
+// 仍在进行的运行保留为 live 实时块。
 func foldWorkSegments(entries []transcriptEntry, mode foldMode) []transcriptEntry {
 	view, _, _ := foldWorkSegmentsView(entries, mode, nil)
 	return view
@@ -100,18 +110,24 @@ func foldWorkSegments(entries []transcriptEntry, mode foldMode) []transcriptEntr
 // 渲染管线用它们把 transcript 空间的失效标记与交互写回翻译到视图空间。
 func foldWorkSegmentsView(entries []transcriptEntry, mode foldMode, expandedFor func(*workSegmentData) bool) (view []transcriptEntry, transcriptToView, viewToTranscript []int) {
 	if mode == foldLive {
-		return foldWorkSegmentsLiveView(entries)
+		return foldWorkSegmentsLiveView(entries, expandedFor)
 	}
 	view = make([]transcriptEntry, 0, len(entries))
 	transcriptToView = make([]int, len(entries))
 	runStart := -1
-	flush := func(run []transcriptEntry, respondedAt time.Time) {
+	// flush 把一段连续运行聚合为一个工作段条目：段内多段思考与工具合并为
+	// 一行摘要（思考之间只有工具调用、没有正文输出时逐块拆行只会得到
+	// Thought/Worked 交替的噪声墙）。段落在真实推理位置（响应之前）；
+	// 返回段在视图中的下标（被抑制或无段为 -1），供调用方判定该运行是否
+	// 成段（成段运行后跟随的响应条目带时钟行）。
+	flush := func(run []transcriptEntry) int {
+		lastSegment := -1
 		if len(run) == 0 {
-			return
+			return -1
 		}
 		if entry, ok := buildWorkSegmentEntry(run); ok {
-			entry.segment.respondedAt = respondedAt
 			if expandedFor != nil && expandedFor(entry.segment) {
+				lastSegment = len(view)
 				view, transcriptToView, viewToTranscript = emitExpandedWorkSegment(view, transcriptToView, viewToTranscript, run, runStart, entry)
 			} else {
 				segIndex := len(view)
@@ -120,6 +136,7 @@ func foldWorkSegmentsView(entries []transcriptEntry, mode foldMode, expandedFor 
 				}
 				view = append(view, entry)
 				viewToTranscript = append(viewToTranscript, -1)
+				lastSegment = segIndex
 			}
 		} else {
 			for i, child := range run {
@@ -129,6 +146,7 @@ func foldWorkSegmentsView(entries []transcriptEntry, mode foldMode, expandedFor 
 			}
 		}
 		runStart = -1
+		return lastSegment
 	}
 	emitRaw := func(index int, entry transcriptEntry) {
 		transcriptToView[index] = len(view)
@@ -139,7 +157,7 @@ func foldWorkSegmentsView(entries []transcriptEntry, mode foldMode, expandedFor 
 	for index, entry := range entries {
 		switch {
 		case isInteractiveToolEntry(entry):
-			flush(run, time.Time{})
+			flush(run)
 			run = nil
 			emitRaw(index, entry)
 		case isWorkSegmentCollectable(entry):
@@ -148,18 +166,20 @@ func foldWorkSegmentsView(entries []transcriptEntry, mode foldMode, expandedFor 
 			}
 			run = append(run, entry)
 		case entry.kind == entryAssistant && len(run) > 0:
-			// 响应在前、Thought 在后：段摘要跟随产生它的模型响应，
-			// 并把响应时间记到段上（标题尾部展示）。
-			emitRaw(index, entry)
-			flush(run, entry.createdAt)
+			// Thought 保持在真实推理位置（响应之前）；响应时间不再挂在段标
+			// 题上，而是标记在响应条目上，渲染在响应结束的下一行。
+			if flush(run) >= 0 {
+				entry.responseClock = true
+			}
 			run = nil
+			emitRaw(index, entry)
 		default:
-			flush(run, time.Time{})
+			flush(run)
 			run = nil
 			emitRaw(index, entry)
 		}
 	}
-	flush(run, time.Time{})
+	flush(run)
 	return view, transcriptToView, viewToTranscript
 }
 
@@ -188,16 +208,12 @@ func emitExpandedWorkSegment(view []transcriptEntry, transcriptToView, viewToTra
 	return view, transcriptToView, viewToTranscript
 }
 
-// foldWorkSegmentsLiveView 是 foldLive 模式的映射版本。
-func foldWorkSegmentsLiveView(entries []transcriptEntry) (view []transcriptEntry, transcriptToView, viewToTranscript []int) {
-	transcriptToView = make([]int, len(entries))
-	identity := func() {
-		view = append([]transcriptEntry(nil), entries...)
-		for i := range entries {
-			transcriptToView[i] = i
-			viewToTranscript = append(viewToTranscript, i)
-		}
-	}
+// foldWorkSegmentsLiveView 是 foldLive 模式的映射版本：已完成的前缀运行按
+// resting 语义折叠（Thought 保留在真实推理位置，回合进行中同样成立），仅
+// 尾部仍在进行的连续运行保留为 live 实时块。旧实现把前缀条目原样平铺，已
+// 完成的思考块会以裸条目滞留在视图中（与 resting 结构不一致），且折叠结
+// 构变化还会导致渲染缓存复用过期的 live 块行。
+func foldWorkSegmentsLiveView(entries []transcriptEntry, expandedFor func(*workSegmentData) bool) (view []transcriptEntry, transcriptToView, viewToTranscript []int) {
 	end := len(entries)
 	start := end
 	for start > 0 {
@@ -207,29 +223,74 @@ func foldWorkSegmentsLiveView(entries []transcriptEntry) (view []transcriptEntry
 		}
 		start--
 	}
+	// 尾部无可收编运行（或为空）：全部按 resting 语义折叠。
+	view, transcriptToView, viewToTranscript = foldWorkSegmentsView(entries[:start], foldResting, expandedFor)
 	if start == end {
-		identity()
 		return view, transcriptToView, viewToTranscript
 	}
 	segment, ok := buildWorkSegmentEntry(entries[start:end])
 	if !ok {
-		identity()
+		// 尾部仅簿记工具（被抑制成段）：保持原样平铺。
+		for i := start; i < end; i++ {
+			transcriptToView = append(transcriptToView, len(view))
+			view = append(view, entries[i])
+			viewToTranscript = append(viewToTranscript, i)
+		}
 		return view, transcriptToView, viewToTranscript
 	}
 	segment.segment.live = true
-	view = make([]transcriptEntry, 0, start+1)
-	for i := 0; i < start; i++ {
-		transcriptToView[i] = i
-		view = append(view, entries[i])
-		viewToTranscript = append(viewToTranscript, i)
-	}
 	segIndex := len(view)
 	for i := start; i < end; i++ {
-		transcriptToView[i] = segIndex
+		transcriptToView = append(transcriptToView, segIndex)
 	}
 	view = append(view, segment)
 	viewToTranscript = append(viewToTranscript, -1)
 	return view, transcriptToView, viewToTranscript
+}
+
+// viewSlotSignature 描述一个视图槽位的结构身份。渲染缓存按视图下标复用，
+// 而折叠投影可能在 transcript 条目本身未变时改变槽位内容（如 live 段解散
+// 为原始条目、段吸收新子条目）：仅靠 transcript 空间的失效下标无法发现，
+// 必须按签名比对，从首个分歧槽位强制重渲染。
+type viewSlotSignature struct {
+	kind     entryKind
+	source   int  // viewToTranscript：所属 transcript 下标；段条目为 -1
+	children int  // 段的子条目数；非段条目为 -1
+	live     bool // 段：live 实时块
+	header   bool // 段：展开态标题行
+}
+
+// viewProjectionSignature 计算视图投影的结构签名序列。
+func viewProjectionSignature(view []transcriptEntry, viewToTranscript []int) []viewSlotSignature {
+	sig := make([]viewSlotSignature, len(view))
+	for i, entry := range view {
+		slot := viewSlotSignature{kind: entry.kind, source: -1, children: -1}
+		if i < len(viewToTranscript) {
+			slot.source = viewToTranscript[i]
+		}
+		if entry.segment != nil {
+			slot.children = len(entry.segment.children)
+			slot.live = entry.segment.live
+			slot.header = entry.segment.header
+		}
+		sig[i] = slot
+	}
+	return sig
+}
+
+// firstViewSignatureDiff 返回前后两份投影签名的首个分歧下标；一致返回 -1，
+// 长度不同（一方为另一方前缀）返回较短长度。
+func firstViewSignatureDiff(previous, current []viewSlotSignature) int {
+	shared := minInt(len(previous), len(current))
+	for i := 0; i < shared; i++ {
+		if previous[i] != current[i] {
+			return i
+		}
+	}
+	if len(previous) != len(current) {
+		return shared
+	}
+	return -1
 }
 
 // workSegmentTitle 生成 resting 态标题：
@@ -256,10 +317,6 @@ func workSegmentTitle(data *workSegmentData, at time.Time) string {
 	}
 	if data.failed > 0 {
 		fmt.Fprintf(&b, " · %d failed", data.failed)
-	}
-	if responded := formatResponseClock(data.respondedAt, at); responded != "" {
-		b.WriteString(" · ")
-		b.WriteString(responded)
 	}
 	return b.String()
 }

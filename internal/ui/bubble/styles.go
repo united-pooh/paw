@@ -404,21 +404,22 @@ func rebuildLegacyStyles() {
 			Background(colorManager.LipglossColor(colorSelectionBackground)).
 			Foreground(colorManager.LipglossColor(colorSelectionForeground))
 	}
+	// 语法高亮使用专用语法色（keyword 紫 / string 绿 / number 黄 / comment
+	// 灰），不再借用 Signal/ContextUsed 等 UI 语义角色，避免与界面元素撞色。
 	syntaxKeywordStyle = lipgloss.NewStyle().
-		Foreground(colorManager.LipglossColor(colorSignal)).
-		Bold(true)
+		Foreground(colorManager.LipglossColor(colorSyntaxKeyword))
 	syntaxStringStyle = lipgloss.NewStyle().
-		Foreground(colorManager.LipglossColor(colorMarkdownCodeForeground))
+		Foreground(colorManager.LipglossColor(colorSyntaxString))
 	syntaxNumberStyle = lipgloss.NewStyle().
-		Foreground(colorManager.LipglossColor(colorContextUsed))
+		Foreground(colorManager.LipglossColor(colorSyntaxNumber))
 	syntaxCommentStyle = lipgloss.NewStyle().
-		Foreground(colorManager.LipglossColor(colorMarkdownQuote)).
+		Foreground(colorManager.LipglossColor(colorSyntaxComment)).
 		Italic(true)
 	syntaxBracketStyles = []lipgloss.Style{
-		lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorLabelAssistant)),
-		lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorContextUsed)),
-		lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorLabelUser)),
-		lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorSignal)),
+		lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorSyntaxBracket1)),
+		lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorSyntaxBracket2)),
+		lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorSyntaxBracket3)),
+		lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorSyntaxBracket4)),
 	}
 }
 

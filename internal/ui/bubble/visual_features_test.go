@@ -32,7 +32,8 @@ func TestHighlightToolDetailLinePreservesTextAndStylesTokens(t *testing.T) {
 	if plain := ansi.Strip(got); plain != `func main() { return "ok" // comment }` {
 		t.Fatalf("plain highlighted text = %q", plain)
 	}
-	if syntaxKeywordStyle.GetForeground() == nil || !syntaxKeywordStyle.GetBold() {
+	// 关键字靠专用色相区分（参考主流编辑器主题，不再叠加粗体）。
+	if syntaxKeywordStyle.GetForeground() == nil {
 		t.Fatal("keyword style is not configured")
 	}
 	if syntaxStringStyle.GetForeground() == nil || syntaxCommentStyle.GetForeground() == nil {

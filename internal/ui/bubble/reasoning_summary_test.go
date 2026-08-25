@@ -32,4 +32,8 @@ func TestReasoningSummaryTranscriptOmitsLegacyLabel(t *testing.T) {
 	if strings.Contains(expanded, "reasoning >") || !strings.Contains(expanded, "provider returned summary") {
 		t.Fatalf("expanded reasoning = %q", expanded)
 	}
+	// 展开态只渲染正文，不再重复一行 "Thought for" 标题。
+	if strings.Contains(expanded, "Thought for") {
+		t.Fatalf("expanded reasoning still renders a redundant Thought title: %q", expanded)
+	}
 }

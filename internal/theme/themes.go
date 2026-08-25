@@ -6,9 +6,14 @@ func palette(bg, surface, fg, muted, primary, secondary, cyan, green, yellow, re
 		LabelUser: "#ffaf00", LabelAssistant: fg, LabelTool: green, LabelResult: green, LabelSystem: muted, LabelError: red,
 		Body: fg, ToolDetailBackground: surface,
 		MarkdownHeading: primary, MarkdownRule: muted, MarkdownBullet: cyan,
-		MarkdownBold: primary, MarkdownHighlight: yellow, MarkdownHighlightForeground: bg,
+		// bold 只用正文色 + 粗体属性：与标题撞色会让强调层级失声。
+		MarkdownBold: fg, MarkdownHighlight: yellow, MarkdownHighlightForeground: bg,
 		MarkdownCodeForeground: fg, MarkdownCodeBackground: surface, MarkdownCodeBorder: primary,
 		MarkdownLink: cyan, MarkdownQuote: muted, MarkdownQuoteBorder: muted,
+		// 语法高亮默认映射（keyword 紫 / string 绿 / number 黄 / comment 灰），
+		// 与各主题官方语法色系一致；个别主题在 init() 中按官方值覆盖。
+		SyntaxKeyword: secondary, SyntaxString: green, SyntaxNumber: yellow, SyntaxComment: muted,
+		SyntaxBrackets: [4]string{cyan, secondary, yellow, green},
 		PanelBorder: muted, InputFocusedBorder: cyan, InputWaitingBorder: muted, InputMultilineBorder: yellow,
 		InputTerminal: secondary, InputTokenCommand: secondary, InputTokenFile: green,
 		SelectedProviderBG: primary, SelectedProviderFG: bg, UnselectedProvider: muted,
@@ -44,12 +49,14 @@ func init() {
 	p.MarkdownHeading = "#ffffaf"
 	p.MarkdownRule = "#808080"
 	p.MarkdownBullet = "#5fd7d7"
-	p.MarkdownBold = "#ffffaf"
+	// bold 用亮暖白而非标题的 #ffffaf：两者同色时正文强调与标题无法区分。
+	p.MarkdownBold = "#f0e6d5"
 	p.MarkdownHighlight = "#5f5fd7"
 	p.MarkdownHighlightForeground = "#ffffff"
 	p.MarkdownCodeForeground = "#ffffd7"
 	p.MarkdownCodeBackground = "#303030"
-	p.MarkdownCodeBorder = "#5f5fd7"
+	// 代码块边框改青色：#5f5fd7 此前被 highlight/provider/wizard 多处复用。
+	p.MarkdownCodeBorder = "#5f9ea8"
 	p.MarkdownQuote = "#8a8a8a"
 	p.MarkdownQuoteBorder = "#808080"
 	p.InputWaitingBorder = "#808080"
@@ -63,4 +70,27 @@ func init() {
 	// 因此用 25% 混合：#515254，文字 4.43:1、与正文 1.79:1。
 	p.SelectionBackground = blendHex("#292c33", "#c9c2b7", 0.25)
 	p.SelectionForeground = "#eeeeee"
+
+	// 各主题官方语法色微调：generic 推导（keyword 紫/string 绿/number 黄）
+	// 未覆盖的按官方值覆盖。
+	override := func(id ThemeID, fn func(*Palette)) {
+		for i := range builtIns {
+			if builtIns[i].ID == id {
+				fn(&builtIns[i].Colors)
+			}
+		}
+	}
+	override(TokyoNight, func(p *Palette) { p.SyntaxNumber = "#ff9e64" })
+	override(TokyoNightStorm, func(p *Palette) { p.SyntaxNumber = "#ff9e64" })
+	override(TokyoNightLight, func(p *Palette) { p.SyntaxNumber = "#965027" })
+	override(CatppuccinMocha, func(p *Palette) { p.SyntaxNumber = "#fab387" })
+	override(Dracula, func(p *Palette) {
+		p.SyntaxKeyword = "#ff79c6"
+		p.SyntaxString = "#f1fa8c"
+		p.SyntaxNumber = "#bd93f9"
+	})
+	override(GruvboxDark, func(p *Palette) {
+		p.SyntaxKeyword = "#fb4934"
+		p.SyntaxNumber = "#d3869b"
+	})
 }

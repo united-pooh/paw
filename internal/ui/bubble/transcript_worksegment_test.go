@@ -32,6 +32,7 @@ func wsUser(body string, secs int) transcriptEntry {
 	return transcriptEntry{kind: entryUser, body: body, createdAt: wsAt(secs)}
 }
 
+// 一个连续运行聚合为一个工作段条目：含思考命名为 Thought，统计工具数。
 func TestFoldWorkSegmentsCollectsReasoningAndTools(t *testing.T) {
 	entries := []transcriptEntry{
 		wsReasoning("plan", 0),
@@ -54,6 +55,28 @@ func TestFoldWorkSegmentsCollectsReasoningAndTools(t *testing.T) {
 	}
 }
 
+// 思考之间只有工具调用、没有正文输出时，多段思考合并为一行；响应时间回
+// 填到该运行（唯一/最后一段）的标题尾部。
+func TestFoldWorkSegmentsMergesThoughtsLinkedOnlyByTools(t *testing.T) {
+	entries := []transcriptEntry{
+		wsReasoning("first", 0),
+		wsTool("Read", "ok", 2),
+		wsReasoning("second", 4),
+		wsAssistant("回答", 6),
+	}
+	out := foldWorkSegments(entries, foldResting)
+	if len(out) != 2 || out[0].kind != entryWorkSegment || out[1].kind != entryAssistant {
+		t.Fatalf("out = %#v, want merged segment followed by response", out)
+	}
+	data := out[0].segment
+	if !data.hasReasoning || data.toolCalls != 1 || len(data.children) != 3 {
+		t.Fatalf("merged segment = %#v, want both thoughts + tool in one segment", data)
+	}
+	if !out[1].responseClock {
+		t.Fatal("response following a run must carry the response clock")
+	}
+}
+
 func TestFoldWorkSegmentsCutsOnVisibleText(t *testing.T) {
 	entries := []transcriptEntry{
 		wsReasoning("first", 0),
@@ -63,26 +86,23 @@ func TestFoldWorkSegmentsCutsOnVisibleText(t *testing.T) {
 	}
 	out := foldWorkSegments(entries, foldResting)
 	if len(out) != 3 {
-		t.Fatalf("out len = %d, want 3 (assistant, segment, segment)", len(out))
+		t.Fatalf("out len = %d, want 3 (segment, assistant, segment)", len(out))
 	}
-	// 响应在前、Thought 在后：段跟随产生它的响应。
-	if out[0].kind != entryAssistant || out[1].kind != entryWorkSegment || out[2].kind != entryWorkSegment {
+	// Thought 保留在真实推理位置（响应之前）；响应时间记在该运行的段标题尾部。
+	if out[0].kind != entryWorkSegment || out[1].kind != entryAssistant || out[2].kind != entryWorkSegment {
 		t.Fatalf("out kinds = %v/%v/%v", out[0].kind, out[1].kind, out[2].kind)
 	}
-	if !out[1].segment.hasReasoning {
+	if !out[0].segment.hasReasoning {
 		t.Fatal("first segment should have reasoning")
 	}
-	if !out[1].segment.respondedAt.Equal(wsAt(5)) {
-		t.Fatalf("respondedAt = %v, want assistant time", out[1].segment.respondedAt)
+	if !out[1].responseClock {
+		t.Fatal("response following a run must carry the response clock")
 	}
 	if out[2].segment.hasReasoning {
-		t.Fatal("second segment is pure tools, must not have reasoning (Worked 命名)")
+		t.Fatal("trailing segment is pure tools, must not have reasoning (Worked 命名)")
 	}
 	if out[2].segment.toolCalls != 1 {
-		t.Fatalf("second segment toolCalls = %d, want 1", out[2].segment.toolCalls)
-	}
-	if !out[2].segment.respondedAt.IsZero() {
-		t.Fatal("trailing segment without response must not carry respondedAt")
+		t.Fatalf("trailing segment toolCalls = %d, want 1", out[2].segment.toolCalls)
 	}
 }
 
@@ -107,12 +127,21 @@ func TestFoldWorkSegmentsTrailsResponse(t *testing.T) {
 		wsAssistant("GeoRA: Geometry-Aware ...", 18),
 	}
 	out := foldWorkSegments(entries, foldResting)
-	if len(out) != 3 || out[0].kind != entryUser || out[1].kind != entryAssistant || out[2].kind != entryWorkSegment {
-		t.Fatalf("out = %#v, want user → response → thought", out)
+	if len(out) != 3 || out[0].kind != entryUser || out[1].kind != entryWorkSegment || out[2].kind != entryAssistant {
+		t.Fatalf("out = %#v, want user → thought → response", out)
 	}
-	title := workSegmentTitle(out[2].segment, wsAt(20))
-	if !strings.Contains(title, "Thought for") || !strings.Contains(title, "12:00") {
-		t.Fatalf("title = %q, want trailing response clock today (12:00)", title)
+	// 响应时间在响应结束的下一行，而不是段标题尾部。
+	if !out[2].responseClock {
+		t.Fatal("response following a run must carry the response clock")
+	}
+	rendered := ansi.Strip(renderEntryAt(out[2], 80, wsAt(20), false))
+	bodyRow := strings.Index(rendered, "GeoRA")
+	clockRow := strings.Index(rendered, "12:00")
+	if bodyRow < 0 || clockRow < bodyRow {
+		t.Fatalf("clock must render on the line after the response:\n%s", rendered)
+	}
+	if title := workSegmentTitle(out[1].segment, wsAt(20)); strings.Contains(title, "12:00") {
+		t.Fatalf("segment title must not carry the clock: %q", title)
 	}
 }
 
@@ -182,7 +211,9 @@ func TestFoldWorkSegmentsCountsFailedExcludingBookkeeping(t *testing.T) {
 	}
 }
 
-func TestFoldWorkSegmentsLiveFoldsOnlyTailRun(t *testing.T) {
+// live 模式下已完成的运行与 resting 一致折叠（Thought 保留在真实推理位
+// 置、响应时间记在段标题尾部），只有尾部仍在进行的运行保留为 live 实时块。
+func TestFoldWorkSegmentsLiveFoldsCompletedRunsAtNaturalPosition(t *testing.T) {
 	entries := []transcriptEntry{
 		wsReasoning("old", 0),
 		wsTool("Read", "ok", 2),
@@ -191,13 +222,23 @@ func TestFoldWorkSegmentsLiveFoldsOnlyTailRun(t *testing.T) {
 		wsTool("Bash", "ok", 9),
 	}
 	out := foldWorkSegments(entries, foldLive)
-	if len(out) != 4 {
-		t.Fatalf("out len = %d, want 4 (old run stays raw)", len(out))
+	if len(out) != 3 {
+		t.Fatalf("out len = %d, want 3 (completed segment, response, live tail)", len(out))
 	}
-	if out[0].kind != entryReasoning || out[1].kind != entryTool || out[2].kind != entryAssistant {
-		t.Fatalf("non-tail entries folded in live mode: %#v", out)
+	completed := out[0]
+	if completed.kind != entryWorkSegment || completed.segment == nil || completed.segment.live {
+		t.Fatalf("out[0] = %#v, want resting segment for completed run", completed)
 	}
-	tail := out[3]
+	if !completed.segment.hasReasoning || completed.segment.toolCalls != 1 {
+		t.Fatalf("completed segment stats = %#v", completed.segment)
+	}
+	if !out[1].responseClock {
+		t.Fatal("response following a run must carry the response clock")
+	}
+	if out[1].kind != entryAssistant {
+		t.Fatalf("out[1] = %#v, want response after its thoughts", out[1])
+	}
+	tail := out[2]
 	if tail.kind != entryWorkSegment || tail.segment == nil || !tail.segment.live {
 		t.Fatalf("tail = %#v, want live work segment", tail)
 	}
@@ -206,26 +247,33 @@ func TestFoldWorkSegmentsLiveFoldsOnlyTailRun(t *testing.T) {
 	}
 }
 
-func TestFoldWorkSegmentsLiveNoFoldWhenTailIsBoundary(t *testing.T) {
+// 尾部是可见正文时整个前缀按 resting 语义折叠：Thought 保留在响应之前。
+func TestFoldWorkSegmentsLiveFoldsAllWhenTailIsBoundary(t *testing.T) {
 	entries := []transcriptEntry{
 		wsReasoning("think", 0),
 		wsTool("Read", "ok", 2),
 		wsAssistant("最终回答", 5),
 	}
 	out := foldWorkSegments(entries, foldLive)
-	if len(out) != 3 || out[2].kind != entryAssistant {
-		t.Fatalf("out = %#v, want all raw when tail is visible text", out)
+	if len(out) != 2 || out[0].kind != entryWorkSegment || out[1].kind != entryAssistant {
+		t.Fatalf("out = %#v, want folded segment followed by response", out)
+	}
+	if out[0].segment.live {
+		t.Fatal("trailing boundary means no live segment")
 	}
 }
 
-func TestFoldWorkSegmentsLiveNoFoldWhenTailIsInteractive(t *testing.T) {
+func TestFoldWorkSegmentsLiveKeepsInteractiveTailRaw(t *testing.T) {
 	entries := []transcriptEntry{
 		wsReasoning("think", 0),
 		wsTool("select", "ok", 2),
 	}
 	out := foldWorkSegments(entries, foldLive)
 	if len(out) != 2 || out[1].kind != entryTool {
-		t.Fatalf("out = %#v, want all raw when tail is interactive tool", out)
+		t.Fatalf("out = %#v, want interactive tool left raw", out)
+	}
+	if out[0].kind != entryWorkSegment || out[0].segment.live {
+		t.Fatalf("out[0] = %#v, want completed reasoning folded as resting segment", out[0])
 	}
 }
 
@@ -363,8 +411,15 @@ func TestRenderWorkSegmentEntryCollapsed(t *testing.T) {
 }
 
 func TestFoldWorkSegmentsViewExpandedInlinesChildren(t *testing.T) {
+	started, finished := wsAt(0), wsAt(2)
 	entries := []transcriptEntry{
-		wsReasoning("推理正文", 0),
+		{
+			kind:                entryReasoning,
+			body:                "推理正文",
+			reasoningStartedAt:  &started,
+			reasoningFinishedAt: &finished,
+			createdAt:           wsAt(0),
+		},
 		wsToolWithBody("Read", "ok", "Read ok go.mod", 3),
 	}
 	view, transcriptToView, viewToTranscript := foldWorkSegmentsView(entries, foldResting, func(*workSegmentData) bool { return true })
@@ -387,12 +442,86 @@ func TestFoldWorkSegmentsViewExpandedInlinesChildren(t *testing.T) {
 	if view[2].kind != entryTool || !view[2].toolGroupPending {
 		t.Fatalf("inline tool = %#v", view[2])
 	}
+	// 内联的 reasoning 子条目只渲染正文，不嵌套自身的 "Thought for" 标题
+	// （标题只属于段头一行）。
+	childOut := ansi.Strip(renderEntryAt(view[1], 80, wsAt(10), false))
+	if !strings.Contains(childOut, "推理正文") || strings.Contains(childOut, "Thought for") {
+		t.Fatalf("inline reasoning render = %q, want content without nested title", childOut)
+	}
 	// 映射：子条目指向自己的视图下标；标题行无 transcript 归属。
 	if transcriptToView[0] != 1 || transcriptToView[1] != 2 {
 		t.Fatalf("transcriptToView = %v", transcriptToView)
 	}
 	if viewToTranscript[0] != -1 || viewToTranscript[1] != 0 || viewToTranscript[2] != 1 {
 		t.Fatalf("viewToTranscript = %v", viewToTranscript)
+	}
+}
+
+func TestWorkSegmentSpanUsesReasoningWindow(t *testing.T) {
+	started, finished := wsAt(0), wsAt(30)
+	// 网关缓冲场景：思考从请求发出起算（0s），条目落库时刻已到 30s；
+	// 段时长必须取真实窗口而非 createdAt 的零宽跨度（否则显示 1s）。
+	seg, ok := buildWorkSegmentEntry([]transcriptEntry{{
+		kind:                entryReasoning,
+		body:                "buffered thinking",
+		reasoningStartedAt:  &started,
+		reasoningFinishedAt: &finished,
+		createdAt:           wsAt(30),
+	}})
+	if !ok {
+		t.Fatal("want segment")
+	}
+	if got := workSegmentTitle(seg.segment, wsAt(40)); !strings.Contains(got, "Thought for 30 s") {
+		t.Fatalf("title = %q, want reasoning window duration", got)
+	}
+}
+
+// 回归：正文开始流出后，已完成的 Thought 折叠在其真实推理位置（响应之
+// 前），过期的 live 展开块不得滞留（旧实现复用缓存行，把 "● Thoughts +
+// 正文" 滞留在视图中）。
+func TestLiveThoughtCollapsesAtNaturalPositionOnceTextStreams(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 20
+	started := time.Unix(100, 0)
+	model.cursorFrameAt = started
+	model.relayout()
+	if !model.queryGuard.StartModel() {
+		t.Fatal("StartModel failed")
+	}
+
+	next, _ := model.Update(assistantPartMsg{lifecycle: "start", blockIndex: 0, partType: "reasoning"})
+	model = next.(appModel)
+	next, _ = model.Update(assistantPartMsg{lifecycle: "delta", blockIndex: 0, partType: "reasoning", delta: "thinking out loud"})
+	model = next.(appModel)
+	model.refreshViewport()
+	if got := ansi.Strip(model.viewport.View()); !strings.Contains(got, "Thoughts") || !strings.Contains(got, "thinking out loud") {
+		t.Fatalf("live reasoning window not visible while streaming:\n%s", got)
+	}
+
+	model.cursorFrameAt = started.Add(3 * time.Second)
+	next, _ = model.Update(assistantPartMsg{lifecycle: "end", blockIndex: 0, partType: "reasoning"})
+	model = next.(appModel)
+	next, _ = model.Update(assistantPartMsg{lifecycle: "delta", blockIndex: 1, partType: "text", delta: "你好喵～\n"})
+	model = next.(appModel)
+	model.refreshViewport()
+
+	got := ansi.Strip(model.viewport.View())
+	textRow := strings.Index(got, "你好喵～")
+	thoughtRow := strings.Index(got, "Thought for 3 s")
+	if textRow < 0 || thoughtRow < 0 {
+		t.Fatalf("response or folded thought missing mid-turn:\n%s", got)
+	}
+	if thoughtRow > textRow {
+		t.Fatalf("thought must stay at its natural position (before the response):\n%s", got)
+	}
+	// 响应时间在响应结束的下一行，而不是段标题上。
+	if clockRow := strings.Index(got, "08:01"); clockRow < 0 || clockRow < textRow {
+		t.Fatalf("response clock must render on the line after the response:\n%s", got)
+	}
+	if strings.Contains(got, "Thoughts ·") || strings.Contains(got, "thinking out loud") {
+		t.Fatalf("stale live thought block survived the response:\n%s", got)
 	}
 }
 
@@ -457,13 +586,13 @@ func TestToggleWorkSegmentExpansionRenders(t *testing.T) {
 	model.refreshViewport()
 	segIdx := -1
 	for i, entry := range model.viewEntries {
-		if entry.kind == entryWorkSegment {
+		if entry.kind == entryWorkSegment && entry.segment != nil && entry.segment.toolCalls > 0 {
 			segIdx = i
 			break
 		}
 	}
 	if segIdx < 0 {
-		t.Fatalf("no folded segment in view: %#v", model.viewEntries)
+		t.Fatalf("no folded tool segment in view: %#v", model.viewEntries)
 	}
 	if !model.toggleWorkSegmentExpansion(segIdx) {
 		t.Fatal("toggle returned false")

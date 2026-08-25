@@ -84,10 +84,14 @@ type transcriptEntry struct {
 	reasoningPartIndex    int // provider block index
 	reasoningStartedAt    *time.Time
 	reasoningFinishedAt   *time.Time
-	reasoningExpansionSet bool // UI-only local override; never persisted
-	reasoningExpanded     bool // value used when reasoningExpansionSet is true
-	// segment 仅在 kind == entryWorkSegment 时非空，持有收编的子条目与聚合统计。
-	segment *workSegmentData
+reasoningExpansionSet bool // UI-only local override; never persisted
+reasoningExpanded     bool // value used when reasoningExpansionSet is true
+// responseClock 仅存在于视图副本（transcript 原条目永不置位）：该响应紧跟
+// 一个工作运行时由折叠层标记，渲染时在响应结束的下一行输出暗色时钟行，
+// 而不是把时间挂在 Thought 段标题上（避免时间跑到响应上方）。
+responseClock bool
+// segment 仅在 kind == entryWorkSegment 时非空，持有收编的子条目与聚合统计。
+segment *workSegmentData
 }
 
 // workSegmentData 是一个工作段的视图数据：子条目为原始 reasoning/tool 条目
@@ -99,9 +103,6 @@ type workSegmentData struct {
 	hasReasoning bool
 	startedAt    time.Time
 	finishedAt   time.Time
-	// respondedAt 是该段产生的模型响应（跟随其后的 assistant 条目）的时间，
-	// 标题尾部展示；段后没有响应时为零值不展示。
-	respondedAt  time.Time
 	header       bool // 展开态下作为段标题行内联在视图中（子条目跟随其后平铺）
 	live         bool // foldLive 下仅尾部段为 true
 }
@@ -564,6 +565,12 @@ type appModel struct {
 	foldModeSet                         bool
 	lastFoldMode                        foldMode
 	segmentExpanded                     map[string]bool // 工作段身份（workSegmentKey）→ 手动展开态
+	// viewProjectionSig 是上次渲染的视图投影结构签名：折叠结构变化（如 live
+	// 段解散、段重组）会让同一视图槽位装上不同条目，而 transcript 条目本身
+	// 未变、失效下标发现不了；签名分歧点作为额外的视图空间失效起点。
+	viewProjectionSig                   []viewSlotSignature
+	viewStructDirtyFrom                 int // 视图空间结构失效起点；-1 表示无（零值 0 由 viewStructDirtySet 区分）
+	viewStructDirtySet                  bool
 	transcriptRenderCache               []transcriptRenderCacheEntry
 	transcriptRenderConfig              transcriptRenderConfig
 	transcriptRenderConfigSet           bool

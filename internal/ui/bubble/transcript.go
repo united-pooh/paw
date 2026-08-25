@@ -120,6 +120,7 @@ type transcriptRenderCacheKey struct {
 	turnMetadata         string
 	showThinking         bool
 	segmentSnapshot      string
+	responseClock        bool
 }
 
 func (m *appModel) ensureAssistantStreamEntry() {
@@ -1283,6 +1284,17 @@ func (m *appModel) recomputeViewEntries() {
 		return m.segmentExpanded[workSegmentKey(data)]
 	}
 	m.viewEntries, m.transcriptToViewMap, m.viewToTranscriptMap = foldWorkSegmentsView(m.transcript, mode, expandedFor)
+	// 结构签名比对：折叠投影可能在 transcript 条目未变时改变视图槽位内容
+	// （live 段解散/段重组），transcript 空间的失效下标发现不了。记录首个
+	// 分歧槽位，渲染时从该处起重渲染，避免复用过期的缓存行。
+	sig := viewProjectionSignature(m.viewEntries, m.viewToTranscriptMap)
+	if diff := firstViewSignatureDiff(m.viewProjectionSig, sig); diff >= 0 {
+		if !m.viewStructDirtySet || diff < m.viewStructDirtyFrom {
+			m.viewStructDirtyFrom = diff
+		}
+		m.viewStructDirtySet = true
+	}
+	m.viewProjectionSig = sig
 }
 
 // setWorkSegmentExpanded 记录某个工作段的手动展开态（跨视图重建保留）。
@@ -1341,6 +1353,14 @@ func (m *appModel) ensureTranscriptLinesAt(width int, showThinking bool, at time
 	m.ensureToolRuntimeIndex()
 	m.transcriptRenderVisits = 0
 	m.transcriptPrefixAnchorVisits = 0
+	// 折叠投影的结构失效起点（视图空间）：live 段解散/段重组等变化不改变
+	// transcript 条目本身，transcript 失效下标发现不了，必须从这里补充。
+	structDirtyFrom := -1
+	if m.viewStructDirtySet {
+		structDirtyFrom = m.viewStructDirtyFrom
+		m.viewStructDirtySet = false
+		m.viewStructDirtyFrom = 0
+	}
 	config := transcriptRenderConfig{
 		width:         width,
 		showThinking:  showThinking,
@@ -1370,7 +1390,7 @@ func (m *appModel) ensureTranscriptLinesAt(width int, showThinking bool, at time
 		m.transcriptRenderCache = make([]transcriptRenderCacheEntry, len(m.viewEntries))
 		m.transcriptInvalidation.markFull()
 	}
-	if !m.transcriptInvalidation.dirty && viewFrom < 0 {
+	if !m.transcriptInvalidation.dirty && viewFrom < 0 && structDirtyFrom < 0 {
 		m.transcriptRenderConfig = config
 		m.transcriptRenderConfigSet = true
 		return false, -1, nil
@@ -1424,6 +1444,9 @@ func (m *appModel) ensureTranscriptLinesAt(width int, showThinking bool, at time
 	}
 	if viewFrom >= 0 && viewFrom < startIdx {
 		startIdx = viewFrom
+	}
+	if structDirtyFrom >= 0 && structDirtyFrom < startIdx {
+		startIdx = structDirtyFrom
 	}
 	if startIdx < 0 || startIdx >= len(m.viewEntries) {
 		// 越界回退：invalidate 会清空渲染缓存，不能直接接着渲染——重新
@@ -1835,9 +1858,10 @@ func transcriptRenderKey(entry transcriptEntry, width int, at time.Time, showThi
 		createdAtIsZero:      entry.createdAt.IsZero(),
 		toolStartedAtUnixNS:  entry.toolStartedAt.UnixNano(),
 		toolFinishedAtUnixNS: entry.toolFinishedAt.UnixNano(),
-		turnMetadata:         transcriptTurnMetadataSnapshot(entry.turnMetadata),
-		showThinking:         showThinking,
-	}
+	turnMetadata:         transcriptTurnMetadataSnapshot(entry.turnMetadata),
+	showThinking:         showThinking,
+	responseClock:        entry.responseClock,
+}
 	if toolEntryStatus(entry) == "running" {
 		key.toolElapsedSecond = toolElapsedSeconds(entry, at)
 	}
@@ -2412,6 +2436,16 @@ func renderEntryAt(entry transcriptEntry, width int, at time.Time, showThinking 
 		return indentLines(card, transcriptEntryGutter)
 	}
 	body := renderEntryBodyAt(entry, bodyWidth, at, showThinking)
+	if entry.kind == entryAssistant && entry.responseClock {
+		// 响应时间落在响应结束的下一行（暗色时钟行），不随 Thought 段标题上移。
+		if clock := formatResponseClock(entry.createdAt, at); clock != "" {
+			if body == "" {
+				body = thinkingBodyStyle.Render(clock)
+			} else {
+				body += "\n" + thinkingBodyStyle.Render(clock)
+			}
+		}
+	}
 	if entry.kind == entryAssistant && entry.turnMetadata != nil {
 		footer := contextFreeStyle.Render(formatTurnFooter(*entry.turnMetadata))
 		if body == "" {
@@ -2724,7 +2758,10 @@ func renderEntryBodyAt(entry transcriptEntry, width int, at time.Time, showThink
 
 // renderReasoningBody 渲染 reasoning 条目。
 // 已完成时默认折叠为 "Thought for N s" 标题；全局 Ctrl+O（showThinking）或
-// 单块点击（reasoningExpansionSet）会展开显示正文，标题仍保留在首行。
+// 单块点击（reasoningExpansionSet）展开后只渲染正文，不再保留标题行：标题
+// 只是折叠态的摘要与点击把手，展开态正文本身即内容。展开的工作段内联子条
+// 目也走这里，去掉标题可避免"段标题下每个思考块再嵌一行 Thought"的重复。
+// 点击正文任意行可重新折叠（reasoningHitAtTranscriptRow 覆盖整条目区域）。
 // redacted 块无正文，始终显示 "Thought (redacted)"。
 func renderReasoningBody(entry transcriptEntry, width int, at time.Time, showThinking bool) string {
 	bodyWidth := transcriptBodyWidth(width)
@@ -2736,15 +2773,15 @@ func renderReasoningBody(entry transcriptEntry, width int, at time.Time, showThi
 		expanded = entry.reasoningExpanded
 	}
 	if entry.reasoningFinishedAt != nil {
+		content := strings.TrimSpace(entry.body)
+		if expanded && content != "" {
+			return thinkingBodyStyle.Width(bodyWidth).Render(content)
+		}
 		duration := time.Duration(0)
 		if entry.reasoningStartedAt != nil {
 			duration = entry.reasoningFinishedAt.Sub(*entry.reasoningStartedAt)
 		}
-		title := fmt.Sprintf("Thought for %d s", maxInt(1, int(duration.Seconds())))
-		content := strings.TrimSpace(entry.body)
-		if expanded && content != "" {
-			return thinkingBodyStyle.Width(bodyWidth).Render(title + "\n" + content)
-		}
+		title := fmt.Sprintf("Thought for %s", formatSegmentDuration(duration))
 		return thinkingBodyStyle.Width(bodyWidth).Render(title)
 	}
 	content := strings.TrimSpace(entry.body)

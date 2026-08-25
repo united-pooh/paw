@@ -38,6 +38,14 @@ const (
 	colorMarkdownLink                colorRole = "markdown.link"
 	colorMarkdownQuote               colorRole = "markdown.quote"
 	colorMarkdownQuoteBorder         colorRole = "markdown.quote.border"
+	colorSyntaxKeyword               colorRole = "syntax.keyword"
+	colorSyntaxString                colorRole = "syntax.string"
+	colorSyntaxNumber                colorRole = "syntax.number"
+	colorSyntaxComment               colorRole = "syntax.comment"
+	colorSyntaxBracket1              colorRole = "syntax.bracket.1"
+	colorSyntaxBracket2              colorRole = "syntax.bracket.2"
+	colorSyntaxBracket3              colorRole = "syntax.bracket.3"
+	colorSyntaxBracket4              colorRole = "syntax.bracket.4"
 	colorPanelBorder                 colorRole = "panel.border"
 	colorInputFocusedBorder          colorRole = "input.focused.border"
 	colorInputWaitingBorder          colorRole = "input.waiting.border"
@@ -132,6 +140,22 @@ func (c ColorManager) Hex(role colorRole) string {
 		value = p.MarkdownQuote
 	case colorMarkdownQuoteBorder:
 		value = p.MarkdownQuoteBorder
+	case colorSyntaxKeyword:
+		value = p.SyntaxKeyword
+	case colorSyntaxString:
+		value = p.SyntaxString
+	case colorSyntaxNumber:
+		value = p.SyntaxNumber
+	case colorSyntaxComment:
+		value = p.SyntaxComment
+	case colorSyntaxBracket1:
+		value = p.SyntaxBrackets[0]
+	case colorSyntaxBracket2:
+		value = p.SyntaxBrackets[1]
+	case colorSyntaxBracket3:
+		value = p.SyntaxBrackets[2]
+	case colorSyntaxBracket4:
+		value = p.SyntaxBrackets[3]
 	case colorPanelBorder:
 		value = p.PanelBorder
 	case colorInputFocusedBorder:

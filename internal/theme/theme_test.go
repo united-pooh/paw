@@ -40,6 +40,28 @@ func TestBuiltInThemesHaveCompleteTrueColorPalettes(t *testing.T) {
 	}
 }
 
+// 语法高亮四类 token 色必须在每个主题内互不相同（以及不同于正文色），
+// 防止配色退化成"整块代码一个颜色"。
+func TestSyntaxRolesAreDistinctWithinTheme(t *testing.T) {
+	for _, item := range List() {
+		p := item.Colors
+		seen := map[string]string{}
+		roles := map[string]string{
+			"keyword": p.SyntaxKeyword, "string": p.SyntaxString,
+			"number": p.SyntaxNumber, "comment": p.SyntaxComment,
+		}
+		for role, color := range roles {
+			if color == p.Body {
+				t.Fatalf("theme %q syntax %s = %s equals body color (invisible highlight)", item.ID, role, color)
+			}
+			if prev, dup := seen[color]; dup {
+				t.Fatalf("theme %q syntax %s = %s duplicates %s", item.ID, role, color, prev)
+			}
+			seen[color] = role
+		}
+	}
+}
+
 func TestNormalizeID(t *testing.T) {
 	tests := map[string]ThemeID{" TOKYO-NIGHT ": TokyoNight, "DrAcUlA": Dracula, "": Default, "unknown": Default}
 	for input, want := range tests {

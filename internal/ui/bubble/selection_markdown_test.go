@@ -73,8 +73,8 @@ func TestSelectionBackgroundOverMarkdownBlock(t *testing.T) {
 	if !strings.Contains(got, "\x1b[0m"+fullSGR) {
 		t.Fatalf("selection SGR not re-asserted after markdown reset:\n%q", got)
 	}
-	// 加粗的前景色（38;2;255;255;175 由默认主题 markdown bold 提供）保留。
-	if !strings.Contains(got, "38;2;255;255;175") {
+	// 加粗的前景色（38;2;240;230;213 由默认主题 markdown bold 提供）保留。
+	if !strings.Contains(got, "38;2;240;230;213") {
 		t.Fatalf("bold foreground lost in selection:\n%q", got)
 	}
 }
@@ -105,7 +105,7 @@ func TestSelectionKeepsAssistantMarkerStyledLine(t *testing.T) {
 		t.Fatalf("first line = %q, want assistant marker", snapshots[0].plain)
 	}
 	// marker 行的 styled 必须保留 markdown 样式（加粗前景色）而不是纯文本。
-	if !strings.Contains(snapshots[0].styled, "38;2;255;255;175") {
+	if !strings.Contains(snapshots[0].styled, "38;2;240;230;213") {
 		t.Fatalf("marker line styled lost markdown styling: %q", snapshots[0].styled)
 	}
 	if !strings.Contains(snapshots[0].styled, "✦") {
@@ -115,7 +115,7 @@ func TestSelectionKeepsAssistantMarkerStyledLine(t *testing.T) {
 	width := snapshots[0].width
 	selected := renderSelectedLineFragment(snapshots[0].styled, 0, width)
 	fullSGR, _ := selectionSGRPrefixes()
-	if !strings.Contains(selected, "38;2;255;255;175") {
+	if !strings.Contains(selected, "38;2;240;230;213") {
 		t.Fatalf("selected marker line lost markdown styling: %q", selected)
 	}
 	if !strings.Contains(selected, fullSGR) {
