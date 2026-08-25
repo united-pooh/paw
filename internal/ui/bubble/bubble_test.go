@@ -5892,9 +5892,10 @@ func TestFormatSessionLabel_SizeDisplay(t *testing.T) {
 			if strings.Contains(label, "abcdef1234567890") || strings.Contains(label, "abcdef12") {
 				t.Fatalf("formatSessionLabel() = %q, must not expose session ID", label)
 			}
-			if !strings.Contains(label, "2024-03-15 09:08:07") {
-				t.Fatalf("formatSessionLabel() = %q, want creation timestamp", label)
-			}
+		// 时间戳按本地时区显示（落库为 UTC，换算后再断言，时区无关）。
+		if !strings.Contains(label, base.Local().Format("2006-01-02 15:04:05")) {
+			t.Fatalf("formatSessionLabel() = %q, want creation timestamp", label)
+		}
 		})
 	}
 

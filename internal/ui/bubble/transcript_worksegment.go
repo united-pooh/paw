@@ -323,10 +323,15 @@ func workSegmentTitle(data *workSegmentData, at time.Time) string {
 
 // formatResponseClock 格式化模型响应时间：今天只显示时分（14:32）；同年
 // 带月日（8月24日 14:32）；跨年再带年份（2025年8月24日 14:32）。
+// 落库时间戳是 UTC（jsonl_store 用 nowFn().UTC()），恢复后必须先转本地时区
+// 再取时分，否则 resume 后的时钟全部显示 0 时区；at 一并归一化，保证
+// 「今天/同年」的日期比较在同一时区进行。
 func formatResponseClock(t, at time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
+	t = t.Local()
+	at = at.Local()
 	clock := fmt.Sprintf("%02d:%02d", t.Hour(), t.Minute())
 	if t.Year() == at.Year() && t.YearDay() == at.YearDay() {
 		return clock

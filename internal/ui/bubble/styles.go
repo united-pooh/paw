@@ -181,8 +181,10 @@ func rebuildLegacyStyles() {
 	markdownBoldStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorMarkdownBold)).
 		Bold(true)
+	// italic 用专用色相而非正文色：部分终端不渲染 italic 属性，颜色偏移
+	// 是斜体唯一的可见信号。
 	markdownItalicStyle = lipgloss.NewStyle().
-		Foreground(colorManager.LipglossColor(colorBody)).
+		Foreground(colorManager.LipglossColor(colorMarkdownItalic)).
 		Italic(true)
 	markdownHighlightStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorMarkdownHighlightForeground)).

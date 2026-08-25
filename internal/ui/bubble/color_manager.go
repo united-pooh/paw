@@ -30,6 +30,7 @@ const (
 	colorMarkdownRule                colorRole = "markdown.rule"
 	colorMarkdownBullet              colorRole = "markdown.bullet"
 	colorMarkdownBold                colorRole = "markdown.bold"
+	colorMarkdownItalic              colorRole = "markdown.italic"
 	colorMarkdownHighlight           colorRole = "markdown.highlight"
 	colorMarkdownHighlightForeground colorRole = "markdown.highlight.foreground"
 	colorMarkdownCodeForeground      colorRole = "markdown.code.foreground"
@@ -124,6 +125,8 @@ func (c ColorManager) Hex(role colorRole) string {
 		value = p.MarkdownBullet
 	case colorMarkdownBold:
 		value = p.MarkdownBold
+	case colorMarkdownItalic:
+		value = p.MarkdownItalic
 	case colorMarkdownHighlight:
 		value = p.MarkdownHighlight
 	case colorMarkdownHighlightForeground:

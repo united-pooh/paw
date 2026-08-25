@@ -306,7 +306,8 @@ func (m appModel) renderSessionPickerContent() string {
 // formatSessionLabel 格式化会话列表项的显示文本。最近使用时间在隐藏
 // session ID 后提供稳定的、可读的候选项区分信息。
 func formatSessionLabel(item sessionSummaryItem) string {
-	lastUsedAt := item.lastUsedAt.Format("2006-01-02 15:04:05")
+	// 落库时间戳是 UTC，展示前转本地时区。
+	lastUsedAt := item.lastUsedAt.Local().Format("2006-01-02 15:04:05")
 	size := formatFileSize(item.transcriptSize)
 	msg := strings.Join(strings.Fields(sanitizeTerminalText(item.firstMessage)), " ")
 	if msg != "" {

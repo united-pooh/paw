@@ -39,7 +39,7 @@ func NewStyleSet(p theme.Palette) StyleSet {
 		LabelError:               lipgloss.NewStyle().Foreground(c.LipglossColor(colorLabelError)).Bold(true),
 		MarkdownHeading:          lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownHeading)).Bold(true),
 		MarkdownBold:             lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownBold)).Bold(true),
-		MarkdownItalic:           lipgloss.NewStyle().Foreground(c.LipglossColor(colorBody)).Italic(true),
+		MarkdownItalic:           lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownItalic)).Italic(true),
 		MarkdownHighlight:        lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownHighlightForeground)).Background(c.LipglossColor(colorMarkdownHighlight)),
 		MarkdownRule:             lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownRule)),
 		MarkdownBullet:           lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownBullet)).Bold(true),

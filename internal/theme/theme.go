@@ -51,7 +51,7 @@ type Palette struct {
 	TerminalBackground, HeaderBackground, HeaderForeground                                                      string
 	LabelUser, LabelAssistant, LabelTool, LabelResult, LabelSystem, LabelError                                  string
 	Body, ToolDetailBackground                                                                                  string
-	MarkdownHeading, MarkdownRule, MarkdownBullet, MarkdownBold, MarkdownHighlight, MarkdownHighlightForeground string
+	MarkdownHeading, MarkdownRule, MarkdownBullet, MarkdownBold, MarkdownItalic, MarkdownHighlight, MarkdownHighlightForeground string
 	MarkdownCodeForeground, MarkdownCodeBackground, MarkdownCodeBorder                                          string
 	MarkdownLink, MarkdownQuote, MarkdownQuoteBorder                                                            string
 	// 语法高亮专用色：独立于 UI 语义角色，避免代码 token 与界面元素撞色。
@@ -78,7 +78,7 @@ func (p Palette) Values() map[string]string {
 	return map[string]string{
 		"terminal.background": p.TerminalBackground, "header.background": p.HeaderBackground, "header.foreground": p.HeaderForeground,
 		"label.user": p.LabelUser, "label.assistant": p.LabelAssistant, "label.tool": p.LabelTool, "label.result": p.LabelResult, "label.system": p.LabelSystem, "label.error": p.LabelError,
-		"body": p.Body, "tool.detail.background": p.ToolDetailBackground, "markdown.heading": p.MarkdownHeading, "markdown.rule": p.MarkdownRule, "markdown.bullet": p.MarkdownBullet, "markdown.bold": p.MarkdownBold, "markdown.highlight": p.MarkdownHighlight, "markdown.highlight.foreground": p.MarkdownHighlightForeground,
+		"body": p.Body, "tool.detail.background": p.ToolDetailBackground, "markdown.heading": p.MarkdownHeading, "markdown.rule": p.MarkdownRule, "markdown.bullet": p.MarkdownBullet, "markdown.bold": p.MarkdownBold, "markdown.italic": p.MarkdownItalic, "markdown.highlight": p.MarkdownHighlight, "markdown.highlight.foreground": p.MarkdownHighlightForeground,
 		"markdown.code.foreground": p.MarkdownCodeForeground, "markdown.code.background": p.MarkdownCodeBackground, "markdown.code.border": p.MarkdownCodeBorder,
 		"markdown.link": p.MarkdownLink, "markdown.quote": p.MarkdownQuote, "markdown.quote.border": p.MarkdownQuoteBorder,
 		"syntax.keyword": p.SyntaxKeyword, "syntax.string": p.SyntaxString, "syntax.number": p.SyntaxNumber, "syntax.comment": p.SyntaxComment,

@@ -136,11 +136,13 @@ func TestFoldWorkSegmentsTrailsResponse(t *testing.T) {
 	}
 	rendered := ansi.Strip(renderEntryAt(out[2], 80, wsAt(20), false))
 	bodyRow := strings.Index(rendered, "GeoRA")
-	clockRow := strings.Index(rendered, "12:00")
+	// 时钟按本地时区显示（wsAt 是 UTC 基准，换算到本地后再断言，时区无关）。
+	localClock := wsAt(18).Local().Format("15:04")
+	clockRow := strings.Index(rendered, localClock)
 	if bodyRow < 0 || clockRow < bodyRow {
 		t.Fatalf("clock must render on the line after the response:\n%s", rendered)
 	}
-	if title := workSegmentTitle(out[1].segment, wsAt(20)); strings.Contains(title, "12:00") {
+	if title := workSegmentTitle(out[1].segment, wsAt(20)); strings.Contains(title, localClock) {
 		t.Fatalf("segment title must not carry the clock: %q", title)
 	}
 }
@@ -522,6 +524,17 @@ func TestLiveThoughtCollapsesAtNaturalPositionOnceTextStreams(t *testing.T) {
 	}
 	if strings.Contains(got, "Thoughts ·") || strings.Contains(got, "thinking out loud") {
 		t.Fatalf("stale live thought block survived the response:\n%s", got)
+	}
+}
+
+// 落库时间戳是 UTC：formatResponseClock 必须转本地时区显示，否则 resume
+// 后的响应时钟全部显示 0 时区。
+func TestFormatResponseClockNormalizesUTCToLocal(t *testing.T) {
+	at := time.Date(2026, 8, 25, 9, 30, 0, 0, time.Local)
+	utc := time.Date(2026, 8, 25, 1, 30, 0, 0, time.UTC)
+	want := utc.Local().Format("15:04")
+	if got := formatResponseClock(utc, at); got != want {
+		t.Fatalf("formatResponseClock(UTC) = %q, want local %q", got, want)
 	}
 }
 

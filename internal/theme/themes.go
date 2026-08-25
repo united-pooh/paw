@@ -6,8 +6,9 @@ func palette(bg, surface, fg, muted, primary, secondary, cyan, green, yellow, re
 		LabelUser: "#ffaf00", LabelAssistant: fg, LabelTool: green, LabelResult: green, LabelSystem: muted, LabelError: red,
 		Body: fg, ToolDetailBackground: surface,
 		MarkdownHeading: primary, MarkdownRule: muted, MarkdownBullet: cyan,
-		// bold 只用正文色 + 粗体属性：与标题撞色会让强调层级失声。
-		MarkdownBold: fg, MarkdownHighlight: yellow, MarkdownHighlightForeground: bg,
+		// bold 用主题黄（与标题的 primary 拉开层次）；italic 用 secondary 紫：
+		// 很多终端不渲染 italic 属性，颜色偏移是斜体唯一的可见信号。
+		MarkdownBold: yellow, MarkdownItalic: secondary, MarkdownHighlight: yellow, MarkdownHighlightForeground: bg,
 		MarkdownCodeForeground: fg, MarkdownCodeBackground: surface, MarkdownCodeBorder: primary,
 		MarkdownLink: cyan, MarkdownQuote: muted, MarkdownQuoteBorder: muted,
 		// 语法高亮默认映射（keyword 紫 / string 绿 / number 黄 / comment 灰），
@@ -49,8 +50,9 @@ func init() {
 	p.MarkdownHeading = "#ffffaf"
 	p.MarkdownRule = "#808080"
 	p.MarkdownBullet = "#5fd7d7"
-	// bold 用亮暖白而非标题的 #ffffaf：两者同色时正文强调与标题无法区分。
-	p.MarkdownBold = "#f0e6d5"
+	// bold 继承主题黄 #e5b66e（与标题的浅黄 #ffffaf 拉开层次）；italic 用
+	// 柔和蓝：Default 的 secondary 是 hot pink，做斜体太吵。
+	p.MarkdownItalic = "#81a1f1"
 	p.MarkdownHighlight = "#5f5fd7"
 	p.MarkdownHighlightForeground = "#ffffff"
 	p.MarkdownCodeForeground = "#ffffd7"
