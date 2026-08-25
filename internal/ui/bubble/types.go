@@ -99,6 +99,9 @@ type workSegmentData struct {
 	hasReasoning bool
 	startedAt    time.Time
 	finishedAt   time.Time
+	// respondedAt 是该段产生的模型响应（跟随其后的 assistant 条目）的时间，
+	// 标题尾部展示；段后没有响应时为零值不展示。
+	respondedAt  time.Time
 	header       bool // 展开态下作为段标题行内联在视图中（子条目跟随其后平铺）
 	live         bool // foldLive 下仅尾部段为 true
 }

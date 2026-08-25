@@ -63,19 +63,26 @@ func TestFoldWorkSegmentsCutsOnVisibleText(t *testing.T) {
 	}
 	out := foldWorkSegments(entries, foldResting)
 	if len(out) != 3 {
-		t.Fatalf("out len = %d, want 3 (segment, assistant, segment)", len(out))
+		t.Fatalf("out len = %d, want 3 (assistant, segment, segment)", len(out))
 	}
-	if out[0].kind != entryWorkSegment || out[1].kind != entryAssistant || out[2].kind != entryWorkSegment {
+	// 响应在前、Thought 在后：段跟随产生它的响应。
+	if out[0].kind != entryAssistant || out[1].kind != entryWorkSegment || out[2].kind != entryWorkSegment {
 		t.Fatalf("out kinds = %v/%v/%v", out[0].kind, out[1].kind, out[2].kind)
 	}
-	if !out[0].segment.hasReasoning {
+	if !out[1].segment.hasReasoning {
 		t.Fatal("first segment should have reasoning")
+	}
+	if !out[1].segment.respondedAt.Equal(wsAt(5)) {
+		t.Fatalf("respondedAt = %v, want assistant time", out[1].segment.respondedAt)
 	}
 	if out[2].segment.hasReasoning {
 		t.Fatal("second segment is pure tools, must not have reasoning (Worked 命名)")
 	}
 	if out[2].segment.toolCalls != 1 {
 		t.Fatalf("second segment toolCalls = %d, want 1", out[2].segment.toolCalls)
+	}
+	if !out[2].segment.respondedAt.IsZero() {
+		t.Fatal("trailing segment without response must not carry respondedAt")
 	}
 }
 
@@ -89,6 +96,23 @@ func TestFoldWorkSegmentsCutsOnUserAndSystem(t *testing.T) {
 	out := foldWorkSegments(entries, foldResting)
 	if len(out) != 4 || out[1].kind != entryWorkSegment || out[3].kind != entryWorkSegment {
 		t.Fatalf("out = %#v", out)
+	}
+}
+
+func TestFoldWorkSegmentsTrailsResponse(t *testing.T) {
+	entries := []transcriptEntry{
+		wsUser("读一下这篇文章", 0),
+		wsReasoning("think", 1),
+		wsTool("WebFetch", "ok", 4),
+		wsAssistant("GeoRA: Geometry-Aware ...", 18),
+	}
+	out := foldWorkSegments(entries, foldResting)
+	if len(out) != 3 || out[0].kind != entryUser || out[1].kind != entryAssistant || out[2].kind != entryWorkSegment {
+		t.Fatalf("out = %#v, want user → response → thought", out)
+	}
+	title := workSegmentTitle(out[2].segment, wsAt(20))
+	if !strings.Contains(title, "Thought for") || !strings.Contains(title, "12:00") {
+		t.Fatalf("title = %q, want trailing response clock today (12:00)", title)
 	}
 }
 
@@ -258,6 +282,27 @@ func TestWorkSegmentLiveTitle(t *testing.T) {
 	empty := &workSegmentData{startedAt: wsAt(0), live: true}
 	if got := workSegmentLiveTitle(empty, wsAt(0)); got != "Thoughts · 1 s" {
 		t.Fatalf("live title without tools = %q", got)
+	}
+}
+
+func TestFormatResponseClock(t *testing.T) {
+	at := time.Date(2026, 8, 25, 9, 30, 0, 0, time.Local)
+	cases := []struct {
+		name string
+		t    time.Time
+		want string
+	}{
+		{"zero", time.Time{}, ""},
+		{"today", time.Date(2026, 8, 25, 14, 32, 0, 0, time.Local), "14:32"},
+		{"same year", time.Date(2026, 8, 24, 14, 32, 0, 0, time.Local), "8月24日 14:32"},
+		{"other year", time.Date(2025, 8, 24, 14, 32, 0, 0, time.Local), "2025年8月24日 14:32"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatResponseClock(tt.t, at); got != tt.want {
+				t.Fatalf("formatResponseClock() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

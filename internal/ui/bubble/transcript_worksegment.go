@@ -105,11 +105,12 @@ func foldWorkSegmentsView(entries []transcriptEntry, mode foldMode, expandedFor 
 	view = make([]transcriptEntry, 0, len(entries))
 	transcriptToView = make([]int, len(entries))
 	runStart := -1
-	flush := func(run []transcriptEntry) {
+	flush := func(run []transcriptEntry, respondedAt time.Time) {
 		if len(run) == 0 {
 			return
 		}
 		if entry, ok := buildWorkSegmentEntry(run); ok {
+			entry.segment.respondedAt = respondedAt
 			if expandedFor != nil && expandedFor(entry.segment) {
 				view, transcriptToView, viewToTranscript = emitExpandedWorkSegment(view, transcriptToView, viewToTranscript, run, runStart, entry)
 			} else {
@@ -129,29 +130,36 @@ func foldWorkSegmentsView(entries []transcriptEntry, mode foldMode, expandedFor 
 		}
 		runStart = -1
 	}
+	emitRaw := func(index int, entry transcriptEntry) {
+		transcriptToView[index] = len(view)
+		view = append(view, entry)
+		viewToTranscript = append(viewToTranscript, index)
+	}
 	var run []transcriptEntry
 	for index, entry := range entries {
 		switch {
 		case isInteractiveToolEntry(entry):
-			flush(run)
+			flush(run, time.Time{})
 			run = nil
-			transcriptToView[index] = len(view)
-			view = append(view, entry)
-			viewToTranscript = append(viewToTranscript, index)
+			emitRaw(index, entry)
 		case isWorkSegmentCollectable(entry):
 			if len(run) == 0 {
 				runStart = index
 			}
 			run = append(run, entry)
-		default:
-			flush(run)
+		case entry.kind == entryAssistant && len(run) > 0:
+			// 响应在前、Thought 在后：段摘要跟随产生它的模型响应，
+			// 并把响应时间记到段上（标题尾部展示）。
+			emitRaw(index, entry)
+			flush(run, entry.createdAt)
 			run = nil
-			transcriptToView[index] = len(view)
-			view = append(view, entry)
-			viewToTranscript = append(viewToTranscript, index)
+		default:
+			flush(run, time.Time{})
+			run = nil
+			emitRaw(index, entry)
 		}
 	}
-	flush(run)
+	flush(run, time.Time{})
 	return view, transcriptToView, viewToTranscript
 }
 
@@ -249,7 +257,27 @@ func workSegmentTitle(data *workSegmentData, at time.Time) string {
 	if data.failed > 0 {
 		fmt.Fprintf(&b, " · %d failed", data.failed)
 	}
+	if responded := formatResponseClock(data.respondedAt, at); responded != "" {
+		b.WriteString(" · ")
+		b.WriteString(responded)
+	}
 	return b.String()
+}
+
+// formatResponseClock 格式化模型响应时间：今天只显示时分（14:32）；同年
+// 带月日（8月24日 14:32）；跨年再带年份（2025年8月24日 14:32）。
+func formatResponseClock(t, at time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	clock := fmt.Sprintf("%02d:%02d", t.Hour(), t.Minute())
+	if t.Year() == at.Year() && t.YearDay() == at.YearDay() {
+		return clock
+	}
+	if t.Year() == at.Year() {
+		return fmt.Sprintf("%d月%d日 %s", int(t.Month()), t.Day(), clock)
+	}
+	return fmt.Sprintf("%d年%d月%d日 %s", t.Year(), int(t.Month()), t.Day(), clock)
 }
 
 // workSegmentLiveTitle 生成 live 态标题（统一 Thoughts + 实时时长与计数）。
