@@ -249,16 +249,23 @@ func renderCodeBlockPanel(code string, width int, label string) string {
 	// 代码块按 fence 语言做 token 级语法高亮（base 叠加代码块底色，避免
 	// token 的 SGR reset 丢背景）；未知语言保持纯文本，不做猜测性上色。
 	code = highlightCodeBlockLines(code, syntaxLanguageFromText("", label))
+	// 高亮 token 的 SGR reset 会连带清掉代码块底色：补齐宽度的空格位于最后
+	// 一个 token 的 reset 之后，会以终端默认背景渲染，导致背景只覆盖文字、
+	// 行尾出现裸条。渲染后统一在 reset 处恢复底色，保证整块背景连续。
+	codeBg := colorManager.Hex(colorMarkdownCodeBackground)
+	codeFg := colorManager.Hex(colorMarkdownCodeForeground)
 	if blockWidth < 6 {
 		lines := limitRenderedCodeBlockLines(wrapStyledCellText(code, width), maxRenderedCodeBlockLines)
-		return markdownCodeBlockStyle.Render(strings.Join(lines, "\n"))
+		return restoreBackgroundAfterANSIReset(markdownCodeBlockStyle.Render(strings.Join(lines, "\n")), codeBg, codeFg)
 	}
 	textWidth := maxInt(1, blockWidth-4)
 	lines := limitRenderedCodeBlockLines(wrapStyledCellText(code, textWidth), maxRenderedCodeBlockLines)
 	rendered := make([]string, 0, len(lines)+2)
 	rendered = append(rendered, renderCodeBlockTopBorder(label, blockWidth))
 	for _, line := range lines {
-		body := " " + markdownCodeBlockStyle.Render(fitStyledCellLine(line, textWidth)) + " "
+		// 左右留白放进 Render 内部，让边距也带上代码块底色。
+		body := restoreBackgroundAfterANSIReset(
+			markdownCodeBlockStyle.Render(" "+fitStyledCellLine(line, textWidth)+" "), codeBg, codeFg)
 		rendered = append(rendered,
 			markdownCodeBlockBorderStyle.Render("│")+body+markdownCodeBlockBorderStyle.Render("│"),
 		)

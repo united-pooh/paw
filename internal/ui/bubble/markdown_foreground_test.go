@@ -179,3 +179,36 @@ func TestCodeBlockTabIndentationRendersInline(t *testing.T) {
 		t.Fatalf("nested tab indentation not expanded to 8 cells:\n%s", out)
 	}
 }
+
+// 语法高亮代码块的底色必须填满整行（含行尾补宽空格与左右留白）。
+// 回归：高亮 token 的 SGR reset 清掉外层底色，reset 之后的补宽空格以终端
+// 默认背景渲染，背景只覆盖到文字为止，行尾出现裸条。
+func TestCodeBlockBackgroundCoversFullRowWidth(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(previousProfile)
+		rebuildLegacyStyles()
+	})
+	rebuildLegacyStyles()
+
+	out := renderMarkdown("```python\nelse:\n    continue  # keep polling\n```", 60)
+	bgSeq := backgroundSGR(colorManager.Hex(colorMarkdownCodeBackground))
+	if bgSeq == "" {
+		t.Skip("code block background is not a hex color")
+	}
+	found := false
+	for _, row := range strings.Split(out, "\n") {
+		if !strings.Contains(row, "continue") {
+			continue
+		}
+		found = true
+		// 行尾补宽空格位于最后一个 token 的 reset 之后：reset 必须紧跟底色恢复。
+		if !strings.Contains(row, "\x1b[0m"+bgSeq) {
+			t.Fatalf("code block row loses background after token reset: %q", row)
+		}
+	}
+	if !found {
+		t.Fatalf("code block row missing from output:\n%s", ansi.Strip(out))
+	}
+}
