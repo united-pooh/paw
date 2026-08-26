@@ -10,7 +10,7 @@ func palette(bg, surface, fg, muted, primary, secondary, cyan, green, yellow, re
 		// 很多终端不渲染 italic 属性，颜色偏移是斜体唯一的可见信号。
 		MarkdownBold: yellow, MarkdownItalic: secondary, MarkdownHighlight: yellow, MarkdownHighlightForeground: bg,
 		MarkdownCodeForeground: fg, MarkdownCodeBackground: surface, MarkdownCodeBorder: primary,
-		MarkdownLink: cyan, MarkdownQuote: muted, MarkdownQuoteBorder: muted,
+		MarkdownLink: cyan, MarkdownQuote: muted, MarkdownQuoteBorder: muted, MarkdownQuoteText: muted,
 		// 语法高亮默认映射（keyword 紫 / string 绿 / number 黄 / comment 灰），
 		// 与各主题官方语法色系一致；个别主题在 init() 中按官方值覆盖。
 		SyntaxKeyword: secondary, SyntaxString: green, SyntaxNumber: yellow, SyntaxComment: muted,
@@ -83,7 +83,12 @@ func init() {
 		}
 	}
 	override(TokyoNight, func(p *Palette) { p.SyntaxNumber = "#ff9e64" })
-	override(TokyoNightStorm, func(p *Palette) { p.SyntaxNumber = "#ff9e64" })
+	override(TokyoNightStorm, func(p *Palette) {
+		p.SyntaxNumber = "#ff9e64"
+		// 仅引用块文字用 Storm 标志性的紫色（独立角色，不影响 Thoughts 等
+		// 复用 markdown.quote 的暗色文字）。
+		p.MarkdownQuoteText = "#bb9af7"
+	})
 	override(TokyoNightLight, func(p *Palette) { p.SyntaxNumber = "#965027" })
 	override(CatppuccinMocha, func(p *Palette) { p.SyntaxNumber = "#fab387" })
 	override(Dracula, func(p *Palette) {

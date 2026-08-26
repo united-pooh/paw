@@ -153,8 +153,9 @@ func rebuildLegacyStyles() {
 	toolCitationQuoteBorderStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorMarkdownQuoteBorder))
 	toolCitationRailStyle = lipgloss.NewStyle().
-		Border(lipgloss.Border{Left: "│"}).
-		BorderForeground(colorManager.LipglossColor(colorMarkdownQuoteBorder)).
+		BorderStyle(lipgloss.Border{Left: "│"}).
+		BorderLeft(true).
+		BorderLeftForeground(colorManager.LipglossColor(colorMarkdownQuoteBorder)).
 		PaddingLeft(1)
 	labelSystemStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorLabelSystem)).
@@ -214,10 +215,13 @@ func rebuildLegacyStyles() {
 		Foreground(colorManager.LipglossColor(colorTerminalBackground)).
 		Background(colorManager.LipglossColor(colorSignal)).
 		Bold(true)
+	// 引用样式只启用左边框：lipgloss 的 .Border() 会同时启用四边，
+	// top/bottom 无字符时会为每个引用行渲染上下空白填充行。
 	markdownQuoteStyle = lipgloss.NewStyle().
-		Foreground(colorManager.LipglossColor(colorMarkdownQuote)).
-		Border(lipgloss.Border{Left: "│"}).
-		BorderForeground(colorManager.LipglossColor(colorMarkdownQuoteBorder)).
+		Foreground(colorManager.LipglossColor(colorMarkdownQuoteText)).
+		BorderStyle(lipgloss.Border{Left: "│"}).
+		BorderLeft(true).
+		BorderLeftForeground(colorManager.LipglossColor(colorMarkdownQuoteBorder)).
 		PaddingLeft(1)
 	transcriptPanelStyle = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

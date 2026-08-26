@@ -54,6 +54,9 @@ type Palette struct {
 	MarkdownHeading, MarkdownRule, MarkdownBullet, MarkdownBold, MarkdownItalic, MarkdownHighlight, MarkdownHighlightForeground string
 	MarkdownCodeForeground, MarkdownCodeBackground, MarkdownCodeBorder                                          string
 	MarkdownLink, MarkdownQuote, MarkdownQuoteBorder                                                            string
+	// MarkdownQuoteText 是 markdown 引用块文字的独立角色：MarkdownQuote 同时被
+	// Thoughts 暗色正文/工具引用/todo 说明复用，引用文字单独配色不影响它们。
+	MarkdownQuoteText string
 	// 语法高亮专用色：独立于 UI 语义角色，避免代码 token 与界面元素撞色。
 	SyntaxKeyword, SyntaxString, SyntaxNumber, SyntaxComment string
 	SyntaxBrackets                                           [4]string // 彩虹括号，按嵌套深度循环
@@ -80,7 +83,7 @@ func (p Palette) Values() map[string]string {
 		"label.user": p.LabelUser, "label.assistant": p.LabelAssistant, "label.tool": p.LabelTool, "label.result": p.LabelResult, "label.system": p.LabelSystem, "label.error": p.LabelError,
 		"body": p.Body, "tool.detail.background": p.ToolDetailBackground, "markdown.heading": p.MarkdownHeading, "markdown.rule": p.MarkdownRule, "markdown.bullet": p.MarkdownBullet, "markdown.bold": p.MarkdownBold, "markdown.italic": p.MarkdownItalic, "markdown.highlight": p.MarkdownHighlight, "markdown.highlight.foreground": p.MarkdownHighlightForeground,
 		"markdown.code.foreground": p.MarkdownCodeForeground, "markdown.code.background": p.MarkdownCodeBackground, "markdown.code.border": p.MarkdownCodeBorder,
-		"markdown.link": p.MarkdownLink, "markdown.quote": p.MarkdownQuote, "markdown.quote.border": p.MarkdownQuoteBorder,
+		"markdown.link": p.MarkdownLink, "markdown.quote": p.MarkdownQuote, "markdown.quote.border": p.MarkdownQuoteBorder, "markdown.quote.text": p.MarkdownQuoteText,
 		"syntax.keyword": p.SyntaxKeyword, "syntax.string": p.SyntaxString, "syntax.number": p.SyntaxNumber, "syntax.comment": p.SyntaxComment,
 		"syntax.bracket.1": p.SyntaxBrackets[0], "syntax.bracket.2": p.SyntaxBrackets[1], "syntax.bracket.3": p.SyntaxBrackets[2], "syntax.bracket.4": p.SyntaxBrackets[3],
 		"panel.border": p.PanelBorder, "input.focused.border": p.InputFocusedBorder, "input.waiting.border": p.InputWaitingBorder, "input.multiline.border": p.InputMultilineBorder,

@@ -48,7 +48,7 @@ func NewStyleSet(p theme.Palette) StyleSet {
 		MarkdownCodeBlock:        lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownCodeForeground)).Background(c.LipglossColor(colorMarkdownCodeBackground)),
 		MarkdownCodeBlockBorder:  lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownCodeBorder)),
 		MarkdownCodeBlockLabel:   lipgloss.NewStyle().Foreground(bg).Background(c.LipglossColor(colorSignal)).Bold(true),
-		MarkdownQuote:            lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownQuote)).Border(lipgloss.Border{Left: "│"}).BorderForeground(c.LipglossColor(colorMarkdownQuoteBorder)).PaddingLeft(1),
+		MarkdownQuote:            lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownQuoteText)).BorderStyle(lipgloss.Border{Left: "│"}).BorderLeft(true).BorderLeftForeground(c.LipglossColor(colorMarkdownQuoteBorder)).PaddingLeft(1),
 		TranscriptContent:        lipgloss.NewStyle().Background(bg).Padding(0, mainContentPadding),
 		InputDock:                lipgloss.NewStyle().Background(bg).Padding(0, mainContentPadding),
 		InputDockTerminal:        lipgloss.NewStyle().Background(bg).Foreground(c.LipglossColor(colorInputTerminal)).Padding(0, mainContentPadding),

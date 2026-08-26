@@ -33,7 +33,20 @@ func renderMarkdown(markdown string, width int) string {
 		if lang, ok := fencedCodeStart(trimmed); ok {
 			codeLines, end := collectFencedCodeLines(lines, i, lang)
 			i = end
-			parts = append(parts, renderCodeBlock(lang, strings.Join(codeLines, "\n"), width))
+			code := strings.Join(codeLines, "\n")
+			// 模型有时把整段回答包进一个 ```text 围栏（内部还有嵌套围栏与
+			// 引用块）：仅当围栏横跨整条消息且内容本身像 Markdown（含嵌套
+			// 围栏/标题/引用标记）时才视为传输包装解开；纯文本片段（哪怕
+			// 占满整条消息）仍按代码面板渲染。
+			if strings.EqualFold(lang, "text") && end >= len(lines)-1 && onlyBlankParts(parts) && looksLikeMarkdownContent(code) {
+				parts = append(parts, renderMarkdown(code, width))
+				continue
+			}
+			// 未闭合的空围栏不渲染空面板。
+			if lang == "" && strings.TrimSpace(code) == "" {
+				continue
+			}
+			parts = append(parts, renderCodeBlock(lang, code, width))
 			continue
 		}
 		if isMarkdownTableStart(lines, i) {
@@ -50,8 +63,20 @@ func renderMarkdown(markdown string, width int) string {
 			parts = append(parts, leading+renderMarkdownHeading(level, text, width))
 			continue
 		}
-		if text, ok := strings.CutPrefix(trimmed, ">"); ok {
-			parts = append(parts, leading+markdownQuoteStyle.Width(maxInt(1, width-2)).Render(restoreForegroundAfterANSIReset(renderInlineMarkdown(strings.TrimSpace(text)), colorManager.Hex(colorMarkdownQuote))))
+		if _, ok := strings.CutPrefix(trimmed, ">"); ok {
+			// 连续引用行合并为一个引用块：剥离 ">"/"> " 前缀后递归按 Markdown
+			// 渲染（引用内的标题/列表/嵌套代码块都能正确呈现），再逐行加 │ 边栏。
+			var quoteLines []string
+			for i < len(lines) {
+				inner, isQuote := strings.CutPrefix(strings.TrimSpace(lines[i]), ">")
+				if !isQuote {
+					break
+				}
+				quoteLines = append(quoteLines, strings.TrimSpace(inner))
+				i++
+			}
+			i--
+			parts = append(parts, leading+renderMarkdownQuoteBlock(strings.Join(quoteLines, "\n"), width))
 			continue
 		}
 		if marker, text, ok := markdownListItem(trimmed); ok {
@@ -65,6 +90,46 @@ func renderMarkdown(markdown string, width int) string {
 	}
 
 	return strings.TrimRight(strings.Join(parts, "\n"), "\n")
+}
+
+// renderMarkdownQuoteBlock 渲染引用块：剥离引用前缀后的内容先递归按
+// Markdown 渲染（标题/列表/嵌套代码块都保留自身样式），再为每行加 │ 边栏。
+// 普通文本在 ANSI reset 后恢复引用灰，与旧的逐行引用观感一致。
+func renderMarkdownQuoteBlock(inner string, width int) string {
+	innerWidth := maxInt(1, width-2)
+	rendered := renderMarkdown(strings.TrimRight(inner, "\n"), innerWidth)
+	if rendered == "" {
+		return markdownQuoteStyle.Width(innerWidth).Render("")
+	}
+	lines := strings.Split(rendered, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, markdownQuoteStyle.Width(innerWidth).Render(restoreForegroundAfterANSIReset(line, colorManager.Hex(colorMarkdownQuoteText))))
+	}
+	return strings.Join(out, "\n")
+}
+
+// onlyBlankParts 报告已渲染片段是否全为空白（用于识别「围栏横跨整条消息」
+// 的传输包装：围栏前不允许有任何非空内容）。
+func onlyBlankParts(parts []string) bool {
+	for _, part := range parts {
+		if strings.TrimSpace(ansi.Strip(part)) != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// looksLikeMarkdownContent 报告代码块内容是否带有 Markdown 块级特征（嵌套
+// 围栏/标题/引用），用于区分「整段回答的 ```text 传输包装」与纯文本片段。
+func looksLikeMarkdownContent(code string) bool {
+	for _, line := range strings.Split(code, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ">") {
+			return true
+		}
+	}
+	return false
 }
 
 // isMarkdownThematicBreak recognizes CommonMark-style horizontal rules. The
@@ -167,6 +232,10 @@ func renderCodeBlock(lang, code string, width int) string {
 
 func renderCodeBlockPanel(code string, width int, label string) string {
 	width = maxInt(1, width)
+	// tab 统一展开为 4 空格（与 lipgloss Render 的展开宽度一致）：宽度测量把
+	// \t 当 0 宽、渲染却展开成 4 格，两者不一致会让 token 被错误换行、
+	// 边框错位、缩进看起来丢失。
+	code = strings.ReplaceAll(code, "\t", "    ")
 	blockWidth := markdownCodeBlockWidth(code, label, width)
 	// 代码块按 fence 语言做 token 级语法高亮（base 叠加代码块底色，避免
 	// token 的 SGR reset 丢背景）；未知语言保持纯文本，不做猜测性上色。

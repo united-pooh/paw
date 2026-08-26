@@ -39,6 +39,7 @@ const (
 	colorMarkdownLink                colorRole = "markdown.link"
 	colorMarkdownQuote               colorRole = "markdown.quote"
 	colorMarkdownQuoteBorder         colorRole = "markdown.quote.border"
+	colorMarkdownQuoteText           colorRole = "markdown.quote.text"
 	colorSyntaxKeyword               colorRole = "syntax.keyword"
 	colorSyntaxString                colorRole = "syntax.string"
 	colorSyntaxNumber                colorRole = "syntax.number"
@@ -143,6 +144,8 @@ func (c ColorManager) Hex(role colorRole) string {
 		value = p.MarkdownQuote
 	case colorMarkdownQuoteBorder:
 		value = p.MarkdownQuoteBorder
+	case colorMarkdownQuoteText:
+		value = p.MarkdownQuoteText
 	case colorSyntaxKeyword:
 		value = p.SyntaxKeyword
 	case colorSyntaxString:
