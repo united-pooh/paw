@@ -103,8 +103,17 @@ func renderMarkdownQuoteBlock(inner string, width int) string {
 	}
 	lines := strings.Split(rendered, "\n")
 	out := make([]string, 0, len(lines))
+	quoteText := colorManager.Hex(colorMarkdownQuoteText)
+	// 内层递归渲染的普通文本带 bodyStyle 前景 SGR，它出现得比外层引用色晚，
+	// 会把引用文字色顶掉；逐行把正文前景序列替换为引用文字色（标题/粗体/
+	// 代码等其他角色保持各自配色），再在 ANSI reset 后补回引用色。
+	bodySeq := foregroundSGR(colorManager.Hex(colorBody))
+	quoteSeq := foregroundSGR(quoteText)
 	for _, line := range lines {
-		out = append(out, markdownQuoteStyle.Width(innerWidth).Render(restoreForegroundAfterANSIReset(line, colorManager.Hex(colorMarkdownQuoteText))))
+		if bodySeq != "" && quoteSeq != "" && bodySeq != quoteSeq {
+			line = strings.ReplaceAll(line, bodySeq, quoteSeq)
+		}
+		out = append(out, markdownQuoteStyle.Width(innerWidth).Render(restoreForegroundAfterANSIReset(line, quoteText)))
 	}
 	return strings.Join(out, "\n")
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
+	"paw/internal/theme"
 )
 
 // foregroundLostInLine 用 SGR 状态机模拟终端：若 reset（\x1b[0m）之后出现
@@ -90,6 +91,37 @@ func TestMarkdownQuoteLinesMergeWithoutStrayBlanks(t *testing.T) {
 		if !strings.Contains(lines[i], "│") || !strings.Contains(lines[i], want) {
 			t.Fatalf("quote line %d = %q, want rail + %q", i, lines[i], want)
 		}
+	}
+}
+
+// 引用块的普通文本必须呈现 markdown.quote.text 角色色（Storm 下为紫色），
+// 而不是被内层递归渲染的 bodyStyle 正文色覆盖。
+// 回归：内层行首的正文前景 SGR 晚于外层引用色输出，曾把引用文字顶回正文色。
+func TestMarkdownQuoteTextColorOverridesBodyForeground(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(previousProfile)
+		rebuildLegacyStyles()
+	})
+
+	item, ok := theme.ByID(theme.TokyoNightStorm)
+	if !ok {
+		t.Fatal("tokyo-night-storm theme not registered")
+	}
+	previous := colorManager
+	colorManager = NewColorManager(item.Colors)
+	rebuildLegacyStyles()
+	t.Cleanup(func() {
+		colorManager = previous
+		rebuildLegacyStyles()
+	})
+
+	out := renderMarkdown("> 这是一行引用", 60)
+	quoteSeq := foregroundSGR(colorManager.Hex(colorMarkdownQuoteText))
+	if !strings.Contains(out, quoteSeq+"这是一行引用") {
+		t.Fatalf("quote text not colored with markdown.quote.text (%s):\n%q",
+			colorManager.Hex(colorMarkdownQuoteText), out)
 	}
 }
 
