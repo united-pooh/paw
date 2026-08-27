@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	"paw/internal/message"
+	"paw/internal/model"
 	"strconv"
 	"strings"
 )
@@ -266,12 +267,25 @@ func decodeToolUseEnvelope(payload string) (toolUseEnvelope, bool) {
 		return toolUseEnvelope{}, false
 	}
 
+	data := []byte(payload)
+	if !json.Valid(data) {
+		// Models occasionally emit invalid escapes inside string literals
+		// (e.g. regex patterns like `\.`). Repair the literals the same way
+		// decodeToolArguments does, then retry before giving up.
+		data = model.RepairJSONStringLiterals(data)
+		if !json.Valid(data) {
+			return toolUseEnvelope{}, false
+		}
+	}
 	var envelope toolUseEnvelope
-	if err := json.Unmarshal([]byte(payload), &envelope); err != nil {
+	if err := json.Unmarshal(data, &envelope); err != nil {
 		return toolUseEnvelope{}, false
 	}
 	if envelope.Type != toolUseResponseType || envelope.Name == "" {
 		return toolUseEnvelope{}, false
+	}
+	if len(envelope.Input) == 0 {
+		envelope.Input = json.RawMessage(`{}`)
 	}
 	return envelope, true
 }
@@ -287,8 +301,15 @@ func decodeToolUseEnvelopes(payload string) ([]toolUseEnvelope, bool) {
 	if !strings.HasPrefix(payload, "[") {
 		return nil, false
 	}
+	data := []byte(payload)
+	if !json.Valid(data) {
+		data = model.RepairJSONStringLiterals(data)
+		if !json.Valid(data) {
+			return nil, false
+		}
+	}
 	var envelopes []toolUseEnvelope
-	if err := json.Unmarshal([]byte(payload), &envelopes); err != nil {
+	if err := json.Unmarshal(data, &envelopes); err != nil {
 		return nil, false
 	}
 	if len(envelopes) == 0 {

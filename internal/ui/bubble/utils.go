@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/rivo/uniseg"
+	"paw/internal/model"
 	selecttool "paw/internal/tool/select"
 	"paw/internal/ui"
 )
@@ -611,9 +612,16 @@ func balancedJSONObjectAt(content string, start int) (string, int, bool) {
 }
 
 func isToolUseJSONPayload(payload string) bool {
+	data := []byte(payload)
 	var object map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(payload), &object); err != nil {
-		return false
+	if err := json.Unmarshal(data, &object); err != nil {
+		// Models sometimes emit invalid escapes inside string literals
+		// (e.g. regex patterns). Repair the literals before giving up so the
+		// leaky payload can still be recognized and stripped from the view.
+		data = model.RepairJSONStringLiterals(data)
+		if err := json.Unmarshal(data, &object); err != nil {
+			return false
+		}
 	}
 	var typ string
 	_ = json.Unmarshal(object["type"], &typ)
