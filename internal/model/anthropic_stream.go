@@ -215,6 +215,8 @@ func (c *Client) consumeAnthropicStream(ctx context.Context, resp *http.Response
 	toolCalls := map[int]*activeAnthropicToolCall{}
 	// 按完成顺序记录工具调用
 	completedToolIndices := []int{}
+	// message_delta 携带的整条消息 stop_reason，message_stop 时随 Done 发出
+	pendingFinishReason := FinishReason("")
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -323,13 +325,28 @@ func (c *Client) consumeAnthropicStream(ctx context.Context, resp *http.Response
 			continue
 		}
 
+		// message_delta: 携带整条消息的 stop_reason（end_turn/max_tokens 等）。
+		// max_tokens 映射为 FinishReasonLength，让 runner 的截断守卫拒执行
+		// 截断消息里的工具调用。
+		if chunk.Type == "message_delta" && chunk.Delta != nil && chunk.Delta.StopReason != nil {
+			switch *chunk.Delta.StopReason {
+			case "max_tokens":
+				pendingFinishReason = FinishReasonLength
+			case "tool_use":
+				pendingFinishReason = FinishReasonToolCalls
+			default:
+				pendingFinishReason = FinishReasonStop
+			}
+			continue
+		}
+
 		// message_stop: 整批验证工具调用后结束
 		if chunk.Type == "message_stop" {
 			if err := finalizeAndFlushToolCalls(events, ctx, toolCalls, completedToolIndices); err != nil {
 				_ = emitStreamEvent(ctx, events, StreamEvent{Err: err})
 				return
 			}
-			_ = emitStreamEvent(ctx, events, StreamEvent{Done: true})
+			_ = emitStreamEvent(ctx, events, StreamEvent{Done: true, FinishReason: pendingFinishReason})
 			return
 		}
 

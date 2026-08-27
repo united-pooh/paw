@@ -136,6 +136,7 @@ func prepareDeepSeekTools(tools []ToolDefinition) (PreparedToolSet, error) {
 			OriginalSchema: compiled.original,
 			projection:     compiled.projection,
 			validator:      compiled.validator,
+			schema:         compiled.schema,
 		})
 	}
 	return prepared, nil
@@ -146,6 +147,7 @@ type compiledDeepSeekSchema struct {
 	original   json.RawMessage
 	projection *argumentProjection
 	validator  *jsonschema.Schema
+	schema     map[string]any
 }
 
 func compileDeepSeekToolSchema(toolName string, raw json.RawMessage) (compiledDeepSeekSchema, error) {
@@ -187,7 +189,7 @@ func compileDeepSeekToolSchema(toolName string, raw json.RawMessage) (compiledDe
 	}
 	return compiledDeepSeekSchema{
 		wire: json.RawMessage(wireData), original: json.RawMessage(originalData),
-		projection: projection, validator: compileOriginalSchemaValidator(root),
+		projection: projection, validator: compileOriginalSchemaValidator(root), schema: root,
 	}, nil
 }
 

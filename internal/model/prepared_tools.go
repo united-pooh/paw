@@ -25,6 +25,7 @@ type PreparedTool struct {
 
 	projection *argumentProjection
 	validator  *jsonschema.Schema
+	schema     map[string]any
 }
 
 type PreparedToolSet []PreparedTool
@@ -127,6 +128,11 @@ func restoreToolArguments(tool PreparedTool, raw json.RawMessage) (json.RawMessa
 		}
 	}
 	if tool.validator != nil {
+		if coerced, changed, err := coerceValueToSchema(value, tool.schema); err != nil {
+			return nil, fmt.Errorf("参数类型修正失败: %w", err)
+		} else if changed {
+			value = coerced
+		}
 		if err := tool.validator.Validate(value); err != nil {
 			return nil, fmt.Errorf("不符合原始 Schema: %w", err)
 		}
