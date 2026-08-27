@@ -124,22 +124,38 @@ func TestSelectionDockToggleAndSubmit(t *testing.T) {
 		t.Fatalf("result=%#v ok=%v", result, ok)
 	}
 }
-func TestSelectionDockSingleSubmitUsesSelectedState(t *testing.T) {
+func TestSelectionDockSingleNavigationSelectsFocusedAnswer(t *testing.T) {
 	r := selectionRequest("x", selecttool.ModeSingle)
 	r.MinSelect = 1
 	r.MaxSelect = 1
 	d := newSelectionDock(r)
 	d.move(1)
-	if got, ok := d.submit(); ok || len(got.SelectedOptions) != 0 || d.errorText != "Select at least 1 option." {
-		t.Fatalf("focused unselected answer submitted: result=%#v ok=%v error=%q", got, ok, d.errorText)
+	if !d.selected["metrics"] || d.selected["logs"] || d.selected["traces"] {
+		t.Fatalf("single navigation did not exclusively select focused answer: %#v", d.selected)
 	}
-	d.selected["logs"] = true
 	got, ok := d.submit()
-	want := []selecttool.SelectedOption{{ID: "logs", Label: "Logs"}}
+	want := []selecttool.SelectedOption{{ID: "metrics", Label: "Metrics"}}
 	if !ok || !reflect.DeepEqual(got.SelectedOptions, want) {
 		t.Fatalf("result=%#v ok=%v", got, ok)
 	}
 }
+
+func TestSelectionDockMultipleNavigationDoesNotChangeSelection(t *testing.T) {
+	d := newSelectionDock(selectionRequest("x", selecttool.ModeMultiple))
+	d.selected["logs"] = true
+	d.move(1)
+	if !d.selected["logs"] || d.selected["metrics"] {
+		t.Fatalf("multiple navigation changed selected state: %#v", d.selected)
+	}
+}
+
+func TestSelectionDockSingleHintMatchesNavigationSelection(t *testing.T) {
+	d := newSelectionDock(selectionRequest("x", selecttool.ModeSingle))
+	if got := selectionDockHint(d); strings.Contains(got, "space select") || !strings.Contains(got, "↑↓ select") {
+		t.Fatalf("single hint = %q", got)
+	}
+}
+
 func TestSelectionDockMultipleKeysSpaceTogglesAndEnterSubmits(t *testing.T) {
 	r := selectionRequest("", selecttool.ModeMultiple)
 	r.MinSelect = 1

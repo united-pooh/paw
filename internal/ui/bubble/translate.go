@@ -154,7 +154,7 @@ func (m appModel) renderTranslatePanel() string {
 			meta = append(meta, unselectedProviderStyle.Render(panel.phonetic))
 		}
 		if panel.pos != "" {
-			meta = append(meta, selectedProviderStyle.Render(panel.pos))
+			meta = append(meta, m.styles.MarkdownHighlight.Render(panel.pos))
 		}
 		if len(meta) > 0 {
 			lines = append(lines, strings.Join(meta, "  "))

@@ -731,7 +731,7 @@ func (m appModel) renderCompletionContent() string {
 	for i := start; i < end; i++ {
 		label := visible[i]
 		if i == c.selectedIndex {
-			lines = append(lines, selectedProviderStyle.Render(fmt.Sprintf("> %s", label)))
+			lines = append(lines, m.styles.SelectionSelected.Render(fmt.Sprintf("> %s", label)))
 		} else {
 			lines = append(lines, unselectedProviderStyle.Render(fmt.Sprintf("  %s", label)))
 		}

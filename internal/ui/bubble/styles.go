@@ -79,7 +79,6 @@ var (
 	inputPanelFocusedStyle       lipgloss.Style
 	inputPanelWaitingStyle       lipgloss.Style
 	inputPanelTerminalStyle      lipgloss.Style
-	selectedProviderStyle        lipgloss.Style
 	unselectedProviderStyle      lipgloss.Style
 	wizardTitleStyle             lipgloss.Style
 	wizardPanelStyle             lipgloss.Style
@@ -245,13 +244,10 @@ func rebuildLegacyStyles() {
 		Foreground(colorManager.LipglossColor(colorInputTerminal))
 	inputDockGoalStyle = inputDockStyle.Copy()
 	worktreeNameStyle = lipgloss.NewStyle().
-		Foreground(colorManager.LipglossColor(colorMarkdownQuote)).
-		Background(colorManager.LipglossColor(colorWorktreeBackground))
+		Foreground(colorManager.LipglossColor(colorMarkdownQuote))
 	worktreeSeparatorStyle = lipgloss.NewStyle().
-		Foreground(colorManager.LipglossColor(colorMarkdownQuote)).
-		Background(colorManager.LipglossColor(colorWorktreeBackground))
+		Foreground(colorManager.LipglossColor(colorMarkdownQuote))
 	worktreeChipStyle = lipgloss.NewStyle().
-		Background(colorManager.LipglossColor(colorWorktreeBackground)).
 		Padding(0, 1)
 	inputHintStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorContextFree))
@@ -329,10 +325,6 @@ func rebuildLegacyStyles() {
 		BorderForeground(colorManager.LipglossColor(colorInputWaitingBorder))
 	inputPanelTerminalStyle = inputPanelStyle.Copy().
 		BorderForeground(colorManager.LipglossColor(colorInputTerminal))
-	selectedProviderStyle = lipgloss.NewStyle().
-		Background(colorManager.LipglossColor(colorSelectedProviderBg)).
-		Foreground(colorManager.LipglossColor(colorSelectedProviderFg)).
-		Bold(true)
 	unselectedProviderStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorUnselectedProvider))
 	wizardTitleStyle = lipgloss.NewStyle().

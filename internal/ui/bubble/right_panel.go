@@ -107,9 +107,9 @@ func (m appModel) renderTasksCardContentHeight(width, height int) string {
 		}
 		if m.taskPicker != nil && idx == clampInt(m.taskPicker.selectedIndex, 0, len(tasks)-1) {
 			dot = ">"
-			dotStyle = selectedProviderStyle
-			nameStyle = selectedProviderStyle
-			lineStyle = selectedProviderStyle
+			dotStyle = m.styles.SelectionSelected
+			nameStyle = m.styles.SelectionSelected
+			lineStyle = m.styles.SelectionSelected
 		}
 		lines = append(lines, rendertaskSidebarRow(width, dot, taskDisplayName(t), status, dotStyle, nameStyle, lineStyle))
 	}

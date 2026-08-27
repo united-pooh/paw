@@ -25,6 +25,22 @@ func TestNewStyleSetUsesThemePalette(t *testing.T) {
 	}
 }
 
+func TestSelectionSelectedSwapsNormalForegroundAndBackground(t *testing.T) {
+	for _, item := range theme.List() {
+		styles := NewStyleSet(item.Colors)
+		if styles.SelectionSelected.GetBackground() != styles.SelectionNormal.GetForeground() {
+			t.Fatalf("theme %s selected background = %v, want normal foreground %v", item.ID, styles.SelectionSelected.GetBackground(), styles.SelectionNormal.GetForeground())
+		}
+		if styles.SelectionSelected.GetForeground() != styles.SelectionNormal.GetBackground() {
+			t.Fatalf("theme %s selected foreground = %v, want normal background %v", item.ID, styles.SelectionSelected.GetForeground(), styles.SelectionNormal.GetBackground())
+		}
+		if styles.SelectionFocusedSelected.GetBackground() != styles.SelectionSelected.GetBackground() ||
+			styles.SelectionFocusedSelected.GetForeground() != styles.SelectionSelected.GetForeground() {
+			t.Fatalf("theme %s focused-selected is not the same inverse style", item.ID)
+		}
+	}
+}
+
 func TestStyleSetsDoNotShareMutableState(t *testing.T) {
 	tokyo, _ := theme.ByID(theme.TokyoNight)
 	light, _ := theme.ByID(theme.TokyoNightLight)

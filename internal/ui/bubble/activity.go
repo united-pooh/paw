@@ -20,11 +20,11 @@ func (m appModel) renderActivityBox() string {
 	tasksTab := " Tasks "
 	todoTab := " Todo "
 	if m.taskPicker.tab == activityTabTasks {
-		tasksTab = selectedProviderStyle.Render(tasksTab)
+		tasksTab = m.styles.SelectionSelected.Render(tasksTab)
 		todoTab = unselectedProviderStyle.Render(todoTab)
 	} else {
 		tasksTab = unselectedProviderStyle.Render(tasksTab)
-		todoTab = selectedProviderStyle.Render(todoTab)
+		todoTab = m.styles.SelectionSelected.Render(todoTab)
 	}
 
 	lines := []string{

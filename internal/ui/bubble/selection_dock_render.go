@@ -295,7 +295,7 @@ func selectionDockHint(d *selectionDock) string {
 	if d.request.Mode == selecttool.ModeMultiple {
 		return "↑↓ move  space toggle  enter submit  esc cancel"
 	}
-	return "↑↓ move  space select  enter submit  esc cancel"
+	return "↑↓ select  enter submit  esc cancel"
 }
 
 func alignSelectionDockEnds(left, right string, width int) string {

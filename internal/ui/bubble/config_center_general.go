@@ -120,7 +120,7 @@ func (m appModel) renderConfigCenterTabs(contentWidth int) string {
 		parts = append(parts, m.styles.InputPrompt.Copy().Bold(true).Render("设置"))
 		for i, label := range labels {
 			if i == active {
-				parts = append(parts, m.styles.Selected.Copy().Padding(0, 1).Render(label))
+				parts = append(parts, m.styles.SelectionSelected.Copy().Padding(0, 1).Render(label))
 			} else {
 				parts = append(parts, m.styles.Body.Copy().Bold(true).Render(label))
 			}

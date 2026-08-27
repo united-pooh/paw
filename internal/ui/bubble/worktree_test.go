@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -84,8 +85,12 @@ func TestWorktreeLabelUsesOnlyBranchColorForGitState(t *testing.T) {
 	if got := worktreeRefStyle(worktreeDirty).GetForeground(); got != colorManager.LipglossColor(colorWorktreeDirty) {
 		t.Fatalf("dirty branch color = %q, want %q", got, colorManager.Hex(colorWorktreeDirty))
 	}
-	if got := worktreeSeparatorStyle.GetBackground(); got != colorManager.LipglossColor(colorWorktreeBackground) {
-		t.Fatalf("worktree separator background = %q, want %q", got, colorManager.Hex(colorWorktreeBackground))
+	noColor := lipgloss.NoColor{}
+	if got := worktreeSeparatorStyle.GetBackground(); got != noColor {
+		t.Fatalf("worktree separator background = %#v, want none", got)
+	}
+	if got := worktreeChipStyle.GetBackground(); got != noColor {
+		t.Fatalf("worktree chip background = %#v, want none", got)
 	}
 
 	model.worktree = worktreeSnapshot{name: "paw", ref: "abc1234", state: worktreeClean, isGit: true, detached: true}

@@ -55,8 +55,6 @@ const (
 	colorInputTerminal               colorRole = "input.terminal"
 	colorInputTokenCommand           colorRole = "input.token.command"
 	colorInputTokenFile              colorRole = "input.token.file"
-	colorSelectedProviderBg          colorRole = "provider.selected.background"
-	colorSelectedProviderFg          colorRole = "provider.selected.foreground"
 	colorUnselectedProvider          colorRole = "provider.unselected"
 	colorWizardTitle                 colorRole = "wizard.title"
 	colorWizardBorder                colorRole = "wizard.border"
@@ -176,10 +174,6 @@ func (c ColorManager) Hex(role colorRole) string {
 		value = p.InputTokenCommand
 	case colorInputTokenFile:
 		value = p.InputTokenFile
-	case colorSelectedProviderBg:
-		value = p.SelectedProviderBG
-	case colorSelectedProviderFg:
-		value = p.SelectedProviderFG
 	case colorUnselectedProvider:
 		value = p.UnselectedProvider
 	case colorWizardTitle:

@@ -208,6 +208,9 @@ func (d *selectionDock) setFocusPosition(position int) {
 	case d.request.OptionsOnly || position < len(d.request.Options):
 		d.focus = selectionFocus{kind: selectionFocusAnswer, answerIndex: position}
 		d.lastAnswerIndex = position
+		if d.request.Mode == selecttool.ModeSingle {
+			d.selectFocusedAnswer()
+		}
 	case position == len(d.request.Options):
 		d.focus = selectionFocus{kind: selectionFocusCustom}
 	default:

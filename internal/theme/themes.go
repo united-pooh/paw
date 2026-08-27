@@ -17,7 +17,7 @@ func palette(bg, surface, fg, muted, primary, secondary, cyan, green, yellow, re
 		SyntaxBrackets: [4]string{cyan, secondary, yellow, green},
 		PanelBorder: muted, InputFocusedBorder: cyan, InputWaitingBorder: muted, InputMultilineBorder: yellow,
 		InputTerminal: secondary, InputTokenCommand: secondary, InputTokenFile: green,
-		SelectedProviderBG: primary, SelectedProviderFG: bg, UnselectedProvider: muted,
+		UnselectedProvider: muted,
 		WizardTitle: primary, WizardBorder: primary,
 		// 选区背景 = 正文背景与前景按 30% 混合：深色主题下同时满足
 		// “选区文字 ≥4.5:1”与“选区 vs 正文 ≥2:1”双对比度约束，且与
@@ -63,8 +63,6 @@ func init() {
 	p.MarkdownQuoteBorder = "#808080"
 	p.InputWaitingBorder = "#808080"
 	p.InputMultilineBorder = "#ffaf00"
-	p.SelectedProviderBG = "#5f5fd7"
-	p.SelectedProviderFG = "#ffffff"
 	p.UnselectedProvider = "#8a8a8a"
 	p.WizardTitle = "#ffffaf"
 	p.WizardBorder = "#5f5fd7"

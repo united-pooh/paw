@@ -16,7 +16,7 @@ type StyleSet struct {
 	InputHint, InputPrompt, InputTokenCommand, InputTokenFile, InputTokenImage                                                 lipgloss.Style
 	ContextCache, ContextUsed, ContextFree, ContextThinking                                                                    lipgloss.Style
 	TerminalInputLabel, TerminalInputText                                                                                      lipgloss.Style
-	Modal, ModalTitle, Selected, SelectionFocused, SelectionNormal, SelectionSelected, SelectionFocusedSelected, Unselected    lipgloss.Style
+	Modal, ModalTitle, SelectionFocused, SelectionNormal, SelectionSelected, SelectionFocusedSelected, Unselected              lipgloss.Style
 	StatusRunning, StatusSuccess, StatusWarning, StatusError, StatusMuted                                                      lipgloss.Style
 	Notice, NoticeHover                                                                                                        lipgloss.Style
 }
@@ -65,11 +65,10 @@ func NewStyleSet(p theme.Palette) StyleSet {
 		TerminalInputText:        lipgloss.NewStyle().Foreground(c.LipglossColor(colorInputTerminal)).Background(bg),
 		Modal:                    lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(c.LipglossColor(colorWizardBorder)).Background(surface).Padding(0, 1),
 		ModalTitle:               lipgloss.NewStyle().Foreground(c.LipglossColor(colorWizardTitle)).Background(surface).Bold(true),
-		Selected:                 lipgloss.NewStyle().Background(c.LipglossColor(colorSelectedProviderBg)).Foreground(c.LipglossColor(colorSelectedProviderFg)).Bold(true),
 		SelectionNormal:          lipgloss.NewStyle().Foreground(c.LipglossColor(colorBody)).Background(surface),
 		SelectionFocused:         lipgloss.NewStyle().Foreground(c.LipglossColor(colorSelectionForeground)).Bold(true),
-		SelectionSelected:        lipgloss.NewStyle().Background(c.LipglossColor(colorSelectionBackground)).Foreground(c.LipglossColor(colorSelectionForeground)).Bold(true),
-		SelectionFocusedSelected: lipgloss.NewStyle().Background(c.LipglossColor(colorSelectionBackground)).Foreground(c.LipglossColor(colorSelectionForeground)).Bold(true),
+		SelectionSelected:        lipgloss.NewStyle().Background(c.LipglossColor(colorBody)).Foreground(surface).Bold(true),
+		SelectionFocusedSelected: lipgloss.NewStyle().Background(c.LipglossColor(colorBody)).Foreground(surface).Bold(true),
 		Unselected:               lipgloss.NewStyle().Foreground(c.LipglossColor(colorUnselectedProvider)).Background(surface),
 		StatusRunning:            lipgloss.NewStyle().Foreground(c.LipglossColor(colorContextUsed)).Background(bg).Bold(true),
 		StatusSuccess:            lipgloss.NewStyle().Foreground(c.LipglossColor(colorWorktreeClean)).Background(bg),

@@ -179,9 +179,8 @@ func TestSelectionFocusedStyleChangesForegroundWithoutBackground(t *testing.T) {
 }
 
 // TestSelectionTokensStayVisibleInDarkAndLightThemes 防止选中态令牌退回
-// “只有前景色、无背景”的隐形状态：Selected（tab 反色块）与
-// SelectionSelected/SelectionFocusedSelected（行级高亮）必须同时带背景和
-// 前景，且前景不能取自 provider 选中前景（浅色主题下与背景同色）。
+// “只有前景色、无背景”的隐形状态：SelectionSelected/SelectionFocusedSelected
+// （行级高亮）必须同时带背景和前景。
 func TestSelectionTokensStayVisibleInDarkAndLightThemes(t *testing.T) {
 	for _, item := range theme.List() {
 		styles := NewStyleSet(item.Colors)
@@ -189,7 +188,6 @@ func TestSelectionTokensStayVisibleInDarkAndLightThemes(t *testing.T) {
 			name  string
 			style lipgloss.Style
 		}{
-			{"Selected", styles.Selected},
 			{"SelectionSelected", styles.SelectionSelected},
 			{"SelectionFocusedSelected", styles.SelectionFocusedSelected},
 		} {

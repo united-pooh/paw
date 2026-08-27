@@ -313,7 +313,7 @@ func (m appModel) renderSessionPickerContent() string {
 		item := picker.sessions[i]
 		label := formatSessionLabel(item)
 		if i == picker.selectedIndex {
-			lines = append(lines, selectedProviderStyle.Render("> "+label))
+			lines = append(lines, m.styles.SelectionSelected.Render("> "+label))
 		} else {
 			lines = append(lines, unselectedProviderStyle.Render("  "+label))
 		}

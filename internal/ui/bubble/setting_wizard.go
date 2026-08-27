@@ -194,7 +194,7 @@ func (m appModel) renderSettingChoiceStep() string {
 		option := options[i]
 		text := "  " + option.label + "  " + option.description
 		if i == selected {
-			text = selectedProviderStyle.Render("> " + option.label + "  " + option.description)
+			text = m.styles.SelectionSelected.Render("> " + option.label + "  " + option.description)
 		} else {
 			text = unselectedProviderStyle.Render(text)
 		}

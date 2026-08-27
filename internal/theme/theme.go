@@ -62,7 +62,7 @@ type Palette struct {
 	SyntaxBrackets                                           [4]string // 彩虹括号，按嵌套深度循环
 	PanelBorder, InputFocusedBorder, InputWaitingBorder, InputMultilineBorder                                   string
 	InputTerminal, InputTokenCommand, InputTokenFile                                                            string
-	SelectedProviderBG, SelectedProviderFG, UnselectedProvider                                                  string
+	UnselectedProvider                                                                                          string
 	WizardTitle, WizardBorder, SelectionBackground, SelectionForeground                                         string
 	ContextCache, ContextUsed, ContextFree, Signal                                                              string
 	WorktreeBackground, WorktreeBorder, WorktreeClean, WorktreeDirty, WorktreeConflict                          string
@@ -88,7 +88,7 @@ func (p Palette) Values() map[string]string {
 		"syntax.bracket.1": p.SyntaxBrackets[0], "syntax.bracket.2": p.SyntaxBrackets[1], "syntax.bracket.3": p.SyntaxBrackets[2], "syntax.bracket.4": p.SyntaxBrackets[3],
 		"panel.border": p.PanelBorder, "input.focused.border": p.InputFocusedBorder, "input.waiting.border": p.InputWaitingBorder, "input.multiline.border": p.InputMultilineBorder,
 		"input.terminal": p.InputTerminal, "input.token.command": p.InputTokenCommand, "input.token.file": p.InputTokenFile,
-		"provider.selected.background": p.SelectedProviderBG, "provider.selected.foreground": p.SelectedProviderFG, "provider.unselected": p.UnselectedProvider,
+		"provider.unselected": p.UnselectedProvider,
 		"wizard.title": p.WizardTitle, "wizard.border": p.WizardBorder, "selection.background": p.SelectionBackground, "selection.foreground": p.SelectionForeground,
 		"context.cache": p.ContextCache, "context.used": p.ContextUsed, "context.free": p.ContextFree, "signal": p.Signal,
 		"worktree.background": p.WorktreeBackground, "worktree.border": p.WorktreeBorder, "worktree.clean": p.WorktreeClean, "worktree.dirty": p.WorktreeDirty, "worktree.conflict": p.WorktreeConflict,

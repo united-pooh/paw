@@ -321,7 +321,7 @@ func (m appModel) renderModelStep() string {
 			index := indices[position]
 			name := m.modelWizard.modelOptions[index]
 			if index == m.modelWizard.selectedModel {
-				lines = append(lines, selectedProviderStyle.Render("> "+name))
+				lines = append(lines, m.styles.SelectionSelected.Render("> "+name))
 			} else {
 				lines = append(lines, unselectedProviderStyle.Render("  "+name))
 			}
@@ -344,7 +344,7 @@ func (m appModel) renderProviderStep() string {
 		option := m.modelWizard.providerOptions[i]
 		text := "  " + option.label + "  " + option.description
 		if i == m.modelWizard.selectedIndex {
-			text = selectedProviderStyle.Render("> " + option.label + "  " + option.description)
+			text = m.styles.SelectionSelected.Render("> " + option.label + "  " + option.description)
 		} else {
 			text = unselectedProviderStyle.Render(text)
 		}
