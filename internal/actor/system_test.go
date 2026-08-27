@@ -3,6 +3,7 @@ package actor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -199,6 +200,49 @@ func TestPassivationEvictsAndSnapshots(t *testing.T) {
 	}
 	if err := json.Unmarshal(snap.State, &state); err != nil || len(state.Processed) != 4 {
 		t.Fatalf("snapshot state = %s", snap.State)
+	}
+}
+
+// 零事件 cell（只收过 Ephemeral 消息或从未收消息）不得尝试写快照：
+// es 层拒绝 seq=0，快照是缓存，空流没有可缓存状态。
+func TestSnapshotSkippedForZeroEventCell(t *testing.T) {
+	dir := t.TempDir()
+	vc := NewVirtualClock()
+	var logs []string
+	sys := NewSystem(dir, WithShards(1), WithClock(vc), WithPassivation(time.Minute),
+		WithLogger(func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }))
+	sys.Register("counter", func(id ActorID) Actor { return newCounter(id.Key) })
+	defer sys.Stop()
+
+	id := ActorID{Type: "counter", Key: "idle"}
+	if err := sys.Tell(context.Background(), id, Msg{MsgID: "e1", Kind: "noop", Durability: Ephemeral}); err != nil {
+		t.Fatal(err)
+	}
+	sys.Drain()
+	vc.Advance(2 * time.Minute) // 触发钝化快照
+	sys.Drain()
+
+	for _, line := range logs {
+		if strings.Contains(line, "snapshot") {
+			t.Fatalf("zero-event cell should not attempt snapshot, got log: %s", line)
+		}
+	}
+	if _, ok, err := sys.journal.readSnapshot(context.Background(), id); err != nil || ok {
+		t.Fatalf("zero-event cell must have no snapshot: ok=%v err=%v", ok, err)
+	}
+
+	// Stop 对零事件 cell 同样不写快照（原崩溃路径：Stop 遍历活跃 cell）。
+	idle := ActorID{Type: "counter", Key: "never-messaged"}
+	if err := sys.Tell(context.Background(), idle, Msg{MsgID: "e2", Kind: "noop", Durability: Ephemeral}); err != nil {
+		t.Fatal(err)
+	}
+	sys.Drain()
+	logs = nil
+	sys.Stop()
+	for _, line := range logs {
+		if strings.Contains(line, "snapshot") {
+			t.Fatalf("Stop must not snapshot zero-event cells, got log: %s", line)
+		}
 	}
 }
 

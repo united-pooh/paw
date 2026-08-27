@@ -247,13 +247,27 @@ func startTokenTracer(ctx context.Context, sessionID string, opts options) (*tok
 	if cwd, err := os.Getwd(); err == nil {
 		tracer.SetWorkspace(cwd)
 	}
+	port := opts.tokenTracerPort
 	server := tokentracer.NewServer(tracer, tokentracer.ServerConfig{
 		Host:        "127.0.0.1",
-		Port:        opts.tokenTracerPort,
+		Port:        port,
 		OpenBrowser: opts.tokenTracerOpen,
 	})
 	if err := server.Start(ctx); err != nil {
-		return nil, nil, err
+		if port == 0 {
+			return nil, nil, err
+		}
+		// 请求的端口被占（常见：另一个 Paw 会话已在跑）时回退到随机空闲
+		// 端口继续，而不是杀死整个会话；显式端口仍大声失败。
+		fmt.Fprintf(os.Stderr, "paw: token tracer port %d unavailable (%v); falling back to a free port\n", port, err)
+		server = tokentracer.NewServer(tracer, tokentracer.ServerConfig{
+			Host:        "127.0.0.1",
+			Port:        0,
+			OpenBrowser: opts.tokenTracerOpen,
+		})
+		if err := server.Start(ctx); err != nil {
+			return nil, nil, err
+		}
 	}
 	return tracer, server, nil
 }

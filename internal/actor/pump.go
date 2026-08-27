@@ -89,6 +89,11 @@ func (c *cell) snapshot(ctx context.Context) {
 	if !ok || actor == nil {
 		return
 	}
+	if lastSeq < 1 {
+		// 零事件流（从未处理过 Durable 消息）没有可缓存的恢复点；
+		// es 层拒绝 seq=0，跳过以免 Stop/钝化刷错误日志。
+		return
+	}
 	state, err := esr.Snapshot()
 	if err != nil {
 		c.system.logger("actor: snapshot %s state: %v", c.id, err)
