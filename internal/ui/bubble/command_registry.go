@@ -265,6 +265,18 @@ func NewCommandRegistry() *CommandRegistry {
 		Handler:           newSessionHandler,
 	})
 	registry.Register(Command{
+		Name:              "/fork",
+		Description:       "fork the current session into a new branch sharing its context",
+		AllowWhileRunning: false,
+		Handler: func(m *appModel, _ string) tea.Cmd {
+			m.sessionPicker = nil
+			m.pending = nil
+			m.chatQueue.Clear()
+			m.clearNewMessageNotice()
+			return startForkSessionCmd(m.ctx, m.runner, m.sessionStore, m.sessionID)
+		},
+	})
+	registry.Register(Command{
 		Name:              "/resume",
 		Description:       "browse and restore previous sessions",
 		AllowWhileRunning: false,

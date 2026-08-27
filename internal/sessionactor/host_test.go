@@ -242,6 +242,60 @@ func TestHostNewSessionCreatesEmptyIsolatedConversation(t *testing.T) {
 	}
 }
 
+// ForkSession 以当前会话的完整上下文创建分支：fork 立即可见父会话历史，
+// 之后分支上的新 turn 只写子会话，父会话历史保持不变。
+func TestHostForkSessionSharesContextAndDiverges(t *testing.T) {
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	modelClient := &capturingRichModel{}
+	host, err := NewHost(loop.NewEngine(modelClient, &recordingUI{}, tool.NewRegistry(), store, "s1"), store, "s1")
+	if err != nil {
+		t.Fatalf("NewHost: %v", err)
+	}
+	defer host.Close()
+
+	if _, err := host.RunTurn(context.Background(), "seed prompt"); err != nil {
+		t.Fatalf("seed RunTurn: %v", err)
+	}
+	forkID, loaded, err := host.ForkSession(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("ForkSession: %v", err)
+	}
+	if forkID == "" || forkID == "s1" || host.CurrentSessionID() != forkID {
+		t.Fatalf("fork/current session = %q/%q", forkID, host.CurrentSessionID())
+	}
+	if len(loaded.Messages) != 2 || loaded.Messages[0].Content != "seed prompt" {
+		t.Fatalf("forked load result = %#v, want parent context", loaded)
+	}
+	meta, err := store.GetMeta(context.Background(), forkID)
+	if err != nil {
+		t.Fatalf("fork meta: %v", err)
+	}
+	if meta.ParentSessionID != "s1" {
+		t.Fatalf("fork parent = %q, want s1", meta.ParentSessionID)
+	}
+
+	if _, err := host.RunTurn(context.Background(), "branch prompt"); err != nil {
+		t.Fatalf("branch RunTurn: %v", err)
+	}
+	parentHistory, err := store.LoadResolvedHistory(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("parent history: %v", err)
+	}
+	branchHistory, err := store.LoadResolvedHistory(context.Background(), forkID)
+	if err != nil {
+		t.Fatalf("branch history: %v", err)
+	}
+	if len(parentHistory) != 2 {
+		t.Fatalf("parent history changed after fork: %#v", parentHistory)
+	}
+	if len(branchHistory) != 4 || branchHistory[0].Content != "seed prompt" || branchHistory[2].Content != "branch prompt" {
+		t.Fatalf("branch history = %#v, want parent prefix + new turn", branchHistory)
+	}
+}
+
 func TestHostPreservesRichImageDataThroughSessionActor(t *testing.T) {
 	store, err := session.NewJSONLStore(t.TempDir())
 	if err != nil {

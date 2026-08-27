@@ -83,75 +83,108 @@ func startNewSessionCmd(ctx context.Context, runner Runner) tea.Cmd {
 // loadSessionHistoryCmd 异步加载指定会话的历史。
 func loadSessionHistoryCmd(ctx context.Context, runner Runner, store SessionStore, sessionID string) tea.Cmd {
 	return func() tea.Msg {
-		if runner == nil {
-			return sessionRestoredMsg{err: fmt.Errorf("runner 未初始化")}
+		return buildSessionRestoredMsg(ctx, runner, store, sessionID)
+	}
+}
+
+// sessionForker 由 sessionactor.Host 实现：从既有会话分叉新会话并激活。
+type sessionForker interface {
+	ForkSession(ctx context.Context, sourceID string) (string, loop.SessionLoadResult, error)
+}
+
+// startForkSessionCmd 从当前会话分叉出新分支会话：新会话通过血缘共享当前
+// 上下文（分叉点之后各自独立演化），原会话保持不变。分叉成功后按 resume
+// 路径重建新会话的展示条目。
+func startForkSessionCmd(ctx context.Context, runner Runner, store SessionStore, sourceID string) tea.Cmd {
+	return func() tea.Msg {
+		forker, ok := runner.(sessionForker)
+		if !ok {
+			return sessionRestoredMsg{source: sessionRestoreFork, err: fmt.Errorf("runner does not support session fork")}
 		}
-		var messages []message.Message
-		var recovery *session.RecoveryState
-		var modes *loop.SessionModeSnapshot
-		if loader, ok := runner.(sessionStateLoader); ok {
-			result, err := loader.LoadSession(ctx, sessionID)
-			if err != nil {
-				return sessionRestoredMsg{err: err}
-			}
-			messages = result.Messages
-			recovery = result.Recovery
-			modes = result.Modes
-		} else {
-			var err error
-			messages, err = runner.LoadHistory(ctx, sessionID)
-			if err != nil {
-				return sessionRestoredMsg{err: err}
-			}
+		if strings.TrimSpace(sourceID) == "" {
+			return sessionRestoredMsg{source: sessionRestoreFork, err: fmt.Errorf("当前没有可分叉的会话")}
 		}
-		if toucher, ok := store.(interface {
-			TouchSession(context.Context, string) error
-		}); ok {
-			if err := toucher.TouchSession(ctx, sessionID); err != nil {
-				return sessionRestoredMsg{err: err}
-			}
+		sessionID, _, err := forker.ForkSession(ctx, sourceID)
+		if err != nil {
+			return sessionRestoredMsg{source: sessionRestoreFork, err: err}
 		}
-		var currentTodo todo.Snapshot
-		hasCurrentTodo := false
-		todoWasCleared := false
-		if todoLoader, ok := store.(TodoSnapshotLoader); ok {
-			var todoErr error
-			currentTodo, hasCurrentTodo, todoErr = todoLoader.LoadLatestTodoSnapshot(ctx, sessionID)
-			if todoErr != nil {
-				return sessionRestoredMsg{err: todoErr}
-			}
-			todoWasCleared = hasCurrentTodo && currentTodo.Cleared()
+		msg := buildSessionRestoredMsg(ctx, runner, store, sessionID)
+		msg.source = sessionRestoreFork
+		msg.forkedFrom = sourceID
+		return msg
+	}
+}
+
+// buildSessionRestoredMsg 加载并激活指定会话，构造 transcript 恢复消息。
+func buildSessionRestoredMsg(ctx context.Context, runner Runner, store SessionStore, sessionID string) sessionRestoredMsg {
+	if runner == nil {
+		return sessionRestoredMsg{err: fmt.Errorf("runner 未初始化")}
+	}
+	var messages []message.Message
+	var recovery *session.RecoveryState
+	var modes *loop.SessionModeSnapshot
+	if loader, ok := runner.(sessionStateLoader); ok {
+		result, err := loader.LoadSession(ctx, sessionID)
+		if err != nil {
+			return sessionRestoredMsg{err: err}
 		}
-		metadata := loadRestoreTurnMetadata(ctx, store, sessionID)
-		entries := make([]transcriptEntry, 0, len(messages))
-		if recordLoader, ok := store.(ResolvedRecordLoader); ok {
-			if records, recordsErr := recordLoader.LoadResolvedRecords(ctx, sessionID); recordsErr == nil {
-				entries = transcriptEntriesFromRecords(records, metadata, workspaceRootOf(runner))
-			}
+		messages = result.Messages
+		recovery = result.Recovery
+		modes = result.Modes
+	} else {
+		var err error
+		messages, err = runner.LoadHistory(ctx, sessionID)
+		if err != nil {
+			return sessionRestoredMsg{err: err}
 		}
-		if len(entries) == 0 && len(messages) > 0 {
-			createdAt := time.Now()
-			for _, msg := range messages {
-				entries = append(entries, transcriptEntriesFromMessage(msg, createdAt, workspaceRootOf(runner))...)
-			}
-			attachRestoreMetadataByAssistantOrder(entries, metadata)
+	}
+	if toucher, ok := store.(interface {
+		TouchSession(context.Context, string) error
+	}); ok {
+		if err := toucher.TouchSession(ctx, sessionID); err != nil {
+			return sessionRestoredMsg{err: err}
 		}
-		if recovery != nil {
-			entries = append(entries, transcriptEntry{
-				kind:      entryError,
-				title:     "recovery",
-				body:      recoveryDisplayText(recovery),
-				createdAt: time.Now(),
-			})
+	}
+	var currentTodo todo.Snapshot
+	hasCurrentTodo := false
+	todoWasCleared := false
+	if todoLoader, ok := store.(TodoSnapshotLoader); ok {
+		var todoErr error
+		currentTodo, hasCurrentTodo, todoErr = todoLoader.LoadLatestTodoSnapshot(ctx, sessionID)
+		if todoErr != nil {
+			return sessionRestoredMsg{err: todoErr}
 		}
-		return sessionRestoredMsg{
-			sessionID:      sessionID,
-			entries:        entries,
-			currentTodo:    currentTodo,
-			hasCurrentTodo: hasCurrentTodo && !todoWasCleared,
-			todoWasCleared: todoWasCleared,
-			modes:          modes,
+		todoWasCleared = hasCurrentTodo && currentTodo.Cleared()
+	}
+	metadata := loadRestoreTurnMetadata(ctx, store, sessionID)
+	entries := make([]transcriptEntry, 0, len(messages))
+	if recordLoader, ok := store.(ResolvedRecordLoader); ok {
+		if records, recordsErr := recordLoader.LoadResolvedRecords(ctx, sessionID); recordsErr == nil {
+			entries = transcriptEntriesFromRecords(records, metadata, workspaceRootOf(runner))
 		}
+	}
+	if len(entries) == 0 && len(messages) > 0 {
+		createdAt := time.Now()
+		for _, msg := range messages {
+			entries = append(entries, transcriptEntriesFromMessage(msg, createdAt, workspaceRootOf(runner))...)
+		}
+		attachRestoreMetadataByAssistantOrder(entries, metadata)
+	}
+	if recovery != nil {
+		entries = append(entries, transcriptEntry{
+			kind:      entryError,
+			title:     "recovery",
+			body:      recoveryDisplayText(recovery),
+			createdAt: time.Now(),
+		})
+	}
+	return sessionRestoredMsg{
+		sessionID:      sessionID,
+		entries:        entries,
+		currentTodo:    currentTodo,
+		hasCurrentTodo: hasCurrentTodo && !todoWasCleared,
+		todoWasCleared: todoWasCleared,
+		modes:          modes,
 	}
 }
 

@@ -1188,6 +1188,8 @@ func (s *JSONLStore) AppendTurnMetadata(ctx context.Context, sessionID string, m
 // LoadTurnMetadata loads valid sidecar records in append order. Missing or
 // malformed lines are ignored so a damaged display sidecar cannot hide a
 // usable message transcript.
+// fork 会话自身没有分叉前 turn 的侧车记录：拼接父会话的元数据（分叉点即
+// 父会话末尾，取全量），保证 resume/展示时父前缀的耗时与本地时间照常显示。
 func (s *JSONLStore) LoadTurnMetadata(ctx context.Context, sessionID string) ([]TurnMetadata, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -1195,6 +1197,23 @@ func (s *JSONLStore) LoadTurnMetadata(ctx context.Context, sessionID string) ([]
 	if strings.TrimSpace(sessionID) == "" {
 		return nil, fmt.Errorf("sessionID 不能为空")
 	}
+	metadata, err := s.loadOwnTurnMetadata(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	meta, err := s.GetMeta(ctx, sessionID)
+	if err != nil || meta.ParentSessionID == "" {
+		return metadata, nil
+	}
+	parent, err := s.LoadTurnMetadata(ctx, meta.ParentSessionID)
+	if err != nil || len(parent) == 0 {
+		return metadata, nil
+	}
+	return append(parent, metadata...), nil
+}
+
+// loadOwnTurnMetadata 只读取会话自身 turns.jsonl 侧车（不沿 fork 血缘上溯）。
+func (s *JSONLStore) loadOwnTurnMetadata(ctx context.Context, sessionID string) ([]TurnMetadata, error) {
 	f, err := os.Open(s.readTurnMetadataPath(sessionID))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -1395,15 +1414,12 @@ func (s *JSONLStore) ListSessions(ctx context.Context) ([]SessionSummary, error)
 			}
 			records, err := s.readOwnRecords(ctx, sessionID)
 			if err == nil {
-				for _, rec := range records {
-					if rec.Message.Role == "user" && rec.Message.Content != "" {
-						msg := rec.Message.Content
-						if len(msg) > 80 {
-							msg = msg[:80]
-						}
-						summary.FirstMessage = msg
-						break
-					}
+				summary.FirstMessage = firstUserMessagePreview(records)
+			}
+			// fork 子会话自身尚无记录：摘要回退到含父前缀的可见记录。
+			if summary.FirstMessage == "" && meta.ParentSessionID != "" {
+				if resolved, resolveErr := s.LoadResolvedRecords(ctx, sessionID); resolveErr == nil {
+					summary.FirstMessage = firstUserMessagePreview(resolved)
 				}
 			}
 
@@ -1420,6 +1436,20 @@ func (s *JSONLStore) ListSessions(ctx context.Context) ([]SessionSummary, error)
 	})
 
 	return summaries, nil
+}
+
+// firstUserMessagePreview 返回记录集中第一条用户消息的前 80 字节摘要。
+func firstUserMessagePreview(records []Record) string {
+	for _, rec := range records {
+		if rec.Message.Role == "user" && rec.Message.Content != "" {
+			msg := rec.Message.Content
+			if len(msg) > 80 {
+				msg = msg[:80]
+			}
+			return msg
+		}
+	}
+	return ""
 }
 
 // sessionRoots 返回会话枚举根目录列表（全局优先，legacy 其次）。

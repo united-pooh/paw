@@ -301,6 +301,38 @@ func (h *Host) NewSession(ctx context.Context) (string, loop.SessionLoadResult, 
 	return sessionID, result, nil
 }
 
+// ForkSession 以 sourceID 会话的完整上下文创建分支会话并激活。子会话通过
+// 血缘 meta（parent_session_id + fork_from_seq）共享父会话历史前缀，自身只
+// 追加增量记录；两个会话后续各自演化、互不影响。
+func (h *Host) ForkSession(ctx context.Context, sourceID string) (string, loop.SessionLoadResult, error) {
+	if h == nil || h.store == nil {
+		return "", loop.SessionLoadResult{}, fmt.Errorf("session actor host is unavailable")
+	}
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID == "" {
+		return "", loop.SessionLoadResult{}, fmt.Errorf("source session id is empty")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	sessionID, err := session.GenerateSessionID()
+	if err != nil {
+		return "", loop.SessionLoadResult{}, fmt.Errorf("generate session id: %w", err)
+	}
+	if _, err := h.store.Fork(ctx, session.ForkRequest{
+		SessionID:       sessionID,
+		ParentSessionID: sourceID,
+		ForkFromSeq:     -1, // -1 = 分叉点取父会话当前全部可见记录
+	}); err != nil {
+		return "", loop.SessionLoadResult{}, fmt.Errorf("fork session: %w", err)
+	}
+	result, err := h.LoadSession(ctx, sessionID)
+	if err != nil {
+		return "", result, fmt.Errorf("activate forked session: %w", err)
+	}
+	return sessionID, result, nil
+}
+
 func (h *Host) LoadSession(ctx context.Context, sessionID string) (loop.SessionLoadResult, error) {
 	h.mu.Lock()
 	previous := h.sessionID

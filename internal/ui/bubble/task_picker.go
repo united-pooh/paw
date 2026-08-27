@@ -689,9 +689,13 @@ func (m *appModel) applySessionPickerRestore(msg sessionRestoredMsg) {
 	m.resetHistoryNavigation()
 	title := "sessions"
 	body := fmt.Sprintf("已切换到会话: %s", msg.sessionID)
-	if msg.source == sessionRestoreNew {
+	switch msg.source {
+	case sessionRestoreNew:
 		title = "session"
 		body = fmt.Sprintf("已创建新会话: %s", msg.sessionID)
+	case sessionRestoreFork:
+		title = "fork"
+		body = fmt.Sprintf("已从 %s 分叉新会话: %s（共享此前上下文，之后互不影响）", msg.forkedFrom, msg.sessionID)
 	}
 	m.addEntry(transcriptEntry{kind: entrySystem, title: title, body: body})
 	if guidance := restoredModeGuidance(msg.modes); guidance != "" {

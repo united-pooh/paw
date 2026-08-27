@@ -423,6 +423,7 @@ type sessionRestoredMsg struct {
 	sessionID      string
 	entries        []transcriptEntry
 	source         sessionRestoreSource
+	forkedFrom     string // source == sessionRestoreFork 时的父会话 ID
 	taskPreview    *taskTranscriptPreview
 	currentTodo    todo.Snapshot
 	hasCurrentTodo bool
@@ -437,6 +438,7 @@ const (
 	sessionRestorePicker sessionRestoreSource = iota
 	sessionRestoreTaskEnter
 	sessionRestoreNew
+	sessionRestoreFork
 )
 
 // fileCompletionLoadedMsg 携带异步加载完成的文件补全列表。

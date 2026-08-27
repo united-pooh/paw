@@ -219,6 +219,77 @@ func TestForkDefaultRetainsPartialDisplayRecordsButExcludesActiveHistory(t *test
 	}
 }
 
+// fork 子会话没有自身的 turns 侧车：LoadTurnMetadata 拼接父会话元数据，
+// 保证分叉前的耗时/响应时间照常展示；分叉后的新 turn 追加在父前缀之后，
+// 父会话侧车不受子会话写入影响。
+func TestLoadTurnMetadataMergesParentOnFork(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	if err := store.Append(ctx, "parent", message.Message{Role: message.RoleUser, Content: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	parentTurn := TurnMetadata{TurnID: "turn-parent", DurationMS: 1200, Status: TurnStatusCompleted}
+	if err := store.AppendTurnMetadata(ctx, "parent", parentTurn); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Fork(ctx, ForkRequest{SessionID: "child", ParentSessionID: "parent", ForkFromSeq: -1}); err != nil {
+		t.Fatal(err)
+	}
+
+	merged, err := store.LoadTurnMetadata(ctx, "child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged) != 1 || merged[0].TurnID != "turn-parent" {
+		t.Fatalf("merged metadata=%#v, want parent turn visible", merged)
+	}
+
+	childTurn := TurnMetadata{TurnID: "turn-child", DurationMS: 300, Status: TurnStatusCompleted}
+	if err := store.AppendTurnMetadata(ctx, "child", childTurn); err != nil {
+		t.Fatal(err)
+	}
+	merged, err = store.LoadTurnMetadata(ctx, "child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged) != 2 || merged[0].TurnID != "turn-parent" || merged[1].TurnID != "turn-child" {
+		t.Fatalf("merged metadata after child turn=%#v", merged)
+	}
+	parentOnly, err := store.LoadTurnMetadata(ctx, "parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parentOnly) != 1 {
+		t.Fatalf("parent metadata=%#v, want unchanged", parentOnly)
+	}
+}
+
+// fork 子会话自身没有消息记录时，ListSessions 摘要回退到父前缀的首条用户消息。
+func TestListSessionsForkFirstMessageFallsBackToParent(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	if err := store.Append(ctx, "parent", message.Message{Role: message.RoleUser, Content: "fork seed question"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Fork(ctx, ForkRequest{SessionID: "child", ParentSessionID: "parent", ForkFromSeq: -1}); err != nil {
+		t.Fatal(err)
+	}
+	summaries, err := store.ListSessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]string{}
+	for _, s := range summaries {
+		seen[s.SessionID] = s.FirstMessage
+	}
+	if seen["child"] != "fork seed question" {
+		t.Fatalf("child summary=%q, want parent first message fallback (all=%#v)", seen["child"], summaries)
+	}
+	if seen["parent"] != "fork seed question" {
+		t.Fatalf("parent summary=%q", seen["parent"])
+	}
+}
+
 func TestTurnJournalPersistsFailedTurnAndBuildsSnapshot(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

@@ -48,6 +48,8 @@ type fakeRunner struct {
 	compactErr       error
 	newSessionCalls  int
 	newSessionErr    error
+	forkSessionCalls []string
+	forkSessionErr   error
 }
 
 type ctrlCRunner struct {
@@ -96,6 +98,14 @@ func (r *fakeRunner) NewSession(context.Context) (string, loop.SessionLoadResult
 		return "", loop.SessionLoadResult{}, r.newSessionErr
 	}
 	return fmt.Sprintf("new-session-%d", r.newSessionCalls), loop.SessionLoadResult{}, nil
+}
+
+func (r *fakeRunner) ForkSession(_ context.Context, sourceID string) (string, loop.SessionLoadResult, error) {
+	r.forkSessionCalls = append(r.forkSessionCalls, sourceID)
+	if r.forkSessionErr != nil {
+		return "", loop.SessionLoadResult{}, r.forkSessionErr
+	}
+	return "forked-session-1", loop.SessionLoadResult{}, nil
 }
 
 func (r *fakeRunner) SubmitSupplement(input string) bool {
@@ -438,6 +448,58 @@ func TestClearAndNewShareFreshSessionBehavior(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// /fork 从当前会话分叉新分支：runner 收到当前 sessionID，UI 切换到新会话
+// 并提示分叉来源；新分支保留既有上下文（entries 由恢复路径重建）。
+func TestForkCommandBranchesCurrentSession(t *testing.T) {
+	runner := &fakeRunner{}
+	model := newTestModel(runner)
+	model.transcript = []transcriptEntry{{kind: entryUser, body: "seed context"}}
+
+	handled, cmd := model.handleCommand("/fork")
+	if !handled || cmd == nil {
+		t.Fatalf("/fork handled/cmd = %v/%v", handled, cmd)
+	}
+	msg, ok := cmd().(sessionRestoredMsg)
+	if !ok || msg.err != nil {
+		t.Fatalf("/fork result = %#v", msg)
+	}
+	if msg.source != sessionRestoreFork || msg.forkedFrom != "session-1" || msg.sessionID != "forked-session-1" {
+		t.Fatalf("/fork msg = %#v", msg)
+	}
+	if len(runner.forkSessionCalls) != 1 || runner.forkSessionCalls[0] != "session-1" {
+		t.Fatalf("fork calls = %#v", runner.forkSessionCalls)
+	}
+	next, _ := model.Update(msg)
+	model = next.(appModel)
+	if model.sessionID != "forked-session-1" {
+		t.Fatalf("session after fork = %q", model.sessionID)
+	}
+	last := model.transcript[len(model.transcript)-1]
+	if !strings.Contains(last.body, "已从 session-1 分叉") {
+		t.Fatalf("fork notice entry = %#v", last)
+	}
+}
+
+// /fork 失败时保持当前会话不变并以错误条目提示。
+func TestForkCommandReportsRunnerError(t *testing.T) {
+	runner := &fakeRunner{forkSessionErr: errors.New("boom")}
+	model := newTestModel(runner)
+
+	handled, cmd := model.handleCommand("/fork")
+	if !handled || cmd == nil {
+		t.Fatalf("/fork handled/cmd = %v/%v", handled, cmd)
+	}
+	msg, ok := cmd().(sessionRestoredMsg)
+	if !ok || msg.err == nil {
+		t.Fatalf("/fork error result = %#v", msg)
+	}
+	next, _ := model.Update(msg)
+	model = next.(appModel)
+	if model.sessionID != "session-1" {
+		t.Fatalf("session changed on fork error: %q", model.sessionID)
 	}
 }
 
