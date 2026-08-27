@@ -69,3 +69,53 @@
 - [x] 添加或定位可复现侧边块未消失的失败测试 <!-- todo:reproduce-task-sidebar -->
 - [x] 实施最小修复，确保 task 结束后侧边块消失 <!-- todo:fix-task-sidebar -->
 - [x] taskController 悬浮卡改用本地进程存活视图；task/UI 定向测试、race、`go vet ./...` 与 diff 检查通过；`go test ./...` 仅剩未触及的 reasoning UI 用例失败 <!-- todo:verify-task-sidebar -->
+- [x] First impression & paper-type positioning <!-- todo:1 -->
+- [x] Fatal-flaws audit (early gate) <!-- todo:2 -->
+- [x] Lifecycle & capability matching <!-- todo:3 -->
+- [x] Five-dimension scoring <!-- todo:4 -->
+- [x] Paradigm-shift probe <!-- todo:5 -->
+- [x] Feasibility check <!-- todo:6 -->
+- [x] Run integrity gate silently & confirm verdict consistency <!-- todo:7 -->
+- [x] 定位状态栏/顶栏 chip 的组装与样式边界（谁在给空格上背景） <!-- todo:inv-1 -->
+- [x] 写临时试验：ASCII/中文/宽字符分支名的 chip 与 markdown 输出原始 ANSI 取证（chip 部分已完成） <!-- todo:inv-2 -->
+- [x] 分析证据，给出结论与修复建议 <!-- todo:inv-3 -->
+- [x] 定位 FinishReason 生产消费点与 tool call 执行入口 <!-- todo:t1 -->
+- [x] 增量1：JSON 修复层（repairJson + 挂入 decodeToolArguments）+ 测试 <!-- todo:t2 -->
+- [x] 增量2：Schema 类型强转（coerce + 挂入 restoreToolArguments）+ 测试 <!-- todo:t3 -->
+- [x] 增量3：截断守卫（Anthropic message_delta stop_reason=max_tokens 映射 FinishReasonLength）+ 测试 <!-- todo:t4 -->
+
+## 工具参数错误自愈三防线（借鉴 pi-mono，2026-08）
+
+- [x] 调研 Paw 现状与 pi-mono 处理策略（InputError 透传 / IsError 回喂已同构） <!-- todo:investigate -->
+- [x] 增量1 JSON 修复层：decodeToolArguments 修复字符串内裸控制符/非法转义/尾反斜杠+闭引号；结构性损坏仍拒绝（internal/model/tool_arguments.go） <!-- todo:implement -->
+- [x] 增量2 Schema 类型强转：coerceValueToSchema（数字串→number、bool 串→boolean、number→string，anyOf 分支选择），挂入 restoreToolArguments 校验前执行（internal/model/schema_coerce.go） <!-- todo:implement -->
+- [x] 增量3 截断守卫：Anthropic message_delta stop_reason 映射 FinishReason（max_tokens→length/tool_use→tool_calls/end_turn→stop），复用 runner 既有「length 截断含工具调用即拒执行」守卫（internal/model/anthropic_stream.go） <!-- todo:implement -->
+- [x] go test ./internal/model ./internal/loop 全绿；ui/bubble 失败经 HEAD worktree 验证为既有问题与本改动无关 <!-- todo:verify -->
+
+教训：Anthropic 流此前丢弃 stop_reason，截断消息里的 tool call 会带合法参数直接执行——修复层可能把截断参数补成「合法但残缺」，宁可拒执行回喂错误让模型重发。
+- [x] go test ./... 全量验证 <!-- todo:t5 -->
+- [x] 确认 GLM-5.3-Flash 的官方型号与发布信息 <!-- todo:i1 -->
+- [x] 核对官方 API/模型卡声明的输入输出模态 <!-- todo:i2 -->
+- [x] 区分基础模型能力与平台侧图片/视频工具能力 <!-- todo:i3 -->
+- [x] 整理适用于 Paw 的结论与限制 <!-- todo:i4 -->
+- [x] 定位 snapshot seq=0 根因（Ephemeral-only actor 从未产生流事件，快照仍尝试写） <!-- todo:root_cause_snapshot -->
+- [x] 定位 8999 端口占用根因（旧 agent 进程持端口，tracer 绑定失败即致命） <!-- todo:root_cause_port -->
+- [x] 修复：零事件 cell 跳过快照写（internal/actor/pump.go snapshot） <!-- todo:fix_snapshot_skip -->
+- [x] 修复：tracer 端口被占时回退空闲端口并大声提示（cmd/agent/interactive.go） <!-- todo:fix_port_fallback -->
+- [x] 回归测试：两处各加一个用例；go test 全部相关包通过 <!-- todo:fix_and_test -->
+
+## tool_use JSON 泄漏到 transcript 修复（fence 包裹 + 非法转义，2026-08）
+
+- [x] 根因：模型在 tool_use 信封外包 ``` fence，且 pattern 含非法 JSON 转义（如 `\.`），json.Valid 失败 → loop 信封解析与 bubble UI 清洗双双放弃，原始 JSON 明文上屏 <!-- todo:leak-root-cause -->
+- [x] 修复：model.RepairJSONStringLiterals 导出；loop decodeToolUseEnvelope(s) 解析失败先修字面量重试（internal/loop/tool_parser.go）<!-- todo:leak-loop-fix -->
+- [x] 修复：bubble isToolUseJSONPayload 同样接入宽松修复，保证泄漏内容仍被识别并从视图剥离（internal/ui/bubble/utils.go）<!-- todo:leak-bubble-fix -->
+- [x] 测试：tool_parser_test.go 2 例 + utils_leak_test.go 2 例全绿；loop/model 包 -count=1 通过；go vet 干净；bubble 全量 FAIL 为既有问题（HEAD worktree 基线同样失败，与本改动无关）<!-- todo:leak-verify -->
+- [x] 读全部 selectedProviderStyle 调用点上下文（completion/right_panel/activity 等）确认 receiver 可用性 <!-- todo:u1 -->
+- [x] 改 7 处调用点到 SelectionSelected + translate 换 MarkdownHighlight <!-- todo:u2 -->
+- [x] 删除 Selected（style_set）+ selectedProviderStyle（styles.go）+ color 角色（color_manager/theme）+ 测试表条目 <!-- todo:u3 -->
+- [x] go build ./... + 定向测试 + go test ./... 全量并对比既有失败基线（IDENTICAL_TO_BASELINE 已证实） <!-- todo:u4 -->
+- [x] 调查 selection dock 单选/多选状态迁移、样式和现有测试 <!-- todo:q1 -->
+- [x] 补失败测试：反色选中、单选导航即选中、多选焦点与选中保持独立 <!-- todo:q2 -->
+- [x] 实现 SelectionSelected 反色和单选焦点即选中 <!-- todo:q3 -->
+- [x] selection/question 定向测试、P5 golden、go vet、go build 通过；bubble 全量失败集合与 HEAD 基线一致；全量额外 exec 限流用例单次波动，独立重复 5 次通过 <!-- todo:q4 -->
+- [x] 运行定向测试、go test ./... 并核对既有基线失败 <!-- todo:q4 -->
