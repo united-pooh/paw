@@ -109,7 +109,7 @@ func registerInteractiveTools(registry *tool.Registry, broker *selecttool.Broker
 	return nil
 }
 
-func registerTools(registry *tool.Registry, root string, readRoots []string, taskManager *task.Manager, sessionID string, broker coremcp.Broker, allowOutsideRead bool) error {
+func registerTools(registry *tool.Registry, root string, readRoots []string, taskManager *task.Manager, sessionID string, broker coremcp.Broker, allowOutsideRead bool, workerMode bool) error {
 	if registry == nil {
 		return fmt.Errorf("tool registry is nil")
 	}
@@ -122,10 +122,16 @@ func registerTools(registry *tool.Registry, root string, readRoots []string, tas
 	registry.Register(&toolfile.GlobTool{Root: root, ReadRoots: readRoots})
 	registry.Register(&toolexec.BashTool{Root: root})
 	registry.Register(&toolwebfetch.Tool{})
-	registry.Register(task.NewTool(taskManager, sessionID))
-	registry.Register(task.NewStatusTool(taskManager))
-	registry.Register(task.NewStopTool(taskManager))
-	registry.Register(task.NewWaitTool(taskManager))
+	// 任务编排工具只给主 agent：任务注册表投影是进程内的（共享持久日志只在
+	// 启动时恢复），worker 里 TaskWait 等不到其他进程任务的终态更新，会挂满
+	// 超时并被模型反复重试形成死锁；嵌套派生还会让每个 worker 各起一个进程
+	// 池，进程树爆炸撞上 rlimit。worker 只需专注完成自身 prompt。
+	if !workerMode {
+		registry.Register(task.NewTool(taskManager, sessionID))
+		registry.Register(task.NewStatusTool(taskManager))
+		registry.Register(task.NewStopTool(taskManager))
+		registry.Register(task.NewWaitTool(taskManager))
+	}
 	if broker != nil {
 		adapted := toolmcp.NewTools(broker)
 		tools := make([]tool.Tool, 0, len(adapted))

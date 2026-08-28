@@ -63,9 +63,37 @@ func TestRegisterMainAgentToolsAddsHeadlessUpdateTodo(t *testing.T) {
 	}
 }
 
+// worker 进程不注册任务编排工具（Task/TaskStatus/TaskStop/TaskWait）：任务
+// 注册表投影是进程内的，worker 里 TaskWait 等不到其他进程任务的终态更新会
+// 死锁；主 agent 保留完整编排能力。
+func TestRegisterToolsSkipsTaskOrchestrationForWorker(t *testing.T) {
+	worker := tool.NewRegistry()
+	if err := registerTools(worker, t.TempDir(), nil, nil, "", nil, false, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Task", "TaskStatus", "TaskStop", "TaskWait"} {
+		if _, ok := worker.Get(name); ok {
+			t.Fatalf("worker registry must not expose %s", name)
+		}
+	}
+	if _, ok := worker.Get("Read"); !ok {
+		t.Fatal("worker registry missing base tool Read")
+	}
+
+	main := tool.NewRegistry()
+	if err := registerTools(main, t.TempDir(), nil, nil, "", nil, false, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Task", "TaskStatus", "TaskStop", "TaskWait"} {
+		if _, ok := main.Get(name); !ok {
+			t.Fatalf("main registry missing %s", name)
+		}
+	}
+}
+
 func TestRegisterToolsDoesNotAddQuestion(t *testing.T) {
 	registry := tool.NewRegistry()
-	if err := registerTools(registry, t.TempDir(), nil, nil, "", nil, false); err != nil {
+	if err := registerTools(registry, t.TempDir(), nil, nil, "", nil, false, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := registry.Get("question"); ok {
@@ -75,7 +103,7 @@ func TestRegisterToolsDoesNotAddQuestion(t *testing.T) {
 
 func TestAllBuiltinToolSchemasPrepareForDeepSeekStrict(t *testing.T) {
 	registry := tool.NewRegistry()
-	if err := registerTools(registry, t.TempDir(), nil, nil, "", nil, false); err != nil {
+	if err := registerTools(registry, t.TempDir(), nil, nil, "", nil, false, false); err != nil {
 		t.Fatal(err)
 	}
 	selectBroker := selecttool.NewBroker()
@@ -124,7 +152,7 @@ func TestRegisterInteractiveToolsRejectsNil(t *testing.T) {
 
 func TestRegisterToolsIncludesEdit(t *testing.T) {
 	registry := tool.NewRegistry()
-	if err := registerTools(registry, t.TempDir(), nil, nil, "", nil, false); err != nil {
+	if err := registerTools(registry, t.TempDir(), nil, nil, "", nil, false, false); err != nil {
 		t.Fatalf("registerTools: %v", err)
 	}
 	ed, ok := registry.Get("Edit")
@@ -141,7 +169,7 @@ func TestRegisterToolsIncludesEdit(t *testing.T) {
 
 func TestRegisterToolsEnablesOutsideReadInDangerousMode(t *testing.T) {
 	registry := tool.NewRegistry()
-	if err := registerTools(registry, t.TempDir(), nil, nil, "", nil, true); err != nil {
+	if err := registerTools(registry, t.TempDir(), nil, nil, "", nil, true, false); err != nil {
 		t.Fatalf("registerTools: %v", err)
 	}
 	registered, ok := registry.Get("Read")

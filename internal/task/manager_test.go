@@ -276,6 +276,26 @@ func newTestManager(t *testing.T, modelStreamer loop.ModelStreamer, cfg settings
 	}), store, root
 }
 
+// 等待目标全部不在注册表投影中时，WaitAny 立即返回（不存在的任务永远不会
+// 进入终态），而不是挂满超时——worker/模型误等未知 id 时不再死锁。
+func TestWaitAnyReturnsImmediatelyWhenAllTasksNotFound(t *testing.T) {
+	manager, _, _ := newTestManager(t, &recordingModel{}, settings.DefaultConfig(), nil)
+	start := time.Now()
+	result, err := manager.WaitAny(context.Background(), []string{"missing-task"}, 10*time.Minute)
+	if err != nil {
+		t.Fatalf("WaitAny() error = %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("WaitAny blocked %s on unknown ids, want immediate return", elapsed)
+	}
+	if result.TimedOut {
+		t.Fatalf("WaitAny() TimedOut = true, want false for all-not-found")
+	}
+	if len(result.Tasks) != 1 || !result.Tasks[0].NotFound {
+		t.Fatalf("WaitAny() tasks = %#v, want not_found summary", result.Tasks)
+	}
+}
+
 func createSessionWithHistory(t *testing.T, store *session.JSONLStore, sessionID string, history ...message.Message) {
 	t.Helper()
 	ctx := context.Background()

@@ -207,7 +207,7 @@ func buildRunnerWithTaskContext(ctx context.Context, sessionIDFlag string, outpu
 	})
 	runner.SetTaskTokensProvider(taskManager)
 	runner.SetTurnOwnedTaskCleaner(taskManager)
-	if err := registerTools(registry, root, runner.SkillRoots(), taskManager, sessionID, broker, yoloMode); err != nil {
+	if err := registerTools(registry, root, runner.SkillRoots(), taskManager, sessionID, broker, yoloMode, subCtx.workerMode); err != nil {
 		if mcpManager != nil {
 			_ = mcpManager.Close(context.Background())
 		}

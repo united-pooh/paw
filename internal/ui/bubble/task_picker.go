@@ -2,11 +2,12 @@
 package bubble
 
 import (
-	"bufio"
-	"context"
-	"encoding/json"
-	"fmt"
-	"os"
+"bufio"
+"context"
+"encoding/json"
+"errors"
+"fmt"
+"os"
 	"paw/internal/loop"
 	"paw/internal/message"
 	"paw/internal/session"
@@ -223,6 +224,14 @@ func loadTaskTranscriptEntries(ctx context.Context, store SessionStore, task tas
 	}
 	file, err := os.Open(path)
 	if err != nil {
+		// worker 尚未写第一条记录时 transcript 文件还没创建（首次 append 才
+		// 落盘）：视为"暂无记录"而不是预览失败。
+		if errors.Is(err, os.ErrNotExist) {
+			if content := strings.TrimSpace(task.Content); content != "" {
+				return []transcriptEntry{{kind: entryAssistant, title: "assistant", body: content, createdAt: at}}, nil
+			}
+			return nil, nil
+		}
 		return nil, err
 	}
 	defer file.Close()

@@ -538,7 +538,8 @@ func (m *Manager) SubscribeTaskUpdates() (<-chan struct{}, func()) {
 
 // WaitAny 阻塞直到任意一个给定任务进入终态（completed/failed/stopped）或
 // timeout 到期。返回所有请求任务的最新快照；超时时 timed_out=true（非错误）。
-// 未知 id 标记 not_found 且不构成"完成"条件。ctx 取消时返回错误。
+// 未知 id 标记 not_found 且不构成"完成"条件；全部目标都不存在时立即返回
+// （不存在的任务永远不会进入终态，等待必然挂满超时）。ctx 取消时返回错误。
 func (m *Manager) WaitAny(ctx context.Context, ids []string, timeout time.Duration) (WaitResult, error) {
 	if m == nil {
 		return WaitResult{}, fmt.Errorf("task manager is nil")
@@ -570,7 +571,7 @@ func (m *Manager) WaitAny(ctx context.Context, ids []string, timeout time.Durati
 		if err != nil {
 			return WaitResult{}, err
 		}
-		if result.AnyTerminal {
+		if result.AnyTerminal || allTasksNotFound(result.Tasks) {
 			return result, nil
 		}
 		if remaining <= 0 {
@@ -608,6 +609,20 @@ func (m *Manager) WaitAny(ctx context.Context, ids []string, timeout time.Durati
 			return result, nil
 		}
 	}
+}
+
+// allTasksNotFound 报告所有等待目标都不在注册表投影中：这些 id 永远不会
+// 进入终态（投影不会因为等待而凭空出现任务），等待必然挂满超时。
+func allTasksNotFound(tasks []TaskSummary) bool {
+	if len(tasks) == 0 {
+		return false
+	}
+	for _, task := range tasks {
+		if !task.NotFound {
+			return false
+		}
+	}
+	return true
 }
 
 func isTerminalStatus(status TaskStatus) bool {

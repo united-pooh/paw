@@ -90,6 +90,30 @@ func TestLoadTaskTranscriptEntriesFallsBackToEnvelopeFile(t *testing.T) {
 	}
 }
 
+// 运行中的任务 transcript 文件可能还没创建（worker 未写第一条记录）：
+// 预览容错为"暂无记录"，有任务内容时回退内容，而不是报 no such file。
+func TestLoadTaskTranscriptEntriesToleratesNotYetCreatedTranscript(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions", "agent-1", "transcript.jsonl")
+	running := task.TaskSnapshot{ID: "agent-1", SessionID: "agent-1", Status: task.TaskRunning, TranscriptPath: path}
+
+	entries, err := loadTaskTranscriptEntries(context.Background(), nil, running, time.Now(), "")
+	if err != nil {
+		t.Fatalf("missing transcript must not error: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("entries = %#v, want empty for not-yet-created transcript", entries)
+	}
+
+	running.Content = "partial progress"
+	entries, err = loadTaskTranscriptEntries(context.Background(), nil, running, time.Now(), "")
+	if err != nil {
+		t.Fatalf("content fallback error: %v", err)
+	}
+	if len(entries) != 1 || entries[0].body != "partial progress" {
+		t.Fatalf("content fallback entries = %#v", entries)
+	}
+}
+
 func TestLoadTaskTranscriptEntriesFallbackUsesContentWhenFileMissing(t *testing.T) {
 	task := task.TaskSnapshot{
 		ID:        "agent-1",
