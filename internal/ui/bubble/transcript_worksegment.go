@@ -192,7 +192,9 @@ func emitExpandedWorkSegment(view []transcriptEntry, transcriptToView, viewToTra
 	view = append(view, entry)
 	viewToTranscript = append(viewToTranscript, -1)
 	for i, child := range run {
-		transcriptToView[runStart+i] = len(view)
+		if runStart+i < len(transcriptToView) {
+			transcriptToView[runStart+i] = len(view)
+		}
 		inline := child
 		switch inline.kind {
 		case entryReasoning, entryThinking:
@@ -239,6 +241,12 @@ func foldWorkSegmentsLiveView(entries []transcriptEntry, expandedFor func(*workS
 		return view, transcriptToView, viewToTranscript
 	}
 	segment.segment.live = true
+	// live 段同样支持手动展开：working 中平铺子条目（input/output 预览与
+	// 工具耗时沿用普通条目渲染），与 resting 展开共用同一机制。
+	if expandedFor != nil && expandedFor(segment.segment) {
+		view, transcriptToView, viewToTranscript = emitExpandedWorkSegment(view, transcriptToView, viewToTranscript, entries[start:end], start, segment)
+		return view, transcriptToView, viewToTranscript
+	}
 	segIndex := len(view)
 	for i := start; i < end; i++ {
 		transcriptToView = append(transcriptToView, segIndex)
@@ -358,7 +366,8 @@ func workSegmentLiveTitle(data *workSegmentData, at time.Time) string {
 }
 
 // renderWorkSegmentEntry 渲染工作段条目：折叠态与展开态标题行都渲染为一
-// 行标题（展开段的子条目已作为独立视图条目内联平铺）；live 态渲染实时块。
+// 行标题（展开段的子条目已作为独立视图条目内联平铺）；live 折叠态渲染
+// 实时块（标题+滚动窗口），live 展开态只渲染实时标题行。
 func renderWorkSegmentEntry(entry transcriptEntry, width int, at time.Time, showThinking bool) string {
 	data := entry.segment
 	if data == nil {
@@ -366,7 +375,16 @@ func renderWorkSegmentEntry(entry transcriptEntry, width int, at time.Time, show
 	}
 	bodyWidth := transcriptBodyWidth(width)
 	if data.live {
-		return renderWorkSegmentLive(data, width, bodyWidth, at)
+		title := thinkingBodyStyle.Width(bodyWidth).Render("● " + workSegmentLiveTitle(data, at))
+		rendered := indentLines(title, transcriptEntryGutter)
+		if data.header {
+			return rendered
+		}
+		window := workSegmentLiveWindow(data, width, bodyWidth, at)
+		if window == "" {
+			return rendered
+		}
+		return rendered + "\n" + window
 	}
 	title := thinkingBodyStyle.Width(bodyWidth).Render(workSegmentTitle(data, at))
 	return indentLines(title, transcriptEntryGutter)
@@ -409,10 +427,13 @@ func renderWorkSegmentChild(child transcriptEntry, width, bodyWidth int, at time
 // workSegmentLiveWindowRows 是 live 滚动窗口的行数。
 const workSegmentLiveWindowRows = 12
 
-// renderWorkSegmentLive 渲染 live 工作段：实时标题 + 12 行滚动窗口。
+// renderWorkSegmentLive 渲染 live 工作段（折叠态）：实时标题 + 12 行滚动窗口。
 func renderWorkSegmentLive(data *workSegmentData, width, bodyWidth int, at time.Time) string {
 	title := thinkingBodyStyle.Width(bodyWidth).Render("● " + workSegmentLiveTitle(data, at))
 	rendered := indentLines(title, transcriptEntryGutter)
+	if data.header {
+		return rendered
+	}
 	window := workSegmentLiveWindow(data, width, bodyWidth, at)
 	if window == "" {
 		return rendered
@@ -441,7 +462,7 @@ func workSegmentLiveWindow(data *workSegmentData, width, bodyWidth int, at time.
 }
 
 // workSegmentHitAtTranscriptRow 命中的行是否属于一个可点击的工作段标题
-// （resting 折叠块或展开段的标题行；live 块不可点击）。
+// （resting/live 折叠块或展开段的标题行）。
 func (m appModel) workSegmentHitAtTranscriptRow(row int) (int, bool) {
 	for _, location := range m.transcriptEntryLocationsAt() {
 		if row < location.startRow || row >= location.startRow+location.height {
@@ -451,7 +472,7 @@ func (m appModel) workSegmentHitAtTranscriptRow(row int) (int, bool) {
 			return -1, false
 		}
 		entry := m.viewEntries[location.transcriptIndex]
-		if entry.kind != entryWorkSegment || entry.segment == nil || entry.segment.live {
+		if entry.kind != entryWorkSegment || entry.segment == nil {
 			return -1, false
 		}
 		if row != location.startRow {
@@ -462,13 +483,14 @@ func (m appModel) workSegmentHitAtTranscriptRow(row int) (int, bool) {
 	return -1, false
 }
 
-// toggleWorkSegmentExpansion 切换一个 resting 工作段的展开态并刷新视图。
+// toggleWorkSegmentExpansion 切换一个工作段的展开态并刷新视图（live 与
+// resting 段均可展开；live 展开后平铺子条目，实时刷新由投影签名驱动）。
 func (m *appModel) toggleWorkSegmentExpansion(index int) bool {
 	if m == nil || index < 0 || index >= len(m.viewEntries) {
 		return false
 	}
 	entry := m.viewEntries[index]
-	if entry.kind != entryWorkSegment || entry.segment == nil || entry.segment.live {
+	if entry.kind != entryWorkSegment || entry.segment == nil {
 		return false
 	}
 	expanded := m.segmentExpanded[workSegmentKey(entry.segment)]

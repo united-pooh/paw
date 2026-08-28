@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"paw/internal/tool"
 )
@@ -32,6 +33,9 @@ type ToolStart struct {
 	ToolName      string `json:"tool_name"`
 	CallIndex     int    `json:"call_index"`
 	CanonicalPath string `json:"canonical_path,omitempty"`
+	// ArgsGenStartedAt 是工具参数开始流式生成的时刻（无流式窗口时为零值），
+	// 用于「参数生成→执行完成」合并耗时口径。
+	ArgsGenStartedAt time.Time `json:"args_gen_started_at,omitempty"`
 }
 
 type ToolLifecycle interface {

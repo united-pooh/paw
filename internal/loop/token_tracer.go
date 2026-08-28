@@ -134,6 +134,19 @@ func (runner *Engine) currentModelLabels() (string, string) {
 	return strings.TrimSpace(cfg.Provider), strings.TrimSpace(cfg.Model)
 }
 
+// flushToolPhaseTrace 在回合结束时按 turn 上报工具阶段耗时聚合（参数生成
+// 总时长 vs 工具执行总时长）；本回合无工具调用时不发事件。
+func (runner *Engine) flushToolPhaseTrace(turn *TurnState) {
+	if runner == nil || turn == nil || turn.ToolPhases.Calls == 0 {
+		return
+	}
+	runner.recordTraceEvent("turn_tool_phases", map[string]any{
+		"calls":       turn.ToolPhases.Calls,
+		"args_gen_ms": turn.ToolPhases.ArgsGenMS,
+		"exec_ms":     turn.ToolPhases.ExecMS,
+	})
+}
+
 func (runner *Engine) recordTraceEvent(eventType string, data map[string]any) {
 	tracer := runner.currentTokenTracer()
 	if tracer == nil {

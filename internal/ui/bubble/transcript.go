@@ -790,7 +790,7 @@ func taskWaitRunningBody(names []string, elapsed int64) string {
 	return label + " 正在运行 " + formatWholeSeconds(int(elapsed))
 }
 
-func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMessage, mutationKnown, isMutation bool, mutation *ui.FileMutationSnapshot) {
+func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMessage, mutationKnown, isMutation bool, mutation *ui.FileMutationSnapshot, argsGenStartedAt time.Time) {
 	m.lastModelVisibleActivityAt = m.animationNow()
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -808,7 +808,7 @@ func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMes
 			taskWaitRunning: true,
 			taskWaitNames:   names,
 			createdAt:       m.animationNow(),
-			toolStartedAt:   m.animationNow(),
+			toolStartedAt:   toolBillingStartAt(argsGenStartedAt, m.animationNow()),
 		})
 		return
 	}
@@ -831,8 +831,17 @@ func (m *appModel) recordToolCallEntry(toolUseID, name string, input json.RawMes
 		isFileMutation:    isMutation,
 		toolGroupPending:  segmentPending,
 		createdAt:         m.animationNow(),
-		toolStartedAt:     m.animationNow(),
+		toolStartedAt:     toolBillingStartAt(argsGenStartedAt, m.animationNow()),
 	})
+}
+
+// toolBillingStartAt 返回工具耗时的计费起点：优先取参数开始流式生成的时刻
+// （合并口径），无流式窗口时回退到工具执行起点。
+func toolBillingStartAt(argsGenStartedAt, execStartedAt time.Time) time.Time {
+	if !argsGenStartedAt.IsZero() && !argsGenStartedAt.After(execStartedAt) {
+		return argsGenStartedAt
+	}
+	return execStartedAt
 }
 
 func (m *appModel) recordToolResultEntry(toolUseID, name, status, content string, isError, mutationKnown, isMutation bool, mutation *ui.FileMutationSnapshot) {
@@ -2998,6 +3007,14 @@ func formatToolDuration(startedAt, finishedAt time.Time) string {
 		return "0ms"
 	}
 	duration := finishedAt.Sub(startedAt)
+	if duration < time.Millisecond {
+		// 亚毫秒精度（0.8ms）：本地工具（Read/Write 微秒级）不再显示 0ms。
+		ms := float64(duration) / float64(time.Millisecond)
+		if ms < 0.1 {
+			ms = 0.1
+		}
+		return fmt.Sprintf("%.1fms", ms)
+	}
 	if duration < time.Second {
 		return fmt.Sprintf("%dms", duration/time.Millisecond)
 	}

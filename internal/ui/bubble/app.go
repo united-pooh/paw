@@ -262,7 +262,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.finalizeThinkingStream()
 			m.finalizeAssistantStream()
 			m.isGenerating = false
-			m.recordToolCallEntry(msg.ID, msg.Name, json.RawMessage(msg.Input), msg.FileMutationKnown, msg.IsFileMutation, msg.FileMutation)
+			m.recordToolCallEntry(msg.ID, msg.Name, json.RawMessage(msg.Input), msg.FileMutationKnown, msg.IsFileMutation, msg.FileMutation, msg.ArgsGenStartedAt)
 		})
 		return m, nil
 	case toolResultMsg:

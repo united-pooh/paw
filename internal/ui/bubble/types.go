@@ -107,12 +107,14 @@ type workSegmentData struct {
 	live         bool // foldLive 下仅尾部段为 true
 }
 
-// workSegmentKey 生成段的稳定身份：用于跨视图重建保留展开状态。
+// workSegmentKey 生成段的稳定身份：用于跨视图重建保留展开状态。只用段
+// 起点（纳秒精度，逐段唯一）：live 段在流式中 children/toolCalls/failed
+// 会持续增长，把这些计数纳入 key 会让展开态在段成长时丢失。
 func workSegmentKey(data *workSegmentData) string {
-	if data == nil {
-		return ""
-	}
-	return fmt.Sprintf("%d/%d/%d/%d/%t", data.startedAt.UnixNano(), len(data.children), data.toolCalls, data.failed, data.hasReasoning)
+if data == nil {
+return ""
+}
+return fmt.Sprintf("%d/%t", data.startedAt.UnixNano(), data.hasReasoning)
 }
 
 type toolCitation struct {

@@ -1,6 +1,9 @@
 package ui
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // FileMutationSnapshot contains the UI-only before/after state of a file mutation.
 // It is intentionally kept out of message.ToolResult and tracing payloads.
@@ -20,6 +23,9 @@ type ToolCallEvent struct {
 	FileMutationKnown bool
 	IsFileMutation    bool
 	FileMutation      *FileMutationSnapshot
+	// ArgsGenStartedAt 是工具参数开始流式生成的时刻（无流式窗口时为零值）：
+	// UI 工具耗时的计费起点（参数生成→执行完成合并口径）。
+	ArgsGenStartedAt time.Time
 }
 
 // ToolResultEvent describes one tool execution result event.

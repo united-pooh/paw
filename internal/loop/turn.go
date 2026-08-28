@@ -301,6 +301,7 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 			}
 			runner.setHistory(stripRecoveryMessages(history))
 			settled = true
+			runner.flushToolPhaseTrace(turnState)
 			return runner.completeTurnExecution(ctx, timing, assistantMessage, assistantSeq), nil
 		}
 
@@ -310,7 +311,7 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 				return journal.AppendToolResult(ctx, runner.sessionID, turnID, callIndex, result)
 			}
 		}
-		toolResult, err := runner.runToolCallsWithCheckpoint(ctx, toolCalls, checkpoint)
+		toolResult, err := runner.runToolCallsWithPhases(ctx, toolCalls, checkpoint, turnState.ToolArgsGenAt, &turnState.ToolPhases)
 		if err != nil {
 			return execution, err
 		}

@@ -156,6 +156,33 @@ type TurnState struct {
 	ToolRounds int
 	// SkillContext is the immutable skill snapshot captured at turn start.
 	SkillContext string
+	// ToolArgsGenAt 记录每个工具调用参数开始流式生成的时刻（tool_call block
+	// start），工具执行时换算「参数生成→执行完成」的合并耗时；非流式或不带
+	// call ID 的 provider 无此窗口，回退为纯执行耗时。
+	ToolArgsGenAt map[string]time.Time
+	// ToolPhases 是本 turn 已执行工具的阶段耗时聚合（tracer 按 turn 上报）。
+	ToolPhases ToolPhaseTotals
+}
+
+// ToolPhaseTotals 聚合一个 turn 内全部工具调用的阶段耗时（毫秒）。
+type ToolPhaseTotals struct {
+	ArgsGenMS int64 `json:"args_gen_ms"`
+	ExecMS    int64 `json:"exec_ms"`
+	Calls     int   `json:"calls"`
+}
+
+// markToolArgsGenStarted 记录工具参数开始生成的时刻（只取第一次，重试或
+// 续流不重置起点）。
+func (s *TurnState) markToolArgsGenStarted(callID string, at time.Time) {
+	if s == nil || strings.TrimSpace(callID) == "" || at.IsZero() {
+		return
+	}
+	if s.ToolArgsGenAt == nil {
+		s.ToolArgsGenAt = make(map[string]time.Time)
+	}
+	if _, exists := s.ToolArgsGenAt[callID]; !exists {
+		s.ToolArgsGenAt[callID] = at
+	}
 }
 
 type outputMode int
@@ -191,6 +218,9 @@ type turnState struct {
 	legacyActiveType    message.AssistantPartType
 	legacyActiveIndex   int
 	legacyNextPartIndex int
+	// outer 指向本回合外层 TurnState（工具参数生成时刻回写于此，生命周期与
+	// 整个用户 turn 一致）；测试构造的裸 turnState 为 nil。
+	outer *TurnState
 }
 
 // partAccumulator 按 provider block index 收集有序助理 parts。

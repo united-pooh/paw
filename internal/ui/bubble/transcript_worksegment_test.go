@@ -119,6 +119,74 @@ func TestFoldWorkSegmentsCutsOnUserAndSystem(t *testing.T) {
 	}
 }
 
+// workSegmentKey 不含会增长的计数：live 段在流式中 children/toolCalls/failed
+// 持续增长，key 必须保持稳定，否则展开态在段成长时丢失。
+func TestWorkSegmentKeyStaysStableAsLiveSegmentGrows(t *testing.T) {
+	data := &workSegmentData{hasReasoning: true, startedAt: wsAt(0)}
+	key := workSegmentKey(data)
+	data.children = append(data.children, wsReasoning("plan", 0), wsTool("Read", "ok", 1))
+	data.toolCalls = 1
+	data.failed = 0
+	if got := workSegmentKey(data); got != key {
+		t.Fatalf("key changed as segment grew: %q → %q", key, got)
+	}
+	data.toolCalls = 2
+	data.failed = 1
+	if got := workSegmentKey(data); got != key {
+		t.Fatalf("key changed after stats update: %q → %q", key, got)
+	}
+}
+
+// foldLive 下尾部 live 段支持手动展开：expandedFor 命中时平铺为标题行 +
+// 子条目（与 resting 展开同构），否则保持折叠 live 块。
+func TestFoldLiveSegmentExpandsWhenExpandedForMatches(t *testing.T) {
+	entries := []transcriptEntry{
+		wsAssistant("done", 0), // 前缀边界：尾部 run 从 reasoning 开始
+		wsReasoning("plan", 1),
+		wsTool("Read", "ok", 3),
+	}
+	// 折叠态：尾部为单个 live 段。
+	view, _, _ := foldWorkSegmentsView(entries, foldLive, nil)
+	if len(view) != 2 || view[1].kind != entryWorkSegment || !view[1].segment.live || view[1].segment.header {
+		t.Fatalf("collapsed live view = %#v, want assistant + folded live segment", view)
+	}
+	// 展开态：标题行 + reasoning + 工具子条目平铺。
+	expanded := func(data *workSegmentData) bool { return data.live }
+	view, _, viewToTranscript := foldWorkSegmentsView(entries, foldLive, expanded)
+	if len(view) != 4 {
+		t.Fatalf("expanded live view len = %d, want 4 (assistant + header + 2 children)", len(view))
+	}
+	header := view[1]
+	if header.kind != entryWorkSegment || !header.segment.header || !header.segment.live {
+		t.Fatalf("expanded header = %#v, want live header segment", header)
+	}
+	if view[2].kind != entryReasoning || view[3].kind != entryTool {
+		t.Fatalf("expanded children kinds = %v/%v", view[2].kind, view[3].kind)
+	}
+	// 子条目映射回各自的 transcript 下标（hover/inspect 复用）。
+	if viewToTranscript[2] != 1 || viewToTranscript[3] != 2 {
+		t.Fatalf("child viewToTranscript = %#v", viewToTranscript)
+	}
+}
+
+// live 展开态标题只渲染实时标题行（滚动窗口交给平铺的子条目）。
+func TestRenderWorkSegmentLiveHeaderOmitsWindow(t *testing.T) {
+	data := &workSegmentData{
+		hasReasoning: true,
+		live:         true,
+		header:       true,
+		startedAt:    wsAt(0),
+		children:     []transcriptEntry{wsReasoning("scrolling content marker", 0)},
+	}
+	rendered := ansi.Strip(renderWorkSegmentEntry(transcriptEntry{kind: entryWorkSegment, segment: data}, 80, wsAt(5), false))
+	if !strings.Contains(rendered, "Thoughts") {
+		t.Fatalf("live header must render title:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "scrolling content marker") {
+		t.Fatalf("header must not render live window children:\n%s", rendered)
+	}
+}
+
 func TestFoldWorkSegmentsTrailsResponse(t *testing.T) {
 	entries := []transcriptEntry{
 		wsUser("读一下这篇文章", 0),

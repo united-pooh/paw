@@ -10,6 +10,7 @@ import (
 	"paw/internal/ui"
 	"strings"
 	"sync"
+	"time"
 )
 
 type toolResultCheckpoint func(callIndex int, result message.ToolResult) error
@@ -20,6 +21,12 @@ type resolvedToolCall struct {
 	resolveError     string
 	approvedReadPath string
 	permissionDenied string
+	// argsGenStartedAt 是工具参数开始流式生成的时刻（无流式窗口时为零值）；
+	// execStartedAt/execFinishedAt 是纯执行段起止。三者共同支撑「参数生成
+	// →执行完成」的合并耗时展示与 tracer 阶段统计。
+	argsGenStartedAt time.Time
+	execStartedAt    time.Time
+	execFinishedAt   time.Time
 }
 
 func (runner *Engine) resolveToolCall(call message.ToolCall) resolvedToolCall {
@@ -51,9 +58,18 @@ func (runner *Engine) runToolCalls(ctx context.Context, calls []message.ToolCall
 }
 
 func (runner *Engine) runToolCallsWithCheckpoint(ctx context.Context, calls []message.ToolCall, checkpoint toolResultCheckpoint) (message.Message, error) {
+	return runner.runToolCallsWithPhases(ctx, calls, checkpoint, nil, nil)
+}
+
+// runToolCallsWithPhases 在执行之外附带耗时阶段 tracking：argsGen 提供每个
+// 调用的参数生成起点（可无），totals 累加本批调用的阶段耗时（可无）。
+func (runner *Engine) runToolCallsWithPhases(ctx context.Context, calls []message.ToolCall, checkpoint toolResultCheckpoint, argsGen map[string]time.Time, totals *ToolPhaseTotals) (message.Message, error) {
 	resolvedCalls := make([]resolvedToolCall, len(calls))
 	for i := range calls {
 		resolvedCalls[i] = runner.resolveToolCall(calls[i])
+		if started, ok := argsGen[calls[i].ID]; ok {
+			resolvedCalls[i].argsGenStartedAt = started
+		}
 	}
 	if err := runner.preflightToolPermissions(ctx, resolvedCalls); err != nil {
 		return message.Message{}, err
@@ -67,7 +83,7 @@ func (runner *Engine) runToolCallsWithCheckpoint(ctx context.Context, calls []me
 			for end < len(calls) && isToolCallConcurrencySafe(resolvedCalls[end]) {
 				end++
 			}
-			batchResults, err := runner.runToolCallBatch(ctx, resolvedCalls[start:end], start, checkpoint)
+			batchResults, err := runner.runToolCallBatch(ctx, resolvedCalls[start:end], start, checkpoint, totals)
 			if err != nil {
 				return message.Message{}, err
 			}
@@ -76,21 +92,24 @@ func (runner *Engine) runToolCallsWithCheckpoint(ctx context.Context, calls []me
 			continue
 		}
 
-		result, err := runner.runResolvedToolCallWithCheckpoint(ctx, resolvedStart, start, checkpoint)
+		result, finished, err := runner.runResolvedToolCallWithCheckpoint(ctx, resolvedStart, start, checkpoint)
 		if err != nil {
 			return message.Message{}, err
 		}
+		accumulateToolPhaseTotals(totals, finished)
 		results = append(results, result)
 		start++
 	}
 	return buildToolResultsMessage(results), nil
 }
 
-func (runner *Engine) runToolCallBatch(ctx context.Context, calls []resolvedToolCall, offset int, checkpoint toolResultCheckpoint) ([]message.ToolResult, error) {
+func (runner *Engine) runToolCallBatch(ctx context.Context, calls []resolvedToolCall, offset int, checkpoint toolResultCheckpoint, totals *ToolPhaseTotals) ([]message.ToolResult, error) {
+	execStartedAt := runner.now()
 	captures := make([]*fileMutationCapture, len(calls))
 	for i, resolved := range calls {
+		calls[i].execStartedAt = execStartedAt
 		captures[i] = runner.prepareFileMutation(resolved)
-		if err := runner.emitToolCall(resolved, captures[i]); err != nil {
+		if err := runner.emitToolCall(calls[i], captures[i]); err != nil {
 			return nil, err
 		}
 	}
@@ -102,6 +121,7 @@ func (runner *Engine) runToolCallBatch(ctx context.Context, calls []resolvedTool
 
 	results := make([]message.ToolResult, len(calls))
 	mutations := make([]*ui.FileMutationSnapshot, len(calls))
+	execFinished := make([]time.Time, len(calls))
 	var checkpointMu sync.Mutex
 	var checkpointErr error
 	var wg sync.WaitGroup
@@ -111,6 +131,7 @@ func (runner *Engine) runToolCallBatch(ctx context.Context, calls []resolvedTool
 		go func() {
 			defer wg.Done()
 			results[i] = runner.executeResolvedToolCall(ctx, calls[i])
+			execFinished[i] = runner.now()
 			mutations[i] = completeFileMutationCapture(captures[i], results[i])
 			if checkpoint != nil {
 				if err := checkpoint(offset+i, results[i]); err != nil {
@@ -129,9 +150,12 @@ func (runner *Engine) runToolCallBatch(ctx context.Context, calls []resolvedTool
 	}
 
 	for i, result := range results {
-		if err := runner.emitToolResult(calls[i], result, mutations[i]); err != nil {
+		resolved := calls[i]
+		resolved.execFinishedAt = execFinished[i]
+		if err := runner.emitToolResult(resolved, result, mutations[i]); err != nil {
 			return nil, err
 		}
+		accumulateToolPhaseTotals(totals, resolved)
 	}
 	return results, nil
 }
@@ -141,30 +165,50 @@ func (runner *Engine) runToolCall(ctx context.Context, call message.ToolCall) (m
 }
 
 func (runner *Engine) runToolCallWithCheckpoint(ctx context.Context, call message.ToolCall, callIndex int, checkpoint toolResultCheckpoint) (message.ToolResult, error) {
-	return runner.runResolvedToolCallWithCheckpoint(ctx, runner.resolveToolCall(call), callIndex, checkpoint)
+	result, _, err := runner.runResolvedToolCallWithCheckpoint(ctx, runner.resolveToolCall(call), callIndex, checkpoint)
+	return result, err
 }
 
-func (runner *Engine) runResolvedToolCallWithCheckpoint(ctx context.Context, resolved resolvedToolCall, callIndex int, checkpoint toolResultCheckpoint) (message.ToolResult, error) {
+// runResolvedToolCallWithCheckpoint 执行单个工具调用并返回带耗时阶段标记的
+// resolved 副本（参数生成/执行起止），供调用方聚合 turn 级阶段耗时。
+func (runner *Engine) runResolvedToolCallWithCheckpoint(ctx context.Context, resolved resolvedToolCall, callIndex int, checkpoint toolResultCheckpoint) (message.ToolResult, resolvedToolCall, error) {
+	resolved.execStartedAt = runner.now()
 	capture := runner.prepareFileMutation(resolved)
 	if err := runner.emitToolCall(resolved, capture); err != nil {
-		return message.ToolResult{}, err
+		return message.ToolResult{}, resolved, err
 	}
 	if err := runner.recordToolStarted(ctx, resolved, callIndex); err != nil {
-		return message.ToolResult{}, err
+		return message.ToolResult{}, resolved, err
 	}
 
 	result := runner.executeResolvedToolCall(ctx, resolved)
+	resolved.execFinishedAt = runner.now()
 	mutation := completeFileMutationCapture(capture, result)
 	if checkpoint != nil {
 		if err := checkpoint(callIndex, result); err != nil {
-			return message.ToolResult{}, err
+			return message.ToolResult{}, resolved, err
 		}
 	}
 	if err := runner.emitToolResult(resolved, result, mutation); err != nil {
-		return message.ToolResult{}, err
+		return message.ToolResult{}, resolved, err
 	}
 
-	return result, nil
+	return result, resolved, nil
+}
+
+// accumulateToolPhaseTotals 把单个工具调用的阶段耗时累加进 turn 聚合：
+// 参数生成段（args_gen）与纯执行段（exec），无流式窗口时 args_gen 为 0。
+func accumulateToolPhaseTotals(totals *ToolPhaseTotals, resolved resolvedToolCall) {
+	if totals == nil || resolved.execStartedAt.IsZero() || resolved.execFinishedAt.IsZero() {
+		return
+	}
+	totals.Calls++
+	if !resolved.argsGenStartedAt.IsZero() && resolved.argsGenStartedAt.Before(resolved.execStartedAt) {
+		totals.ArgsGenMS += resolved.execStartedAt.Sub(resolved.argsGenStartedAt).Milliseconds()
+	}
+	if resolved.execFinishedAt.After(resolved.execStartedAt) {
+		totals.ExecMS += resolved.execFinishedAt.Sub(resolved.execStartedAt).Milliseconds()
+	}
 }
 
 func (runner *Engine) recordToolStarted(ctx context.Context, resolved resolvedToolCall, callIndex int) error {
@@ -180,6 +224,7 @@ func (runner *Engine) recordToolStarted(ctx context.Context, resolved resolvedTo
 		SessionID: owner.SessionID, TurnID: owner.TurnID,
 		ToolCallID: resolved.call.ID, ToolName: resolved.call.Name,
 		CallIndex: callIndex, CanonicalPath: resolved.approvedReadPath,
+		ArgsGenStartedAt: resolved.argsGenStartedAt,
 	})
 }
 
@@ -241,6 +286,7 @@ func (runner *Engine) emitToolCall(resolved resolvedToolCall, capture *fileMutat
 		Input:             append(json.RawMessage(nil), call.Input...),
 		FileMutationKnown: resolved.selectedTool != nil,
 		IsFileMutation:    isFileMutation,
+		ArgsGenStartedAt:  resolved.argsGenStartedAt,
 	}
 	if capture != nil {
 		event.FileMutation = &ui.FileMutationSnapshot{
@@ -259,12 +305,20 @@ func (runner *Engine) emitToolCall(resolved resolvedToolCall, capture *fileMutat
 func (runner *Engine) emitToolResult(resolved resolvedToolCall, result message.ToolResult, mutation *ui.FileMutationSnapshot) error {
 	call := resolved.call
 	_, isFileMutation := resolved.selectedTool.(tool.FileMutationTool)
-	runner.recordTraceEvent("tool_result", map[string]any{
+	traceData := map[string]any{
 		"tool_use_id": result.ToolUseID,
 		"name":        call.Name,
 		"is_error":    result.IsError,
 		"content":     result.Content,
-	})
+	}
+	// 阶段耗时：参数生成段（args_gen_ms，无流式窗口则缺省）与纯执行段（exec_ms）。
+	if !resolved.argsGenStartedAt.IsZero() && !resolved.execStartedAt.IsZero() && resolved.argsGenStartedAt.Before(resolved.execStartedAt) {
+		traceData["args_gen_ms"] = resolved.execStartedAt.Sub(resolved.argsGenStartedAt).Milliseconds()
+	}
+	if !resolved.execStartedAt.IsZero() && resolved.execFinishedAt.After(resolved.execStartedAt) {
+		traceData["exec_ms"] = resolved.execFinishedAt.Sub(resolved.execStartedAt).Milliseconds()
+	}
+	runner.recordTraceEvent("tool_result", traceData)
 	return runner.display.Publish(DisplayEvent{Kind: DisplayToolResult, ToolResult: ui.ToolResultEvent{
 		ToolUseID:         result.ToolUseID,
 		Name:              call.Name,

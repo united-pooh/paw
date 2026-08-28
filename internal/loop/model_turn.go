@@ -37,6 +37,7 @@ func (runner *Engine) runModelTurn(ctx context.Context, history []message.Messag
 
 	var state turnState
 	state.traceStageID, state.traceAgentID = runner.currentTraceIDs()
+	state.outer = turn
 
 	for attempt := 0; attempt < maxLengthContinuationRequests; attempt++ {
 		modelMessages := baseModelMessages
@@ -399,8 +400,12 @@ func (runner *Engine) handleAssistantPartEvent(state *turnState, event *model.As
 			runner.sendReasoningStart(state, event.BlockIndex, event.Redacted)
 		case "tool_call":
 			state.parts.setToolCallIdentity(event.BlockIndex, event.ToolCallID, event.ToolName)
+			// 工具参数开始流式生成的时刻：工具耗时的计费起点（参数生成→执行
+			// 完成合并口径），回写到外层 TurnState 供执行阶段换算。
+			if state.outer != nil {
+				state.outer.markToolArgsGenStarted(event.ToolCallID, runner.now())
+			}
 			if len(event.ToolArgs) != 0 {
-				state.parts.setToolCallIdentity(event.BlockIndex, event.ToolCallID, event.ToolName)
 				state.parts.appendToolArgs(event.BlockIndex, string(event.ToolArgs))
 			}
 		}

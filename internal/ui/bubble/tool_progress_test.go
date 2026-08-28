@@ -78,10 +78,46 @@ func TestTaskWaitProgressAdvances(t *testing.T) {
 	}
 }
 
+// 工具耗时计费起点：优先参数生成起点（合并口径），无流式窗口回退执行起点。
+func TestToolBillingStartAtPrefersArgsGenWindow(t *testing.T) {
+	exec := time.Now()
+	argsGen := exec.Add(-1500 * time.Millisecond)
+	if got := toolBillingStartAt(argsGen, exec); !got.Equal(argsGen) {
+		t.Fatalf("billing start = %v, want args gen start %v", got, argsGen)
+	}
+	if got := toolBillingStartAt(time.Time{}, exec); !got.Equal(exec) {
+		t.Fatalf("billing start without window = %v, want exec start %v", got, exec)
+	}
+	// 参数起点晚于执行起点（异常时序）时回退执行起点。
+	if got := toolBillingStartAt(exec.Add(time.Second), exec); !got.Equal(exec) {
+		t.Fatalf("billing start with inverted window = %v, want exec start", got)
+	}
+}
+
+// formatToolDuration 亚毫秒显示：0.8ms，0ms 消失；毫秒以上保持整数。
+func TestFormatToolDurationSubMillisecond(t *testing.T) {
+	cases := []struct {
+		duration time.Duration
+		want     string
+	}{
+		{800 * time.Microsecond, "0.8ms"},
+		{120 * time.Microsecond, "0.1ms"}, // 下限 0.1ms
+		{2 * time.Millisecond, "2ms"},
+		{42 * time.Millisecond, "42ms"},
+		{1500 * time.Millisecond, "1.50s"}, // <10s 保留两位小数
+	}
+	base := time.Now()
+	for _, tc := range cases {
+		if got := formatToolDuration(base, base.Add(tc.duration)); got != tc.want {
+			t.Errorf("formatToolDuration(%s) = %q, want %q", tc.duration, got, tc.want)
+		}
+	}
+}
+
 func TestToolEventsRefreshViewportOnce(t *testing.T) {
 	m := newTestModel(&fakeRunner{})
 	beforeCall := m.transcriptRefreshCount
-	m.recordToolCallEntry("call-1", "Read", []byte(`{"file_path":"README.md"}`), false, false, nil)
+	m.recordToolCallEntry("call-1", "Read", []byte(`{"file_path":"README.md"}`), false, false, nil, time.Time{})
 	if got := m.transcriptRefreshCount - beforeCall; got != 1 {
 		t.Fatalf("tool call viewport refreshes = %d, want 1", got)
 	}
@@ -139,7 +175,7 @@ func TestFirstRunningToolDoesNotRebuildHistoricalRuntimeIndex(t *testing.T) {
 	}
 	m.toolRuntimeRebuildVisits = 0
 
-	m.recordToolCallEntry("tail-tool", "Read", []byte(`{"file_path":"README.md"}`), false, false, nil)
+	m.recordToolCallEntry("tail-tool", "Read", []byte(`{"file_path":"README.md"}`), false, false, nil, time.Time{})
 
 	if got := m.toolRuntimeRebuildVisits; got != 0 {
 		t.Fatalf("first running tool rebuilt %d historical entries, want 0", got)
@@ -150,7 +186,7 @@ func TestRunningToolProgressDoesNotRefreshBeforeDisplayedSecondChanges(t *testin
 	m := newTestModel(&fakeRunner{})
 	started := time.Now()
 	m.cursorFrameAt = started
-	m.recordToolCallEntry("call-1", "Read", []byte(`{"file_path":"README.md"}`), false, false, nil)
+	m.recordToolCallEntry("call-1", "Read", []byte(`{"file_path":"README.md"}`), false, false, nil, time.Time{})
 	version := m.transcript[len(m.transcript)-1].version
 	refreshes := m.transcriptRefreshCount
 

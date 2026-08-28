@@ -66,7 +66,7 @@ func TestUpdateTodoToolTrackKeepsRawInspectData(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	input := json.RawMessage(`{"items":[{"id":"build","content":"Build page","status":"in_progress"}]}`)
 	result := `{"accepted":true,"snapshot":{"items":[{"id":"build","content":"Build page","status":"in_progress"}],"updated_at":"2026-08-02T10:00:00Z"}}`
-	model.recordToolCallEntry("call-1", "update_todo", input, false, false, nil)
+	model.recordToolCallEntry("call-1", "update_todo", input, false, false, nil, time.Time{})
 	model.recordToolResultEntry("call-1", "update_todo", "ok", result, false, false, false, nil)
 
 	if len(model.transcript) != 1 {
