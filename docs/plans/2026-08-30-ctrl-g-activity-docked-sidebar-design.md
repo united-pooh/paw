@@ -1,6 +1,6 @@
 # Ctrl+G Activity Docked Sidebar 设计规格
 
-**状态：** Review
+**状态：** Approved
 
 **日期：** 2026-08-30
 
