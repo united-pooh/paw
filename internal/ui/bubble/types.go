@@ -491,6 +491,7 @@ type taskTranscriptPreview struct {
 	parentTranscript []transcriptEntry
 	entries          []transcriptEntry
 	liveContent      string
+	loadError        string
 }
 
 // appModel 是 Bubble Tea TUI 的唯一状态中心。

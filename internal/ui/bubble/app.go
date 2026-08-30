@@ -516,14 +516,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resetToolInspect()
 		m.clearInputTokens()
 		if msg.err != nil {
-			title := "sessions"
 			if msg.source == sessionRestoreTaskEnter {
-				title = "task"
-				m.closeActivity()
-			} else {
-				m.sessionPicker = nil
+				m.applyTaskPreviewError(msg)
+				cmds = append(cmds, m.input.Focus())
+				return m, tea.Batch(cmds...)
 			}
-			m.addEntry(transcriptEntry{kind: entryError, title: title, body: msg.err.Error()})
+			m.sessionPicker = nil
+			m.addEntry(transcriptEntry{kind: entryError, title: "sessions", body: msg.err.Error()})
 		} else {
 			if msg.source != sessionRestoreTaskEnter {
 				if rebinder, ok := m.goalController.(SessionControllerRebinder); ok {

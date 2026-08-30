@@ -163,7 +163,11 @@ func (m appModel) handleActivityKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		selected := clampInt(m.activity.selectedIndex, 0, len(m.activity.tasks)-1)
-		return m.previewTaskTranscript(m.activity.tasks[selected])
+		task := m.activity.tasks[selected]
+		if m.currentLayout().activityMode == activityLayoutFullscreen {
+			m.closeActivity()
+		}
+		return m.previewTaskTranscript(task)
 	}
 	return m, nil
 }
@@ -587,6 +591,14 @@ func renderTaskPreviewTranscript(preview *taskTranscriptPreview, createdAt time.
 			createdAt: createdAt,
 		})
 	}
+	if message := strings.TrimSpace(preview.loadError); message != "" {
+		entries = append(entries, transcriptEntry{
+			kind:      entryError,
+			title:     "task",
+			body:      message,
+			createdAt: createdAt,
+		})
+	}
 	return decorateTaskTranscript(preview.task, entries, createdAt)
 }
 
@@ -654,18 +666,27 @@ func (m *appModel) refreshTaskPreviewFromTasks() bool {
 	}
 	task, ok := m.findTaskPreviewTask()
 	if !ok {
-		return false
+		const unavailable = "task is no longer available"
+		if m.taskPreview.loadError == unavailable {
+			return false
+		}
+		m.taskPreview.loadError = unavailable
+		m.resetToolInspect()
+		m.replaceTranscript(renderTaskPreviewTranscript(m.taskPreview, m.animationNow()))
+		return true
 	}
 	live := liveTaskContent(task)
 	if task.Status == m.taskPreview.task.Status &&
 		task.Content == m.taskPreview.task.Content &&
 		task.UsedTokens == m.taskPreview.task.UsedTokens &&
 		taskUsageEqual(task.Usage, m.taskPreview.task.Usage) &&
-		live == m.taskPreview.liveContent {
+		live == m.taskPreview.liveContent &&
+		m.taskPreview.loadError == "" {
 		return false
 	}
 	m.taskPreview.task = task
 	m.taskPreview.liveContent = live
+	m.taskPreview.loadError = ""
 	m.resetToolInspect()
 	m.replaceTranscript(renderTaskPreviewTranscript(m.taskPreview, m.animationNow()))
 	return true
@@ -819,14 +840,29 @@ func (m *appModel) applyTaskPreviewRestore(msg sessionRestoredMsg) {
 	m.resetToolInspect()
 	m.clearNewMessageNotice()
 	m.sessionPicker = nil
-	m.closeActivity()
 	if msg.taskPreview != nil {
 		preview := *msg.taskPreview
 		preview.parentTranscript = copyTranscriptEntries(msg.taskPreview.parentTranscript)
 		preview.entries = mergeTranscriptToolEntries(copyTranscriptEntries(msg.entries))
+		preview.loadError = ""
 		finalizeRestoredRunningToolEntries(preview.entries, m.animationNow())
 		m.taskPreview = &preview
 	}
+	m.replaceTranscript(renderTaskPreviewTranscript(m.taskPreview, m.animationNow()))
+	m.relayout()
+	m.refreshViewport()
+}
+
+func (m *appModel) applyTaskPreviewError(msg sessionRestoredMsg) {
+	if msg.taskPreview == nil || msg.err == nil {
+		return
+	}
+	preview := *msg.taskPreview
+	preview.parentTranscript = copyTranscriptEntries(msg.taskPreview.parentTranscript)
+	preview.loadError = msg.err.Error()
+	m.taskPreview = &preview
+	m.resetToolInspect()
+	m.clearNewMessageNotice()
 	m.replaceTranscript(renderTaskPreviewTranscript(m.taskPreview, m.animationNow()))
 	m.relayout()
 	m.refreshViewport()
@@ -838,7 +874,6 @@ func (m *appModel) restoreMainTranscriptFromTaskPreview() {
 		return
 	}
 	m.sessionPicker = nil
-	m.closeActivity()
 	m.taskPreview = nil
 	m.resetToolInspect()
 	m.clearNewMessageNotice()
