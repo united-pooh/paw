@@ -141,40 +141,6 @@ func TestSystemTaskBlockEntryRendersAsCard(t *testing.T) {
 	}
 }
 
-func TestRenderTaskCardEmpty(t *testing.T) {
-	model := newTestModel(&fakeRunner{})
-	model.taskController = &fakeTaskController{}
-	if card := model.renderTaskCard(time.Time{}); card != "" {
-		t.Fatalf("task card = %q, want empty for no running tasks", card)
-	}
-}
-
-func TestRenderTaskCardListsRunningOnly(t *testing.T) {
-	model := newTestModel(&fakeRunner{})
-	model.taskController = &fakeTaskController{tasks: []task.TaskSnapshot{
-		{ID: "running-1", Name: "二叶筑", Color: "#ff9900", Status: task.TaskRunning},
-		{ID: "done-1", Name: "已完成", Status: task.TaskCompleted},
-		{ID: "running-2", Status: task.TaskRunning},
-	}}
-	card := ansi.Strip(model.renderTaskCard(time.Time{}))
-	for _, want := range []string{"taskController · 2 运行中", "二叶筑", "task"} {
-		if !strings.Contains(card, want) {
-			t.Fatalf("task card = %q, want %q", card, want)
-		}
-	}
-	if strings.Contains(card, "done-1") || strings.Contains(card, "已完成") {
-		t.Fatalf("task card = %q, should not list completed tasks", card)
-	}
-	if strings.Contains(card, "running-1") || strings.Contains(card, "running-2") {
-		t.Fatalf("task card = %q, should not show task id / session id", card)
-	}
-	for _, line := range strings.Split(card, "\n") {
-		if got := lipgloss.Width(line); got > taskCardMaxWidth {
-			t.Fatalf("task card line width = %d, want <= %d: %q", got, taskCardMaxWidth, line)
-		}
-	}
-}
-
 type activeTaskController struct {
 	*fakeTaskController
 	active []task.TaskSnapshot
@@ -184,7 +150,7 @@ func (c *activeTaskController) ActiveTasks() []task.TaskSnapshot {
 	return append([]task.TaskSnapshot(nil), c.active...)
 }
 
-func TestRenderTaskCardUsesActiveTasksInsteadOfStaleRunningProjection(t *testing.T) {
+func TestRunningTasksUsesActiveTasksInsteadOfStaleProjection(t *testing.T) {
 	stale := task.TaskSnapshot{ID: "stale-running", Name: "stale worker", Status: task.TaskRunning}
 	controller := &activeTaskController{
 		fakeTaskController: &fakeTaskController{tasks: []task.TaskSnapshot{stale}},
@@ -192,73 +158,16 @@ func TestRenderTaskCardUsesActiveTasksInsteadOfStaleRunningProjection(t *testing
 	model := newTestModel(&fakeRunner{})
 	model.taskController = controller
 
-	if card := model.renderTaskCard(time.Now()); card != "" {
-		t.Fatalf("task card = %q, want stale projected task hidden after its process ended", ansi.Strip(card))
+	if running := model.runningTasks(); len(running) != 0 {
+		t.Fatalf("runningTasks = %#v, want stale projected task hidden after its process ended", running)
 	}
 	if model.hasRunningTasks() {
 		t.Fatal("hasRunningTasks = true, want process liveness to override stale running projection")
 	}
 
 	controller.active = []task.TaskSnapshot{stale}
-	if card := ansi.Strip(model.renderTaskCard(time.Now())); !strings.Contains(card, "stale worker") {
-		t.Fatalf("task card = %q, want active task visible", card)
-	}
-}
-
-func TestSpinnerFrameIndexRotates(t *testing.T) {
-	base := time.Unix(0, 0)
-	if spinnerFrameIndex(base) != 0 {
-		t.Fatalf("spinnerFrameIndex(zero) = %d, want 0", spinnerFrameIndex(base))
-	}
-	seen := make(map[int]bool)
-	for i := 0; i < len(taskSpinnerFrames)*4; i++ {
-		frame := spinnerFrameIndex(base.Add(time.Duration(i) * 250 * time.Millisecond))
-		seen[frame] = true
-	}
-	if len(seen) != len(taskSpinnerFrames) {
-		t.Fatalf("spinner frames seen = %d, want %d", len(seen), len(taskSpinnerFrames))
-	}
-}
-
-func TestPlaceRightCenteredOverlayPosition(t *testing.T) {
-	width, height := 40, 10
-	base := strings.Repeat("x\n", height-1) + "x"
-	overlay := "AAA\nBBB"
-	composed := ansi.Strip(placeRightCenteredOverlay(base, overlay, width, height))
-	lines := strings.Split(composed, "\n")
-	if len(lines) != height {
-		t.Fatalf("composed lines = %d, want %d", len(lines), height)
-	}
-	// 垂直居中：overlay 高度 2，首行应在 (10-2)/2 = 4。
-	if idx := strings.Index(lines[4], "AAA"); idx != 36 {
-		t.Fatalf("line 4 = %q, want overlay first row at column 36 (got %d)", lines[4], idx)
-	}
-	if idx := strings.Index(lines[5], "BBB"); idx != 36 {
-		t.Fatalf("line 5 = %q, want overlay second row at column 36 (got %d)", lines[5], idx)
-	}
-	// 其余行保持 base 内容。
-	if !strings.Contains(lines[0], "x") || strings.Contains(lines[0], "AAA") {
-		t.Fatalf("line 0 = %q, want untouched base", lines[0])
-	}
-}
-
-func TestRenderTaskCardRowHidesSessionID(t *testing.T) {
-	row := ansi.Strip(renderTaskCardRow(task.TaskSnapshot{
-		ID:    "a6c81e94d94a5e40",
-		Name:  "八潮瑠唯",
-		Color: "#669988",
-	}, "◐"))
-	for _, want := range []string{"◐", "八潮瑠唯"} {
-		if !strings.Contains(row, want) {
-			t.Fatalf("task row = %q, want %q", row, want)
-		}
-	}
-	if strings.Contains(row, "a6c81e94") {
-		t.Fatalf("task row = %q, should not show task id / session id", row)
-	}
-	fallback := ansi.Strip(renderTaskCardRow(task.TaskSnapshot{ID: "x123", Status: task.TaskRunning}, "◐"))
-	if !strings.Contains(fallback, "task") || strings.Contains(fallback, "x123") {
-		t.Fatalf("nameless task row = %q, want generic name without id", fallback)
+	if running := model.runningTasks(); len(running) != 1 || running[0].ID != stale.ID {
+		t.Fatalf("runningTasks = %#v, want active task", running)
 	}
 }
 

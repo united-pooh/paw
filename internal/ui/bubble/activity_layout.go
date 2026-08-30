@@ -83,3 +83,27 @@ func renderSplitHairline(leftContent, rightContent string, leftWidth, rightWidth
 		jointStyle.Render(joint) +
 		embedHairlineContent(rightContent, rightWidth, lineColor)
 }
+
+func renderHairlineWithRightHint(mainContent, hint string, width int, lineColor string) string {
+	width = maxInt(1, width)
+	mainContent = truncateStyledCellLine(mainContent, maxInt(1, width/2))
+	hintBudget := maxInt(0, width-terminalCellWidth(mainContent)-3)
+	if hintBudget <= 0 || strings.TrimSpace(hint) == "" {
+		return embedHairlineContent(mainContent, width, lineColor)
+	}
+	hint = truncateStyledCellLine(hint, hintBudget)
+	lineStyle := lipgloss.NewStyle()
+	if lineColor != "" {
+		lineStyle = lineStyle.Foreground(lipgloss.Color(lineColor))
+	}
+	dash := func(n int) string {
+		if n <= 0 {
+			return ""
+		}
+		return lineStyle.Render(strings.Repeat("─", n))
+	}
+	left := dash(1) + " " + mainContent + " "
+	right := " " + hint + " " + dash(1)
+	middle := maxInt(0, width-terminalCellWidth(left)-terminalCellWidth(right))
+	return fitStyledCellLine(left+dash(middle)+right, width)
+}

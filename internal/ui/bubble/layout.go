@@ -196,13 +196,14 @@ func (m appModel) View() string {
 		view = top + "\n" + inner + "\n" + bottom
 	default:
 		inner := m.renderWorkspaceBody(layout)
-		view = renderDockedFrame(
-			inner,
+		top := renderHairlineWithRightHint(
 			m.renderHeaderEmbedded(layout.contentWidth),
-			m.renderBottomDockLine(layout.contentWidth),
+			m.renderHeaderActivityHint(),
 			layout.frameWidth,
-			layout.frameHeight,
+			"",
 		)
+		bottom := m.renderBottomDockLine(layout.contentWidth)
+		view = top + "\n" + inner + "\n" + bottom
 	}
 	if layout.queueInlineHeight > 0 && layout.activityMode != activityLayoutFullscreen {
 		rightInset := terminalCellWidth(m.renderBottomDockWorktree(layout.frameWidth)) + 2

@@ -7170,9 +7170,11 @@ func TestTaskTaskUpdateMsgRefreshesActivityAndPreview(t *testing.T) {
 	if model.taskPreview.task.Status != taskpkg.TaskCompleted || model.taskPreview.liveContent != "" {
 		t.Fatalf("preview = %#v, want refreshed terminal task without live content", model.taskPreview)
 	}
-	card := ansi.Strip(model.renderTaskCard(time.Now()))
-	if strings.Contains(card, "running") || strings.Contains(card, "worker") {
-		t.Fatalf("sidebar card = %q, want no running worker after completion", card)
+	if running := model.runningTasks(); len(running) != 0 {
+		t.Fatalf("running tasks = %#v, want none after completion", running)
+	}
+	if hint := model.renderHeaderActivityHint(); strings.Contains(hint, "running") {
+		t.Fatalf("header hint = %q, want no running worker after completion", hint)
 	}
 }
 

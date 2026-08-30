@@ -92,3 +92,44 @@ func TestActivityDockCursorAnchorsOnlyForWorkspaceFocus(t *testing.T) {
 		t.Fatal("fullscreen Activity should hide terminal cursor")
 	}
 }
+
+func TestClosedActivityUsesHeaderHintInsteadOfFloatingTaskCard(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 120
+	model.height = 30
+	model.taskController = &activeTaskController{
+		fakeTaskController: &fakeTaskController{tasks: []task.TaskSnapshot{{ID: "worker", Name: "worker", Status: task.TaskRunning}}},
+		active:             []task.TaskSnapshot{{ID: "worker", Name: "worker", Status: task.TaskRunning}},
+	}
+	model.activity.visible = false
+	model.relayout()
+
+	plain := ansi.Strip(model.View())
+	top := strings.Split(plain, "\n")[0]
+	if !strings.Contains(top, "1 running") || !strings.Contains(top, "Ctrl+G") {
+		t.Fatalf("top border missing running hint:\n%s", plain)
+	}
+	if strings.Contains(plain, "taskController ·") || strings.Contains(plain, "╭") {
+		t.Fatalf("legacy floating card still rendered:\n%s", plain)
+	}
+}
+
+func TestOpenActivityDoesNotDuplicateClosedHint(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 120
+	model.height = 30
+	model.taskController = &activeTaskController{
+		fakeTaskController: &fakeTaskController{tasks: []task.TaskSnapshot{{ID: "worker", Status: task.TaskRunning}}},
+		active:             []task.TaskSnapshot{{ID: "worker", Status: task.TaskRunning}},
+	}
+	model.openActivity(activityTabTasks)
+	plain := ansi.Strip(model.View())
+	if strings.Contains(strings.Split(plain, "\n")[0], "running · Ctrl+G") {
+		t.Fatalf("closed hint leaked into open Activity:\n%s", plain)
+	}
+	if strings.Count(strings.Split(plain, "\n")[0], "● 1") != 1 {
+		t.Fatalf("open Activity running count missing or duplicated:\n%s", plain)
+	}
+}

@@ -9,6 +9,7 @@
 package bubble
 
 import (
+	"strconv"
 	"strings"
 	"time"
 )
@@ -130,5 +131,16 @@ func (m appModel) renderActivityHeader(width int) string {
 	if m.activity.tab == activityTabTodo {
 		page = "Todo"
 	}
-	return truncateStyledCellLine("Activity / "+page, width)
+	text := "Activity / " + page
+	if count := len(m.runningTasks()); count > 0 {
+		text += " · ● " + strconv.Itoa(count)
+	}
+	return truncateStyledCellLine(text, width)
+}
+
+func (m appModel) renderHeaderActivityHint() string {
+	if count := len(m.runningTasks()); count > 0 {
+		return "● " + strconv.Itoa(count) + " running · Ctrl+G"
+	}
+	return "Activity · Ctrl+G"
 }
