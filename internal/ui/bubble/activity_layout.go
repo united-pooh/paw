@@ -45,3 +45,12 @@ func resizeActivityWidth(width, direction int) int {
 	}
 	return clampInt(width+direction*activityResizeStep, activityMinWidth, activityMaxWidth)
 }
+
+func applyActivityGeometry(layout tuiLayout, visible bool, requestedWidth int) tuiLayout {
+	geometry := computeActivityGeometry(layout.contentWidth, visible, requestedWidth)
+	layout.workspaceWidth = geometry.workspaceWidth
+	layout.activityWidth = geometry.activityWidth
+	layout.activitySeparatorWidth = geometry.separatorWidth
+	layout.activityMode = geometry.mode
+	return layout
+}

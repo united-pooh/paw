@@ -73,9 +73,73 @@ func (m *appModel) closeActivity() {
 	m.refreshViewport()
 }
 
+func (m appModel) handleActivityGlobalKey(msg tea.KeyMsg) (appModel, bool, tea.Cmd) {
+	keyName := msg.String()
+	if keyName == "ctrl+g" {
+		if m.activity.visible {
+			m.closeActivity()
+		} else {
+			m.openActivity(m.activity.tab)
+		}
+		return m, true, nil
+	}
+	if !m.activity.visible {
+		return m, false, nil
+	}
+	if m.activity.commandPrefix == activityCommandCtrlW {
+		m.activity.commandPrefix = activityCommandIdle
+		switch keyName {
+		case "h":
+			m.activity.focus = activityFocusWorkspace
+			return m, true, m.input.Focus()
+		case "l":
+			if m.currentLayout().activityMode == activityLayoutDocked {
+				m.activity.focus = activityFocusPanel
+				m.input.Blur()
+			}
+			return m, true, nil
+		case "<":
+			if m.currentLayout().activityMode == activityLayoutDocked {
+				m.activity.widthColumns = resizeActivityWidth(m.activity.widthColumns, -1)
+				m.relayout()
+				m.refreshViewport()
+			}
+			return m, true, nil
+		case ">":
+			if m.currentLayout().activityMode == activityLayoutDocked {
+				m.activity.widthColumns = resizeActivityWidth(m.activity.widthColumns, 1)
+				m.relayout()
+				m.refreshViewport()
+			}
+			return m, true, nil
+		default:
+			return m, true, nil
+		}
+	}
+	if keyName == "ctrl+w" {
+		m.activity.commandPrefix = activityCommandCtrlW
+		return m, true, nil
+	}
+	if keyName == "esc" {
+		if m.currentLayout().activityMode == activityLayoutFullscreen {
+			m.closeActivity()
+			return m, true, m.input.Focus()
+		}
+		if m.taskPreview != nil {
+			m.restoreMainTranscriptFromTaskPreview()
+			return m, true, nil
+		}
+		if m.activity.focus == activityFocusPanel {
+			m.activity.focus = activityFocusWorkspace
+			return m, true, m.input.Focus()
+		}
+	}
+	return m, false, nil
+}
+
 func (m appModel) handleActivityKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "ctrl+c", "ctrl+g", "esc":
+	case "ctrl+c":
 		m.closeActivity()
 		return m, m.input.Focus()
 	case "tab", "right", "l":

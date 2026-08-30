@@ -5580,14 +5580,16 @@ func TestEscReturnsFromtaskPreviewToMainTranscript(t *testing.T) {
 	}
 }
 
-// TestCtrlGTogglestaskPreviewClosed 验证 task preview 中按 ctrl+g
-// 直接收起面板并返回主 transcript（ctrl+g 全局 toggle 语义）。
-func TestCtrlGTogglestaskPreviewClosed(t *testing.T) {
+// TestCtrlGClosesActivityButKeepsTaskPreview 验证 task preview 中按 ctrl+g
+// 只收起 Activity，左侧 task transcript 保持不变。
+func TestCtrlGClosesActivityButKeepsTaskPreview(t *testing.T) {
 	mainTranscript := []transcriptEntry{{kind: entryUser, title: "you", body: "main message"}}
 	model := newTestModel(&fakeRunner{})
 	model.sessionID = "session-1"
 	model.viewport.Width = 80
 	model.viewport.Height = 2
+	model.activity.visible = true
+	model.activity.focus = activityFocusPanel
 	model.taskPreview = &taskTranscriptPreview{
 		task:             taskpkg.TaskSnapshot{ID: "agent-2", SessionID: "agent-2"},
 		parentSessionID:  "session-1",
@@ -5602,14 +5604,14 @@ func TestCtrlGTogglestaskPreviewClosed(t *testing.T) {
 	if model.sessionID != "session-1" {
 		t.Fatalf("sessionID = %q, want session-1", model.sessionID)
 	}
-	if model.taskPreview != nil {
-		t.Fatalf("taskPreview = %#v, want nil after ctrl+g toggle", model.taskPreview)
+	if model.taskPreview == nil {
+		t.Fatal("taskPreview = nil, want preview preserved after ctrl+g toggle")
 	}
 	if model.activity.visible {
-		t.Fatalf("taskPicker = %#v, want nil after ctrl+g toggle", model.activity)
+		t.Fatalf("activity = %#v, want closed after ctrl+g toggle", model.activity)
 	}
-	if len(model.transcript) != 1 || model.transcript[0].body != "main message" {
-		t.Fatalf("transcript = %#v, want restored main transcript", model.transcript)
+	if len(model.transcript) != 1 || model.transcript[0].body != "task message" {
+		t.Fatalf("transcript = %#v, want task preview preserved", model.transcript)
 	}
 	if got := model.input.Value(); got != "main input" {
 		t.Fatalf("input value = %q, want preserved", got)

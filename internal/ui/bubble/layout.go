@@ -82,9 +82,14 @@ func computeTUILayoutWithInputLimit(width, height, requestedInputHeight, inputHe
 
 func (m appModel) currentLayout() tuiLayout {
 	if m.selectionDock != nil {
-		base := computeTUILayout(m.width, m.height, inputMinVisibleLines)
-		inputHeight := m.selectionDock.preferredHeight(inputDockContentWidth(base.contentWidth))
-		return computeTUILayoutWithInputLimit(m.width, m.height, inputHeight, selectionDockMaxVisibleLines)
+		base := applyActivityGeometry(computeTUILayout(m.width, m.height, inputMinVisibleLines), m.activity.visible, m.activity.widthColumns)
+		selectionWidth := base.workspaceWidth
+		if base.activityMode == activityLayoutFullscreen {
+			selectionWidth = base.contentWidth
+		}
+		inputHeight := m.selectionDock.preferredHeight(inputDockContentWidth(selectionWidth))
+		layout := computeTUILayoutWithInputLimit(m.width, m.height, inputHeight, selectionDockMaxVisibleLines)
+		return applyActivityGeometry(layout, m.activity.visible, m.activity.widthColumns)
 	}
 	queueHeight := m.queuePanelHeight()
 	textareaHeight := m.input.Height()
@@ -99,7 +104,7 @@ func (m appModel) currentLayout() tuiLayout {
 	layout := computeTUILayoutWithInputLimit(m.width, m.height, requestedInputHeight, inputLimit)
 	layout.queueHeight = minInt(queueHeight, maxInt(0, layout.inputHeight-1))
 	layout.queueInlineHeight = m.queueInlineSummaryHeight()
-	return layout
+	return applyActivityGeometry(layout, m.activity.visible, m.activity.widthColumns)
 }
 
 // View 渲染一个尺寸严格等于当前终端的单一固定外框。

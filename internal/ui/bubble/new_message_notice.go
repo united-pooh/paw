@@ -84,7 +84,6 @@ func (m appModel) newMessageNoticeCanRender() bool {
 		m.settingWizard == nil &&
 		m.configCenter == nil &&
 		m.sessionPicker == nil &&
-		!m.activity.visible &&
 		m.completion == nil
 }
 

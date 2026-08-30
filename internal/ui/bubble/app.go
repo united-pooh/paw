@@ -693,7 +693,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.sessionPicker != nil {
 			return m.handleSessionPickerKey(msg)
 		}
-		if m.activity.visible {
+		if next, handled, cmd := m.handleActivityGlobalKey(msg); handled {
+			return next, cmd
+		}
+		if m.activity.visible && m.activity.focus == activityFocusPanel {
 			return m.handleActivityKey(msg)
 		}
 		if m.toolInspectActive {
@@ -718,16 +721,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if msg.String() == "ctrl+v" && !m.isTerminalWorkRunning() {
 			return m, clipboardPasteCmd(m.ctx, textareaAbsoluteCursor(m.input))
-		}
-		if msg.String() == "ctrl+g" {
-			// ctrl+g 是 task 面板的全局 toggle：面板打开时由
-			// handleActivityKey 拦截并关闭；task preview 中按下
-			// 视为收起面板，直接返回主 transcript；其余状态打开面板。
-			if m.taskPreview != nil {
-				m.restoreMainTranscriptFromTaskPreview()
-				return m, m.input.Focus()
-			}
-			return m.openTaskPicker()
 		}
 		// 补全激活时：只拦截导航键和确认键，其余按键正常透传给输入框
 		if m.completion != nil {
