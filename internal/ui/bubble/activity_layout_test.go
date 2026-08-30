@@ -1,6 +1,11 @@
 package bubble
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/charmbracelet/x/ansi"
+)
 
 func TestComputeActivityGeometryHiddenAndBreakpoint(t *testing.T) {
 	hidden := computeActivityGeometry(120, false, 0)
@@ -53,5 +58,34 @@ func TestResizeActivityWidthUsesFourColumnStep(t *testing.T) {
 	}
 	if got := resizeActivityWidth(52, 1); got != 52 {
 		t.Fatalf("max clamp = %d, want 52", got)
+	}
+}
+
+func TestJoinActivityColumnsKeepsExactCellGeometry(t *testing.T) {
+	left := "中文  \nleft  "
+	right := "👩‍💻 \nright"
+	got := joinActivityColumns(left, right, 6, 5, 2, "│")
+	lines := strings.Split(got, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("height=%d, want 2", len(lines))
+	}
+	for row, line := range lines {
+		if terminalCellWidth(line) != 12 {
+			t.Fatalf("row=%d width=%d: %q", row, terminalCellWidth(line), ansi.Strip(line))
+		}
+		if !strings.Contains(ansi.Strip(line), "│") {
+			t.Fatalf("row=%d missing separator: %q", row, ansi.Strip(line))
+		}
+	}
+}
+
+func TestRenderSplitHairlineUsesJointAtWorkspaceBoundary(t *testing.T) {
+	line := renderSplitHairline("main", "Activity", 52, 32, "┬", "")
+	if terminalCellWidth(line) != 85 {
+		t.Fatalf("width=%d, want 85: %q", terminalCellWidth(line), ansi.Strip(line))
+	}
+	joint := ansi.Strip(cutStyledCellsExact(line, 52, 53))
+	if joint != "┬" {
+		t.Fatalf("joint=%q, want ┬: %q", joint, ansi.Strip(line))
 	}
 }

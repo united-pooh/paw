@@ -1,5 +1,11 @@
 package bubble
 
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
+
 const (
 	activityDefaultPercent = 36
 	activityMinWidth       = 32
@@ -53,4 +59,27 @@ func applyActivityGeometry(layout tuiLayout, visible bool, requestedWidth int) t
 	layout.activitySeparatorWidth = geometry.separatorWidth
 	layout.activityMode = geometry.mode
 	return layout
+}
+
+func joinActivityColumns(left, right string, leftWidth, rightWidth, height int, separator string) string {
+	left = fitStyledRect(left, leftWidth, height)
+	right = fitStyledRect(right, rightWidth, height)
+	separator = fitStyledCellLine(separator, activitySeparatorWidth)
+	leftLines := strings.Split(left, "\n")
+	rightLines := strings.Split(right, "\n")
+	lines := make([]string, height)
+	for row := 0; row < height; row++ {
+		lines[row] = leftLines[row] + separator + rightLines[row]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderSplitHairline(leftContent, rightContent string, leftWidth, rightWidth int, joint, lineColor string) string {
+	jointStyle := lipgloss.NewStyle()
+	if lineColor != "" {
+		jointStyle = jointStyle.Foreground(lipgloss.Color(lineColor))
+	}
+	return embedHairlineContent(leftContent, leftWidth, lineColor) +
+		jointStyle.Render(joint) +
+		embedHairlineContent(rightContent, rightWidth, lineColor)
 }

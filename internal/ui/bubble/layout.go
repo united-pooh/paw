@@ -107,6 +107,23 @@ func (m appModel) currentLayout() tuiLayout {
 	return applyActivityGeometry(layout, m.activity.visible, m.activity.widthColumns)
 }
 
+func (m appModel) renderWorkspaceBody(layout tuiLayout) string {
+	workspaceLayout := layout
+	workspaceLayout.contentWidth = layout.workspaceWidth
+	parts := make([]string, 0, 4)
+	if workspaceLayout.transcriptHeight > 0 {
+		parts = append(parts, m.renderTranscriptRegion(workspaceLayout))
+	}
+	if workspaceLayout.statusHeight > 0 {
+		parts = append(parts, m.renderDockStatusLine(workspaceLayout.contentWidth))
+	}
+	parts = append(parts, m.renderInputBoxForLayout(workspaceLayout))
+	if workspaceLayout.queueHeight > 0 {
+		parts = append(parts, m.renderQueuePanel(workspaceLayout.contentWidth, workspaceLayout.queueHeight))
+	}
+	return fitStyledRect(strings.Join(parts, "\n"), workspaceLayout.contentWidth, layout.contentHeight)
+}
+
 // View 渲染一个尺寸严格等于当前终端的单一固定外框。
 func (m appModel) View() string {
 	m.activateThemeStyles()
@@ -130,43 +147,77 @@ func (m appModel) View() string {
 	}
 
 	layout := m.currentLayout()
-	parts := make([]string, 0, 3)
-	if layout.transcriptHeight > 0 {
-		parts = append(parts, m.renderTranscriptRegion(layout))
+	var view string
+	switch layout.activityMode {
+	case activityLayoutFullscreen:
+		inner := m.renderActivityPane(layout.activityWidth, layout.contentHeight)
+		view = renderDockedFrame(
+			inner,
+			m.renderActivityHeader(layout.activityWidth),
+			m.renderActivityFullscreenBottomContent(layout.activityWidth),
+			layout.frameWidth,
+			layout.frameHeight,
+		)
+	case activityLayoutDocked:
+		workspace := m.renderWorkspaceBody(layout)
+		activity := m.renderActivityPane(layout.activityWidth, layout.contentHeight)
+		separatorColor := colorManager.Hex(colorMarkdownQuoteBorder)
+		if m.activity.focus == activityFocusPanel {
+			separatorColor = m.currentModeHex()
+			if separatorColor == "" {
+				separatorColor = colorManager.Hex(colorSignal)
+			}
+		}
+		separatorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(separatorColor))
+		inner := joinActivityColumns(
+			workspace,
+			activity,
+			layout.workspaceWidth,
+			layout.activityWidth,
+			layout.contentHeight,
+			separatorStyle.Render("│"),
+		)
+		top := renderSplitHairline(
+			m.renderHeaderEmbedded(layout.workspaceWidth),
+			m.renderActivityHeader(layout.activityWidth),
+			layout.workspaceWidth,
+			layout.activityWidth,
+			"┬",
+			separatorColor,
+		)
+		bottom := renderSplitHairline(
+			m.renderBottomWorkspaceLine(layout.workspaceWidth),
+			m.renderActivityBottomLine(layout.activityWidth),
+			layout.workspaceWidth,
+			layout.activityWidth,
+			"┴",
+			m.currentModeHex(),
+		)
+		view = top + "\n" + inner + "\n" + bottom
+	default:
+		inner := m.renderWorkspaceBody(layout)
+		view = renderDockedFrame(
+			inner,
+			m.renderHeaderEmbedded(layout.contentWidth),
+			m.renderBottomDockLine(layout.contentWidth),
+			layout.frameWidth,
+			layout.frameHeight,
+		)
 	}
-	if layout.statusHeight > 0 {
-		parts = append(parts, m.renderDockStatusLine(layout.contentWidth))
-	}
-	parts = append(parts, m.renderInputBoxForLayout(layout))
-	if layout.queueHeight > 0 {
-		parts = append(parts, m.renderQueuePanel(layout.contentWidth, layout.queueHeight))
-	}
-
-	// 各 part 由各自的渲染函数保证精确到 contentWidth×自身高度；这里的
-	// join 结果已符合 contentWidth×contentHeight，无需再整体 fit 一遍
-	// （renderDockedFrame 内部还会按 frame 尺寸做一次 fit）。
-	inner := strings.Join(parts, "\n")
-	// 顶边框线嵌入 header（模型名/状态/时间）；底边框左侧嵌入输入模式，
-	// 中间显示 token usage，右侧显示项目/分支。边框颜色随 agentmode 变化。
-	view := renderDockedFrame(
-		inner,
-		m.renderHeaderEmbedded(layout.contentWidth),
-		m.renderBottomDockLine(layout.contentWidth),
-		layout.frameWidth,
-		layout.frameHeight,
-	)
-	if layout.queueInlineHeight > 0 {
+	if layout.queueInlineHeight > 0 && layout.activityMode != activityLayoutFullscreen {
+		rightInset := terminalCellWidth(m.renderBottomDockWorktree(layout.frameWidth)) + 2
+		if layout.activityMode == activityLayoutDocked {
+			rightInset += layout.activitySeparatorWidth + layout.activityWidth
+		}
 		view = renderQueueInlineBottomBorder(
 			view,
 			layout.frameWidth,
-			m.queuePanelContent(layout.frameWidth),
+			m.queuePanelContent(layout.workspaceWidth),
 			m.currentModeHex(),
 			terminalCellWidth(m.renderModeIndicator())+2,
-			terminalCellWidth(m.renderBottomDockWorktree(layout.frameWidth))+2,
+			rightInset,
 		)
 	}
-	// renderDockedFrame/renderQueueInlineBottomBorder 的输出已是精确的
-	// frameWidth×frameHeight 矩形，跳过整体重测。
 	view = paintStyledBackgroundBody(view, layout.frameWidth, layout.frameHeight, m.styles.Frame, m.theme.Colors.TerminalBackground, true)
 	m.updateTerminalCursorAnchor(layout)
 	return view
@@ -334,29 +385,9 @@ func (m appModel) renderTranscriptRegion(layout tuiLayout) string {
 		)
 	}
 
-	// 运行中 task 任务卡：贴在 transcript 右边界内侧、垂直居中。
-	// Activity 面板打开时任务卡不重复渲染（面板自身含任务列表）。
-	// modal / completion 浮层在其之后合成，必要时覆盖卡片。
+	// Activity 和运行任务状态不再作为 transcript overlay；其余局部浮层仍只
+	// 在 workspace transcript 区内合成。
 	overlaid := false
-	if !m.activity.visible {
-		if card := m.renderTaskCard(m.animationNow()); card != "" {
-			base = placeRightCenteredOverlay(base, card, layout.contentWidth, layout.transcriptHeight)
-			overlaid = true
-		}
-	}
-
-	// Activity（task/pipeline 选择器）以右侧边栏形态合成，而非居中
-	// modal：ctrl+g 展开的是屏幕右侧的悬浮面板。
-	if m.activity.visible {
-		base = placeOpaqueOverlay(
-			base,
-			m.renderActivityBox(),
-			layout.contentWidth,
-			layout.transcriptHeight,
-			overlayAlignRight,
-		)
-		overlaid = true
-	}
 
 	if modal := m.renderActiveModalBox(layout); modal != "" {
 		return placeOpaqueOverlay(
@@ -697,7 +728,7 @@ func (m appModel) shouldAnchorTextInputCursor() bool {
 		m.settingWizard == nil &&
 		m.configCenter == nil &&
 		m.sessionPicker == nil &&
-		!m.activity.visible &&
+		(!m.activity.visible || (m.activity.focus == activityFocusWorkspace && m.currentLayout().activityMode != activityLayoutFullscreen)) &&
 		true
 }
 
@@ -709,7 +740,7 @@ func (m appModel) inputCursorTerminalPosition(layout tuiLayout) terminalCursorPo
 	// queue 面板位于输入框下方；从终端底部回退时必须跨过 queue 区域。
 	upFromBottom := 1 + queueHeight + layout.worktreeHeight + maxInt(0, textareaHeight-row-1)
 	column := inputDockStyle.GetPaddingLeft() + m.visibleInputCursorColumn()
-	column = minInt(column, maxInt(0, layout.frameWidth-1))
+	column = minInt(column, maxInt(0, layout.workspaceWidth-1))
 	return terminalCursorPosition{
 		active:       true,
 		upFromBottom: upFromBottom,
@@ -845,14 +876,16 @@ func (m appModel) headerText() string   { return "" }
 // relayout 只根据终端尺寸和输入视觉行数计算内部区域。
 func (m *appModel) relayout() {
 	if m.width <= 0 || m.height <= 0 {
-		// Bubble Tea 尚未发送首个 WindowSizeMsg 时保留 textarea/viewport 的
-		// 初始化尺寸，避免输入事件把宽度暂时压成 1。
 		m.input.SetHeight(m.tokenAwareInputVisibleLineCount())
 		return
 	}
-	base := computeTUILayout(m.width, m.height, inputMinVisibleLines)
-	inputWidth := inputDockContentWidth(base.contentWidth)
-	transcriptWidth := maxInt(1, base.contentWidth-transcriptContentStyle.GetHorizontalPadding())
+	base := applyActivityGeometry(computeTUILayout(m.width, m.height, inputMinVisibleLines), m.activity.visible, m.activity.widthColumns)
+	workspaceModelWidth := base.workspaceWidth
+	if base.activityMode == activityLayoutFullscreen {
+		workspaceModelWidth = base.contentWidth
+	}
+	inputWidth := inputDockContentWidth(workspaceModelWidth)
+	transcriptWidth := maxInt(1, workspaceModelWidth-transcriptContentStyle.GetHorizontalPadding())
 	m.input.SetWidth(inputWidth)
 
 	requestedInputHeight := m.tokenAwareInputVisibleLineCount()
@@ -863,9 +896,9 @@ func (m *appModel) relayout() {
 	if m.selectionDock == nil {
 		requestedInputHeight += queueHeight
 	}
-	layout := computeTUILayout(m.width, m.height, requestedInputHeight)
+	layout := applyActivityGeometry(computeTUILayout(m.width, m.height, requestedInputHeight), m.activity.visible, m.activity.widthColumns)
 	if m.selectionDock != nil {
-		layout = computeTUILayoutWithInputLimit(m.width, m.height, requestedInputHeight, selectionDockMaxVisibleLines)
+		layout = applyActivityGeometry(computeTUILayoutWithInputLimit(m.width, m.height, requestedInputHeight, selectionDockMaxVisibleLines), m.activity.visible, m.activity.widthColumns)
 	}
 	if m.selectionDock == nil {
 		actualQueueHeight := minInt(queueHeight, maxInt(0, layout.inputHeight-1))

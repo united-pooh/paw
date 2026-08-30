@@ -124,3 +124,11 @@ func (m appModel) renderHeaderEmbedded(width int) string {
 	}
 	return renderHeaderCompact(m.collectHeaderData(now), width)
 }
+
+func (m appModel) renderActivityHeader(width int) string {
+	page := "Tasks"
+	if m.activity.tab == activityTabTodo {
+		page = "Todo"
+	}
+	return truncateStyledCellLine("Activity / "+page, width)
+}

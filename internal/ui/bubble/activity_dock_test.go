@@ -43,3 +43,52 @@ func TestRenderActivityPaneHasExactSizeAndNoNestedBorder(t *testing.T) {
 		}
 	}
 }
+
+func TestViewRendersFullHeightDockWithoutCoveringWorkspace(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 120
+	model.height = 30
+	model.transcript = []transcriptEntry{{kind: entryAssistant, body: "LEFT-SENTINEL " + strings.Repeat("x", 70)}}
+	model.openActivity(activityTabTasks)
+	model.relayout()
+	model.refreshViewport()
+
+	raw := model.View()
+	view := ansi.Strip(raw)
+	assertFixedFrame(t, raw, 120, 30)
+	layout := model.currentLayout()
+	if layout.activityMode != activityLayoutDocked {
+		t.Fatalf("layout = %+v", layout)
+	}
+	for row, line := range strings.Split(raw, "\n")[1:29] {
+		joint := ansi.Strip(cutStyledCellsExact(line, layout.workspaceWidth, layout.workspaceWidth+1))
+		if joint != "│" {
+			t.Fatalf("row=%d joint=%q, want │: %q", row, joint, ansi.Strip(line))
+		}
+	}
+	if !strings.Contains(view, "LEFT-SENTINEL") || !strings.Contains(view, "Activity") {
+		t.Fatalf("dock lost content:\n%s", view)
+	}
+}
+
+func TestActivityDockCursorAnchorsOnlyForWorkspaceFocus(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 120
+	model.height = 30
+	model.openActivity(activityTabTasks)
+	if model.shouldAnchorTextInputCursor() {
+		t.Fatal("Activity focus should hide terminal cursor")
+	}
+	model.activity.focus = activityFocusWorkspace
+	model.input.Focus()
+	if !model.shouldAnchorTextInputCursor() {
+		t.Fatal("workspace focus should anchor terminal cursor")
+	}
+	model.width = 80
+	model.relayout()
+	if model.shouldAnchorTextInputCursor() {
+		t.Fatal("fullscreen Activity should hide terminal cursor")
+	}
+}

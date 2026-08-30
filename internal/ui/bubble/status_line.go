@@ -117,7 +117,7 @@ func (m appModel) renderDockStatusLine(width int) string {
 
 // renderBottomDockLine 渲染最下方边框：模式靠左，项目/分支靠右；中间剩余
 // 空间显示 token usage，复制反馈出现时临时替代 usage。线色随 agentmode 变化。
-func (m appModel) renderBottomDockLine(width int) string {
+func (m appModel) renderBottomDockLineWithRight(width int, right string) string {
 	width = maxInt(1, width)
 	lineStyle := lipgloss.NewStyle()
 	if modeHex := m.currentModeHex(); modeHex != "" {
@@ -131,7 +131,6 @@ func (m appModel) renderBottomDockLine(width int) string {
 	}
 
 	left := m.renderModeIndicator()
-	right := m.renderBottomDockWorktree(width)
 	left = truncateStyledCellLine(left, maxInt(0, width-2))
 	leftWidth := terminalCellWidth(left)
 	leftAt := 0
@@ -182,6 +181,18 @@ func (m appModel) renderBottomDockLine(width int) string {
 	b.WriteString(right)
 	b.WriteString(dash(width - rightAt - rightWidth))
 	return fitStyledCellLine(b.String(), width)
+}
+
+func (m appModel) renderBottomDockLine(width int) string {
+	return m.renderBottomDockLineWithRight(width, m.renderBottomDockWorktree(width))
+}
+
+func (m appModel) renderBottomWorkspaceLine(width int) string {
+	return m.renderBottomDockLineWithRight(width, "")
+}
+
+func (m appModel) renderActivityBottomLine(width int) string {
+	return embedHairlineContent(m.renderBottomDockWorktree(maxInt(width, worktreeInlineMinimumWidth)), width, m.currentModeHex())
 }
 
 func (m appModel) renderBottomDockUsage() string {

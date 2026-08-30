@@ -58,13 +58,6 @@ func (m appModel) renderActivityPane(width, height int) string {
 	return fitStyledRect(strings.Join(parts, "\n"), width, height)
 }
 
-func (m appModel) renderActivityBox() string {
-	if !m.activity.visible {
-		return ""
-	}
-	return m.renderActivityPane(m.activityPanelWidth(), m.activityPanelHeight())
-}
-
 func (m appModel) renderActivityTabs(width int) string {
 	labels := make([]string, 0, len(activityPages))
 	for _, page := range activityPages {
@@ -91,6 +84,10 @@ func (m appModel) activityFooterHint() string {
 		return "Tab/←/→ page · Esc main"
 	}
 	return "↑/↓ select · Enter preview · Tab page · Esc main"
+}
+
+func (m appModel) renderActivityFullscreenBottomContent(width int) string {
+	return truncateStyledCellLine("ACTIVITY · Esc/Ctrl+G back", width)
 }
 
 func (m appModel) renderActivityTodo(width, height int) string {
@@ -141,14 +138,4 @@ func todoStatusDisplay(status todo.Status) (string, lipgloss.Style) {
 	default:
 		return "○", todoPendingStyle
 	}
-}
-
-func (m appModel) activityPanelWidth() int {
-	layout := m.currentLayout()
-	return minInt(60, maxInt(1, layout.contentWidth/2))
-}
-
-func (m appModel) activityPanelHeight() int {
-	layout := m.currentLayout()
-	return maxInt(1, layout.transcriptHeight-2)
 }

@@ -2810,8 +2810,9 @@ func TestTaskCommandUsesDefaultsAndTasksRender(t *testing.T) {
 	if !model.activity.visible || model.activity.tab != activityTabTasks {
 		t.Fatalf("activity = %#v, want Tasks tab", model.activity)
 	}
-	if got := model.renderActivityBox(); !strings.Contains(got, "worker") {
-		t.Fatalf("Activity modal = %q, want worker", got)
+	layout := model.currentLayout()
+	if got := model.renderActivityPane(layout.activityWidth, layout.contentHeight); !strings.Contains(got, "worker") {
+		t.Fatalf("Activity pane = %q, want worker", got)
 	}
 }
 
