@@ -208,7 +208,7 @@ func (m appModel) View() string {
 	if layout.queueInlineHeight > 0 && layout.activityMode != activityLayoutFullscreen {
 		rightInset := terminalCellWidth(m.renderBottomDockWorktree(layout.frameWidth)) + 2
 		if layout.activityMode == activityLayoutDocked {
-			rightInset += layout.activitySeparatorWidth + layout.activityWidth
+			rightInset = layout.activitySeparatorWidth + layout.activityWidth
 		}
 		view = renderQueueInlineBottomBorder(
 			view,

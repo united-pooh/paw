@@ -62,6 +62,24 @@ func TestActivityGlobalKeysToggleFocusAndResize(t *testing.T) {
 	if !model.activity.visible || model.activity.focus != activityFocusPanel {
 		t.Fatalf("ctrl+g open = %+v", model.activity)
 	}
+	defaultWidth := model.currentLayout().activityWidth
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
+	model = next.(appModel)
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'>'}})
+	model = next.(appModel)
+	if model.activity.widthColumns != defaultWidth+activityResizeStep {
+		t.Fatalf("first grow width = %d, want %d", model.activity.widthColumns, defaultWidth+activityResizeStep)
+	}
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
+	model = next.(appModel)
+	if model.activity.commandPrefix != activityCommandCtrlW {
+		t.Fatalf("second ctrl+w prefix = %v", model.activity.commandPrefix)
+	}
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'<'}})
+	model = next.(appModel)
+	if model.activity.widthColumns != defaultWidth {
+		t.Fatalf("grow+shrink width = %d, want %d; prefix=%v mode=%v key=%q", model.activity.widthColumns, defaultWidth, model.activity.commandPrefix, model.currentLayout().activityMode, (tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'<'}}).String())
+	}
 
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
 	model = next.(appModel)
@@ -88,6 +106,20 @@ func TestActivityGlobalKeysToggleFocusAndResize(t *testing.T) {
 	}
 	if model.activity.widthColumns != 40 {
 		t.Fatalf("shrink+grow width = %d, want 40", model.activity.widthColumns)
+	}
+}
+
+func TestWideActivityEscReturnsFocusWithoutClosingDock(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 120
+	model.height = 30
+	model.openActivity(activityTabTasks)
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = next.(appModel)
+	if !model.activity.visible || model.activity.focus != activityFocusWorkspace || !model.input.Focused() {
+		t.Fatalf("Esc state = %+v focused=%v", model.activity, model.input.Focused())
 	}
 }
 

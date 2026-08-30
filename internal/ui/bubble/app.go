@@ -654,6 +654,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.translatePanel = &panel
 		return m, nil
 	case tea.KeyMsg:
+		// Ctrl+W pane chord 的第二键必须先于 raw mouse 碎片过滤处理；字符 `<`
+		// 同时是 SGR mouse 序列前缀，否则调窄命令会被误吞。
+		if m.activity.commandPrefix == activityCommandCtrlW {
+			if next, handled, cmd := m.handleActivityGlobalKey(msg); handled {
+				return next, cmd
+			}
+		}
 		var rawMouseFragment bool
 		msg, rawMouseFragment = m.filterRawMouseEscapeKey(msg)
 		if rawMouseFragment {

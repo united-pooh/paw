@@ -99,15 +99,17 @@ func (m appModel) handleActivityGlobalKey(msg tea.KeyMsg) (appModel, bool, tea.C
 			}
 			return m, true, nil
 		case "<":
-			if m.currentLayout().activityMode == activityLayoutDocked {
-				m.activity.widthColumns = resizeActivityWidth(m.activity.widthColumns, -1)
+			layout := m.currentLayout()
+			if layout.activityMode == activityLayoutDocked {
+				m.activity.widthColumns = resizeActivityWidth(layout.activityWidth, -1)
 				m.relayout()
 				m.refreshViewport()
 			}
 			return m, true, nil
 		case ">":
-			if m.currentLayout().activityMode == activityLayoutDocked {
-				m.activity.widthColumns = resizeActivityWidth(m.activity.widthColumns, 1)
+			layout := m.currentLayout()
+			if layout.activityMode == activityLayoutDocked {
+				m.activity.widthColumns = resizeActivityWidth(layout.activityWidth, 1)
 				m.relayout()
 				m.refreshViewport()
 			}

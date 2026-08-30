@@ -133,3 +133,49 @@ func TestOpenActivityDoesNotDuplicateClosedHint(t *testing.T) {
 		t.Fatalf("open Activity running count missing or duplicated:\n%s", plain)
 	}
 }
+
+func TestCompletionStaysInsideWorkspaceWhenActivityDocked(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 120
+	model.height = 30
+	model.openActivity(activityTabTasks)
+	model.activity.focus = activityFocusWorkspace
+	model.input.Focus()
+	model.completion = &completion{kind: completionKindCommand, items: []string{"/help", "/tasks"}}
+	model.relayout()
+
+	raw := model.View()
+	layout := model.currentLayout()
+	for _, line := range strings.Split(raw, "\n")[1:29] {
+		left := ansi.Strip(cutStyledCellsExact(line, 0, layout.workspaceWidth))
+		right := ansi.Strip(cutStyledCellsExact(line, layout.workspaceWidth+1, layout.frameWidth))
+		if strings.Contains(right, "/help") || strings.Contains(right, "/tasks") {
+			t.Fatalf("completion leaked into Activity pane:\n%s", ansi.Strip(raw))
+		}
+		if strings.Contains(left, "/help") {
+			return
+		}
+	}
+	t.Fatalf("completion missing from workspace:\n%s", ansi.Strip(raw))
+}
+
+func TestWorkspaceModalLeavesActivityPaneUnchanged(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 120
+	model.height = 30
+	model.openActivity(activityTabTasks)
+	layout := model.currentLayout()
+	baseline := strings.Split(model.View(), "\n")
+
+	model.modelWizard = newModelWizard(model.currentModelConfig())
+	modal := strings.Split(model.View(), "\n")
+	for row := 1; row < model.height-1; row++ {
+		baselineRight := ansi.Strip(cutStyledCellsExact(baseline[row], layout.workspaceWidth+1, layout.frameWidth))
+		modalRight := ansi.Strip(cutStyledCellsExact(modal[row], layout.workspaceWidth+1, layout.frameWidth))
+		if baselineRight != modalRight {
+			t.Fatalf("row %d Activity changed under workspace modal:\nbaseline=%q\nmodal=%q", row, baselineRight, modalRight)
+		}
+	}
+}

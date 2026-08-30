@@ -309,7 +309,8 @@ context meter 左侧显示紧凑 token 与比例，例如 `260k↑ 2.05k↓ 25%(
 快捷键:
 - `ctrl+v`: 从剪贴板粘贴图片时插入 `[Image N]` 图片芯片；连续粘贴会按顺序生成多个芯片，芯片可以像一个整体一样删除。剪贴板没有图片时保持原有文本粘贴行为。
 - `ctrl+o`: 展开/折叠模型 thinking 过程；折叠时 thinking 仍保存在 transcript 中，但不渲染到 viewport。
-- `ctrl+g`: 展开/收起屏幕右侧的 Subagents 面板（toggle，右侧边栏形态）；subagent 运行中还会在右侧自动出现悬浮任务卡，面板打开时任务卡不重复显示。面板内使用 ↑↓ 选择，Enter 预览该 subagent transcript，Esc 或再次按 `ctrl+g` 收起面板返回主 session transcript；输入框内容和提交目标保持主 session 不变。
+- `ctrl+g`: 展开/收起主外框内的全高 Activity 右侧栏；打开后 transcript、状态行、输入框和 queue 会共同缩窄，不遮挡主内容。右栏包含 Tasks/Todo，使用 ↑↓ 选择，Enter 在左侧预览 task transcript。终端窄于 85 列时 Activity 使用内部全页模式；输入始终提交到主 session。
+- Activity 可见时，先按 `ctrl+w`，再按 `h/l` 切换 workspace/Activity 焦点，或按 `</>` 以 4 列步长调整右栏宽度。Esc 从 task preview 返回主 transcript；没有 preview 时把焦点交回 workspace。
 
 鼠标选择:
 - 在消息历史区按住左键拖拽即可选择文本；拖到面板顶部/底部会自动滚动；释放时把选中内容写入系统剪贴板（本地剪贴板 + OSC 52 终端剪贴板双写，SSH/远程会话同样可用），并在状态栏短暂提示「已复制 N 字符」。
