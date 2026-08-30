@@ -262,28 +262,28 @@ func TestActivityCommandsAndTabs(t *testing.T) {
 	model.relayout()
 
 	handled, cmd := model.handleCommand("/tasks")
-	if !handled || cmd != nil || model.taskPicker == nil || model.taskPicker.tab != activityTabTasks {
-		t.Fatalf("/tasks handled=%v cmd=%v activity=%#v", handled, cmd, model.taskPicker)
+	if !handled || cmd != nil || !model.activity.visible || model.activity.tab != activityTabTasks {
+		t.Fatalf("/tasks handled=%v cmd=%v activity=%#v", handled, cmd, model.activity)
 	}
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = next.(appModel)
-	if model.taskPicker.tab != activityTabTodo {
-		t.Fatalf("tab=%v, want Pipeline", model.taskPicker.tab)
+	if model.activity.tab != activityTabTodo {
+		t.Fatalf("tab=%v, want Pipeline", model.activity.tab)
 	}
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
 	model = next.(appModel)
-	if model.taskPicker.tab != activityTabTasks {
-		t.Fatalf("shift+tab=%v, want Tasks", model.taskPicker.tab)
+	if model.activity.tab != activityTabTasks {
+		t.Fatalf("shift+tab=%v, want Tasks", model.activity.tab)
 	}
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	model = next.(appModel)
-	if model.taskPicker != nil {
-		t.Fatalf("Esc activity=%#v, want nil", model.taskPicker)
+	if model.activity.visible {
+		t.Fatalf("Esc activity=%#v, want nil", model.activity)
 	}
 
 	handled, cmd = model.handleCommand("/todo")
-	if !handled || cmd != nil || model.taskPicker == nil || model.taskPicker.tab != activityTabTodo {
-		t.Fatalf("/todo handled=%v cmd=%v activity=%#v", handled, cmd, model.taskPicker)
+	if !handled || cmd != nil || !model.activity.visible || model.activity.tab != activityTabTodo {
+		t.Fatalf("/todo handled=%v cmd=%v activity=%#v", handled, cmd, model.activity)
 	}
 }
 

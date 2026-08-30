@@ -2,12 +2,12 @@
 package bubble
 
 import (
-"bufio"
-"context"
-"encoding/json"
-"errors"
-"fmt"
-"os"
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
 	"paw/internal/loop"
 	"paw/internal/message"
 	"paw/internal/session"
@@ -33,12 +33,6 @@ func waitTaskUpdateCmd(ctx context.Context, updates <-chan struct{}) tea.Cmd {
 	}
 }
 
-func newTaskPicker(tasks []taskpkg.TaskSnapshot) *taskPicker {
-	return &taskPicker{
-		tasks: append([]taskpkg.TaskSnapshot(nil), tasks...),
-		tab:   activityTabTasks,
-	}
-}
 func (m appModel) openTaskPicker() (tea.Model, tea.Cmd) {
 	m.openActivity(activityTabTasks)
 	return m, nil
@@ -53,70 +47,95 @@ func (m *appModel) openActivity(tab activityTab) {
 	if m == nil {
 		return
 	}
-	m.taskPicker = newTaskPicker(m.taskEntries())
-	m.taskPicker.tab = tab
+	m.activity.visible = true
+	m.activity.focus = activityFocusPanel
+	m.activity.tab = tab
+	m.activity.commandPrefix = activityCommandIdle
 	m.sessionPicker = nil
 	m.modelWizard = nil
 	m.settingWizard = nil
 	m.clearCompletionAndRelayout()
+	m.refreshActivityTasks()
+	m.input.Blur()
 	m.relayout()
+	m.refreshViewport()
 }
 
-func (m appModel) handleTaskPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.taskPicker == nil {
-		return m, nil
+func (m *appModel) closeActivity() {
+	if m == nil {
+		return
 	}
+	m.activity.visible = false
+	m.activity.focus = activityFocusWorkspace
+	m.activity.commandPrefix = activityCommandIdle
+	m.input.Focus()
+	m.relayout()
+	m.refreshViewport()
+}
 
+func (m appModel) handleActivityKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "ctrl+g", "esc":
-		m.taskPicker = nil
-		m.relayout()
+		m.closeActivity()
 		return m, m.input.Focus()
 	case "tab", "right", "l":
-		m.taskPicker.tab = activityTabTodo
+		m.activity.tab = activityTabTodo
 		return m, nil
 	case "shift+tab", "left", "h":
-		m.taskPicker.tab = activityTabTasks
+		m.activity.tab = activityTabTasks
 		return m, nil
 	case "up", "k":
-		if m.taskPicker.tab != activityTabTasks {
-			return m, nil
-		}
-		if m.taskPicker.selectedIndex > 0 {
-			m.taskPicker.selectedIndex--
+		if m.activity.tab == activityTabTasks {
+			m.selectActivityTask(m.activity.selectedIndex - 1)
 		}
 		return m, nil
 	case "down", "j":
-		if m.taskPicker.tab != activityTabTasks {
-			return m, nil
-		}
-		if m.taskPicker.selectedIndex < len(m.taskPicker.tasks)-1 {
-			m.taskPicker.selectedIndex++
+		if m.activity.tab == activityTabTasks {
+			m.selectActivityTask(m.activity.selectedIndex + 1)
 		}
 		return m, nil
 	case "enter":
-		if m.taskPicker.tab != activityTabTasks {
+		if m.activity.tab != activityTabTasks || len(m.activity.tasks) == 0 {
 			return m, nil
 		}
-		if len(m.taskPicker.tasks) == 0 {
-			return m, nil
-		}
-		task := m.taskPicker.tasks[m.taskPicker.selectedIndex]
-		return m.previewTaskTranscript(task)
+		selected := clampInt(m.activity.selectedIndex, 0, len(m.activity.tasks)-1)
+		return m.previewTaskTranscript(m.activity.tasks[selected])
 	}
 	return m, nil
 }
 
 func (m *appModel) refreshActivityTasks() {
-	if m == nil || m.taskPicker == nil {
+	if m == nil || !m.activity.visible {
 		return
 	}
-	m.taskPicker.tasks = append(m.taskPicker.tasks[:0], m.taskEntries()...)
-	if len(m.taskPicker.tasks) == 0 {
-		m.taskPicker.selectedIndex = 0
+	oldIndex := m.activity.selectedIndex
+	selectedID := strings.TrimSpace(m.activity.selectedTaskID)
+	m.activity.tasks = append(m.activity.tasks[:0], m.taskEntries()...)
+	if len(m.activity.tasks) == 0 {
+		m.activity.selectedIndex = 0
+		m.activity.selectedTaskID = ""
 		return
 	}
-	m.taskPicker.selectedIndex = clampInt(m.taskPicker.selectedIndex, 0, len(m.taskPicker.tasks)-1)
+	if selectedID != "" {
+		for index, snapshot := range m.activity.tasks {
+			if strings.TrimSpace(snapshot.ID) == selectedID {
+				m.activity.selectedIndex = index
+				return
+			}
+		}
+	}
+	m.activity.selectedIndex = clampInt(oldIndex, 0, len(m.activity.tasks)-1)
+	m.activity.selectedTaskID = strings.TrimSpace(m.activity.tasks[m.activity.selectedIndex].ID)
+}
+
+func (m *appModel) selectActivityTask(index int) {
+	if len(m.activity.tasks) == 0 {
+		m.activity.selectedIndex = 0
+		m.activity.selectedTaskID = ""
+		return
+	}
+	m.activity.selectedIndex = clampInt(index, 0, len(m.activity.tasks)-1)
+	m.activity.selectedTaskID = strings.TrimSpace(m.activity.tasks[m.activity.selectedIndex].ID)
 }
 
 // activityPollInterval 是 Activity 面板中 ListTasks 刷新的节流间隔。
@@ -127,7 +146,7 @@ const activityPollInterval = 500 * time.Millisecond
 // ListTasks 相关刷新：高频（running 任务存在）时使用 500ms 节流，
 // 否则使用更保守的 2s 节流，避免每帧都跨进程读 task registry。
 func (m *appModel) refreshActivityFromTasks(now time.Time) bool {
-	if m == nil || m.taskPicker == nil {
+	if m == nil || !m.activity.visible {
 		return false
 	}
 	interval := activityPollInterval
@@ -149,10 +168,10 @@ func (m *appModel) refreshActivityFromTasks(now time.Time) bool {
 
 // activityHasRunningTask 报告当前 Activity 面板任务列表中是否有 running 任务。
 func (m *appModel) activityHasRunningTask() bool {
-	if m == nil || m.taskPicker == nil {
+	if m == nil || !m.activity.visible {
 		return false
 	}
-	for _, task := range m.taskPicker.tasks {
+	for _, task := range m.activity.tasks {
 		if string(task.Status) == "running" {
 			return true
 		}
@@ -680,7 +699,9 @@ func (m *appModel) applySessionPickerRestore(msg sessionRestoredMsg) {
 	m.doneAssistant = -1
 	m.sessionID = msg.sessionID
 	m.sessionPicker = nil
-	m.taskPicker = nil
+	m.activity.visible = false
+	m.activity.focus = activityFocusWorkspace
+	m.activity.commandPrefix = activityCommandIdle
 	m.taskPreview = nil
 	m.goalMode = false
 	m.planMode = false
@@ -734,7 +755,7 @@ func (m *appModel) applyTaskPreviewRestore(msg sessionRestoredMsg) {
 	m.resetToolInspect()
 	m.clearNewMessageNotice()
 	m.sessionPicker = nil
-	m.taskPicker = nil
+	m.closeActivity()
 	if msg.taskPreview != nil {
 		preview := *msg.taskPreview
 		preview.parentTranscript = copyTranscriptEntries(msg.taskPreview.parentTranscript)
@@ -753,7 +774,7 @@ func (m *appModel) restoreMainTranscriptFromTaskPreview() {
 		return
 	}
 	m.sessionPicker = nil
-	m.taskPicker = nil
+	m.closeActivity()
 	m.taskPreview = nil
 	m.resetToolInspect()
 	m.clearNewMessageNotice()

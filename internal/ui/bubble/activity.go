@@ -9,7 +9,7 @@ import (
 )
 
 func (m appModel) renderActivityBox() string {
-	if m.taskPicker == nil {
+	if !m.activity.visible {
 		return ""
 	}
 	panelWidth := m.activityPanelWidth()
@@ -19,7 +19,7 @@ func (m appModel) renderActivityBox() string {
 
 	tasksTab := " Tasks "
 	todoTab := " Todo "
-	if m.taskPicker.tab == activityTabTasks {
+	if m.activity.tab == activityTabTasks {
 		tasksTab = m.styles.SelectionSelected.Render(tasksTab)
 		todoTab = unselectedProviderStyle.Render(todoTab)
 	} else {
@@ -31,7 +31,7 @@ func (m appModel) renderActivityBox() string {
 		wizardTitleStyle.Render("Activity"),
 		tasksTab + " " + todoTab,
 	}
-	switch m.taskPicker.tab {
+	switch m.activity.tab {
 	case activityTabTodo:
 		lines = append(lines, "", m.renderActivityTodo(contentWidth, maxInt(1, contentHeight-len(lines))))
 	default:

@@ -2807,8 +2807,8 @@ func TestTaskCommandUsesDefaultsAndTasksRender(t *testing.T) {
 	if !handled || cmd != nil {
 		t.Fatalf("/tasks handled/cmd = %v/%v", handled, cmd)
 	}
-	if model.taskPicker == nil || model.taskPicker.tab != activityTabTasks {
-		t.Fatalf("activity = %#v, want Tasks tab", model.taskPicker)
+	if !model.activity.visible || model.activity.tab != activityTabTasks {
+		t.Fatalf("activity = %#v, want Tasks tab", model.activity)
 	}
 	if got := model.renderActivityBox(); !strings.Contains(got, "worker") {
 		t.Fatalf("Activity modal = %q, want worker", got)
@@ -5458,7 +5458,7 @@ func TestCtrlGtaskPickerEnterPreviewsSelectedtask(t *testing.T) {
 
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
 	model = next.(appModel)
-	if model.taskPicker == nil {
+	if !model.activity.visible {
 		t.Fatalf("taskPicker = nil, want picker")
 	}
 	if got := model.input.Value(); got != "main input" {
@@ -5473,8 +5473,8 @@ func TestCtrlGtaskPickerEnterPreviewsSelectedtask(t *testing.T) {
 
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
 	model = next.(appModel)
-	if model.taskPicker.selectedIndex != 1 {
-		t.Fatalf("selectedIndex = %d, want second task", model.taskPicker.selectedIndex)
+	if model.activity.selectedIndex != 1 {
+		t.Fatalf("selectedIndex = %d, want second task", model.activity.selectedIndex)
 	}
 
 	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -5528,14 +5528,14 @@ func TestTaskPickerEscAndCtrlGCloseSelection(t *testing.T) {
 
 		next, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
 		model = next.(appModel)
-		if model.taskPicker == nil {
+		if !model.activity.visible {
 			t.Fatalf("key %v: taskPicker = nil after ctrl+g", key)
 		}
 
 		next, _ = model.Update(tea.KeyMsg{Type: key})
 		model = next.(appModel)
-		if model.taskPicker != nil {
-			t.Fatalf("key %v: taskPicker = %#v, want nil", key, model.taskPicker)
+		if model.activity.visible {
+			t.Fatalf("key %v: taskPicker = %#v, want nil", key, model.activity)
 		}
 		if got := model.input.Value(); got != "main input" {
 			t.Fatalf("key %v: input value = %q, want preserved", key, got)
@@ -5605,8 +5605,8 @@ func TestCtrlGTogglestaskPreviewClosed(t *testing.T) {
 	if model.taskPreview != nil {
 		t.Fatalf("taskPreview = %#v, want nil after ctrl+g toggle", model.taskPreview)
 	}
-	if model.taskPicker != nil {
-		t.Fatalf("taskPicker = %#v, want nil after ctrl+g toggle", model.taskPicker)
+	if model.activity.visible {
+		t.Fatalf("taskPicker = %#v, want nil after ctrl+g toggle", model.activity)
 	}
 	if len(model.transcript) != 1 || model.transcript[0].body != "main message" {
 		t.Fatalf("transcript = %#v, want restored main transcript", model.transcript)
@@ -6006,10 +6006,10 @@ func TestFormatSessionLabel_SizeDisplay(t *testing.T) {
 			if strings.Contains(label, "abcdef1234567890") || strings.Contains(label, "abcdef12") {
 				t.Fatalf("formatSessionLabel() = %q, must not expose session ID", label)
 			}
-		// 时间戳按本地时区显示（落库为 UTC，换算后再断言，时区无关）。
-		if !strings.Contains(label, base.Local().Format("2006-01-02 15:04:05")) {
-			t.Fatalf("formatSessionLabel() = %q, want creation timestamp", label)
-		}
+			// 时间戳按本地时区显示（落库为 UTC，换算后再断言，时区无关）。
+			if !strings.Contains(label, base.Local().Format("2006-01-02 15:04:05")) {
+				t.Fatalf("formatSessionLabel() = %q, want creation timestamp", label)
+			}
 		})
 	}
 
@@ -7161,8 +7161,8 @@ func TestTaskTaskUpdateMsgRefreshesActivityAndPreview(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("task update should re-arm the subscription wait command")
 	}
-	if len(model.taskPicker.tasks) != 1 || model.taskPicker.tasks[0].Status != taskpkg.TaskCompleted {
-		t.Fatalf("activity tasks = %#v, want completed task", model.taskPicker.tasks)
+	if len(model.activity.tasks) != 1 || model.activity.tasks[0].Status != taskpkg.TaskCompleted {
+		t.Fatalf("activity tasks = %#v, want completed task", model.activity.tasks)
 	}
 	if model.taskPreview.task.Status != taskpkg.TaskCompleted || model.taskPreview.liveContent != "" {
 		t.Fatalf("preview = %#v, want refreshed terminal task without live content", model.taskPreview)

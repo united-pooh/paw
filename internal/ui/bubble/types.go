@@ -459,10 +459,29 @@ type sessionSummaryItem struct {
 	transcriptSize int64
 }
 
-type taskPicker struct {
-	tasks         []task.TaskSnapshot
-	selectedIndex int
-	tab           activityTab
+type activityPaneFocus uint8
+
+const (
+	activityFocusWorkspace activityPaneFocus = iota
+	activityFocusPanel
+)
+
+type activityCommandPrefix uint8
+
+const (
+	activityCommandIdle activityCommandPrefix = iota
+	activityCommandCtrlW
+)
+
+type activityState struct {
+	visible        bool
+	focus          activityPaneFocus
+	tab            activityTab
+	widthColumns   int
+	tasks          []task.TaskSnapshot
+	selectedIndex  int
+	selectedTaskID string
+	commandPrefix  activityCommandPrefix
 }
 
 type taskTranscriptPreview struct {
@@ -638,7 +657,7 @@ type appModel struct {
 	modelWizard                         *modelWizard
 	settingWizard                       *settingWizard
 	sessionPicker                       *sessionPicker
-	taskPicker                          *taskPicker
+	activity                            activityState
 	taskPreview                         *taskTranscriptPreview
 	completion                          *completion
 	lastActivityPollAt                  time.Time // Activity 面板 ListTasks 刷新的节流时间戳

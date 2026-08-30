@@ -57,8 +57,8 @@ func (m appModel) renderTasksCardContentHeight(width, height int) string {
 			}
 		}
 	}
-	if m.taskPicker != nil && availableTaskRows > 0 {
-		selected := clampInt(m.taskPicker.selectedIndex, 0, len(tasks)-1)
+	if m.activity.visible && availableTaskRows > 0 {
+		selected := clampInt(m.activity.selectedIndex, 0, len(tasks)-1)
 		if selected < windowStart {
 			windowStart = selected
 		}
@@ -105,7 +105,7 @@ func (m appModel) renderTasksCardContentHeight(width, height int) string {
 		if color := strings.TrimSpace(t.Color); color != "" {
 			nameStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(color))
 		}
-		if m.taskPicker != nil && idx == clampInt(m.taskPicker.selectedIndex, 0, len(tasks)-1) {
+		if m.activity.visible && idx == clampInt(m.activity.selectedIndex, 0, len(tasks)-1) {
 			dot = ">"
 			dotStyle = m.styles.SelectionSelected
 			nameStyle = m.styles.SelectionSelected

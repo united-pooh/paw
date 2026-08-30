@@ -111,8 +111,8 @@ func (m appModel) needsUIAnimationFrames(now time.Time) bool {
 	if !m.waveAmpStartedAt.IsZero() && now.Sub(m.waveAmpStartedAt) < equalizerAmpDuration {
 		return true
 	}
-	if m.taskPicker != nil {
-		for _, task := range m.taskPicker.tasks {
+	if m.activity.visible {
+		for _, task := range m.activity.tasks {
 			if string(task.Status) == "running" {
 				return true
 			}

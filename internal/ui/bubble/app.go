@@ -71,15 +71,19 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 	}
 	skillRoot, _ := os.Getwd()
 	model := appModel{
-		theme:                     selectedTheme,
-		styles:                    styles,
-		ctx:                       ctx,
-		runner:                    runner,
-		sessionID:                 sessionID,
-		modelConfig:               controller,
-		settingsConfig:            settingsController,
-		taskController:            taskController,
-		sessionStore:              sessionStore,
+		theme:          selectedTheme,
+		styles:         styles,
+		ctx:            ctx,
+		runner:         runner,
+		sessionID:      sessionID,
+		modelConfig:    controller,
+		settingsConfig: settingsController,
+		taskController: taskController,
+		sessionStore:   sessionStore,
+		activity: activityState{
+			focus: activityFocusWorkspace,
+			tab:   activityTabTasks,
+		},
 		commandRegistry:           NewCommandRegistry(),
 		skillRegistry:             skill.NewRegistry(skill.DefaultRoots(skillRoot)),
 		cursorAnchor:              anchor,
@@ -515,7 +519,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			title := "sessions"
 			if msg.source == sessionRestoreTaskEnter {
 				title = "task"
-				m.taskPicker = nil
+				m.closeActivity()
 			} else {
 				m.sessionPicker = nil
 			}
@@ -689,8 +693,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.sessionPicker != nil {
 			return m.handleSessionPickerKey(msg)
 		}
-		if m.taskPicker != nil {
-			return m.handleTaskPickerKey(msg)
+		if m.activity.visible {
+			return m.handleActivityKey(msg)
 		}
 		if m.toolInspectActive {
 			return m.handleToolInspectKey(msg)
@@ -717,7 +721,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.String() == "ctrl+g" {
 			// ctrl+g 是 task 面板的全局 toggle：面板打开时由
-			// handleTaskPickerKey 拦截并关闭；task preview 中按下
+			// handleActivityKey 拦截并关闭；task preview 中按下
 			// 视为收起面板，直接返回主 transcript；其余状态打开面板。
 			if m.taskPreview != nil {
 				m.restoreMainTranscriptFromTaskPreview()
