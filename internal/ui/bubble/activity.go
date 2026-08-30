@@ -2,46 +2,97 @@ package bubble
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"paw/internal/todo"
 )
 
+var activityPages = []struct {
+	id    activityTab
+	title string
+}{
+	{id: activityTabTasks, title: "Tasks"},
+	{id: activityTabTodo, title: "Todo"},
+}
+
+var (
+	activityFocusStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorSignal)).Bold(true)
+	activityHintStyle  = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorContextFree))
+)
+
+func (m appModel) renderActivityPane(width, height int) string {
+	width = maxInt(1, width)
+	height = maxInt(1, height)
+	headerHeight := minInt(2, height)
+	footerHeight := 0
+	if height >= 4 {
+		footerHeight = 1
+	}
+	bodyHeight := maxInt(0, height-headerHeight-footerHeight)
+
+	focus := ""
+	if m.activity.focus == activityFocusPanel {
+		focus = activityFocusStyle.Render("FOCUSED")
+	}
+	title := renderSidebarRow(width, "Activity", focus, wizardTitleStyle, activityFocusStyle)
+	parts := []string{title}
+	if headerHeight > 1 {
+		parts = append(parts, m.renderActivityTabs(width))
+	}
+
+	body := ""
+	switch m.activity.tab {
+	case activityTabTodo:
+		body = m.renderActivityTodo(width, bodyHeight)
+	default:
+		body = m.renderActivityTasks(width, bodyHeight)
+	}
+	if bodyHeight > 0 {
+		parts = append(parts, fitStyledRect(body, width, bodyHeight))
+	}
+	if footerHeight > 0 {
+		parts = append(parts, activityHintStyle.Render(truncateStyledCellLine(m.activityFooterHint(), width)))
+	}
+	return fitStyledRect(strings.Join(parts, "\n"), width, height)
+}
+
 func (m appModel) renderActivityBox() string {
 	if !m.activity.visible {
 		return ""
 	}
-	panelWidth := m.activityPanelWidth()
-	panelHeight := m.activityPanelHeight()
-	contentWidth := maxInt(1, panelWidth-wizardPanelStyle.GetHorizontalFrameSize()-wizardPanelStyle.GetHorizontalPadding())
-	contentHeight := maxInt(1, panelHeight-wizardPanelStyle.GetVerticalFrameSize()-wizardPanelStyle.GetVerticalPadding())
-
-	tasksTab := " Tasks "
-	todoTab := " Todo "
-	if m.activity.tab == activityTabTasks {
-		tasksTab = m.styles.SelectionSelected.Render(tasksTab)
-		todoTab = unselectedProviderStyle.Render(todoTab)
-	} else {
-		tasksTab = unselectedProviderStyle.Render(tasksTab)
-		todoTab = m.styles.SelectionSelected.Render(todoTab)
-	}
-
-	lines := []string{
-		wizardTitleStyle.Render("Activity"),
-		tasksTab + " " + todoTab,
-	}
-	switch m.activity.tab {
-	case activityTabTodo:
-		lines = append(lines, "", m.renderActivityTodo(contentWidth, maxInt(1, contentHeight-len(lines))))
-	default:
-		lines = append(lines, "", m.renderActivityTasks(contentWidth, maxInt(1, contentHeight-len(lines))))
-	}
-	lines = append(lines, "", unselectedProviderStyle.Render("Tab/←/→ switch  ↑/↓ select  Enter open  Esc close"))
-	return renderFixedStyledPanel(wizardPanelStyle, panelWidth, panelHeight, strings.Join(lines, "\n"))
+	return m.renderActivityPane(m.activityPanelWidth(), m.activityPanelHeight())
 }
 
-// renderActivityTodo 在 Activity 面板中渲染当前 todo 列表。
+func (m appModel) renderActivityTabs(width int) string {
+	labels := make([]string, 0, len(activityPages))
+	for _, page := range activityPages {
+		label := page.title
+		switch page.id {
+		case activityTabTasks:
+			label += " " + strconv.Itoa(len(m.activity.tasks))
+		case activityTabTodo:
+			if m.hasCurrentTodo && !m.currentTodo.Cleared() {
+				label += fmt.Sprintf(" %d/%d", m.currentTodo.CompletedCount(), m.currentTodo.TotalCount())
+			}
+		}
+		style := unselectedProviderStyle
+		if page.id == m.activity.tab {
+			style = m.styles.SelectionSelected
+		}
+		labels = append(labels, style.Render(" "+label+" "))
+	}
+	return truncateStyledCellLine(strings.Join(labels, " "), width)
+}
+
+func (m appModel) activityFooterHint() string {
+	if m.activity.tab == activityTabTodo {
+		return "Tab/←/→ page · Esc main"
+	}
+	return "↑/↓ select · Enter preview · Tab page · Esc main"
+}
+
 func (m appModel) renderActivityTodo(width, height int) string {
 	if !m.hasCurrentTodo || m.currentTodo.Cleared() {
 		return unselectedProviderStyle.Render("No active todo list")
@@ -71,7 +122,6 @@ func (m appModel) renderActivityTodo(width, height int) string {
 	return strings.Join(lines, "\n")
 }
 
-// renderTodoItemLine 渲染单个 todo 项。
 func renderTodoItemLine(item todo.Item, width, contentWidth int) []string {
 	icon, iconStyle := todoStatusDisplay(item.Status)
 	mark := iconStyle.Render(icon + " ")
@@ -82,7 +132,6 @@ func renderTodoItemLine(item todo.Item, width, contentWidth int) []string {
 	return []string{fitStyledCellLine(line, width)}
 }
 
-// todoStatusDisplay 根据 todo 状态返回图标与样式。
 func todoStatusDisplay(status todo.Status) (string, lipgloss.Style) {
 	switch status {
 	case todo.StatusCompleted:
@@ -94,30 +143,12 @@ func todoStatusDisplay(status todo.Status) (string, lipgloss.Style) {
 	}
 }
 
-// activityPanelWidth 是右侧 Activity 面板的显示宽度（含边框）：贴右边界，
-// 最多占内容区一半（上限 60 列），把左侧留给 transcript。
 func (m appModel) activityPanelWidth() int {
 	layout := m.currentLayout()
 	return minInt(60, maxInt(1, layout.contentWidth/2))
 }
 
-// activityPanelHeight 是右侧 Activity 面板的显示高度（含边框）：最高占
-// transcript 区域（上下各留 1 行呼吸空间）。
 func (m appModel) activityPanelHeight() int {
 	layout := m.currentLayout()
 	return maxInt(1, layout.transcriptHeight-2)
-}
-
-func (m appModel) renderActivityTasks(width, height int) string {
-	if m.taskController == nil {
-		return labelErrorStyle.Render("Task controller is unavailable.")
-	}
-	if len(m.taskEntries()) == 0 {
-		return unselectedProviderStyle.Render("No tasks yet.")
-	}
-	return lipgloss.NewStyle().
-		Width(maxInt(1, width)).
-		MaxWidth(maxInt(1, width)).
-		MaxHeight(maxInt(1, height)).
-		Render(m.renderTasksCardContentHeight(width, height))
 }

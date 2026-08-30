@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"paw/internal/task"
 )
 
@@ -117,6 +118,70 @@ func (m appModel) renderTasksCardContentHeight(width, height int) string {
 		lines = append(lines, renderSidebarRow(width, fmt.Sprintf("+%d more", moreCount), "", mutedStyle, mutedStyle))
 	}
 	return strings.Join(lines, "\n")
+}
+
+var activityTaskSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+func (m appModel) renderActivityTasks(width, height int) string {
+	if m.taskController == nil {
+		return fitStyledRect(labelErrorStyle.Render("Task controller is unavailable."), width, height)
+	}
+	tasks := m.activity.tasks
+	if len(tasks) == 0 {
+		return fitStyledRect(unselectedProviderStyle.Render("No tasks yet."), width, height)
+	}
+	visible := maxInt(1, height/2)
+	selected := clampInt(m.activity.selectedIndex, 0, len(tasks)-1)
+	start := clampInt(selected-visible+1, 0, maxInt(0, len(tasks)-visible))
+	end := minInt(len(tasks), start+visible)
+	lines := make([]string, 0, height)
+	for index := start; index < end; index++ {
+		first, second := m.renderActivityTaskRows(tasks[index], width, index == selected)
+		lines = append(lines, first)
+		if len(lines) < height {
+			lines = append(lines, second)
+		}
+	}
+	return fitStyledRect(strings.Join(lines, "\n"), width, height)
+}
+
+func (m appModel) renderActivityTaskRows(snapshot task.TaskSnapshot, width int, selected bool) (string, string) {
+	glyph := "✓"
+	status := "done"
+	right := ""
+	switch snapshot.Status {
+	case task.TaskRunning:
+		glyph = activityTaskSpinnerFrames[m.spinnerFrameIdx%len(activityTaskSpinnerFrames)]
+		status = "running"
+		right = formatElapsedTime(time.Since(snapshot.StartedAt))
+	case task.TaskFailed:
+		glyph, status = "✗", "failed"
+	case task.TaskStopped:
+		glyph, status = "■", "stopped"
+	case task.TaskInterrupted:
+		glyph, status = "!", "interrupted"
+	}
+	name := taskDisplayName(snapshot)
+	first := renderSidebarRow(width, glyph+" "+name, right, unselectedProviderStyle, unselectedProviderStyle)
+	meta := status
+	if snapshot.UsedTokens > 0 {
+		meta += " · " + formatCompactTokenCount(snapshot.UsedTokens) + " tokens"
+	}
+	if m.taskPreview != nil && strings.TrimSpace(m.taskPreview.task.ID) == strings.TrimSpace(snapshot.ID) {
+		meta += " · previewing on left"
+	}
+	if width < 40 {
+		meta = status
+		if m.taskPreview != nil && strings.TrimSpace(m.taskPreview.task.ID) == strings.TrimSpace(snapshot.ID) {
+			meta += " · previewing"
+		}
+	}
+	second := "  " + truncateStyledCellLine(meta, maxInt(1, width-2))
+	if selected {
+		return m.styles.SelectionSelected.Render(fitStyledCellLine(ansi.Strip(first), width)),
+			m.styles.SelectionSelected.Render(fitStyledCellLine(second, width))
+	}
+	return fitStyledCellLine(first, width), unselectedProviderStyle.Render(fitStyledCellLine(second, width))
 }
 
 func renderSidebarRow(width int, left, right string, leftStyle, rightStyle lipgloss.Style) string {
