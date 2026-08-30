@@ -19,17 +19,21 @@ const (
 // tuiLayout 是由终端尺寸和输入高度唯一决定的纯布局结果。
 // frame 的尺寸只随 WindowSizeMsg 改变，内容更新只能改变内部区域。
 type tuiLayout struct {
-	frameWidth        int
-	frameHeight       int
-	contentWidth      int
-	contentHeight     int
-	headerHeight      int
-	transcriptHeight  int
-	statusHeight      int
-	worktreeHeight    int
-	inputHeight       int
-	queueHeight       int
-	queueInlineHeight int
+	frameWidth             int
+	frameHeight            int
+	contentWidth           int
+	contentHeight          int
+	workspaceWidth         int
+	activityWidth          int
+	activitySeparatorWidth int
+	activityMode           activityLayoutMode
+	headerHeight           int
+	transcriptHeight       int
+	statusHeight           int
+	worktreeHeight         int
+	inputHeight            int
+	queueHeight            int
+	queueInlineHeight      int
 }
 
 func computeTUILayout(width, height, requestedInputHeight int) tuiLayout {
@@ -66,6 +70,8 @@ func computeTUILayoutWithInputLimit(width, height, requestedInputHeight, inputHe
 		frameHeight:      frameHeight,
 		contentWidth:     contentWidth,
 		contentHeight:    contentHeight,
+		workspaceWidth:   contentWidth,
+		activityMode:     activityLayoutHidden,
 		headerHeight:     headerHeight,
 		transcriptHeight: transcriptHeight,
 		statusHeight:     statusHeight,

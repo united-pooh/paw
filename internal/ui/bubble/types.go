@@ -84,14 +84,14 @@ type transcriptEntry struct {
 	reasoningPartIndex    int // provider block index
 	reasoningStartedAt    *time.Time
 	reasoningFinishedAt   *time.Time
-reasoningExpansionSet bool // UI-only local override; never persisted
-reasoningExpanded     bool // value used when reasoningExpansionSet is true
-// responseClock 仅存在于视图副本（transcript 原条目永不置位）：该响应紧跟
-// 一个工作运行时由折叠层标记，渲染时在响应结束的下一行输出暗色时钟行，
-// 而不是把时间挂在 Thought 段标题上（避免时间跑到响应上方）。
-responseClock bool
-// segment 仅在 kind == entryWorkSegment 时非空，持有收编的子条目与聚合统计。
-segment *workSegmentData
+	reasoningExpansionSet bool // UI-only local override; never persisted
+	reasoningExpanded     bool // value used when reasoningExpansionSet is true
+	// responseClock 仅存在于视图副本（transcript 原条目永不置位）：该响应紧跟
+	// 一个工作运行时由折叠层标记，渲染时在响应结束的下一行输出暗色时钟行，
+	// 而不是把时间挂在 Thought 段标题上（避免时间跑到响应上方）。
+	responseClock bool
+	// segment 仅在 kind == entryWorkSegment 时非空，持有收编的子条目与聚合统计。
+	segment *workSegmentData
 }
 
 // workSegmentData 是一个工作段的视图数据：子条目为原始 reasoning/tool 条目
@@ -111,10 +111,10 @@ type workSegmentData struct {
 // 起点（纳秒精度，逐段唯一）：live 段在流式中 children/toolCalls/failed
 // 会持续增长，把这些计数纳入 key 会让展开态在段成长时丢失。
 func workSegmentKey(data *workSegmentData) string {
-if data == nil {
-return ""
-}
-return fmt.Sprintf("%d/%t", data.startedAt.UnixNano(), data.hasReasoning)
+	if data == nil {
+		return ""
+	}
+	return fmt.Sprintf("%d/%t", data.startedAt.UnixNano(), data.hasReasoning)
 }
 
 type toolCitation struct {
@@ -476,100 +476,100 @@ type taskTranscriptPreview struct {
 
 // appModel 是 Bubble Tea TUI 的唯一状态中心。
 type appModel struct {
-	ctx                                 context.Context
-	theme                               theme.Theme
-	styles                              StyleSet
-	themePicker                         *themePickerState
-	runner                              Runner
-	workspaceRoot                       string
-	selectionBroker                     *selecttool.Broker
-	selectionDock                       *selectionDock
-	todoBroker                          *todo.Broker
-	currentTodo                         todo.Snapshot
-	hasCurrentTodo                      bool
-	todoWasCleared                      bool
-	latestTodoIndex                     int
-	sessionID                           string
-	modelConfig                         ModelConfigController
-	configCenterController              ConfigCenterController
-	configCenter                        *configCenterState
-	settingsConfig                      SettingsController
-	taskController                      TaskController
-	taskUpdates                         <-chan struct{}
-	taskUpdatesStop                     func()
-	sessionStore                        SessionStore
-	mcpController                       MCPStatusController
-	goalController                      GoalController
-	planController                      PlanController
-	commandRegistry                     *CommandRegistry
-	skillRegistry                       *skill.Registry
-	queryGuard                          QueryGuard
-	chatQueue                           CommandQueue
-	queueMode                           queueInteractionMode
-	queueSelectedID                     string
-	queueEdit                           *queueEditState
-	inputSource                         inputSource
-	cursorAnchor                        *terminalCursorAnchor
-	input                               textareax.Model
-	viewport                            viewportx.Model
-	width                               int
-	height                              int
-	ready                               bool
-	running                             bool
-	runningTerminal                     bool
-	terminalMode                        bool
-	goalMode                            bool
-	planMode                            bool
-	terminalPreview                     bool
-	hasInteracted                       bool
-	showThinking                        bool
-	selecting                           bool
-	selectionActive                     bool
-	selectionStart                      selectionPoint
-	selectionEnd                        selectionPoint
-	selectionMode                       selectionMode
-	selectionAnchor                     selectionPoint
-	selectionMoved                      bool
-	clickCount                          int
-	lastClickAt                         time.Time
-	lastClickPoint                      selectionPoint
-	clickActionSeq                      uint64
-	clickActionPending                  bool
-	copyToast                           string
-	copyToastUntil                      time.Time
-	translatePanel                      *translatePanel
-	translateSeq                        uint64
-	cursorFrameAt                       time.Time
-	uiAnimationFrameScheduled           bool
-	clockTickScheduled                  bool      // 空闲时钟链去重标志
-	lastKeyEventAt                      time.Time // 最后键盘输入时刻（IME 安全窗口用）
-	turnStartedAt                       time.Time
-	turnID                              string
+	ctx                       context.Context
+	theme                     theme.Theme
+	styles                    StyleSet
+	themePicker               *themePickerState
+	runner                    Runner
+	workspaceRoot             string
+	selectionBroker           *selecttool.Broker
+	selectionDock             *selectionDock
+	todoBroker                *todo.Broker
+	currentTodo               todo.Snapshot
+	hasCurrentTodo            bool
+	todoWasCleared            bool
+	latestTodoIndex           int
+	sessionID                 string
+	modelConfig               ModelConfigController
+	configCenterController    ConfigCenterController
+	configCenter              *configCenterState
+	settingsConfig            SettingsController
+	taskController            TaskController
+	taskUpdates               <-chan struct{}
+	taskUpdatesStop           func()
+	sessionStore              SessionStore
+	mcpController             MCPStatusController
+	goalController            GoalController
+	planController            PlanController
+	commandRegistry           *CommandRegistry
+	skillRegistry             *skill.Registry
+	queryGuard                QueryGuard
+	chatQueue                 CommandQueue
+	queueMode                 queueInteractionMode
+	queueSelectedID           string
+	queueEdit                 *queueEditState
+	inputSource               inputSource
+	cursorAnchor              *terminalCursorAnchor
+	input                     textareax.Model
+	viewport                  viewportx.Model
+	width                     int
+	height                    int
+	ready                     bool
+	running                   bool
+	runningTerminal           bool
+	terminalMode              bool
+	goalMode                  bool
+	planMode                  bool
+	terminalPreview           bool
+	hasInteracted             bool
+	showThinking              bool
+	selecting                 bool
+	selectionActive           bool
+	selectionStart            selectionPoint
+	selectionEnd              selectionPoint
+	selectionMode             selectionMode
+	selectionAnchor           selectionPoint
+	selectionMoved            bool
+	clickCount                int
+	lastClickAt               time.Time
+	lastClickPoint            selectionPoint
+	clickActionSeq            uint64
+	clickActionPending        bool
+	copyToast                 string
+	copyToastUntil            time.Time
+	translatePanel            *translatePanel
+	translateSeq              uint64
+	cursorFrameAt             time.Time
+	uiAnimationFrameScheduled bool
+	clockTickScheduled        bool      // 空闲时钟链去重标志
+	lastKeyEventAt            time.Time // 最后键盘输入时刻（IME 安全窗口用）
+	turnStartedAt             time.Time
+	turnID                    string
 	// lastModelVisibleActivityAt 是本轮最近一次模型可见活动（正文 delta、
 	// 工具调用/结果、思考块收尾）的时刻。与 turnStartedAt 一起界定当前
 	// reasoning 块的计时窗口起点：思考内容被网关缓冲、最后才一次性到达时，
 	// 时长仍能覆盖从请求发出到思考结束的真实等待。
-	lastModelVisibleActivityAt          time.Time
-	goalWorking                         bool
-	planWorking                         bool
-	pending                             []inputDraft
-	inputTokens                         []inputToken
-	submittedDraft                      inputDraft
-	inputHistory                        []inputDraft
-	historyIndex                        int
-	historyDraft                        inputDraft
-	historyDownLock                     bool
-	inputPasteFoldActive                bool
-	transcript                          []transcriptEntry
+	lastModelVisibleActivityAt time.Time
+	goalWorking                bool
+	planWorking                bool
+	pending                    []inputDraft
+	inputTokens                []inputToken
+	submittedDraft             inputDraft
+	inputHistory               []inputDraft
+	historyIndex               int
+	historyDraft               inputDraft
+	historyDownLock            bool
+	inputPasteFoldActive       bool
+	transcript                 []transcriptEntry
 	// viewEntries 是 transcript 的视图投影（工作段折叠后的渲染序列），由
 	// recomputeViewEntries 在渲染前重建；渲染管线（render cache/spans/交互
 	// 坐标）一律基于 viewEntries 下标，transcript 保持原始条目不动。
-	viewEntries                         []transcriptEntry
-	transcriptToViewMap                 []int // transcript 下标 → 视图下标（被收编条目指向所属段）
-	viewToTranscriptMap                 []int // 视图下标 → transcript 下标（段条目为 -1）
-	foldModeSet                         bool
-	lastFoldMode                        foldMode
-	segmentExpanded                     map[string]bool // 工作段身份（workSegmentKey）→ 手动展开态
+	viewEntries         []transcriptEntry
+	transcriptToViewMap []int // transcript 下标 → 视图下标（被收编条目指向所属段）
+	viewToTranscriptMap []int // 视图下标 → transcript 下标（段条目为 -1）
+	foldModeSet         bool
+	lastFoldMode        foldMode
+	segmentExpanded     map[string]bool // 工作段身份（workSegmentKey）→ 手动展开态
 	// viewProjectionSig 是上次渲染的视图投影结构签名：折叠结构变化（如 live
 	// 段解散、段重组）会让同一视图槽位装上不同条目，而 transcript 条目本身
 	// 未变、失效下标发现不了；签名分歧点作为额外的视图空间失效起点。
@@ -652,6 +652,14 @@ type appModel struct {
 	worktree                            worktreeSnapshot
 	worktreeReader                      worktreeStatusReader
 }
+
+type activityLayoutMode uint8
+
+const (
+	activityLayoutHidden activityLayoutMode = iota
+	activityLayoutDocked
+	activityLayoutFullscreen
+)
 
 type activityTab int
 
