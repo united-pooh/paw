@@ -265,7 +265,7 @@ func effectiveResponsesExtraRequestBody(cfg Config) RequestBody {
 }
 
 func buildResponsesRequest(cfg Config, messages []message.Message, tools PreparedToolSet, stream bool) (responsesRequest, error) {
-	input, err := buildResponsesInput(messages)
+	input, err := buildResponsesInput(cfg, messages)
 	if err != nil {
 		return responsesRequest{}, err
 	}
@@ -326,11 +326,8 @@ func validateResponsesInputItems(items []json.RawMessage) error {
 	return nil
 }
 
-// responsesInputReplayStrippedFields 是 provider 在 output item 上返回、但
-// Responses input 端不接受的字段。status 由捕获方 provider 合法产出，
-// 但跨 provider 切换模型时（如 deepseek 产生的历史切到 GPT 系网关），
-// 严格校验的端点对 item 级未知字段直接报 unknown_parameter
-// （input[N].status），导致带思考/工具历史的请求全部 400。
+// responsesInputReplayStrippedFields 是同一 provider/model 回放 output item 时，
+// Responses input 端不接受的 output-only 字段。
 var responsesInputReplayStrippedFields = []string{"status"}
 
 // stripResponsesOutputOnlyFields 清洗回放 item 中仅 output 侧合法的字段。
@@ -357,17 +354,57 @@ func stripResponsesOutputOnlyFields(item json.RawMessage) json.RawMessage {
 	return cleaned
 }
 
-func buildResponsesInput(messages []message.Message) ([]json.RawMessage, error) {
+func responsesProviderDataReplayCompatible(cfg Config, origin *message.MessageOrigin) bool {
+	if origin == nil {
+		return false
+	}
+	current := messageOriginForConfig(cfg, responsesProviderTransport)
+	if !strings.EqualFold(strings.TrimSpace(origin.Transport), current.Transport) ||
+		strings.TrimSpace(origin.Model) != current.Model {
+		return false
+	}
+
+	originProfile := strings.TrimSpace(origin.ProfileID)
+	currentProfile := strings.TrimSpace(current.ProfileID)
+	if originProfile != "" || currentProfile != "" {
+		if originProfile == "" || currentProfile == "" || originProfile != currentProfile {
+			return false
+		}
+	} else {
+		originProvider := strings.TrimSpace(origin.Provider)
+		currentProvider := strings.TrimSpace(current.Provider)
+		if originProvider == "" || currentProvider == "" || !strings.EqualFold(originProvider, currentProvider) {
+			return false
+		}
+	}
+
+	originProvider := strings.TrimSpace(origin.Provider)
+	currentProvider := strings.TrimSpace(current.Provider)
+	if originProvider != "" || currentProvider != "" {
+		if originProvider == "" || currentProvider == "" || !strings.EqualFold(originProvider, currentProvider) {
+			return false
+		}
+	}
+	originAdapter := strings.TrimSpace(origin.Adapter)
+	currentAdapter := strings.TrimSpace(current.Adapter)
+	if originAdapter != "" || currentAdapter != "" {
+		if originAdapter == "" || currentAdapter == "" || !strings.EqualFold(originAdapter, currentAdapter) {
+			return false
+		}
+	}
+	return true
+}
+
+func buildResponsesInput(cfg Config, messages []message.Message) ([]json.RawMessage, error) {
 	items := make([]json.RawMessage, 0, len(messages))
 	for _, msg := range messages {
 		calls := messageToolCalls(msg)
 		results := messageToolResults(msg)
 
-		// 有效 ProviderData 时权威重放原始 output items，跳过通用投影，
-		// 避免重复生成 assistant message / function_call。回放前剥离仅
-		// output 侧合法的字段（status），兼容严格校验入参的端点（如跨
-		// provider 切换后的 GPT 系网关）。
-		if len(results) == 0 && len(msg.ProviderData) != 0 {
+		// ProviderData 只在同一 provider/profile、transport、adapter 和 model
+		// 上权威重放。切换供应商或模型时回退到通用 message/tool 投影，避免
+		// 把 action、encrypted_content 等 provider 私有 output 字段送给新端点。
+		if len(results) == 0 && len(msg.ProviderData) != 0 && responsesProviderDataReplayCompatible(cfg, msg.GeneratedBy) {
 			if replayed, ok := decodeResponsesProviderData(msg.ProviderData); ok {
 				for _, item := range replayed {
 					items = append(items, stripResponsesOutputOnlyFields(item))
@@ -803,6 +840,19 @@ type responsesStreamResult struct {
 	retryAfter   time.Duration
 }
 
+func responsesStreamRecoveryDelta(accumulated, completed string) string {
+	if accumulated == "" {
+		return completed
+	}
+	if completed == accumulated {
+		return ""
+	}
+	if strings.HasPrefix(completed, accumulated) {
+		return completed[len(accumulated):]
+	}
+	return completed
+}
+
 func isRetryableResponsesStreamError(ctx context.Context, err error) bool {
 	if err == nil || (ctx != nil && ctx.Err() != nil) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
@@ -840,6 +890,51 @@ func responsesFailureFromEvent(event responsesStreamEvent, header http.Header) *
 	return failure
 }
 
+func splitResponsesSSEEvents(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	lineStart := 0
+	for i := 0; i < len(data); i++ {
+		if data[i] != '\n' && data[i] != '\r' {
+			continue
+		}
+		lineEnd := i
+		if data[i] == '\r' && i+1 < len(data) && data[i+1] == '\n' {
+			i++
+		}
+		nextLine := i + 1
+		if lineEnd == lineStart {
+			return nextLine, data[:lineStart], nil
+		}
+		lineStart = nextLine
+	}
+	if atEOF && len(data) != 0 {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
+func responsesSSEPayload(block []byte) ([]byte, bool) {
+	lines := bytes.Split(block, []byte{'\n'})
+	dataLines := make([][]byte, 0, len(lines))
+	for _, line := range lines {
+		line = bytes.TrimSuffix(line, []byte{'\r'})
+		if len(line) == 0 || line[0] == ':' {
+			continue
+		}
+		field, value, found := bytes.Cut(line, []byte{':'})
+		if !found || !bytes.Equal(field, []byte("data")) {
+			continue
+		}
+		if len(value) != 0 && value[0] == ' ' {
+			value = value[1:]
+		}
+		dataLines = append(dataLines, value)
+	}
+	if len(dataLines) == 0 {
+		return nil, false
+	}
+	return bytes.Join(dataLines, []byte{'\n'}), true
+}
+
 func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response, events chan<- StreamEvent, idleTimeout time.Duration) responsesStreamResult {
 	body := newStreamIdleWatchdog(ctx, resp.Body, idleTimeout)
 	defer func() {
@@ -848,34 +943,47 @@ func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response
 	result := responsesStreamResult{retryAfter: providerRetryAfter(resp.Header, time.Now())}
 
 	scanner := bufio.NewScanner(body)
+	scanner.Split(splitResponsesSSEEvents)
 	scanner.Buffer(make([]byte, 0, streamScannerInitialBufferBytes), streamScannerMaxTokenBytes)
 	active := make(map[int]*activeResponseToolCall)
+	var streamedText strings.Builder
+	var streamedThinking strings.Builder
 	sawOutputTextDelta := false
 	sawReasoningDelta := false
+	var decodeFailure *responsesStreamFailure
 
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || !strings.HasPrefix(line, "data:") {
+		payload, ok := responsesSSEPayload(scanner.Bytes())
+		if !ok {
 			continue
 		}
-		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if payload == "" || payload == "[DONE]" {
+		payload = bytes.TrimSpace(payload)
+		if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
 			continue
 		}
 		var event responsesStreamEvent
-		if err := json.Unmarshal([]byte(payload), &event); err != nil {
-			result.err = &responsesStreamFailure{EventType: "decode", Message: "解析 Responses 流式数据失败", RequestID: providerRequestID(resp.Header), Retryable: true, cause: err}
-			return result
+		if err := json.Unmarshal(payload, &event); err != nil {
+			decodeFailure = &responsesStreamFailure{
+				EventType: "decode",
+				Message:   fmt.Sprintf("解析 Responses 流式数据失败（event_bytes=%d）: %v", len(payload), err),
+				RequestID: providerRequestID(resp.Header),
+				Retryable: true,
+				cause:     err,
+			}
+			continue
 		}
 		switch event.Type {
 		case "response.output_text.delta":
 			if event.Delta != "" {
 				result.madeProgress = true
-				if !emitStreamEvent(ctx, events, StreamEvent{Delta: event.Delta}) {
-					result.err = ctx.Err()
-					return result
+				if decodeFailure == nil {
+					streamedText.WriteString(event.Delta)
+					if !emitStreamEvent(ctx, events, StreamEvent{Delta: event.Delta}) {
+						result.err = ctx.Err()
+						return result
+					}
+					sawOutputTextDelta = true
 				}
-				sawOutputTextDelta = true
 			}
 		case "response.reasoning_summary_text.delta", "response.reasoning.delta", "response.reasoning_text.delta":
 			// reasoning_summary_text.delta / reasoning.delta 是 OpenAI 官方事件；
@@ -884,17 +992,21 @@ func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response
 			// response.completed 一次性回放——表现为思考内容瞬间全量输出。
 			if event.Delta != "" {
 				result.madeProgress = true
-				if !emitStreamEvent(ctx, events, StreamEvent{Thinking: event.Delta}) {
-					result.err = ctx.Err()
-					return result
+				if decodeFailure == nil {
+					streamedThinking.WriteString(event.Delta)
+					if !emitStreamEvent(ctx, events, StreamEvent{Thinking: event.Delta}) {
+						result.err = ctx.Err()
+						return result
+					}
+					sawReasoningDelta = true
 				}
-				sawReasoningDelta = true
 			}
 		case "response.reasoning_text.done":
 			// DeepSeek 的全量 CoT 兜底：仅在一条流式 delta 都没收到时回放全文，
 			// 避免与已播放的增量重复（received 时 completed 兜底会被抑制）。
-			if !sawReasoningDelta && event.Text != "" {
+			if decodeFailure == nil && !sawReasoningDelta && event.Text != "" {
 				result.madeProgress = true
+				streamedThinking.WriteString(event.Text)
 				if !emitStreamEvent(ctx, events, StreamEvent{Thinking: event.Text}) {
 					result.err = ctx.Err()
 					return result
@@ -957,11 +1069,16 @@ func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response
 				result.err = err
 				return result
 			}
-			if sawOutputTextDelta {
-				finalEvent.Delta = ""
-			}
-			if sawReasoningDelta {
-				finalEvent.Thinking = ""
+			if decodeFailure != nil {
+				finalEvent.Delta = responsesStreamRecoveryDelta(streamedText.String(), finalEvent.Delta)
+				finalEvent.Thinking = responsesStreamRecoveryDelta(streamedThinking.String(), finalEvent.Thinking)
+			} else {
+				if sawOutputTextDelta {
+					finalEvent.Delta = ""
+				}
+				if sawReasoningDelta {
+					finalEvent.Thinking = ""
+				}
 			}
 			if !emitFinalResponsesEvent(ctx, events, finalEvent) {
 				result.err = ctx.Err()
@@ -983,6 +1100,10 @@ func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response
 		} else {
 			result.err = &responsesStreamFailure{EventType: "stream_read", Message: "读取 Responses 流式响应失败", RequestID: providerRequestID(resp.Header), Retryable: true, cause: err}
 		}
+		return result
+	}
+	if decodeFailure != nil {
+		result.err = decodeFailure
 		return result
 	}
 	result.err = &responsesStreamFailure{EventType: "unexpected_eof", Message: "Responses stream ended before response.completed", RequestID: providerRequestID(resp.Header), Retryable: true}

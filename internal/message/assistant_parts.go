@@ -23,7 +23,10 @@ const (
 )
 
 type MessageOrigin struct {
+	Provider  string `json:"provider,omitempty"`
+	ProfileID string `json:"profile_id,omitempty"`
 	Transport string `json:"transport"`
+	Adapter   string `json:"adapter,omitempty"`
 	Model     string `json:"model"`
 }
 

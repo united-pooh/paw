@@ -124,7 +124,7 @@ func (c *Client) StreamMessage(ctx context.Context, messages []message.Message, 
 	} else if shouldAttemptAnthropicStream(cfg) {
 		transport = "anthropic-compatible"
 	}
-	origin := &message.MessageOrigin{Transport: transport, Model: cfg.Model}
+	origin := messageOriginForConfig(cfg, transport)
 	adapter := SelectModelAdapter(cfg)
 	prepared, err := c.prepareTools(adapter, tools)
 	if err != nil {
@@ -167,6 +167,16 @@ func (c *Client) StreamMessage(ctx context.Context, messages []message.Message, 
 		return nil, err
 	}
 	return wrapWithOrigin(adaptPreparedToolEvents(ctx, events, prepared), origin), nil
+}
+
+func messageOriginForConfig(cfg Config, transport string) *message.MessageOrigin {
+	return &message.MessageOrigin{
+		Provider:  strings.TrimSpace(cfg.Provider),
+		ProfileID: strings.TrimSpace(cfg.ProfileID),
+		Transport: strings.TrimSpace(transport),
+		Adapter:   strings.TrimSpace(cfg.Adapter),
+		Model:     strings.TrimSpace(cfg.Model),
+	}
 }
 
 func wrapWithOrigin(events <-chan StreamEvent, origin *message.MessageOrigin) <-chan StreamEvent {

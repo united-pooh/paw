@@ -79,8 +79,8 @@ func TestStreamMessageUsesResponsesAPIAndParsesTextToolCallsAndUsage(t *testing.
 	defer server.Close()
 
 	client := NewClient(Config{
-		Transport: "openai-responses", APIBaseURL: server.URL + "/v1", APIPath: "/responses",
-		APIKey: "sk-test", Model: "gpt-test", Timeout: time.Second,
+		Provider: "openai", ProfileID: "openai-main", Transport: "openai-responses", Adapter: "gpt",
+		APIBaseURL: server.URL + "/v1", APIPath: "/responses", APIKey: "sk-test", Model: "gpt-test", Timeout: time.Second,
 	})
 	events, err := client.StreamMessage(context.Background(), []message.Message{
 		{Role: message.RoleUser, Content: "first"},
@@ -96,10 +96,14 @@ func TestStreamMessageUsesResponsesAPIAndParsesTextToolCallsAndUsage(t *testing.
 	var calls []message.ToolCall
 	var usage *Usage
 	var providerData json.RawMessage
+	var origin *message.MessageOrigin
 	var done bool
 	for event := range events {
 		if event.Err != nil {
 			t.Fatalf("event error = %v", event.Err)
+		}
+		if event.GeneratedBy != nil {
+			origin = event.GeneratedBy
 		}
 		text.WriteString(event.Delta)
 		calls = append(calls, event.ToolCalls...)
@@ -124,9 +128,82 @@ func TestStreamMessageUsesResponsesAPIAndParsesTextToolCallsAndUsage(t *testing.
 	if usage == nil || usage.ContextTokenCount() != 128 || usage.CacheHitTokens() != 50 {
 		t.Fatalf("usage = %#v", usage)
 	}
+	if origin == nil || origin.Provider != "openai" || origin.ProfileID != "openai-main" || origin.Transport != "openai-responses" || origin.Adapter != "gpt" || origin.Model != "gpt-test" {
+		t.Fatalf("origin = %#v", origin)
+	}
 	items, ok := decodeResponsesProviderData(providerData)
 	if !ok || len(items) != 2 {
 		t.Fatalf("provider data = %s, items=%d ok=%v", providerData, len(items), ok)
+	}
+}
+
+func TestStreamingResponsesParsesMultilineSSEDataEvents(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "event: response.output_text.delta\n")
+		_, _ = fmt.Fprint(w, "data: {\n")
+		_, _ = fmt.Fprint(w, "data: \"type\":\"response.output_text.delta\",\n")
+		_, _ = fmt.Fprint(w, "data: \"delta\":\"multiline\"\n")
+		_, _ = fmt.Fprint(w, "data: }\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"multiline"}]}]}}`+"\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Transport: "openai-responses", APIBaseURL: server.URL, APIPath: "/responses",
+		Model: "gpt-test", Timeout: time.Second,
+	})
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "hello"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+
+	var text strings.Builder
+	var done bool
+	for event := range events {
+		if event.Err != nil {
+			t.Fatalf("event error = %v", event.Err)
+		}
+		text.WriteString(event.Delta)
+		done = done || event.Done
+	}
+	if text.String() != "multiline" || !done {
+		t.Fatalf("text=%q done=%v", text.String(), done)
+	}
+}
+
+func TestStreamingResponsesRecoversAfterMalformedEventWhenCompletedSnapshotArrives(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.output_text.delta","delta":"prefix "}`+"\n\n")
+		_, _ = fmt.Fprint(w, "data: {not-json}\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.output_text.delta","delta":"late delta"}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"prefix recovered"}]}]}}`+"\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Transport: "openai-responses", APIBaseURL: server.URL, APIPath: "/responses",
+		Model: "gpt-test", Timeout: time.Second,
+	})
+	events, err := client.StreamMessage(context.Background(), []message.Message{{Role: message.RoleUser, Content: "hello"}}, nil)
+	if err != nil {
+		t.Fatalf("StreamMessage() error = %v", err)
+	}
+
+	var text strings.Builder
+	var done bool
+	for event := range events {
+		if event.Err != nil {
+			t.Fatalf("event error = %v", event.Err)
+		}
+		text.WriteString(event.Delta)
+		done = done || event.Done
+	}
+	if text.String() != "prefix recovered" || !done {
+		t.Fatalf("text=%q done=%v", text.String(), done)
 	}
 }
 
@@ -275,10 +352,12 @@ func TestDecodeResponsesProviderDataRejectsWrongTransportAndVersion(t *testing.T
 }
 
 func TestBuildResponsesInputReplaysProviderOutputItems(t *testing.T) {
+	cfg := Config{Provider: "openai", ProfileID: "openai-main", Transport: "openai-responses", Adapter: "gpt", Model: "gpt-test"}
 	assistant := message.Message{
-		Role:    message.RoleAssistant,
-		Content: "visible fallback",
-		ToolUse: &message.ToolCall{ID: "call_1", Name: "Read", Input: json.RawMessage(`{"file_path":"README.md"}`)},
+		Role:        message.RoleAssistant,
+		Content:     "visible fallback",
+		GeneratedBy: messageOriginForConfig(cfg, responsesProviderTransport),
+		ToolUse:     &message.ToolCall{ID: "call_1", Name: "Read", Input: json.RawMessage(`{"file_path":"README.md"}`)},
 		ProviderData: json.RawMessage(`{
 			"transport":"openai-responses",
 			"version":1,
@@ -293,7 +372,7 @@ func TestBuildResponsesInputReplaysProviderOutputItems(t *testing.T) {
 		ToolResult: &message.ToolResult{ToolUseID: "call_1", Content: "contents"},
 	}
 
-	items, err := buildResponsesInput([]message.Message{assistant, result})
+	items, err := buildResponsesInput(cfg, []message.Message{assistant, result})
 	if err != nil {
 		t.Fatalf("buildResponsesInput() error = %v", err)
 	}
@@ -311,14 +390,14 @@ func TestBuildResponsesInputReplaysProviderOutputItems(t *testing.T) {
 	}
 }
 
-// TestBuildResponsesInputStripsOutputOnlyStatusOnReplay 验证 ProviderData 回放
-// 的原始 output items 在上线前剥离仅 output 侧合法的 status 字段。回归：
-// 跨 provider 切换（deepseek 历史 → GPT 系网关）时严格端点对 item 级未知
-// 字段报 unknown_parameter（input[N].status），带历史的请求全部 400。
+// TestBuildResponsesInputStripsOutputOnlyStatusOnReplay 验证同源 ProviderData
+// 回放时仍会剥离 input 不接受的 status 字段。
 func TestBuildResponsesInputStripsOutputOnlyStatusOnReplay(t *testing.T) {
+	cfg := Config{Provider: "openai", ProfileID: "openai-main", Transport: "openai-responses", Adapter: "gpt", Model: "gpt-test"}
 	assistant := message.Message{
-		Role:    message.RoleAssistant,
-		Content: "visible fallback",
+		Role:        message.RoleAssistant,
+		Content:     "visible fallback",
+		GeneratedBy: messageOriginForConfig(cfg, responsesProviderTransport),
 		ProviderData: json.RawMessage(`{
 			"transport":"openai-responses",
 			"version":1,
@@ -329,7 +408,7 @@ func TestBuildResponsesInputStripsOutputOnlyStatusOnReplay(t *testing.T) {
 		}`),
 	}
 
-	items, err := buildResponsesInput([]message.Message{assistant})
+	items, err := buildResponsesInput(cfg, []message.Message{assistant})
 	if err != nil {
 		t.Fatalf("buildResponsesInput() error = %v", err)
 	}
@@ -351,6 +430,93 @@ func TestBuildResponsesInputStripsOutputOnlyStatusOnReplay(t *testing.T) {
 	}
 }
 
+func TestBuildResponsesRequestFallsBackAcrossModelOrigins(t *testing.T) {
+	assistant := message.Message{
+		Role:        message.RoleAssistant,
+		Content:     "portable answer",
+		GeneratedBy: &message.MessageOrigin{Transport: "openai-responses", Model: "deepseek-old"},
+		ProviderData: json.RawMessage(`{
+			"transport":"openai-responses",
+			"version":1,
+			"output_items":[
+				{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"paw"}},
+				{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"portable answer"}]}
+			]
+		}`),
+	}
+
+	req, err := buildResponsesRequest(Config{
+		Provider: "openai", Transport: "openai-responses", ProfileID: "openai-main", Model: "gpt-current",
+	}, []message.Message{assistant}, nil, false)
+	if err != nil {
+		t.Fatalf("buildResponsesRequest() error = %v", err)
+	}
+	if len(req.Input) != 1 {
+		t.Fatalf("input = %s, want one portable assistant message", req.Input)
+	}
+	if bytes.Contains(req.Input[0], []byte(`"action"`)) {
+		t.Fatalf("cross-model provider action leaked into input: %s", req.Input[0])
+	}
+	var item responsesItem
+	if err := json.Unmarshal(req.Input[0], &item); err != nil {
+		t.Fatalf("decode portable input: %v", err)
+	}
+	if item.Role != "assistant" || item.Content != "portable answer" {
+		t.Fatalf("portable input = %#v", item)
+	}
+}
+
+func TestBuildResponsesRequestFallsBackForLegacyOriginWithoutProviderIdentity(t *testing.T) {
+	assistant := message.Message{
+		Role:        message.RoleAssistant,
+		Content:     "legacy answer",
+		GeneratedBy: &message.MessageOrigin{Transport: "openai-responses", Model: "shared-model"},
+		ProviderData: json.RawMessage(`{
+			"transport":"openai-responses",
+			"version":1,
+			"output_items":[{"type":"web_search_call","id":"ws_legacy","action":{"type":"search","query":"legacy"}}]
+		}`),
+	}
+
+	req, err := buildResponsesRequest(Config{
+		Provider: "gateway", ProfileID: "gateway-main", Transport: "openai-responses", Model: "shared-model",
+	}, []message.Message{assistant}, nil, false)
+	if err != nil {
+		t.Fatalf("buildResponsesRequest() error = %v", err)
+	}
+	if len(req.Input) != 1 || bytes.Contains(req.Input[0], []byte(`"action"`)) {
+		t.Fatalf("legacy-origin input = %s, want portable assistant message", req.Input)
+	}
+}
+
+func TestBuildResponsesRequestFallsBackAcrossProviderProfiles(t *testing.T) {
+	assistant := message.Message{
+		Role:    message.RoleAssistant,
+		Content: "portable answer",
+		GeneratedBy: &message.MessageOrigin{
+			Provider: "openrouter", ProfileID: "openrouter-main", Transport: "openai-responses", Adapter: "gpt", Model: "shared-model",
+		},
+		ProviderData: json.RawMessage(`{
+			"transport":"openai-responses",
+			"version":1,
+			"output_items":[
+				{"type":"computer_call","id":"computer_1","status":"completed","action":{"type":"screenshot"}},
+				{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"portable answer"}]}
+			]
+		}`),
+	}
+
+	req, err := buildResponsesRequest(Config{
+		Provider: "gateway", ProfileID: "gateway-main", Transport: "openai-responses", Adapter: "gpt", Model: "shared-model",
+	}, []message.Message{assistant}, nil, false)
+	if err != nil {
+		t.Fatalf("buildResponsesRequest() error = %v", err)
+	}
+	if len(req.Input) != 1 || bytes.Contains(req.Input[0], []byte(`"action"`)) {
+		t.Fatalf("cross-provider input = %s, want portable assistant message without action", req.Input)
+	}
+}
+
 func TestBuildResponsesInputFallsBackForLegacyAssistant(t *testing.T) {
 	assistant := message.Message{
 		Role:    message.RoleAssistant,
@@ -362,7 +528,7 @@ func TestBuildResponsesInputFallsBackForLegacyAssistant(t *testing.T) {
 		ToolResult: &message.ToolResult{ToolUseID: "call_1", Content: "contents"},
 	}
 
-	items, err := buildResponsesInput([]message.Message{assistant, result})
+	items, err := buildResponsesInput(Config{}, []message.Message{assistant, result})
 	if err != nil {
 		t.Fatalf("buildResponsesInput() error = %v", err)
 	}
@@ -381,7 +547,7 @@ func TestBuildResponsesInputFallsBackForLegacyAssistant(t *testing.T) {
 }
 
 func TestBuildResponsesInputPreservesEmptyFunctionCallOutput(t *testing.T) {
-	items, err := buildResponsesInput([]message.Message{{
+	items, err := buildResponsesInput(Config{}, []message.Message{{
 		Role:       message.RoleUser,
 		ToolResult: &message.ToolResult{ToolUseID: "call_empty", Content: ""},
 	}})
@@ -403,7 +569,7 @@ func TestBuildResponsesInputPreservesEmptyFunctionCallOutput(t *testing.T) {
 }
 
 func TestBuildResponsesInputOmitsOutputFromOtherItemTypes(t *testing.T) {
-	items, err := buildResponsesInput([]message.Message{
+	items, err := buildResponsesInput(Config{}, []message.Message{
 		{Role: message.RoleUser, Content: "hello"},
 		{
 			Role:    message.RoleAssistant,
@@ -480,12 +646,14 @@ func TestResponsesRepairsOrphanedReplayedFunctionCallOutputBeforeHTTP(t *testing
 	}))
 	defer server.Close()
 
-	client := NewClient(Config{
-		Transport: "openai-responses", APIBaseURL: server.URL, APIPath: "/responses",
-		Model: "gpt-test", Timeout: time.Second,
-	})
+	cfg := Config{
+		Provider: "openai", ProfileID: "openai-main", Transport: "openai-responses", Adapter: "gpt",
+		APIBaseURL: server.URL, APIPath: "/responses", Model: "gpt-test", Timeout: time.Second,
+	}
+	client := NewClient(cfg)
 	events, err := client.StreamMessage(context.Background(), []message.Message{{
-		Role: message.RoleAssistant,
+		Role:        message.RoleAssistant,
+		GeneratedBy: messageOriginForConfig(cfg, responsesProviderTransport),
 		ProviderData: json.RawMessage(`{
 			"transport":"openai-responses",
 			"version":1,
@@ -518,7 +686,7 @@ func TestBuildResponsesInputFallsBackForDamagedProviderData(t *testing.T) {
 		ProviderData: json.RawMessage(`{"transport":"openai-responses","version":99,"output_items":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"Read","arguments":"{\"file_path\":\"README.md\"}"}]}`),
 	}
 
-	items, err := buildResponsesInput([]message.Message{assistant})
+	items, err := buildResponsesInput(Config{}, []message.Message{assistant})
 	if err != nil {
 		t.Fatalf("buildResponsesInput() error = %v", err)
 	}

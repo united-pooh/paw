@@ -93,12 +93,13 @@ func TestRepairResponsesInputItemsAddsSyntheticOutputForDanglingCall(t *testing.
 func TestRepairResponsesInputItemsCoversProviderDataReplayInconsistency(t *testing.T) {
 	// 模拟崩溃场景：ProviderData 重放的 function_call 存在，
 	// 但结构化 ToolResults 中多了一条孤儿 output（重放 items 与结构化字段不一致）。
+	cfg := Config{Provider: "openai", ProfileID: "openai-main", Transport: "openai-responses", Adapter: "gpt", Model: "gpt-test"}
 	messages := []message.Message{
-		{Role: message.RoleAssistant, ProviderData: json.RawMessage(`{"transport":"openai-responses","version":1,"output_items":[{"type":"function_call","call_id":"call_1","name":"Read","arguments":"{}"}]}`)},
+		{Role: message.RoleAssistant, GeneratedBy: messageOriginForConfig(cfg, responsesProviderTransport), ProviderData: json.RawMessage(`{"transport":"openai-responses","version":1,"output_items":[{"type":"function_call","call_id":"call_1","name":"Read","arguments":"{}"}]}`)},
 		{Role: message.RoleUser, ToolResult: &message.ToolResult{ToolUseID: "call_ghost", Content: "orphan"}},
 	}
 
-	items, err := buildResponsesInput(messages)
+	items, err := buildResponsesInput(cfg, messages)
 	if err != nil {
 		t.Fatal(err)
 	}

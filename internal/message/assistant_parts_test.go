@@ -27,7 +27,7 @@ func TestAssistantPartsJSONRoundTripPreservesOrderAndOpaqueData(t *testing.T) {
 			{Type: AssistantPartText, Text: &AssistantTextPart{Text: "done"}},
 			{Type: AssistantPartToolCall, ToolCall: &ToolCall{ID: "call-1", Name: "Read", Input: json.RawMessage(`{"file_path":"go.mod"}`)}},
 		},
-		GeneratedBy: &MessageOrigin{Transport: "anthropic-compatible", Model: "claude-test"},
+		GeneratedBy: &MessageOrigin{Provider: "anthropic", ProfileID: "anthropic-main", Transport: "anthropic-compatible", Adapter: "claude", Model: "claude-test"},
 	}
 
 	data, err := json.Marshal(original)
@@ -157,7 +157,7 @@ func TestCloneMessageDeepCopiesAssistantPartsAndOrigin(t *testing.T) {
 			{Type: AssistantPartReasoning, Reasoning: &ReasoningPart{Text: "think", ProviderData: json.RawMessage(`{"signature":"opaque"}`), StartedAt: &started}},
 			{Type: AssistantPartToolCall, ToolCall: &ToolCall{ID: "call-1", Name: "Read", Input: json.RawMessage(`{"file_path":"go.mod"}`)}},
 		},
-		GeneratedBy: &MessageOrigin{Transport: "anthropic-compatible", Model: "claude-test"},
+		GeneratedBy: &MessageOrigin{Provider: "anthropic", ProfileID: "anthropic-main", Transport: "anthropic-compatible", Adapter: "claude", Model: "claude-test"},
 	}
 	cloned := CloneMessage(original)
 
