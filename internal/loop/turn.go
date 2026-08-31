@@ -141,7 +141,6 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 	if turnIDErr != nil {
 		return execution, turnIDErr
 	}
-
 	// 每一轮都基于“已提交的历史副本”工作。Recovery 只存在于本轮
 	// prompt，不会作为 synthetic user message 写入持久化 transcript。
 	pendingRecovery := runner.takeRecovery()
@@ -154,7 +153,8 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 			retryingEmptyTurn = true
 		}
 	}
-	history, injectedSupplements := runner.buildTurnHistory(userInput)
+	history, initialSupplements := runner.buildTurnHistory(userInput)
+	injectedSupplements := genericPendingSupplements(initialSupplements)
 	if pendingRecovery != nil {
 		history = insertRecoveryMessage(history, pendingRecovery)
 	}
@@ -175,7 +175,7 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 			}
 		}
 		if !settled && len(injectedSupplements) > 0 {
-			runner.prependSupplements(injectedSupplements)
+			runner.prependPendingSupplements(injectedSupplements)
 		}
 		if !journalStarted && pendingRecovery != nil {
 			runner.setRecovery(pendingRecovery)
@@ -209,17 +209,29 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 			if err := journal.BeginTurn(ctx, runner.sessionID, turnID, startMessages...); err != nil {
 				return execution, fmt.Errorf("开始保存 turn 失败: %w", err)
 			}
+			journalStarted = true
+		} else {
+			journalStarted = true
+			if len(initialSupplements) > 0 {
+				if err := journal.AppendMessages(ctx, runner.sessionID, turnID, buildSupplementMessages(initialSupplements)...); err != nil {
+					return execution, fmt.Errorf("保存 supplement 失败: %w", err)
+				}
+			}
 		}
-		journalStarted = true
+		injectedSupplements = nil
 	}
+	runner.promptCtx.beginSteerAdmission()
+	defer runner.promptCtx.endSteerAdmission()
 	for round := 0; round < maxToolRounds; round++ {
-		var injected []string
+		var injected []pendingSupplement
 		history, injected = runner.appendPendingSupplements(history)
-		injectedSupplements = append(injectedSupplements, injected...)
 		if journal != nil && len(injected) > 0 {
-			if appendErr := runner.store.Append(ctx, runner.sessionID, buildSupplementMessages(injected)...); appendErr != nil {
+			if appendErr := journal.AppendMessages(ctx, runner.sessionID, turnID, buildSupplementMessages(pendingSupplementContents(injected))...); appendErr != nil {
+				injectedSupplements = append(injectedSupplements, injected...)
 				return execution, fmt.Errorf("保存 supplement 失败: %w", appendErr)
 			}
+		} else {
+			injectedSupplements = append(injectedSupplements, injected...)
 		}
 
 		if round == 0 {
@@ -287,6 +299,9 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 
 		toolCalls := toolCallsFromMessage(assistantMessage)
 		if len(toolCalls) == 0 {
+			if !runner.promptCtx.trySealSteerAdmission() {
+				continue
+			}
 			// 只有当本轮完整结束时，才把本轮消息提交为新的会话历史。
 			if journal != nil {
 				if err := journal.CompleteTurn(ctx, runner.sessionID, turnID); err != nil {

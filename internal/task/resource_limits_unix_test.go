@@ -78,6 +78,9 @@ func TestResolveSandboxLimitsDefaults(t *testing.T) {
 		t.Fatalf("explicit limits not preserved: %#v", withExplicit)
 	}
 	withZero := resolveSandboxLimits(SandboxLimits{})
+	if withZero.JobWallSeconds != 90*60 {
+		t.Fatalf("default job wall seconds = %d, want 90 minutes", withZero.JobWallSeconds)
+	}
 	if withZero.CPUSeconds != defaultWorkerCPUSeconds || withZero.FileSizeMiB != defaultWorkerFileSizeMiB ||
 		withZero.MaxProcesses != defaultWorkerMaxProcesses || withZero.OpenFiles != defaultWorkerOpenFiles ||
 		withZero.JobWallSeconds != defaultWorkerJobWallSecs {

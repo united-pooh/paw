@@ -9,6 +9,7 @@ import (
 	"paw/internal/model"
 	"paw/internal/settings"
 	"paw/internal/task"
+	"sort"
 	"strings"
 	"time"
 )
@@ -384,7 +385,33 @@ func (m appModel) taskEntries() []task.TaskSnapshot {
 			tasks = append(tasks, task)
 		}
 	}
+	sort.SliceStable(tasks, func(i, j int) bool {
+		leftPriority := taskAttentionPriority(tasks[i].Status)
+		rightPriority := taskAttentionPriority(tasks[j].Status)
+		if leftPriority != rightPriority {
+			return leftPriority < rightPriority
+		}
+		if !tasks[i].StartedAt.Equal(tasks[j].StartedAt) {
+			return tasks[i].StartedAt.After(tasks[j].StartedAt)
+		}
+		return false
+	})
 	return tasks
+}
+
+func taskAttentionPriority(status task.TaskStatus) int {
+	switch status {
+	case task.TaskRunning:
+		return 0
+	case task.TaskFailed, task.TaskInterrupted:
+		return 1
+	case task.TaskStopped:
+		return 2
+	case task.TaskCompleted:
+		return 3
+	default:
+		return 4
+	}
 }
 
 func rendertaskResult(result task.Result) string {

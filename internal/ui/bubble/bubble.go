@@ -59,10 +59,10 @@ type TimedRunner interface {
 	loop.TimedRunner
 }
 
-// SupplementSubmitter describes runners that can accept instructions while a
+// SteerSubmitter describes runners that can accept user steering while a
 // model turn is already running.
-type SupplementSubmitter interface {
-	SubmitSupplement(input string) bool
+type SteerSubmitter interface {
+	SubmitSteer(input string) bool
 }
 
 // SessionStore 描述 TUI 列举和管理会话所需的最小接口。

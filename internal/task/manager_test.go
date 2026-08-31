@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"paw/internal/actor"
 	"paw/internal/es"
 	"paw/internal/loop"
 	coremcp "paw/internal/mcp"
@@ -34,11 +35,12 @@ type blockingLauncher struct {
 
 type trackingBlockingLauncher struct {
 	process *blockingProcess
+	pid     int
 }
 
 func (l *trackingBlockingLauncher) Start(_ context.Context, req WorkerRequest) (Process, error) {
 	l.process = newBlockingProcess(req)
-	l.process.pid = 999999
+	l.process.pid = l.pid
 	return l.process, nil
 }
 
@@ -1360,7 +1362,7 @@ func TestRunningTaskRecoversInterruptedFromActorJournalWithoutMetadata(t *testin
 	if err != nil {
 		t.Fatalf("NewJSONLStore() error = %v", err)
 	}
-	launcher := &trackingBlockingLauncher{}
+	launcher := &trackingBlockingLauncher{pid: 999999}
 	manager := NewManager(Config{
 		Store:    store,
 		Root:     root,
@@ -1925,6 +1927,38 @@ func TestActiveTasksExcludesRunningProjectionWithoutHostedProcess(t *testing.T) 
 	}
 }
 
+func TestWorkerManagerCanSkipStartupOrphanReconciliation(t *testing.T) {
+	root := t.TempDir()
+	registry := newTaskRegistry(root)
+	running := TaskSnapshot{
+		ID:        "parent-task",
+		SessionID: "parent-task",
+		Status:    TaskRunning,
+		PID:       999999,
+		StartedAt: time.Now().UTC(),
+	}
+	if err := registry.saveTask(context.Background(), running); err != nil {
+		t.Fatalf("saveTask(running) error = %v", err)
+	}
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+
+	worker := NewManager(Config{
+		Store:                              store,
+		Root:                               root,
+		Settings:                           fakeSettingsProvider{cfg: settings.DefaultConfig()},
+		DisableStartupOrphanReconciliation: true,
+	})
+	defer worker.Close()
+
+	got, ok := worker.Status(running.ID)
+	if !ok || got.Status != TaskRunning {
+		t.Fatalf("worker manager task = %#v / %v, want untouched running task", got, ok)
+	}
+}
+
 func TestReconcileOrphansMarksDeadPIDInterrupted(t *testing.T) {
 	root := t.TempDir()
 	registry := newTaskRegistry(root)
@@ -1981,6 +2015,104 @@ func TestReconcileOrphansMarksDeadPIDInterrupted(t *testing.T) {
 	}
 }
 
+func seedStaleRunningRegistryProjection(t *testing.T, manager *Manager, running TaskSnapshot) {
+	t.Helper()
+	if err := manager.actors.record(context.Background(), taskEventStarted, running); err != nil {
+		t.Fatalf("record running task: %v", err)
+	}
+	if _, changed, err := manager.actors.stop(context.Background(), running.ID, TaskInterrupted, "worker exited"); err != nil || !changed {
+		t.Fatalf("interrupt task = (%v, %v), want changed terminal task", changed, err)
+	}
+	if err := manager.actors.system.Tell(context.Background(), taskRegistryActorID, actor.Msg{
+		Kind:       taskRegistryUpsert,
+		Payload:    taskRegistryUpdate{Task: running},
+		Durability: actor.Durable,
+	}); err != nil {
+		t.Fatalf("seed stale registry projection: %v", err)
+	}
+	manager.actors.system.Drain()
+}
+
+func TestReconcileOrphansRepairsStaleRunningRegistryProjection(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	manager := NewManager(Config{
+		Store:    store,
+		Root:     root,
+		Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+	})
+	defer manager.Close()
+
+	running := TaskSnapshot{
+		ID:        "stale-registry",
+		SessionID: "stale-registry",
+		Status:    TaskRunning,
+		PID:       999999,
+		StartedAt: time.Now().UTC(),
+	}
+	seedStaleRunningRegistryProjection(t, manager, running)
+	if tasks := manager.ListTasks(); len(tasks) != 1 || tasks[0].Status != TaskRunning {
+		t.Fatalf("ListTasks() before reconcile = %#v, want stale running projection", tasks)
+	}
+
+	manager.reconcileOrphanedTasks(context.Background())
+
+	tasks := manager.ListTasks()
+	if len(tasks) != 1 || tasks[0].Status != TaskInterrupted || tasks[0].Error != "worker exited" {
+		t.Fatalf("ListTasks() after reconcile = %#v, want authoritative interrupted task", tasks)
+	}
+}
+
+func TestWaitAnyRepairsStaleRunningRegistryProjection(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	manager := NewManager(Config{
+		Store:    store,
+		Root:     root,
+		Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+	})
+	defer manager.Close()
+
+	running := TaskSnapshot{
+		ID:        "stale-wait",
+		SessionID: "stale-wait",
+		Status:    TaskRunning,
+		PID:       999999,
+		StartedAt: time.Now().UTC(),
+	}
+	seedStaleRunningRegistryProjection(t, manager, running)
+
+	unrelated := TaskSnapshot{
+		ID:        "unrelated-orphan",
+		SessionID: "unrelated-orphan",
+		Status:    TaskRunning,
+		PID:       999998,
+		StartedAt: time.Now().UTC(),
+	}
+	if err := manager.actors.record(context.Background(), taskEventStarted, unrelated); err != nil {
+		t.Fatalf("record unrelated task: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result, err := manager.WaitAny(ctx, []string{running.ID}, time.Hour)
+	if err != nil {
+		t.Fatalf("WaitAny() error = %v", err)
+	}
+	if result.TimedOut || len(result.Tasks) != 1 || result.Tasks[0].Status != TaskInterrupted {
+		t.Fatalf("WaitAny() = %#v, want immediate authoritative interrupted task", result)
+	}
+	if got, ok := manager.Status(unrelated.ID); !ok || got.Status != TaskRunning {
+		t.Fatalf("unrelated task = %#v / %v, want WaitAny to leave it untouched", got, ok)
+	}
+}
+
 func TestReconcileOrphansKeepsLivePIDRunning(t *testing.T) {
 	root := t.TempDir()
 	registry := newTaskRegistry(root)
@@ -2003,6 +2135,98 @@ func TestReconcileOrphansKeepsLivePIDRunning(t *testing.T) {
 	}
 	if task.Status != TaskRunning {
 		t.Fatalf("live task status = %s, want running (must not be reaped)", task.Status)
+	}
+}
+
+func TestReconcileOrphansKeepsTaskOwnedByLiveManagerWhenWorkerPIDIsPending(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	launcher := &trackingBlockingLauncher{}
+	owner := NewManager(Config{
+		Store:    store,
+		Root:     root,
+		Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+		Launcher: launcher,
+	})
+	t.Cleanup(func() {
+		if launcher.process != nil {
+			_ = launcher.process.Stop()
+		}
+		_ = owner.Close()
+	})
+
+	started, err := owner.Launch(context.Background(), Request{Prompt: "queued task"})
+	if err != nil {
+		t.Fatalf("Launch() error = %v", err)
+	}
+	if started.PID <= 0 {
+		t.Fatalf("started PID = %d, want live owner fallback while worker PID is pending", started.PID)
+	}
+
+	observer := NewManager(Config{
+		Store:    store,
+		Root:     root,
+		Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+	})
+	defer observer.Close()
+	got, ok := observer.Status(started.ID)
+	if !ok || got.Status != TaskRunning {
+		t.Fatalf("observer task = %#v / %v, want running task owned by live manager", got, ok)
+	}
+}
+
+func TestReconcileOrphansKeepsQueuedProcessPoolTask(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	launcher := &ProcessPoolLauncher{
+		Command:       os.Args[0],
+		Args:          []string{"-test.run=TestTaskPoolBlockingHelperProcess"},
+		Env:           []string{"PAW_task_POOL_BLOCKING_HELPER=1"},
+		MaxWorkers:    1,
+		QueueCapacity: 2,
+	}
+	owner := NewManager(Config{
+		Store:    store,
+		Root:     root,
+		Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+		Launcher: launcher,
+	})
+	t.Cleanup(func() {
+		_ = owner.Close()
+		_ = launcher.Close()
+	})
+
+	first, err := owner.Launch(context.Background(), Request{Prompt: "occupy worker"})
+	if err != nil {
+		t.Fatalf("first Launch() error = %v", err)
+	}
+	second, err := owner.Launch(context.Background(), Request{Prompt: "queued task"})
+	if err != nil {
+		t.Fatalf("second Launch() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = owner.Stop(context.Background(), first.ID)
+		_, _ = owner.Stop(context.Background(), second.ID)
+	})
+	if second.PID <= 0 {
+		t.Fatalf("queued task PID = %d, want live owner fallback", second.PID)
+	}
+
+	observer := NewManager(Config{
+		Store:    store,
+		Root:     root,
+		Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+	})
+	defer observer.Close()
+	got, ok := observer.Status(second.ID)
+	if !ok || got.Status != TaskRunning {
+		t.Fatalf("observer queued task = %#v / %v, want running", got, ok)
 	}
 }
 

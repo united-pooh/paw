@@ -53,10 +53,11 @@ type Config struct {
 	Launcher Launcher
 	Tracer   *tokentracer.Tracer
 
-	Depth        int
-	MaxDepth     int
-	ParentTaskID string
-	MCPBroker    coremcp.Broker
+	Depth                              int
+	MaxDepth                           int
+	ParentTaskID                       string
+	MCPBroker                          coremcp.Broker
+	DisableStartupOrphanReconciliation bool
 }
 
 type Manager struct {
@@ -262,7 +263,9 @@ func NewManager(cfg Config) *Manager {
 	// 立即转为 interrupted 终态，避免任务卡/活动面板/RunningTasks 把它们
 	// 当作运行中，也避免 TaskWait 对僵尸 id 一直等到超时。
 	m.importLegacyTasks(context.Background())
-	m.reconcileOrphanedTasks(context.Background())
+	if !cfg.DisableStartupOrphanReconciliation {
+		m.reconcileOrphanedTasks(context.Background())
+	}
 	return m
 }
 
@@ -304,16 +307,29 @@ func (m *Manager) importLegacyTasks(ctx context.Context) {
 // reconcileOrphanedTasks 把磁盘上 status=running 但 worker 进程已不存在的
 // 任务标记为 TaskInterrupted 并写盘。本实例 Host 中仍有进程句柄的任务不受影响；
 // PID 存活检查保证多实例场景下不会误杀其他实例仍在运行的任务。
-// 回收是尽力而为的：任何磁盘/进程检查失败都跳过，不影响 Manager 启动。
-func (m *Manager) reconcileOrphanedTasks(ctx context.Context) {
+// 指定 targetIDs 时只检查这些任务；回收是尽力而为的，任何磁盘/进程检查失败
+// 都会跳过，不影响 Manager 启动或 TaskWait。
+func (m *Manager) reconcileOrphanedTasks(ctx context.Context, targetIDs ...string) {
 	if m == nil || m.actors == nil || m.registry.root == "" {
 		return
+	}
+	var targets map[string]struct{}
+	if len(targetIDs) > 0 {
+		targets = make(map[string]struct{}, len(targetIDs))
+		for _, id := range targetIDs {
+			targets[id] = struct{}{}
+		}
 	}
 	tasks, err := m.actors.list(ctx)
 	if err != nil {
 		return
 	}
 	for _, task := range tasks {
+		if targets != nil {
+			if _, ok := targets[task.ID]; !ok {
+				continue
+			}
+		}
 		_ = m.registry.saveTask(ctx, task)
 		if task.Status != TaskRunning || m.actors.hasActiveTask(task.ID) {
 			continue
@@ -561,6 +577,7 @@ func (m *Manager) WaitAny(ctx context.Context, ids []string, timeout time.Durati
 		return WaitResult{}, fmt.Errorf("at least one task task id is required")
 	}
 
+	m.reconcileOrphanedTasks(ctx, targets...)
 	deadline := time.Now().Add(timeout)
 	updates, cancel := m.actors.subscribe()
 	defer cancel()
@@ -800,6 +817,7 @@ func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Pro
 		Status:          TaskRunning,
 		TranscriptPath:  m.store.TranscriptPath(sessionID),
 		OutputPath:      m.registry.outputPath(sessionID),
+		PID:             os.Getpid(),
 		Depth:           depth,
 		ParentTaskID:    m.parentTaskID,
 		StartedAt:       time.Now().UTC(),
@@ -843,7 +861,9 @@ func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Pro
 		_, _, _ = m.actors.transition(ctx, taskEventFailed, task)
 		return TaskSnapshot{}, nil, err
 	}
-	task.PID = process.PID()
+	if pid := process.PID(); pid > 0 {
+		task.PID = pid
+	}
 	// worker 具名角色：若进程承载者是具名池 worker，任务名/色采用执行它的
 	// worker 角色（任务剥离 persona）；无具名 worker（in-process/streaming）
 	// 时保留 assignPersona 分配的角色名。
@@ -959,7 +979,7 @@ func (m *Manager) waitBackground(taskID string, process Process) {
 }
 
 func (m *Manager) finishTask(ctx context.Context, taskID string, result WorkerResult, err error) (TaskSnapshot, bool) {
-	m.actors.release(taskID)
+	defer m.actors.release(taskID)
 	now := time.Now().UTC()
 	task, found, statusErr := m.actors.status(ctx, taskID)
 	if statusErr != nil || !found || task.Status != TaskRunning {

@@ -4,7 +4,7 @@
 
 **日期：** 2026-08-30
 
-**范围：** `internal/ui/bubble`
+**范围：** `internal/ui/bubble`、`internal/task`
 
 ## 1. 背景
 
@@ -229,10 +229,12 @@ Activity pane 从上到下分四段：
 
 任务行：
 
-- 第一行：状态 glyph/spinner、名称、右对齐持续时间。
-- 第二行：状态、token/阶段等元数据；右栏小于 40 列时省略次要字段，而不是压缩名称。
-- 当前选择继续使用 `SelectionSelected` 反色整行，保持仓库现有选中项规范。
-- 正在左侧预览的 task 在第二行显示 `previewing on left`，不增加第二套选择状态。
+- 每个未选中 task 只占一行：左侧为状态 glyph/spinner 与 worker 角色名，右侧为明确的 worker status；running 同时显示持续时间。
+- worker 名使用 `TaskSnapshot.Color` 对应的角色应援色；选中态保留 `SelectionSelected` 背景，但不再抹掉角色名前景色。
+- 只有当前选中 task 展开详情：优先显示 `Description`，缺失时回退为 `Prompt` 单行摘要，再按侧栏宽度进行单词/宽字符安全换行。
+- token 数与 `previewing on left` 作为选中项末尾的次级元数据行；不再让所有 task 固定占两行。
+- 列表按注意力优先级排序：`running` → `failed/interrupted` → `stopped` → `completed`；同组内最新启动任务在前。刷新后仍按 task ID 保持选择。
+- 滚动窗口按实际渲染行高计算，确保多行描述不会把选中项挤出可视区域。
 
 ### 8.3 Activity 关闭态
 
@@ -243,6 +245,13 @@ Activity pane 从上到下分四段：
 - 宽度不足：优先保留现有模型/状态信息，Activity 提示可省略；`Ctrl+G` 快捷键仍有效。
 
 Activity 打开后，顶部右段改为 `Activity / {page} · ● N`，不重复显示关闭态提示。
+
+### 8.4 Worker 身份与派发
+
+- ProcessPool 内的长期 worker 保持稳定的角色名与应援色搭配；同一个 worker 执行不同 task 时身份不变化。
+- worker 创建时从 40 人角色池的随机排列中取角色，一轮内不重复；不再总是从角色池头部按固定顺序出现。
+- 当多个健康 worker 同时空闲时，调度器随机选择执行者，而不是固定使用 LIFO 尾部 worker。
+- 非进程池或尚未取得 worker 身份的路径继续使用现有随机 persona 兜底，持久化字段和工具协议不变。
 
 ## 9. 渲染架构
 

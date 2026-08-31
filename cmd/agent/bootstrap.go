@@ -184,17 +184,18 @@ func buildRunnerWithTaskContext(ctx context.Context, sessionIDFlag string, outpu
 		return nil, fmt.Errorf("configure context maintenance: %w", err)
 	}
 	taskManager := task.NewManager(task.Config{
-		Model:        client,
-		Store:        store,
-		Root:         root,
-		Settings:     settingsController,
-		Notifier:     notifier,
-		Context:      runner,
-		Launcher:     launcher,
-		Depth:        subCtx.depth,
-		MaxDepth:     subCtx.maxDepth,
-		ParentTaskID: subCtx.parentTaskID,
-		MCPBroker:    broker,
+		Model:                              client,
+		Store:                              store,
+		Root:                               root,
+		Settings:                           settingsController,
+		Notifier:                           notifier,
+		Context:                            runner,
+		Launcher:                           launcher,
+		Depth:                              subCtx.depth,
+		MaxDepth:                           subCtx.maxDepth,
+		ParentTaskID:                       subCtx.parentTaskID,
+		MCPBroker:                          broker,
+		DisableStartupOrphanReconciliation: subCtx.workerMode,
 	})
 	defer func() {
 		if !success {

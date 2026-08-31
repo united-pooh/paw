@@ -478,6 +478,18 @@ func (s *JSONLStore) BeginTurn(ctx context.Context, sessionID, turnID string, me
 	return err
 }
 
+func (s *JSONLStore) AppendMessages(ctx context.Context, sessionID, turnID string, messages ...message.Message) error {
+	if err := validateTurnArgs(sessionID, turnID); err != nil {
+		return err
+	}
+	records := make([]Record, 0, len(messages))
+	for _, msg := range messages {
+		records = append(records, Record{Kind: JournalMessage, TurnID: strings.TrimSpace(turnID), Message: msg})
+	}
+	_, _, err := s.appendRecords(ctx, sessionID, records)
+	return err
+}
+
 func (s *JSONLStore) AppendAssistant(ctx context.Context, sessionID, turnID string, msg message.Message) error {
 	_, err := s.AppendAssistantWithSequence(ctx, sessionID, turnID, msg)
 	return err

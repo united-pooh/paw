@@ -95,15 +95,7 @@ func (a *taskActor) Receive(ctx *actor.Context, msg actor.Msg) {
 			return
 		}
 		a.state = taskActorState{Task: mutation.Task, Found: true}
-		if err := a.registry.saveTask(context.Background(), mutation.Task); err != nil {
-			a.reply(ctx, taskActorReply{Task: mutation.Task, Found: true, Error: err.Error()})
-			return
-		}
-		if err := ctx.Send(taskRegistryActorID, actor.Msg{
-			Kind:       taskRegistryUpsert,
-			Payload:    taskRegistryUpdate{Task: mutation.Task},
-			Durability: actor.Durable,
-		}); err != nil {
+		if err := a.publishTask(ctx, mutation.Task); err != nil {
 			a.reply(ctx, taskActorReply{Task: mutation.Task, Found: true, Error: err.Error()})
 			return
 		}
@@ -121,7 +113,12 @@ func (a *taskActor) Receive(ctx *actor.Context, msg actor.Msg) {
 			return
 		}
 		if a.state.Task.Status != TaskRunning {
-			a.reply(ctx, taskActorReply{Task: a.state.Task, Found: true, Error: fmt.Sprintf("task task %s is not running (status=%s)", a.id.Key, a.state.Task.Status)})
+			task := a.state.Task
+			if err := a.publishTask(ctx, task); err != nil {
+				a.reply(ctx, taskActorReply{Task: task, Found: true, Error: err.Error()})
+				return
+			}
+			a.reply(ctx, taskActorReply{Task: task, Found: true})
 			return
 		}
 		if command.Status != TaskStopped && command.Status != TaskInterrupted {
@@ -146,16 +143,23 @@ func (a *taskActor) Receive(ctx *actor.Context, msg actor.Msg) {
 			_ = process.Stop()
 		}
 		_ = a.registry.saveOutput(context.Background(), task.ID, WorkerResult{TaskID: task.ID, SessionID: task.SessionID, Error: command.Reason, ExitCode: exitCode})
-		if err := a.registry.saveTask(context.Background(), task); err != nil {
-			a.reply(ctx, taskActorReply{Task: task, Found: true, Changed: true, Error: err.Error()})
-			return
-		}
-		if err := ctx.Send(taskRegistryActorID, actor.Msg{Kind: taskRegistryUpsert, Payload: taskRegistryUpdate{Task: task}, Durability: actor.Durable}); err != nil {
+		if err := a.publishTask(ctx, task); err != nil {
 			a.reply(ctx, taskActorReply{Task: task, Found: true, Changed: true, Error: err.Error()})
 			return
 		}
 		a.reply(ctx, taskActorReply{Task: task, Found: true, Changed: true})
 	}
+}
+
+func (a *taskActor) publishTask(ctx *actor.Context, task TaskSnapshot) error {
+	if err := a.registry.saveTask(context.Background(), task); err != nil {
+		return err
+	}
+	return ctx.Send(taskRegistryActorID, actor.Msg{
+		Kind:       taskRegistryUpsert,
+		Payload:    taskRegistryUpdate{Task: task},
+		Durability: actor.Durable,
+	})
 }
 
 func (a *taskActor) reply(ctx *actor.Context, reply taskActorReply) {

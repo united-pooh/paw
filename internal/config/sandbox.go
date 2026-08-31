@@ -8,7 +8,7 @@ const (
 	SandboxDefaultFileSizeMiB   = 256
 	SandboxDefaultMaxProcesses  = 64
 	SandboxDefaultOpenFiles     = 256
-	SandboxDefaultJobWallSecs   = 600
+	SandboxDefaultJobWallSecs   = 90 * 60
 
 	sandboxPoolMaxWorkersCap    = 32
 	sandboxPoolQueueCapacityCap = 64

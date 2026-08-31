@@ -72,6 +72,7 @@ type journalEntry struct {
 // stores remain valid; the production JSONL store implements this interface.
 type TurnJournal interface {
 	BeginTurn(ctx context.Context, sessionID, turnID string, messages ...message.Message) error
+	AppendMessages(ctx context.Context, sessionID, turnID string, messages ...message.Message) error
 	AppendAssistant(ctx context.Context, sessionID, turnID string, msg message.Message) error
 	AppendToolResult(ctx context.Context, sessionID, turnID string, callIndex int, result message.ToolResult) error
 	CompleteTurn(ctx context.Context, sessionID, turnID string) error

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	randv2 "math/rand/v2"
 	"os"
 	"os/exec"
 	"runtime"
@@ -45,7 +46,8 @@ type ProcessPoolLauncher struct {
 	// JobWallTime 是单任务最大墙钟时长；0 表示不设上限（默认不启用）。
 	JobWallTime time.Duration
 
-	// roleCursor 按序分配池内 worker 的角色名（defaultPersonas），进程内唯一。
+	// roleOrder/roleCursor 让池内 worker 从角色池随机且不重复地获得身份。
+	roleOrder  []int
 	roleCursor int
 
 	submit    chan *poolJob
@@ -302,9 +304,7 @@ func (s *poolSchedulerState) dispatch() {
 
 		var worker *poolWorker
 		if len(s.idle) > 0 {
-			last := len(s.idle) - 1
-			worker = s.idle[last]
-			s.idle = s.idle[:last]
+			worker, s.idle = popIdleWorker(s.idle, randv2.IntN(len(s.idle)))
 		} else if s.workers < s.maxWorkers {
 			var err error
 			worker, err = s.launcher.newPoolWorker()
@@ -339,6 +339,16 @@ func (s *poolSchedulerState) dispatch() {
 			go run()
 		}
 	}
+}
+
+func popIdleWorker(idle []*poolWorker, index int) (*poolWorker, []*poolWorker) {
+	if index < 0 || index >= len(idle) {
+		panic(fmt.Sprintf("idle worker index %d out of range [0,%d)", index, len(idle)))
+	}
+	worker := idle[index]
+	copy(idle[index:], idle[index+1:])
+	idle[len(idle)-1] = nil
+	return worker, idle[:len(idle)-1]
 }
 
 func runPoolWorkerSafely(worker *poolWorker, job *poolJob) (result WorkerResult, err error, healthy bool) {
@@ -533,12 +543,23 @@ type poolWorker struct {
 	stopOnce   sync.Once
 }
 
-// nextWorkerRoleLocked 在已持有 l.mu 的前提下按序分配一个角色（进程内唯一）。
+func randomPersonaOrder(count int) []int {
+	if count <= 0 {
+		return nil
+	}
+	return randv2.Perm(count)
+}
+
+// nextWorkerRoleLocked 在已持有 l.mu 的前提下按随机排列分配角色；一轮内不重复。
 func (l *ProcessPoolLauncher) nextWorkerRoleLocked() persona {
 	if l == nil || len(defaultPersonas) == 0 {
 		return persona{}
 	}
-	role := defaultPersonas[l.roleCursor%len(defaultPersonas)]
+	if len(l.roleOrder) != len(defaultPersonas) || l.roleCursor >= len(l.roleOrder) {
+		l.roleOrder = randomPersonaOrder(len(defaultPersonas))
+		l.roleCursor = 0
+	}
+	role := defaultPersonas[l.roleOrder[l.roleCursor]]
 	l.roleCursor++
 	return role
 }

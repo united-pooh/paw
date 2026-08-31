@@ -307,6 +307,8 @@ context meter 的 token 数只来自模型服务端返回的真实 `usage` 字�
 context meter 左侧显示紧凑 token 与比例，例如 `260k↑ 2.05k↓ 25%(10%)`：`↑` 是 session 累计上传/input token，`↓` 是 session 累计回答/output token，两个百分比分别是当前 context 用量和当前 cache hit 用量占总 limit 的比例。右侧只显示当前 context 剩余比例，例如 `free(75%)`。超过三位的 token 会压缩成 `k`，超过 `999k` 会压缩成 `M`，数字最多保留三位有效数字。
 
 快捷键:
+- 模型工作时，`Enter` 会把纯文本作为 steering 指令送入当前 turn 的下一次模型请求，不会插入已经建立的 token stream；`Tab` 会把输入排入后续独立 turn。若当前 turn 已封口或 runner 不支持 steering，`Enter` 会安全降级为 queue。
+- 模型工作时，`ctrl+c` 仍用于取消当前工具/turn。带图片的输入按 `Enter` 时不会尝试 steering，而会保留附件并进入 queue。
 - `ctrl+v`: 从剪贴板粘贴图片时插入 `[Image N]` 图片芯片；连续粘贴会按顺序生成多个芯片，芯片可以像一个整体一样删除。剪贴板没有图片时保持原有文本粘贴行为。
 - `ctrl+o`: 展开/折叠模型 thinking 过程；折叠时 thinking 仍保存在 transcript 中，但不渲染到 viewport。
 - `ctrl+g`: 展开/收起主外框内的全高 Activity 右侧栏；打开后 transcript、状态行、输入框和 queue 会共同缩窄，不遮挡主内容。右栏包含 Tasks/Todo，使用 ↑↓ 选择，Enter 在左侧预览 task transcript。终端窄于 85 列时 Activity 使用内部全页模式；输入始终提交到主 session。

@@ -123,6 +123,9 @@ func (m appModel) renderTasksCardContentHeight(width, height int) string {
 var activityTaskSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 func (m appModel) renderActivityTasks(width, height int) string {
+	if height <= 0 {
+		return ""
+	}
 	if m.taskController == nil {
 		return fitStyledRect(labelErrorStyle.Render("Task controller is unavailable."), width, height)
 	}
@@ -130,58 +133,131 @@ func (m appModel) renderActivityTasks(width, height int) string {
 	if len(tasks) == 0 {
 		return fitStyledRect(unselectedProviderStyle.Render("No tasks yet."), width, height)
 	}
-	visible := maxInt(1, height/2)
+
 	selected := clampInt(m.activity.selectedIndex, 0, len(tasks)-1)
-	start := clampInt(selected-visible+1, 0, maxInt(0, len(tasks)-visible))
-	end := minInt(len(tasks), start+visible)
-	lines := make([]string, 0, height)
-	for index := start; index < end; index++ {
-		first, second := m.renderActivityTaskRows(tasks[index], width, index == selected)
-		lines = append(lines, first)
-		if len(lines) < height {
-			lines = append(lines, second)
+	lines := make([]string, 0, len(tasks)+height)
+	selectedStart, selectedEnd := 0, 0
+	for index, snapshot := range tasks {
+		if index == selected {
+			selectedStart = len(lines)
+		}
+		lines = append(lines, m.renderActivityTaskHeader(snapshot, width, index == selected))
+		if index == selected {
+			lines = append(lines, m.renderSelectedActivityTaskDetails(snapshot, width)...)
+			selectedEnd = len(lines)
 		}
 	}
-	return fitStyledRect(strings.Join(lines, "\n"), width, height)
+
+	start := activityTaskViewportStart(len(lines), height, selectedStart, selectedEnd)
+	end := minInt(len(lines), start+height)
+	return fitStyledRect(strings.Join(lines[start:end], "\n"), width, height)
 }
 
-func (m appModel) renderActivityTaskRows(snapshot task.TaskSnapshot, width int, selected bool) (string, string) {
-	glyph := "✓"
-	status := "done"
-	right := ""
-	switch snapshot.Status {
-	case task.TaskRunning:
-		glyph = activityTaskSpinnerFrames[m.spinnerFrameIdx%len(activityTaskSpinnerFrames)]
-		status = "running"
-		right = formatElapsedTime(time.Since(snapshot.StartedAt))
-	case task.TaskFailed:
-		glyph, status = "✗", "failed"
-	case task.TaskStopped:
-		glyph, status = "■", "stopped"
-	case task.TaskInterrupted:
-		glyph, status = "!", "interrupted"
+func activityTaskViewportStart(total, height, selectedStart, selectedEnd int) int {
+	if height <= 0 || total <= height {
+		return 0
 	}
-	name := taskDisplayName(snapshot)
-	first := renderSidebarRow(width, glyph+" "+name, right, unselectedProviderStyle, unselectedProviderStyle)
-	meta := status
-	if snapshot.UsedTokens > 0 {
-		meta += " · " + formatCompactTokenCount(snapshot.UsedTokens) + " tokens"
+	selectedHeight := maxInt(1, selectedEnd-selectedStart)
+	if selectedHeight >= height {
+		return clampInt(selectedStart, 0, total-height)
 	}
-	if m.taskPreview != nil && strings.TrimSpace(m.taskPreview.task.ID) == strings.TrimSpace(snapshot.ID) {
-		meta += " · previewing on left"
+	start := selectedStart - (height-selectedHeight)/2
+	start = clampInt(start, 0, total-height)
+	if selectedStart < start {
+		start = selectedStart
 	}
-	if width < 40 {
-		meta = status
-		if m.taskPreview != nil && strings.TrimSpace(m.taskPreview.task.ID) == strings.TrimSpace(snapshot.ID) {
-			meta += " · previewing"
+	if selectedEnd > start+height {
+		start = selectedEnd - height
+	}
+	return clampInt(start, 0, total-height)
+}
+
+func (m appModel) renderActivityTaskHeader(snapshot task.TaskSnapshot, width int, selected bool) string {
+	glyph, status, glyphStyle, statusStyle := m.activityTaskStatus(snapshot)
+	nameStyle := unselectedProviderStyle.Copy().Bold(true)
+	fillStyle := unselectedProviderStyle
+	if color := strings.TrimSpace(snapshot.Color); color != "" {
+		nameStyle = nameStyle.Foreground(lipgloss.Color(color))
+	}
+	if selected {
+		fillStyle = m.styles.SelectionSelected
+		glyphStyle = fillStyle
+		statusStyle = fillStyle
+		nameStyle = fillStyle.Copy()
+		if color := strings.TrimSpace(snapshot.Color); color != "" {
+			nameStyle = nameStyle.Foreground(lipgloss.Color(color))
 		}
 	}
-	second := "  " + truncateStyledCellLine(meta, maxInt(1, width-2))
-	if selected {
-		return m.styles.SelectionSelected.Render(fitStyledCellLine(ansi.Strip(first), width)),
-			m.styles.SelectionSelected.Render(fitStyledCellLine(second, width))
+	return renderActivityTaskHeaderRow(width, glyph, taskDisplayName(snapshot), status, fillStyle, glyphStyle, nameStyle, statusStyle)
+}
+
+func (m appModel) activityTaskStatus(snapshot task.TaskSnapshot) (string, string, lipgloss.Style, lipgloss.Style) {
+	switch snapshot.Status {
+	case task.TaskRunning:
+		elapsed := formatElapsedTime(time.Since(snapshot.StartedAt))
+		return activityTaskSpinnerFrames[m.spinnerFrameIdx%len(activityTaskSpinnerFrames)], "running · " + elapsed, m.styles.StatusRunning, m.styles.StatusRunning
+	case task.TaskFailed:
+		return "✗", "failed", m.styles.StatusError, m.styles.StatusError
+	case task.TaskStopped:
+		return "■", "stopped", m.styles.StatusMuted, m.styles.StatusMuted
+	case task.TaskInterrupted:
+		return "!", "interrupted", m.styles.StatusWarning, m.styles.StatusWarning
+	default:
+		return "✓", "completed", m.styles.StatusSuccess, m.styles.StatusSuccess
 	}
-	return fitStyledCellLine(first, width), unselectedProviderStyle.Render(fitStyledCellLine(second, width))
+}
+
+func (m appModel) renderSelectedActivityTaskDetails(snapshot task.TaskSnapshot, width int) []string {
+	description := summarizeToolContent(snapshot.Description)
+	if description == "" {
+		description = summarizeToolContent(snapshot.Prompt)
+	}
+	if description == "" {
+		description = "No task description."
+	}
+
+	contentWidth := maxInt(1, width-2)
+	wrapped := strings.Split(wrapCompact(ansi.Strip(description), contentWidth), "\n")
+	lines := make([]string, 0, len(wrapped)+1)
+	for _, line := range wrapped {
+		lines = append(lines, m.styles.SelectionSelected.Render(fitStyledCellLine("  "+line, width)))
+	}
+
+	meta := make([]string, 0, 2)
+	if snapshot.UsedTokens > 0 {
+		meta = append(meta, formatCompactTokenCount(snapshot.UsedTokens)+" tokens")
+	}
+	if m.taskPreview != nil && strings.TrimSpace(m.taskPreview.task.ID) == strings.TrimSpace(snapshot.ID) {
+		preview := "previewing on left"
+		if width < 40 {
+			preview = "previewing"
+		}
+		meta = append(meta, preview)
+	}
+	if len(meta) > 0 {
+		text := "  " + truncateStyledCellLine(strings.Join(meta, " · "), contentWidth)
+		lines = append(lines, m.styles.SelectionSelected.Render(fitStyledCellLine(text, width)))
+	}
+	return lines
+}
+
+func renderActivityTaskHeaderRow(width int, glyph, name, status string, fillStyle, glyphStyle, nameStyle, statusStyle lipgloss.Style) string {
+	width = maxInt(1, width)
+	status = strings.TrimSpace(status)
+	if status == "" {
+		status = "unknown"
+	}
+	status = truncateStyledCellLine(status, maxInt(1, width/2))
+	statusWidth := terminalCellWidth(status)
+	glyph = truncateStyledCellLine(glyph, width)
+	glyphWidth := terminalCellWidth(glyph)
+	nameWidth := maxInt(0, width-glyphWidth-statusWidth-2)
+	name = truncateStyledCellLine(name, nameWidth)
+	leftWidth := glyphWidth + 1 + terminalCellWidth(name)
+	gap := maxInt(1, width-leftWidth-statusWidth)
+	row := glyphStyle.Render(glyph) + fillStyle.Render(" ") + nameStyle.Render(name) +
+		fillStyle.Render(strings.Repeat(" ", gap)) + statusStyle.Render(status)
+	return fitStyledCellLine(row, width)
 }
 
 func renderSidebarRow(width int, left, right string, leftStyle, rightStyle lipgloss.Style) string {

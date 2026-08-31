@@ -19,7 +19,7 @@ const (
 	defaultWorkerFileSizeMiB  = 256
 	defaultWorkerMaxProcesses = 64
 	defaultWorkerOpenFiles    = 256
-	defaultWorkerJobWallSecs  = 600
+	defaultWorkerJobWallSecs  = 90 * 60
 )
 
 func resolveSandboxLimits(limits SandboxLimits) SandboxLimits {

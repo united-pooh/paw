@@ -61,7 +61,11 @@ func (m appModel) handleSubmit() (tea.Model, tea.Cmd) {
 	}
 
 	if m.isModelWorkRunning() {
-		return m.queueChatInput(line), nil
+		if next, accepted := m.trySubmitSteer(line); accepted {
+			return next, nil
+		} else {
+			return next.queueChatInput(line), nil
+		}
 	}
 	if m.isTerminalWorkRunning() {
 		m.addEntry(transcriptEntry{kind: entrySystem, title: "busy", body: "chat is unavailable while a terminal command is running"})
@@ -343,28 +347,27 @@ func (m appModel) handleInputVerticalNavigation(direction int) (tea.Model, tea.C
 	return m.handleHistoryNavigation(1)
 }
 
-func (m appModel) submitSupplement(line string) appModel {
+func (m appModel) trySubmitSteer(line string) (appModel, bool) {
 	line = strings.TrimSpace(line)
-	if line == "" {
-		return m
+	if line == "" || submittedDraftHasImage(m.submittedDraft) {
+		return m, false
+	}
+	submitter, ok := m.runner.(SteerSubmitter)
+	if !ok || !submitter.SubmitSteer(line) {
+		return m, false
 	}
 	m.rememberInputHistory(line)
-	submitter, ok := m.runner.(SupplementSubmitter)
-	if !ok || !submitter.SubmitSupplement(line) {
-		m.addEntry(transcriptEntry{
-			kind:  entrySystem,
-			title: "supplement",
-			body:  "runner does not support running-turn supplements",
-		})
-		return m
+	m.addEntry(m.userTranscriptEntry("you (steer)", line))
+	return m, true
+}
+
+func submittedDraftHasImage(draft inputDraft) bool {
+	for _, token := range draft.Tokens {
+		if token.Kind == inputTokenImage && token.Image != nil {
+			return true
+		}
 	}
-	m.addEntry(transcriptEntry{
-		kind:        entryUser,
-		title:       "you (supplement)",
-		body:        line,
-		inputTokens: m.submittedTokensForLine(line),
-	})
-	return m
+	return false
 }
 
 func (m appModel) submittedTokensForLine(line string) []inputToken {

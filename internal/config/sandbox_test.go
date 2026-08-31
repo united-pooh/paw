@@ -9,6 +9,9 @@ func intPtr(value int) *int { return &value }
 
 func TestResolveEffectiveSandboxDefaults(t *testing.T) {
 	eff := ResolveEffectiveSandbox(Document{}, WorkspaceDocument{})
+	if eff.JobWallSeconds != 90*60 {
+		t.Fatalf("default job wall seconds = %d, want 90 minutes", eff.JobWallSeconds)
+	}
 	want := EffectiveSandbox{
 		MaxWorkers:     SandboxDefaultMaxWorkers,
 		QueueCapacity:  SandboxDefaultQueueCapacity,

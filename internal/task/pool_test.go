@@ -216,6 +216,56 @@ func TestProcessPoolCloseCancelsQueuedJobs(t *testing.T) {
 
 var _ = time.Second
 
+func TestRandomPersonaOrderIsPermutation(t *testing.T) {
+	order := randomPersonaOrder(12)
+	if len(order) != 12 {
+		t.Fatalf("randomPersonaOrder() len = %d, want 12: %#v", len(order), order)
+	}
+	seen := make(map[int]bool, len(order))
+	for _, index := range order {
+		if index < 0 || index >= len(order) || seen[index] {
+			t.Fatalf("randomPersonaOrder() is not a permutation: %#v", order)
+		}
+		seen[index] = true
+	}
+}
+
+func TestNextWorkerRoleUsesRandomizedOrderWithoutDuplicates(t *testing.T) {
+	previous := defaultPersonas
+	defaultPersonas = []persona{
+		{Name: "角色A", Color: "#111111"},
+		{Name: "角色B", Color: "#222222"},
+		{Name: "角色C", Color: "#333333"},
+	}
+	t.Cleanup(func() { defaultPersonas = previous })
+
+	launcher := &ProcessPoolLauncher{roleOrder: []int{2, 0, 1}}
+	got := make([]string, 0, len(defaultPersonas))
+	for range defaultPersonas {
+		got = append(got, launcher.nextWorkerRoleLocked().Name)
+	}
+	want := []string{"角色C", "角色A", "角色B"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("worker roles = %#v, want %#v", got, want)
+		}
+	}
+}
+
+func TestPopIdleWorkerUsesChosenRandomIndex(t *testing.T) {
+	first := &poolWorker{roleName: "first"}
+	second := &poolWorker{roleName: "second"}
+	third := &poolWorker{roleName: "third"}
+
+	worker, remaining := popIdleWorker([]*poolWorker{first, second, third}, 1)
+	if worker != second {
+		t.Fatalf("popIdleWorker() = %v, want second worker", worker)
+	}
+	if len(remaining) != 2 || remaining[0] != first || remaining[1] != third {
+		t.Fatalf("remaining workers = %#v, want first/third", remaining)
+	}
+}
+
 func TestPoolWorkersGetUniqueNamedRoles(t *testing.T) {
 	launcher := &ProcessPoolLauncher{
 		Command:       os.Args[0],

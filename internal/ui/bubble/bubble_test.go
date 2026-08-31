@@ -40,6 +40,8 @@ type fakeRunner struct {
 	lastDraft        string
 	lastLimit        int
 	supplements      []string
+	steers           []string
+	rejectSteers     bool
 	contextLimits    []int
 	contextModes     []string
 	yoloModes        []bool
@@ -58,6 +60,21 @@ type ctrlCRunner struct {
 	activeTool      bool
 	cancelToolCalls int
 	cancelTurnCalls int
+}
+
+type noSteerRunner struct {
+	inputs []string
+}
+
+func (r *noSteerRunner) RunTurn(_ context.Context, input string) (message.Message, error) {
+	r.inputs = append(r.inputs, input)
+	return message.Message{Role: message.RoleAssistant, Content: "ok"}, nil
+}
+
+func (*noSteerRunner) ResetHistory() {}
+
+func (*noSteerRunner) LoadHistory(context.Context, string) ([]message.Message, error) {
+	return nil, nil
 }
 
 func (r *ctrlCRunner) CancelCurrentTool() bool {
@@ -114,6 +131,15 @@ func (r *fakeRunner) SubmitSupplement(input string) bool {
 		return false
 	}
 	r.supplements = append(r.supplements, input)
+	return true
+}
+
+func (r *fakeRunner) SubmitSteer(input string) bool {
+	input = strings.TrimSpace(input)
+	if input == "" || r.rejectSteers {
+		return false
+	}
+	r.steers = append(r.steers, input)
 	return true
 }
 
@@ -1219,8 +1245,8 @@ func TestRunningCommandPolicyAllowsStatusAndBlocksClear(t *testing.T) {
 	}
 }
 
-// TestRunningModelQueuesPlainText 验证模型运行中普通文本也会进入 queue，而不是作为当前 turn 的补充输入。
-func TestRunningModelQueuesPlainText(t *testing.T) {
+// TestRunningModelEnterSubmitsSteer 验证模型运行中 Enter 会把纯文本送入当前 turn。
+func TestRunningModelEnterSubmitsSteer(t *testing.T) {
 	runner := &fakeRunner{}
 	model := newTestModel(runner)
 	model.input.SetValue("first")
@@ -1228,35 +1254,101 @@ func TestRunningModelQueuesPlainText(t *testing.T) {
 	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
 	if cmd == nil {
-		t.Fatalf("first submit cmd is nil")
+		t.Fatal("first submit cmd is nil")
 	}
 
-	model.input.SetValue("queued plain text")
-	next, queuedCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model.input.SetValue("adjust this turn")
+	next, steerCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
-	if queuedCmd != nil {
-		t.Fatalf("queued submit returned cmd")
+	if steerCmd != nil {
+		t.Fatal("steer submit returned cmd")
 	}
-	if got := model.chatQueue.Len(); got != 1 {
-		t.Fatalf("queue len = %d, want 1", got)
+	if got := runner.steers; !equalStrings(got, []string{"adjust this turn"}) {
+		t.Fatalf("runner.steers = %#v", got)
 	}
-	if len(runner.supplements) != 0 {
-		t.Fatalf("runner.supplements = %#v, want none", runner.supplements)
+	if got := model.chatQueue.Len(); got != 0 {
+		t.Fatalf("queue len = %d, want 0", got)
 	}
-	if len(model.transcript) != 1 {
-		t.Fatalf("transcript len = %d, want 1 while queued input is pending: %#v", len(model.transcript), model.transcript)
+	if got := runner.supplements; len(got) != 0 {
+		t.Fatalf("runner.supplements = %#v, want none", got)
 	}
-	if got := model.transcript[0]; got.kind != entryUser || got.body != "first" {
-		t.Fatalf("active turn transcript = %#v", got)
+	if len(model.transcript) != 2 {
+		t.Fatalf("transcript len = %d, want 2: %#v", len(model.transcript), model.transcript)
+	}
+	if got := model.transcript[1]; got.kind != entryUser || got.title != "you (steer)" || got.body != "adjust this turn" {
+		t.Fatalf("steer transcript = %#v", got)
 	}
 	if got := model.input.Value(); got != "" {
 		t.Fatalf("input value = %q, want cleared", got)
+	}
+	if got := model.inputHistory; len(got) != 2 || got[1].Text != "adjust this turn" {
+		t.Fatalf("inputHistory = %#v", got)
 	}
 	_ = cmd()
 }
 
-// TestRunningModelEnterSubmitsSupplement 验证旧的 supplement runner 能力不再被普通文本 Enter 隐式调用。
-func TestRunningModelEnterSubmitsSupplement(t *testing.T) {
+func TestRunningModelRejectedSteerFallsBackToQueue(t *testing.T) {
+	runner := &fakeRunner{rejectSteers: true}
+	model := newTestModel(runner)
+	model.input.SetValue("first")
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if cmd == nil {
+		t.Fatal("first submit cmd is nil")
+	}
+
+	model.input.SetValue("queue after seal")
+	next, queuedCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if queuedCmd != nil {
+		t.Fatal("fallback queue returned cmd")
+	}
+	if got := model.chatQueue.Len(); got != 1 {
+		t.Fatalf("queue len = %d, want 1", got)
+	}
+	if len(runner.steers) != 0 || len(runner.supplements) != 0 {
+		t.Fatalf("steers/supplements = %#v/%#v, want none", runner.steers, runner.supplements)
+	}
+	if len(model.transcript) != 1 {
+		t.Fatalf("transcript = %#v, want no steer/error row", model.transcript)
+	}
+
+	_ = cmd()
+	model.queryGuard.FinishModel()
+	queuedCmd = model.startNextQueuedTurn()
+	if queuedCmd == nil {
+		t.Fatal("startNextQueuedTurn() cmd is nil")
+	}
+	_ = queuedCmd()
+	if want := []string{"first", "queue after seal"}; !equalStrings(runner.inputs, want) {
+		t.Fatalf("runner.inputs = %#v, want %#v", runner.inputs, want)
+	}
+}
+
+func TestRunningModelWithoutSteerCapabilityFallsBackToQueue(t *testing.T) {
+	runner := &noSteerRunner{}
+	model := newTestModel(runner)
+	model.input.SetValue("first")
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if cmd == nil {
+		t.Fatal("first submit cmd is nil")
+	}
+	model.input.SetValue("compatible fallback")
+	next, queuedCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if queuedCmd != nil || model.chatQueue.Len() != 1 {
+		t.Fatalf("fallback cmd/queue = %v/%d", queuedCmd, model.chatQueue.Len())
+	}
+	if len(model.transcript) != 1 {
+		t.Fatalf("transcript = %#v, want no steer/error row", model.transcript)
+	}
+	_ = cmd()
+}
+
+func TestSteerEntryDoesNotReplaceActiveAssistantStream(t *testing.T) {
 	runner := &fakeRunner{}
 	model := newTestModel(runner)
 	model.input.SetValue("first")
@@ -1264,29 +1356,49 @@ func TestRunningModelEnterSubmitsSupplement(t *testing.T) {
 	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
 	if cmd == nil {
-		t.Fatalf("first submit cmd is nil")
+		t.Fatal("first submit cmd is nil")
+	}
+	next, _ = model.Update(assistantDeltaMsg("draft\n"))
+	model = next.(appModel)
+	assistantIndex := model.activeAssistant
+	if assistantIndex < 0 {
+		t.Fatal("active assistant was not created")
 	}
 
-	model.input.SetValue("supplement this turn")
-	next, queuedCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model.input.SetValue("adjust now")
+	next, steerCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
-	if queuedCmd != nil {
-		t.Fatalf("queued submit returned cmd")
+	if steerCmd != nil {
+		t.Fatal("steer submit returned cmd")
 	}
-	if got := model.chatQueue.Len(); got != 1 {
-		t.Fatalf("queue len = %d, want 1", got)
+	if model.activeAssistant != assistantIndex {
+		t.Fatalf("active assistant = %d, want %d", model.activeAssistant, assistantIndex)
 	}
-	if got := runner.supplements; len(got) != 0 {
-		t.Fatalf("runner.supplements = %#v, want no implicit supplement", got)
+	if got := model.transcript[len(model.transcript)-1]; got.title != "you (steer)" {
+		t.Fatalf("last transcript entry = %#v", got)
 	}
-	if len(model.transcript) != 1 {
-		t.Fatalf("transcript len = %d, want 1 while queued input is pending: %#v", len(model.transcript), model.transcript)
+
+	next, _ = model.Update(assistantDeltaMsg("continued\n"))
+	model = next.(appModel)
+	if got := model.transcript[assistantIndex]; got.kind != entryAssistant || !strings.Contains(got.body, "draft\ncontinued\n") {
+		t.Fatalf("assistant entry = %#v", got)
 	}
-	if got := model.transcript[0]; got.kind != entryUser || got.body != "first" {
-		t.Fatalf("active turn transcript = %#v", got)
+	if got := model.transcript[len(model.transcript)-1]; got.title != "you (steer)" || got.body != "adjust now" {
+		t.Fatalf("steer entry mutated = %#v", got)
 	}
-	if got := model.input.Value(); got != "" {
-		t.Fatalf("input value = %q, want cleared", got)
+
+	next, _ = model.Update(doneMsg{})
+	model = next.(appModel)
+	next, _ = model.Update(assistantDeltaMsg("corrected response\n"))
+	model = next.(appModel)
+	if model.activeAssistant != len(model.transcript)-1 || model.activeAssistant == assistantIndex {
+		t.Fatalf("continuation assistant index = %d, old = %d, transcript = %#v", model.activeAssistant, assistantIndex, model.transcript)
+	}
+	if got := model.transcript[len(model.transcript)-2]; got.title != "you (steer)" || got.body != "adjust now" {
+		t.Fatalf("steer entry order = %#v", got)
+	}
+	if got := model.transcript[len(model.transcript)-1]; got.kind != entryAssistant || !strings.Contains(got.body, "corrected response") {
+		t.Fatalf("continuation assistant entry = %#v", got)
 	}
 	_ = cmd()
 }
@@ -1345,6 +1457,9 @@ func TestRunningModelQueuesChatFIFOWithTab(t *testing.T) {
 	}
 	if got := runner.supplements; len(got) != 0 {
 		t.Fatalf("runner.supplements = %#v, want none for queued inputs", got)
+	}
+	if got := runner.steers; len(got) != 0 {
+		t.Fatalf("runner.steers = %#v, want none for Tab queue", got)
 	}
 	if len(runner.inputs) != 0 {
 		t.Fatalf("runner.inputs before first cmd = %#v", runner.inputs)
@@ -5472,10 +5587,8 @@ func TestCtrlGtaskPickerEnterPreviewsSelectedtask(t *testing.T) {
 		}
 	}
 
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
-	model = next.(appModel)
-	if model.activity.selectedIndex != 1 {
-		t.Fatalf("selectedIndex = %d, want second task", model.activity.selectedIndex)
+	if model.activity.selectedIndex != 0 || len(model.activity.tasks) != 2 || model.activity.tasks[0].ID != "agent-2" {
+		t.Fatalf("priority-sorted selection = index:%d tasks:%#v, want running agent-2 first", model.activity.selectedIndex, model.activity.tasks)
 	}
 
 	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})

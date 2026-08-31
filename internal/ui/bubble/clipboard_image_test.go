@@ -101,6 +101,53 @@ func TestClipboardImageQueuePreservesRichParts(t *testing.T) {
 	}
 }
 
+func TestWorkingEnterWithClipboardImageFallsBackToRichQueue(t *testing.T) {
+	oldImageReader := readClipboardImageFn
+	oldTextReader := readClipboardTextFn
+	t.Cleanup(func() {
+		readClipboardImageFn = oldImageReader
+		readClipboardTextFn = oldTextReader
+	})
+	runner := &clipboardImageTestRunner{}
+	setTestClipboardImage(t, message.ImagePart{MIMEType: "image/png", Data: []byte("png")})
+	model := newTestModel(runner)
+	model.input.SetValue("first")
+	next, firstCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if firstCmd == nil {
+		t.Fatal("first submit command is nil")
+	}
+
+	model.input.SetValue("inspect ")
+	next, pasteCmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	model = next.(appModel)
+	next, _ = model.Update(pasteCmd())
+	model = next.(appModel)
+	next, queueCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(appModel)
+	if queueCmd != nil || model.chatQueue.Len() != 1 {
+		t.Fatalf("queue command/length = %v/%d", queueCmd, model.chatQueue.Len())
+	}
+	if len(runner.steers) != 0 {
+		t.Fatalf("runner.steers = %#v, want image draft to bypass steering", runner.steers)
+	}
+	queued := model.chatQueue.Items()
+	if len(queued) != 1 || queued[0].Draft.Text != "inspect [Image 1]" || len(queued[0].Draft.Tokens) != 1 || queued[0].Draft.Tokens[0].Image == nil {
+		t.Fatalf("queued image draft = %#v", queued)
+	}
+
+	next, queuedTurnCmd := model.Update(firstCmd())
+	model = next.(appModel)
+	if queuedTurnCmd == nil {
+		t.Fatal("queued turn command is nil")
+	}
+	_ = queuedTurnCmd()
+	if len(runner.richInputs) != 2 || len(runner.richInputs[1].Parts) != 2 ||
+		runner.richInputs[1].Parts[1].Type != message.ContentPartImage {
+		t.Fatalf("queued rich inputs = %#v", runner.richInputs)
+	}
+}
+
 func TestClipboardImageChipDeletesAsOneToken(t *testing.T) {
 	oldImageReader := readClipboardImageFn
 	oldTextReader := readClipboardTextFn

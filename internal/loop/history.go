@@ -20,18 +20,60 @@ func buildUserMessages(input string) []message.Message {
 	}
 }
 
-// promptState 收敛系统提示增补与轮间 supplements（用户在 turn 运行中提交
-// 的追加指令），自带锁。P2 从 Engine 字段提取。
+// promptState 收敛系统提示增补与轮间 pending 输入，自带锁。
 type promptState struct {
 	mu               sync.RWMutex
-	supplements      []string
+	supplements      []pendingSupplement
+	acceptingSteers  bool
 	systemSupplement string
+}
+
+type pendingSupplement struct {
+	content           string
+	forceContinuation bool
 }
 
 func (p *promptState) appendSupplement(input string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.supplements = append(p.supplements, input)
+	p.supplements = append(p.supplements, pendingSupplement{content: input})
+}
+
+func (p *promptState) beginSteerAdmission() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.acceptingSteers = true
+}
+
+func (p *promptState) endSteerAdmission() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.acceptingSteers = false
+}
+
+func (p *promptState) admitSteer(input string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.acceptingSteers {
+		return false
+	}
+	p.supplements = append(p.supplements, pendingSupplement{
+		content:           input,
+		forceContinuation: true,
+	})
+	return true
+}
+
+func (p *promptState) trySealSteerAdmission() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, supplement := range p.supplements {
+		if supplement.forceContinuation {
+			return false
+		}
+	}
+	p.acceptingSteers = false
+	return true
 }
 
 func (p *promptState) pendingCount() int {
@@ -40,27 +82,35 @@ func (p *promptState) pendingCount() int {
 	return len(p.supplements)
 }
 
-func (p *promptState) drain() []string {
+func (p *promptState) drainPending() []pendingSupplement {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if len(p.supplements) == 0 {
 		return nil
 	}
-	supplements := append([]string(nil), p.supplements...)
+	supplements := append([]pendingSupplement(nil), p.supplements...)
 	p.supplements = nil
 	return supplements
 }
 
-func (p *promptState) prepend(supplements []string) {
+func (p *promptState) drain() []string {
+	return pendingSupplementContents(p.drainPending())
+}
+
+func (p *promptState) prependPending(supplements []pendingSupplement) {
 	if len(supplements) == 0 {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	combined := make([]string, 0, len(supplements)+len(p.supplements))
+	combined := make([]pendingSupplement, 0, len(supplements)+len(p.supplements))
 	combined = append(combined, supplements...)
 	combined = append(combined, p.supplements...)
 	p.supplements = combined
+}
+
+func (p *promptState) prepend(supplements []string) {
+	p.prependPending(genericPendingSupplements(supplements))
 }
 
 func (p *promptState) setSystemSupplement(supplement string) {
@@ -79,6 +129,7 @@ func (p *promptState) resetSupplements() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.supplements = nil
+	p.acceptingSteers = false
 }
 
 func (runner *Engine) SubmitSupplement(input string) bool {
@@ -88,6 +139,14 @@ func (runner *Engine) SubmitSupplement(input string) bool {
 	}
 	runner.promptCtx.appendSupplement(input)
 	return true
+}
+
+func (runner *Engine) SubmitSteer(input string) bool {
+	input = strings.TrimSpace(input)
+	if runner == nil || input == "" {
+		return false
+	}
+	return runner.promptCtx.admitSteer(input)
 }
 
 func (runner *Engine) PendingSupplementCount() int {
@@ -107,26 +166,56 @@ func (runner *Engine) buildTurnHistory(input message.Message) ([]message.Message
 	return history, supplements
 }
 
-func (runner *Engine) appendPendingSupplements(history []message.Message) ([]message.Message, []string) {
-	supplements := runner.drainSupplements()
+func (runner *Engine) appendPendingSupplements(history []message.Message) ([]message.Message, []pendingSupplement) {
+	supplements := runner.drainPendingSupplements()
 	if len(supplements) == 0 {
 		return history, nil
 	}
-	return append(history, buildSupplementMessages(supplements)...), supplements
+	return append(history, buildSupplementMessages(pendingSupplementContents(supplements))...), supplements
 }
 
-func (runner *Engine) drainSupplements() []string {
+func (runner *Engine) drainPendingSupplements() []pendingSupplement {
 	if runner == nil {
 		return nil
 	}
-	return runner.promptCtx.drain()
+	return runner.promptCtx.drainPending()
 }
 
-func (runner *Engine) prependSupplements(supplements []string) {
+func (runner *Engine) drainSupplements() []string {
+	return pendingSupplementContents(runner.drainPendingSupplements())
+}
+
+func (runner *Engine) prependPendingSupplements(supplements []pendingSupplement) {
 	if runner == nil || len(supplements) == 0 {
 		return
 	}
-	runner.promptCtx.prepend(supplements)
+	runner.promptCtx.prependPending(supplements)
+}
+
+func (runner *Engine) prependSupplements(supplements []string) {
+	runner.prependPendingSupplements(genericPendingSupplements(supplements))
+}
+
+func pendingSupplementContents(supplements []pendingSupplement) []string {
+	if len(supplements) == 0 {
+		return nil
+	}
+	contents := make([]string, 0, len(supplements))
+	for _, supplement := range supplements {
+		contents = append(contents, supplement.content)
+	}
+	return contents
+}
+
+func genericPendingSupplements(supplements []string) []pendingSupplement {
+	if len(supplements) == 0 {
+		return nil
+	}
+	pending := make([]pendingSupplement, 0, len(supplements))
+	for _, supplement := range supplements {
+		pending = append(pending, pendingSupplement{content: supplement})
+	}
+	return pending
 }
 
 func buildSupplementMessages(supplements []string) []message.Message {
