@@ -24,6 +24,7 @@ func NewWorkspaceCoordinator() *WorkspaceCoordinator {
 		SessionVersion: make(map[string]uint64),
 		Queue:          make(map[string][]InputDraft),
 		Pending:        make(map[string]InteractionState),
+		Parts:          make(map[string]StreamingPart),
 	}}
 }
 
@@ -154,6 +155,59 @@ func (c *WorkspaceCoordinator) ResolveInteraction(requestID string) (Interaction
 	return interaction, cloneWorkspaceState(c.state), nil
 }
 
+func (c *WorkspaceCoordinator) StartPart(part StreamingPart) (WorkspaceState, error) {
+	if c == nil {
+		return WorkspaceState{}, errors.New("workspace coordinator is nil")
+	}
+	part.PartID = strings.TrimSpace(part.PartID)
+	if part.PartID == "" {
+		return WorkspaceState{}, errors.New("part ID is required")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.validateActiveTurnLocked(part.SessionID, part.TurnID); err != nil {
+		return cloneWorkspaceState(c.state), err
+	}
+	if _, exists := c.state.Parts[part.PartID]; exists {
+		return cloneWorkspaceState(c.state), fmt.Errorf("part already exists: %s", part.PartID)
+	}
+	c.state.Parts[part.PartID] = part
+	return cloneWorkspaceState(c.state), nil
+}
+
+func (c *WorkspaceCoordinator) AppendPart(partID, text string) (StreamingPart, WorkspaceState, error) {
+	if c == nil {
+		return StreamingPart{}, WorkspaceState{}, errors.New("workspace coordinator is nil")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	part, ok := c.state.Parts[partID]
+	if !ok {
+		return StreamingPart{}, cloneWorkspaceState(c.state), fmt.Errorf("part not found: %s", partID)
+	}
+	if part.Completed {
+		return part, cloneWorkspaceState(c.state), fmt.Errorf("part already completed: %s", partID)
+	}
+	part.Text += text
+	c.state.Parts[partID] = part
+	return part, cloneWorkspaceState(c.state), nil
+}
+
+func (c *WorkspaceCoordinator) CompletePart(partID string) (StreamingPart, WorkspaceState, error) {
+	if c == nil {
+		return StreamingPart{}, WorkspaceState{}, errors.New("workspace coordinator is nil")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	part, ok := c.state.Parts[partID]
+	if !ok {
+		return StreamingPart{}, cloneWorkspaceState(c.state), fmt.Errorf("part not found: %s", partID)
+	}
+	part.Completed = true
+	c.state.Parts[partID] = part
+	return part, cloneWorkspaceState(c.state), nil
+}
+
 func (c *WorkspaceCoordinator) SetActiveTasks(count int) WorkspaceState {
 	if c == nil {
 		return WorkspaceState{}
@@ -180,6 +234,19 @@ func (c *WorkspaceCoordinator) SetActiveWrites(count int) WorkspaceState {
 	state := cloneWorkspaceState(c.state)
 	c.mu.Unlock()
 	return state
+}
+
+func (c *WorkspaceCoordinator) ConsistentSnapshot(hub *EventHub) CoordinatorSnapshot {
+	if c == nil {
+		return CoordinatorSnapshot{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var cursor EventCursor
+	if hub != nil {
+		cursor = hub.CurrentCursor()
+	}
+	return CoordinatorSnapshot{State: cloneWorkspaceState(c.state), Cursor: cursor}
 }
 
 func (c *WorkspaceCoordinator) WorkspaceSnapshot() WorkspaceState {

@@ -15,12 +15,22 @@ type InteractionState struct {
 	Kind      string `json:"kind"`
 }
 
+type StreamingPart struct {
+	PartID    string `json:"part_id"`
+	SessionID string `json:"session_id"`
+	TurnID    string `json:"turn_id"`
+	Kind      string `json:"kind"`
+	Text      string `json:"text"`
+	Completed bool   `json:"completed,omitempty"`
+}
+
 type WorkspaceState struct {
 	ActiveSessionID string                      `json:"active_session_id,omitempty"`
 	ActiveTurnID    string                      `json:"active_turn_id,omitempty"`
 	SessionVersion  map[string]uint64           `json:"session_version"`
 	Queue           map[string][]InputDraft     `json:"queue"`
 	Pending         map[string]InteractionState `json:"pending"`
+	Parts           map[string]StreamingPart    `json:"parts"`
 	ActiveTasks     int                         `json:"active_tasks"`
 	ActiveWrites    int                         `json:"active_writes"`
 }
@@ -32,6 +42,11 @@ type SessionState struct {
 	Pending        []InteractionState `json:"pending"`
 }
 
+type CoordinatorSnapshot struct {
+	State  WorkspaceState `json:"state"`
+	Cursor EventCursor    `json:"cursor"`
+}
+
 func cloneWorkspaceState(state WorkspaceState) WorkspaceState {
 	cloned := WorkspaceState{
 		ActiveSessionID: state.ActiveSessionID,
@@ -39,6 +54,7 @@ func cloneWorkspaceState(state WorkspaceState) WorkspaceState {
 		SessionVersion:  make(map[string]uint64, len(state.SessionVersion)),
 		Queue:           make(map[string][]InputDraft, len(state.Queue)),
 		Pending:         make(map[string]InteractionState, len(state.Pending)),
+		Parts:           make(map[string]StreamingPart, len(state.Parts)),
 		ActiveTasks:     state.ActiveTasks,
 		ActiveWrites:    state.ActiveWrites,
 	}
@@ -50,6 +66,9 @@ func cloneWorkspaceState(state WorkspaceState) WorkspaceState {
 	}
 	for requestID, pending := range state.Pending {
 		cloned.Pending[requestID] = pending
+	}
+	for partID, part := range state.Parts {
+		cloned.Parts[partID] = part
 	}
 	return cloned
 }

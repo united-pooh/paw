@@ -36,7 +36,18 @@ func BuildWorkspaceRuntime(ctx context.Context, opts WorkspaceRuntimeOptions, co
 		return nil, fmt.Errorf("workspace runtime output is nil")
 	}
 
-	runtime := &WorkspaceRuntime{Root: root, ControllerLease: opts.ControllerLease, Coordinator: NewWorkspaceCoordinator()}
+	workspace, err := CanonicalWorkspace(root)
+	if err != nil {
+		return nil, err
+	}
+	eventHub, err := NewEventHub(EventHubConfig{WorkspaceID: workspace.ID})
+	if err != nil {
+		return nil, err
+	}
+	runtime := &WorkspaceRuntime{
+		Root: root, ControllerLease: opts.ControllerLease,
+		Coordinator: NewWorkspaceCoordinator(), EventHub: eventHub,
+	}
 	runtime.initializeCloseStages()
 	success := false
 	defer func() {

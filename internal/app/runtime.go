@@ -37,6 +37,7 @@ type WorkspaceRuntime struct {
 	Toolset            *Toolset
 	Coordinator        *WorkspaceCoordinator
 	SessionService     *SessionService
+	EventHub           *EventHub
 
 	configManager *configv2.Manager
 	taskLauncher  *task.ProcessPoolLauncher
@@ -117,6 +118,12 @@ func (r *WorkspaceRuntime) initializeCloseStages() {
 				return r.configManager.Close()
 			}
 			return nil
+		}},
+		{name: "events", close: func(context.Context) error {
+			if r.EventHub == nil {
+				return nil
+			}
+			return r.EventHub.Close()
 		}},
 		{name: "lease", close: func(context.Context) error {
 			if r.ControllerLease == nil {

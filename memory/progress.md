@@ -159,3 +159,6 @@
 - [x] 任务 6：实现 Supervisor 两 runtime 上限、busy 保护、LRU 空闲淘汰与最近工作区原子存储；ForgetRecent 不隐式关闭 runtime <!-- todo:impl-6 -->
 - [x] 任务 7：实现 WorkspaceCoordinator 单写者状态机，固定 active session/turn、队列、interaction、session version 与 Activity 快照 <!-- todo:impl-7 -->
 - [x] 任务 8：实现 store-only SessionService，支持 session/turn 游标分页、只读快照以及不激活 Host 的 Create/Fork <!-- todo:impl-8 -->
+- [x] 任务 9：定义 schema_version=1 的 AppEvent 信封与 typed payload JSON 契约 <!-- todo:impl-9 -->
+- [x] 任务 10：实现 EventHub 原子 replay/live 切换、ring 淘汰、游标 reset 与慢消费者 reset <!-- todo:impl-10 -->
+- [x] 任务 11：实现 coordinator/EventHub 一致快照、流式 part 投影与 25ms/16KiB UTF-8 byte offset batcher <!-- todo:impl-11 -->
