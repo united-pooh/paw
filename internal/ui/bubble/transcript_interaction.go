@@ -91,7 +91,7 @@ func (m *appModel) buildTranscriptInteractionRows(startRow int, lines []string, 
 		}
 	}
 	toolCount := 0
-	if m != nil && startIdx >= 0 && startIdx <= len(m.transcript) {
+	if m != nil && startIdx >= 0 && startIdx <= len(m.viewEntries) {
 		toolCount = len(m.viewEntries) - startIdx
 	}
 	tools := make([]transcriptToolInteraction, toolCount)
@@ -192,7 +192,7 @@ func (m *appModel) setTranscriptInteractionRows(lines []string, startIdx int) {
 		return
 	}
 	rows, tools, valid := m.buildTranscriptInteractionRows(0, lines, startIdx)
-	m.transcriptInteraction.set(rows, tools, valid && len(rows) == len(m.transcriptLines) && len(tools) == len(m.transcript))
+	m.transcriptInteraction.set(rows, tools, valid && len(rows) == len(m.transcriptLines) && len(tools) == len(m.viewEntries))
 	m.rebuildTranscriptHoverPatch()
 }
 
@@ -202,7 +202,7 @@ func (m *appModel) replaceTranscriptInteractionRows(startRow int, lines []string
 	}
 	previousPatch := m.transcriptHoverPatch
 	rows, tools, valid := m.buildTranscriptInteractionRows(startRow, lines, startIdx)
-	m.transcriptInteraction.replace(startRow, rows, len(m.transcriptLines), startIdx, tools, len(m.transcript), valid)
+	m.transcriptInteraction.replace(startRow, rows, len(m.transcriptLines), startIdx, tools, len(m.viewEntries), valid)
 	if previousPatch.valid {
 		if unit, ok := m.currentTranscriptHoverPatchUnit(); ok && previousPatch.unit == unit &&
 			unit.toolIndex < startIdx && unit.start+unit.height <= startRow {

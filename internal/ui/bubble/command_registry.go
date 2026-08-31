@@ -32,6 +32,7 @@ type CommandRegistry struct {
 func NewCommandRegistry() *CommandRegistry {
 	registry := &CommandRegistry{}
 	newSessionHandler := func(m *appModel, _ string) tea.Cmd {
+		m.resetToolInspect()
 		m.sessionPicker = nil
 		m.pending = nil
 		m.chatQueue.Clear()

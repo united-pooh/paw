@@ -1867,10 +1867,10 @@ func transcriptRenderKey(entry transcriptEntry, width int, at time.Time, showThi
 		createdAtIsZero:      entry.createdAt.IsZero(),
 		toolStartedAtUnixNS:  entry.toolStartedAt.UnixNano(),
 		toolFinishedAtUnixNS: entry.toolFinishedAt.UnixNano(),
-	turnMetadata:         transcriptTurnMetadataSnapshot(entry.turnMetadata),
-	showThinking:         showThinking,
-	responseClock:        entry.responseClock,
-}
+		turnMetadata:         transcriptTurnMetadataSnapshot(entry.turnMetadata),
+		showThinking:         showThinking,
+		responseClock:        entry.responseClock,
+	}
 	if toolEntryStatus(entry) == "running" {
 		key.toolElapsedSecond = toolElapsedSeconds(entry, at)
 	}

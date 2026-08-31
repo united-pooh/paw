@@ -274,6 +274,7 @@ func (m *appModel) openToolInspect() (tea.Model, tea.Cmd) {
 	if m == nil {
 		return appModel{}, nil
 	}
+	m.recomputeViewEntries()
 	index := -1
 	for i := len(m.viewEntries) - 1; i >= 0 && index < 0; i-- {
 		entry := m.viewEntries[i]

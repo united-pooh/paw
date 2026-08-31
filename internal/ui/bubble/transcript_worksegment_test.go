@@ -86,10 +86,11 @@ func TestFoldWorkSegmentsCutsOnVisibleText(t *testing.T) {
 	}
 	out := foldWorkSegments(entries, foldResting)
 	if len(out) != 3 {
-		t.Fatalf("out len = %d, want 3 (segment, assistant, segment)", len(out))
+		t.Fatalf("out len = %d, want 3 (segment, assistant, raw tool)", len(out))
 	}
-	// Thought 保留在真实推理位置（响应之前）；响应时间记在该运行的段标题尾部。
-	if out[0].kind != entryWorkSegment || out[1].kind != entryAssistant || out[2].kind != entryWorkSegment {
+	// Thought 保留在真实推理位置（响应之前）；纯工具运行保留原始工具轨迹，
+	// 继续支持 Tools 组的点击、悬停和检查交互。
+	if out[0].kind != entryWorkSegment || out[1].kind != entryAssistant || out[2].kind != entryTool {
 		t.Fatalf("out kinds = %v/%v/%v", out[0].kind, out[1].kind, out[2].kind)
 	}
 	if !out[0].segment.hasReasoning {
@@ -98,11 +99,8 @@ func TestFoldWorkSegmentsCutsOnVisibleText(t *testing.T) {
 	if !out[1].responseClock {
 		t.Fatal("response following a run must carry the response clock")
 	}
-	if out[2].segment.hasReasoning {
-		t.Fatal("trailing segment is pure tools, must not have reasoning (Worked 命名)")
-	}
-	if out[2].segment.toolCalls != 1 {
-		t.Fatalf("trailing segment toolCalls = %d, want 1", out[2].segment.toolCalls)
+	if out[2].toolName != "Write" {
+		t.Fatalf("trailing raw tool = %#v, want Write", out[2])
 	}
 }
 
@@ -114,8 +112,49 @@ func TestFoldWorkSegmentsCutsOnUserAndSystem(t *testing.T) {
 		wsTool("Read", "ok", 3),
 	}
 	out := foldWorkSegments(entries, foldResting)
-	if len(out) != 4 || out[1].kind != entryWorkSegment || out[3].kind != entryWorkSegment {
+	if len(out) != 4 || out[1].kind != entryWorkSegment || out[3].kind != entryTool || out[3].toolName != "Read" {
 		t.Fatalf("out = %#v", out)
+	}
+}
+
+func TestFoldWorkSegmentsPureToolsStayRaw(t *testing.T) {
+	entries := []transcriptEntry{
+		wsTool("Read", "ok", 0),
+		wsTool("Bash", "error", 2),
+	}
+	for _, mode := range []foldMode{foldResting, foldLive} {
+		view, transcriptToView, viewToTranscript := foldWorkSegmentsView(entries, mode, nil)
+		if len(view) != 2 || view[0].kind != entryTool || view[1].kind != entryTool {
+			t.Fatalf("mode %v view = %#v, want raw tools", mode, view)
+		}
+		if transcriptToView[0] != 0 || transcriptToView[1] != 1 || viewToTranscript[0] != 0 || viewToTranscript[1] != 1 {
+			t.Fatalf("mode %v mappings = %v / %v, want identity", mode, transcriptToView, viewToTranscript)
+		}
+	}
+}
+
+func TestFoldWorkSegmentsStartsAtReasoningAfterRawTools(t *testing.T) {
+	entries := []transcriptEntry{
+		wsTool("Read", "ok", 0),
+		wsReasoning("think", 1),
+		wsTool("Bash", "ok", 3),
+	}
+	out := foldWorkSegments(entries, foldResting)
+	if len(out) != 2 || out[0].kind != entryTool || out[0].toolName != "Read" || out[1].kind != entryWorkSegment {
+		t.Fatalf("out = %#v, want raw Read followed by reasoning segment", out)
+	}
+	if out[1].segment.toolCalls != 1 || len(out[1].segment.children) != 2 {
+		t.Fatalf("reasoning segment = %#v", out[1].segment)
+	}
+}
+
+func TestPureToolRunStillTimestampsFollowingResponse(t *testing.T) {
+	out := foldWorkSegments([]transcriptEntry{
+		wsTool("Read", "ok", 0),
+		wsAssistant("done", 2),
+	}, foldResting)
+	if len(out) != 2 || out[0].kind != entryTool || out[1].kind != entryAssistant || !out[1].responseClock {
+		t.Fatalf("out = %#v, want raw tool followed by timestamped response", out)
 	}
 }
 
@@ -259,8 +298,11 @@ func TestFoldWorkSegmentsInteractiveCutsAndStaysRaw(t *testing.T) {
 	if out[1].kind != entryTool || out[1].toolName != "question" {
 		t.Fatalf("interactive entry folded away: %#v", out[1])
 	}
-	if out[0].segment.toolCalls != 1 || out[2].segment.toolCalls != 1 {
-		t.Fatalf("segment stats = %#v / %#v", out[0].segment, out[2].segment)
+	if out[0].segment.toolCalls != 1 {
+		t.Fatalf("leading segment stats = %#v", out[0].segment)
+	}
+	if out[2].kind != entryTool || out[2].toolName != "Write" {
+		t.Fatalf("trailing interactive-cut tool = %#v, want raw Write", out[2])
 	}
 }
 
@@ -692,6 +734,33 @@ func TestToggleWorkSegmentExpansionRenders(t *testing.T) {
 	}
 	if !model.toggleWorkSegmentExpansion(segIdx) {
 		t.Fatal("collapse returned false")
+	}
+}
+
+func TestExpandedWorkSegmentInteractionIndexUsesViewSpace(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.ready = true
+	model.width = 80
+	model.height = 24
+	model.relayout()
+	model.transcript = []transcriptEntry{
+		wsReasoning("think", 0),
+		wsToolWithBody("Read", "ok", "Read ok go.mod", 2),
+		wsAssistant("done", 3),
+	}
+	model.refreshViewport()
+	if !model.toggleWorkSegmentExpansion(0) {
+		t.Fatal("expand work segment returned false")
+	}
+	toolViewIndex := model.transcriptToViewMap[1]
+	if toolViewIndex < 0 || toolViewIndex >= len(model.viewEntries) || model.viewEntries[toolViewIndex].kind != entryTool {
+		t.Fatalf("tool view index = %d view = %#v", toolViewIndex, model.viewEntries)
+	}
+	if !model.transcriptInteraction.valid || len(model.transcriptInteraction.tools) != len(model.viewEntries) {
+		t.Fatalf("interaction index = valid:%v tools:%d view:%d", model.transcriptInteraction.valid, len(model.transcriptInteraction.tools), len(model.viewEntries))
+	}
+	if _, ok := model.transcriptInteraction.toolAt(toolViewIndex); !ok {
+		t.Fatalf("expanded tool has no interaction at view index %d", toolViewIndex)
 	}
 }
 

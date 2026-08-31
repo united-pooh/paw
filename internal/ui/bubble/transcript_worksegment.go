@@ -1,7 +1,7 @@
-// 工作段（WorkSegment）折叠：把 transcript 中"可见正文之间"的 reasoning 与
-// 工具事务连续运行在视图层收编为一个条目。本文件只包含纯函数与统计聚合，
-// 不触碰原始 transcript 与事件流。设计见
-// docs/superpowers/specs/2026-08-24-thought-worksegment-fold-design.md。
+// 工作段（WorkSegment）折叠：把 transcript 中由 reasoning 发起、并可继续
+// 包含工具事务的连续运行在视图层收编为一个条目。纯工具运行保留原始工具轨
+// 迹，以继续支持 Tools 组交互。本文件只包含纯函数与统计聚合，不触碰原始
+// transcript 与事件流。
 package bubble
 
 import (
@@ -14,10 +14,12 @@ import (
 type foldMode int
 
 const (
-	// foldLive 用于回合进行中：已完成的运行按 resting 语义折叠（Thought 保
-	// 留在真实推理位置），仅尾部仍在进行的连续运行保留为 live 实时块。
+	// foldLive 用于回合进行中：已完成的 reasoning 运行按 resting 语义折叠
+	// （Thought 保留在真实推理位置），仅尾部仍在进行的 reasoning 运行保留
+	// 为 live 实时块。
 	foldLive foldMode = iota
-	// foldResting 用于回合结束与历史渲染：全部连续运行折叠为一行摘要块。
+	// foldResting 用于回合结束与历史渲染：reasoning 发起的连续运行折叠为
+	// 一行摘要块；纯工具运行保持原始轨迹。
 	foldResting
 )
 
@@ -52,8 +54,30 @@ func isInteractiveToolEntry(entry transcriptEntry) bool {
 	}
 }
 
-// buildWorkSegmentEntry 把一段连续运行聚合为工作段条目。
-// 仅含簿记工具的运行（无 reasoning、无有效工具事务）被抑制，返回 ok=false。
+func isReasoningWorkEntry(entry transcriptEntry) bool {
+	return entry.kind == entryReasoning || entry.kind == entryThinking
+}
+
+func workSegmentRunHasReasoning(entries []transcriptEntry) bool {
+	for _, entry := range entries {
+		if isReasoningWorkEntry(entry) {
+			return true
+		}
+	}
+	return false
+}
+
+func workRunShouldTimestampResponse(entries []transcriptEntry) bool {
+	for _, entry := range entries {
+		if isReasoningWorkEntry(entry) || (entry.kind == entryTool && !isBookkeepingToolEntry(entry)) {
+			return true
+		}
+	}
+	return false
+}
+
+// buildWorkSegmentEntry 把一段由 reasoning 发起的连续运行聚合为工作段条目。
+// 纯工具运行保留原始工具轨迹，避免吞掉工具组的点击、悬停和检查交互。
 func buildWorkSegmentEntry(children []transcriptEntry) (transcriptEntry, bool) {
 	if len(children) == 0 {
 		return transcriptEntry{}, false
@@ -73,7 +97,7 @@ func buildWorkSegmentEntry(children []transcriptEntry) (transcriptEntry, bool) {
 			}
 		}
 	}
-	if !data.hasReasoning && data.toolCalls == 0 {
+	if !data.hasReasoning {
 		return transcriptEntry{}, false
 	}
 	// 段时长取真实工作窗口：reasoning 的计时窗口（reasoningWindowStart，从请求
@@ -94,9 +118,9 @@ func buildWorkSegmentEntry(children []transcriptEntry) (transcriptEntry, bool) {
 	}, true
 }
 
-// foldWorkSegments 把 entries 中的工作段连续运行在视图层折叠。
-// foldResting 折叠所有连续运行；foldLive 下已完成的运行同样折叠，仅尾部
-// 仍在进行的运行保留为 live 实时块。
+// foldWorkSegments 把 entries 中由 reasoning 发起的连续运行在视图层折叠。
+// foldResting 折叠所有 reasoning 运行；foldLive 下已完成的 reasoning 运行
+// 同样折叠，仅尾部仍在进行的 reasoning 运行保留为 live 实时块。
 func foldWorkSegments(entries []transcriptEntry, mode foldMode) []transcriptEntry {
 	view, _, _ := foldWorkSegmentsView(entries, mode, nil)
 	return view
@@ -115,11 +139,10 @@ func foldWorkSegmentsView(entries []transcriptEntry, mode foldMode, expandedFor 
 	view = make([]transcriptEntry, 0, len(entries))
 	transcriptToView = make([]int, len(entries))
 	runStart := -1
-	// flush 把一段连续运行聚合为一个工作段条目：段内多段思考与工具合并为
-	// 一行摘要（思考之间只有工具调用、没有正文输出时逐块拆行只会得到
-	// Thought/Worked 交替的噪声墙）。段落在真实推理位置（响应之前）；
-	// 返回段在视图中的下标（被抑制或无段为 -1），供调用方判定该运行是否
-	// 成段（成段运行后跟随的响应条目带时钟行）。
+	// flush 把 reasoning 发起的连续运行聚合为一个工作段条目：段内多段思考
+	// 与工具合并为一行摘要（思考之间只有工具调用、没有正文输出时逐块拆行
+	// 只会得到噪声墙）。纯工具运行原样输出。段落位于真实推理位置（响应之
+	// 前）；返回段在视图中的下标（未成段为 -1）。
 	flush := func(run []transcriptEntry) int {
 		lastSegment := -1
 		if len(run) == 0 {
@@ -161,16 +184,21 @@ func foldWorkSegmentsView(entries []transcriptEntry, mode foldMode, expandedFor 
 			run = nil
 			emitRaw(index, entry)
 		case isWorkSegmentCollectable(entry):
+			if isReasoningWorkEntry(entry) && len(run) > 0 && !workSegmentRunHasReasoning(run) {
+				flush(run)
+				run = nil
+			}
 			if len(run) == 0 {
 				runStart = index
 			}
 			run = append(run, entry)
 		case entry.kind == entryAssistant && len(run) > 0:
 			// Thought 保持在真实推理位置（响应之前）；响应时间不再挂在段标
-			// 题上，而是标记在响应条目上，渲染在响应结束的下一行。
-			if flush(run) >= 0 {
-				entry.responseClock = true
-			}
+			// 题上，而是标记在响应条目上，渲染在响应结束的下一行。纯工具
+			// 运行虽不折叠，仍属于响应前工作，应保留响应时钟。
+			responseClock := workRunShouldTimestampResponse(run)
+			flush(run)
+			entry.responseClock = responseClock
 			run = nil
 			emitRaw(index, entry)
 		default:
@@ -217,28 +245,30 @@ func emitExpandedWorkSegment(view []transcriptEntry, transcriptToView, viewToTra
 // 构变化还会导致渲染缓存复用过期的 live 块行。
 func foldWorkSegmentsLiveView(entries []transcriptEntry, expandedFor func(*workSegmentData) bool) (view []transcriptEntry, transcriptToView, viewToTranscript []int) {
 	end := len(entries)
-	start := end
-	for start > 0 {
-		entry := entries[start-1]
+	collectableStart := end
+	for collectableStart > 0 {
+		entry := entries[collectableStart-1]
 		if isInteractiveToolEntry(entry) || !isWorkSegmentCollectable(entry) {
 			break
 		}
-		start--
+		collectableStart--
 	}
-	// 尾部无可收编运行（或为空）：全部按 resting 语义折叠。
+	start := -1
+	for index := collectableStart; index < end; index++ {
+		if isReasoningWorkEntry(entries[index]) {
+			start = index
+			break
+		}
+	}
+	// 尾部没有 reasoning 发起的运行：全部按 resting 语义处理，纯工具轨迹
+	// 保持原样，继续沿用 Tools 组的点击、悬停和检查交互。
+	if start < 0 {
+		return foldWorkSegmentsView(entries, foldResting, expandedFor)
+	}
 	view, transcriptToView, viewToTranscript = foldWorkSegmentsView(entries[:start], foldResting, expandedFor)
-	if start == end {
-		return view, transcriptToView, viewToTranscript
-	}
 	segment, ok := buildWorkSegmentEntry(entries[start:end])
 	if !ok {
-		// 尾部仅簿记工具（被抑制成段）：保持原样平铺。
-		for i := start; i < end; i++ {
-			transcriptToView = append(transcriptToView, len(view))
-			view = append(view, entries[i])
-			viewToTranscript = append(viewToTranscript, i)
-		}
-		return view, transcriptToView, viewToTranscript
+		return foldWorkSegmentsView(entries, foldResting, expandedFor)
 	}
 	segment.segment.live = true
 	// live 段同样支持手动展开：working 中平铺子条目（input/output 预览与
