@@ -117,6 +117,9 @@ func TestWorkerStartToConfigOpenOptionsProductionPath(t *testing.T) {
 	if !options.DisableModelDiscovery {
 		t.Fatal("production worker start path left discovery enabled")
 	}
+	if !options.DisableWatch {
+		t.Fatal("production worker start path left config watcher enabled")
+	}
 }
 
 func mustWorkerStartJSON(t *testing.T, req task.WorkerRequest) []byte {

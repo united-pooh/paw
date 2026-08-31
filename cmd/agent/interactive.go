@@ -14,7 +14,6 @@ import (
 	"paw/internal/settings"
 	"paw/internal/todo"
 	"paw/internal/tokentracer"
-	"paw/internal/tool"
 	selecttool "paw/internal/tool/select"
 	bubbleui "paw/internal/ui/bubble"
 	"paw/internal/ui/headless"
@@ -22,22 +21,16 @@ import (
 	"time"
 )
 
-// finalizeTool is the plan_finalize tool registered in interactive mode. Its
-// hook is wired once the session plan controller exists.
-var finalizeTool = plan.NewFinalizeTool(nil)
-
 func runSingleTurnMode(ctx context.Context, opts options) error {
 	output := headless.New(os.Stdout)
 	todoBroker := todo.NewBroker()
 	defer todoBroker.Close()
-	app, err := buildRunner(ctx, opts.sessionID, output, opts.allowOutsideRead, false, func(registry *tool.Registry) error {
-		return registerMainAgentTools(registry, todoBroker)
-	})
+	app, err := buildRunnerWithBrokers(ctx, opts.sessionID, output, opts.allowOutsideRead, false, todoBroker, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = app.Close() }()
-	wireSessionTools(app.Runner.Engine, app.Store, todoBroker, app.SessionID)
+	wireSessionTools(app, todoBroker, app.SessionID)
 	applyCompressionSettings(app.Runner.Engine, app.SettingsController)
 	app.Runner.SetStreamMAEnabled(opts.streamMA)
 
@@ -55,16 +48,7 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	defer todoBroker.Close()
 	output.SetSelectionBroker(selectionBroker)
 	output.SetTodoBroker(todoBroker)
-	app, err := buildRunner(ctx, opts.sessionID, output, opts.allowOutsideRead, true, func(registry *tool.Registry) error {
-		if err := registerMainAgentTools(registry, todoBroker); err != nil {
-			return err
-		}
-		if err := registerInteractiveTools(registry, selectionBroker); err != nil {
-			return err
-		}
-		registry.Register(finalizeTool)
-		return nil
-	})
+	app, err := buildRunnerWithBrokers(ctx, opts.sessionID, output, opts.allowOutsideRead, true, todoBroker, selectionBroker)
 	if err != nil {
 		selectionBroker.Close()
 		return err
@@ -77,10 +61,10 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 	runner.SetPermissionPrompter(selectionPermissionPrompter{broker: selectionBroker})
 	runner.RepublishPendingPermissions(app.SessionID)
 	sessionID := app.SessionID
-	wireSessionTools(runner.Engine, app.Store, todoBroker, sessionID)
+	wireSessionTools(app, todoBroker, sessionID)
 	runner.SetSessionLoadedHook(func(sid string) {
 		// /resume 切换会话后：会话相关工具、todo 事件、状态块全部跟随新会话。
-		wireSessionTools(runner.Engine, app.Store, todoBroker, sid)
+		wireSessionTools(app, todoBroker, sid)
 	})
 	applyCompressionSettings(runner.Engine, app.SettingsController)
 	runner.SetStreamMAEnabled(opts.streamMA)
@@ -131,7 +115,7 @@ func runInteractiveMode(ctx context.Context, opts options) error {
 		_ = output.NotifyPlanStopped(reason)
 	})
 	output.SetPlanController(planController)
-	finalizeTool.SetHook(planController.Finalize)
+	app.Toolset.Finalize().SetHook(planController.Finalize)
 	return output.Run(ctx, runner, sessionID)
 }
 
@@ -168,16 +152,17 @@ func (p selectionPermissionPrompter) PromptPermission(ctx context.Context, reque
 
 // wireSessionTools 把会话相关工具与状态块绑定到指定 sessionID。
 // 启动时绑定一次，/resume 切换会话后经 SessionLoadedHook 重新绑定。
-func wireSessionTools(runner *loop.Engine, store *session.JSONLStore, todoBroker *todo.Broker, sessionID string) {
-	if runner == nil || store == nil {
+func wireSessionTools(app *appContext, todoBroker *todo.Broker, sessionID string) {
+	if app == nil || app.Runner == nil || app.Store == nil || app.Toolset == nil {
 		return
 	}
-	restoreTodoBroker(store, todoBroker, sessionID)
-	wireTodoEvents(store, sessionID, filepath.Join(runner.WorkspaceRoot(), "memory", "progress.md"))
-	wireSearchTranscript(store, sessionID)
-	wireStateTools(store, sessionID)
+	runner := app.Runner.Engine
+	restoreTodoBroker(app.Store, todoBroker, sessionID)
+	if err := app.Toolset.BindSession(app.Store, sessionID, filepath.Join(runner.WorkspaceRoot(), "memory", "progress.md")); err != nil {
+		fmt.Fprintf(os.Stderr, "bind session tools for %s: %v\n", sessionID, err)
+	}
 	runner.SetTodoBroker(todoBroker)
-	runner.SetStateBlockProvider(stateBlockProviderFor(sessionID, store, todoBroker, plansDir(runner)))
+	runner.SetStateBlockProvider(stateBlockProviderFor(sessionID, app.Store, todoBroker, plansDir(runner)))
 }
 
 func restoreTodoBroker(store *session.JSONLStore, broker *todo.Broker, sessionID string) {

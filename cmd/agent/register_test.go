@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	appcore "paw/internal/app"
 	"paw/internal/model"
 	"paw/internal/session"
 	"paw/internal/todo"
@@ -185,16 +186,19 @@ func TestRegisterToolsEnablesOutsideReadInDangerousMode(t *testing.T) {
 	}
 }
 
-func TestWireTodoEventsPersistsSessionEvent(t *testing.T) {
+func TestToolsetBindPersistsTodoSessionEvent(t *testing.T) {
 	registry := tool.NewRegistry()
-	if err := registerMainAgentTools(registry, nil); err != nil {
+	toolset := appcore.NewToolset(nil)
+	if err := toolset.RegisterMain(registry); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	store, err := session.NewJSONLStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	wireTodoEvents(store, "s1", "")
+	if err := toolset.BindSession(store, "s1", ""); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
 
 	todoTool, ok := registry.Get("update_todo")
 	if !ok {

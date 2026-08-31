@@ -9,10 +9,12 @@ import (
 	"strings"
 	"testing"
 
+	appcore "paw/internal/app"
 	"paw/internal/loop"
 	"paw/internal/message"
 	"paw/internal/model"
 	"paw/internal/session"
+	"paw/internal/sessionactor"
 	"paw/internal/todo"
 	"paw/internal/tool"
 	"paw/internal/ui/headless"
@@ -46,20 +48,22 @@ func TestResumeRebindsStateTools(t *testing.T) {
 	registry := tool.NewRegistry()
 	broker := todo.NewBroker()
 	defer broker.Close()
-	if err := registerMainAgentTools(registry, broker); err != nil {
+	toolset := appcore.NewToolset(broker)
+	if err := toolset.RegisterMain(registry); err != nil {
 		t.Fatal(err)
 	}
 
 	runner := loop.NewEngineWithInstructionRoot(&resumeTestModel{}, headless.New(io.Discard), registry, store, "session-a", root)
-	wireSessionTools(runner, store, broker, "session-a")
+	app := &appContext{Runner: &sessionactor.Host{Engine: runner}, Store: store, Toolset: toolset}
+	wireSessionTools(app, broker, "session-a")
 	runner.SetSessionLoadedHook(func(sid string) {
-		wireSessionTools(runner, store, broker, sid)
+		wireSessionTools(app, broker, sid)
 	})
 
 	runAriadne := func() {
 		t.Helper()
 		in, _ := json.Marshal(map[string]string{"content": "## 方向\nx\n\n## 进度\nx\n\n## 关键决策\nx\n\n## 下一步\nx\n\n## 教训\nx\n"})
-		if out, err := mainAriadneTool.Run(ctx, in); err != nil {
+		if out, err := toolset.Ariadne().Run(ctx, in); err != nil {
 			t.Fatalf("update_ariadne: %v", err)
 		} else if out == "" {
 			t.Fatal("empty output")
@@ -124,15 +128,17 @@ func TestResumeRestoresTodoBrokerFromSession(t *testing.T) {
 	registry := tool.NewRegistry()
 	broker := todo.NewBroker()
 	defer broker.Close()
-	if err := registerMainAgentTools(registry, broker); err != nil {
+	toolset := appcore.NewToolset(broker)
+	if err := toolset.RegisterMain(registry); err != nil {
 		t.Fatal(err)
 	}
 	runner := loop.NewEngineWithInstructionRoot(&resumeTestModel{}, headless.New(io.Discard), registry, store, "session-a", root)
-	wireSessionTools(runner, store, broker, "session-a")
-	if _, err := mainTodoTool.Run(ctx, json.RawMessage(`{"items":[{"id":"a","content":"A task","status":"pending"}]}`)); err != nil {
+	app := &appContext{Runner: &sessionactor.Host{Engine: runner}, Store: store, Toolset: toolset}
+	wireSessionTools(app, broker, "session-a")
+	if _, err := toolset.Todo().Run(ctx, json.RawMessage(`{"items":[{"id":"a","content":"A task","status":"pending"}]}`)); err != nil {
 		t.Fatal(err)
 	}
-	runner.SetSessionLoadedHook(func(sid string) { wireSessionTools(runner, store, broker, sid) })
+	runner.SetSessionLoadedHook(func(sid string) { wireSessionTools(app, broker, sid) })
 	if _, err := runner.LoadSession(ctx, "session-b"); err != nil {
 		t.Fatal(err)
 	}
@@ -157,14 +163,16 @@ func TestTodoArchiveWritesProgressFile(t *testing.T) {
 	registry := tool.NewRegistry()
 	broker := todo.NewBroker()
 	defer broker.Close()
-	if err := registerMainAgentTools(registry, broker); err != nil {
+	toolset := appcore.NewToolset(broker)
+	if err := toolset.RegisterMain(registry); err != nil {
 		t.Fatal(err)
 	}
 	runner := loop.NewEngineWithInstructionRoot(&resumeTestModel{}, headless.New(io.Discard), registry, store, "session-a", root)
-	wireSessionTools(runner, store, broker, "session-a")
+	app := &appContext{Runner: &sessionactor.Host{Engine: runner}, Store: store, Toolset: toolset}
+	wireSessionTools(app, broker, "session-a")
 
 	snap := `{"explanation":"archive test","items":[{"id":"1","content":"done item","status":"completed"},{"id":"2","content":"pending item","status":"pending"}]}`
-	if out, err := mainTodoTool.Run(ctx, json.RawMessage(snap)); err != nil {
+	if out, err := toolset.Todo().Run(ctx, json.RawMessage(snap)); err != nil {
 		t.Fatalf("update_todo: %v", err)
 	} else if !strings.Contains(out, `"accepted":true`) {
 		t.Fatalf("unexpected result: %s", out)
@@ -184,7 +192,7 @@ func TestTodoArchiveWritesProgressFile(t *testing.T) {
 	}
 
 	// 同一快照重复提交：幂等，不重复追加。
-	if _, err := mainTodoTool.Run(ctx, json.RawMessage(snap)); err != nil {
+	if _, err := toolset.Todo().Run(ctx, json.RawMessage(snap)); err != nil {
 		t.Fatal(err)
 	}
 	data2, _ := os.ReadFile(progress)
