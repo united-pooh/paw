@@ -32,6 +32,19 @@ export interface StreamingPart {
   completed?: boolean;
 }
 
+export interface SessionSummary {
+  session_id: string;
+  created_at: string;
+  last_used_at: string;
+  title?: string;
+  transcript_size: number;
+}
+
+export interface SessionPage {
+  items: SessionSummary[];
+  next_cursor?: string;
+}
+
 export interface SessionSnapshot {
   session_id: string;
   session_version: number;
