@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Paw Web 轨迹与交互设计</title>
+<style>
+:root{--bg:#f1f3f6;--panel:#fff;--side:#f8f9fb;--line:#e5e7eb;--text:#17191d;--muted:#7f8792;--blue:#5b83ee;--soft:#eef3ff;--green:#35a06f;--red:#d65353;--amber:#c48831}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);font-family:Inter,"PingFang SC",system-ui,sans-serif;color:var(--text)}.page{padding:24px}.intro{max-width:1480px;margin:0 auto 15px;display:flex;justify-content:space-between;align-items:flex-end}.intro h1{margin:0 0 5px;font-size:23px}.intro p{margin:0;color:#737b85}.actions{display:flex;gap:9px}.choice{border:1px solid #d8dce2;background:#fff;border-radius:11px;padding:9px 14px;cursor:pointer}.choice:hover,.choice.selected{border-color:var(--blue);background:var(--soft);color:#315fca}.shell{max-width:1480px;height:825px;margin:auto;display:grid;grid-template-columns:285px minmax(0,1fr);background:#fff;border:1px solid #dde1e6;border-radius:18px;overflow:hidden;box-shadow:0 22px 70px rgba(35,43,58,.13)}.sidebar{background:var(--side);border-right:1px solid var(--line);padding:18px 14px;display:flex;flex-direction:column}.brand{font-size:21px;font-weight:760;padding:10px 10px 24px}.new{height:50px;border:1px solid #daddE3;border-radius:13px;background:#fff;font-weight:650}.label{margin:30px 10px 9px;color:#9298a1;font-size:13px}.workspace{padding:10px;border-radius:10px;font-weight:650}.session{padding:14px 12px 14px 33px;border-radius:10px;font-size:13px}.session.active{background:#e9ebef}.settings{margin-top:auto;padding:15px 10px;border-top:1px solid var(--line)}.main{display:grid;grid-template-rows:75px 54px 1fr;min-width:0}.top{padding:0 25px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}.title{font-weight:720;font-size:18px}.state{font-size:12px;color:#637080;background:#f3f5f7;padding:7px 10px;border-radius:99px}.tabs{border-bottom:1px solid #eff0f2;display:flex;gap:28px;padding:0 28px}.tab{height:54px;display:flex;align-items:center;color:#8a9098;position:relative}.tab.active{color:#3f6edb;font-weight:650}.tab.active:after{content:"";height:3px;position:absolute;left:0;right:0;bottom:-1px;background:var(--blue);border-radius:4px}.body{min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 350px}.timeline{overflow:auto;padding:24px 34px 80px}.turn-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:17px}.turn-head h2{font-size:16px;margin:0}.turn-head span{color:#8b929c;font-size:12px}.event{display:grid;grid-template-columns:34px minmax(0,1fr);position:relative;padding-bottom:17px}.event:before{content:"";position:absolute;left:16px;top:30px;bottom:-1px;width:1px;background:#e2e5e9}.event:last-child:before{display:none}.icon{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;border:1px solid #dfe2e7;background:#fff;font-size:13px;z-index:1}.event-card{margin-left:12px;border:1px solid #e4e7eb;border-radius:12px;background:#fff;overflow:hidden}.event-title{height:45px;display:flex;align-items:center;justify-content:space-between;padding:0 13px;font-size:13px}.event-title strong{font-size:13px}.meta{color:#8c939c;font-size:11px}.event-body{border-top:1px solid #eef0f2;padding:12px 13px;background:#fafbfc;color:#606873;font-size:12px;line-height:1.6}.ok{color:var(--green)}.err{color:var(--red)}.warn{color:var(--amber)}.reasoning .icon{background:#f3f0ff;color:#7658c7}.tool .icon{background:#eef8f3;color:#28835c}.permission .icon{background:#fff7e8;color:#a36b18}.answer .icon{background:#eef3ff;color:#4771d6}.details{border-left:1px solid var(--line);background:#fbfcfd;padding:22px;overflow:auto}.details h3{font-size:14px;margin:0 0 14px}.detail-card{border:1px solid #e2e5e9;background:#fff;border-radius:12px;padding:14px;margin-bottom:13px}.detail-label{font-size:10px;letter-spacing:.8px;color:#9aa0a8;text-transform:uppercase;margin-bottom:7px}.detail-value{font-family:"SFMono-Regular",Consolas,monospace;font-size:12px;line-height:1.55;white-space:pre-wrap}.diff-add{color:#23754d;background:#edf8f2}.permission-actions{display:flex;gap:8px;margin-top:12px}.allow,.deny{border-radius:9px;padding:8px 12px;font-size:12px}.allow{border:0;background:#1e232a;color:#fff}.deny{border:1px solid #dddfe3;background:#fff}.footer-note{max-width:1480px;margin:14px auto 0;padding:13px 15px;background:white;border:1px solid #e0e3e8;border-radius:12px;color:#626a74;font-size:13px}.footer-note strong{color:#252a31}
+</style>
+</head>
+<body>
+<div class="page">
+<div class="intro"><div><h1>轨迹页与关键交互</h1><p>对话页保持阅读专注；轨迹页承载 Paw 的工程过程、权限与任务信息。</p></div><div class="actions"><button class="choice" data-choice="approve-trace" onclick="toggleSelect(this)">✓ 交互通过</button><button class="choice" data-choice="revise-trace" onclick="toggleSelect(this)">调整轨迹页</button></div></div>
+<div class="shell">
+<aside class="sidebar"><div class="brand">🐾 Paw <small>WEB</small></div><button class="new">⊕ 新会话</button><div class="label">工作区</div><div class="workspace">▱ paw</div><div class="session active">浏览器前端架构</div><div class="session">工具轨迹交互修复</div><div class="settings">⚙ 设置</div></aside>
+<main class="main">
+<header class="top"><span class="title">浏览器前端架构</span><span class="state">● 等待权限决定</span></header>
+<nav class="tabs"><div class="tab">对话</div><div class="tab active">轨迹</div></nav>
+<div class="body">
+<section class="timeline">
+<div class="turn-head"><h2>Turn 7 · 浏览器前端设计</h2><span>15:48:02 — 运行中</span></div>
+<div class="event reasoning"><div class="icon">◌</div><div class="event-card"><div class="event-title"><strong>Reasoning</strong><span class="meta">4.8s · 612 tokens</span></div><div class="event-body">分析现有 UI adapter、会话存储和运行时组合边界……</div></div></div>
+<div class="event tool"><div class="icon">✓</div><div class="event-card"><div class="event-title"><strong>codegraph_explore</strong><span class="meta ok">完成 · 842ms</span></div><div class="event-body">查询：Paw architecture suitability for browser frontend…</div></div></div>
+<div class="event tool"><div class="icon">✓</div><div class="event-card"><div class="event-title"><strong>Read · internal/ui/ui.go</strong><span class="meta ok">完成 · 12ms</span></div><div class="event-body">UI 接口支持 assistant、reasoning、tool 和 system 事件。</div></div></div>
+<div class="event permission"><div class="icon">!</div><div class="event-card"><div class="event-title"><strong>需要工作区外读取权限</strong><span class="meta warn">等待决定</span></div><div class="event-body">/Users/example/shared/design-system.md<div class="permission-actions"><button class="allow">允许一次</button><button class="deny">拒绝</button></div></div></div></div>
+<div class="event answer"><div class="icon">A</div><div class="event-card"><div class="event-title"><strong>Answer draft</strong><span class="meta">流式生成中</span></div><div class="event-body">适合，但应该新增应用服务层……</div></div></div>
+</section>
+<aside class="details"><h3>事件详情</h3><div class="detail-card"><div class="detail-label">Event ID</div><div class="detail-value">184 · permission.requested</div></div><div class="detail-card"><div class="detail-label">请求范围</div><div class="detail-value">Read outside workspace
+canonical_path:
+/Users/example/shared/design-system.md</div></div><div class="detail-card"><div class="detail-label">恢复语义</div><div class="detail-value">刷新页面后仍显示 pending；决定 API 使用 request_id 幂等提交。</div></div><div class="detail-card"><div class="detail-label">文件变更预览</div><div class="detail-value diff-add">+ internal/app/runtime.go
++ internal/web/server.go</div></div></aside>
+</div>
+</main>
+</div>
+<div class="footer-note"><strong>交互规则：</strong>question 与 permission 既出现在轨迹时间线，也以全局待处理状态固定在页顶；切换会话不会丢失，刷新后由快照恢复。工具详情默认折叠，点击后在右侧详情栏查看输入、结果、diff 与错误。</div>
+</div>
+</body>
+</html>
