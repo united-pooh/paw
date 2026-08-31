@@ -25,16 +25,17 @@ import (
 const defaultSessionsDir = "sessions"
 
 type Record struct {
-	Seq          int64               `json:"seq"`
-	Kind         JournalKind         `json:"kind,omitempty"`
-	TurnID       string              `json:"turn_id,omitempty"`
-	CallIndex    *int                `json:"call_index,omitempty"`
-	Message      message.Message     `json:"message"`
-	ToolResult   *message.ToolResult `json:"tool_result,omitempty"`
-	Error        string              `json:"error,omitempty"`
-	TodoSnapshot *todo.Snapshot      `json:"todo_snapshot,omitempty"`
-	StateEvent   *StateEventRecord   `json:"state_event,omitempty"`
-	CreatedAt    time.Time           `json:"created_at"`
+	Seq            int64               `json:"seq"`
+	Kind           JournalKind         `json:"kind,omitempty"`
+	TurnID         string              `json:"turn_id,omitempty"`
+	CallIndex      *int                `json:"call_index,omitempty"`
+	Message        message.Message     `json:"message"`
+	ToolResult     *message.ToolResult `json:"tool_result,omitempty"`
+	Error          string              `json:"error,omitempty"`
+	TodoSnapshot   *todo.Snapshot      `json:"todo_snapshot,omitempty"`
+	StateEvent     *StateEventRecord   `json:"state_event,omitempty"`
+	CommandReceipt *CommandReceipt     `json:"command_receipt,omitempty"`
+	CreatedAt      time.Time           `json:"created_at"`
 }
 
 // journalState 缓存单个 session 的追加序列状态，避免每次 append 都重新扫描
@@ -681,6 +682,33 @@ func (s *JSONLStore) loadResolvedJournalRecords(ctx context.Context, sessionID s
 // recovery analysis. It intentionally is not part of the public Store API.
 func (s *JSONLStore) LoadResolvedJournalRecords(ctx context.Context, sessionID string) ([]Record, error) {
 	return s.loadResolvedJournalRecords(ctx, sessionID)
+}
+
+func (s *JSONLStore) AppendCommandReceipt(ctx context.Context, sessionID string, receipt CommandReceipt) (int64, error) {
+	if strings.TrimSpace(receipt.CommandID) == "" || strings.TrimSpace(receipt.Kind) == "" || strings.TrimSpace(receipt.ResourceID) == "" {
+		return -1, fmt.Errorf("command receipt requires command_id, kind, and resource_id")
+	}
+	if receipt.CreatedAt.IsZero() {
+		receipt.CreatedAt = s.nowFn().UTC()
+	}
+	_, lastSeq, err := s.appendRecords(ctx, sessionID, []Record{{Kind: JournalCommandReceipt, CommandReceipt: &receipt}})
+	return lastSeq, err
+}
+
+func (s *JSONLStore) FindCommandReceipt(ctx context.Context, sessionID, commandID, kind string) (CommandReceipt, bool, error) {
+	records, err := s.loadResolvedJournalRecords(ctx, sessionID)
+	if err != nil {
+		return CommandReceipt{}, false, err
+	}
+	commandID = strings.TrimSpace(commandID)
+	kind = strings.TrimSpace(kind)
+	for index := len(records) - 1; index >= 0; index-- {
+		receipt := records[index].CommandReceipt
+		if receipt != nil && receipt.CommandID == commandID && (kind == "" || receipt.Kind == kind) {
+			return *receipt, true, nil
+		}
+	}
+	return CommandReceipt{}, false, nil
 }
 
 func (s *JSONLStore) LoadLatestTodoSnapshot(ctx context.Context, sessionID string) (todo.Snapshot, bool, error) {

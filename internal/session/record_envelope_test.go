@@ -34,6 +34,8 @@ func TestRecordEnvelopeRoundTrip(t *testing.T) {
 	}
 	snap := todo.Snapshot{Explanation: "x", Items: []todo.Item{{ID: "a", Content: "c", Status: todo.StatusPending}}, UpdatedAt: at}
 	cases = append(cases, Record{Seq: 8, Kind: JournalTodoSnapshot, TodoSnapshot: &snap})
+	receipt := CommandReceipt{CommandID: "cmd-1", Kind: "session.create", ResourceID: "s1", Status: "accepted", SessionVersion: 2, CreatedAt: at}
+	cases = append(cases, Record{Seq: 9, Kind: JournalCommandReceipt, CommandReceipt: &receipt})
 
 	for i, rec := range cases {
 		rec.CreatedAt = at
@@ -63,6 +65,9 @@ func TestRecordEnvelopeRoundTrip(t *testing.T) {
 		}
 		if rec.TodoSnapshot != nil && (back.TodoSnapshot == nil || back.TodoSnapshot.Explanation != rec.TodoSnapshot.Explanation) {
 			t.Fatalf("case %d: todo snapshot mismatch", i)
+		}
+		if rec.CommandReceipt != nil && (back.CommandReceipt == nil || back.CommandReceipt.CommandID != rec.CommandReceipt.CommandID || back.CommandReceipt.ResourceID != rec.CommandReceipt.ResourceID) {
+			t.Fatalf("case %d: command receipt mismatch", i)
 		}
 	}
 }

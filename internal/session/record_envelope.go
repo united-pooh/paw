@@ -24,18 +24,20 @@ const (
 	EventMemoryUpdated    = "session.memory_updated"
 	EventAriadneUpdated   = "session.ariadne_updated"
 	EventStateCompacted   = "session.state_compacted"
+	EventCommandReceipt   = "session.command_receipt"
 )
 
 // sessionEventPayload 是 session 域事件的统一 payload。字段与 Record 一一
 // 对应，保证 Record ↔ Envelope 转换无损失。
 type sessionEventPayload struct {
-	TurnID     string              `json:"turn_id,omitempty"`
-	CallIndex  *int                `json:"call_index,omitempty"`
-	Message    *message.Message    `json:"message,omitempty"`
-	ToolResult *message.ToolResult `json:"tool_result,omitempty"`
-	Error      string              `json:"error,omitempty"`
-	Snapshot   *todo.Snapshot      `json:"snapshot,omitempty"`
-	StateEvent *StateEventRecord   `json:"state_event,omitempty"`
+	TurnID         string              `json:"turn_id,omitempty"`
+	CallIndex      *int                `json:"call_index,omitempty"`
+	Message        *message.Message    `json:"message,omitempty"`
+	ToolResult     *message.ToolResult `json:"tool_result,omitempty"`
+	Error          string              `json:"error,omitempty"`
+	Snapshot       *todo.Snapshot      `json:"snapshot,omitempty"`
+	StateEvent     *StateEventRecord   `json:"state_event,omitempty"`
+	CommandReceipt *CommandReceipt     `json:"command_receipt,omitempty"`
 }
 
 var kindToEvent = map[JournalKind]string{
@@ -50,6 +52,7 @@ var kindToEvent = map[JournalKind]string{
 	JournalMemoryUpdated:    EventMemoryUpdated,
 	JournalAriadneUpdated:   EventAriadneUpdated,
 	JournalStateCompacted:   EventStateCompacted,
+	JournalCommandReceipt:   EventCommandReceipt,
 }
 
 var eventToKind = map[string]JournalKind{
@@ -64,6 +67,7 @@ var eventToKind = map[string]JournalKind{
 	EventMemoryUpdated:    JournalMemoryUpdated,
 	EventAriadneUpdated:   JournalAriadneUpdated,
 	EventStateCompacted:   JournalStateCompacted,
+	EventCommandReceipt:   JournalCommandReceipt,
 }
 
 // recordToEnvelope 将一条 Record 映射为统一信封。seq 与 created_at 由调用方
@@ -74,13 +78,14 @@ func recordToEnvelope(rec Record) (es.Envelope, error) {
 		return es.Envelope{}, fmt.Errorf("session: record kind %q has no event type", rec.Kind)
 	}
 	payload := sessionEventPayload{
-		TurnID:     rec.TurnID,
-		CallIndex:  rec.CallIndex,
-		Message:    nil,
-		ToolResult: rec.ToolResult,
-		Error:      rec.Error,
-		Snapshot:   rec.TodoSnapshot,
-		StateEvent: rec.StateEvent,
+		TurnID:         rec.TurnID,
+		CallIndex:      rec.CallIndex,
+		Message:        nil,
+		ToolResult:     rec.ToolResult,
+		Error:          rec.Error,
+		Snapshot:       rec.TodoSnapshot,
+		StateEvent:     rec.StateEvent,
+		CommandReceipt: rec.CommandReceipt,
 	}
 	if rec.Kind == JournalMessage || rec.Kind == JournalAssistant || rec.Kind == JournalAssistantPartial || rec.Kind == JournalToolResult {
 		msg := rec.Message
@@ -112,15 +117,16 @@ func envelopeToRecord(env es.Envelope) (Record, error) {
 		return Record{}, fmt.Errorf("session: decode payload of %q: %w", env.Type, err)
 	}
 	rec := Record{
-		Seq:          env.Seq,
-		Kind:         kind,
-		TurnID:       payload.TurnID,
-		CallIndex:    payload.CallIndex,
-		ToolResult:   payload.ToolResult,
-		Error:        payload.Error,
-		TodoSnapshot: payload.Snapshot,
-		StateEvent:   payload.StateEvent,
-		CreatedAt:    env.OccurredAt,
+		Seq:            env.Seq,
+		Kind:           kind,
+		TurnID:         payload.TurnID,
+		CallIndex:      payload.CallIndex,
+		ToolResult:     payload.ToolResult,
+		Error:          payload.Error,
+		TodoSnapshot:   payload.Snapshot,
+		StateEvent:     payload.StateEvent,
+		CommandReceipt: payload.CommandReceipt,
+		CreatedAt:      env.OccurredAt,
 	}
 	if payload.Message != nil {
 		rec.Message = *payload.Message

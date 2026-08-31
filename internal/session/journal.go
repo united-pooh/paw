@@ -24,7 +24,17 @@ const (
 	JournalMemoryUpdated    JournalKind = "memory_updated"
 	JournalAriadneUpdated   JournalKind = "ariadne_updated"
 	JournalStateCompacted   JournalKind = "state_compacted"
+	JournalCommandReceipt   JournalKind = "command_receipt"
 )
+
+type CommandReceipt struct {
+	CommandID      string    `json:"command_id"`
+	Kind           string    `json:"kind"`
+	ResourceID     string    `json:"resource_id"`
+	Status         string    `json:"status"`
+	SessionVersion uint64    `json:"session_version"`
+	CreatedAt      time.Time `json:"created_at"`
+}
 
 // StateEventKind 区分状态文件更新事件的种类（memory/ariadne）。
 type StateEventKind string

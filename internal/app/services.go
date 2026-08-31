@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"paw/internal/session"
 )
@@ -11,6 +12,7 @@ import (
 type SessionService struct {
 	store       *session.JSONLStore
 	coordinator *WorkspaceCoordinator
+	commandMu   sync.Mutex
 }
 
 func NewSessionService(store *session.JSONLStore, coordinator *WorkspaceCoordinator) *SessionService {
@@ -33,10 +35,12 @@ type SnapshotRequest struct {
 }
 
 type CreateSessionCommand struct {
+	CommandID string
 	SessionID string
 }
 
 type ForkSessionCommand struct {
+	CommandID       string
 	SessionID       string
 	ParentSessionID string
 }
@@ -75,34 +79,74 @@ func (s *SessionService) Create(ctx context.Context, command CreateSessionComman
 	if s == nil || s.store == nil {
 		return SessionMutationResult{}, fmt.Errorf("session service is unavailable")
 	}
-	sessionID := strings.TrimSpace(command.SessionID)
-	if sessionID == "" {
-		var err error
-		sessionID, err = session.GenerateSessionID()
-		if err != nil {
-			return SessionMutationResult{}, err
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
+	commandID := strings.TrimSpace(command.CommandID)
+	var sessionID string
+	var err error
+	if commandID != "" {
+		sessionID, err = deterministicCommandResourceID(CommandKindCreateSession, commandID, command.SessionID)
+	} else {
+		sessionID = strings.TrimSpace(command.SessionID)
+		if sessionID == "" {
+			sessionID, err = session.GenerateSessionID()
+		}
+	}
+	if err != nil {
+		return SessionMutationResult{}, err
+	}
+	if commandID != "" {
+		if receipt, found, findErr := s.findReceipt(ctx, sessionID, commandID, CommandKindCreateSession); findErr != nil {
+			return SessionMutationResult{}, findErr
+		} else if found {
+			return mutationResultFromReceipt(receipt), nil
 		}
 	}
 	if _, err := s.store.CreateRoot(ctx, session.CreateRootRequest{SessionID: sessionID}); err != nil {
 		return SessionMutationResult{}, err
 	}
-	return SessionMutationResult{SessionID: sessionID, SessionVersion: s.sessionVersion(sessionID)}, nil
+	result := SessionMutationResult{SessionID: sessionID, SessionVersion: s.sessionVersion(sessionID)}
+	if commandID != "" {
+		receipt := CommandReceipt{
+			CommandID: commandID, Kind: CommandKindCreateSession, ResourceID: sessionID,
+			Status: CommandStatusAccepted, SessionVersion: result.SessionVersion,
+		}
+		if _, err := s.store.AppendCommandReceipt(ctx, sessionID, receipt); err != nil {
+			return SessionMutationResult{}, err
+		}
+	}
+	return result, nil
 }
 
 func (s *SessionService) Fork(ctx context.Context, command ForkSessionCommand) (SessionMutationResult, error) {
 	if s == nil || s.store == nil {
 		return SessionMutationResult{}, fmt.Errorf("session service is unavailable")
 	}
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
 	parentID := strings.TrimSpace(command.ParentSessionID)
 	if parentID == "" {
 		return SessionMutationResult{}, fmt.Errorf("parent session ID is required")
 	}
-	sessionID := strings.TrimSpace(command.SessionID)
-	if sessionID == "" {
-		var err error
-		sessionID, err = session.GenerateSessionID()
-		if err != nil {
-			return SessionMutationResult{}, err
+	commandID := strings.TrimSpace(command.CommandID)
+	var sessionID string
+	var err error
+	if commandID != "" {
+		sessionID, err = deterministicCommandResourceID(CommandKindForkSession, commandID, command.SessionID)
+	} else {
+		sessionID = strings.TrimSpace(command.SessionID)
+		if sessionID == "" {
+			sessionID, err = session.GenerateSessionID()
+		}
+	}
+	if err != nil {
+		return SessionMutationResult{}, err
+	}
+	if commandID != "" {
+		if receipt, found, findErr := s.findReceipt(ctx, sessionID, commandID, CommandKindForkSession); findErr != nil {
+			return SessionMutationResult{}, findErr
+		} else if found {
+			return mutationResultFromReceipt(receipt), nil
 		}
 	}
 	if _, err := s.store.Fork(ctx, session.ForkRequest{
@@ -110,7 +154,25 @@ func (s *SessionService) Fork(ctx context.Context, command ForkSessionCommand) (
 	}); err != nil {
 		return SessionMutationResult{}, err
 	}
-	return SessionMutationResult{SessionID: sessionID, SessionVersion: s.sessionVersion(sessionID)}, nil
+	result := SessionMutationResult{SessionID: sessionID, SessionVersion: s.sessionVersion(sessionID)}
+	if commandID != "" {
+		receipt := CommandReceipt{
+			CommandID: commandID, Kind: CommandKindForkSession, ResourceID: sessionID,
+			Status: CommandStatusAccepted, SessionVersion: result.SessionVersion,
+		}
+		if _, err := s.store.AppendCommandReceipt(ctx, sessionID, receipt); err != nil {
+			return SessionMutationResult{}, err
+		}
+	}
+	return result, nil
+}
+
+func (s *SessionService) findReceipt(ctx context.Context, sessionID, commandID, kind string) (CommandReceipt, bool, error) {
+	exists, err := s.store.Exists(ctx, sessionID)
+	if err != nil || !exists {
+		return CommandReceipt{}, false, err
+	}
+	return s.store.FindCommandReceipt(ctx, sessionID, commandID, kind)
 }
 
 func (s *SessionService) sessionVersion(sessionID string) uint64 {
