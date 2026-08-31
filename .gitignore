@@ -48,6 +48,8 @@ test-results/
 index.html
 !internal/tokentracer/dashboard/index.html
 !internal/tokentracer/dashboard/dist/index.html
+!internal/web/ui/index.html
+!internal/web/ui/dist/index.html
 qa-report.json
 diff-demo.md
 .worktrees/

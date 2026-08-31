@@ -138,4 +138,5 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/workspaces/{workspace_id}/sessions/{session_id}", s.handleSessionSnapshot)
 	mux.HandleFunc("POST /api/workspaces/{workspace_id}/sessions/{session_id}/fork", s.handleForkSession)
 	mux.HandleFunc("GET /api/workspaces/{workspace_id}/sessions/{session_id}/export", s.handleExportSession)
+	mux.Handle("/", StaticHandler())
 }

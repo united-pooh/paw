@@ -168,3 +168,4 @@
 - [x] 任务 15：实现 256-bit 一次性 bootstrap exchange、HttpOnly SameSite cookie、Host/Auth/Origin/body-limit/security-header middleware <!-- todo:impl-15 -->
 - [x] 任务 16：实现 bootstrap/workspace/session/export API、serve fragment URL、context shutdown 与 Supervisor 强制收敛 <!-- todo:impl-16 -->
 - [x] 任务 17：实现 cookie-authenticated SSE、after/Last-Event-ID 游标、wire frame、fake ticker heartbeat、reset frame 与 client cancel 释放 <!-- todo:impl-17 -->
+- [x] 任务 18：建立 React/Vite/Vitest/ESLint 工具链、静态 SPA handler、hashed immutable assets 与 Go embed 构建脚本 <!-- todo:impl-18 -->

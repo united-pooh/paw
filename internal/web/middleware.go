@@ -57,11 +57,11 @@ func Middleware(cfg MiddlewareConfig, next http.Handler) http.Handler {
 			writeJSONError(writer, http.StatusMisdirectedRequest, "invalid_host", "request host is not allowed", requestID)
 			return
 		}
-		if _, public := publicPaths[request.URL.Path]; !public {
-			if cfg.Auth == nil || cfg.Auth.Authenticate(request) != nil {
-				writeJSONError(writer, http.StatusUnauthorized, "unauthorized", "authentication required", requestID)
-				return
-			}
+		_, public := publicPaths[request.URL.Path]
+		public = public || (!strings.HasPrefix(request.URL.Path, "/api/") && (request.Method == http.MethodGet || request.Method == http.MethodHead))
+		if !public && (cfg.Auth == nil || cfg.Auth.Authenticate(request) != nil) {
+			writeJSONError(writer, http.StatusUnauthorized, "unauthorized", "authentication required", requestID)
+			return
 		}
 		if isWriteMethod(request.Method) && !safeWriteRequest(request, cfg.AllowedOrigin) {
 			writeJSONError(writer, http.StatusForbidden, "cross_origin_forbidden", "cross-origin write request denied", requestID)
