@@ -82,10 +82,35 @@ func NewAppEvent(workspaceID WorkspaceID, sessionID, turnID string, eventType Ev
 	}, nil
 }
 
+type AssistantPartStartedPayload struct {
+	PartID    string `json:"part_id"`
+	PartIndex int    `json:"part_index"`
+	Kind      string `json:"kind"`
+}
+
 type AssistantDeltaPayload struct {
 	PartID string `json:"part_id"`
 	Offset int    `json:"offset"`
 	Text   string `json:"text"`
+}
+
+type AssistantPartCompletedPayload struct {
+	PartID      string `json:"part_id"`
+	FinalLength int    `json:"final_length"`
+}
+
+type ReasoningStartedPayload struct {
+	PartID    string `json:"part_id"`
+	PartIndex int    `json:"part_index"`
+	Redacted  bool   `json:"redacted"`
+}
+
+type ToolStartedPayload struct {
+	ToolUseID   string    `json:"tool_use_id"`
+	Name        string    `json:"name"`
+	Target      string    `json:"target,omitempty"`
+	ArgsSummary string    `json:"args_summary"`
+	StartedAt   time.Time `json:"started_at"`
 }
 
 type ToolCompletedPayload struct {
@@ -95,6 +120,22 @@ type ToolCompletedPayload struct {
 	DetailID      string    `json:"detail_id,omitempty"`
 	FinishedAt    time.Time `json:"finished_at"`
 	DurationMS    int64     `json:"duration_ms"`
+}
+
+type ToolFailedPayload struct {
+	ToolUseID  string    `json:"tool_use_id"`
+	Name       string    `json:"name"`
+	ErrorCode  string    `json:"error_code"`
+	Message    string    `json:"message"`
+	DetailID   string    `json:"detail_id,omitempty"`
+	FinishedAt time.Time `json:"finished_at"`
+}
+
+type SystemMessagePayload struct {
+	Level string `json:"level"`
+	Code  string `json:"code"`
+	Title string `json:"title"`
+	Body  string `json:"body"`
 }
 
 type QuestionOptionPayload struct {
