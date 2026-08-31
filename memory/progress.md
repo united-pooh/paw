@@ -119,3 +119,29 @@
 - [x] 实现 SelectionSelected 反色和单选焦点即选中 <!-- todo:q3 -->
 - [x] selection/question 定向测试、P5 golden、go vet、go build 通过；bubble 全量失败集合与 HEAD 基线一致；全量额外 exec 限流用例单次波动，独立重复 5 次通过 <!-- todo:q4 -->
 - [x] 运行定向测试、go test ./... 并核对既有基线失败 <!-- todo:q4 -->
+
+## Responses 历史跨供应商兼容（2026-08-31）
+
+- [x] 定位根因：Responses `ProviderData` 在模型/供应商切换后仍原样重放，`web_search_call.action` 被严格端点拒绝 <!-- todo:responses-origin-investigate -->
+- [x] 扩展 `MessageOrigin`，持久化 provider/profile/transport/adapter/model <!-- todo:responses-origin-metadata -->
+- [x] 同源请求保留 ProviderData；跨源请求回退通用消息/工具投影 <!-- todo:responses-origin-fix -->
+- [x] 覆盖跨模型、同模型跨 profile、同源 status 清洗、旧 transcript 保守降级与工具配对 <!-- todo:responses-origin-tests -->
+- [x] `go test ./... -count=1`、定向 race、go vet、diff check 通过；首次全量 actor 时序用例抖动，单测 10 次及第二次全量均通过 <!-- todo:responses-origin-verify -->
+- [x] 更新跨会话进度/验证记录 <!-- todo:archive -->
+- [x] 探索 Paw 当前运行时、UI 边界与浏览器服务基础 <!-- todo:context -->
+- [x] 确认是否启用视觉伴侣展示浏览器原型与架构图 <!-- todo:visual -->
+- [x] 逐项澄清浏览器前端的目标、范围、部署与成功标准 <!-- todo:questions -->
+- [x] 提出 2–3 种架构方案并分析权衡 <!-- todo:approaches -->
+- [x] 编写并提交浏览器前端设计规格文档 <!-- todo:spec -->
+- [x] 执行规格占位符、一致性、范围和模糊性自检 <!-- todo:selfcheck -->
+- [x] 等待用户审查书面规格并处理修改 <!-- todo:review -->
+- [x] 还原故障前后的持久化事件与时间线 <!-- todo:timeline -->
+- [x] 核对 Paw 内所有结束或取消 TUI 的入口 <!-- todo:app-exits -->
+- [x] 检查 Bubble Tea Program.Run 的非命令退出条件 <!-- todo:tea-exits -->
+- [x] 查找故障时的进程、信号和终端日志证据 <!-- todo:runtime-evidence -->
+- [x] 梳理实现涉及的现有文件、构造器、测试和前端工具链 <!-- todo:plan-context -->
+- [x] 编写分阶段 TDD 实现计划与精确文件清单 <!-- todo:plan-write -->
+- [x] 检查浏览器工作台计划的规格覆盖、占位符、精确文件路径与仓库可执行性 <!-- todo:plan-check -->
+- [x] 使用 Gitmoji 提交浏览器工作台实现计划，并保持既有 model/message 改动不入提交 <!-- todo:plan-commit -->
+- [x] 完成 writing-plans 交接，计划位于 docs/superpowers/plans/2026-08-31-browser-workbench.md <!-- todo:plan-handoff -->
+- [x] 检查规格覆盖、占位符和类型一致性 <!-- todo:plan-check -->
