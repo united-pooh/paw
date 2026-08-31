@@ -51,6 +51,7 @@ type Config struct {
 	Notifier Notifier
 	Context  ContextSink
 	Launcher Launcher
+	Governor WorkerGovernor
 	Tracer   *tokentracer.Tracer
 
 	Depth                              int
@@ -68,6 +69,7 @@ type Manager struct {
 	notifier     Notifier
 	contextSink  ContextSink
 	launcher     Launcher
+	governor     WorkerGovernor
 	tracer       *tokentracer.Tracer
 	registry     taskRegistry
 	depth        int
@@ -231,6 +233,7 @@ func NewManager(cfg Config) *Manager {
 		notifier:     cfg.Notifier,
 		contextSink:  cfg.Context,
 		launcher:     cfg.Launcher,
+		governor:     cfg.Governor,
 		tracer:       cfg.Tracer,
 		registry:     registry,
 		depth:        cfg.Depth,
@@ -404,7 +407,7 @@ func (m *Manager) Run(ctx context.Context, req Request) (Result, error) {
 		return Result{}, err
 	}
 
-	task, process, err := m.startTask(ctx, req)
+	task, process, err := m.startTask(ctx, ctx, req)
 	if err != nil {
 		return Result{}, err
 	}
@@ -462,7 +465,7 @@ func (m *Manager) Launch(ctx context.Context, req Request) (TaskSnapshot, error)
 		return TaskSnapshot{}, err
 	}
 
-	task, process, err := m.startTask(context.Background(), req)
+	task, process, err := m.startTask(context.Background(), ctx, req)
 	if err != nil {
 		return TaskSnapshot{}, err
 	}
@@ -782,7 +785,7 @@ func (m *Manager) validateStreaming() error {
 	return nil
 }
 
-func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Process, error) {
+func (m *Manager) startTask(ctx, capacityCtx context.Context, req Request) (TaskSnapshot, Process, error) {
 	m.startMu.Lock()
 	defer m.startMu.Unlock()
 
@@ -844,8 +847,29 @@ func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Pro
 		return TaskSnapshot{}, nil, err
 	}
 
+	var releaseWorker func()
+	if m.governor != nil {
+		if capacityCtx == nil {
+			capacityCtx = context.Background()
+		}
+		releaseWorker, err = m.governor.AcquireWorker(capacityCtx)
+		if err != nil {
+			task.Status = TaskFailed
+			task.Error = err.Error()
+			now := time.Now().UTC()
+			exitCode := 1
+			task.FinishedAt = &now
+			task.ExitCode = &exitCode
+			_ = m.registry.saveOutput(ctx, task.ID, WorkerResult{TaskID: task.ID, SessionID: task.SessionID, Error: task.Error, ExitCode: exitCode})
+			_, _, _ = m.actors.transition(ctx, taskEventFailed, task)
+			return TaskSnapshot{}, nil, err
+		}
+	}
 	process, err := m.launcher.Start(ctx, workerReq)
 	if err != nil {
+		if releaseWorker != nil {
+			releaseWorker()
+		}
 		task.Status = TaskFailed
 		task.Error = err.Error()
 		now := time.Now().UTC()
@@ -860,6 +884,9 @@ func (m *Manager) startTask(ctx context.Context, req Request) (TaskSnapshot, Pro
 		})
 		_, _, _ = m.actors.transition(ctx, taskEventFailed, task)
 		return TaskSnapshot{}, nil, err
+	}
+	if releaseWorker != nil {
+		process = &governedProcess{Process: process, release: releaseWorker}
 	}
 	if pid := process.PID(); pid > 0 {
 		task.PID = pid

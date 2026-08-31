@@ -36,11 +36,12 @@ const (
 type ProcessPoolLauncher struct {
 	mu sync.Mutex
 
-	Command string
-	Args    []string
-	Dir     string
-	Env     []string
-	Broker  coremcp.Broker
+	Command        string
+	Args           []string
+	Dir            string
+	Env            []string
+	Broker         coremcp.Broker
+	WorkerGovernor WorkerGovernor
 
 	MaxWorkers    int
 	QueueCapacity int
@@ -619,16 +620,18 @@ type poolWorker struct {
 	roleName  string
 	roleColor string
 
-	writeMu    sync.Mutex
-	mu         sync.Mutex
-	stderr     limitedTailBuffer
-	stderrDone chan struct{}
-	currentCtx context.Context
-	currentJob *poolJob
-	current    chan workerDone
-	ready      chan error
-	closed     chan struct{}
-	stopOnce   sync.Once
+	writeMu       sync.Mutex
+	mu            sync.Mutex
+	stderr        limitedTailBuffer
+	stderrDone    chan struct{}
+	currentCtx    context.Context
+	currentJob    *poolJob
+	current       chan workerDone
+	ready         chan error
+	closed        chan struct{}
+	releaseWorker func()
+	releaseOnce   sync.Once
+	stopOnce      sync.Once
 }
 
 func randomPersonaOrder(count int) []int {
@@ -677,6 +680,7 @@ func (l *ProcessPoolLauncher) newPoolWorker() (*poolWorker, error) {
 	env := append([]string(nil), l.Env...)
 	dir := l.Dir
 	broker := l.Broker
+	governor := l.WorkerGovernor
 	wall := l.JobWallTime
 	role := l.nextWorkerRoleLocked()
 	l.mu.Unlock()
@@ -686,6 +690,20 @@ func (l *ProcessPoolLauncher) newPoolWorker() (*poolWorker, error) {
 	if role.Name == "" {
 		role = persona{Name: "task", Color: "#888888"}
 	}
+	var releaseWorker func()
+	if governor != nil {
+		var err error
+		releaseWorker, err = governor.AcquireWorker(l.poolCtx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	workerOwnsRelease := false
+	defer func() {
+		if !workerOwnsRelease && releaseWorker != nil {
+			releaseWorker()
+		}
+	}()
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = dir
@@ -718,8 +736,10 @@ func (l *ProcessPoolLauncher) newPoolWorker() (*poolWorker, error) {
 	worker := &poolWorker{
 		cmd: cmd, stdin: stdin, broker: broker, ctx: ctx, cancel: cancel,
 		wall: wall, roleName: role.Name, roleColor: role.Color,
-		ready: make(chan error, 1), closed: make(chan struct{}), stderrDone: make(chan struct{}),
+		releaseWorker: releaseWorker,
+		ready:         make(chan error, 1), closed: make(chan struct{}), stderrDone: make(chan struct{}),
 	}
+	workerOwnsRelease = true
 	go func() {
 		defer close(worker.stderrDone)
 		_, _ = io.Copy(&worker.stderr, stderr)
@@ -729,7 +749,7 @@ func (l *ProcessPoolLauncher) newPoolWorker() (*poolWorker, error) {
 	go func() {
 		waitErr := cmd.Wait()
 		worker.failCurrent(worker.exitError(waitErr))
-		worker.stopOnce.Do(func() { close(worker.closed) })
+		worker.stop()
 	}()
 	if err := worker.send(workerMessage{Protocol: workerProtocolV2, Type: workerMessageHello}); err != nil {
 		worker.stop()
@@ -924,6 +944,11 @@ func (w *poolWorker) stop() {
 		if w.cmd != nil && w.cmd.Process != nil {
 			_ = w.cmd.Process.Kill()
 		}
+		w.releaseOnce.Do(func() {
+			if w.releaseWorker != nil {
+				w.releaseWorker()
+			}
+		})
 		close(w.closed)
 	})
 }

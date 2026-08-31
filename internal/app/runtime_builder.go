@@ -36,7 +36,7 @@ func BuildWorkspaceRuntime(ctx context.Context, opts WorkspaceRuntimeOptions, co
 		return nil, fmt.Errorf("workspace runtime output is nil")
 	}
 
-	runtime := &WorkspaceRuntime{Root: root, ControllerLease: opts.ControllerLease}
+	runtime := &WorkspaceRuntime{Root: root, ControllerLease: opts.ControllerLease, Coordinator: NewWorkspaceCoordinator()}
 	runtime.initializeCloseStages()
 	success := false
 	defer func() {
@@ -119,6 +119,7 @@ func BuildWorkspaceRuntime(ctx context.Context, opts WorkspaceRuntimeOptions, co
 	runtime.taskLauncher = launcher
 	launcher.SetDangerousMode(yoloMode)
 	launcher.SetMCPBroker(broker)
+	launcher.WorkerGovernor = opts.ResourceGovernor
 	if instanceID := strings.TrimSpace(opts.WorkerContext.InstanceID); instanceID != "" {
 		launcher.Env = append(launcher.Env, "PAW_CONTROLLER_INSTANCE_ID="+instanceID)
 	}

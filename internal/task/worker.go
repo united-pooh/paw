@@ -63,6 +63,10 @@ type Launcher interface {
 	Start(ctx context.Context, req WorkerRequest) (Process, error)
 }
 
+type WorkerGovernor interface {
+	AcquireWorker(ctx context.Context) (release func(), err error)
+}
+
 type Process interface {
 	PID() int
 	Wait() (WorkerResult, error)
@@ -75,6 +79,69 @@ type ProcessPartialResultSource interface {
 
 type ProcessCauseStopper interface {
 	StopWithCause(error) error
+}
+
+type governedProcess struct {
+	Process
+	release     func()
+	releaseOnce sync.Once
+}
+
+func (p *governedProcess) releaseSlot() {
+	if p == nil {
+		return
+	}
+	p.releaseOnce.Do(func() {
+		if p.release != nil {
+			p.release()
+		}
+	})
+}
+
+func (p *governedProcess) Wait() (WorkerResult, error) {
+	if p == nil || p.Process == nil {
+		return WorkerResult{ExitCode: 1}, fmt.Errorf("task process is nil")
+	}
+	defer p.releaseSlot()
+	return p.Process.Wait()
+}
+
+func (p *governedProcess) Stop() error {
+	if p == nil || p.Process == nil {
+		return nil
+	}
+	return p.Process.Stop()
+}
+
+func (p *governedProcess) StopWithCause(cause error) error {
+	if p == nil || p.Process == nil {
+		return nil
+	}
+	if stopper, ok := p.Process.(ProcessCauseStopper); ok {
+		return stopper.StopWithCause(cause)
+	}
+	return p.Process.Stop()
+}
+
+func (p *governedProcess) PartialResult() WorkerResult {
+	if source, ok := p.Process.(ProcessPartialResultSource); ok {
+		return source.PartialResult()
+	}
+	return WorkerResult{}
+}
+
+func (p *governedProcess) WorkerRole() (string, string) {
+	if source, ok := p.Process.(WorkerRoleSource); ok {
+		return source.WorkerRole()
+	}
+	return "", ""
+}
+
+func (p *governedProcess) UpdateMCPSnapshot(snapshot coremcp.Snapshot) error {
+	if updater, ok := p.Process.(interface{ UpdateMCPSnapshot(coremcp.Snapshot) error }); ok {
+		return updater.UpdateMCPSnapshot(snapshot)
+	}
+	return nil
 }
 
 // WorkerRoleSource 由能识别执行 worker 角色的进程实现（进程池具名 worker）。

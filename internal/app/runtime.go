@@ -35,6 +35,7 @@ type WorkspaceRuntime struct {
 	MCPManager         *mcp.Manager
 	ControllerLease    *ControllerLease
 	Toolset            *Toolset
+	Coordinator        *WorkspaceCoordinator
 
 	configManager *configv2.Manager
 	taskLauncher  *task.ProcessPoolLauncher

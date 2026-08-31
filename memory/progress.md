@@ -154,5 +154,8 @@
 - [x] 修复 Task worker 生命周期：后台任务脱离父 turn、显式取消带 cause、失败保存部分文本/usage、worker stderr 入错、池容量计数与失败后复用；TaskWait 默认恢复 90 分钟 <!-- todo:task-worker-remediation -->
 - [x] 修复 Responses SSE 解析：按事件边界解析多行 data，坏帧后等待 completed 权威快照恢复，跨 provider/model 历史保守投影 <!-- todo:responses-stream-recovery -->
 - [x] 任务 4：提取 WorkspaceRuntime 组合根与 runtime-owned Toolset，禁用 worker config watcher，关闭顺序与跨 runtime 隔离测试通过 <!-- todo:impl-4 -->
-- [x] 修复后台任务父 turn 解耦、取消溯源、部分 usage/结果保存与默认调度策略 <!-- todo:task-worker-remediation -->
-- [x] 任务 4：提取 WorkspaceRuntime 组合根 <!-- todo:impl-4 -->
+- [x] 脱敏审查、Gitmoji 提交、推送 dev 并更新本地二进制 <!-- todo:release-current -->
+- [x] 任务 5：实现共享 ResourceGovernor；各 runtime 的进程池创建常驻 worker 前获取共享 slot，worker 退出时幂等释放 <!-- todo:impl-5 -->
+- [x] 任务 6：实现 Supervisor 两 runtime 上限、busy 保护、LRU 空闲淘汰与最近工作区原子存储；ForgetRecent 不隐式关闭 runtime <!-- todo:impl-6 -->
+- [x] 任务 7：实现 WorkspaceCoordinator 单写者状态机，固定 active session/turn、队列、interaction、session version 与 Activity 快照 <!-- todo:impl-7 -->
+- [x] 任务 7：实现 WorkspaceCoordinator 单写者状态机 <!-- todo:impl-7 -->

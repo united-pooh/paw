@@ -179,6 +179,53 @@ func TestTaskPoolDelayedHelperProcess(t *testing.T) {
 	}
 }
 
+func TestProcessPoolsShareWorkerGovernorAcrossLaunchers(t *testing.T) {
+	governor := newTestWorkerGovernor(1)
+	newLauncher := func() *ProcessPoolLauncher {
+		return &ProcessPoolLauncher{
+			Command: os.Args[0], Args: []string{"-test.run=TestTaskPoolHelperProcess"},
+			Env: []string{"PAW_task_POOL_HELPER=1"}, MaxWorkers: 1, QueueCapacity: 1,
+			WorkerGovernor: governor,
+		}
+	}
+	first := newLauncher()
+	second := newLauncher()
+	defer first.Close()
+	defer second.Close()
+
+	worker, err := first.newPoolWorker()
+	if err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		worker *poolWorker
+		err    error
+	}
+	started := make(chan result, 1)
+	go func() {
+		secondWorker, err := second.newPoolWorker()
+		started <- result{worker: secondWorker, err: err}
+	}()
+	select {
+	case got := <-started:
+		if got.worker != nil {
+			got.worker.stop()
+		}
+		t.Fatalf("second launcher acquired shared slot early: %v", got.err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	worker.stop()
+	select {
+	case got := <-started:
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		got.worker.stop()
+	case <-time.After(time.Second):
+		t.Fatal("second launcher did not acquire released shared slot")
+	}
+}
+
 func TestProcessPoolCloseRejectsNewJobs(t *testing.T) {
 	launcher := NewProcessPoolLauncher(os.Args[0], "")
 	launcher.Args = []string{"-test.run=TestTaskPoolHelperProcess"}

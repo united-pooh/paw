@@ -31,4 +31,5 @@ type WorkspaceRuntimeOptions struct {
 	TodoBroker       *todo.Broker
 	ControllerLease  *ControllerLease
 	ControllerMode   ControllerMode
+	ResourceGovernor *ResourceGovernor
 }

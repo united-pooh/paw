@@ -43,6 +43,27 @@ type contextProbeLauncher struct {
 	process *blockingProcess
 }
 
+type testWorkerGovernor struct {
+	slots chan struct{}
+}
+
+func newTestWorkerGovernor(capacity int) *testWorkerGovernor {
+	return &testWorkerGovernor{slots: make(chan struct{}, capacity)}
+}
+
+func (g *testWorkerGovernor) AcquireWorker(ctx context.Context) (func(), error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case g.slots <- struct{}{}:
+		var once sync.Once
+		return func() { once.Do(func() { <-g.slots }) }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 func (l *contextProbeLauncher) Start(ctx context.Context, req WorkerRequest) (Process, error) {
 	l.ctx = ctx
 	l.process = newBlockingProcess(req)
@@ -1727,6 +1748,45 @@ func TestStopOwnedTasksUsesActorOwnershipAfterRestartWithoutMetadata(t *testing.
 	if !ok || got.Status != TaskRunning {
 		t.Fatalf("Status(%s) = (%#v, %v), want untouched running task", b1.ID, got, ok)
 	}
+}
+
+func TestManagerGovernorBlocksSecondWorkerUntilFirstReleases(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	governor := newTestWorkerGovernor(1)
+	launcher := &blockingLauncher{}
+	manager := NewManager(Config{
+		Store: store, Root: root, Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()},
+		Launcher: launcher, Governor: governor,
+	})
+	first, err := manager.Launch(context.Background(), Request{Prompt: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if _, err := manager.Run(ctx, Request{Prompt: "second"}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("second Run() error = %v, want governor context deadline", err)
+	}
+	launcher.mu.Lock()
+	started := len(launcher.started)
+	launcher.mu.Unlock()
+	if started != 1 {
+		t.Fatalf("launcher starts = %d, want only first worker", started)
+	}
+
+	if _, err := manager.Stop(context.Background(), first.ID); err != nil {
+		t.Fatal(err)
+	}
+	third, err := manager.Launch(context.Background(), Request{Prompt: "third"})
+	if err != nil {
+		t.Fatalf("third Launch() error = %v", err)
+	}
+	_, _ = manager.Stop(context.Background(), third.ID)
 }
 
 func TestLaunchDetachesBackgroundWorkerFromParentCancellation(t *testing.T) {
