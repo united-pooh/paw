@@ -167,3 +167,4 @@
 - [x] 任务 14：增加独立 serve FlagSet 和 loopback listen 校验，保持 legacy/worker flags 解析兼容 <!-- todo:impl-14 -->
 - [x] 任务 15：实现 256-bit 一次性 bootstrap exchange、HttpOnly SameSite cookie、Host/Auth/Origin/body-limit/security-header middleware <!-- todo:impl-15 -->
 - [x] 任务 16：实现 bootstrap/workspace/session/export API、serve fragment URL、context shutdown 与 Supervisor 强制收敛 <!-- todo:impl-16 -->
+- [x] 任务 17：实现 cookie-authenticated SSE、after/Last-Event-ID 游标、wire frame、fake ticker heartbeat、reset frame 与 client cancel 释放 <!-- todo:impl-17 -->

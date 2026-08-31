@@ -132,6 +132,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/recent-workspaces/{workspace_id}", s.handleForgetRecent)
 	mux.HandleFunc("POST /api/workspaces/open", s.handleOpenWorkspace)
 	mux.HandleFunc("POST /api/workspaces/{workspace_id}/close", s.handleCloseWorkspace)
+	mux.Handle("GET /api/workspaces/{workspace_id}/events", SSEHandler{Supervisor: s.supervisor})
 	mux.HandleFunc("GET /api/workspaces/{workspace_id}/sessions", s.handleSessions)
 	mux.HandleFunc("POST /api/workspaces/{workspace_id}/sessions", s.handleCreateSession)
 	mux.HandleFunc("GET /api/workspaces/{workspace_id}/sessions/{session_id}", s.handleSessionSnapshot)
