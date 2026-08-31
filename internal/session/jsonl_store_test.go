@@ -176,6 +176,37 @@ func TestListSessions_MultipleSessionsLRUOrder(t *testing.T) {
 	}
 }
 
+func TestListSessionPageUsesStableOpaqueCursor(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	base := time.Now().Add(-time.Hour).UTC()
+	for index, sessionID := range []string{"session-a", "session-b", "session-c"} {
+		created := base.Add(time.Duration(index) * time.Minute)
+		store.nowFn = func() time.Time { return created }
+		createTestSession(t, store, sessionID, []message.Message{{Role: message.RoleUser, Content: sessionID}})
+	}
+	first, err := store.ListSessionPage(ctx, SessionPageRequest{Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Items) != 2 || first.Items[0].SessionID != "session-c" || first.NextCursor == "" {
+		t.Fatalf("first page = %#v", first)
+	}
+	if strings.Contains(first.NextCursor, "session-") || strings.Contains(first.NextCursor, store.baseDir) {
+		t.Fatalf("cursor leaks internals: %q", first.NextCursor)
+	}
+	second, err := store.ListSessionPage(ctx, SessionPageRequest{Limit: 2, Cursor: first.NextCursor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Items) != 1 || second.Items[0].SessionID != "session-a" || second.NextCursor != "" {
+		t.Fatalf("second page = %#v", second)
+	}
+	if _, err := store.ListSessionPage(ctx, SessionPageRequest{Cursor: "not-base64"}); err == nil {
+		t.Fatal("invalid cursor accepted")
+	}
+}
+
 func TestListSessions_TouchMovesSessionToFront(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

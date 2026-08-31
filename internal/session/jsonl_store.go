@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -1373,6 +1374,81 @@ type SessionSummary struct {
 	LastUsedAt     time.Time
 	FirstMessage   string // 第一条用户消息的前 80 个字符，可能为空
 	TranscriptSize int64  // transcript 文件大小（字节）
+}
+
+type SessionPageRequest struct {
+	Cursor string
+	Limit  int
+}
+
+type SessionPage struct {
+	Items      []SessionSummary
+	NextCursor string
+}
+
+type sessionPageCursor struct {
+	LastUsedAt time.Time `json:"last_used_at"`
+	SessionID  string    `json:"session_id"`
+}
+
+func (s *JSONLStore) ListSessionPage(ctx context.Context, request SessionPageRequest) (SessionPage, error) {
+	summaries, err := s.ListSessions(ctx)
+	if err != nil {
+		return SessionPage{}, err
+	}
+	limit := request.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	start := 0
+	if strings.TrimSpace(request.Cursor) != "" {
+		cursor, err := decodeSessionPageCursor(request.Cursor)
+		if err != nil {
+			return SessionPage{}, err
+		}
+		start = len(summaries)
+		for index, summary := range summaries {
+			if summary.LastUsedAt.Before(cursor.LastUsedAt) || (summary.LastUsedAt.Equal(cursor.LastUsedAt) && summary.SessionID > cursor.SessionID) {
+				start = index
+				break
+			}
+		}
+	}
+	end := start + limit
+	if end > len(summaries) {
+		end = len(summaries)
+	}
+	page := SessionPage{Items: append([]SessionSummary(nil), summaries[start:end]...)}
+	if end < len(summaries) && end > start {
+		page.NextCursor, err = encodeSessionPageCursor(page.Items[len(page.Items)-1])
+		if err != nil {
+			return SessionPage{}, err
+		}
+	}
+	return page, nil
+}
+
+func encodeSessionPageCursor(summary SessionSummary) (string, error) {
+	data, err := json.Marshal(sessionPageCursor{LastUsedAt: summary.LastUsedAt.UTC(), SessionID: summary.SessionID})
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(data), nil
+}
+
+func decodeSessionPageCursor(cursor string) (sessionPageCursor, error) {
+	data, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(cursor))
+	if err != nil {
+		return sessionPageCursor{}, fmt.Errorf("invalid session cursor: %w", err)
+	}
+	var decoded sessionPageCursor
+	if err := json.Unmarshal(data, &decoded); err != nil || decoded.SessionID == "" || decoded.LastUsedAt.IsZero() {
+		return sessionPageCursor{}, fmt.Errorf("invalid session cursor")
+	}
+	return decoded, nil
 }
 
 // TouchSession marks a foreground session as recently used. The metadata file's

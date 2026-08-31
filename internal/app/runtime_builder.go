@@ -79,6 +79,7 @@ func BuildWorkspaceRuntime(ctx context.Context, opts WorkspaceRuntimeOptions, co
 		return nil, fmt.Errorf("初始化 session store 失败: %w", err)
 	}
 	runtime.Store = store
+	runtime.SessionService = NewSessionService(store, runtime.Coordinator)
 	sessionID, err := ResolveRuntimeSessionID(ctx, store, opts.SessionID)
 	if err != nil {
 		return nil, err

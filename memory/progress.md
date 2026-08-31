@@ -158,4 +158,4 @@
 - [x] 任务 5：实现共享 ResourceGovernor；各 runtime 的进程池创建常驻 worker 前获取共享 slot，worker 退出时幂等释放 <!-- todo:impl-5 -->
 - [x] 任务 6：实现 Supervisor 两 runtime 上限、busy 保护、LRU 空闲淘汰与最近工作区原子存储；ForgetRecent 不隐式关闭 runtime <!-- todo:impl-6 -->
 - [x] 任务 7：实现 WorkspaceCoordinator 单写者状态机，固定 active session/turn、队列、interaction、session version 与 Activity 快照 <!-- todo:impl-7 -->
-- [x] 任务 7：实现 WorkspaceCoordinator 单写者状态机 <!-- todo:impl-7 -->
+- [x] 任务 8：实现 store-only SessionService，支持 session/turn 游标分页、只读快照以及不激活 Host 的 Create/Fork <!-- todo:impl-8 -->

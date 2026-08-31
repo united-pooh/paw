@@ -36,6 +36,7 @@ type WorkspaceRuntime struct {
 	ControllerLease    *ControllerLease
 	Toolset            *Toolset
 	Coordinator        *WorkspaceCoordinator
+	SessionService     *SessionService
 
 	configManager *configv2.Manager
 	taskLauncher  *task.ProcessPoolLauncher
