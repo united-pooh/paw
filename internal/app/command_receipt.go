@@ -12,6 +12,7 @@ import (
 const (
 	CommandKindCreateSession = "session.create"
 	CommandKindForkSession   = "session.fork"
+	CommandKindSubmitTurn    = "turn.submit"
 	CommandStatusAccepted    = "accepted"
 )
 

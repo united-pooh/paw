@@ -37,6 +37,8 @@ type WorkspaceRuntime struct {
 	Toolset            *Toolset
 	Coordinator        *WorkspaceCoordinator
 	SessionService     *SessionService
+	TurnService        *TurnService
+	UIAdapter          *UIAdapter
 	EventHub           *EventHub
 
 	configManager *configv2.Manager

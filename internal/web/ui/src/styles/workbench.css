@@ -37,9 +37,10 @@ h1 { font-size: 19px; margin: 0; }
 .trace-dot { width: 10px; height: 10px; margin-top: 5px; border-radius: 50%; background: var(--accent); }
 .trace-view button div { display: grid; gap: 3px; }
 .trace-view small { color: var(--muted); }
-.readonly-composer { position: sticky; bottom: 0; width: min(780px, calc(100% - 48px)); margin: 0 auto 24px; display: flex; gap: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 20px; padding: 12px; box-shadow: 0 16px 50px rgba(0,0,0,.1); }
-.readonly-composer textarea { flex: 1; min-height: 58px; border: 0; resize: none; outline: 0; background: transparent; }
-.readonly-composer button { align-self: end; border: 0; border-radius: 999px; padding: 10px 18px; background: var(--accent); color: white; }
+.readonly-composer, .composer { position: sticky; bottom: 0; width: min(780px, calc(100% - 48px)); margin: 0 auto 24px; display: flex; gap: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 20px; padding: 12px; box-shadow: 0 16px 50px rgba(0,0,0,.1); }
+.readonly-composer textarea, .composer textarea { flex: 1; min-height: 58px; border: 0; resize: none; outline: 0; background: transparent; }
+.readonly-composer button, .composer button { align-self: end; border: 0; border-radius: 999px; padding: 10px 18px; background: var(--accent); color: white; }
+.composer button:disabled { opacity: .45; cursor: default; }
 .trace-detail { position: fixed; inset: 0 0 0 auto; width: min(420px, 100%); background: var(--surface); border-left: 1px solid var(--border); box-shadow: -20px 0 50px rgba(0,0,0,.12); padding: 22px; z-index: 10; }
 .trace-detail header { display: flex; justify-content: space-between; }
 .trace-detail header button { border: 0; background: transparent; font-size: 24px; }

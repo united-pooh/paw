@@ -7,10 +7,14 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"paw/internal/app"
+	"paw/internal/loop"
+	"paw/internal/message"
 	"paw/internal/session"
 )
 
@@ -93,6 +97,83 @@ func TestBootstrapWorkspaceAndSessionHandlers(t *testing.T) {
 	if response.StatusCode != http.StatusNoContent {
 		t.Fatalf("close status = %d body=%s", response.StatusCode, readBody(response))
 	}
+}
+
+type webBlockingTurnRunner struct {
+	mu      sync.Mutex
+	current string
+	started chan struct{}
+	release chan struct{}
+}
+
+func (r *webBlockingTurnRunner) CurrentSessionID() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.current
+}
+func (r *webBlockingTurnRunner) LoadSession(_ context.Context, sessionID string) (loop.SessionLoadResult, error) {
+	r.mu.Lock()
+	r.current = sessionID
+	r.mu.Unlock()
+	return loop.SessionLoadResult{}, nil
+}
+func (r *webBlockingTurnRunner) RunTurnWithTiming(ctx context.Context, _ string, _ string, _ time.Time) (loop.TurnExecution, error) {
+	close(r.started)
+	select {
+	case <-r.release:
+	case <-ctx.Done():
+		return loop.TurnExecution{}, ctx.Err()
+	}
+	return loop.TurnExecution{Message: message.Message{Role: message.RoleAssistant, Content: "answer"}}, nil
+}
+
+func TestMessageHandlerAcceptsSubmitAndReturnsBusy(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	workspace := mustWorkspace(t, workspaceRoot)
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"s1", "s2"} {
+		if _, err := store.CreateRoot(context.Background(), session.CreateRootRequest{SessionID: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	coordinator := app.NewWorkspaceCoordinator()
+	hub, err := app.NewEventHub(app.EventHubConfig{WorkspaceID: workspace.ID, StreamID: "stream-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &webBlockingTurnRunner{current: "s1", started: make(chan struct{}), release: make(chan struct{})}
+	runtime := &app.WorkspaceRuntime{Root: workspaceRoot, Store: store, Coordinator: coordinator, EventHub: hub}
+	runtime.SessionService = app.NewSessionService(store, coordinator)
+	runtime.TurnService = app.NewTurnService(runner, store, coordinator, hub, nil)
+	supervisor := app.NewSupervisor(app.SupervisorConfig{Factory: func(context.Context, app.WorkspaceRuntimeOptions) (*app.WorkspaceRuntime, error) { return runtime, nil }})
+	if _, err := supervisor.Open(context.Background(), app.WorkspaceRuntimeOptions{Root: workspaceRoot}); err != nil {
+		t.Fatal(err)
+	}
+	auth := NewAuthStore(false)
+	server, err := NewServer(ServerConfig{Listen: "127.0.0.1:0", Supervisor: supervisor, Auth: auth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Shutdown(context.Background())
+	client, cookie := authenticatedClient(t, server, auth)
+	body, _ := json.Marshal(submitMessageRequest{CommandID: "submit-1", SessionVersion: 0, Text: "hello"})
+	response := doJSON(t, client, http.MethodPost, server.URL()+"/api/workspaces/"+string(workspace.ID)+"/sessions/s1/messages", body, cookie)
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("submit = %d %s", response.StatusCode, readBody(response))
+	}
+	<-runner.started
+	body, _ = json.Marshal(submitMessageRequest{CommandID: "submit-2", SessionVersion: 0, Text: "hello"})
+	response = doJSON(t, client, http.MethodPost, server.URL()+"/api/workspaces/"+string(workspace.ID)+"/sessions/s2/messages", body, cookie)
+	if response.StatusCode != http.StatusConflict || !strings.Contains(readBody(response), "workspace_busy") {
+		t.Fatalf("busy response = %d", response.StatusCode)
+	}
+	close(runner.release)
 }
 
 func TestServerShutdownStopsHTTPAndSupervisor(t *testing.T) {

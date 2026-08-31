@@ -41,13 +41,14 @@ func BuildWorkspaceRuntime(ctx context.Context, opts WorkspaceRuntimeOptions, co
 		return nil, err
 	}
 	coordinator := NewWorkspaceCoordinator()
+	uiAdapter := NewUIAdapter(workspace.ID, coordinator, eventHub)
 	output := opts.Output
 	if output == nil {
-		output = NewUIAdapter(workspace.ID, coordinator, eventHub)
+		output = uiAdapter
 	}
 	runtime := &WorkspaceRuntime{
 		Root: root, ControllerLease: opts.ControllerLease,
-		Coordinator: coordinator, EventHub: eventHub,
+		Coordinator: coordinator, UIAdapter: uiAdapter, EventHub: eventHub,
 	}
 	runtime.initializeCloseStages()
 	success := false
@@ -149,6 +150,7 @@ func BuildWorkspaceRuntime(ctx context.Context, opts WorkspaceRuntimeOptions, co
 		return nil, err
 	}
 	runtime.Runner = runner
+	runtime.TurnService = NewTurnService(runner, store, coordinator, eventHub, uiAdapter)
 	runner.SetSkillRegistry(skill.NewRegistry([]string{paths.Skills}))
 	if err := runner.SetContextMaintenanceConfig(settingsController.CurrentSettings().ContextMaintenance); err != nil {
 		return nil, fmt.Errorf("configure context maintenance: %w", err)

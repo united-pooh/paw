@@ -171,3 +171,4 @@
 - [x] 任务 18：建立 React/Vite/Vitest/ESLint 工具链、静态 SPA handler、hashed immutable assets 与 Go embed 构建脚本 <!-- todo:impl-18 -->
 - [x] 任务 19：实现前端 typed API、snapshot store、SSE EventSource 连接器与 stream/sequence/UTF-8 offset reducer <!-- todo:impl-19 -->
 - [x] 任务 20：实现只读现代工作台：工作区/会话侧栏、对话/轨迹切换、详情抽屉、安全 Markdown 与 DSH 风格设计 token <!-- todo:impl-20 -->
+- [x] 任务 21：接通 session 消息 Submit、active turn/receipt 生命周期、busy/version 错误和带本地草稿/稳定 command ID 的 Composer <!-- todo:impl-21 -->

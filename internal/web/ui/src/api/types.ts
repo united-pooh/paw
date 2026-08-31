@@ -40,6 +40,13 @@ export interface SessionSummary {
   transcript_size: number;
 }
 
+export interface CommandReceipt {
+  command_id: string;
+  status: string;
+  resource_id: string;
+  session_version: number;
+}
+
 export interface SessionPage {
   items: SessionSummary[];
   next_cursor?: string;

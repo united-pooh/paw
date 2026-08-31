@@ -1,4 +1,4 @@
-import type { BootstrapResponse, SessionPage, SessionSnapshot } from './types';
+import type { BootstrapResponse, CommandReceipt, SessionPage, SessionSnapshot } from './types';
 
 export class APIError extends Error {
   constructor(public readonly status: number, message: string) {
@@ -21,6 +21,10 @@ export const api = {
     requestJSON(`/api/workspaces/${encodeURIComponent(workspaceID)}/sessions`),
   sessionSnapshot: (workspaceID: string, sessionID: string): Promise<SessionSnapshot> =>
     requestJSON(`/api/workspaces/${encodeURIComponent(workspaceID)}/sessions/${encodeURIComponent(sessionID)}`),
+  submitMessage: (workspaceID: string, sessionID: string, command: { command_id: string; session_version: number; text: string }): Promise<CommandReceipt> =>
+    requestJSON(`/api/workspaces/${encodeURIComponent(workspaceID)}/sessions/${encodeURIComponent(sessionID)}/messages`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command)
+    }),
   exchangeBootstrap: (token: string): Promise<{ status: string }> =>
     requestJSON('/api/auth/exchange', {
       method: 'POST',
