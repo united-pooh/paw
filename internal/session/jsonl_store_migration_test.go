@@ -64,6 +64,43 @@ func testMessage(content string) message.Message {
 	return message.Message{Role: message.RoleUser, Content: content}
 }
 
+func TestNewJSONLStoreForWorkspaceMigratesLegacySession(t *testing.T) {
+	workspace := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	legacyStore, err := NewJSONLStore(filepath.Join(workspace, ".paw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := legacyStore.CreateRoot(ctx, CreateRootRequest{SessionID: "workspace-legacy"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacyStore.Append(ctx, "workspace-legacy", testMessage("legacy first message")); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewJSONLStoreForWorkspace(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append(ctx, "workspace-legacy", testMessage("continued")); err != nil {
+		t.Fatal(err)
+	}
+	history, err := store.LoadResolvedHistory(ctx, "workspace-legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 2 || history[0].Content != "legacy first message" || history[1].Content != "continued" {
+		t.Fatalf("history = %+v", history)
+	}
+	if _, err := os.Stat(filepath.Join(store.Root(), "sessions", "workspace-legacy", "meta.json")); err != nil {
+		t.Fatalf("migrated meta: %v", err)
+	}
+}
+
 // TestLegacyReadFallback 覆盖：未迁移的 legacy 会话可被全局 store 读取。
 func TestLegacyReadFallback(t *testing.T) {
 	store, _ := newGlobalStore(t)

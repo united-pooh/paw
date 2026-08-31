@@ -130,31 +130,40 @@ func (s *JSONLStore) sessionLock(sessionID string) *sync.Mutex {
 	return l
 }
 
-// NewJSONLStoreInCwd 创建全局项目布局的会话存储：
+// NewJSONLStoreForWorkspace 创建显式工作区对应的全局项目会话存储。
 // 新数据写入 ~/.paw/projects/<项目名>/sessions/，旧工作区
-// <cwd>/.paw/sessions/ 作为只读 fallback（未迁移会话懒迁移到全局）。
-func NewJSONLStoreInCwd() (*JSONLStore, error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, fmt.Errorf("获取当前目录失败: %w", err)
+// <workspaceRoot>/.paw/sessions/ 作为只读 fallback（未迁移会话懒迁移到全局）。
+func NewJSONLStoreForWorkspace(workspaceRoot string) (*JSONLStore, error) {
+	workspaceRoot = filepath.Clean(workspaceRoot)
+	if workspaceRoot == "." || !filepath.IsAbs(workspaceRoot) {
+		return nil, fmt.Errorf("workspaceRoot 必须是绝对路径")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("获取用户主目录失败: %w", err)
 	}
-	projectDir := filepath.Join(home, ".paw", "projects", projectNameFor(cwd))
+	projectDir := filepath.Join(home, ".paw", "projects", projectNameFor(workspaceRoot))
 	store, err := NewJSONLStore(projectDir)
 	if err != nil {
 		return nil, err
 	}
-	store.legacyBaseDir = filepath.Join(cwd, ".paw")
+	store.legacyBaseDir = filepath.Join(workspaceRoot, ".paw")
 	return store, nil
 }
 
-// projectNameFor 生成稳定的项目目录名：cwd basename（slug 化）+ 路径哈希
-// 前 8 位，避免同名目录冲突。同一 cwd 每次启动生成相同名称。
-func projectNameFor(cwd string) string {
-	base := filepath.Base(cwd)
+// NewJSONLStoreInCwd 保留当前工作目录兼容入口。
+func NewJSONLStoreInCwd() (*JSONLStore, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("获取当前目录失败: %w", err)
+	}
+	return NewJSONLStoreForWorkspace(cwd)
+}
+
+// projectNameFor 生成稳定的项目目录名：workspace basename（slug 化）+ 路径
+// 哈希前 8 位，避免同名目录冲突。同一路径每次启动生成相同名称。
+func projectNameFor(workspaceRoot string) string {
+	base := filepath.Base(workspaceRoot)
 	var slug strings.Builder
 	for _, r := range base {
 		switch {
@@ -168,7 +177,7 @@ func projectNameFor(cwd string) string {
 	if name == "" {
 		name = "project"
 	}
-	sum := sha256.Sum256([]byte(cwd))
+	sum := sha256.Sum256([]byte(workspaceRoot))
 	return fmt.Sprintf("%s-%x", name, sum[:4])
 }
 
@@ -1147,9 +1156,17 @@ func (s *JSONLStore) TranscriptPath(sessionID string) string {
 	return s.transcriptPath(sessionID)
 }
 
-// Dir 返回存储根目录（sessions/ 等子目录位于其下）。
-func (s *JSONLStore) Dir() string {
+// Root 返回存储根目录（sessions/ 等子目录位于其下）。
+func (s *JSONLStore) Root() string {
+	if s == nil {
+		return ""
+	}
 	return s.baseDir
+}
+
+// Dir 保留现有调用方使用的存储根目录访问器。
+func (s *JSONLStore) Dir() string {
+	return s.Root()
 }
 
 // TurnMetadataPath returns the sidecar path used for persisted turn timing.

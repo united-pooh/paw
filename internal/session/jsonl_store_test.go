@@ -24,6 +24,54 @@ func newTestStore(t *testing.T) *JSONLStore {
 	return store
 }
 
+func TestNewJSONLStoreForWorkspacePreservesValidPathWhitespace(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), " workspace ")
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	store, err := NewJSONLStoreForWorkspace(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRoot := filepath.Join(home, ".paw", "projects", projectNameFor(workspace))
+	if store.Root() != wantRoot || store.legacyBaseDir != filepath.Join(workspace, ".paw") {
+		t.Fatalf("root = %q, legacy = %q", store.Root(), store.legacyBaseDir)
+	}
+}
+
+func TestNewJSONLStoreForWorkspaceIgnoresProcessCWD(t *testing.T) {
+	workspace := t.TempDir()
+	other := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(old) })
+	if err := os.Chdir(other); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewJSONLStoreForWorkspace(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRoot := filepath.Join(home, ".paw", "projects", projectNameFor(workspace))
+	if store.Root() != wantRoot {
+		t.Fatalf("root = %q, want %q", store.Root(), wantRoot)
+	}
+	if store.legacyBaseDir != filepath.Join(workspace, ".paw") {
+		t.Fatalf("legacy root = %q", store.legacyBaseDir)
+	}
+}
+
 // TestGetMetaMissingSessionReturnsSentinel 验证不存在的 session 返回可识别的
 // ErrSessionNotFound（启动时 todo 恢复据此静默降级，不再向 stderr 打噪音）。
 func TestGetMetaMissingSessionReturnsSentinel(t *testing.T) {
