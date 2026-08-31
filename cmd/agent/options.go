@@ -23,18 +23,24 @@ type options struct {
 }
 
 func parseOptions() options {
-	prompt := flag.String("p", "", "single-turn prompt; omit to start Bubble Tea UI")
-	sessionID := flag.String("s", "", "session ID; omit to resume/create by cwd")
-	taskWorker := flag.Bool("task-worker", false, "run hidden task worker")
-	taskWorkerPool := flag.Bool("task-worker-pool", false, "run hidden long-lived task pool worker")
-	sandboxLimits := flag.String("sandbox-limits", "", "worker sandbox limits (csv: cpu=sec,file_mb=MiB,proc=n,nofile=n,wall=sec; unset fields fall back to defaults)")
-	streamMA := flag.Bool("streamma", defaultStreamMAEnabled(), "enable /streamma and /streamma-trace commands")
-	tokenTracer := flag.Bool("token-tracer", defaultTokenTracerEnabled(), "start local Token Tracer dashboard in interactive mode")
-	tokenTracerOpen := flag.Bool("token-tracer-open", defaultTokenTracerOpen(), "open Token Tracer dashboard in the default browser")
-	tokenTracerPort := flag.Int("token-tracer-port", defaultTokenTracerPort(), "Token Tracer dashboard port; 0 selects a free port")
-	yolo := flag.Bool("yolo", false, "dangerous mode: allow Read to access files outside the workspace")
-	dangerously := flag.Bool("dangerously", false, "dangerous mode: allow Read to access files outside the workspace")
-	flag.Parse()
+	return parseOptionsFrom(flag.CommandLine, os.Args[1:])
+}
+
+func parseOptionsFrom(flags *flag.FlagSet, args []string) options {
+	prompt := flags.String("p", "", "single-turn prompt; omit to start Bubble Tea UI")
+	sessionID := flags.String("s", "", "session ID; omit to resume/create by cwd")
+	taskWorker := flags.Bool("task-worker", false, "run hidden task worker")
+	taskWorkerPool := flags.Bool("task-worker-pool", false, "run hidden long-lived task pool worker")
+	sandboxLimits := flags.String("sandbox-limits", "", "worker sandbox limits (csv: cpu=sec,file_mb=MiB,proc=n,nofile=n,wall=sec; unset fields fall back to defaults)")
+	streamMA := flags.Bool("streamma", defaultStreamMAEnabled(), "enable /streamma and /streamma-trace commands")
+	tokenTracer := flags.Bool("token-tracer", defaultTokenTracerEnabled(), "start local Token Tracer dashboard in interactive mode")
+	tokenTracerOpen := flags.Bool("token-tracer-open", defaultTokenTracerOpen(), "open Token Tracer dashboard in the default browser")
+	tokenTracerPort := flags.Int("token-tracer-port", defaultTokenTracerPort(), "Token Tracer dashboard port; 0 selects a free port")
+	yolo := flags.Bool("yolo", false, "dangerous mode: allow Read to access files outside the workspace")
+	dangerously := flags.Bool("dangerously", false, "dangerous mode: allow Read to access files outside the workspace")
+	if err := flags.Parse(args); err != nil {
+		return options{}
+	}
 
 	return options{
 		prompt:           *prompt,

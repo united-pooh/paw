@@ -164,3 +164,4 @@
 - [x] 任务 11：实现 coordinator/EventHub 一致快照、流式 part 投影与 25ms/16KiB UTF-8 byte offset batcher <!-- todo:impl-11 -->
 - [x] 任务 12：新增 session.command_receipt journal 记录；Create/Fork 跨重启与并发重试返回同一资源且只持久化一次 receipt <!-- todo:impl-12 -->
 - [x] 任务 13：实现 UI Adapter，将 reasoning/assistant/tool/system 回调投影为稳定 ID、offset、摘要和 detail 事件 <!-- todo:impl-13 -->
+- [x] 任务 14：增加独立 serve FlagSet 和 loopback listen 校验，保持 legacy/worker flags 解析兼容 <!-- todo:impl-14 -->

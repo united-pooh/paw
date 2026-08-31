@@ -16,6 +16,17 @@ func main() {
 		log.Printf("warning: load .env/.env.local: %v", err)
 	}
 
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		serveOpts, err := parseServeOptions(os.Args[2:])
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := runServeMode(serveOpts); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
 	opts := parseOptions()
 	ctx := context.Background()
 	sandboxLimits := parseSandboxLimits(opts.sandboxLimits)
