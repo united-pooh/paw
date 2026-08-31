@@ -113,6 +113,11 @@ func validateWorkerRequest(req task.WorkerRequest) error {
 // 每次任务之间的运行时状态完全隔离（仅 model.Client 在池内按需复用）。
 func runWorkerTurn(ctx context.Context, req task.WorkerRequest, broker *workerMCPBroker, allowOutsideRead bool) task.WorkerResult {
 	workerUI := &workerUsageUI{UI: headless.New(io.Discard)}
+	if broker != nil {
+		workerUI.emit = func(event task.WorkerStreamEvent) {
+			_ = broker.send(task.NewWorkerEventMessage(req.TaskID, event))
+		}
+	}
 	app, err := buildRunnerWithTaskContext(ctx, req.SessionID, workerUI, allowOutsideRead, false, taskRuntimeContext{
 		workerMode:      true,
 		depth:           req.Depth,
@@ -395,6 +400,17 @@ type workerUsageUI struct {
 
 	mu    sync.RWMutex
 	usage *tokentracer.Usage
+	emit  func(task.WorkerStreamEvent)
+}
+
+func (u *workerUsageUI) OnAssistantDelta(text string) error {
+	if err := u.UI.OnAssistantDelta(text); err != nil {
+		return err
+	}
+	if text != "" && u.emit != nil {
+		u.emit(task.WorkerStreamEvent{Delta: text})
+	}
+	return nil
 }
 
 func (u *workerUsageUI) OnModelUsage(usage model.Usage) {
@@ -403,8 +419,17 @@ func (u *workerUsageUI) OnModelUsage(usage model.Usage) {
 		return
 	}
 	u.mu.Lock()
-	defer u.mu.Unlock()
-	u.usage = &structured
+	if u.usage == nil {
+		u.usage = &structured
+	} else {
+		merged := u.usage.Add(structured)
+		u.usage = &merged
+	}
+	u.mu.Unlock()
+	if u.emit != nil {
+		copied := usage
+		u.emit(task.WorkerStreamEvent{Usage: &copied})
+	}
 }
 
 func (u *workerUsageUI) Usage() *tokentracer.Usage {

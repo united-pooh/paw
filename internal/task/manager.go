@@ -978,6 +978,24 @@ func (m *Manager) waitBackground(taskID string, process Process) {
 	}
 }
 
+func mergeTaskPartialResult(task *TaskSnapshot, result WorkerResult) {
+	if task == nil {
+		return
+	}
+	if content := strings.TrimSpace(result.Content); content != "" {
+		task.Content = content
+	}
+	if result.UsedTokens > 0 {
+		task.UsedTokens = result.UsedTokens
+	}
+	if usage := normalizedUsage(result.Usage); usage != nil {
+		task.Usage = usage
+		if task.UsedTokens == 0 {
+			task.UsedTokens = usageTokenTotal(*usage)
+		}
+	}
+}
+
 func (m *Manager) finishTask(ctx context.Context, taskID string, result WorkerResult, err error) (TaskSnapshot, bool) {
 	defer m.actors.release(taskID)
 	now := time.Now().UTC()
@@ -991,18 +1009,7 @@ func (m *Manager) finishTask(ctx context.Context, taskID string, result WorkerRe
 	}
 	task.FinishedAt = &now
 	task.ExitCode = &exitCode
-	if result.Content != "" {
-		task.Content = strings.TrimSpace(result.Content)
-	}
-	if result.UsedTokens > 0 {
-		task.UsedTokens = result.UsedTokens
-	}
-	if usage := normalizedUsage(result.Usage); usage != nil {
-		task.Usage = usage
-		if task.UsedTokens == 0 {
-			task.UsedTokens = usageTokenTotal(*usage)
-		}
-	}
+	mergeTaskPartialResult(&task, result)
 	if err != nil || result.Error != "" {
 		task.Status = TaskFailed
 		task.Error = strings.TrimSpace(result.Error)
@@ -1611,7 +1618,7 @@ func (t *taskTool) Name() string {
 }
 
 func (t *taskTool) Description() string {
-	return "Launch a focused task. Use context_mode empty for a self-contained spec, or fork to inherit committed parent session history. run_mode defaults to background and returns a task id immediately; explicit sync waits for the result."
+	return "Launch a focused task. Prefer context_mode empty for self-contained review, research, and verification prompts; use fork only when committed parent history is required. Background work survives ordinary parent turn failures and stops only on explicit cancellation or runtime shutdown. run_mode defaults to background and returns a task id immediately; explicit sync waits for the result."
 }
 
 func (t *taskTool) InputSchema() json.RawMessage {

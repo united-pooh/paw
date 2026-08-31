@@ -652,7 +652,7 @@ type appModel struct {
 	isGenerating                        bool
 	turnHasModelOutput                  bool
 	modelCancelRequested                bool
-	activeModelCancel                   context.CancelFunc
+	activeModelCancel                   context.CancelCauseFunc
 	toolCancelRequested                 bool
 	lastCtrlCAt                         time.Time // 追踪双击 Ctrl+C 退出
 	modelWizard                         *modelWizard

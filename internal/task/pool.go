@@ -17,6 +17,7 @@ import (
 	"time"
 
 	coremcp "paw/internal/mcp"
+	"paw/internal/tokentracer"
 
 	"github.com/sourcegraph/conc"
 )
@@ -25,6 +26,7 @@ const (
 	defaultPoolWorkerCount = 4
 	defaultPoolQueueSize   = 8
 	poolReadyTimeout       = 30 * time.Second
+	poolStderrLimit        = 64 * 1024
 )
 
 // ProcessPoolLauncher keeps a bounded set of long-lived worker processes and
@@ -60,7 +62,7 @@ type ProcessPoolLauncher struct {
 	group       *conc.WaitGroup
 	workerGroup *conc.WaitGroup
 	poolCtx     context.Context
-	poolCancel  context.CancelFunc
+	poolCancel  context.CancelCauseFunc
 	closed      bool
 	closeErr    error
 }
@@ -143,7 +145,7 @@ func (l *ProcessPoolLauncher) Start(ctx context.Context, req WorkerRequest) (Pro
 		l.slots = make(chan struct{}, capacity)
 		l.shutdown = make(chan struct{})
 		l.wake = make(chan struct{}, 1)
-		l.poolCtx, l.poolCancel = context.WithCancel(context.Background())
+		l.poolCtx, l.poolCancel = context.WithCancelCause(context.Background())
 		l.group = conc.NewWaitGroup()
 		l.workerGroup = conc.NewWaitGroup()
 		l.group.Go(l.runScheduler)
@@ -161,7 +163,7 @@ func (l *ProcessPoolLauncher) Start(ctx context.Context, req WorkerRequest) (Pro
 		return nil, errors.New("task process pool is not initialized")
 	}
 
-	jobCtx, cancel := context.WithCancel(ctx)
+	jobCtx, cancel := context.WithCancelCause(ctx)
 	job := &poolJob{
 		ctx:    jobCtx,
 		cancel: cancel,
@@ -171,20 +173,20 @@ func (l *ProcessPoolLauncher) Start(ctx context.Context, req WorkerRequest) (Pro
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.closed {
-		cancel()
+		cancel(errors.New("task process pool is shut down"))
 		return nil, errors.New("task process pool is shut down")
 	}
 	select {
 	case submit <- job:
 		return &poolJobProcess{job: job}, nil
 	case <-ctx.Done():
-		cancel()
+		cancel(context.Cause(ctx))
 		return nil, ctx.Err()
 	case <-shutdown:
-		cancel()
+		cancel(errors.New("task process pool is shut down"))
 		return nil, errors.New("task process pool is shut down")
 	default:
-		cancel()
+		cancel(errors.New("task process pool queue is full"))
 		return nil, fmt.Errorf("task process pool queue is full")
 	}
 }
@@ -199,7 +201,7 @@ func (l *ProcessPoolLauncher) Close() error {
 		l.mu.Lock()
 		l.closed = true
 		if l.poolCancel != nil {
-			l.poolCancel()
+			l.poolCancel(errors.New("task process pool closed"))
 		}
 		if l.shutdown != nil {
 			close(l.shutdown)
@@ -258,16 +260,16 @@ func (l *ProcessPoolLauncher) runScheduler() {
 			}
 			state.queue = append(state.queue, job)
 		case completion := <-state.complete:
-			if state.workers > 0 {
-				state.workers--
-			}
 			delete(state.active, completion.worker)
 			if completion.worker != nil && completion.healthy {
 				state.idle = append(state.idle, completion.worker)
 			} else if completion.worker != nil {
+				if state.workers > 0 {
+					state.workers--
+				}
 				completion.worker.stop()
 			}
-			completion.job.cancel()
+			completion.job.cancel(nil)
 			completion.job.deliver(workerDone{result: completion.result, err: completion.err})
 		case <-shutdown:
 			// Start 的 send 与 Close 的 closed=true 由同一把锁串行化，
@@ -298,7 +300,8 @@ func (s *poolSchedulerState) dispatch() {
 		job := s.queue[0]
 		if err := job.ctx.Err(); err != nil {
 			s.queue = s.queue[1:]
-			job.deliver(workerDone{result: canceledWorkerResult(job.req, err), err: err})
+			cause := context.Cause(job.ctx)
+			job.deliver(workerDone{result: canceledWorkerResult(job.req, cause), err: cause})
 			continue
 		}
 
@@ -374,8 +377,8 @@ func (s *poolSchedulerState) drainSubmitted(submit <-chan *poolJob) {
 			if job == nil {
 				return
 			}
-			job.cancel()
-			job.deliver(workerDone{result: canceledWorkerResult(job.req, context.Canceled), err: context.Canceled})
+			job.cancel(errors.New("task process pool closed"))
+			job.deliver(workerDone{result: canceledWorkerResult(job.req, context.Cause(job.ctx)), err: context.Cause(job.ctx)})
 		default:
 			return
 		}
@@ -387,13 +390,15 @@ func (s *poolSchedulerState) stopAll() {
 		worker.stop()
 	}
 	for worker, job := range s.active {
-		job.cancel()
+		job.cancel(errors.New("task process pool closed"))
 		worker.stop()
-		job.deliver(workerDone{result: canceledWorkerResult(job.req, context.Canceled), err: context.Canceled})
+		cause := context.Cause(job.ctx)
+		job.deliver(workerDone{result: canceledWorkerResult(job.req, cause), err: cause})
 	}
 	for _, job := range s.queue {
-		job.cancel()
-		job.deliver(workerDone{result: canceledWorkerResult(job.req, context.Canceled), err: context.Canceled})
+		job.cancel(errors.New("task process pool closed"))
+		cause := context.Cause(job.ctx)
+		job.deliver(workerDone{result: canceledWorkerResult(job.req, cause), err: cause})
 	}
 	s.active = nil
 	s.idle = nil
@@ -410,12 +415,13 @@ type poolCompletion struct {
 
 type poolJob struct {
 	ctx    context.Context
-	cancel context.CancelFunc
+	cancel context.CancelCauseFunc
 	req    WorkerRequest
 	result chan workerDone
 
-	mu     sync.RWMutex
-	worker *poolWorker
+	mu      sync.RWMutex
+	worker  *poolWorker
+	partial WorkerResult
 
 	deliverOnce sync.Once
 }
@@ -446,6 +452,71 @@ func (j *poolJob) getWorker() *poolWorker {
 	worker := j.worker
 	j.mu.RUnlock()
 	return worker
+}
+
+func (j *poolJob) recordEvent(event WorkerStreamEvent) {
+	if j == nil {
+		return
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.partial.TaskID = j.req.TaskID
+	j.partial.SessionID = j.req.SessionID
+	if event.Delta != "" {
+		j.partial.Content += event.Delta
+	}
+	if event.Error != "" {
+		j.partial.Error = event.Error
+	}
+	if event.Usage != nil {
+		usage := tokentracer.UsageFromModelUsage(*event.Usage)
+		if !usage.Empty() {
+			if j.partial.Usage == nil {
+				j.partial.Usage = &usage
+			} else {
+				merged := j.partial.Usage.Add(usage)
+				j.partial.Usage = &merged
+			}
+			j.partial.UsedTokens = usageTokenTotal(*j.partial.Usage)
+		}
+	}
+}
+
+func (j *poolJob) partialResult() WorkerResult {
+	if j == nil {
+		return WorkerResult{}
+	}
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	result := j.partial
+	if result.Usage != nil {
+		usage := *result.Usage
+		result.Usage = &usage
+	}
+	return result
+}
+
+func mergeWorkerResultWithPartial(result, partial WorkerResult) WorkerResult {
+	if result.TaskID == "" {
+		result.TaskID = partial.TaskID
+	}
+	if result.SessionID == "" {
+		result.SessionID = partial.SessionID
+	}
+	if result.Content == "" {
+		result.Content = partial.Content
+	}
+	if result.Error == "" {
+		result.Error = partial.Error
+	}
+	if result.UsedTokens == 0 {
+		result.UsedTokens = partial.UsedTokens
+	}
+	if result.Usage == nil && partial.Usage != nil {
+		usage := *partial.Usage
+		result.Usage = &usage
+	}
+	return result
 }
 
 func (j *poolJob) pid() int {
@@ -494,11 +565,25 @@ func (p *poolJobProcess) Wait() (WorkerResult, error) {
 }
 
 func (p *poolJobProcess) Stop() error {
+	return p.StopWithCause(context.Canceled)
+}
+
+func (p *poolJobProcess) StopWithCause(cause error) error {
 	if p == nil || p.job == nil {
 		return nil
 	}
-	p.job.cancel()
+	if cause == nil {
+		cause = context.Canceled
+	}
+	p.job.cancel(cause)
 	return nil
+}
+
+func (p *poolJobProcess) PartialResult() WorkerResult {
+	if p == nil || p.job == nil {
+		return WorkerResult{}
+	}
+	return p.job.partialResult()
 }
 
 // UpdateMCPSnapshot 在任务执行期间推送更新的 MCP 快照给承载该任务的 worker。
@@ -536,7 +621,10 @@ type poolWorker struct {
 
 	writeMu    sync.Mutex
 	mu         sync.Mutex
+	stderr     limitedTailBuffer
+	stderrDone chan struct{}
 	currentCtx context.Context
+	currentJob *poolJob
 	current    chan workerDone
 	ready      chan error
 	closed     chan struct{}
@@ -630,16 +718,17 @@ func (l *ProcessPoolLauncher) newPoolWorker() (*poolWorker, error) {
 	worker := &poolWorker{
 		cmd: cmd, stdin: stdin, broker: broker, ctx: ctx, cancel: cancel,
 		wall: wall, roleName: role.Name, roleColor: role.Color,
-		ready: make(chan error, 1), closed: make(chan struct{}),
+		ready: make(chan error, 1), closed: make(chan struct{}), stderrDone: make(chan struct{}),
 	}
 	go func() {
-		_, _ = io.Copy(io.Discard, stderr)
+		defer close(worker.stderrDone)
+		_, _ = io.Copy(&worker.stderr, stderr)
 		_ = stderr.Close()
 	}()
 	go worker.readLoop(stdout)
 	go func() {
-		_ = cmd.Wait()
-		worker.failCurrent(errors.New("task pool worker exited"))
+		waitErr := cmd.Wait()
+		worker.failCurrent(worker.exitError(waitErr))
 		worker.stopOnce.Do(func() { close(worker.closed) })
 	}()
 	if err := worker.send(workerMessage{Protocol: workerProtocolV2, Type: workerMessageHello}); err != nil {
@@ -680,6 +769,7 @@ func (w *poolWorker) readLoop(stdout io.Reader) {
 			current := w.current
 			w.current = nil
 			w.currentCtx = nil
+			w.currentJob = nil
 			w.mu.Unlock()
 			if current != nil {
 				current <- workerDone{result: msg.Result()}
@@ -687,24 +777,29 @@ func (w *poolWorker) readLoop(stdout io.Reader) {
 		case workerMessageMCPCall:
 			go w.handleMCPCall(msg)
 		case workerMessageEvent:
-			// Streaming events are added to the job handle in the next slice.
+			w.mu.Lock()
+			job := w.currentJob
+			w.mu.Unlock()
+			if job != nil && msg.Event != nil {
+				job.recordEvent(*msg.Event)
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		w.failCurrent(err)
-	} else {
-		w.failCurrent(errors.New("task pool worker output closed"))
 	}
 }
 
 func (w *poolWorker) run(job *poolJob) (WorkerResult, error, bool) {
 	if err := job.ctx.Err(); err != nil {
-		return canceledWorkerResult(job.req, err), err, true
+		cause := context.Cause(job.ctx)
+		return canceledWorkerResult(job.req, cause), cause, true
 	}
 	resultCh := make(chan workerDone, 1)
 	w.mu.Lock()
 	w.current = resultCh
 	w.currentCtx = job.ctx
+	w.currentJob = job
 	w.mu.Unlock()
 	start := NewWorkerStartMessage(job.req, job.req.MCPSnapshot)
 	start.Protocol = workerProtocolV2
@@ -720,21 +815,33 @@ func (w *poolWorker) run(job *poolJob) (WorkerResult, error, bool) {
 	}
 	select {
 	case done := <-resultCh:
-		return done.result, done.err, done.err == nil
+		result := mergeWorkerResultWithPartial(done.result, job.partialResult())
+		protocolHealthy := done.err == nil
+		err := done.err
+		if err == nil && result.Error != "" {
+			err = errors.New(result.Error)
+		}
+		// 收到结构合法的 worker.result 说明进程协议仍健康；任务本身失败
+		// 不应销毁可复用 worker，否则短暂 provider 故障会引发进程抖动。
+		return result, err, protocolHealthy
 	case <-jobCtx.Done():
 		if err := job.ctx.Err(); err != nil {
-			// 调用方取消：正常取消路径。
+			// 调用方取消：保留带来源的 cause，并回收当前 worker。
 			_ = w.send(workerMessage{Protocol: workerProtocolV2, Type: workerMessageCancel, TaskID: job.req.TaskID})
 			w.stop()
-			return canceledWorkerResult(job.req, job.ctx.Err()), job.ctx.Err(), false
+			cause := context.Cause(job.ctx)
+			result := mergeWorkerResultWithPartial(canceledWorkerResult(job.req, cause), job.partialResult())
+			return result, cause, false
 		}
 		// 墙钟超时：不信任 worker 后续，直接拉起失败并回收该 worker。
 		err := fmt.Errorf("task job wall clock exceeded %s", w.wall)
 		w.stop()
-		return WorkerResult{TaskID: job.req.TaskID, SessionID: job.req.SessionID, Error: err.Error(), ExitCode: 1}, err, false
+		result := mergeWorkerResultWithPartial(WorkerResult{TaskID: job.req.TaskID, SessionID: job.req.SessionID, Error: err.Error(), ExitCode: 1}, job.partialResult())
+		return result, err, false
 	case <-w.closed:
-		err := errors.New("task pool worker exited unexpectedly")
-		return WorkerResult{TaskID: job.req.TaskID, SessionID: job.req.SessionID, Error: err.Error(), ExitCode: 1}, err, false
+		err := w.exitError(nil)
+		result := mergeWorkerResultWithPartial(WorkerResult{TaskID: job.req.TaskID, SessionID: job.req.SessionID, Error: err.Error(), ExitCode: 1}, job.partialResult())
+		return result, err, false
 	}
 }
 
@@ -758,6 +865,23 @@ func (w *poolWorker) handleMCPCall(msg workerMessage) {
 	_ = w.send(response)
 }
 
+func (w *poolWorker) exitError(waitErr error) error {
+	if w.stderrDone != nil {
+		<-w.stderrDone
+	}
+	stderr := strings.TrimSpace(w.stderr.String())
+	if stderr != "" {
+		if waitErr != nil {
+			return fmt.Errorf("task pool worker exited: %w; stderr: %s", waitErr, stderr)
+		}
+		return fmt.Errorf("task pool worker exited; stderr: %s", stderr)
+	}
+	if waitErr != nil {
+		return fmt.Errorf("task pool worker exited: %w", waitErr)
+	}
+	return errors.New("task pool worker exited")
+}
+
 func (w *poolWorker) failCurrent(err error) {
 	if err == nil {
 		err = errors.New("task pool worker failed")
@@ -766,6 +890,7 @@ func (w *poolWorker) failCurrent(err error) {
 	current := w.current
 	w.current = nil
 	w.currentCtx = nil
+	w.currentJob = nil
 	w.mu.Unlock()
 	if current != nil {
 		current <- workerDone{result: WorkerResult{Error: err.Error(), ExitCode: 1}, err: err}
@@ -804,6 +929,27 @@ func (w *poolWorker) stop() {
 }
 
 // jsonLineScanner adds a bounded frame size to the worker JSONL protocol.
+type limitedTailBuffer struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (b *limitedTailBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf = append(b.buf, p...)
+	if len(b.buf) > poolStderrLimit {
+		b.buf = append([]byte(nil), b.buf[len(b.buf)-poolStderrLimit:]...)
+	}
+	return len(p), nil
+}
+
+func (b *limitedTailBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(append([]byte(nil), b.buf...))
+}
+
 type jsonLineScanner struct {
 	scanner *bufio.Scanner
 }

@@ -31,6 +31,15 @@ func (t *taskProcessTable) track(id string) {
 	t.mu.Unlock()
 }
 
+func (t *taskProcessTable) get(id string) Process {
+	if t == nil || id == "" {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.processes[id]
+}
+
 func (t *taskProcessTable) take(id string) Process {
 	if t == nil || id == "" {
 		return nil

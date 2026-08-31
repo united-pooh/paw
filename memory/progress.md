@@ -145,3 +145,14 @@
 - [x] 使用 Gitmoji 提交浏览器工作台实现计划，并保持既有 model/message 改动不入提交 <!-- todo:plan-commit -->
 - [x] 完成 writing-plans 交接，计划位于 docs/superpowers/plans/2026-08-31-browser-workbench.md <!-- todo:plan-handoff -->
 - [x] 检查规格覆盖、占位符和类型一致性 <!-- todo:plan-check -->
+- [x] 使用 Gitmoji 提交实现计划 <!-- todo:plan-commit -->
+- [x] 提供计划执行方式并完成 writing-plans 交接 <!-- todo:handoff -->
+- [x] 任务 1：建立 workspace canonical path 契约 <!-- todo:impl-1 -->
+- [x] 任务 2：实现顶层 ControllerLease <!-- todo:impl-2 -->
+- [x] 任务 3：为 session store 增加显式 root 构造器 <!-- todo:impl-3 -->
+- [x] 调查 Task worker 中断异常、失败链路与无效 token 消耗根因 <!-- todo:task-worker-investigation -->
+- [x] 修复 Task worker 生命周期：后台任务脱离父 turn、显式取消带 cause、失败保存部分文本/usage、worker stderr 入错、池容量计数与失败后复用；TaskWait 默认恢复 90 分钟 <!-- todo:task-worker-remediation -->
+- [x] 修复 Responses SSE 解析：按事件边界解析多行 data，坏帧后等待 completed 权威快照恢复，跨 provider/model 历史保守投影 <!-- todo:responses-stream-recovery -->
+- [x] 任务 4：提取 WorkspaceRuntime 组合根与 runtime-owned Toolset，禁用 worker config watcher，关闭顺序与跨 runtime 隔离测试通过 <!-- todo:impl-4 -->
+- [x] 修复后台任务父 turn 解耦、取消溯源、部分 usage/结果保存与默认调度策略 <!-- todo:task-worker-remediation -->
+- [x] 任务 4：提取 WorkspaceRuntime 组合根 <!-- todo:impl-4 -->

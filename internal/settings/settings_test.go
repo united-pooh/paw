@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"paw/internal/theme"
 )
@@ -170,6 +171,12 @@ func TestTranslateOnDoubleClickDefaultsOffAndRoundTrips(t *testing.T) {
 	}
 	if legacy.UI.TranslateOnDoubleClick {
 		t.Fatal("legacy settings must default TranslateOnDoubleClick to false")
+	}
+}
+
+func TestDefaultTaskWaitTimeoutIsNinetyMinutes(t *testing.T) {
+	if got, want := DefaultTaskWaitTimeoutMs, int((90*time.Minute)/time.Millisecond); got != want {
+		t.Fatalf("DefaultTaskWaitTimeoutMs = %d, want %d", got, want)
 	}
 }
 

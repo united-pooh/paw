@@ -41,7 +41,7 @@ func (t *turnOwnerProbeTool) Run(ctx context.Context, _ json.RawMessage) (string
 	return "started background work", nil
 }
 
-func TestFailedTurnCleansOwnedTasksAndPropagatesTurnOwner(t *testing.T) {
+func TestFailedTurnKeepsOwnedBackgroundTasksAndPropagatesTurnOwner(t *testing.T) {
 	streamer := &fakeModel{rounds: []fakeRound{
 		{events: []model.StreamEvent{
 			{ToolCalls: []message.ToolCall{{ID: "probe-1", Name: "OwnerProbe", Input: json.RawMessage(`{}`)}}, Done: true},
@@ -63,10 +63,45 @@ func TestFailedTurnCleansOwnedTasksAndPropagatesTurnOwner(t *testing.T) {
 	}
 	cleaner.mu.Lock()
 	defer cleaner.mu.Unlock()
-	if cleaner.calls != 1 || cleaner.sessionID != probe.owner.SessionID || cleaner.turnID != probe.owner.TurnID {
-		t.Fatalf("cleanup = calls=%d owner=%q/%q, tool owner=%#v", cleaner.calls, cleaner.sessionID, cleaner.turnID, probe.owner)
+	if cleaner.calls != 0 {
+		t.Fatalf("cleanup calls = %d, want background task to survive provider failure", cleaner.calls)
 	}
-	if !strings.Contains(cleaner.reason, "responses stream failed") {
+}
+
+type cancelCauseModel struct {
+	started chan struct{}
+}
+
+func (m *cancelCauseModel) StreamMessage(ctx context.Context, _ []message.Message, _ []model.ToolDefinition) (<-chan model.StreamEvent, error) {
+	close(m.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestExplicitUserCancellationCleansOwnedTasksWithCause(t *testing.T) {
+	streamer := &cancelCauseModel{started: make(chan struct{})}
+	cleaner := &recordingTurnCleaner{}
+	runner := NewEngine(streamer, &fakeUI{}, tool.NewRegistry(), nil, "parent-session")
+	runner.SetTurnOwnedTaskCleaner(cleaner)
+	ctx, cancel := context.WithCancelCause(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := runner.RunTurn(ctx, "start work")
+		done <- err
+	}()
+	<-streamer.started
+	cancel(ErrTurnCanceledByUser)
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunTurn() error = %v, want context canceled", err)
+	}
+
+	cleaner.mu.Lock()
+	defer cleaner.mu.Unlock()
+	if cleaner.calls != 1 || cleaner.sessionID != "parent-session" || cleaner.turnID == "" {
+		t.Fatalf("cleanup = calls=%d owner=%q/%q", cleaner.calls, cleaner.sessionID, cleaner.turnID)
+	}
+	if !strings.Contains(cleaner.reason, ErrTurnCanceledByUser.Error()) {
 		t.Fatalf("cleanup reason = %q", cleaner.reason)
 	}
 }

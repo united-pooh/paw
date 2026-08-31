@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"paw/internal/message"
 	"paw/internal/model"
@@ -163,14 +164,10 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 	settled := false
 	ctx = WithTurnOwner(ctx, runner.sessionID, turnID)
 	defer func() {
-		if !settled {
+		if !settled && errors.Is(context.Cause(ctx), ErrTurnCanceledByUser) {
 			if cleaner := runner.taskEnv.cleaner(); cleaner != nil {
-				failure := err
-				if failure == nil {
-					failure = fmt.Errorf("turn ended before completion")
-				}
 				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-				cleaner.StopOwnedTasks(cleanupCtx, runner.sessionID, turnID, "interrupted: parent turn failed: "+failure.Error())
+				cleaner.StopOwnedTasks(cleanupCtx, runner.sessionID, turnID, "interrupted: "+ErrTurnCanceledByUser.Error())
 				cancel()
 			}
 		}

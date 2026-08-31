@@ -3,10 +3,13 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"paw/internal/model"
 )
 
 func TestProcessPoolReusesWorkerAndKeepsRequestsIsolated(t *testing.T) {
@@ -58,6 +61,124 @@ func TestProcessPoolReusesWorkerAndKeepsRequestsIsolated(t *testing.T) {
 	}
 }
 
+func TestProcessPoolReusesWorkerAfterTaskFailure(t *testing.T) {
+	launcher := &ProcessPoolLauncher{
+		Command:       os.Args[0],
+		Args:          []string{"-test.run=TestTaskPoolFailThenSucceedHelperProcess"},
+		Env:           []string{"PAW_TASK_POOL_FAIL_THEN_SUCCEED_HELPER=1"},
+		MaxWorkers:    1,
+		QueueCapacity: 1,
+	}
+	defer launcher.Close()
+
+	failed, err := launcher.Start(context.Background(), WorkerRequest{TaskID: "fail-first", Prompt: "fail"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := failed.Wait(); err == nil || !strings.Contains(err.Error(), "expected task failure") {
+		t.Fatalf("failed Wait() error = %v", err)
+	}
+	failedPID := failed.PID()
+
+	succeeded, err := launcher.Start(context.Background(), WorkerRequest{TaskID: "succeed-second", Prompt: "succeed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := succeeded.Wait()
+	if err != nil || result.Content != "recovered" {
+		t.Fatalf("succeeded Wait() = %#v, %v", result, err)
+	}
+	if succeeded.PID() != failedPID {
+		t.Fatalf("worker PID changed after task failure: %d -> %d", failedPID, succeeded.PID())
+	}
+}
+
+func TestTaskPoolFailThenSucceedHelperProcess(t *testing.T) {
+	if os.Getenv("PAW_TASK_POOL_FAIL_THEN_SUCCEED_HELPER") != "1" {
+		return
+	}
+	decoder := json.NewDecoder(os.Stdin)
+	encoder := json.NewEncoder(os.Stdout)
+	for {
+		var message WorkerMessage
+		if err := decoder.Decode(&message); err != nil {
+			return
+		}
+		switch message.Type {
+		case WorkerMessageHello:
+			_ = encoder.Encode(NewWorkerReadyMessage())
+		case WorkerMessageStart:
+			if message.Prompt == "fail" {
+				_ = encoder.Encode(NewWorkerResultMessage(WorkerResult{TaskID: message.TaskID, Error: "expected task failure", ExitCode: 1}))
+			} else {
+				_ = encoder.Encode(NewWorkerResultMessage(WorkerResult{TaskID: message.TaskID, Content: "recovered", ExitCode: 0}))
+			}
+		case WorkerMessageCancel, WorkerMessageShutdown:
+			return
+		}
+	}
+}
+
+func TestProcessPoolHonorsMaxWorkersAfterReusingIdleWorker(t *testing.T) {
+	launcher := &ProcessPoolLauncher{
+		Command:       os.Args[0],
+		Args:          []string{"-test.run=TestTaskPoolDelayedHelperProcess"},
+		Env:           []string{"PAW_TASK_POOL_DELAYED_HELPER=1"},
+		MaxWorkers:    1,
+		QueueCapacity: 2,
+	}
+	defer launcher.Close()
+
+	processes := make([]Process, 0, 3)
+	for i := 0; i < 3; i++ {
+		process, err := launcher.Start(context.Background(), WorkerRequest{
+			TaskID: fmt.Sprintf("max-worker-%d", i),
+			Prompt: fmt.Sprintf("job-%d", i),
+		})
+		if err != nil {
+			t.Fatalf("Start(%d) error = %v", i, err)
+		}
+		processes = append(processes, process)
+	}
+
+	var pid int
+	for i, process := range processes {
+		if _, err := process.Wait(); err != nil {
+			t.Fatalf("Wait(%d) error = %v", i, err)
+		}
+		if i == 0 {
+			pid = process.PID()
+		} else if process.PID() != pid {
+			t.Fatalf("job %d ran on PID %d, want single MaxWorkers=1 PID %d", i, process.PID(), pid)
+		}
+	}
+}
+
+func TestTaskPoolDelayedHelperProcess(t *testing.T) {
+	if os.Getenv("PAW_TASK_POOL_DELAYED_HELPER") != "1" {
+		return
+	}
+	decoder := json.NewDecoder(os.Stdin)
+	encoder := json.NewEncoder(os.Stdout)
+	for {
+		var message WorkerMessage
+		if err := decoder.Decode(&message); err != nil {
+			return
+		}
+		switch message.Type {
+		case WorkerMessageHello:
+			_ = encoder.Encode(NewWorkerReadyMessage())
+		case WorkerMessageStart:
+			time.Sleep(100 * time.Millisecond)
+			_ = encoder.Encode(NewWorkerResultMessage(WorkerResult{
+				TaskID: message.TaskID, Content: message.Prompt, ExitCode: 0,
+			}))
+		case WorkerMessageCancel, WorkerMessageShutdown:
+			return
+		}
+	}
+}
+
 func TestProcessPoolCloseRejectsNewJobs(t *testing.T) {
 	launcher := NewProcessPoolLauncher(os.Args[0], "")
 	launcher.Args = []string{"-test.run=TestTaskPoolHelperProcess"}
@@ -94,6 +215,169 @@ func TestTaskPoolHelperProcess(t *testing.T) {
 		case WorkerMessageCancel, WorkerMessageShutdown:
 			return
 		}
+	}
+}
+
+func TestProcessPoolReportsWorkerStderrOnUnexpectedExit(t *testing.T) {
+	launcher := &ProcessPoolLauncher{
+		Command:       os.Args[0],
+		Args:          []string{"-test.run=TestTaskPoolStderrHelperProcess"},
+		Env:           []string{"PAW_TASK_POOL_STDERR_HELPER=1"},
+		MaxWorkers:    1,
+		QueueCapacity: 1,
+	}
+	defer launcher.Close()
+
+	process, err := launcher.Start(context.Background(), WorkerRequest{TaskID: "stderr-task", SessionID: "stderr-session"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	result, waitErr := process.Wait()
+	if waitErr == nil || !strings.Contains(waitErr.Error(), "worker stderr sentinel") {
+		t.Fatalf("Wait() = %#v, %v, want captured stderr", result, waitErr)
+	}
+}
+
+func TestTaskPoolStderrHelperProcess(t *testing.T) {
+	if os.Getenv("PAW_TASK_POOL_STDERR_HELPER") != "1" {
+		return
+	}
+	decoder := json.NewDecoder(os.Stdin)
+	encoder := json.NewEncoder(os.Stdout)
+	var message WorkerMessage
+	if err := decoder.Decode(&message); err != nil {
+		return
+	}
+	_ = encoder.Encode(NewWorkerReadyMessage())
+	if err := decoder.Decode(&message); err != nil {
+		return
+	}
+	_, _ = os.Stderr.WriteString("worker stderr sentinel\n")
+	os.Exit(23)
+}
+
+func TestProcessPoolPreservesPartialEventsWhenWorkerReturnsFailure(t *testing.T) {
+	launcher := &ProcessPoolLauncher{
+		Command:       os.Args[0],
+		Args:          []string{"-test.run=TestTaskPoolPartialFailureHelperProcess"},
+		Env:           []string{"PAW_TASK_POOL_PARTIAL_FAILURE_HELPER=1"},
+		MaxWorkers:    1,
+		QueueCapacity: 1,
+	}
+	defer launcher.Close()
+
+	process, err := launcher.Start(context.Background(), WorkerRequest{TaskID: "partial-failure", SessionID: "partial-session"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	result, waitErr := process.Wait()
+	if waitErr == nil || !strings.Contains(waitErr.Error(), "provider stream failed") {
+		t.Fatalf("Wait() = %#v, %v, want provider failure", result, waitErr)
+	}
+	if result.Content != "partial answer" || result.UsedTokens != 23 || result.Usage == nil {
+		t.Fatalf("partial failure result = %#v", result)
+	}
+}
+
+func TestTaskPoolPartialFailureHelperProcess(t *testing.T) {
+	if os.Getenv("PAW_TASK_POOL_PARTIAL_FAILURE_HELPER") != "1" {
+		return
+	}
+	decoder := json.NewDecoder(os.Stdin)
+	encoder := json.NewEncoder(os.Stdout)
+	for {
+		var message WorkerMessage
+		if err := decoder.Decode(&message); err != nil {
+			return
+		}
+		switch message.Type {
+		case WorkerMessageHello:
+			_ = encoder.Encode(NewWorkerReadyMessage())
+		case WorkerMessageStart:
+			_ = encoder.Encode(NewWorkerEventMessage(message.TaskID, WorkerStreamEvent{Delta: "partial answer"}))
+			_ = encoder.Encode(NewWorkerEventMessage(message.TaskID, WorkerStreamEvent{Usage: &model.Usage{PromptTokens: 20, CompletionTokens: 3}}))
+			_ = encoder.Encode(NewWorkerResultMessage(WorkerResult{
+				TaskID: message.TaskID, SessionID: message.SessionID, Error: "provider stream failed", ExitCode: 1,
+			}))
+		case WorkerMessageCancel, WorkerMessageShutdown:
+			return
+		}
+	}
+}
+
+func TestProcessPoolPreservesPartialEventsWhenStopped(t *testing.T) {
+	launcher := &ProcessPoolLauncher{
+		Command:       os.Args[0],
+		Args:          []string{"-test.run=TestTaskPoolPartialBlockingHelperProcess"},
+		Env:           []string{"PAW_TASK_POOL_PARTIAL_BLOCKING_HELPER=1"},
+		MaxWorkers:    1,
+		QueueCapacity: 1,
+	}
+	defer launcher.Close()
+
+	process, err := launcher.Start(context.Background(), WorkerRequest{TaskID: "partial-stop", SessionID: "partial-session"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		source, ok := process.(ProcessPartialResultSource)
+		if !ok {
+			t.Fatal("process does not expose partial result")
+		}
+		if source.PartialResult().Content == "partial before stop" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("partial event was not received")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := process.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	result, waitErr := process.Wait()
+	if waitErr == nil || !strings.Contains(waitErr.Error(), "canceled") {
+		t.Fatalf("Wait() = %#v, %v, want cancellation", result, waitErr)
+	}
+	if result.Content != "partial before stop" {
+		t.Fatalf("stopped result = %#v, want partial content", result)
+	}
+}
+
+func TestTaskPoolPartialBlockingHelperProcess(t *testing.T) {
+	if os.Getenv("PAW_TASK_POOL_PARTIAL_BLOCKING_HELPER") != "1" {
+		return
+	}
+	decoder := json.NewDecoder(os.Stdin)
+	encoder := json.NewEncoder(os.Stdout)
+	for {
+		var message WorkerMessage
+		if err := decoder.Decode(&message); err != nil {
+			return
+		}
+		switch message.Type {
+		case WorkerMessageHello:
+			_ = encoder.Encode(NewWorkerReadyMessage())
+		case WorkerMessageStart:
+			_ = encoder.Encode(NewWorkerEventMessage(message.TaskID, WorkerStreamEvent{Delta: "partial before stop"}))
+		case WorkerMessageCancel, WorkerMessageShutdown:
+			return
+		}
+	}
+}
+
+func TestPoolJobRecordsPartialEvents(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	job := &poolJob{ctx: ctx, cancel: cancel, req: WorkerRequest{TaskID: "partial-task", SessionID: "partial-session"}}
+	job.recordEvent(WorkerStreamEvent{Delta: "first "})
+	job.recordEvent(WorkerStreamEvent{Delta: "second"})
+	job.recordEvent(WorkerStreamEvent{Usage: &model.Usage{PromptTokens: 20, CompletionTokens: 3}})
+
+	result := job.partialResult()
+	if result.Content != "first second" || result.UsedTokens != 23 || result.Usage == nil {
+		t.Fatalf("partial result = %#v", result)
 	}
 }
 
@@ -205,8 +489,8 @@ func TestProcessPoolCloseCancelsQueuedJobs(t *testing.T) {
 		}()
 		select {
 		case err := <-waitDone:
-			if err == nil || !strings.Contains(err.Error(), "canceled") {
-				t.Errorf("%s Wait() error = %v, want cancellation", name, err)
+			if err == nil || (!strings.Contains(err.Error(), "canceled") && !strings.Contains(err.Error(), "task process pool closed")) {
+				t.Errorf("%s Wait() error = %v, want cancellation cause", name, err)
 			}
 		case <-time.After(time.Second):
 			t.Errorf("%s Wait() did not return promptly", name)
@@ -305,7 +589,7 @@ func TestPoolWorkersGetUniqueNamedRoles(t *testing.T) {
 	}
 
 	// WorkerRole 经 poolJobProcess 透传给任务。
-	job := &poolJob{ctx: context.Background(), cancel: func() {}, req: WorkerRequest{TaskID: "unique-role-1"}}
+	job := &poolJob{ctx: context.Background(), cancel: func(error) {}, req: WorkerRequest{TaskID: "unique-role-1"}}
 	job.setWorker(first)
 	process := &poolJobProcess{job: job}
 	if name, color := process.WorkerRole(); name != first.roleName || color != first.roleColor {
@@ -314,7 +598,7 @@ func TestPoolWorkersGetUniqueNamedRoles(t *testing.T) {
 }
 
 func TestPoolJobProcessWorkerRoleWaitsForWorkerBinding(t *testing.T) {
-	job := &poolJob{ctx: context.Background(), cancel: func() {}, req: WorkerRequest{TaskID: "pending-binding"}}
+	job := &poolJob{ctx: context.Background(), cancel: func(error) {}, req: WorkerRequest{TaskID: "pending-binding"}}
 	process := &poolJobProcess{job: job}
 
 	done := make(chan struct{})

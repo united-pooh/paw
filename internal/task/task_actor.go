@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -43,9 +44,10 @@ type taskActorReply struct {
 }
 
 type taskActorStopCommand struct {
-	Status TaskStatus `json:"status"`
-	Reason string     `json:"reason"`
-	At     time.Time  `json:"at"`
+	Status  TaskStatus   `json:"status"`
+	Reason  string       `json:"reason"`
+	At      time.Time    `json:"at"`
+	Partial WorkerResult `json:"partial,omitempty"`
 }
 
 type taskActorState struct {
@@ -133,6 +135,7 @@ func (a *taskActor) Receive(ctx *actor.Context, msg actor.Msg) {
 		task.FinishedAt = &command.At
 		task.ExitCode = &exitCode
 		task.Error = command.Reason
+		mergeTaskPartialResult(&task, command.Partial)
 		mutation := taskActorMutation{Event: taskEventForStatus(task.Status), Task: task}
 		if err := ctx.Persist(mutation.Event, mutation, actor.Durable); err != nil {
 			a.reply(ctx, taskActorReply{Task: a.state.Task, Found: true, Error: err.Error()})
@@ -140,9 +143,21 @@ func (a *taskActor) Receive(ctx *actor.Context, msg actor.Msg) {
 		}
 		a.state = taskActorState{Task: task, Found: true}
 		if process := a.processes.take(a.id.Key); process != nil {
-			_ = process.Stop()
+			if stopper, ok := process.(ProcessCauseStopper); ok {
+				_ = stopper.StopWithCause(errors.New(command.Reason))
+			} else {
+				_ = process.Stop()
+			}
 		}
-		_ = a.registry.saveOutput(context.Background(), task.ID, WorkerResult{TaskID: task.ID, SessionID: task.SessionID, Error: command.Reason, ExitCode: exitCode})
+		output := command.Partial
+		output.TaskID = task.ID
+		output.SessionID = task.SessionID
+		output.Error = command.Reason
+		output.ExitCode = exitCode
+		if output.UsedTokens == 0 && output.Usage != nil {
+			output.UsedTokens = usageTokenTotal(*output.Usage)
+		}
+		_ = a.registry.saveOutput(context.Background(), task.ID, output)
 		if err := a.publishTask(ctx, task); err != nil {
 			a.reply(ctx, taskActorReply{Task: task, Found: true, Changed: true, Error: err.Error()})
 			return
@@ -253,12 +268,19 @@ func (h *taskActorHost) stop(ctx context.Context, id string, status TaskStatus, 
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	var partial WorkerResult
+	if process := h.processes.get(id); process != nil {
+		if source, ok := process.(ProcessPartialResultSource); ok {
+			partial = source.PartialResult()
+		}
+	}
 	reply, err := h.system.Ref(actor.ActorID{Type: taskActorType, Key: id}).Ask(ctx, actor.Msg{
 		Kind: taskActorStop,
 		Payload: taskActorStopCommand{
-			Status: status,
-			Reason: reason,
-			At:     time.Now().UTC(),
+			Status:  status,
+			Reason:  reason,
+			At:      time.Now().UTC(),
+			Partial: partial,
 		},
 		Durability: actor.Durable,
 	}, taskActorAskTimeout)

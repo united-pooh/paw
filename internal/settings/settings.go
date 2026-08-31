@@ -122,8 +122,9 @@ func NormalizeCompressionMode(mode CompressionMode) CompressionMode {
 }
 
 // DefaultTaskWaitTimeoutMs 是 TaskWait 未显式指定 timeout_ms 时的默认
-// 等待上限（10 分钟）。超时返回当前快照 + timed_out 标记，并非错误。
-const DefaultTaskWaitTimeoutMs = 600000
+// 等待上限（90 分钟，与默认 worker 墙钟上限一致）。超时返回当前快照 +
+// timed_out 标记，并非错误。
+const DefaultTaskWaitTimeoutMs = 90 * 60 * 1000
 
 func DefaultContextMaintenanceConfig() ContextMaintenanceConfig {
 	return ContextMaintenanceConfig{

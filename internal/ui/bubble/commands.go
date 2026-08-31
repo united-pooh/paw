@@ -63,13 +63,13 @@ func (m *appModel) beginModelWorkContext() context.Context {
 		return context.Background()
 	}
 	if m.activeModelCancel != nil {
-		m.activeModelCancel()
+		m.activeModelCancel(context.Canceled)
 	}
 	parent := m.ctx
 	if parent == nil {
 		parent = context.Background()
 	}
-	ctx, cancel := context.WithCancel(parent)
+	ctx, cancel := context.WithCancelCause(parent)
 	m.activeModelCancel = cancel
 	m.modelCancelRequested = false
 	m.toolCancelRequested = false
@@ -86,7 +86,7 @@ func (m *appModel) cancelModelWork() {
 	m.modelCancelRequested = true
 	m.transcriptRefreshDeferred = true
 	if m.activeModelCancel != nil {
-		m.activeModelCancel()
+		m.activeModelCancel(loop.ErrTurnCanceledByUser)
 	}
 }
 
@@ -97,7 +97,7 @@ func (m *appModel) finishModelWork() {
 		return
 	}
 	if m.activeModelCancel != nil {
-		m.activeModelCancel()
+		m.activeModelCancel(context.Canceled)
 		m.activeModelCancel = nil
 	}
 }

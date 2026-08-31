@@ -38,6 +38,17 @@ type trackingBlockingLauncher struct {
 	pid     int
 }
 
+type contextProbeLauncher struct {
+	ctx     context.Context
+	process *blockingProcess
+}
+
+func (l *contextProbeLauncher) Start(ctx context.Context, req WorkerRequest) (Process, error) {
+	l.ctx = ctx
+	l.process = newBlockingProcess(req)
+	return l.process, nil
+}
+
 func (l *trackingBlockingLauncher) Start(_ context.Context, req WorkerRequest) (Process, error) {
 	l.process = newBlockingProcess(req)
 	l.process.pid = l.pid
@@ -52,10 +63,12 @@ func (l *blockingLauncher) Start(ctx context.Context, req WorkerRequest) (Proces
 }
 
 type blockingProcess struct {
-	req  WorkerRequest
-	pid  int
-	once sync.Once
-	done chan struct{}
+	req       WorkerRequest
+	pid       int
+	once      sync.Once
+	done      chan struct{}
+	partial   WorkerResult
+	stopCause error
 }
 
 func newBlockingProcess(req WorkerRequest) *blockingProcess {
@@ -77,8 +90,17 @@ func (p *blockingProcess) Wait() (WorkerResult, error) {
 }
 
 func (p *blockingProcess) Stop() error {
+	return p.StopWithCause(context.Canceled)
+}
+
+func (p *blockingProcess) StopWithCause(cause error) error {
+	p.stopCause = cause
 	p.once.Do(func() { close(p.done) })
 	return nil
+}
+
+func (p *blockingProcess) PartialResult() WorkerResult {
+	return p.partial
 }
 
 type immediateLauncher struct {
@@ -963,6 +985,9 @@ func TestTaskToolsProvideSyncAndStatusAccess(t *testing.T) {
 	if tool.Name() != "Task" {
 		t.Fatalf("tool.Name() = %q, want Task", tool.Name())
 	}
+	if description := strings.ToLower(tool.Description()); !strings.Contains(description, "prefer context_mode empty") || !strings.Contains(description, "background work survives ordinary parent turn failures") {
+		t.Fatalf("tool.Description() = %q", tool.Description())
+	}
 	schema := string(tool.InputSchema())
 	for _, want := range []string{`"required":["prompt"]`, `"context_mode"`, `"run_mode"`, `"description"`} {
 		if !strings.Contains(schema, want) {
@@ -1562,6 +1587,46 @@ func TestStopStopsRunningWorkerAndPersistsStoppedStatus(t *testing.T) {
 	}
 }
 
+func TestStopPreservesPartialWorkerResultAndCause(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	launcher := &trackingBlockingLauncher{pid: os.Getpid()}
+	manager := NewManager(Config{Store: store, Root: root, Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()}, Launcher: launcher})
+	task, err := manager.Launch(context.Background(), Request{Prompt: "partial"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage := tokentracer.Usage{Input: 30, Output: 7}.Normalized()
+	launcher.process.partial = WorkerResult{
+		TaskID: task.ID, SessionID: task.SessionID, Content: "partial answer", Usage: &usage,
+	}
+
+	stopped, err := manager.Stop(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopped.Content != "partial answer" || stopped.UsedTokens != 37 || stopped.Usage == nil {
+		t.Fatalf("stopped task = %#v", stopped)
+	}
+	if launcher.process.stopCause == nil || launcher.process.stopCause.Error() != "stopped" {
+		t.Fatalf("stop cause = %v", launcher.process.stopCause)
+	}
+	data, err := os.ReadFile(stopped.OutputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output WorkerResult
+	if err := json.Unmarshal(data, &output); err != nil {
+		t.Fatal(err)
+	}
+	if output.Content != "partial answer" || output.UsedTokens != 37 || output.Usage == nil || output.Error != "stopped" {
+		t.Fatalf("saved output = %#v", output)
+	}
+}
+
 func TestStopOwnedTasksOnlyInterruptsExactParentTurn(t *testing.T) {
 	root := t.TempDir()
 	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
@@ -1662,6 +1727,30 @@ func TestStopOwnedTasksUsesActorOwnershipAfterRestartWithoutMetadata(t *testing.
 	if !ok || got.Status != TaskRunning {
 		t.Fatalf("Status(%s) = (%#v, %v), want untouched running task", b1.ID, got, ok)
 	}
+}
+
+func TestLaunchDetachesBackgroundWorkerFromParentCancellation(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewJSONLStore(filepath.Join(root, ".paw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	launcher := &contextProbeLauncher{}
+	manager := NewManager(Config{Store: store, Root: root, Settings: fakeSettingsProvider{cfg: settings.DefaultConfig()}, Launcher: launcher})
+	ctx, cancel := context.WithCancel(context.Background())
+
+	task, err := manager.Launch(ctx, Request{Prompt: "detached"})
+	if err != nil {
+		t.Fatalf("Launch() error = %v", err)
+	}
+	cancel()
+	if launcher.ctx == nil || launcher.ctx.Err() != nil {
+		t.Fatalf("background worker context after parent cancel = %v, want live detached context", launcher.ctx)
+	}
+	if got, ok := manager.Status(task.ID); !ok || got.Status != TaskRunning {
+		t.Fatalf("Status(%s) = (%#v, %v), want running", task.ID, got, ok)
+	}
+	_, _ = manager.Stop(context.Background(), task.ID)
 }
 
 func TestTaskToolPropagatesTurnOwnerFromContext(t *testing.T) {

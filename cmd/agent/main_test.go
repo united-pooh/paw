@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -12,7 +13,9 @@ import (
 
 	"paw/internal/model"
 	"paw/internal/session"
+	"paw/internal/task"
 	"paw/internal/tokentracer"
+	"paw/internal/ui/headless"
 )
 
 func TestClearTerminalWindowWritesClearAndScrollbackSequence(t *testing.T) {
@@ -129,8 +132,14 @@ func TestStartTokenTracerFallsBackWhenPortBusy(t *testing.T) {
 }
 
 func TestWorkerUsageUICapturesStructuredUsage(t *testing.T) {
-	workerUI := &workerUsageUI{}
+	var events []task.WorkerStreamEvent
+	workerUI := &workerUsageUI{UI: headless.New(io.Discard), emit: func(event task.WorkerStreamEvent) {
+		events = append(events, event)
+	}}
 
+	if err := workerUI.OnAssistantDelta("partial answer"); err != nil {
+		t.Fatal(err)
+	}
 	workerUI.OnModelUsage(model.Usage{
 		PromptTokens:         120,
 		CompletionTokens:     9,
@@ -143,6 +152,9 @@ func TestWorkerUsageUICapturesStructuredUsage(t *testing.T) {
 	}
 	if usage.Input != 70 || usage.CacheRead != 50 || usage.Output != 9 {
 		t.Fatalf("Usage() = %#v, want input/cache/output split", usage)
+	}
+	if len(events) != 2 || events[0].Delta != "partial answer" || events[1].Usage == nil {
+		t.Fatalf("worker events = %#v", events)
 	}
 }
 
