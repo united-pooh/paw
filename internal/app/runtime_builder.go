@@ -32,10 +32,6 @@ func BuildWorkspaceRuntime(ctx context.Context, opts WorkspaceRuntimeOptions, co
 	if err != nil {
 		return nil, err
 	}
-	if opts.Output == nil {
-		return nil, fmt.Errorf("workspace runtime output is nil")
-	}
-
 	workspace, err := CanonicalWorkspace(root)
 	if err != nil {
 		return nil, err
@@ -44,9 +40,14 @@ func BuildWorkspaceRuntime(ctx context.Context, opts WorkspaceRuntimeOptions, co
 	if err != nil {
 		return nil, err
 	}
+	coordinator := NewWorkspaceCoordinator()
+	output := opts.Output
+	if output == nil {
+		output = NewUIAdapter(workspace.ID, coordinator, eventHub)
+	}
 	runtime := &WorkspaceRuntime{
 		Root: root, ControllerLease: opts.ControllerLease,
-		Coordinator: NewWorkspaceCoordinator(), EventHub: eventHub,
+		Coordinator: coordinator, EventHub: eventHub,
 	}
 	runtime.initializeCloseStages()
 	success := false
@@ -107,7 +108,7 @@ func BuildWorkspaceRuntime(ctx context.Context, opts WorkspaceRuntimeOptions, co
 	runtime.SettingsController = settingsController
 
 	var notifier task.Notifier
-	if value, ok := opts.Output.(task.Notifier); ok {
+	if value, ok := output.(task.Notifier); ok {
 		notifier = value
 	}
 	executable, err := os.Executable()
@@ -142,7 +143,7 @@ func BuildWorkspaceRuntime(ctx context.Context, opts WorkspaceRuntimeOptions, co
 	launcher.Args = append(launcher.Args, "--sandbox-limits="+SandboxLimitsFlag(sandbox))
 
 	registry := tool.NewRegistry()
-	engine := loop.NewEngineWithInstructionRoot(client, opts.Output, registry, store, sessionID, root)
+	engine := loop.NewEngineWithInstructionRoot(client, output, registry, store, sessionID, root)
 	runner, err := sessionactor.NewHost(engine, store, sessionID)
 	if err != nil {
 		return nil, err

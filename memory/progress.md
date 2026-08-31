@@ -166,3 +166,4 @@
 - [x] 任务 13：实现 UI Adapter，将 reasoning/assistant/tool/system 回调投影为稳定 ID、offset、摘要和 detail 事件 <!-- todo:impl-13 -->
 - [x] 任务 14：增加独立 serve FlagSet 和 loopback listen 校验，保持 legacy/worker flags 解析兼容 <!-- todo:impl-14 -->
 - [x] 任务 15：实现 256-bit 一次性 bootstrap exchange、HttpOnly SameSite cookie、Host/Auth/Origin/body-limit/security-header middleware <!-- todo:impl-15 -->
+- [x] 任务 16：实现 bootstrap/workspace/session/export API、serve fragment URL、context shutdown 与 Supervisor 强制收敛 <!-- todo:impl-16 -->

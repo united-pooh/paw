@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"flag"
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestServeOptions(t *testing.T) {
@@ -40,6 +43,37 @@ func TestServeOptions(t *testing.T) {
 				t.Fatalf("parseServeOptions() = %#v, want %#v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestRunServePrintsFragmentURLAndStopsOnContextCancel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	ctx, cancel := context.WithCancel(context.Background())
+	var output bytes.Buffer
+	opened := make(chan string, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- runServe(ctx, serveOptions{listen: "127.0.0.1:0", open: true}, &output, func(url string) { opened <- url })
+	}()
+	var url string
+	select {
+	case url = <-opened:
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve did not emit bootstrap URL")
+	}
+	if !strings.Contains(url, "#bootstrap=") || !strings.Contains(output.String(), url) {
+		t.Fatalf("bootstrap URL = %q output=%q", url, output.String())
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve did not stop after context cancellation")
 	}
 }
 

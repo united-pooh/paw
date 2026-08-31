@@ -237,6 +237,36 @@ func (s *Supervisor) Close(ctx context.Context, id WorkspaceID) error {
 	}
 }
 
+func (s *Supervisor) Shutdown(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var entries []*runtimeEntry
+	s.mu.Lock()
+	for _, entry := range s.entries {
+		if entry.state == runtimeLoaded {
+			entry.state = runtimeClosing
+			entry.done = make(chan struct{})
+			entries = append(entries, entry)
+		}
+	}
+	s.mu.Unlock()
+	var errs []error
+	for _, entry := range entries {
+		if err := contextError(ctx); err != nil {
+			errs = append(errs, err)
+			break
+		}
+		if err := s.finishClose(entry); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 func (s *Supervisor) CloseAll(ctx context.Context) error {
 	if s == nil {
 		return nil
