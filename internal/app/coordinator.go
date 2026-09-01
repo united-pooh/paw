@@ -47,6 +47,22 @@ func (c *WorkspaceCoordinator) RestoreSessionState(sessionID string, version uin
 	return cloneWorkspaceState(c.state)
 }
 
+func (c *WorkspaceCoordinator) RestoreInterruptedTurn(sessionID, turnID string) WorkspaceState {
+	if c == nil {
+		return WorkspaceState{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.state.ActiveTurnID != turnID || c.state.ActiveSessionID != sessionID {
+		return cloneWorkspaceState(c.state)
+	}
+	c.state.ActiveSessionID = ""
+	c.state.ActiveTurnID = ""
+	deletePendingTurnLocked(c.state.Pending, turnID)
+	c.bumpSessionVersionLocked(sessionID)
+	return cloneWorkspaceState(c.state)
+}
+
 func (c *WorkspaceCoordinator) BeginTurn(sessionID, turnID string) (WorkspaceState, error) {
 	if c == nil {
 		return WorkspaceState{}, errors.New("workspace coordinator is nil")

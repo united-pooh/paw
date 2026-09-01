@@ -180,3 +180,5 @@
 - [x] 任务 24/25：trace detail store、详情 API 与前端详情栏 <!-- todo:impl-24-25 -->
 - [x] 任务 26：SSE reset 后重取快照并按新 stream/sequence 重连，reconnectingSnapshot 防并发重载 <!-- todo:impl-26 -->
 - [x] 任务 1–26：后端运行时/事件/命令/SSE/交互/详情与前端工作台全部核心闭环 <!-- todo:impl-1-to-26 -->
+- [x] 任务 1–27：后端运行时/事件/命令/SSE/交互/详情/多工作区切换与前端工作台 <!-- todo:impl-1-to-27 -->
+- [x] 任务 28：重启时 restoreUnfinishedTurns 投影 turn.interrupted、清理 coordinator active/pending，恢复排队输入时显式传入 event 上下文 <!-- todo:impl-28 -->

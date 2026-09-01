@@ -94,7 +94,7 @@ func BuildWorkspaceRuntime(ctx context.Context, opts WorkspaceRuntimeOptions, co
 		return nil, fmt.Errorf("初始化 session store 失败: %w", err)
 	}
 	runtime.Store = store
-	if err := restoreQueuedInputs(ctx, store, runtime.Coordinator); err != nil {
+	if err := restoreQueuedInputs(ctx, store, runtime.Coordinator, workspace.ID, eventHub); err != nil {
 		return nil, fmt.Errorf("恢复排队输入失败: %w", err)
 	}
 	runtime.SessionService = NewSessionService(store, runtime.Coordinator)
@@ -237,7 +237,36 @@ func BuildWorkspaceRuntime(ctx context.Context, opts WorkspaceRuntimeOptions, co
 	return runtime, nil
 }
 
-func restoreQueuedInputs(ctx context.Context, store *session.JSONLStore, coordinator *WorkspaceCoordinator) error {
+// restoreUnfinishedTurns 把重启前没有终态的 turn 投影为 interrupted：
+// 进程重启后无法恢复的流式上下文必须显式标记，而不是伪装成仍在运行。
+func restoreUnfinishedTurns(sessionID string, records []session.Record, coordinator *WorkspaceCoordinator, events *EventHub, workspaceID WorkspaceID) {
+	state := map[string]bool{}
+	order := []string{}
+	for _, record := range records {
+		switch record.Kind {
+		case session.JournalTurnStarted:
+			state[record.TurnID] = true
+			order = append(order, record.TurnID)
+		case session.JournalTurnCompleted, session.JournalTurnFailed, session.JournalTurnStopped:
+			state[record.TurnID] = false
+		}
+	}
+	for _, turnID := range order {
+		if !state[turnID] {
+			continue
+		}
+		coordinator.RestoreInterruptedTurn(sessionID, turnID)
+		event, err := NewAppEvent(workspaceID, sessionID, turnID, EventTurnInterrupted, time.Now(), 0, map[string]any{
+			"turn_id": turnID, "detected_at": time.Now().UTC(), "reason": "service restarted before the turn reached a terminal state",
+		})
+		if err != nil || events == nil {
+			continue
+		}
+		_, _ = events.Publish(event)
+	}
+}
+
+func restoreQueuedInputs(ctx context.Context, store *session.JSONLStore, coordinator *WorkspaceCoordinator, workspaceID WorkspaceID, eventHub *EventHub) error {
 	page, err := store.ListSessionPage(ctx, session.SessionPageRequest{Limit: 100})
 	if err != nil {
 		return err
@@ -274,6 +303,7 @@ func restoreQueuedInputs(ctx context.Context, store *session.JSONLStore, coordin
 				queue = append(queue, InputDraft{CommandID: receipt.CommandID, Content: receipt.Input.Content, CreatedAt: receipt.Input.CreatedAt})
 			}
 			coordinator.RestoreSessionState(summary.SessionID, version, queue)
+			restoreUnfinishedTurns(summary.SessionID, records, coordinator, eventHub, workspaceID)
 		}
 		if page.NextCursor == "" {
 			break

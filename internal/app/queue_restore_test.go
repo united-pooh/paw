@@ -31,7 +31,7 @@ func TestRestoreQueuedInputsKeepsOnlyUnconsumedCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	coordinator := NewWorkspaceCoordinator()
-	if err := restoreQueuedInputs(ctx, store, coordinator); err != nil {
+	if err := restoreQueuedInputs(ctx, store, coordinator, "workspace", nil); err != nil {
 		t.Fatal(err)
 	}
 	state := coordinator.SessionSnapshot("s1")
