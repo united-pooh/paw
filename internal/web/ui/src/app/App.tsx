@@ -31,7 +31,10 @@ export function App() {
       streamID: snapshot.stream_id,
       sequence: snapshot.event_sequence,
       store,
-      reloadSnapshot: async () => { await refreshSession(targetWorkspace, snapshot.session_id); },
+      reloadSnapshot: async () => {
+        const latest = await refreshSession(targetWorkspace, snapshot.session_id);
+        if (latest) connect(targetWorkspace, latest);
+      },
       onEvent: (event) => {
         if (event.session_id === snapshot.session_id && ['turn.completed', 'turn.failed', 'turn.cancelled'].includes(event.type)) {
           void refreshSession(targetWorkspace, snapshot.session_id, false).then((latest) => {

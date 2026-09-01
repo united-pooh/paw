@@ -38,7 +38,7 @@ export class EventStream {
   }
 
   private connect(): void {
-    if (this.disposed) return;
+    if (this.disposed || this.reconnectingSnapshot) return;
     const after = `${this.options.streamID}:${this.options.sequence}`;
     const url = `/api/workspaces/${encodeURIComponent(this.options.workspaceID)}/events?after=${encodeURIComponent(after)}`;
     const createSource = this.options.createSource ?? ((target) => new EventSource(target));
@@ -70,7 +70,12 @@ export class EventStream {
         this.options.streamID = current.streamID || parsed.stream_id;
         this.options.sequence = current.sequence;
         this.options.onEvent?.(parsed);
-        if (parsed.type === 'event.reset_required') void this.options.reloadSnapshot();
+        if (parsed.type === 'event.reset_required' && !this.reconnectingSnapshot) {
+          this.reconnectingSnapshot = true;
+          void Promise.resolve()
+            .then(this.options.reloadSnapshot)
+            .finally(() => { this.reconnectingSnapshot = false; });
+        }
       }) as EventListener);
     }
   }
@@ -84,4 +89,6 @@ export class EventStream {
       this.connect();
     }, delay);
   }
+
+  private reconnectingSnapshot = false;
 }
