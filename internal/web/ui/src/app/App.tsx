@@ -130,6 +130,9 @@ export function App() {
       sessions={sessions}
       snapshot={workbench.snapshot}
       parts={workbench.parts}
+      interactions={(() => { const entries = Object.entries(workbench.interactions ?? {}); const [requestID, value] = entries[0] ?? ['', undefined]; return value ? { requestID, ...value } : null; })()}
+      onAnswer={(wid, sid, requestID, selectedOption) => { void run(() => api.answerQuestion(wid, sid, requestID, { selected_option: selectedOption }), false); }}
+      onDecide={(wid, sid, requestID, decision) => { void run(() => api.decidePermission(wid, sid, requestID, { decision }), false); }}
       onOpenWorkspace={openWorkspace}
       onCreateSession={createSession}
       onSelectWorkspace={(id) => { void selectWorkspace(id); }}

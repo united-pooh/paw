@@ -39,6 +39,7 @@ type WorkspaceRuntime struct {
 	SessionService     *SessionService
 	TurnService        *TurnService
 	UIAdapter          *UIAdapter
+	Interactions       *InteractionHub
 	EventHub           *EventHub
 
 	configManager *configv2.Manager
@@ -126,6 +127,12 @@ func (r *WorkspaceRuntime) initializeCloseStages() {
 				return nil
 			}
 			return r.EventHub.Close()
+		}},
+		{name: "interactions", close: func(context.Context) error {
+			if r.Interactions == nil {
+				return nil
+			}
+			return r.Interactions.Close()
 		}},
 		{name: "lease", close: func(context.Context) error {
 			if r.ControllerLease == nil {

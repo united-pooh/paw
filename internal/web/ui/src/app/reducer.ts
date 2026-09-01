@@ -8,6 +8,11 @@ export interface WorkbenchState {
   sequence: number;
   parts: Record<string, StreamingPart>;
   connection: ConnectionState;
+  interactions: {
+    [requestID: string]:
+      | { kind: 'question'; question: { prompt: string; mode: string; options: { id: string; label: string; description?: string }[] } }
+      | { kind: 'permission'; permission: { operation: string; canonical_target: string } };
+  };
   resetReason?: string;
   diagnostic?: string;
 }
@@ -22,7 +27,8 @@ export const initialState: WorkbenchState = {
   streamID: '',
   sequence: 0,
   parts: {},
-  connection: 'idle'
+  connection: 'idle',
+  interactions: {}
 };
 
 export function reducer(state: WorkbenchState, action: StoreAction): WorkbenchState {
@@ -31,11 +37,18 @@ export function reducer(state: WorkbenchState, action: StoreAction): WorkbenchSt
   }
   if (action.type === 'snapshot.loaded') {
     const parts = Object.fromEntries((action.snapshot.parts ?? []).map((part) => [part.part_id, part]));
+    const interactions: WorkbenchState['interactions'] = {};
+    for (const pending of action.snapshot.pending ?? []) {
+      interactions[pending.request_id] = pending.kind === 'question'
+        ? { kind: 'question', question: { prompt: '', mode: 'single', options: [] } }
+        : { kind: 'permission', permission: { operation: '', canonical_target: '' } };
+    }
     return {
       snapshot: action.snapshot,
       streamID: action.snapshot.stream_id,
       sequence: action.snapshot.event_sequence,
       parts,
+      interactions,
       connection: 'live'
     };
   }
@@ -109,7 +122,32 @@ function reduceEvent(state: WorkbenchState, event: AppEvent): WorkbenchState {
     }
     return commitEvent(state, event, { ...state.parts, [payload.part_id]: { ...current, completed: true } });
   }
+  if (event.type === 'question.requested') {
+    const payload = event.payload as { request_id: string; prompt: string; mode: string; options: { id: string; label: string; description?: string }[] };
+    return { ...state, interactions: { ...state.interactions, [payload.request_id]: { kind: 'question', question: { prompt: payload.prompt, mode: payload.mode, options: payload.options } } }, sequence: event.sequence, streamID: event.stream_id };
+  }
+  if (event.type === 'permission.requested') {
+    const payload = event.payload as { request_id: string; operation: string; canonical_target: string };
+    return { ...state, interactions: { ...state.interactions, [payload.request_id]: { kind: 'permission', permission: { operation: payload.operation, canonical_target: payload.canonical_target } } }, sequence: event.sequence, streamID: event.stream_id };
+  }
+  if (event.type === 'question.resolved' || event.type === 'permission.resolved') {
+    const payload = event.payload as { request_id: string };
+    return removeInteraction(state, event, payload.request_id);
+  }
+  if (event.type === 'interaction.expired') {
+    const payload = event.payload as { request_id: string };
+    return removeInteraction(state, event, payload.request_id);
+  }
   return { ...state, sequence: event.sequence, streamID: event.stream_id };
+}
+
+function removeInteraction(state: WorkbenchState, event: AppEvent, requestID: string): WorkbenchState {
+  if (!(requestID in state.interactions)) {
+    return { ...state, sequence: event.sequence, streamID: event.stream_id };
+  }
+  const interactions = { ...state.interactions };
+  delete interactions[requestID];
+  return { ...state, interactions, sequence: event.sequence, streamID: event.stream_id };
 }
 
 function reduceDelta(state: WorkbenchState, event: AppEvent, payload: DeltaPayload): WorkbenchState {

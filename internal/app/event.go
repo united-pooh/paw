@@ -144,6 +144,11 @@ type QuestionOptionPayload struct {
 	Description string `json:"description,omitempty"`
 }
 
+type SelectedOptionPayload struct {
+	ID    string `json:"id"`
+	Label string `json:"label,omitempty"`
+}
+
 type QuestionRequestedPayload struct {
 	RequestID string                  `json:"request_id"`
 	Prompt    string                  `json:"prompt"`

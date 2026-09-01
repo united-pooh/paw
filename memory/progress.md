@@ -173,4 +173,5 @@
 - [x] 任务 20：实现只读现代工作台：工作区/会话侧栏、对话/轨迹切换、详情抽屉、安全 Markdown 与 DSH 风格设计 token <!-- todo:impl-20 -->
 - [x] 任务 21：接通 Session Create/Fork、Submit、active turn/receipt 生命周期、busy/version 错误和带本地草稿/稳定 command ID 的 Composer <!-- todo:impl-21 -->
 - [x] 任务 22：接通 active_turn 校验下的 steer、queue、cancel，持久化 command input/receipt，并同步 Composer 运行状态与队列事件 <!-- todo:impl-22 -->
-- [x] 调查“复述目标 + 宣布下一步”消息的实际来源与关闭方式 <!-- todo:investigate-progress-restatement -->
+- [x] 调查“复述目标 + 宣布下一步”消息的实际来源与关闭方式：用户端 harness 自动注入的续行提示，非 agent.md 要求 <!-- todo:investigate-progress-restatement -->
+- [x] 任务 23：实现 InteractionHub question/permission 请求-应答、coordinator pending 状态、SSE 事件、HTTP answer/decision 幂等端点与前端 InteractionBanner <!-- todo:impl-23 -->

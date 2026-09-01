@@ -44,6 +44,14 @@ export const api = {
     requestJSON(`/api/workspaces/${encodeURIComponent(workspaceID)}/sessions/${encodeURIComponent(sessionID)}/cancel`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command)
     }),
+  answerQuestion: (workspaceID: string, sessionID: string, requestID: string, command: { cancelled?: boolean; selected_option?: string }): Promise<void> =>
+    requestJSON(`/api/workspaces/${encodeURIComponent(workspaceID)}/sessions/${encodeURIComponent(sessionID)}/interactions/${encodeURIComponent(requestID)}/answer`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command)
+    }),
+  decidePermission: (workspaceID: string, sessionID: string, requestID: string, command: { decision: 'allow_once' | 'deny' }): Promise<void> =>
+    requestJSON(`/api/workspaces/${encodeURIComponent(workspaceID)}/sessions/${encodeURIComponent(sessionID)}/interactions/${encodeURIComponent(requestID)}/decision`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command)
+    }),
   exchangeBootstrap: (token: string): Promise<{ status: string }> =>
     requestJSON('/api/auth/exchange', {
       method: 'POST',

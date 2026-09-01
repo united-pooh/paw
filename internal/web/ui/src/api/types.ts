@@ -65,6 +65,13 @@ export interface SessionPage {
   next_cursor?: string;
 }
 
+export interface PendingInteraction {
+  request_id: string;
+  session_id: string;
+  turn_id?: string;
+  kind: 'question' | 'permission';
+}
+
 export interface SessionSnapshot {
   session_id: string;
   session_version: number;
@@ -72,7 +79,7 @@ export interface SessionSnapshot {
   earlier_cursor?: string;
   active_turn_id?: string;
   queue?: unknown[];
-  pending?: unknown[];
+  pending?: PendingInteraction[];
   stream_id: string;
   event_sequence: number;
   parts?: StreamingPart[];
@@ -97,8 +104,19 @@ export interface PartCompletedPayload { part_id: string; final_length: number }
 export interface ResetPayload { reason: string; current_stream_id: string; latest_sequence: number }
 export interface TurnPayload { turn_id: string; status?: string }
 export interface QueueUpdatedPayload { items: unknown[]; session_version: number }
+export interface QuestionOption { id: string; label: string; description?: string }
+export interface QuestionRequestedPayload { request_id: string; prompt: string; mode: string; options: QuestionOption[]; created_at: string }
+export interface QuestionResolvedPayload { request_id: string; answer?: { cancelled?: boolean; selected_options?: QuestionOption[] }; resolved_at: string }
+export interface PermissionRequestedPayload { request_id: string; operation: string; canonical_target: string; created_at: string }
+export interface PermissionResolvedPayload { request_id: string; decision: 'allow_once' | 'deny'; resolved_at: string }
+export interface InteractionExpiredPayload { request_id: string; kind: string; reason: string; expired_at: string }
 
 export type KnownAppEvent =
+  | AppEventBase<'question.requested', QuestionRequestedPayload>
+  | AppEventBase<'question.resolved', QuestionResolvedPayload>
+  | AppEventBase<'permission.requested', PermissionRequestedPayload>
+  | AppEventBase<'permission.resolved', PermissionResolvedPayload>
+  | AppEventBase<'interaction.expired', InteractionExpiredPayload>
   | AppEventBase<'turn.started', TurnPayload>
   | AppEventBase<'turn.completed', TurnPayload>
   | AppEventBase<'turn.failed', TurnPayload>

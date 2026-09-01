@@ -58,6 +58,8 @@ export class EventStream {
     };
     for (const type of [
       'turn.started', 'turn.completed', 'turn.failed', 'turn.cancelled', 'queue.updated',
+      'question.requested', 'question.resolved',
+      'permission.requested', 'permission.resolved', 'interaction.expired',
       'assistant.part.started', 'assistant.delta', 'assistant.part.completed',
       'reasoning.started', 'reasoning.delta', 'reasoning.completed', 'event.reset_required'
     ]) {

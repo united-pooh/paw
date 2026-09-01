@@ -45,6 +45,10 @@ h1 { font-size: 19px; margin: 0; }
 .readonly-composer textarea, .composer textarea { flex: 1; min-height: 58px; border: 0; resize: none; outline: 0; background: transparent; }
 .readonly-composer button, .composer button { align-self: end; border: 0; border-radius: 999px; padding: 10px 18px; background: var(--accent); color: white; }
 .composer-wrap { position: sticky; bottom: 0; }
+.interaction-banner { width: min(780px, calc(100% - 48px)); margin: 0 auto 12px; border: 1px solid #c48831; background: #fff8e8; border-radius: 14px; padding: 14px 16px; display: grid; gap: 10px; }
+.interaction-actions { display: flex; gap: 8px; }
+.interaction-actions button { border: 0; border-radius: 999px; padding: 8px 16px; background: var(--text); color: white; }
+.permission-target { font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .composer-mode, .queue-indicator { width: min(780px, calc(100% - 48px)); margin: 0 auto 8px; color: var(--muted); font-size: 12px; }
 .composer-mode { display: flex; gap: 6px; }
 .composer-mode button { border: 1px solid var(--border); border-radius: 999px; background: var(--surface); padding: 5px 10px; }

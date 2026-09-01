@@ -5,6 +5,7 @@ import { SessionList } from '../features/sessions/SessionList';
 import { ConversationView } from '../features/conversation/ConversationView';
 import { TraceView } from '../features/trace/TraceView';
 import { TraceDetailPanel } from '../features/trace/TraceDetailPanel';
+import { InteractionBanner, type PendingInteractionState } from '../features/interactions/InteractionBanner';
 import { Composer } from './Composer';
 
 export interface WorkbenchShellProps {
@@ -20,9 +21,12 @@ export interface WorkbenchShellProps {
   onSteer?: (workspaceID: string, sessionID: string, text: string, commandID: string, turnID: string) => Promise<void>;
   onQueue?: (workspaceID: string, sessionID: string, text: string, commandID: string, turnID: string) => Promise<void>;
   onCancel?: (workspaceID: string, sessionID: string, commandID: string, turnID: string) => Promise<void>;
+  interactions?: PendingInteractionState | null;
+  onAnswer?: (workspaceID: string, sessionID: string, requestID: string, selectedOption: string) => void;
+  onDecide?: (workspaceID: string, sessionID: string, requestID: string, decision: 'allow_once' | 'deny') => void;
 }
 
-export function WorkbenchShell({ workspaces, sessions, snapshot, parts, onSelectWorkspace, onSelectSession, onOpenWorkspace, onCreateSession, onSubmit, onSteer, onQueue, onCancel }: WorkbenchShellProps) {
+export function WorkbenchShell({ workspaces, sessions, snapshot, parts, interactions, onSelectWorkspace, onSelectSession, onOpenWorkspace, onCreateSession, onSubmit, onSteer, onQueue, onCancel, onAnswer, onDecide }: WorkbenchShellProps) {
   const [workspaceID, setWorkspaceID] = useState<string | undefined>(workspaces[0]?.id);
   const [sessionID, setSessionID] = useState<string | undefined>(snapshot?.session_id ?? sessions[0]?.session_id);
   const [tab, setTab] = useState<'conversation' | 'trace'>('conversation');
@@ -37,6 +41,13 @@ export function WorkbenchShell({ workspaces, sessions, snapshot, parts, onSelect
     <section className="main-workspace">
       <header className="topbar"><div><h1>{sessions.find((item) => item.session_id === selectedSessionID)?.title || '浏览器工作台'}</h1><span className="connection-badge">本地连接</span></div><nav><button className={tab === 'conversation' ? 'active' : ''} onClick={() => setTab('conversation')} type="button">对话</button><button className={tab === 'trace' ? 'active' : ''} onClick={() => setTab('trace')} type="button">轨迹</button></nav></header>
       {tab === 'conversation' ? <ConversationView snapshot={activeSnapshot} parts={parts} onInspect={inspect} /> : <TraceView parts={parts} selected={selectedPart} onSelect={setSelectedPart} />}
+      {interactions && (
+        <InteractionBanner
+          pending={interactions}
+          onAnswer={(requestID, selectedOption) => onAnswer?.(selectedWorkspaceID ?? '', selectedSessionID ?? '', requestID, selectedOption)}
+          onDecide={(requestID, decision) => onDecide?.(selectedWorkspaceID ?? '', selectedSessionID ?? '', requestID, decision)}
+        />
+      )}
       {selectedWorkspaceID && selectedSessionID && onSubmit ? <Composer key={`${selectedWorkspaceID}:${selectedSessionID}`} workspaceID={selectedWorkspaceID} sessionID={selectedSessionID} activeTurnID={activeSnapshot?.active_turn_id} queueCount={activeSnapshot?.queue?.length ?? 0}
         onSubmit={(text, commandID) => onSubmit(selectedWorkspaceID, selectedSessionID, text, commandID)}
         onSteer={onSteer ? (text, commandID, turnID) => onSteer(selectedWorkspaceID, selectedSessionID, text, commandID, turnID) : undefined}
