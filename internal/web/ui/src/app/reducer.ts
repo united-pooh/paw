@@ -20,7 +20,8 @@ export interface WorkbenchState {
 export type StoreAction =
   | { type: 'snapshot.loaded'; snapshot: SessionSnapshot }
   | { type: 'event.received'; event: AppEvent }
-  | { type: 'connection.changed'; connection: ConnectionState };
+  | { type: 'connection.changed'; connection: ConnectionState }
+  | { type: 'workspace.switched' };
 
 export const initialState: WorkbenchState = {
   snapshot: null,
@@ -32,6 +33,9 @@ export const initialState: WorkbenchState = {
 };
 
 export function reducer(state: WorkbenchState, action: StoreAction): WorkbenchState {
+  if (action.type === 'workspace.switched') {
+    return { ...initialState, connection: state.connection === 'fatal' ? 'idle' : state.connection };
+  }
   if (action.type === 'connection.changed') {
     return { ...state, connection: action.connection };
   }

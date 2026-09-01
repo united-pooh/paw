@@ -33,6 +33,18 @@ it('handles UTF-8 offsets, duplicates, gaps and leaves session version unchanged
   expect(reducer(duplicate, { type: 'event.received', event: event(3, 'assistant.delta', { part_id: 'p1', offset: 99, text: 'x' }) }).resetReason).toBe('part_offset_gap');
 });
 
+it('workspace.switched clears transient state while keeping connection', () => {
+  let state = reducer(initialState, { type: 'snapshot.loaded', snapshot });
+  state = reducer(state, { type: 'event.received', event: event(3, 'question.requested', { request_id: 'q1', prompt: 'Pick', mode: 'single', options: [], created_at: new Date().toISOString() }) });
+  expect(Object.keys(state.interactions)).toHaveLength(1);
+  state = reducer(state, { type: 'workspace.switched' });
+  expect(state.snapshot).toBeNull();
+  expect(state.parts).toEqual({});
+  expect(state.interactions).toEqual({});
+  expect(state.sequence).toBe(0);
+  expect(state.connection).toBe('live');
+});
+
 it('updates active turn and queue state from command lifecycle events', () => {
   let state = reducer(initialState, { type: 'snapshot.loaded', snapshot });
   state = reducer(state, { type: 'event.received', event: { ...event(3, 'turn.started', { turn_id: 't2' }), turn_id: 't2', entity_version: 5 } });

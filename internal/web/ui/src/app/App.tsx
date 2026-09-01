@@ -49,16 +49,18 @@ export function App() {
     next.start();
   };
 
-  const selectSession = async (targetWorkspace: string, targetSession: string): Promise<void> => {
+  const selectSession = async (targetWorkspace: string, targetSession: string, publish = true): Promise<void> => {
     setSessionID(targetSession);
-    const snapshot = await refreshSession(targetWorkspace, targetSession);
+    const snapshot = await refreshSession(targetWorkspace, targetSession, publish);
     if (snapshot) connect(targetWorkspace, snapshot);
   };
 
   const selectWorkspace = async (targetWorkspace: string): Promise<void> => {
+    stream.current?.dispose();
+    stream.current = null;
+    store.dispatch({ type: 'workspace.switched' });
     setWorkspaceID(targetWorkspace);
     setSessionID(undefined);
-    stream.current?.dispose();
     const page = await api.sessions(targetWorkspace);
     setSessions(page.items);
     if (page.items[0]) await selectSession(targetWorkspace, page.items[0].session_id);

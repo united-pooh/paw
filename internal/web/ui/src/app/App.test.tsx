@@ -12,7 +12,7 @@ beforeEach(() => {
 
 afterEach(() => vi.unstubAllGlobals());
 
-it('renders the empty workspace entry after bootstrap', async () => {
+it('clears in-flight state when switching workspaces', async () => {
   render(<App />);
   expect(await screen.findByRole('heading', { name: '浏览器工作台' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '打开工作区' })).toBeInTheDocument();
