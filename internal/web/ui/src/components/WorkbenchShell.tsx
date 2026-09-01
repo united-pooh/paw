@@ -54,6 +54,12 @@ export function WorkbenchShell({ workspaces, sessions, snapshot, parts, interact
         onQueue={onQueue ? (text, commandID, turnID) => onQueue(selectedWorkspaceID, selectedSessionID, text, commandID, turnID) : undefined}
         onCancel={onCancel ? (commandID, turnID) => onCancel(selectedWorkspaceID, selectedSessionID, commandID, turnID) : undefined} /> : <div className="readonly-composer"><textarea aria-label="消息" placeholder="请选择会话" disabled /><button type="button" disabled>发送</button></div>}
     </section>
-    <TraceDetailPanel part={selectedPart ? parts[selectedPart] : undefined} onClose={() => setSelectedPart(undefined)} />
+    <TraceDetailPanel
+      workspaceID={selectedWorkspaceID}
+      sessionID={selectedSessionID}
+      part={selectedPart ? parts[selectedPart] : undefined}
+      detailID={selectedPart && selectedPart.startsWith('detail_') ? selectedPart : undefined}
+      onClose={() => setSelectedPart(undefined)}
+    />
   </main>;
 }
