@@ -179,7 +179,7 @@ func buildContinuationPrompt(decision CompletionDecision, snapshot todo.Snapshot
 	if decision.StaleTodoReminder {
 		fmt.Fprintf(&b, "提醒：todo 快照已连续 %d 轮未更新。如任务状态有变化（含已完成项），请立即调用 update_todo 标记，不要攒到最后一次性更新。\n", decision.StaleTodoTurns)
 	}
-	b.WriteString("\n请先检查当前状态，用一句话向用户说明你接下来要做什么，然后直接执行下一项最有价值的工作；必要时更新 todo，修改代码后执行相关验证。只有确认全部目标完成后才输出最终总结。")
+	b.WriteString("\n请先检查当前状态，然后直接执行下一项最有价值的工作；必要时更新 todo。")
 	return b.String()
 }
 

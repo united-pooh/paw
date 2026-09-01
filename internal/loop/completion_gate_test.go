@@ -74,12 +74,8 @@ func TestBuildContinuationPromptIncludesPendingItems(t *testing.T) {
 		{ID: "one", Content: "run tests", Status: todo.StatusPending},
 		{ID: "two", Content: "done", Status: todo.StatusCompleted},
 	}}, 0)
-	if prompt == "" || !containsAll(prompt, "run tests", "todo remains") {
+	if prompt == "" || !containsAll(prompt, "run tests", "todo remains", "直接执行下一项最有价值的工作") {
 		t.Fatalf("prompt = %q", prompt)
-	}
-	// 续行回合必须先有一句对用户可见的进展说明，避免“无声续行”。
-	if !containsAll(prompt, "用一句话向用户说明") {
-		t.Fatalf("prompt = %q, want visible-progress instruction", prompt)
 	}
 }
 
