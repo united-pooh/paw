@@ -182,3 +182,5 @@
 - [x] 任务 1–26：后端运行时/事件/命令/SSE/交互/详情与前端工作台全部核心闭环 <!-- todo:impl-1-to-26 -->
 - [x] 任务 1–27：后端运行时/事件/命令/SSE/交互/详情/多工作区切换与前端工作台 <!-- todo:impl-1-to-27 -->
 - [x] 任务 28：重启时 restoreUnfinishedTurns 投影 turn.interrupted、清理 coordinator active/pending，恢复排队输入时显式传入 event 上下文 <!-- todo:impl-28 -->
+- [x] 任务 1–28：后端运行时/事件/命令/SSE/交互/详情/多工作区切换/重启投影与前端工作台 <!-- todo:impl-1-to-28 -->
+- [x] 任务 29：真实 E2E fixture 与 Playwright 测试；修复 projection 把 receipt 误归 legacy turn、竞态丢弃落伍快照、refreshNow 闭包过期 <!-- todo:impl-29 -->

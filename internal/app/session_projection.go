@@ -123,7 +123,8 @@ func projectTurns(records []session.Record, metadata []session.TurnMetadata) []T
 	for _, record := range records {
 		turnID := strings.TrimSpace(record.TurnID)
 		if turnID == "" {
-			turnID = "legacy"
+			// receipt 等管理记录没有 turn 归属，不属于对话投影。
+			continue
 		}
 		turn := ensure(turnID)
 		switch record.Kind {

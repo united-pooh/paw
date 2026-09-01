@@ -40,6 +40,15 @@ export function reducer(state: WorkbenchState, action: StoreAction): WorkbenchSt
     return { ...state, connection: action.connection };
   }
   if (action.type === 'snapshot.loaded') {
+    // 同一会话下，落伍于已应用事件水位的快照是并发刷新的竞态产物；
+    // 应用它会把 SSE 已推进的状态回滚，必须丢弃。
+    if (
+      state.snapshot &&
+      state.snapshot.session_id === action.snapshot.session_id &&
+      action.snapshot.event_sequence < state.sequence
+    ) {
+      return state;
+    }
     const parts = Object.fromEntries((action.snapshot.parts ?? []).map((part) => [part.part_id, part]));
     const interactions: WorkbenchState['interactions'] = {};
     for (const pending of action.snapshot.pending ?? []) {

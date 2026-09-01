@@ -55,6 +55,13 @@ export function App() {
     if (snapshot) connect(targetWorkspace, snapshot);
   };
 
+  // 用户提交后立即重取快照：fixture runner 是同步完成的，终态可能早于
+  // SSE 事件被浏览器渲染，直接刷新保证 UI 与持久化状态一致。参数在调用时
+  // 传入，避免闭包捕获过期的 state。
+  const refreshNow = (targetWorkspace = workspaceID, targetSession = sessionID): void => {
+    if (targetWorkspace && targetSession) void refreshSession(targetWorkspace, targetSession, true);
+  };
+
   const selectWorkspace = async (targetWorkspace: string): Promise<void> => {
     stream.current?.dispose();
     stream.current = null;
@@ -145,6 +152,7 @@ export function App() {
       onSubmit={(wid, sid, text, id) => run(async () => {
         const version = workbench.snapshot?.session_id === sid ? workbench.snapshot.session_version : 0;
         await api.submitMessage(wid, sid, { command_id: id, session_version: version, text });
+        refreshNow(wid, sid);
       })}
       onSteer={(wid, sid, text, id, turnID) => run(() => api.steer(wid, sid, { command_id: id, active_turn_id: turnID, text }))}
       onQueue={(wid, sid, text, id, turnID) => run(() => api.queue(wid, sid, { command_id: id, active_turn_id: turnID, text }))}
