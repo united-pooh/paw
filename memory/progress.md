@@ -176,3 +176,6 @@
 - [x] 调查“复述目标 + 宣布下一步”消息的实际来源与关闭方式：用户端 harness 自动注入的续行提示，非 agent.md 要求 <!-- todo:investigate-progress-restatement -->
 - [x] 任务 23：实现 InteractionHub question/permission 请求-应答、coordinator pending 状态、SSE 事件、HTTP answer/decision 幂等端点与前端 InteractionBanner <!-- todo:impl-23 -->
 - [x] 任务 25：实现 bounded TraceDetailStore、scoped /trace/{event_id} 详情 API、2MiB 截断与前端详情栏 loading/error/copy 状态 <!-- todo:impl-25 -->
+- [x] 任务 1–23：canonical path、lease、session root、runtime、governor、supervisor、coordinator、session service、事件/快照、receipt、UI adapter、serve、auth、API、SSE、前端工具链、store/reducer、只读工作台、submit、steer/queue/cancel、question/permission <!-- todo:impl-1-to-23 -->
+- [x] 任务 24/25：trace detail store、详情 API 与前端详情栏 <!-- todo:impl-24-25 -->
+- [x] 任务 26：SSE reset 后重取快照并按新 stream/sequence 重连，reconnectingSnapshot 防并发重载 <!-- todo:impl-26 -->
