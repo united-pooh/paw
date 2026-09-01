@@ -114,6 +114,38 @@ func TestEngineSubmitSteerUsesAdmissionGate(t *testing.T) {
 	}
 }
 
+func TestPreparedSteerBlocksCompletionUntilCommitted(t *testing.T) {
+	state := &promptState{}
+	state.beginSteerAdmission()
+	admission, ok := state.reserveSteer("later")
+	if !ok {
+		t.Fatal("reserveSteer() = false")
+	}
+	if state.trySealSteerAdmission() {
+		t.Fatal("trySealSteerAdmission() sealed while steer reservation was pending")
+	}
+	admission.Commit()
+	if got := state.drain(); !reflect.DeepEqual(got, []string{"later"}) {
+		t.Fatalf("drain() = %#v", got)
+	}
+}
+
+func TestPreparedSteerAbortReleasesCompletionGate(t *testing.T) {
+	state := &promptState{}
+	state.beginSteerAdmission()
+	admission, ok := state.reserveSteer("discard")
+	if !ok {
+		t.Fatal("reserveSteer() = false")
+	}
+	admission.Abort()
+	if !state.trySealSteerAdmission() {
+		t.Fatal("trySealSteerAdmission() stayed open after abort")
+	}
+	if got := state.pendingCount(); got != 0 {
+		t.Fatalf("pendingCount() = %d", got)
+	}
+}
+
 func TestRunTurnSteerContinuesPlainTextTurn(t *testing.T) {
 	first := make(chan model.StreamEvent, 2)
 	second := make(chan model.StreamEvent, 2)

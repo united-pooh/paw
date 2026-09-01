@@ -104,6 +104,7 @@ type webBlockingTurnRunner struct {
 	current string
 	started chan struct{}
 	release chan struct{}
+	steers  []string
 }
 
 func (r *webBlockingTurnRunner) CurrentSessionID() string {
@@ -117,8 +118,23 @@ func (r *webBlockingTurnRunner) LoadSession(_ context.Context, sessionID string)
 	r.mu.Unlock()
 	return loop.SessionLoadResult{}, nil
 }
+func (r *webBlockingTurnRunner) PrepareSteer(input string) (loop.SteerAdmission, bool) {
+	return &webSteerAdmission{commit: func() {
+		r.mu.Lock()
+		r.steers = append(r.steers, input)
+		r.mu.Unlock()
+	}}, true
+}
+
+type webSteerAdmission struct {
+	once   sync.Once
+	commit func()
+}
+
+func (a *webSteerAdmission) Commit() { a.once.Do(a.commit) }
+func (a *webSteerAdmission) Abort()  { a.once.Do(func() {}) }
 func (r *webBlockingTurnRunner) RunTurnWithTiming(ctx context.Context, _ string, _ string, _ time.Time) (loop.TurnExecution, error) {
-	close(r.started)
+	r.started <- struct{}{}
 	select {
 	case <-r.release:
 	case <-ctx.Done():
@@ -144,7 +160,7 @@ func TestMessageHandlerAcceptsSubmitAndReturnsBusy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner := &webBlockingTurnRunner{current: "s1", started: make(chan struct{}), release: make(chan struct{})}
+	runner := &webBlockingTurnRunner{current: "s1", started: make(chan struct{}, 2), release: make(chan struct{})}
 	runtime := &app.WorkspaceRuntime{Root: workspaceRoot, Store: store, Coordinator: coordinator, EventHub: hub}
 	runtime.SessionService = app.NewSessionService(store, coordinator)
 	runtime.TurnService = app.NewTurnService(runner, store, coordinator, hub, nil)
@@ -168,10 +184,40 @@ func TestMessageHandlerAcceptsSubmitAndReturnsBusy(t *testing.T) {
 		t.Fatalf("submit = %d %s", response.StatusCode, readBody(response))
 	}
 	<-runner.started
+	var submitReceipt app.CommandReceiptResult
+	responseBody := readBody(response)
+	if err := json.Unmarshal([]byte(responseBody), &submitReceipt); err != nil {
+		t.Fatal(err)
+	}
+	staleBody, _ := json.Marshal(activeTurnRequest{CommandID: "stale", ActiveTurnID: "stale", Text: "change"})
+	response = doJSON(t, client, http.MethodPost, server.URL()+"/api/workspaces/"+string(workspace.ID)+"/sessions/s1/steer", staleBody, cookie)
+	if response.StatusCode != http.StatusConflict || !strings.Contains(readBody(response), "active_turn_changed") {
+		t.Fatalf("stale steer response = %d", response.StatusCode)
+	}
+	steerBody, _ := json.Marshal(activeTurnRequest{CommandID: "steer-1", ActiveTurnID: submitReceipt.ResourceID, Text: "change"})
+	response = doJSON(t, client, http.MethodPost, server.URL()+"/api/workspaces/"+string(workspace.ID)+"/sessions/s1/steer", steerBody, cookie)
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("steer response = %d %s", response.StatusCode, readBody(response))
+	}
+	queueBody, _ := json.Marshal(activeTurnRequest{CommandID: "queue-1", ActiveTurnID: submitReceipt.ResourceID, Text: "later"})
+	response = doJSON(t, client, http.MethodPost, server.URL()+"/api/workspaces/"+string(workspace.ID)+"/sessions/s1/queue", queueBody, cookie)
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("queue response = %d %s", response.StatusCode, readBody(response))
+	}
 	body, _ = json.Marshal(submitMessageRequest{CommandID: "submit-2", SessionVersion: 0, Text: "hello"})
 	response = doJSON(t, client, http.MethodPost, server.URL()+"/api/workspaces/"+string(workspace.ID)+"/sessions/s2/messages", body, cookie)
 	if response.StatusCode != http.StatusConflict || !strings.Contains(readBody(response), "workspace_busy") {
 		t.Fatalf("busy response = %d", response.StatusCode)
+	}
+	cancelBody, _ := json.Marshal(activeTurnRequest{CommandID: "cancel-1", ActiveTurnID: submitReceipt.ResourceID})
+	response = doJSON(t, client, http.MethodPost, server.URL()+"/api/workspaces/"+string(workspace.ID)+"/sessions/s1/cancel", cancelBody, cookie)
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("cancel response = %d %s", response.StatusCode, readBody(response))
+	}
+	select {
+	case <-runner.started:
+	case <-time.After(time.Second):
+		t.Fatal("queued web turn did not start")
 	}
 	close(runner.release)
 }

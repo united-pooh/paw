@@ -187,6 +187,22 @@ func (s *Supervisor) Activity(id WorkspaceID) (RuntimeActivity, bool) {
 	return entry.activity, true
 }
 
+func (s *Supervisor) LoadedWorkspaces() []RecentWorkspace {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items := make([]RecentWorkspace, 0, len(s.entries))
+	for _, entry := range s.entries {
+		if entry.state != runtimeLoaded {
+			continue
+		}
+		items = append(items, RecentWorkspace{ID: entry.workspace.ID, Path: entry.workspace.Path, Name: entry.workspace.Name})
+	}
+	return items
+}
+
 func (s *Supervisor) Runtime(id WorkspaceID) (*WorkspaceRuntime, bool) {
 	if s == nil {
 		return nil, false

@@ -33,6 +33,19 @@ it('handles UTF-8 offsets, duplicates, gaps and leaves session version unchanged
   expect(reducer(duplicate, { type: 'event.received', event: event(3, 'assistant.delta', { part_id: 'p1', offset: 99, text: 'x' }) }).resetReason).toBe('part_offset_gap');
 });
 
+it('updates active turn and queue state from command lifecycle events', () => {
+  let state = reducer(initialState, { type: 'snapshot.loaded', snapshot });
+  state = reducer(state, { type: 'event.received', event: { ...event(3, 'turn.started', { turn_id: 't2' }), turn_id: 't2', entity_version: 5 } });
+  expect(state.snapshot?.active_turn_id).toBe('t2');
+  expect(state.snapshot?.session_version).toBe(5);
+  state = reducer(state, { type: 'event.received', event: { ...event(4, 'queue.updated', { items: [{ content: 'later' }], session_version: 6 }), turn_id: 't2', entity_version: 6 } });
+  expect(state.snapshot?.queue).toHaveLength(1);
+  expect(state.snapshot?.session_version).toBe(6);
+  state = reducer(state, { type: 'event.received', event: { ...event(5, 'turn.cancelled', { turn_id: 't2' }), turn_id: 't2', entity_version: 7 } });
+  expect(state.snapshot?.active_turn_id).toBeUndefined();
+  expect(state.snapshot?.session_version).toBe(7);
+});
+
 it('ignores unknown same-schema events and fails unknown schema versions', () => {
   const state = reducer(initialState, { type: 'snapshot.loaded', snapshot });
   const unknown = reducer(state, { type: 'event.received', event: event(3, 'future.event', {}) });

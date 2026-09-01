@@ -10,6 +10,7 @@ import (
 type bootstrapResponse struct {
 	SchemaVersion    uint16                `json:"schema_version"`
 	RecentWorkspaces []app.RecentWorkspace `json:"recent_workspaces"`
+	LoadedWorkspaces []app.RecentWorkspace `json:"loaded_workspaces"`
 	LoadedRuntimes   int                   `json:"loaded_runtimes"`
 }
 
@@ -20,7 +21,8 @@ func (s *Server) handleBootstrap(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	writeJSON(writer, http.StatusOK, bootstrapResponse{
-		SchemaVersion: app.AppEventSchemaVersion, RecentWorkspaces: recent, LoadedRuntimes: s.supervisor.LoadedCount(),
+		SchemaVersion: app.AppEventSchemaVersion, RecentWorkspaces: recent,
+		LoadedWorkspaces: s.supervisor.LoadedWorkspaces(), LoadedRuntimes: s.supervisor.LoadedCount(),
 	})
 }
 

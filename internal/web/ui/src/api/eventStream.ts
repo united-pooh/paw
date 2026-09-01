@@ -14,6 +14,7 @@ export interface EventStreamOptions {
   sequence: number;
   store: WorkbenchStore;
   reloadSnapshot: () => Promise<void>;
+  onEvent?: (event: AppEvent) => void;
   createSource?: (url: string) => EventSourceLike;
 }
 
@@ -45,6 +46,9 @@ export class EventStream {
     this.source = source;
     source.onopen = () => {
       this.retry = 0;
+      const current = this.options.store.getSnapshot();
+      this.options.streamID = current.streamID || this.options.streamID;
+      this.options.sequence = current.sequence;
       this.options.store.dispatch({ type: 'connection.changed', connection: 'live' });
     };
     source.onerror = () => {
@@ -53,12 +57,17 @@ export class EventStream {
       this.scheduleReconnect();
     };
     for (const type of [
+      'turn.started', 'turn.completed', 'turn.failed', 'turn.cancelled', 'queue.updated',
       'assistant.part.started', 'assistant.delta', 'assistant.part.completed',
       'reasoning.started', 'reasoning.delta', 'reasoning.completed', 'event.reset_required'
     ]) {
       source.addEventListener(type, ((event: MessageEvent<string>) => {
         const parsed = JSON.parse(event.data) as AppEvent;
         this.options.store.dispatch({ type: 'event.received', event: parsed });
+        const current = this.options.store.getSnapshot();
+        this.options.streamID = current.streamID || parsed.stream_id;
+        this.options.sequence = current.sequence;
+        this.options.onEvent?.(parsed);
         if (parsed.type === 'event.reset_required') void this.options.reloadSnapshot();
       }) as EventListener);
     }

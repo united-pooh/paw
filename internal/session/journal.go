@@ -20,6 +20,7 @@ const (
 	JournalToolResult       JournalKind = "tool_result"
 	JournalTurnCompleted    JournalKind = "turn_completed"
 	JournalTurnFailed       JournalKind = "turn_failed"
+	JournalTurnStopped      JournalKind = "turn_stopped"
 	JournalTodoSnapshot     JournalKind = "todo_snapshot"
 	JournalMemoryUpdated    JournalKind = "memory_updated"
 	JournalAriadneUpdated   JournalKind = "ariadne_updated"
@@ -27,13 +28,22 @@ const (
 	JournalCommandReceipt   JournalKind = "command_receipt"
 )
 
+type CommandInput struct {
+	CommandID string    `json:"command_id"`
+	Kind      string    `json:"kind"`
+	TurnID    string    `json:"turn_id"`
+	Content   string    `json:"content"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type CommandReceipt struct {
-	CommandID      string    `json:"command_id"`
-	Kind           string    `json:"kind"`
-	ResourceID     string    `json:"resource_id"`
-	Status         string    `json:"status"`
-	SessionVersion uint64    `json:"session_version"`
-	CreatedAt      time.Time `json:"created_at"`
+	CommandID      string        `json:"command_id"`
+	Kind           string        `json:"kind"`
+	ResourceID     string        `json:"resource_id"`
+	Status         string        `json:"status"`
+	SessionVersion uint64        `json:"session_version"`
+	CreatedAt      time.Time     `json:"created_at"`
+	Input          *CommandInput `json:"input,omitempty"`
 }
 
 // StateEventKind 区分状态文件更新事件的种类（memory/ariadne）。
@@ -87,6 +97,7 @@ type TurnJournal interface {
 	AppendToolResult(ctx context.Context, sessionID, turnID string, callIndex int, result message.ToolResult) error
 	CompleteTurn(ctx context.Context, sessionID, turnID string) error
 	FailTurn(ctx context.Context, sessionID, turnID string, err error) error
+	StopTurn(ctx context.Context, sessionID, turnID string, reason error) error
 	LoadSnapshot(ctx context.Context, sessionID string) (SessionSnapshot, error)
 }
 

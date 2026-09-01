@@ -59,6 +59,34 @@ function reduceEvent(state: WorkbenchState, event: AppEvent): WorkbenchState {
     const payload = event.payload as { reason?: string };
     return { ...state, connection: 'reset', resetReason: payload.reason ?? 'reset_required', sequence: event.sequence };
   }
+  if (event.type === 'turn.started') {
+    return commitSnapshotEvent(state, event, (snapshot) => {
+      const turnID = event.turn_id ?? (event.payload as { turn_id?: string }).turn_id ?? '';
+      const turns = snapshot.turns.some((turn) => turn.turn_id === turnID)
+        ? snapshot.turns.map((turn) => turn.turn_id === turnID ? { ...turn, status: 'running' } : turn)
+        : [...snapshot.turns, { turn_id: turnID, messages: [], status: 'running' }];
+      return { ...snapshot, turns, active_turn_id: turnID, session_version: event.entity_version ?? snapshot.session_version };
+    });
+  }
+  if (event.type === 'turn.completed' || event.type === 'turn.failed' || event.type === 'turn.cancelled') {
+    return commitSnapshotEvent(state, event, (snapshot) => {
+      const turnID = event.turn_id ?? (event.payload as { turn_id?: string }).turn_id ?? '';
+      if (snapshot.active_turn_id !== turnID) return snapshot;
+      const status = event.type === 'turn.completed' ? 'completed' : (event.type === 'turn.cancelled' ? 'cancelled' : 'failed');
+      const turns = snapshot.turns.map((turn) => turn.turn_id === turnID ? { ...turn, status } : turn);
+      const next = { ...snapshot, turns, session_version: event.entity_version ?? snapshot.session_version };
+      delete next.active_turn_id;
+      return next;
+    });
+  }
+  if (event.type === 'queue.updated') {
+    const payload = event.payload as { items?: unknown[]; session_version?: number };
+    return commitSnapshotEvent(state, event, (snapshot) => ({
+      ...snapshot,
+      queue: payload.items ?? [],
+      session_version: payload.session_version ?? event.entity_version ?? snapshot.session_version
+    }));
+  }
   if (event.type === 'assistant.part.started' || event.type === 'reasoning.started') {
     const payload = event.payload as { part_id: string; kind?: string };
     const part: StreamingPart = {
@@ -100,6 +128,13 @@ function reduceDelta(state: WorkbenchState, event: AppEvent, payload: DeltaPaylo
     ...state.parts,
     [payload.part_id]: { ...current, text: current.text + payload.text }
   });
+}
+
+function commitSnapshotEvent(state: WorkbenchState, event: AppEvent, update: (snapshot: SessionSnapshot) => SessionSnapshot): WorkbenchState {
+  if (!state.snapshot || event.session_id !== state.snapshot.session_id) {
+    return { ...state, sequence: event.sequence, streamID: event.stream_id };
+  }
+  return { ...state, snapshot: update(state.snapshot), sequence: event.sequence, streamID: event.stream_id };
 }
 
 function commitEvent(state: WorkbenchState, event: AppEvent, parts: Record<string, StreamingPart>): WorkbenchState {

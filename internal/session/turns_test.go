@@ -361,6 +361,24 @@ func TestTurnJournalDropsIncompleteMultiToolGroupFromActiveHistory(t *testing.T)
 	}
 }
 
+func TestTurnJournalStoppedTurnBuildsCancelledRecovery(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	if err := store.BeginTurn(ctx, "s1", "turn-stop", message.Message{Role: message.RoleUser, Content: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StopTurn(ctx, "s1", "turn-stop", errors.New("turn canceled by user")); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := store.LoadSnapshot(ctx, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Recovery == nil || snapshot.Recovery.TurnID != "turn-stop" || !snapshot.Recovery.Interrupted {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+}
+
 func TestTurnJournalCompletedTurnHasNoRecovery(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

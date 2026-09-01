@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"paw/internal/message"
@@ -61,6 +62,27 @@ func TestSessionServiceListSnapshotCreateForkDoNotActivateHost(t *testing.T) {
 	forkHistory, err := store.LoadResolvedHistory(ctx, "forked")
 	if err != nil || len(forkHistory) != 2 || forkHistory[0].Content != "hello" {
 		t.Fatalf("fork history = %#v, %v", forkHistory, err)
+	}
+}
+
+func TestSessionProjectionShowsStoppedTurnAsCancelled(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginTurn(ctx, "s1", "turn-stop", message.Message{Role: message.RoleUser, Content: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StopTurn(ctx, "s1", "turn-stop", errors.New("turn canceled by user")); err != nil {
+		t.Fatal(err)
+	}
+	projection, err := NewSessionService(store, NewWorkspaceCoordinator()).Snapshot(ctx, "s1", SnapshotRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projection.Turns) != 1 || projection.Turns[0].Status != "cancelled" {
+		t.Fatalf("projection=%#v", projection)
 	}
 }
 

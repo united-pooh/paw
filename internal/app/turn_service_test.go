@@ -17,8 +17,10 @@ type fakeTurnRunner struct {
 	current string
 	started chan struct{}
 	release chan struct{}
+	inputs  []string
 	result  string
 	err     error
+	steers  []string
 }
 
 func (r *fakeTurnRunner) CurrentSessionID() string {
@@ -32,8 +34,26 @@ func (r *fakeTurnRunner) LoadSession(_ context.Context, sessionID string) (loop.
 	r.mu.Unlock()
 	return loop.SessionLoadResult{}, nil
 }
-func (r *fakeTurnRunner) RunTurnWithTiming(ctx context.Context, _ string, turnID string, _ time.Time) (loop.TurnExecution, error) {
-	close(r.started)
+func (r *fakeTurnRunner) PrepareSteer(input string) (loop.SteerAdmission, bool) {
+	return &fakeSteerAdmission{commit: func() {
+		r.mu.Lock()
+		r.steers = append(r.steers, input)
+		r.mu.Unlock()
+	}}, true
+}
+
+type fakeSteerAdmission struct {
+	once   sync.Once
+	commit func()
+}
+
+func (a *fakeSteerAdmission) Commit() { a.once.Do(a.commit) }
+func (a *fakeSteerAdmission) Abort()  { a.once.Do(func() {}) }
+func (r *fakeTurnRunner) RunTurnWithTiming(ctx context.Context, input string, turnID string, _ time.Time) (loop.TurnExecution, error) {
+	r.mu.Lock()
+	r.inputs = append(r.inputs, input)
+	r.mu.Unlock()
+	r.started <- struct{}{}
 	select {
 	case <-r.release:
 	case <-ctx.Done():
@@ -52,7 +72,7 @@ func TestSubmitStartsFixedTurnAndIsIdempotent(t *testing.T) {
 	}
 	coordinator := NewWorkspaceCoordinator()
 	hub := newTestEventHub(t, EventHubConfig{WorkspaceID: "workspace", StreamID: "stream"})
-	runner := &fakeTurnRunner{current: "other", started: make(chan struct{}), release: make(chan struct{}), result: "answer"}
+	runner := &fakeTurnRunner{current: "other", started: make(chan struct{}, 2), release: make(chan struct{}), result: "answer"}
 	service := newTurnService(runner, store, coordinator, hub, nil)
 	command := SubmitCommand{CommandID: "submit-1", SessionID: "s1", SessionVersion: 0, Text: "hello"}
 	receipt, err := service.Submit(context.Background(), command)
@@ -90,6 +110,123 @@ func TestSubmitStartsFixedTurnAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestSteerQueueAndCancelValidateActiveTurn(t *testing.T) {
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateRoot(context.Background(), session.CreateRootRequest{SessionID: "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	coordinator := NewWorkspaceCoordinator()
+	hub := newTestEventHub(t, EventHubConfig{WorkspaceID: "workspace", StreamID: "stream"})
+	runner := &fakeTurnRunner{current: "s1", started: make(chan struct{}, 2), release: make(chan struct{})}
+	service := newTurnService(runner, store, coordinator, hub, nil)
+	receipt, err := service.Submit(context.Background(), SubmitCommand{CommandID: "submit", SessionID: "s1", SessionVersion: 0, Text: "start"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-runner.started
+	if _, err := service.Steer(context.Background(), ActiveTurnCommand{CommandID: "steer-bad", SessionID: "s1", ActiveTurnID: "stale", Text: "change"}); !errors.Is(err, ErrActiveTurnChanged) {
+		t.Fatalf("stale steer = %v", err)
+	}
+	steerCommand := ActiveTurnCommand{CommandID: "steer", SessionID: "s1", ActiveTurnID: receipt.ResourceID, Text: "change"}
+	steered, err := service.Steer(context.Background(), steerCommand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry, err := service.Steer(context.Background(), steerCommand); err != nil || retry != steered {
+		t.Fatalf("steer retry = %#v, %v want %#v", retry, err, steered)
+	}
+	runner.mu.Lock()
+	steers := append([]string(nil), runner.steers...)
+	runner.mu.Unlock()
+	if len(steers) != 1 || steers[0] != "change" {
+		t.Fatalf("steers = %#v", steers)
+	}
+	queueCommand := ActiveTurnCommand{CommandID: "queue", SessionID: "s1", ActiveTurnID: receipt.ResourceID, Text: "later"}
+	queued, err := service.Queue(context.Background(), queueCommand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry, err := service.Queue(context.Background(), queueCommand); err != nil || retry != queued {
+		t.Fatalf("queue retry = %#v, %v want %#v", retry, err, queued)
+	}
+	if queued.SessionVersion != 2 || len(coordinator.SessionSnapshot("s1").Queue) != 1 {
+		t.Fatalf("queue = %#v state=%#v", queued, coordinator.SessionSnapshot("s1"))
+	}
+	records, err := store.LoadResolvedJournalRecords(context.Background(), "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs := 0
+	for _, record := range records {
+		if record.Kind == session.JournalCommandReceipt && record.CommandReceipt != nil && record.CommandReceipt.Input != nil {
+			inputs++
+		}
+	}
+	if inputs != 2 {
+		t.Fatalf("command input receipts = %d, want steer and queue", inputs)
+	}
+	queueRecords := 0
+	for _, record := range records {
+		if record.CommandReceipt != nil && record.CommandReceipt.Kind == CommandKindQueueTurn {
+			queueRecords++
+		}
+	}
+	if queueRecords != 1 {
+		t.Fatalf("queue receipt records = %d, want atomic single record", queueRecords)
+	}
+	if _, err := service.Cancel(context.Background(), ActiveTurnCommand{CommandID: "cancel", SessionID: "s1", ActiveTurnID: receipt.ResourceID}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		state := coordinator.WorkspaceSnapshot()
+		if state.ActiveTurnID != "" && state.ActiveTurnID != receipt.ResourceID {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("cancel did not advance to queued turn: %#v", state)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case <-runner.started:
+	case <-time.After(time.Second):
+		t.Fatal("queued turn did not start")
+	}
+	runner.mu.Lock()
+	inputsRun := append([]string(nil), runner.inputs...)
+	runner.mu.Unlock()
+	if len(inputsRun) != 2 || inputsRun[1] != "later" {
+		t.Fatalf("run inputs = %#v", inputsRun)
+	}
+	restarted := newTurnService(runner, store, coordinator, hub, nil)
+	terminal, err := restarted.Cancel(context.Background(), ActiveTurnCommand{CommandID: "cancel-again", SessionID: "s1", ActiveTurnID: receipt.ResourceID})
+	if err != nil || terminal.Status != "cancelled" {
+		t.Fatalf("terminal cancel = %#v, %v", terminal, err)
+	}
+	if _, err := restarted.Cancel(context.Background(), ActiveTurnCommand{CommandID: "cancel-unknown", SessionID: "s1", ActiveTurnID: "missing"}); !errors.Is(err, ErrActiveTurnChanged) {
+		t.Fatalf("unknown terminal cancel = %v", err)
+	}
+	subscription, err := hub.Subscribe(EventCursor{StreamID: "stream"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer subscription.Close()
+	cancelled := false
+	for _, event := range subscription.Replay {
+		if event.Type == EventTurnCancelled && event.TurnID == receipt.ResourceID {
+			cancelled = true
+		}
+	}
+	if !cancelled {
+		t.Fatal("turn.cancelled event was not published")
+	}
+	close(runner.release)
+}
+
 func TestSubmitRejectsVersionMismatchAndWorkspaceBusy(t *testing.T) {
 	store, err := session.NewJSONLStore(t.TempDir())
 	if err != nil {
@@ -102,7 +239,7 @@ func TestSubmitRejectsVersionMismatchAndWorkspaceBusy(t *testing.T) {
 	}
 	coordinator := NewWorkspaceCoordinator()
 	hub := newTestEventHub(t, EventHubConfig{WorkspaceID: "workspace", StreamID: "stream"})
-	runner := &fakeTurnRunner{current: "s1", started: make(chan struct{}), release: make(chan struct{})}
+	runner := &fakeTurnRunner{current: "s1", started: make(chan struct{}, 2), release: make(chan struct{})}
 	service := newTurnService(runner, store, coordinator, hub, nil)
 	if _, err := service.Submit(context.Background(), SubmitCommand{CommandID: "bad-version", SessionID: "s1", SessionVersion: 9, Text: "x"}); !errors.Is(err, ErrSessionVersionChanged) {
 		t.Fatalf("version error = %v", err)

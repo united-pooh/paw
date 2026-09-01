@@ -1,12 +1,16 @@
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; }
+.app-empty, .app-fatal { min-height: 100vh; display: grid; place-content: center; justify-items: center; gap: 14px; color: var(--text); background: var(--bg); }
+.app-empty button { border: 0; border-radius: 999px; padding: 10px 18px; background: var(--accent); color: white; }
+.app-error { position: fixed; z-index: 20; top: 12px; left: 50%; transform: translateX(-50%); max-width: min(720px, calc(100% - 32px)); padding: 10px 14px; border-radius: 10px; background: #8f2f2f; color: white; box-shadow: 0 8px 30px rgba(0,0,0,.18); }
 button, textarea { font: inherit; }
 button { cursor: pointer; }
 .workbench-shell { min-height: 100vh; display: grid; grid-template-columns: 210px 300px minmax(0, 1fr); background: var(--bg); }
 .workspace-sidebar, .session-list { border-right: 1px solid var(--border); background: var(--surface); padding: 20px 14px; }
 .brand-row { display: flex; align-items: center; gap: 10px; font-size: 20px; margin-bottom: 30px; }
 .brand-mark { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; color: white; background: var(--text); }
-.sidebar-label, .session-list-header { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 10px; }
+.sidebar-label, .session-list-header { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+.sidebar-label button { border: 0; background: transparent; color: var(--accent); font-size: 12px; text-transform: none; }
 .workspace-sidebar nav, .session-list { display: flex; flex-direction: column; gap: 6px; }
 .workspace-sidebar nav button, .session-list > button { text-align: left; border: 0; border-radius: 10px; padding: 10px; background: transparent; display: grid; gap: 3px; }
 .workspace-sidebar button.selected, .session-list button.selected { background: var(--surface-muted); }
@@ -40,6 +44,12 @@ h1 { font-size: 19px; margin: 0; }
 .readonly-composer, .composer { position: sticky; bottom: 0; width: min(780px, calc(100% - 48px)); margin: 0 auto 24px; display: flex; gap: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 20px; padding: 12px; box-shadow: 0 16px 50px rgba(0,0,0,.1); }
 .readonly-composer textarea, .composer textarea { flex: 1; min-height: 58px; border: 0; resize: none; outline: 0; background: transparent; }
 .readonly-composer button, .composer button { align-self: end; border: 0; border-radius: 999px; padding: 10px 18px; background: var(--accent); color: white; }
+.composer-wrap { position: sticky; bottom: 0; }
+.composer-mode, .queue-indicator { width: min(780px, calc(100% - 48px)); margin: 0 auto 8px; color: var(--muted); font-size: 12px; }
+.composer-mode { display: flex; gap: 6px; }
+.composer-mode button { border: 1px solid var(--border); border-radius: 999px; background: var(--surface); padding: 5px 10px; }
+.composer-mode button.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.composer button.stop { background: #e45c5c; }
 .composer button:disabled { opacity: .45; cursor: default; }
 .trace-detail { position: fixed; inset: 0 0 0 auto; width: min(420px, 100%); background: var(--surface); border-left: 1px solid var(--border); box-shadow: -20px 0 50px rgba(0,0,0,.12); padding: 22px; z-index: 10; }
 .trace-detail header { display: flex; justify-content: space-between; }

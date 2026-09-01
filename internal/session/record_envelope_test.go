@@ -31,11 +31,13 @@ func TestRecordEnvelopeRoundTrip(t *testing.T) {
 		{Seq: 5, Kind: JournalToolResult, TurnID: "t1", CallIndex: &callIndex, Message: msg(message.RoleUser, "res"), ToolResult: &result},
 		{Seq: 6, Kind: JournalTurnCompleted, TurnID: "t1"},
 		{Seq: 7, Kind: JournalTurnFailed, TurnID: "t1", Error: "boom"},
+		{Seq: 8, Kind: JournalTurnStopped, TurnID: "t1", Error: "cancelled"},
 	}
 	snap := todo.Snapshot{Explanation: "x", Items: []todo.Item{{ID: "a", Content: "c", Status: todo.StatusPending}}, UpdatedAt: at}
-	cases = append(cases, Record{Seq: 8, Kind: JournalTodoSnapshot, TodoSnapshot: &snap})
-	receipt := CommandReceipt{CommandID: "cmd-1", Kind: "session.create", ResourceID: "s1", Status: "accepted", SessionVersion: 2, CreatedAt: at}
-	cases = append(cases, Record{Seq: 9, Kind: JournalCommandReceipt, CommandReceipt: &receipt})
+	cases = append(cases, Record{Seq: 9, Kind: JournalTodoSnapshot, TodoSnapshot: &snap})
+	input := CommandInput{CommandID: "cmd-1", Kind: "turn.queue", TurnID: "t1", Content: "later", CreatedAt: at}
+	receipt := CommandReceipt{CommandID: "cmd-1", Kind: "session.create", ResourceID: "s1", Status: "accepted", SessionVersion: 2, CreatedAt: at, Input: &input}
+	cases = append(cases, Record{Seq: 10, Kind: JournalCommandReceipt, CommandReceipt: &receipt})
 
 	for i, rec := range cases {
 		rec.CreatedAt = at
@@ -68,6 +70,9 @@ func TestRecordEnvelopeRoundTrip(t *testing.T) {
 		}
 		if rec.CommandReceipt != nil && (back.CommandReceipt == nil || back.CommandReceipt.CommandID != rec.CommandReceipt.CommandID || back.CommandReceipt.ResourceID != rec.CommandReceipt.ResourceID) {
 			t.Fatalf("case %d: command receipt mismatch", i)
+		}
+		if rec.CommandReceipt != nil && rec.CommandReceipt.Input != nil && (back.CommandReceipt.Input == nil || *back.CommandReceipt.Input != *rec.CommandReceipt.Input) {
+			t.Fatalf("case %d: command input mismatch", i)
 		}
 	}
 }

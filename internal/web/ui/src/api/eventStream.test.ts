@@ -13,6 +13,25 @@ class Source implements EventSourceLike {
   }
 }
 
+it('reconnects from the latest reduced cursor', () => {
+  vi.useFakeTimers();
+  const store = new WorkbenchStore();
+  const sources: Source[] = [];
+  const urls: string[] = [];
+  const stream = new EventStream({
+    workspaceID: 'w1', streamID: 'stream', sequence: 8, store,
+    reloadSnapshot: async () => undefined,
+    createSource: (url) => { urls.push(url); const source = new Source(); sources.push(source); return source; }
+  });
+  stream.start();
+  sources[0].emit('assistant.part.started', { schema_version: 1, stream_id: 'stream', sequence: 9, workspace_id: 'w1', session_id: 's1', turn_id: 't1', type: 'assistant.part.started', time: new Date().toISOString(), payload: { part_id: 'p1', part_index: 0, kind: 'assistant' } });
+  sources[0].onerror?.(new Event('error'));
+  vi.advanceTimersByTime(1000);
+  expect(urls[1]).toContain('after=stream%3A9');
+  stream.dispose();
+  vi.useRealTimers();
+});
+
 it('connects with snapshot cursor and reloads on reset', async () => {
   const source = new Source();
   let capturedURL = '';

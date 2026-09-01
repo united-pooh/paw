@@ -28,6 +28,25 @@ func NewWorkspaceCoordinator() *WorkspaceCoordinator {
 	}}
 }
 
+func (c *WorkspaceCoordinator) RestoreSessionState(sessionID string, version uint64, queue []InputDraft) WorkspaceState {
+	if c == nil {
+		return WorkspaceState{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return cloneWorkspaceState(c.state)
+	}
+	if current := c.state.SessionVersion[sessionID]; version > current {
+		c.state.SessionVersion[sessionID] = version
+	}
+	if len(queue) > 0 {
+		c.state.Queue[sessionID] = append([]InputDraft(nil), queue...)
+	}
+	return cloneWorkspaceState(c.state)
+}
+
 func (c *WorkspaceCoordinator) BeginTurn(sessionID, turnID string) (WorkspaceState, error) {
 	if c == nil {
 		return WorkspaceState{}, errors.New("workspace coordinator is nil")
@@ -97,6 +116,62 @@ func (c *WorkspaceCoordinator) QueueInput(sessionID, turnID string, draft InputD
 	c.state.Queue[sessionID] = append(c.state.Queue[sessionID], draft)
 	c.bumpSessionVersionLocked(sessionID)
 	return cloneWorkspaceState(c.state), nil
+}
+
+func (c *WorkspaceCoordinator) CommitQueuedInput(sessionID, turnID string, draft InputDraft, persist func(uint64) error) (WorkspaceState, error) {
+	if c == nil {
+		return WorkspaceState{}, errors.New("workspace coordinator is nil")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.validateActiveTurnLocked(sessionID, turnID); err != nil {
+		return cloneWorkspaceState(c.state), err
+	}
+	version := c.state.SessionVersion[sessionID] + 1
+	if persist != nil {
+		if err := persist(version); err != nil {
+			return cloneWorkspaceState(c.state), err
+		}
+	}
+	c.state.Queue[sessionID] = append(c.state.Queue[sessionID], draft)
+	c.state.SessionVersion[sessionID] = version
+	return cloneWorkspaceState(c.state), nil
+}
+
+func (c *WorkspaceCoordinator) PeekQueuedInput(sessionID string) (InputDraft, WorkspaceState, bool) {
+	if c == nil {
+		return InputDraft{}, WorkspaceState{}, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	queue := c.state.Queue[sessionID]
+	if len(queue) == 0 {
+		return InputDraft{}, cloneWorkspaceState(c.state), false
+	}
+	return queue[0], cloneWorkspaceState(c.state), true
+}
+
+func (c *WorkspaceCoordinator) RemoveQueuedInput(sessionID, commandID string) (InputDraft, WorkspaceState, bool) {
+	if c == nil {
+		return InputDraft{}, WorkspaceState{}, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	queue := c.state.Queue[sessionID]
+	for index, draft := range queue {
+		if draft.CommandID != strings.TrimSpace(commandID) {
+			continue
+		}
+		queue = append(queue[:index:index], queue[index+1:]...)
+		if len(queue) == 0 {
+			delete(c.state.Queue, sessionID)
+		} else {
+			c.state.Queue[sessionID] = queue
+		}
+		c.bumpSessionVersionLocked(sessionID)
+		return draft, cloneWorkspaceState(c.state), true
+	}
+	return InputDraft{}, cloneWorkspaceState(c.state), false
 }
 
 func (c *WorkspaceCoordinator) DequeueInput(sessionID string) (InputDraft, WorkspaceState, bool) {

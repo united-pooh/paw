@@ -185,7 +185,13 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 			failure = fmt.Errorf("turn ended before completion")
 		}
 		failureCtx := context.WithoutCancel(ctx)
-		if failErr := journal.FailTurn(failureCtx, runner.sessionID, turnID, failure); failErr != nil && err == nil {
+		var failErr error
+		if errors.Is(context.Cause(ctx), ErrTurnCanceledByUser) {
+			failErr = journal.StopTurn(failureCtx, runner.sessionID, turnID, ErrTurnCanceledByUser)
+		} else {
+			failErr = journal.FailTurn(failureCtx, runner.sessionID, turnID, failure)
+		}
+		if failErr != nil && err == nil {
 			err = fmt.Errorf("保存 turn failure 失败: %w", failErr)
 		}
 		if snapshot, snapshotErr := journal.LoadSnapshot(failureCtx, runner.sessionID); snapshotErr == nil {

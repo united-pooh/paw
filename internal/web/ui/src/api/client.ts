@@ -1,4 +1,4 @@
-import type { BootstrapResponse, CommandReceipt, SessionPage, SessionSnapshot } from './types';
+import type { BootstrapResponse, CommandReceipt, SessionMutationResult, SessionPage, SessionSnapshot, WorkspaceResponse } from './types';
 
 export class APIError extends Error {
   constructor(public readonly status: number, message: string) {
@@ -17,12 +17,31 @@ async function requestJSON<T>(input: RequestInfo | URL, init?: RequestInit): Pro
 
 export const api = {
   bootstrap: (): Promise<BootstrapResponse> => requestJSON('/api/bootstrap'),
+  openWorkspace: (path: string): Promise<WorkspaceResponse> => requestJSON('/api/workspaces/open', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path })
+  }),
   sessions: (workspaceID: string): Promise<SessionPage> =>
     requestJSON(`/api/workspaces/${encodeURIComponent(workspaceID)}/sessions`),
   sessionSnapshot: (workspaceID: string, sessionID: string): Promise<SessionSnapshot> =>
     requestJSON(`/api/workspaces/${encodeURIComponent(workspaceID)}/sessions/${encodeURIComponent(sessionID)}`),
+  createSession: (workspaceID: string, commandID: string): Promise<SessionMutationResult> =>
+    requestJSON(`/api/workspaces/${encodeURIComponent(workspaceID)}/sessions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command_id: commandID })
+    }),
   submitMessage: (workspaceID: string, sessionID: string, command: { command_id: string; session_version: number; text: string }): Promise<CommandReceipt> =>
     requestJSON(`/api/workspaces/${encodeURIComponent(workspaceID)}/sessions/${encodeURIComponent(sessionID)}/messages`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command)
+    }),
+  steer: (workspaceID: string, sessionID: string, command: { command_id: string; active_turn_id: string; text: string }): Promise<CommandReceipt> =>
+    requestJSON(`/api/workspaces/${encodeURIComponent(workspaceID)}/sessions/${encodeURIComponent(sessionID)}/steer`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command)
+    }),
+  queue: (workspaceID: string, sessionID: string, command: { command_id: string; active_turn_id: string; text: string }): Promise<CommandReceipt> =>
+    requestJSON(`/api/workspaces/${encodeURIComponent(workspaceID)}/sessions/${encodeURIComponent(sessionID)}/queue`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command)
+    }),
+  cancel: (workspaceID: string, sessionID: string, command: { command_id: string; active_turn_id: string }): Promise<CommandReceipt> =>
+    requestJSON(`/api/workspaces/${encodeURIComponent(workspaceID)}/sessions/${encodeURIComponent(sessionID)}/cancel`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command)
     }),
   exchangeBootstrap: (token: string): Promise<{ status: string }> =>

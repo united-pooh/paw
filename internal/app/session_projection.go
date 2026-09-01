@@ -144,6 +144,9 @@ func projectTurns(records []session.Record, metadata []session.TurnMetadata) []T
 		case session.JournalTurnFailed:
 			turn.Status = "failed"
 			turn.Error = record.Error
+		case session.JournalTurnStopped:
+			turn.Status = "cancelled"
+			turn.Error = record.Error
 		}
 	}
 	for _, item := range metadata {

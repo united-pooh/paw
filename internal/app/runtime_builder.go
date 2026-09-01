@@ -92,6 +92,9 @@ func BuildWorkspaceRuntime(ctx context.Context, opts WorkspaceRuntimeOptions, co
 		return nil, fmt.Errorf("初始化 session store 失败: %w", err)
 	}
 	runtime.Store = store
+	if err := restoreQueuedInputs(ctx, store, runtime.Coordinator); err != nil {
+		return nil, fmt.Errorf("恢复排队输入失败: %w", err)
+	}
 	runtime.SessionService = NewSessionService(store, runtime.Coordinator)
 	sessionID, err := ResolveRuntimeSessionID(ctx, store, opts.SessionID)
 	if err != nil {
@@ -230,6 +233,55 @@ func BuildWorkspaceRuntime(ctx context.Context, opts WorkspaceRuntimeOptions, co
 
 	success = true
 	return runtime, nil
+}
+
+func restoreQueuedInputs(ctx context.Context, store *session.JSONLStore, coordinator *WorkspaceCoordinator) error {
+	page, err := store.ListSessionPage(ctx, session.SessionPageRequest{Limit: 100})
+	if err != nil {
+		return err
+	}
+	for {
+		for _, summary := range page.Items {
+			records, err := store.LoadResolvedJournalRecords(ctx, summary.SessionID)
+			if err != nil {
+				return err
+			}
+			consumed := make(map[string]bool)
+			for _, record := range records {
+				receipt := record.CommandReceipt
+				if receipt != nil && receipt.Kind == CommandKindSubmitTurn && strings.HasSuffix(receipt.CommandID, ":queued") {
+					consumed[strings.TrimSuffix(receipt.CommandID, ":queued")] = true
+				}
+			}
+			var queue []InputDraft
+			var version uint64
+			for _, record := range records {
+				receipt := record.CommandReceipt
+				if receipt == nil {
+					continue
+				}
+				if receipt.SessionVersion > version {
+					version = receipt.SessionVersion
+				}
+				if receipt.Kind != CommandKindQueueTurn || receipt.Input == nil {
+					continue
+				}
+				if consumed[receipt.CommandID] {
+					continue
+				}
+				queue = append(queue, InputDraft{CommandID: receipt.CommandID, Content: receipt.Input.Content, CreatedAt: receipt.Input.CreatedAt})
+			}
+			coordinator.RestoreSessionState(summary.SessionID, version, queue)
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		page, err = store.ListSessionPage(ctx, session.SessionPageRequest{Cursor: page.NextCursor, Limit: 100})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func explicitWorkspaceRoot(root string) (string, error) {

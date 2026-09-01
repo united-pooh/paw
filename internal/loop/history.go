@@ -25,6 +25,7 @@ type promptState struct {
 	mu               sync.RWMutex
 	supplements      []pendingSupplement
 	acceptingSteers  bool
+	reservedSteers   int
 	systemSupplement string
 }
 
@@ -51,22 +52,42 @@ func (p *promptState) endSteerAdmission() {
 	p.acceptingSteers = false
 }
 
-func (p *promptState) admitSteer(input string) bool {
+func (p *promptState) reserveSteer(input string) (*steerAdmission, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if !p.acceptingSteers {
+		return nil, false
+	}
+	p.reservedSteers++
+	return &steerAdmission{state: p, input: input}, true
+}
+
+func (p *promptState) finishSteerReservation(input string, commit bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.reservedSteers > 0 {
+		p.reservedSteers--
+	}
+	if commit {
+		p.supplements = append(p.supplements, pendingSupplement{content: input, forceContinuation: true})
+	}
+}
+
+func (p *promptState) admitSteer(input string) bool {
+	admission, ok := p.reserveSteer(input)
+	if !ok {
 		return false
 	}
-	p.supplements = append(p.supplements, pendingSupplement{
-		content:           input,
-		forceContinuation: true,
-	})
+	admission.Commit()
 	return true
 }
 
 func (p *promptState) trySealSteerAdmission() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.reservedSteers > 0 {
+		return false
+	}
 	for _, supplement := range p.supplements {
 		if supplement.forceContinuation {
 			return false
@@ -130,6 +151,32 @@ func (p *promptState) resetSupplements() {
 	defer p.mu.Unlock()
 	p.supplements = nil
 	p.acceptingSteers = false
+	p.reservedSteers = 0
+}
+
+type SteerAdmission interface {
+	Commit()
+	Abort()
+}
+
+type steerAdmission struct {
+	state *promptState
+	input string
+	once  sync.Once
+}
+
+func (a *steerAdmission) Commit() {
+	if a == nil {
+		return
+	}
+	a.once.Do(func() { a.state.finishSteerReservation(a.input, true) })
+}
+
+func (a *steerAdmission) Abort() {
+	if a == nil {
+		return
+	}
+	a.once.Do(func() { a.state.finishSteerReservation(a.input, false) })
 }
 
 func (runner *Engine) SubmitSupplement(input string) bool {
@@ -141,12 +188,21 @@ func (runner *Engine) SubmitSupplement(input string) bool {
 	return true
 }
 
-func (runner *Engine) SubmitSteer(input string) bool {
+func (runner *Engine) PrepareSteer(input string) (SteerAdmission, bool) {
 	input = strings.TrimSpace(input)
 	if runner == nil || input == "" {
+		return nil, false
+	}
+	return runner.promptCtx.reserveSteer(input)
+}
+
+func (runner *Engine) SubmitSteer(input string) bool {
+	admission, ok := runner.PrepareSteer(input)
+	if !ok {
 		return false
 	}
-	return runner.promptCtx.admitSteer(input)
+	admission.Commit()
+	return true
 }
 
 func (runner *Engine) PendingSupplementCount() int {

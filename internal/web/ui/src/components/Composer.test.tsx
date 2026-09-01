@@ -22,9 +22,44 @@ it('submits on Enter, keeps Shift+Enter, and does not duplicate pending command 
   expect(localStorage.getItem('paw:draft:w:s')).toBeNull();
 });
 
-it('restores drafts from localStorage and blocks when workspace is busy', () => {
-  localStorage.setItem('paw:draft:w:s', 'saved');
-  render(<Composer workspaceID="w" sessionID="s" busy onSubmit={async () => undefined} />);
-  expect(screen.getByLabelText('消息')).toHaveValue('saved');
-  expect(screen.getByRole('button', { name: '发送' })).toBeDisabled();
+it('reloads the scoped draft when the session changes', async () => {
+  localStorage.setItem('paw:draft:w:a', 'draft-a');
+  localStorage.setItem('paw:draft:w:b', 'draft-b');
+  const view = render(<Composer workspaceID="w" sessionID="a" onSubmit={async () => undefined} />);
+  expect(screen.getByLabelText('消息')).toHaveValue('draft-a');
+  view.rerender(<Composer workspaceID="w" sessionID="b" onSubmit={async () => undefined} />);
+  expect(await screen.findByDisplayValue('draft-b')).toBeInTheDocument();
+});
+
+it('steers by default, can queue, and cancels an active turn without losing draft', async () => {
+  const user = userEvent.setup();
+  const actions: string[] = [];
+  render(<Composer workspaceID="w" sessionID="s" activeTurnID="turn" queueCount={1}
+    onSubmit={async () => undefined}
+    onSteer={async (text) => { actions.push(`steer:${text}`); }}
+    onQueue={async (text) => { actions.push(`queue:${text}`); }}
+    onCancel={async () => { actions.push('cancel'); }} />);
+  const textarea = screen.getByLabelText('消息');
+  await user.type(textarea, 'adjust{Enter}');
+  expect(actions).toContain('steer:adjust');
+  await user.type(textarea, 'later');
+  await user.click(screen.getByRole('button', { name: '排队' }));
+  await user.keyboard('{Enter}');
+  expect(actions).toContain('queue:later');
+  await user.type(textarea, 'draft');
+  await user.click(screen.getByRole('button', { name: '停止' }));
+  expect(actions).toContain('cancel');
+  expect(textarea).toHaveValue('draft');
+  expect(screen.getByRole('status')).toHaveTextContent('已排队 1 条消息');
+});
+
+it('does not silently fall back when a running action callback is unavailable', async () => {
+  const user = userEvent.setup();
+  const actions: string[] = [];
+  render(<Composer workspaceID="w" sessionID="s" activeTurnID="turn"
+    onSubmit={async () => { actions.push('submit'); }}
+    onSteer={async () => { actions.push('steer'); }} />);
+  expect(screen.getByRole('button', { name: '排队' })).toBeDisabled();
+  await user.type(screen.getByLabelText('消息'), 'adjust{Enter}');
+  expect(actions).toEqual(['steer']);
 });

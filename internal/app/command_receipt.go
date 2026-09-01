@@ -13,6 +13,8 @@ const (
 	CommandKindCreateSession = "session.create"
 	CommandKindForkSession   = "session.fork"
 	CommandKindSubmitTurn    = "turn.submit"
+	CommandKindSteerTurn     = "turn.steer"
+	CommandKindQueueTurn     = "turn.queue"
 	CommandStatusAccepted    = "accepted"
 )
 

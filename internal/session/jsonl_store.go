@@ -395,7 +395,7 @@ func (s *JSONLStore) appendRecords(ctx context.Context, sessionID string, record
 	// 已完成/失败的 turn 是用户可感知的持久化边界，不能停留在 page cache。
 	turnBoundary := false
 	for i := range records {
-		if records[i].Kind == JournalTurnCompleted || records[i].Kind == JournalTurnFailed {
+		if records[i].Kind == JournalTurnCompleted || records[i].Kind == JournalTurnFailed || records[i].Kind == JournalTurnStopped {
 			turnBoundary = true
 			break
 		}
@@ -570,6 +570,16 @@ func (s *JSONLStore) FailTurn(ctx context.Context, sessionID, turnID string, tur
 	return err
 }
 
+func (s *JSONLStore) StopTurn(ctx context.Context, sessionID, turnID string, reason error) error {
+	if err := validateTurnArgs(sessionID, turnID); err != nil {
+		return err
+	}
+	record := journalTurn(JournalTurnStopped, turnID)
+	record.Error = journalError(reason)
+	_, _, err := s.appendRecords(ctx, sessionID, []Record{record})
+	return err
+}
+
 // AppendTodoSnapshot 将一次 todo 快照更新作为事件追加到 session 流。
 // 返回分配的事件 seq。todo 记录不出现在消息投影中，但参与 seq 连续性。
 func (s *JSONLStore) AppendTodoSnapshot(ctx context.Context, sessionID string, snapshot todo.Snapshot) (int64, error) {
@@ -685,11 +695,29 @@ func (s *JSONLStore) LoadResolvedJournalRecords(ctx context.Context, sessionID s
 }
 
 func (s *JSONLStore) AppendCommandReceipt(ctx context.Context, sessionID string, receipt CommandReceipt) (int64, error) {
+	return s.AppendCommand(ctx, sessionID, nil, receipt)
+}
+
+func (s *JSONLStore) AppendCommand(ctx context.Context, sessionID string, input *CommandInput, receipt CommandReceipt) (int64, error) {
 	if strings.TrimSpace(receipt.CommandID) == "" || strings.TrimSpace(receipt.Kind) == "" || strings.TrimSpace(receipt.ResourceID) == "" {
 		return -1, fmt.Errorf("command receipt requires command_id, kind, and resource_id")
 	}
 	if receipt.CreatedAt.IsZero() {
 		receipt.CreatedAt = s.nowFn().UTC()
+	}
+	if input != nil {
+		copy := *input
+		copy.CommandID = strings.TrimSpace(copy.CommandID)
+		copy.Kind = strings.TrimSpace(copy.Kind)
+		copy.TurnID = strings.TrimSpace(copy.TurnID)
+		copy.Content = strings.TrimSpace(copy.Content)
+		if copy.CommandID == "" || copy.Kind == "" || copy.TurnID == "" || copy.Content == "" {
+			return -1, fmt.Errorf("command input requires command_id, kind, turn_id, and content")
+		}
+		if copy.CreatedAt.IsZero() {
+			copy.CreatedAt = s.nowFn().UTC()
+		}
+		receipt.Input = &copy
 	}
 	_, lastSeq, err := s.appendRecords(ctx, sessionID, []Record{{Kind: JournalCommandReceipt, CommandReceipt: &receipt}})
 	return lastSeq, err
@@ -881,9 +909,9 @@ func latestTurnState(records []Record) (turnID string, status JournalKind, failu
 			if record.TurnID == turnID {
 				status = JournalTurnCompleted
 			}
-		case JournalTurnFailed:
+		case JournalTurnFailed, JournalTurnStopped:
 			if record.TurnID == turnID {
-				status = JournalTurnFailed
+				status = record.Kind
 				failure = record.Error
 			}
 		}

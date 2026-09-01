@@ -8,7 +8,20 @@ export interface RecentWorkspace {
 export interface BootstrapResponse {
   schema_version: number;
   recent_workspaces: RecentWorkspace[];
+  loaded_workspaces?: RecentWorkspace[];
   loaded_runtimes: number;
+}
+
+export interface WorkspaceResponse {
+  id: string;
+  path: string;
+  name: string;
+  loaded: boolean;
+}
+
+export interface SessionMutationResult {
+  session_id: string;
+  session_version: number;
 }
 
 export interface MessagePart {
@@ -82,8 +95,15 @@ export interface DeltaPayload { part_id: string; offset: number; text: string }
 export interface PartStartedPayload { part_id: string; part_index: number; kind?: string; redacted?: boolean }
 export interface PartCompletedPayload { part_id: string; final_length: number }
 export interface ResetPayload { reason: string; current_stream_id: string; latest_sequence: number }
+export interface TurnPayload { turn_id: string; status?: string }
+export interface QueueUpdatedPayload { items: unknown[]; session_version: number }
 
 export type KnownAppEvent =
+  | AppEventBase<'turn.started', TurnPayload>
+  | AppEventBase<'turn.completed', TurnPayload>
+  | AppEventBase<'turn.failed', TurnPayload>
+  | AppEventBase<'turn.cancelled', TurnPayload>
+  | AppEventBase<'queue.updated', QueueUpdatedPayload>
   | AppEventBase<'assistant.part.started', PartStartedPayload>
   | AppEventBase<'assistant.delta', DeltaPayload>
   | AppEventBase<'assistant.part.completed', PartCompletedPayload>
