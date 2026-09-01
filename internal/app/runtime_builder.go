@@ -43,13 +43,14 @@ func BuildWorkspaceRuntime(ctx context.Context, opts WorkspaceRuntimeOptions, co
 	coordinator := NewWorkspaceCoordinator()
 	uiAdapter := NewUIAdapter(workspace.ID, coordinator, eventHub)
 	interactions := NewInteractionHub(workspace.ID, coordinator, eventHub)
+	traceDetail := NewTraceDetailStore(eventHub)
 	output := opts.Output
 	if output == nil {
 		output = uiAdapter
 	}
 	runtime := &WorkspaceRuntime{
 		Root: root, ControllerLease: opts.ControllerLease,
-		Coordinator: coordinator, UIAdapter: uiAdapter, Interactions: interactions, EventHub: eventHub,
+		Coordinator: coordinator, UIAdapter: uiAdapter, Interactions: interactions, TraceDetail: traceDetail, EventHub: eventHub,
 	}
 	runtime.initializeCloseStages()
 	success := false

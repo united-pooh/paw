@@ -142,6 +142,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/workspaces/{workspace_id}/sessions/{session_id}/cancel", s.handleCancel)
 	mux.HandleFunc("POST /api/workspaces/{workspace_id}/sessions/{session_id}/interactions/{request_id}/answer", s.handleAnswerQuestion)
 	mux.HandleFunc("POST /api/workspaces/{workspace_id}/sessions/{session_id}/interactions/{request_id}/decision", s.handleDecidePermission)
+	mux.HandleFunc("GET /api/workspaces/{workspace_id}/trace/{event_id}", s.handleTraceDetail)
 	mux.HandleFunc("POST /api/workspaces/{workspace_id}/sessions/{session_id}/fork", s.handleForkSession)
 	mux.HandleFunc("GET /api/workspaces/{workspace_id}/sessions/{session_id}/export", s.handleExportSession)
 	mux.Handle("/", StaticHandler())

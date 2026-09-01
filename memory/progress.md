@@ -175,3 +175,4 @@
 - [x] 任务 22：接通 active_turn 校验下的 steer、queue、cancel，持久化 command input/receipt，并同步 Composer 运行状态与队列事件 <!-- todo:impl-22 -->
 - [x] 调查“复述目标 + 宣布下一步”消息的实际来源与关闭方式：用户端 harness 自动注入的续行提示，非 agent.md 要求 <!-- todo:investigate-progress-restatement -->
 - [x] 任务 23：实现 InteractionHub question/permission 请求-应答、coordinator pending 状态、SSE 事件、HTTP answer/decision 幂等端点与前端 InteractionBanner <!-- todo:impl-23 -->
+- [x] 任务 25：实现 bounded TraceDetailStore、scoped /trace/{event_id} 详情 API、2MiB 截断与前端详情栏 loading/error/copy 状态 <!-- todo:impl-25 -->

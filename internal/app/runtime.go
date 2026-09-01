@@ -40,6 +40,7 @@ type WorkspaceRuntime struct {
 	TurnService        *TurnService
 	UIAdapter          *UIAdapter
 	Interactions       *InteractionHub
+	TraceDetail        *TraceDetailStore
 	EventHub           *EventHub
 
 	configManager *configv2.Manager
