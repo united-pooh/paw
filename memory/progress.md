@@ -179,3 +179,4 @@
 - [x] 任务 1–23：canonical path、lease、session root、runtime、governor、supervisor、coordinator、session service、事件/快照、receipt、UI adapter、serve、auth、API、SSE、前端工具链、store/reducer、只读工作台、submit、steer/queue/cancel、question/permission <!-- todo:impl-1-to-23 -->
 - [x] 任务 24/25：trace detail store、详情 API 与前端详情栏 <!-- todo:impl-24-25 -->
 - [x] 任务 26：SSE reset 后重取快照并按新 stream/sequence 重连，reconnectingSnapshot 防并发重载 <!-- todo:impl-26 -->
+- [x] 任务 1–26：后端运行时/事件/命令/SSE/交互/详情与前端工作台全部核心闭环 <!-- todo:impl-1-to-26 -->
