@@ -393,33 +393,34 @@ color: var(--faint); font-size: 11px; letter-spacing: 0.02em;
 }
 
 /* ---------- 模型 / 推理强度卡片堆 ---------- */
-/* 模型配置卡（在后）与输入框卡（在前）始终交叠 30px：静置时后卡只露顶部一条
-   预览带，悬浮或聚焦时以后卡自身高度动画向上抽出（负 margin 不变，输入卡纹丝
-   不动）。30px 交叠略大于输入卡圆角，抽出后下缘依旧藏在输入卡之下，视觉上是一
-   张被抽出的卡片而不是两张分离卡片。 */
+/* 模型配置卡（在后）与输入框卡（在前）始终交叠 35px（大于输入卡圆角，接缝处
+   下缘全程被遮住）：静置时后卡只露 12px 预览带，悬浮或聚焦时后卡以自身高度
+   动画向上抽出（负 margin 不变，输入卡纹丝不动），可见区固定为 47px。视觉上
+   是一张被抽出的卡片而不是两张分离卡片。 */
 .deck-card {
-width: min(768px, calc(100% - 48px)); margin: 0 auto -30px; position: relative; z-index: 0;
-height: 14px; box-sizing: border-box; overflow: hidden;
+width: min(748px, calc(100% - 68px)); margin: 0 auto -35px; position: relative; z-index: 0;
+height: 47px; box-sizing: border-box; overflow: hidden;
 background: var(--surface-muted); border: 1px solid var(--border);
 border-radius: var(--radius-xl); box-shadow: var(--shadow-sm);
 transition: height .3s var(--ease-out), background .3s ease, box-shadow .3s var(--ease-out);
 }
 .deck-card:hover, .deck-card:focus-within {
-height: 54px; background: var(--surface); box-shadow: var(--shadow-md);
+height: 82px; background: var(--surface); box-shadow: var(--shadow-md);
 }
 /* 静置时露出的预览带显示当前模型·强度摘要，抽出时淡出 */
 .deck-peek {
-position: absolute; top: 0; left: 0; right: 0; height: 14px;
+position: absolute; top: 0; left: 0; right: 0; height: 12px;
 display: flex; align-items: center; justify-content: center;
 font-size: 9.5px; letter-spacing: .04em; color: var(--faint);
 pointer-events: none; white-space: nowrap; overflow: hidden;
 transition: opacity .15s ease;
 }
 .deck-card:hover .deck-peek, .deck-card:focus-within .deck-peek { opacity: 0; }
+/* 控件行固定在可见区（卡片顶部 47px），底部 35px 始终藏在输入卡之下 */
 .deck-row {
-height: 54px; box-sizing: border-box;
+position: absolute; top: 0; left: 0; right: 0; height: 47px; box-sizing: border-box;
 display: flex; align-items: center; justify-content: space-between; gap: 12px;
-padding: 16px 16px 8px;
+padding: 16px 16px 7px;
 opacity: 0; transform: translateY(3px); visibility: hidden;
 transition: opacity .18s ease .05s, transform .26s var(--ease-out) .05s, visibility 0s .25s;
 }
