@@ -53,6 +53,52 @@ it('steers by default, can queue, and cancels an active turn without losing draf
   expect(screen.getByRole('status')).toHaveTextContent('已排队 1 条消息');
 });
 
+it('输入 @ 展示文件候补，Enter 确认、目录可下钻、Escape 关闭', async () => {
+  const user = userEvent.setup();
+  const queries: string[] = [];
+  render(<Composer workspaceID="w" sessionID="s" onSubmit={async () => undefined}
+    loadCompletions={async (trigger, query) => {
+      queries.push(`${trigger}${query}`);
+      if (trigger !== '@') return [];
+      if (query.startsWith('docs/')) return [{ label: 'guide.md' }];
+      return [{ label: 'README.md' }, { label: 'docs/', dir: true }];
+    }} />);
+  const textarea = screen.getByLabelText('消息');
+  await user.type(textarea, '@read');
+  // 候补出现，默认选中第一项，Enter 写回并追加空格
+  expect(await screen.findByRole('option', { name: /README\.md/ })).toBeInTheDocument();
+  await user.keyboard('{Enter}');
+  expect(textarea).toHaveValue('@README.md ');
+
+  // 目录候选：选中后保留下钻，继续加载目录内文件
+  await user.type(textarea, '@do');
+  expect(await screen.findByRole('option', { name: /docs\// })).toBeInTheDocument();
+  await user.keyboard('{ArrowDown}{Enter}');
+  expect(textarea).toHaveValue('@README.md @docs/');
+  expect(await screen.findByRole('option', { name: /guide\.md/ })).toBeInTheDocument();
+  expect(queries).toContain('@docs/');
+
+  // Escape 关闭弹窗，Enter 恢复正常提交
+  await user.keyboard('{Escape}');
+  expect(screen.queryByRole('listbox')).toBeNull();
+});
+
+it('斜杠指令候补与提交互不干扰', async () => {
+  const user = userEvent.setup();
+  const calls: string[] = [];
+  render(<Composer workspaceID="w" sessionID="s"
+    onSubmit={async (text) => { calls.push(text); }}
+    loadCompletions={async (trigger) => trigger === '/' ? [{ label: '/task', detail: '派发子任务' }] : []} />);
+  const textarea = screen.getByLabelText('消息');
+  await user.type(textarea, '/ta');
+  expect(await screen.findByRole('option', { name: /\/task/ })).toBeInTheDocument();
+  await user.keyboard('{Enter}');
+  expect(textarea).toHaveValue('/task ');
+  // 弹窗已关闭，此时 Enter 正常发送
+  await user.keyboard('{Enter}');
+  expect(calls).toEqual(['/task']);
+});
+
 it('does not silently fall back when a running action callback is unavailable', async () => {
   const user = userEvent.setup();
   const actions: string[] = [];

@@ -51,6 +51,20 @@ func (s *Server) handleOpenWorkspace(writer http.ResponseWriter, request *http.R
 	writeJSON(writer, http.StatusOK, workspaceResponse{ID: workspace.ID, Path: runtime.Root, Name: workspace.Name, Loaded: true})
 }
 
+// handlePickWorkspace 打开操作系统原生文件夹选择框，返回用户选择的路径；
+// 用户取消时返回 cancelled=true，由前端静默忽略。
+func (s *Server) handlePickWorkspace(writer http.ResponseWriter, request *http.Request) {
+	path, err := pickFolder()
+	if err != nil {
+		writeJSONError(writer, http.StatusInternalServerError, "folder_picker_failed", err.Error(), RequestID(request.Context()))
+		return
+	}
+	writeJSON(writer, http.StatusOK, struct {
+		Path      string `json:"path,omitempty"`
+		Cancelled bool   `json:"cancelled,omitempty"`
+	}{Path: path, Cancelled: path == ""})
+}
+
 func (s *Server) handleCloseWorkspace(writer http.ResponseWriter, request *http.Request) {
 	id := app.WorkspaceID(request.PathValue("workspace_id"))
 	if err := s.supervisor.Close(request.Context(), id); err != nil {

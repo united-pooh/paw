@@ -23,6 +23,10 @@ type TurnMetadata struct {
 	ResponseAt   *time.Time `json:"response_at,omitempty"`
 	DurationMS   int64      `json:"duration_ms"`
 	Status       TurnStatus `json:"status"`
+	// InputTokens/OutputTokens 记录本轮相对会话累计的增量用量，仅用于
+	// 展示（消息页脚），绝不参与模型历史或上下文统计。
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
 }
 
 // TurnMetadataStore is an optional session capability. Keeping it separate

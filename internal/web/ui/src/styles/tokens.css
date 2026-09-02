@@ -1,14 +1,69 @@
 :root {
-  --bg: #f7f7f5;
+  /* 暖纸色基底（Claude 系审美：低饱和、柔和、纸感） */
+  --bg: #faf9f6;
+  --bg-warm: #f3f1ec;
   --surface: #ffffff;
-  --surface-muted: #f1f2f4;
-  --border: #e2e2de;
-  --text: #171717;
-  --muted: #74777f;
-  --accent: #5b82ef;
-  --accent-soft: #eaf0ff;
-  --radius: 14px;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --surface-muted: #f5f3ee;
+  --surface-warm: #f8f6f2;
+  --surface-hover: #f0ede7;
+  --border: #e8e4db;
+  --border-strong: #d8d2c4;
+
+  /* 文字 */
+  --text: #1f1c17;
+  --text-soft: #45403a;
+  --muted: #8d867a;
+  --faint: #b3ab9d;
+
+  /* 品牌强调色（暖陶土橙） */
+  --accent: #c15f3c;
+  --accent-strong: #a84e2e;
+  --accent-soft: #f4e8e1;
+  --accent-faint: rgba(193, 95, 60, 0.08);
+
+  /* 语义色 */
+  --thinking: #7a6ff0;
+  --thinking-soft: #f1effc;
+  --thinking-border: rgba(122, 111, 240, 0.22);
+  --danger: #bf4a44;
+  --danger-soft: #faeceb;
+  --success: #4c8a5f;
+  --success-soft: #ecf4ee;
+  --warning: #9a6b12;
+  --warning-soft: #faf3e1;
+  --warning-border: rgba(154, 107, 18, 0.28);
+
+  /* 代码 */
+  --code-bg: #28241f;
+  --code-text: #f0ebe2;
+  --code-inline-bg: #f1eee7;
+
+  /* 几何 */
+  --radius: 10px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-xl: 26px;
+
+  /* 阴影（暖调、轻量） */
+  --shadow-xs: 0 1px 2px rgba(31, 28, 23, 0.04);
+  --shadow-sm: 0 1px 3px rgba(31, 28, 23, 0.05), 0 1px 2px rgba(31, 28, 23, 0.03);
+  --shadow-md: 0 4px 14px rgba(31, 28, 23, 0.07), 0 1px 4px rgba(31, 28, 23, 0.04);
+  --shadow-lg: 0 16px 48px rgba(31, 28, 23, 0.12), 0 4px 12px rgba(31, 28, 23, 0.05);
+  --ring: 0 0 0 3px rgba(193, 95, 60, 0.16);
+
+  /* 字体 */
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-serif: "Songti SC", "Noto Serif SC", Georgia, "Times New Roman", serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* 动效 */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+
+  font-family: var(--font-ui);
+  font-size: 15px;
   color: var(--text);
   background: var(--bg);
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }

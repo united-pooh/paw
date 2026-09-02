@@ -9,25 +9,214 @@ function safeLink(href: string): string | null {
   }
 }
 
+/** 行内语法：代码、粗体、斜体、行内公式、链接 */
+function renderInline(text: string, keyPrefix: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  const pattern = /(`[^`]+`)|\*\*([^*]+)\*\*|\*([^*\n]+)\*|\$([^$\n]+)\$|\[([^\]]+)\]\(([^)]+)\)/g;
+  let offset = 0;
+  for (const match of text.matchAll(pattern)) {
+    const index = match.index ?? 0;
+    if (index > offset) nodes.push(text.slice(offset, index));
+    const key = `${keyPrefix}-${index}`;
+    const [, code, bold, italic, math, linkText, linkHref] = match;
+    if (code !== undefined) {
+      nodes.push(<code key={key}>{code.slice(1, -1)}</code>);
+    } else if (bold !== undefined) {
+      nodes.push(<strong key={key}>{bold}</strong>);
+    } else if (italic !== undefined) {
+      nodes.push(<em key={key}>{italic}</em>);
+    } else if (math !== undefined) {
+      nodes.push(<code key={key} className="math-inline">{math}</code>);
+    } else if (linkText !== undefined && linkHref !== undefined) {
+      const href = safeLink(linkHref);
+      nodes.push(href
+        ? <a key={key} href={href} rel="noreferrer" target="_blank">{linkText}</a>
+        : <span key={key}>{linkText}</span>);
+    }
+    offset = index + match[0].length;
+  }
+  if (offset < text.length) nodes.push(text.slice(offset));
+  return nodes;
+}
+
+type Block =
+  | { type: 'code'; content: string }
+  | { type: 'math'; content: string }
+  | { type: 'heading'; level: number; content: string }
+  | { type: 'table'; header: string[]; rows: string[][] }
+  | { type: 'list'; ordered: boolean; items: string[] }
+  | { type: 'quote'; content: string }
+  | { type: 'hr' }
+  | { type: 'paragraph'; content: string };
+
+function splitTableRow(line: string): string[] {
+  return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim());
+}
+
+function isTableSeparator(line: string): boolean {
+  return /^\|?[\s:|-]+\|?$/.test(line.trim()) && line.includes('-');
+}
+
+function isBlockStarter(line: string): boolean {
+  const trimmed = line.trim();
+  return (
+    trimmed === '' ||
+    trimmed.startsWith('```') ||
+    trimmed.startsWith('$$') ||
+    /^#{1,6}\s/.test(trimmed) ||
+    /^([-*]|\d+\.)\s/.test(trimmed) ||
+    trimmed.startsWith('>') ||
+    /^-{3,}$/.test(trimmed) ||
+    trimmed.startsWith('|')
+  );
+}
+
+function parseBlocks(text: string): Block[] {
+  const lines = text.split('\n');
+  const blocks: Block[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    if (trimmed === '') { i++; continue; }
+
+    // 代码块 ```...```
+    if (trimmed.startsWith('```')) {
+      const buf: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith('```')) { buf.push(lines[i]); i++; }
+      i++; // 跳过收尾 ```
+      blocks.push({ type: 'code', content: buf.join('\n') });
+      continue;
+    }
+
+    // 数学块 $$...$$（支持单行与多行）
+    if (trimmed.startsWith('$$')) {
+      const first = trimmed.slice(2);
+      if (first.endsWith('$$')) {
+        blocks.push({ type: 'math', content: first.slice(0, -2).trim() });
+        i++;
+        continue;
+      }
+      const buf: string[] = first ? [first] : [];
+      i++;
+      while (i < lines.length) {
+        const current = lines[i].trim();
+        i++;
+        if (current.endsWith('$$')) {
+          const tail = current.slice(0, -2);
+          if (tail) buf.push(tail);
+          break;
+        }
+        buf.push(current);
+      }
+      blocks.push({ type: 'math', content: buf.join('\n').trim() });
+      continue;
+    }
+
+    // 标题 #..######
+    const heading = /^(#{1,6})\s+(.*)$/.exec(trimmed);
+    if (heading) {
+      blocks.push({ type: 'heading', level: heading[1].length, content: heading[2].trim() });
+      i++;
+      continue;
+    }
+
+    // 分割线 ---
+    if (/^-{3,}$/.test(trimmed)) {
+      blocks.push({ type: 'hr' });
+      i++;
+      continue;
+    }
+
+    // 表格 | a | b |
+    if (trimmed.startsWith('|')) {
+      const rows: string[] = [];
+      while (i < lines.length && lines[i].trim().startsWith('|')) { rows.push(lines[i]); i++; }
+      if (rows.length >= 2 && isTableSeparator(rows[1])) {
+        blocks.push({ type: 'table', header: splitTableRow(rows[0]), rows: rows.slice(2).map(splitTableRow) });
+      } else {
+        blocks.push({ type: 'paragraph', content: rows.join('\n') });
+      }
+      continue;
+    }
+
+    // 列表 - / * / 1.
+    const listMatch = /^([-*]|\d+\.)\s+(.*)$/.exec(trimmed);
+    if (listMatch) {
+      const ordered = /\d+\./.test(listMatch[1]);
+      const items: string[] = [];
+      while (i < lines.length) {
+        const entry = /^([-*]|\d+\.)\s+(.*)$/.exec(lines[i].trim());
+        if (!entry) break;
+        items.push(entry[2]);
+        i++;
+      }
+      blocks.push({ type: 'list', ordered, items });
+      continue;
+    }
+
+    // 引用 >
+    if (trimmed.startsWith('>')) {
+      const buf: string[] = [];
+      while (i < lines.length) {
+        const quote = /^>\s?(.*)$/.exec(lines[i].trim());
+        if (!quote) break;
+        buf.push(quote[1]);
+        i++;
+      }
+      blocks.push({ type: 'quote', content: buf.join('\n') });
+      continue;
+    }
+
+    // 普通段落：累计到空行或下一块级元素
+    const paragraph: string[] = [];
+    while (i < lines.length && !isBlockStarter(lines[i])) {
+      paragraph.push(lines[i]);
+      i++;
+    }
+    blocks.push({ type: 'paragraph', content: paragraph.join('\n') });
+  }
+  return blocks;
+}
+
+const HEADING_TAGS = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'] as const;
+
 export function MarkdownContent({ text }: { text: string }) {
-  const blocks = text.split(/\n{2,}/);
   return (
     <div className="markdown-content">
-      {blocks.map((block, index) => {
-        if (block.startsWith('```') && block.endsWith('```')) {
-          return <pre key={index}>{block.slice(3, -3).trim()}</pre>;
+      {parseBlocks(text).map((block, index) => {
+        const key = index;
+        const keyPrefix = `b${index}`;
+        switch (block.type) {
+          case 'code':
+            return <pre key={key}>{block.content}</pre>;
+          case 'math':
+            return <pre key={key} className="math-block">{block.content}</pre>;
+          case 'heading': {
+            const Tag = HEADING_TAGS[Math.min(block.level, 6) - 1];
+            return <Tag key={key}>{renderInline(block.content, keyPrefix)}</Tag>;
+          }
+          case 'table':
+            return (
+              <table key={key}>
+                <thead><tr>{block.header.map((cell, cellIndex) => <th key={cellIndex}>{renderInline(cell, `${keyPrefix}h${cellIndex}`)}</th>)}</tr></thead>
+                <tbody>{block.rows.map((row, rowIndex) => (
+                  <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={cellIndex}>{renderInline(cell, `${keyPrefix}r${rowIndex}c${cellIndex}`)}</td>)}</tr>
+                ))}</tbody>
+              </table>
+            );
+          case 'list':
+            return block.ordered
+              ? <ol key={key}>{block.items.map((item, itemIndex) => <li key={itemIndex}>{renderInline(item, `${keyPrefix}-${itemIndex}`)}</li>)}</ol>
+              : <ul key={key}>{block.items.map((item, itemIndex) => <li key={itemIndex}>{renderInline(item, `${keyPrefix}-${itemIndex}`)}</li>)}</ul>;
+          case 'quote':
+            return <blockquote key={key}>{renderInline(block.content, keyPrefix)}</blockquote>;
+          case 'hr':
+            return <hr key={key} />;
+          default:
+            return <p key={key}>{renderInline(block.content, keyPrefix)}</p>;
         }
-        const nodes: ReactNode[] = [];
-        const pattern = /\[([^\]]+)\]\(([^)]+)\)/g;
-        let offset = 0;
-        for (const match of block.matchAll(pattern)) {
-          nodes.push(block.slice(offset, match.index));
-          const href = safeLink(match[2]);
-          nodes.push(href ? <a key={`${index}-${match.index}`} href={href} rel="noreferrer" target="_blank">{match[1]}</a> : <span key={`${index}-${match.index}`}>{match[1]}</span>);
-          offset = (match.index ?? 0) + match[0].length;
-        }
-        nodes.push(block.slice(offset));
-        return <p key={index}>{nodes}</p>;
       })}
     </div>
   );

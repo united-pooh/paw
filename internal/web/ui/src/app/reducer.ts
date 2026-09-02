@@ -1,4 +1,4 @@
-import type { AppEvent, DeltaPayload, SessionSnapshot, StreamingPart } from '../api/types';
+import type { AppEvent, DeltaPayload, SessionSnapshot, StreamingPart, ToolCallState, ToolCompletedPayload, ToolFailedPayload, ToolStartedPayload } from '../api/types';
 
 export type ConnectionState = 'idle' | 'connecting' | 'live' | 'reconnecting' | 'reset' | 'fatal';
 
@@ -7,6 +7,7 @@ export interface WorkbenchState {
   streamID: string;
   sequence: number;
   parts: Record<string, StreamingPart>;
+  tools: Record<string, ToolCallState>;
   connection: ConnectionState;
   interactions: {
     [requestID: string]:
@@ -28,6 +29,7 @@ export const initialState: WorkbenchState = {
   streamID: '',
   sequence: 0,
   parts: {},
+  tools: {},
   connection: 'idle',
   interactions: {}
 };
@@ -61,6 +63,8 @@ export function reducer(state: WorkbenchState, action: StoreAction): WorkbenchSt
       streamID: action.snapshot.stream_id,
       sequence: action.snapshot.event_sequence,
       parts,
+      // 工具调用属于实时态：同一会话保留，切换会话时随快进快照一并重置。
+      tools: state.snapshot?.session_id === action.snapshot.session_id ? state.tools : {},
       interactions,
       connection: 'live'
     };
@@ -88,9 +92,11 @@ function reduceEvent(state: WorkbenchState, event: AppEvent): WorkbenchState {
   if (event.type === 'turn.started') {
     return commitSnapshotEvent(state, event, (snapshot) => {
       const turnID = event.turn_id ?? (event.payload as { turn_id?: string }).turn_id ?? '';
+      // 乐观写入开始时间：turn 完成前页脚即可显示时间与计时，
+      // 快照拉取后以服务端持久化的精确值覆盖。
       const turns = snapshot.turns.some((turn) => turn.turn_id === turnID)
-        ? snapshot.turns.map((turn) => turn.turn_id === turnID ? { ...turn, status: 'running' } : turn)
-        : [...snapshot.turns, { turn_id: turnID, messages: [], status: 'running' }];
+        ? snapshot.turns.map((turn) => turn.turn_id === turnID ? { ...turn, status: 'running', started_at: turn.started_at ?? event.time } : turn)
+        : [...snapshot.turns, { turn_id: turnID, messages: [], status: 'running', started_at: event.time }];
       return { ...snapshot, turns, active_turn_id: turnID, session_version: event.entity_version ?? snapshot.session_version };
     });
   }
@@ -134,6 +140,40 @@ function reduceEvent(state: WorkbenchState, event: AppEvent): WorkbenchState {
       return { ...state, connection: 'reset', resetReason: 'part_missing' };
     }
     return commitEvent(state, event, { ...state.parts, [payload.part_id]: { ...current, completed: true } });
+  }
+  if (event.type === 'tool.started') {
+    const payload = event.payload as ToolStartedPayload;
+    if (!payload.tool_use_id) return { ...state, sequence: event.sequence, streamID: event.stream_id };
+    const existing = state.tools[payload.tool_use_id];
+    const tool: ToolCallState = {
+      tool_use_id: payload.tool_use_id,
+      name: payload.name ?? existing?.name ?? 'tool',
+      target: payload.target ?? existing?.target,
+      args_summary: payload.args_summary ?? existing?.args_summary,
+      result_summary: existing?.result_summary,
+      detail_id: existing?.detail_id,
+      status: 'running'
+    };
+    return { ...state, tools: { ...state.tools, [tool.tool_use_id]: tool }, sequence: event.sequence, streamID: event.stream_id };
+  }
+  if (event.type === 'tool.completed' || event.type === 'tool.failed') {
+    const payload = event.payload as (ToolCompletedPayload & ToolFailedPayload);
+    if (!payload.tool_use_id) return { ...state, sequence: event.sequence, streamID: event.stream_id };
+    const existing = state.tools[payload.tool_use_id];
+    const failed = event.type === 'tool.failed';
+    const tool: ToolCallState = {
+      tool_use_id: payload.tool_use_id,
+      name: payload.name ?? existing?.name ?? 'tool',
+      target: existing?.target,
+      args_summary: existing?.args_summary,
+      result_summary: failed ? (payload.message ?? existing?.result_summary) : (payload.result_summary ?? existing?.result_summary),
+      error_code: failed ? payload.error_code : undefined,
+      error_message: failed ? payload.message : undefined,
+      detail_id: payload.detail_id ?? existing?.detail_id,
+      duration_ms: payload.duration_ms ?? existing?.duration_ms,
+      status: failed ? 'failed' : 'completed'
+    };
+    return { ...state, tools: { ...state.tools, [tool.tool_use_id]: tool }, sequence: event.sequence, streamID: event.stream_id };
   }
   if (event.type === 'question.requested') {
     const payload = event.payload as { request_id: string; prompt: string; mode: string; options: { id: string; label: string; description?: string }[] };

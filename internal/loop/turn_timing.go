@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"paw/internal/message"
+	"paw/internal/model"
 	"paw/internal/session"
 	"time"
 )
@@ -13,6 +14,10 @@ import (
 type TurnTiming struct {
 	TurnID    string
 	StartedAt time.Time
+	// usageAtStart 记录回合开始前的会话累计用量（由 runTurnWithTiming 捕获），
+	// completeTurnExecution 用它计算本轮的 token 增量。
+	usageAtStart      model.Usage
+	usageAtStartKnown bool
 }
 
 // TurnExecution contains the assistant result plus display-only metadata.
@@ -89,6 +94,23 @@ func (runner *Engine) completeTurnExecution(ctx context.Context, timing *TurnTim
 		ResponseAt: &responseAt,
 		DurationMS: duration.Milliseconds(),
 		Status:     session.TurnStatusCompleted,
+	}
+	if timing.usageAtStartKnown {
+		if end, ok := runner.usage.sessionUsage(); ok {
+			total := end.TotalTokens - timing.usageAtStart.TotalTokens
+			output := end.CompletionTokens - timing.usageAtStart.CompletionTokens
+			if total < 0 {
+				total = 0
+			}
+			if output < 0 {
+				output = 0
+			}
+			if output > total {
+				output = total
+			}
+			metadata.InputTokens = total - output
+			metadata.OutputTokens = output
+		}
 	}
 	if assistantSeq >= 0 {
 		seq := assistantSeq

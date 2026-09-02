@@ -29,6 +29,9 @@ type TurnProjection struct {
 	DurationMS int64             `json:"duration_ms,omitempty"`
 	Status     string            `json:"status,omitempty"`
 	Error      string            `json:"error,omitempty"`
+	// InputTokens/OutputTokens 为本轮展示用 token 增量（来自 turn sidecar）。
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
 }
 
 type SessionProjection struct {
@@ -155,6 +158,8 @@ func projectTurns(records []session.Record, metadata []session.TurnMetadata) []T
 		turn.StartedAt = item.StartedAt
 		turn.ResponseAt = item.ResponseAt
 		turn.DurationMS = item.DurationMS
+		turn.InputTokens = item.InputTokens
+		turn.OutputTokens = item.OutputTokens
 		if item.Status != "" {
 			turn.Status = string(item.Status)
 		}

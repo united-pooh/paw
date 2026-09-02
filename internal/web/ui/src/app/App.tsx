@@ -80,7 +80,13 @@ export function App() {
         const fragment = new URLSearchParams(window.location.hash.slice(1));
         const bootstrapToken = fragment.get('bootstrap');
         if (bootstrapToken) {
-          await api.exchangeBootstrap(bootstrapToken);
+          try {
+            await api.exchangeBootstrap(bootstrapToken);
+          } catch (cause) {
+            // 在 React 18/19 StrictMode 或重刷场景下，一次性 bootstrap token 可能已被消费。
+            // 此时不中断流程，尝试用已有 Session Cookie 继续加载 bootstrap 数据。
+            console.warn('Bootstrap token exchange failed or already exchanged:', cause);
+          }
           history.replaceState(null, '', `${location.pathname}${location.search}`);
         }
         const bootstrap = await api.bootstrap();
@@ -112,11 +118,12 @@ export function App() {
     }
   };
 
+  // 调用操作系统原生文件夹选择框；用户取消时 pick 返回 cancelled，静默忽略。
   const openWorkspace = (): void => {
-    const path = window.prompt('输入绝对工作区路径');
-    if (!path) return;
     void run(async () => {
-      const opened = await api.openWorkspace(path);
+      const picked = await api.pickWorkspace();
+      if (!picked.path) return;
+      const opened = await api.openWorkspace(picked.path);
       const workspace = { id: opened.id, path: opened.path, name: opened.name, last_opened_at: new Date().toISOString() };
       setWorkspaces((current) => [workspace, ...current.filter((item) => item.id !== workspace.id)]);
       await selectWorkspace(workspace.id);
@@ -142,6 +149,7 @@ export function App() {
       sessions={sessions}
       snapshot={workbench.snapshot}
       parts={workbench.parts}
+      tools={workbench.tools}
       interactions={(() => { const entries = Object.entries(workbench.interactions ?? {}); const [requestID, value] = entries[0] ?? ['', undefined]; return value ? { requestID, ...value } : null; })()}
       onAnswer={(wid, sid, requestID, selectedOption) => { void run(() => api.answerQuestion(wid, sid, requestID, { selected_option: selectedOption }), false); }}
       onDecide={(wid, sid, requestID, decision) => { void run(() => api.decidePermission(wid, sid, requestID, { decision }), false); }}

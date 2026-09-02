@@ -4,12 +4,9 @@ package bubble
 import (
 	"fmt"
 	"os"
-	"path/filepath"
+	"paw/internal/complete"
 	"paw/internal/skill"
-	"sort"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -69,114 +66,31 @@ func (c *completion) navigateDown() {
 // 触发检测
 // ──────────────────────────────────────────────────────────────────────────────
 
-// detectAtTrigger 在 value 中找到最末尾的词边界 @ 触发点。
-// 词边界条件：@ 位于字符串开头，或前一个字符为空白符。
-// query 为 @ 之后到字符串末尾的内容；query 内不能含空白符（否则说明词已结束）。
-// 如果未找到满足条件的 @，返回 (-1, "")。
+// 触发检测与路径解析的纯实现已提取到 internal/complete，供 TUI 与 Web 复用；
+// 以下为保持既有调用与测试不变的薄封装。
+
 func detectAtTrigger(value string) (atByteIndex int, query string) {
-	return detectWordTrigger(value, '@')
+	return complete.DetectAtTrigger(value)
 }
 
-// detectSkillTrigger 在 value 中找到最末尾的词边界 $ 触发点。
 func detectSkillTrigger(value string) (dollarByteIndex int, query string) {
-	return detectWordTrigger(value, '$')
+	return complete.DetectSkillTrigger(value)
 }
 
 func detectWordTrigger(value string, trigger rune) (byteIndex int, query string) {
-	runes := []rune(value)
-	n := len(runes)
-	if n == 0 {
-		return -1, ""
-	}
-
-	// 从末尾向前扫描，找到当前"词"的起始位置。
-	// 词 = 连续的非空白字符序列（位于末尾）。
-	wordStart := n // 默认：末尾是空白，没有当前词
-	for i := n - 1; i >= 0; i-- {
-		if unicode.IsSpace(runes[i]) {
-			wordStart = i + 1
-			break
-		}
-		wordStart = i
-	}
-
-	if wordStart >= n {
-		return -1, "" // 当前词为空（末尾是空白）
-	}
-
-	// 当前词必须以触发字符开头
-	if runes[wordStart] != trigger {
-		return -1, ""
-	}
-
-	// 词边界：触发字符在行首，或前一个字符为空白
-	if wordStart > 0 && !unicode.IsSpace(runes[wordStart-1]) {
-		return -1, ""
-	}
-
-	// 计算触发字符在原始字节串中的偏移
-	byteOff := 0
-	for _, r := range runes[:wordStart] {
-		byteOff += utf8.RuneLen(r)
-	}
-
-	// query = 触发字符之后的全部文本
-	q := string(runes[wordStart+1:])
-	return byteOff, q
+	return complete.DetectWordTrigger(value, trigger)
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
 // 路径解析
 // ──────────────────────────────────────────────────────────────────────────────
 
-// resolveSearchDir 根据 @ 之后的 query 解析搜索目录和文件名前缀。
-//
-//   - @       → (cwd, "")
-//   - @foo    → (cwd, "foo")
-//   - @sub/   → (cwd/sub, "")
-//   - @sub/f  → (cwd/sub, "f")
-//   - @~/f    → (HOME, "f")
-//   - @/etc/f → ("/etc", "f")
 func resolveSearchDir(query string) (dir, prefix string) {
-	cwd, _ := os.Getwd()
-	if cwd == "" {
-		cwd = "."
-	}
-
-	switch {
-	case query == "" || query == ".":
-		return cwd, ""
-
-	case query == "~":
-		home, _ := os.UserHomeDir()
-		return home, ""
-
-	case strings.HasPrefix(query, "~/"):
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return cwd, ""
-		}
-		return resolvePathParts(home, query[2:])
-
-	case strings.HasPrefix(query, "/"):
-		return resolvePathParts("/", query[1:])
-
-	default:
-		return resolvePathParts(cwd, query)
-	}
+	return complete.ResolveSearchDirCWD(query)
 }
 
-// resolvePathParts 将 base/rest 分解为 (directory, filePrefix)。
-// 若 rest 含路径分隔符，最后一段作为文件名前缀，其余拼入目录。
 func resolvePathParts(base, rest string) (dir, prefix string) {
-	if rest == "" {
-		return base, ""
-	}
-	if !strings.Contains(rest, "/") {
-		return base, rest
-	}
-	idx := strings.LastIndex(rest, "/")
-	return filepath.Join(base, rest[:idx]), rest[idx+1:]
+	return complete.ResolvePathParts(base, rest)
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -325,144 +239,12 @@ func loadFilesInDirCmd(searchDir, filePrefix string, useDefault bool) tea.Cmd {
 	}
 }
 
-// maxFileCompletionEntries 限制文件补全收集的条目总数，避免在 ~ 或 / 等
-// 大型目录树下递归出海量结果拖慢每次击键时的过滤。
-const maxFileCompletionEntries = 2000
-
-// maxCompletionDepth 限制递归搜索的目录深度（searchDir 自身为 0 层）。
-// 深度限制与 BFS 遍历配合，保证大 scope（如 @~）的遍历开销可控：
-// 超过该深度的子树不再进入，但目录条目本身（≤ 该深度）仍会列出，
-// 用户可先 Tab 进入深层目录后再继续搜索。
-const maxCompletionDepth = 8
-
-// completionSkipDirs 是递归遍历时整棵跳过的目录名。
-// 以点开头的隐藏目录不在这里过滤：它们可能包含用户希望引用的配置
-// （例如 .claude、.codex），应当与普通目录一样参与搜索。
-// 这里处理的是名字不以点开头但体积巨大且几乎不是搜索目标的家目录/系统
-// 噪音目录，避免 @~、@/ 的遍历被它们耗尽条目配额。
-var completionSkipDirs = map[string]bool{
-	"node_modules": true, // 依赖目录
-	"Library":      true, // macOS ~/Library、/Library
-	"AppData":      true, // Windows %USERPROFILE%\AppData
-	"System":       true, // macOS /System
-}
-
-// skipCompletionDir 判断递归遍历时是否应整棵跳过名为 name 的目录。
-func skipCompletionDir(name string) bool {
-	return completionSkipDirs[name]
-}
-
-// listFilesRecursive 递归列出 searchDir 目录树下的全部条目（不含 searchDir 本身）。
-// 条目为相对 searchDir 的路径，目录以 / 结尾；隐藏条目、completionSkipDirs
-// 中的目录以及超过 maxCompletionDepth 的子树被跳过。隐藏条目不会被跳过，
-// 因为 .claude、.codex 等隐藏目录也可能是用户需要引用的工作区文件。
-//
-// 遍历采用逐层（BFS）方式：先收集完整的第 1 层，再第 2 层，依此类推，
-// 达到 maxFileCompletionEntries 条后停止。相比深度优先遍历，BFS 保证浅层
-// 目录优先占满配额——即使某个深层大目录（如 ~/Pictures）文件极多，也不会
-// 挤掉其他浅层目录的条目，@~/proj 这类搜索总能命中 ~/Projects/ 本身。
-//
-// 返回的列表按嵌套深度升序排列，深度相同时保持字典序遍历顺序——因此当
-// 多个路径下存在同名文件时，嵌套最浅的排在前面。
 func listFilesRecursive(searchDir string) ([]string, error) {
-	var all []string
-	type pending struct {
-		dir   string
-		depth int
-	}
-	queue := []pending{{dir: searchDir, depth: 0}}
-	for len(queue) > 0 && len(all) < maxFileCompletionEntries {
-		cur := queue[0]
-		queue = queue[1:]
-
-		entries, err := os.ReadDir(cur.dir)
-		if err != nil {
-			continue // 无法读取的目录（如权限不足）整棵跳过
-		}
-		for _, e := range entries {
-			if len(all) >= maxFileCompletionEntries {
-				break
-			}
-			name := e.Name()
-			child := filepath.Join(cur.dir, name)
-			if e.IsDir() {
-				if skipCompletionDir(name) || cur.depth+1 > maxCompletionDepth {
-					continue
-				}
-				queue = append(queue, pending{dir: child, depth: cur.depth + 1})
-			}
-			rel, err := filepath.Rel(searchDir, child)
-			if err != nil {
-				continue
-			}
-			if e.IsDir() {
-				all = append(all, filepath.ToSlash(rel)+"/")
-			} else {
-				all = append(all, filepath.ToSlash(rel))
-			}
-		}
-	}
-	sortEntriesByDepth(all)
-	return all, nil
+	return complete.ListFilesRecursive(searchDir)
 }
 
-// sortEntriesByDepth 按嵌套深度升序稳定排序；深度相同时保持原有的
-// 字典序遍历顺序，因此同名条目中浅层（深度小）的排在前面。
-func sortEntriesByDepth(items []string) {
-	sort.SliceStable(items, func(i, j int) bool {
-		return entryDepth(items[i]) < entryDepth(items[j])
-	})
-}
-
-// entryDepth 返回条目相对路径的嵌套深度（按 / 分段数；目录的尾部斜杠
-// 本身就是一个分段，因此 docs/ 与 docs/test.md 同为深度 1）。
-func entryDepth(p string) int {
-	return strings.Count(p, "/")
-}
-
-// filterByPrefix 筛选文件补全条目（大小写不敏感）。
-//
-// 文件补全使用更适合文件名搜索的匹配规则：
-//   - 输入 "md" 时优先按扩展名匹配，例如 README.md；
-//   - 其他输入按文件名/目录名的任意位置匹配，例如 test 命中 my_test.go；
-//   - 目录仍然参与匹配，便于继续通过 Tab 浏览目录。
 func filterByPrefix(items []string, prefix string) []string {
-	if prefix == "" {
-		out := make([]string, len(items))
-		copy(out, items)
-		return out
-	}
-
-	query := strings.ToLower(strings.TrimSpace(prefix))
-	if query == "" {
-		out := make([]string, len(items))
-		copy(out, items)
-		return out
-	}
-
-	// 对不含点号的短查询，优先把它视为扩展名；只有没有扩展名命中时，
-	// 才回退到通用子串匹配。这样输入 md 会优先展示 .md 文件，同时不会
-	// 让用户因为目录或文件名中没有以 md 开头而看不到候选。
-	extensionMatches := make([]string, 0, len(items))
-	if !strings.Contains(query, ".") {
-		for _, item := range items {
-			name := strings.TrimSuffix(item, "/")
-			if strings.EqualFold(filepath.Ext(name), "."+query) {
-				extensionMatches = append(extensionMatches, item)
-			}
-		}
-		if len(extensionMatches) > 0 {
-			return extensionMatches
-		}
-	}
-
-	out := make([]string, 0, len(items))
-	for _, item := range items {
-		if strings.Contains(strings.ToLower(item), query) {
-			out = append(out, item)
-		}
-	}
-	return out
+	return complete.FilterByPrefix(items, prefix)
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

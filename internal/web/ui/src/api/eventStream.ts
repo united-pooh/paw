@@ -61,7 +61,8 @@ export class EventStream {
       'question.requested', 'question.resolved',
       'permission.requested', 'permission.resolved', 'interaction.expired',
       'assistant.part.started', 'assistant.delta', 'assistant.part.completed',
-      'reasoning.started', 'reasoning.delta', 'reasoning.completed', 'event.reset_required'
+      'reasoning.started', 'reasoning.delta', 'reasoning.completed',
+      'tool.started', 'tool.completed', 'tool.failed', 'event.reset_required'
     ]) {
       source.addEventListener(type, ((event: MessageEvent<string>) => {
         const parsed = JSON.parse(event.data) as AppEvent;

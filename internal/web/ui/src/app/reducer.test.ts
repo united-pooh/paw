@@ -33,6 +33,27 @@ it('handles UTF-8 offsets, duplicates, gaps and leaves session version unchanged
   expect(reducer(duplicate, { type: 'event.received', event: event(3, 'assistant.delta', { part_id: 'p1', offset: 99, text: 'x' }) }).resetReason).toBe('part_offset_gap');
 });
 
+it('aggregates tool lifecycle events into tools state', () => {
+  let state = reducer(initialState, { type: 'snapshot.loaded', snapshot });
+  state = reducer(state, { type: 'event.received', event: event(3, 'tool.started', { tool_use_id: 'c1', name: 'Read', target: '/tmp/a.go', args_summary: '{"file_path":"/tmp/a.go"}', started_at: new Date().toISOString() }) });
+  expect(state.tools.c1).toMatchObject({ name: 'Read', target: '/tmp/a.go', status: 'running' });
+  state = reducer(state, { type: 'event.received', event: event(4, 'tool.completed', { tool_use_id: 'c1', name: 'Read', result_summary: '42 lines', detail_id: 'detail-1', finished_at: new Date().toISOString(), duration_ms: 81 }) });
+  expect(state.tools.c1).toMatchObject({ status: 'completed', result_summary: '42 lines', detail_id: 'detail-1', duration_ms: 81, target: '/tmp/a.go' });
+  state = reducer(state, { type: 'event.received', event: event(5, 'tool.started', { tool_use_id: 'c2', name: 'Bash', target: 'rm -rf /', args_summary: '{}' }) });
+  state = reducer(state, { type: 'event.received', event: event(6, 'tool.failed', { tool_use_id: 'c2', name: 'Bash', error_code: 'permission_denied', message: 'blocked', finished_at: new Date().toISOString() }) });
+  expect(state.tools.c2).toMatchObject({ status: 'failed', error_code: 'permission_denied', error_message: 'blocked', target: 'rm -rf /' });
+});
+
+it('resets tools when a snapshot arrives for a different session', () => {
+  let state = reducer(initialState, { type: 'snapshot.loaded', snapshot });
+  state = reducer(state, { type: 'event.received', event: event(3, 'tool.started', { tool_use_id: 'c1', name: 'Read', target: '/tmp/a.go' }) });
+  expect(Object.keys(state.tools)).toHaveLength(1);
+  const sameSession = reducer(state, { type: 'snapshot.loaded', snapshot });
+  expect(Object.keys(sameSession.tools)).toHaveLength(1);
+  const otherSession = reducer(state, { type: 'snapshot.loaded', snapshot: { ...snapshot, session_id: 's2' } });
+  expect(otherSession.tools).toEqual({});
+});
+
 it('workspace.switched clears transient state while keeping connection', () => {
   let state = reducer(initialState, { type: 'snapshot.loaded', snapshot });
   state = reducer(state, { type: 'event.received', event: event(3, 'question.requested', { request_id: 'q1', prompt: 'Pick', mode: 'single', options: [], created_at: new Date().toISOString() }) });

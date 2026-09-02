@@ -36,6 +36,10 @@ func (runner *Engine) runTurnWithTiming(ctx context.Context, userInput message.M
 	if runner == nil {
 		return TurnExecution{}, fmt.Errorf("runner 未初始化")
 	}
+	if timing != nil {
+		// 记录回合开始前的会话累计用量，completeTurnExecution 据此计算本轮增量。
+		timing.usageAtStart, timing.usageAtStartKnown = runner.usage.sessionUsage()
+	}
 	turnCtx, finishTurn := runner.beginActiveTurn(ctx)
 	defer finishTurn()
 	ctx = turnCtx

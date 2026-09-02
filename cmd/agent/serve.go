@@ -92,6 +92,13 @@ func runServe(ctx context.Context, options serveOptions, output io.Writer, openB
 	if err != nil {
 		return err
 	}
+	if cwd, err := os.Getwd(); err == nil && strings.TrimSpace(cwd) != "" {
+		if _, err := supervisor.Open(ctx, appcore.WorkspaceRuntimeOptions{Root: cwd}); err != nil {
+			if output != nil {
+				_, _ = fmt.Fprintf(output, "warning: auto-open cwd workspace %s: %v\n", cwd, err)
+			}
+		}
+	}
 	if err := server.Start(); err != nil {
 		return err
 	}
