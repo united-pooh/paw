@@ -218,6 +218,9 @@ function ActivityGroup({ items }: { items: ActivityItem[] }) {
   const toolCount = items.filter((item) => item.kind === 'tool').length;
   const errorCount = items.filter((item) => item.kind === 'tool' && item.result?.is_error).length;
   const hasReasoning = items.some((item) => item.kind === 'reasoning');
+  // 纯思考的工作段摘要已是「思考过程」，内容直接平铺展示，不再嵌套同名折叠框；
+  // 混合段（思考 + 工具）里思考块才需要可折叠的独立区块与工具行区分。
+  const onlyReasoning = items.every((item) => item.kind === 'reasoning');
   const names = summarizeToolNames(items);
 
   let summary: string;
@@ -237,13 +240,15 @@ function ActivityGroup({ items }: { items: ActivityItem[] }) {
       </summary>
       <div className="activity-items">
         {items.map((item, index) => item.kind === 'reasoning' ? (
-          <details className="activity-reasoning" key={`reasoning-${index}`}>
-            <summary>
-              <span className="activity-dot think" aria-hidden="true" />
-              <span className="activity-reasoning-label">思考过程</span>
-            </summary>
-            <div className="activity-reasoning-content">{item.text}</div>
-          </details>
+          onlyReasoning
+            ? <div className="activity-reasoning-content" key={`reasoning-${index}`}>{item.text}</div>
+            : <details className="activity-reasoning" key={`reasoning-${index}`}>
+              <summary>
+                <span className="activity-dot think" aria-hidden="true" />
+                <span className="activity-reasoning-label">思考过程</span>
+              </summary>
+              <div className="activity-reasoning-content">{item.text}</div>
+            </details>
         ) : (
           <ActivityToolRow item={item} key={item.call.id || `tool-${index}`} />
         ))}
@@ -258,9 +263,10 @@ export function ConversationView({ snapshot, parts, showActivity = true, onInspe
   return <div className="conversation-view">
     {blocks.map((block) => {
       if (block.type === 'user-text') {
+        // 气泡只承载正文；时间戳等页脚信息放在气泡外右下角。
         return <article className="message user" key={block.key}>
           <div className="message-role">你</div>
-          <MarkdownContent text={block.text} />
+          <div className="user-bubble"><MarkdownContent text={block.text} /></div>
           {block.meta && <MessageMetaRow meta={block.meta} />}
         </article>;
       }
@@ -279,7 +285,8 @@ export function ConversationView({ snapshot, parts, showActivity = true, onInspe
         </div>
       </div>;
     })}
-    {Object.values(parts).map((part) => <button className={`process-card ${part.kind}`} type="button" onClick={() => onInspect(part.part_id)} key={part.part_id}>
+    {/* 流式过程卡属于轨迹视角：对话模式不展示（工作段同样由 showActivity 控制）。 */}
+    {showActivity && Object.values(parts).map((part) => <button className={`process-card ${part.kind}`} type="button" onClick={() => onInspect(part.part_id)} key={part.part_id}>
       <span>{part.kind === 'reasoning' ? '思考过程' : '实时响应'}</span><small>{part.text.slice(0, 140) || '等待内容…'}</small>
     </button>)}
   </div>;

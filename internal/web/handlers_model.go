@@ -9,8 +9,9 @@ import (
 	configv2 "paw/internal/config"
 )
 
-// modelOption 是模型选择器的一项：ID 为目录标识（provider/name），
-// ReasoningCapable 决定推理强度选择器是否可用，Effort 为当前生效的强度。
+// modelOption 是模型选择器的一项：ID 为目录标识（provider/name）。
+// ReasoningCapable 决定推理强度选择器是否可用：能力标记未知（nil）视为可调
+// （与 TUI 一致），仅显式 false 才禁用。Effort 为当前生效的强度。
 type modelOption struct {
 	ID               string `json:"id"`
 	Name             string `json:"name"`
@@ -27,12 +28,19 @@ type modelOptionsResponse struct {
 	EffortOptions []string      `json:"effort_options"`
 }
 
-// effortChoices 是推理强度的可选档位；"default" 表示不显式设置，
-// 写回配置时移除 parameters.reasoning.effort。
-var effortChoices = []string{"default", "low", "medium", "high", "max"}
+// effortChoices 是推理强度的可选档位（与 TUI 循环档位对齐）；"default" 表示
+// 不显式设置，写回配置时移除 parameters.reasoning_effort。
+var effortChoices = []string{"default", "low", "medium", "high", "xhigh", "max"}
 
-// modelEffort 读取模型生效参数中的推理强度；未设置返回 ""。
+// modelEffort 读取模型生效参数中的推理强度。规范存储是扁平键 reasoning_effort
+// （与 TUI、模型运行时一致）；嵌套 reasoning.effort 仅为旧版 Web UI 写入的兼容
+// 回读。未设置返回 ""。
 func modelEffort(model configv2.Model) string {
+	if effort, ok := model.Parameters["reasoning_effort"].(string); ok {
+		if normalized := strings.ToLower(strings.TrimSpace(effort)); normalized != "" {
+			return normalized
+		}
+	}
 	reasoning, ok := model.Parameters["reasoning"].(map[string]any)
 	if !ok {
 		return ""
@@ -58,7 +66,7 @@ func modelOptionsFromSnapshot(snapshot configv2.Snapshot) modelOptionsResponse {
 			Name:             item.Model.Name,
 			Provider:         item.Model.Provider,
 			Source:           string(item.Source),
-			ReasoningCapable: item.Model.Capabilities.Reasoning != nil && *item.Model.Capabilities.Reasoning,
+			ReasoningCapable: item.Model.Capabilities.Reasoning == nil || *item.Model.Capabilities.Reasoning,
 			Effort:           modelEffort(item.Model),
 		})
 	}
@@ -81,7 +89,7 @@ func (s *Server) handleModelOptions(writer http.ResponseWriter, request *http.Re
 }
 
 // modelSelectRequest 是切换请求体：ModelID 切换模型；Effort 非空时把目标
-// 模型（默认当前激活模型）的 parameters.reasoning.effort 调整为该档位，
+// 模型（默认当前激活模型）的 parameters.reasoning_effort 调整为该档位，
 // "default" 表示移除显式设置。
 type modelSelectRequest struct {
 	ModelID string `json:"model_id,omitempty"`
@@ -147,39 +155,42 @@ func applyEffort(request *http.Request, controller *configv2.Controller, modelID
 			return errModelNotFound(targetID)
 		}
 		updated := item.Model
-		parameters := make(map[string]any, len(updated.Parameters)+1)
-		for key, value := range updated.Parameters {
-			parameters[key] = value
-		}
-		if effort == "default" {
-			if reasoning, ok := parameters["reasoning"].(map[string]any); ok {
-				next := make(map[string]any, len(reasoning))
-				for key, value := range reasoning {
-					if key != "effort" {
-						next[key] = value
-					}
-				}
-				if len(next) == 0 {
-					delete(parameters, "reasoning")
-				} else {
-					parameters["reasoning"] = next
-				}
-			}
-		} else {
-			reasoning, _ := parameters["reasoning"].(map[string]any)
-			next := make(map[string]any, len(reasoning)+1)
-			for key, value := range reasoning {
-				next[key] = value
-			}
-			next["effort"] = effort
-			parameters["reasoning"] = next
-		}
-		updated.Parameters = parameters
+		updated.Parameters = applyEffortToParameters(updated.Parameters, effort)
 		if _, lastErr = controller.UpdateConfig(request.Context(), snapshot.Revision, []configv2.Operation{configv2.UpsertModel(targetID, updated)}); lastErr == nil {
 			return nil
 		}
 	}
 	return lastErr
+}
+
+// applyEffortToParameters 返回写入目标推理强度后的参数副本。规范键是扁平的
+// reasoning_effort（与 TUI、模型运行时一致）；"default" 移除该键。旧版 Web UI
+// 写入的嵌套 reasoning.effort 会在请求组装时遮蔽扁平键，因此任何一次调整都
+// 顺手清理它（reasoning 对象清空后整体移除）。
+func applyEffortToParameters(parameters map[string]any, effort string) map[string]any {
+	next := make(map[string]any, len(parameters)+1)
+	for key, value := range parameters {
+		next[key] = value
+	}
+	if reasoning, ok := next["reasoning"].(map[string]any); ok {
+		cleaned := make(map[string]any, len(reasoning))
+		for key, value := range reasoning {
+			if key != "effort" {
+				cleaned[key] = value
+			}
+		}
+		if len(cleaned) == 0 {
+			delete(next, "reasoning")
+		} else {
+			next["reasoning"] = cleaned
+		}
+	}
+	if effort == "default" {
+		delete(next, "reasoning_effort")
+	} else {
+		next["reasoning_effort"] = effort
+	}
+	return next
 }
 
 type errModelNotFound string

@@ -77,8 +77,11 @@ it('switches from conversation summary to trace detail', async () => {
     parts={{ p: { part_id: 'p', session_id: 's', turn_id: 't', kind: 'reasoning', text: 'details' } }}
   />);
   expect(screen.getByRole('heading', { name: 'Conversation' })).toBeInTheDocument();
+  // 流式过程卡只在轨迹标签下渲染，对话标签不可见
+  expect(screen.queryByRole('button', { name: /思考过程/ })).toBeNull();
+  await user.click(screen.getByRole('button', { name: '轨迹' }));
   await user.click(screen.getByRole('button', { name: /思考过程/ }));
-  // 点击流式过程卡片后切到轨迹标签，并打开详情抽屉
+  // 点击流式过程卡片后打开详情抽屉
   expect(screen.getByRole('button', { name: '轨迹' })).toHaveClass('active');
   expect(screen.getByLabelText('轨迹详情')).toHaveTextContent('details');
 });

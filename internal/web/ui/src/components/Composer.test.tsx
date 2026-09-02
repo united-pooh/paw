@@ -119,7 +119,7 @@ it('卡片堆加载模型目录，切换模型与推理强度', async () => {
       { id: 'local/alpha', name: 'alpha', provider: 'local', source: 'configured', reasoning_capable: true, effort: 'high' },
       { id: 'local/beta', name: 'beta', provider: 'local', source: 'configured', reasoning_capable: false },
     ],
-    effort_options: ['default', 'low', 'medium', 'high', 'max'],
+    effort_options: ['default', 'low', 'medium', 'high', 'xhigh', 'max'],
   };
   render(<Composer workspaceID="w" sessionID="s" onSubmit={async () => undefined}
     loadModelOptions={async () => options}

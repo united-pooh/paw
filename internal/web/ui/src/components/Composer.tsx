@@ -21,7 +21,7 @@ export interface ComposerProps {
 }
 
 /** 推理强度档位的展示文案（default = 不显式设置）。 */
-const EFFORT_LABELS: Record<string, string> = { default: '默认', low: '低', medium: '中', high: '高', max: '最高' };
+const EFFORT_LABELS: Record<string, string> = { default: '默认', low: '低', medium: '中', high: '高', xhigh: '超高', max: '最高' };
 const effortLabel = (effort: string): string => EFFORT_LABELS[effort] ?? effort;
 
 function newCommandID(): string { return crypto.randomUUID(); }
@@ -220,6 +220,9 @@ export function Composer({ workspaceID, sessionID, activeTurnID, queueCount = 0,
     )}
     <QueueIndicator count={queueCount} />
     {running && <div className="composer-mode"><button type="button" disabled={!onSteer} className={runningAction === 'steer' ? 'active' : ''} onMouseDown={(event) => event.preventDefault()} onClick={() => setRunningAction('steer')}>即时调整</button><button type="button" disabled={!onQueue} className={runningAction === 'queue' ? 'active' : ''} onMouseDown={(event) => event.preventDefault()} onClick={() => setRunningAction('queue')}>排队</button></div>}
+    {/* 卡片堆：模型配置卡在后、输入卡在前。静置时后卡只露顶部一条预览带，
+        悬浮预览带或聚焦控件时后卡以高度动画向上抽出；负 margin 始终保持 30px
+        交叠，抽出后下缘依旧藏在输入卡之下，保持「抽出来的卡片」而非两张分离卡片。 */}
     {modelOptions && modelOptions.models.length > 0 && (
       <div className="deck-card">
         <div className="deck-peek" aria-hidden="true">
