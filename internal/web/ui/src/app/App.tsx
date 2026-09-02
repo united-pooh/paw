@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { api } from '../api/client';
+import { APIError, api } from '../api/client';
 import { EventStream } from '../api/eventStream';
 import type { RecentWorkspace, SessionSnapshot, SessionSummary } from '../api/types';
 import { WorkbenchShell } from '../components/WorkbenchShell';
@@ -158,10 +158,23 @@ export function App() {
       onSelectWorkspace={(id) => { void selectWorkspace(id); }}
       onSelectSession={(id) => { if (workspaceID) void selectSession(workspaceID, id); }}
       onSubmit={(wid, sid, text, id) => run(async () => {
-        const version = workbench.snapshot?.session_id === sid ? workbench.snapshot.session_version : 0;
-        await api.submitMessage(wid, sid, { command_id: id, session_version: version, text });
-        refreshNow(wid, sid);
-      })}
+const version = workbench.snapshot?.session_id === sid ? workbench.snapshot.session_version : 0;
+try {
+await api.submitMessage(wid, sid, { command_id: id, session_version: version, text });
+} catch (cause) {
+// 陈旧页面持有的会话在当前实例已不存在（如服务重启、切换了工作区实例）：
+// 自动刷新会话列表并重新选中最新的有效会话，而不是把原始 404 报给用户。
+if (cause instanceof APIError && cause.status === 404 && cause.message.includes('session_not_found')) {
+const page = await api.sessions(wid);
+setSessions(page.items);
+if (page.items[0]) await selectSession(wid, page.items[0].session_id);
+else setSessionID(undefined);
+throw new Error('当前会话已失效，已自动刷新会话列表；请重新发送消息');
+}
+throw cause;
+}
+refreshNow(wid, sid);
+})}
       onSteer={(wid, sid, text, id, turnID) => run(() => api.steer(wid, sid, { command_id: id, active_turn_id: turnID, text }))}
       onQueue={(wid, sid, text, id, turnID) => run(() => api.queue(wid, sid, { command_id: id, active_turn_id: turnID, text }))}
       onCancel={(wid, sid, id, turnID) => run(() => api.cancel(wid, sid, { command_id: id, active_turn_id: turnID }))}

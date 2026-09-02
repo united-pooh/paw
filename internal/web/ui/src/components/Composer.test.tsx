@@ -109,3 +109,45 @@ it('does not silently fall back when a running action callback is unavailable', 
   await user.type(screen.getByLabelText('消息'), 'adjust{Enter}');
   expect(actions).toEqual(['steer']);
 });
+
+it('卡片堆加载模型目录，切换模型与推理强度', async () => {
+  const user = userEvent.setup();
+  const selections: Array<{ model_id?: string; effort?: string }> = [];
+  const options = {
+    active_model_id: 'local/alpha',
+    models: [
+      { id: 'local/alpha', name: 'alpha', provider: 'local', source: 'configured', reasoning_capable: true, effort: 'high' },
+      { id: 'local/beta', name: 'beta', provider: 'local', source: 'configured', reasoning_capable: false },
+    ],
+    effort_options: ['default', 'low', 'medium', 'high', 'max'],
+  };
+  render(<Composer workspaceID="w" sessionID="s" onSubmit={async () => undefined}
+    loadModelOptions={async () => options}
+    onSelectModel={async (selection) => {
+      selections.push(selection);
+      if (selection.model_id) return { ...options, active_model_id: selection.model_id };
+      return options;
+    }} />);
+  // 卡片堆出现，peek 摘要显示当前模型与强度
+  const modelSelect = await screen.findByLabelText('切换模型');
+  expect(screen.getByText('alpha · 高')).toBeInTheDocument();
+  expect(modelSelect).toHaveValue('local/alpha');
+  // 推理强度反映当前模型的 effort，且 reasoning_capable 时可选
+  expect(screen.getByLabelText('推理强度')).toHaveValue('high');
+  // 切换模型
+  await user.selectOptions(modelSelect, 'local/beta');
+  expect(selections).toEqual([{ model_id: 'local/beta' }]);
+  expect(await screen.findByLabelText('切换模型')).toHaveValue('local/beta');
+  // beta 不支持推理 → 推理强度选择器禁用
+  expect(screen.getByLabelText('推理强度')).toBeDisabled();
+  // 调整推理强度
+  await user.selectOptions(screen.getByLabelText('切换模型'), 'local/alpha');
+  await user.selectOptions(screen.getByLabelText('推理强度'), 'max');
+  expect(selections).toContainEqual({ effort: 'max' });
+});
+
+it('未提供模型数据源时不渲染卡片堆', () => {
+  render(<Composer workspaceID="w" sessionID="s" onSubmit={async () => undefined} />);
+  expect(screen.queryByLabelText('切换模型')).toBeNull();
+  expect(screen.queryByLabelText('推理强度')).toBeNull();
+});

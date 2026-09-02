@@ -127,6 +127,35 @@ func TestRunTurnWithTimingUsesJournalAssistantSequence(t *testing.T) {
 	}
 }
 
+func TestRunTurnWithTimingRecordsTokenDelta(t *testing.T) {
+	store := &timingStore{}
+	first := model.Usage{PromptTokens: 1000, CompletionTokens: 100}
+	second := model.Usage{PromptTokens: 2200, CompletionTokens: 260}
+	runner := NewEngine(&fakeModel{rounds: []fakeRound{
+		{events: []model.StreamEvent{{Usage: &first}, {Delta: "one"}, {Done: true}}},
+		{events: []model.StreamEvent{{Usage: &second}, {Delta: "two"}, {Done: true}}},
+	}}, &fakeUI{}, tool.NewRegistry(), store, "session-1")
+	started := time.Date(2026, 7, 30, 7, 45, 0, 0, time.UTC)
+	runner.nowFn = func() time.Time { return started.Add(time.Second) }
+
+	// 首个回合：会话尚无用量记录，零基线下的全量即为增量。
+	if _, err := runner.RunTurnWithTiming(context.Background(), "one", "turn-1", started); err != nil {
+		t.Fatalf("turn-1 error = %v", err)
+	}
+	if len(store.metadata) != 1 || store.metadata[0].InputTokens != 1000 || store.metadata[0].OutputTokens != 100 {
+		t.Fatalf("turn-1 metadata tokens = %#v, want 1000/100", store.metadata)
+	}
+
+	// 第二个回合：provider 按请求上报实际用量（整个会话历史会重新计入 prompt），
+	// 因此本轮增量等于该请求的全量 2200/260。
+	if _, err := runner.RunTurnWithTiming(context.Background(), "two", "turn-2", started); err != nil {
+		t.Fatalf("turn-2 error = %v", err)
+	}
+	if len(store.metadata) != 2 || store.metadata[1].InputTokens != 2200 || store.metadata[1].OutputTokens != 260 {
+		t.Fatalf("turn-2 metadata tokens = %#v, want 2200/260", store.metadata)
+	}
+}
+
 func TestRunTurnLegacyPathStillReturnsMessage(t *testing.T) {
 	runner := NewEngine(&fakeModel{rounds: []fakeRound{{events: []model.StreamEvent{{Delta: "legacy"}, {Done: true}}}}}, &fakeUI{}, tool.NewRegistry(), &fakeStore{}, "session-1")
 	msg, err := runner.RunTurn(context.Background(), "hi")

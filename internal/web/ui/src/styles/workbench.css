@@ -159,6 +159,18 @@ button:focus-visible, summary:focus-visible { outline: none; box-shadow: var(--r
 .empty-state { display: grid; place-items: center; color: var(--faint); font-size: 14px; }
 
 .message { margin-bottom: 28px; animation: fade-up .3s var(--ease-out); }
+
+/* 消息页脚元信息（Cherry Studio 式）：时间 · token 出入 · tok/s · 耗时 */
+.message-meta {
+margin-top: 7px; display: flex; align-items: center; gap: 12px;
+font-size: 11px; color: var(--faint); letter-spacing: 0.02em;
+font-variant-numeric: tabular-nums;
+}
+.message.user .message-meta { justify-content: flex-end; }
+.meta-tokens, .meta-speed, .meta-duration { font-family: var(--font-mono); font-size: 10.5px; }
+.meta-live { color: var(--muted); }
+.meta-live::after { content: ''; display: inline-block; width: 5px; height: 5px; margin-left: 5px; border-radius: 50%; background: var(--accent, currentColor); animation: meta-pulse 1.2s ease-in-out infinite; vertical-align: 1px; }
+@keyframes meta-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
 @keyframes fade-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
 .message.user {
@@ -332,7 +344,7 @@ button:focus-visible, summary:focus-visible { outline: none; box-shadow: var(--r
   background: linear-gradient(180deg, rgba(250, 249, 246, 0) 0%, rgba(250, 249, 246, 0.82) 45%, var(--bg) 75%);
 }
 .dock .composer, .dock .readonly-composer, .dock .composer-mode, .dock .queue-indicator,
-.dock .interaction-banner, .dock .completion-popover { pointer-events: auto; }
+.dock .interaction-banner, .dock .completion-popover, .dock .deck-card { pointer-events: auto; }
 
 /* ---------- 输入区 ---------- */
 .composer-wrap { position: relative; padding-bottom: 20px; }
@@ -362,9 +374,51 @@ button:focus-visible, summary:focus-visible { outline: none; box-shadow: var(--r
   background: var(--surface-muted); color: var(--faint); font-weight: 550;
 }
 .composer-hint {
-  width: min(768px, calc(100% - 48px)); margin: 8px auto 0; text-align: center;
-  color: var(--faint); font-size: 11px; letter-spacing: 0.02em;
+width: min(768px, calc(100% - 48px)); margin: 8px auto 0; text-align: center;
+color: var(--faint); font-size: 11px; letter-spacing: 0.02em;
 }
+
+/* ---------- 模型 / 推理强度卡片堆 ---------- */
+/* 静置时只有一条与输入框顶边贴合的卡片上缘（无独立垫层、无缝隙），
+   悬浮或聚焦时向上推出，底部依旧藏在输入框下，视觉上与输入框连为一体。 */
+.deck-card {
+width: min(768px, calc(100% - 48px)); margin: 0 auto -35px; position: relative; z-index: 0;
+height: 47px; box-sizing: border-box;
+background: var(--surface-muted); border: 1px solid var(--border);
+border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+box-shadow: var(--shadow-sm);
+transition: margin-bottom .3s var(--ease-out), box-shadow .3s var(--ease-out), background .3s ease;
+}
+.deck-card:hover, .deck-card:focus-within {
+margin-bottom: -1px; background: var(--surface); box-shadow: var(--shadow-md);
+}
+/* 平时露出的上缘显示当前模型·强度摘要，展开时淡出 */
+.deck-peek {
+position: absolute; top: 0; left: 0; right: 0; height: 12px;
+display: flex; align-items: center; justify-content: center;
+font-size: 9.5px; letter-spacing: .04em; color: var(--faint);
+pointer-events: none; white-space: nowrap; overflow: hidden;
+transition: opacity .18s ease;
+}
+.deck-card:hover .deck-peek, .deck-card:focus-within .deck-peek { opacity: 0; }
+.deck-row {
+height: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+padding: 12px 16px 4px; box-sizing: border-box;
+opacity: 0; transform: translateY(3px);
+transition: opacity .22s ease .05s, transform .28s var(--ease-out) .05s;
+}
+.deck-card:hover .deck-row, .deck-card:focus-within .deck-row { opacity: 1; transform: none; }
+.deck-field { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.deck-tag { font-size: 10.5px; color: var(--faint); letter-spacing: .04em; flex-shrink: 0; }
+.deck-field select {
+border: 0; outline: none; background: var(--surface-hover); border-radius: 999px;
+padding: 4px 10px; font-size: 12px; font-weight: 550; color: var(--text-soft);
+max-width: 240px; text-overflow: ellipsis; cursor: pointer;
+}
+.deck-field select:hover:not(:disabled) { color: var(--text); }
+.deck-field select:disabled { opacity: .5; cursor: default; }
+/* 输入框需要压在卡片堆上方（deck-card 是定位元素，默认绘制顺序更高） */
+.composer { position: relative; z-index: 1; }
 
 /* ---------- 输入候补弹窗 ---------- */
 .completion-popover {

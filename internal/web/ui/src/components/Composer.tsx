@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CompletionItem } from '../api/types';
+import type { CompletionItem, ModelOptionsResponse } from '../api/types';
 import { QueueIndicator } from '../features/conversation/QueueIndicator';
 
 export type RunningAction = 'steer' | 'queue';
@@ -15,7 +15,14 @@ export interface ComposerProps {
   onCancel?: (commandID: string, activeTurnID: string) => Promise<void>;
   /** 输入候补数据源（@ 文件 / 指令 $ 技能），未提供时不启用候补 */
   loadCompletions?: (trigger: string, query: string) => Promise<CompletionItem[]>;
+  /** 模型/推理强度卡片堆的数据源与切换回调，未提供时不渲染卡片堆 */
+  loadModelOptions?: () => Promise<ModelOptionsResponse>;
+  onSelectModel?: (selection: { model_id?: string; effort?: string }) => Promise<ModelOptionsResponse>;
 }
+
+/** 推理强度档位的展示文案（default = 不显式设置）。 */
+const EFFORT_LABELS: Record<string, string> = { default: '默认', low: '低', medium: '中', high: '高', max: '最高' };
+const effortLabel = (effort: string): string => EFFORT_LABELS[effort] ?? effort;
 
 function newCommandID(): string { return crypto.randomUUID(); }
 
@@ -63,14 +70,18 @@ function StopIcon() {
   );
 }
 
-export function Composer({ workspaceID, sessionID, activeTurnID, queueCount = 0, onSubmit, onSteer, onQueue, onCancel, loadCompletions }: ComposerProps) {
+export function Composer({ workspaceID, sessionID, activeTurnID, queueCount = 0, onSubmit, onSteer, onQueue, onCancel, loadCompletions, loadModelOptions, onSelectModel }: ComposerProps) {
   const storageKey = `paw:draft:${workspaceID}:${sessionID}`;
   const [text, setText] = useState(() => localStorage.getItem(storageKey) ?? '');
   const [pending, setPending] = useState(false);
   const [commandID, setCommandID] = useState<string>();
   const [runningAction, setRunningAction] = useState<RunningAction>('steer');
   const [completion, setCompletion] = useState<CompletionState | null>(null);
+  const [modelOptions, setModelOptions] = useState<ModelOptionsResponse | null>(null);
+  const [selectingModel, setSelectingModel] = useState(false);
   const requestSeq = useRef(0);
+  const modelLoaderRef = useRef(loadModelOptions);
+  modelLoaderRef.current = loadModelOptions;
   const running = Boolean(activeTurnID);
   const canSubmit = useMemo(() => text.trim() !== '' && !pending, [text, pending]);
 
@@ -82,6 +93,24 @@ export function Composer({ workspaceID, sessionID, activeTurnID, queueCount = 0,
   }, [storageKey]);
 
   const update = (value: string) => { setText(value); if (value) localStorage.setItem(storageKey, value); else localStorage.removeItem(storageKey); };
+
+  // 挂载（或切换工作区）时拉取模型目录；加载失败则静默隐藏卡片堆。
+  useEffect(() => {
+    const loader = modelLoaderRef.current;
+    if (!loader) return;
+    let cancelled = false;
+    loader().then((options) => { if (!cancelled) setModelOptions(options); }).catch(() => { /* 隐藏卡片堆 */ });
+    return () => { cancelled = true; };
+  }, [workspaceID]);
+
+  const applyModelSelection = async (selection: { model_id?: string; effort?: string }) => {
+    if (!onSelectModel || selectingModel) return;
+    setSelectingModel(true);
+    try { setModelOptions(await onSelectModel(selection)); } catch { /* 保留旧状态 */ } finally { setSelectingModel(false); }
+  };
+
+  const activeModel = modelOptions?.models.find((model) => model.id === modelOptions.active_model_id);
+  const activeEffort = activeModel?.effort || 'default';
 
   // 输入变化时检测 @ / / $ 触发词，防抖拉取候补。
   useEffect(() => {
@@ -191,6 +220,33 @@ export function Composer({ workspaceID, sessionID, activeTurnID, queueCount = 0,
     )}
     <QueueIndicator count={queueCount} />
     {running && <div className="composer-mode"><button type="button" disabled={!onSteer} className={runningAction === 'steer' ? 'active' : ''} onMouseDown={(event) => event.preventDefault()} onClick={() => setRunningAction('steer')}>即时调整</button><button type="button" disabled={!onQueue} className={runningAction === 'queue' ? 'active' : ''} onMouseDown={(event) => event.preventDefault()} onClick={() => setRunningAction('queue')}>排队</button></div>}
+    {modelOptions && modelOptions.models.length > 0 && (
+      <div className="deck-card">
+        <div className="deck-peek" aria-hidden="true">
+          {activeModel ? `${activeModel.name}${activeEffort !== 'default' ? ` · ${effortLabel(activeEffort)}` : ''}` : '模型'}
+        </div>
+        <div className="deck-row">
+          <label className="deck-field">
+            <span className="deck-tag">模型</span>
+            <select aria-label="切换模型" value={modelOptions.active_model_id} disabled={selectingModel}
+              onChange={(event) => void applyModelSelection({ model_id: event.target.value })}>
+              {modelOptions.models.map((model) => (
+                <option key={model.id} value={model.id}>{model.provider}/{model.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="deck-field">
+            <span className="deck-tag">推理强度</span>
+            <select aria-label="推理强度" value={activeEffort} disabled={selectingModel || !activeModel?.reasoning_capable}
+              onChange={(event) => void applyModelSelection({ effort: event.target.value })}>
+              {(modelOptions.effort_options.length > 0 ? modelOptions.effort_options : ['default']).map((effort) => (
+                <option key={effort} value={effort}>{effortLabel(effort)}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </div>
+    )}
     <div className="composer">
       <textarea aria-label="消息" value={text} onChange={(event) => update(event.target.value)} onKeyDown={handleKeyDown} placeholder={running ? (runningAction === 'queue' ? '排队到当前回合结束后发送' : '立即调整当前回合') : '给 Paw 发消息，@ 引用文件 · / 指令 · $ 技能'} />
       {running

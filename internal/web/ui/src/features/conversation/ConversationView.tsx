@@ -63,9 +63,18 @@ type ActivityItem =
   | { kind: 'reasoning'; text: string }
   | { kind: 'tool'; call: ToolCall; result?: ToolResult };
 
+/** 回合级展示元信息：开始时间 / 耗时 / 本轮 token 增量（来自 turn sidecar）。 */
+interface TurnMeta {
+  started_at?: string;
+  duration_ms?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  status?: string;
+}
+
 type ConversationBlock =
-  | { type: 'user-text'; key: string; text: string }
-  | { type: 'assistant-text'; key: string; text: string }
+  | { type: 'user-text'; key: string; text: string; meta?: TurnMeta }
+  | { type: 'assistant-text'; key: string; text: string; meta?: TurnMeta }
   | { type: 'activity'; key: string; items: ActivityItem[] };
 
 function buildBlocks(snapshot: SessionSnapshot): ConversationBlock[] {
@@ -82,6 +91,19 @@ function buildBlocks(snapshot: SessionSnapshot): ConversationBlock[] {
   };
 
   for (const turn of snapshot.turns) {
+    const meta: TurnMeta = {
+      started_at: turn.started_at,
+      duration_ms: turn.duration_ms,
+      input_tokens: turn.input_tokens,
+      output_tokens: turn.output_tokens,
+      status: turn.status,
+    };
+    // token 用量是回合级聚合，只挂在该回合最后一条可见的 assistant 正文上
+    // （Cherry Studio 式页脚）；其余 assistant 块只显示时间。
+    let lastAssistantIndex = -1;
+    turn.messages.forEach((message, index) => {
+      if (message.role === 'assistant' && isVisible(message) && (message.content ?? '').trim() !== '') lastAssistantIndex = index;
+    });
     turn.messages.forEach((message, index) => {
       if (!isVisible(message)) return;
       const baseKey = `${turn.turn_id}-${index}`;
@@ -104,15 +126,53 @@ function buildBlocks(snapshot: SessionSnapshot): ConversationBlock[] {
 
       if (message.role === 'user' && content !== '') {
         flushActivity();
-        blocks.push({ type: 'user-text', key: baseKey, text: message.content ?? '' });
+        blocks.push({ type: 'user-text', key: baseKey, text: message.content ?? '', meta: { started_at: meta.started_at, status: meta.status } });
       } else if (message.role === 'assistant' && content !== '') {
         flushActivity();
-        blocks.push({ type: 'assistant-text', key: baseKey, text: message.content ?? '' });
+        blocks.push({ type: 'assistant-text', key: baseKey, text: message.content ?? '', meta: index === lastAssistantIndex ? meta : { started_at: meta.started_at, status: meta.status } });
       }
     });
   }
   flushActivity();
   return blocks;
+}
+
+/** HH:MM 时钟格式；解析失败时原样返回。 */
+function formatClock(iso?: string): string {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+/** token 数的紧凑格式：1234 → 1.2k */
+function formatTokens(value: number): string {
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
+  return String(value);
+}
+
+/** 消息页脚元信息行：时间 · token 出入 · tok/s · 耗时（进行中只显示时间）。 */
+function MessageMetaRow({ meta }: { meta: TurnMeta }) {
+  const clock = formatClock(meta.started_at);
+  const running = meta.status === 'running';
+  const input = meta.input_tokens ?? 0;
+  const output = meta.output_tokens ?? 0;
+  const seconds = (meta.duration_ms ?? 0) / 1000;
+  const hasUsage = !running && (input > 0 || output > 0);
+  if (!clock && !hasUsage) return null;
+  return (
+    <div className="message-meta">
+      {clock && <span className="meta-clock">{clock}</span>}
+      {running && <span className="meta-live">生成中…</span>}
+      {hasUsage && (
+        <>
+          <span className="meta-tokens" title={`输入 ${input} / 输出 ${output} tokens`}>↑{formatTokens(input)} ↓{formatTokens(output)}</span>
+          {output > 0 && seconds > 0 && <span className="meta-speed">{(output / seconds).toFixed(1)} tok/s</span>}
+          {seconds > 0 && <span className="meta-duration">{seconds >= 10 ? `${Math.round(seconds)}s` : `${seconds.toFixed(1)}s`}</span>}
+        </>
+      )}
+    </div>
+  );
 }
 
 /** 工具名汇总：按出现顺序去重，重复调用折叠为 ×N */
@@ -201,12 +261,14 @@ export function ConversationView({ snapshot, parts, showActivity = true, onInspe
         return <article className="message user" key={block.key}>
           <div className="message-role">你</div>
           <MarkdownContent text={block.text} />
+          {block.meta && <MessageMetaRow meta={block.meta} />}
         </article>;
       }
       if (block.type === 'assistant-text') {
         return <article className="message assistant" key={block.key}>
           <div className="message-role">Paw</div>
           <MarkdownContent text={block.text} />
+          {block.meta && <MessageMetaRow meta={block.meta} />}
         </article>;
       }
       // 工作段始终挂载在 DOM 中，通过外壳的 grid-rows/透明度过渡动画

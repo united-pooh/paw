@@ -38,7 +38,9 @@ func (runner *Engine) runTurnWithTiming(ctx context.Context, userInput message.M
 	}
 	if timing != nil {
 		// 记录回合开始前的会话累计用量，completeTurnExecution 据此计算本轮增量。
-		timing.usageAtStart, timing.usageAtStartKnown = runner.usage.sessionUsage()
+		// 会话尚无用量记录时（首个回合）以零为基线，否则第一轮永远拿不到增量。
+		timing.usageAtStart, _ = runner.usage.sessionUsage()
+		timing.usageAtStartKnown = true
 	}
 	turnCtx, finishTurn := runner.beginActiveTurn(ctx)
 	defer finishTurn()

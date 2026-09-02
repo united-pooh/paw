@@ -66,8 +66,10 @@ export function WorkbenchShell({ workspaces, sessions, snapshot, parts, interact
           onSubmit={(text, commandID) => onSubmit(selectedWorkspaceID, selectedSessionID, text, commandID)}
           onSteer={onSteer ? (text, commandID, turnID) => onSteer(selectedWorkspaceID, selectedSessionID, text, commandID, turnID) : undefined}
           onQueue={onQueue ? (text, commandID, turnID) => onQueue(selectedWorkspaceID, selectedSessionID, text, commandID, turnID) : undefined}
-          onCancel={onCancel ? (commandID, turnID) => onCancel(selectedWorkspaceID, selectedSessionID, commandID, turnID) : undefined}
-          loadCompletions={async (trigger, query) => (await api.completions(selectedWorkspaceID, trigger, query)).items} /> : <div className="readonly-composer"><textarea aria-label="消息" placeholder="请选择会话" disabled /><button type="button" disabled>发送</button></div>}
+onCancel={onCancel ? (commandID, turnID) => onCancel(selectedWorkspaceID, selectedSessionID, commandID, turnID) : undefined}
+loadCompletions={async (trigger, query) => (await api.completions(selectedWorkspaceID, trigger, query)).items}
+loadModelOptions={() => api.modelOptions(selectedWorkspaceID)}
+onSelectModel={(selection) => api.selectModel(selectedWorkspaceID, selection)} /> : <div className="readonly-composer"><textarea aria-label="消息" placeholder="请选择会话" disabled /><button type="button" disabled>发送</button></div>}
       </div>
     </section>
     <TraceDetailPanel
