@@ -50,7 +50,11 @@ func Middleware(cfg MiddlewareConfig, next http.Handler) http.Handler {
 		writer.Header().Set("X-Content-Type-Options", "nosniff")
 		writer.Header().Set("X-Frame-Options", "DENY")
 		writer.Header().Set("Referrer-Policy", "no-referrer")
-		writer.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'none'")
+		// style-src 放宽 'unsafe-inline'：KaTeX 公式的定位全部依赖内联 style 属性，
+		// 缺省 default-src 'self' 会经 style-src-attr 回退把内联样式全部静默丢弃，
+		// 导致公式塌缩成一行。脚本仍保持严格（无 unsafe-inline）。font-src 允许 data:
+		// 兼容打包产物中内联的字体内嵌。
+		writer.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'none'")
 		request = request.WithContext(context.WithValue(request.Context(), requestIDKey{}, requestID))
 
 		if !hostAllowed(request.Host, allowedHosts) {

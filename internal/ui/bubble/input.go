@@ -255,6 +255,7 @@ func (m appModel) submitPlan(line string) (tea.Model, tea.Cmd) {
 	m.planWorking = true
 	m.turnStartedAt = time.Now()
 	m.turnID = id
+	m.scrollToBottomAfterSubmit()
 	m.applyCursorAnimation()
 	return m, m.scheduleUIAnimationFrame()
 }
@@ -281,6 +282,7 @@ func (m appModel) submitGoal(line string) (tea.Model, tea.Cmd) {
 	m.goalWorking = true
 	m.turnStartedAt = time.Now()
 	m.turnID = id
+	m.scrollToBottomAfterSubmit()
 	m.applyCursorAnimation()
 	return m, m.scheduleUIAnimationFrame()
 }
@@ -358,7 +360,18 @@ func (m appModel) trySubmitSteer(line string) (appModel, bool) {
 	}
 	m.rememberInputHistory(line)
 	m.addEntry(m.userTranscriptEntry("you (steer)", line))
+	m.scrollToBottomAfterSubmit()
 	return m, true
+}
+
+// scrollToBottomAfterSubmit 提交后强制视口回到底部并恢复跟随。
+// 用户主动发送消息即表达了关注最新内容的意图：即使此前上翻查看历史
+// 脱离了贴底跟随，发送后也应回到底部等待回复（对齐 Web sendSignal 回底契约）。
+func (m *appModel) scrollToBottomAfterSubmit() {
+	if m == nil {
+		return
+	}
+	m.viewport.GotoBottom()
 }
 
 func submittedDraftHasImage(draft inputDraft) bool {
@@ -408,6 +421,7 @@ func (m appModel) startChatTurn(line string) (appModel, tea.Cmd) {
 	m.activeTurnUserEntry = len(m.transcript) - 1
 	m.turnStartedAt = time.Now()
 	m.turnID = newTurnID(m.turnStartedAt)
+	m.scrollToBottomAfterSubmit()
 	m.syncRunningFlags()
 	workCmd := runTurnCmd(m.beginModelWorkContext(), m.runner, draft, m.turnID, m.turnStartedAt)
 	frameCmd := m.scheduleUIAnimationFrame()
@@ -426,6 +440,8 @@ func (m appModel) queueChatInput(line string) appModel {
 	}
 	m.rememberInputHistory(line)
 	m.chatQueue.EnqueueDraft(draft)
+	// 入队即完成提交动作：立即回底，等待中的队列与自己的将到达消息都指向最新内容。
+	m.scrollToBottomAfterSubmit()
 	return m
 }
 
@@ -659,6 +675,7 @@ func (m appModel) submitShellCommand(command string) (tea.Model, tea.Cmd) {
 		title: "terminal",
 		body:  "$ " + command,
 	})
+	m.scrollToBottomAfterSubmit()
 	m.syncRunningFlags()
 	m.activeAssistant = -1
 	return m, runShellCmd(m.ctx, command)

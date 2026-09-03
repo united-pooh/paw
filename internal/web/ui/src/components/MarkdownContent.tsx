@@ -1,4 +1,21 @@
 import type { ReactNode } from 'react';
+import katex from 'katex';
+import 'katex/dist/katex.min.css';
+import { CopyButton } from './CopyButton';
+
+/** KaTeX 渲染数学公式。解析失败时（如流式打字机的未闭合残式）回退原样源码展示。 */
+function renderMath(source: string, displayMode: boolean): ReactNode {
+  try {
+    // output: 'html' 不生成 MathML 节点：jsdom 的无障碍树计算无法在 MathML 上工作，
+    // 且纯 HTML 模式下 KaTeX 本身已提供 aria-label，屏幕阅读器体验不降级。
+    const html = katex.renderToString(source, { displayMode, throwOnError: true, strict: 'ignore', output: 'html' });
+    return <span className={displayMode ? 'math-display' : 'math-tex'} dangerouslySetInnerHTML={{ __html: html }} />;
+  } catch {
+    return displayMode
+      ? <pre>{source}</pre>
+      : <code className="math-inline">{source}</code>;
+  }
+}
 
 function safeLink(href: string): string | null {
   try {
@@ -26,7 +43,7 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
     } else if (italic !== undefined) {
       nodes.push(<em key={key}>{italic}</em>);
     } else if (math !== undefined) {
-      nodes.push(<code key={key} className="math-inline">{math}</code>);
+      nodes.push(<span key={key}>{renderMath(math, false)}</span>);
     } else if (linkText !== undefined && linkHref !== undefined) {
       const href = safeLink(linkHref);
       nodes.push(href
@@ -190,9 +207,14 @@ export function MarkdownContent({ text }: { text: string }) {
         const keyPrefix = `b${index}`;
         switch (block.type) {
           case 'code':
-            return <pre key={key}>{block.content}</pre>;
+            return (
+              <div className="code-block" key={key}>
+                <pre>{block.content}</pre>
+                <CopyButton text={block.content} label="复制代码" />
+              </div>
+            );
           case 'math':
-            return <pre key={key} className="math-block">{block.content}</pre>;
+            return <div key={key} className="math-block">{renderMath(block.content, true)}</div>;
           case 'heading': {
             const Tag = HEADING_TAGS[Math.min(block.level, 6) - 1];
             return <Tag key={key}>{renderInline(block.content, keyPrefix)}</Tag>;

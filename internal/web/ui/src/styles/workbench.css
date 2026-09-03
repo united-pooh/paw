@@ -126,7 +126,7 @@ button:focus-visible, summary:focus-visible { outline: none; box-shadow: var(--r
 
 /* ---------- 顶栏 ---------- */
 .main-workspace { position: relative; min-width: 0; height: 100vh; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
-.main-workspace > .conversation-view, .main-workspace > .empty-state { overflow-y: auto; min-height: 0; height: 100%; }
+.main-workspace > .conversation-wrap, .main-workspace > .empty-state { overflow-y: auto; min-height: 0; height: 100%; }
 .topbar {
   background: rgba(250, 249, 246, 0.82); backdrop-filter: blur(16px) saturate(1.3);
   border-bottom: 1px solid var(--border); padding: 12px 24px; z-index: 5;
@@ -155,7 +155,23 @@ button:focus-visible, summary:focus-visible { outline: none; box-shadow: var(--r
 
 /* ---------- 对话区 ---------- */
 /* 底部净空：悬浮坞（输入框 + 渐变区）的高度，保证滚到底时最后几条消息不被遮挡 */
-.conversation-view { width: min(768px, calc(100% - 48px)); margin: 0 auto; padding: 36px 0 200px; }
+.conversation-wrap { position: relative; }
+.conversation-view { height: 100%; overflow-y: auto; min-height: 0; width: min(768px, calc(100% - 48px)); margin: 0 auto; padding: 36px 0 200px; }
+
+/* 跟随滚动：未贴底期间收到新消息时浮现的「回到底部」浮钮 */
+.scroll-to-latest {
+  /* 悬浮坞 + 渐变区约 200px 净空：浮钮浮于净空上沿，避免被输入区遮挡 */
+  position: absolute; left: 50%; bottom: 176px; transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface-card); color: var(--text-soft);
+  font-size: 12.5px; font-weight: 600; font-family: inherit;
+  box-shadow: var(--shadow-lg); cursor: pointer; z-index: 6;
+  animation: rise-in .22s var(--ease-out);
+  transition: color .15s var(--ease-out), border-color .15s var(--ease-out), transform .15s var(--ease-out);
+}
+.scroll-to-latest:hover { color: var(--text); border-color: var(--accent); transform: translateX(-50%) translateY(-1px); }
+@keyframes rise-in { from { opacity: 0; transform: translateX(-50%) translateY(8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
 .empty-state { display: grid; place-items: center; color: var(--faint); font-size: 14px; }
 
 .message { margin-bottom: 28px; animation: fade-up .3s var(--ease-out); }
@@ -177,6 +193,37 @@ font-variant-numeric: tabular-nums;
 .message.user { margin-left: auto; width: fit-content; max-width: min(78%, 640px); }
 .message.user .message-role { display: none; }
 .message.user .user-bubble { background: #edeae2; border-radius: 18px; padding: 12px 18px; }
+
+/* ---------- 消息页脚：元信息 + 操作条 ---------- */
+.message-footer { display: flex; align-items: center; gap: 12px; margin-top: 7px; min-height: 22px; }
+.message-footer .message-meta { margin-top: 0; }
+.message.assistant .message-footer { justify-content: space-between; }
+.message.user .message-footer { justify-content: flex-end; }
+.message-actions { display: flex; align-items: center; gap: 2px; opacity: 0; transition: opacity .15s var(--ease-out); }
+.message:hover .message-actions, .message-actions:focus-within { opacity: 1; }
+
+.copy-btn {
+  display: inline-grid; place-items: center; width: 24px; height: 24px; border: 0;
+  border-radius: 7px; background: transparent; color: var(--faint); cursor: pointer;
+}
+.copy-btn:hover { background: var(--surface-hover); color: var(--text-soft); }
+.copy-btn.copied { color: var(--success); }
+
+/* ---------- 代码块复制按钮 ---------- */
+.code-block { position: relative; }
+.code-block .copy-btn {
+  position: absolute; top: 8px; right: 8px; width: 26px; height: 26px;
+  background: rgba(255, 255, 255, 0.08); color: var(--code-text); opacity: 0;
+  transition: opacity .15s var(--ease-out), background-color .15s var(--ease-out), color .15s var(--ease-out);
+}
+.code-block:hover .copy-btn, .code-block .copy-btn:focus-visible { opacity: 1; }
+.code-block .copy-btn:hover { background: rgba(255, 255, 255, 0.18); color: #fff; }
+.code-block .copy-btn.copied { color: #8fd6a8; }
+
+/* 流式正文的光标：泵未追平期间跟随最后一段文字末尾脉动 */
+.message.assistant.stream-typing .markdown-content > *:last-child:not(pre):not(table):not(blockquote)::after {
+  content: '▍'; color: var(--accent); margin-left: 2px; animation: meta-pulse 1s ease-in-out infinite;
+}
 
 .message-role {
   display: flex; align-items: center; gap: 8px;
@@ -209,8 +256,13 @@ font-variant-numeric: tabular-nums;
 }
 .markdown-content code { font-family: var(--font-mono); font-size: .88em; }
 .markdown-content :not(pre) > code { background: var(--code-inline-bg); border-radius: 6px; padding: 1.5px 5px; color: var(--accent-strong); }
+/* 公式解析失败时的回退展示：行内紫色等宽、块级紫框原样 latex 源码 */
 .markdown-content .math-inline { color: var(--thinking); }
-.markdown-content .math-block { background: var(--thinking-soft); color: #41398f; border: 1px solid var(--thinking-border); box-shadow: none; }
+.markdown-content .math-block { background: var(--thinking-soft); border: 1px solid var(--thinking-border); box-shadow: none; border-radius: var(--radius); padding: 10px 14px; overflow-x: auto; }
+.markdown-content .math-block pre { margin: 0; white-space: pre-wrap; color: #41398f; font-family: var(--font-mono); font-size: .88em; }
+/* KaTeX 渲染成功：display 公式居中，去掉默认大间距与框叠加 */
+.markdown-content .math-block .katex-display { margin: 0; padding: 4px 0; }
+.markdown-content .math-display { display: block; text-align: center; }
 .markdown-content ul, .markdown-content ol { margin: .4em 0 .8em; padding-left: 1.5em; line-height: 1.8; }
 .markdown-content li { margin: .25em 0; }
 .markdown-content li::marker { color: var(--faint); }

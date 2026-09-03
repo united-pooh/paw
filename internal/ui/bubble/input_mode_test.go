@@ -1,6 +1,7 @@
 package bubble
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -152,5 +153,115 @@ func TestPlanModeDoesNotAddInputFrame(t *testing.T) {
 	bottom := ansi.Strip(model.renderBottomDockLine(80))
 	if !strings.Contains(bottom, "plan") {
 		t.Fatalf("bottom border = %q, want plan indicator", bottom)
+	}
+}
+
+// ---------- 提交即回底：上翻脱离状态中发送消息，发送后应回到底部 ----------
+
+// newScrollOffBottomModel 构造一段过满 transcript 并上翻到顶部（脱离贴底跟随）的模型
+func newScrollOffBottomModel(t *testing.T, runner Runner) appModel {
+	t.Helper()
+	model := newTestModel(runner)
+	model.ready = true
+	model.width = 100
+	model.height = 30
+	model.relayout()
+	for i := 0; i < 30; i++ {
+		model.addEntry(transcriptEntry{kind: entryAssistant, body: fmt.Sprintf("history %d\nline b\nline c\nline d", i)})
+	}
+	model.viewport.GotoBottom()
+	if !model.viewport.AtBottom() {
+		t.Fatal("precondition: transcript should start pinned at bottom")
+	}
+	model.viewport.GotoTop()
+	if model.viewport.AtBottom() {
+		t.Fatal("precondition: transcript should be scrollable off the bottom")
+	}
+	return model
+}
+
+func requireSubmitResultAtBottom(t *testing.T, model appModel) appModel {
+	t.Helper()
+	next, _ := model.handleSubmit()
+	updated, ok := next.(appModel)
+	if !ok {
+		t.Fatalf("handleSubmit returned %T, want appModel", next)
+	}
+	if !updated.viewport.AtBottom() {
+		t.Fatalf("submit should return viewport to bottom, yoffset=%d", updated.viewport.YOffset)
+	}
+	return updated
+}
+
+func TestSubmitChatTurnReturnsViewportToBottom(t *testing.T) {
+	model := newScrollOffBottomModel(t, &fakeRunner{})
+	model.input.SetValue("新的问题")
+	updated := requireSubmitResultAtBottom(t, model)
+	last := updated.transcript[len(updated.transcript)-1]
+	if last.kind != entryUser || !strings.Contains(last.body, "新的问题") {
+		t.Fatalf("last entry = %#v, want user entry for submitted text", last)
+	}
+}
+
+func TestSubmitSteerReturnsViewportToBottom(t *testing.T) {
+	model := newScrollOffBottomModel(t, &fakeRunner{})
+	// 模拟进行中回合：guard 与 legacy running 双重置位（handleSubmit 会先 reconcile）
+	model.queryGuard.StartModel()
+	model.running = true
+	model.input.SetValue("补充说明")
+	updated := requireSubmitResultAtBottom(t, model)
+	last := updated.transcript[len(updated.transcript)-1]
+	if last.kind != entryUser || last.title != "you (steer)" {
+		t.Fatalf("last entry = %#v, want steer user entry", last)
+	}
+}
+
+func TestSubmitQueueReturnsViewportToBottom(t *testing.T) {
+	model := newScrollOffBottomModel(t, &noSteerRunner{})
+	model.queryGuard.StartModel()
+	model.running = true
+	model.input.SetValue("排队消息")
+	updated := requireSubmitResultAtBottom(t, model)
+	if got := len(updated.chatQueue.Items()); got != 1 {
+		t.Fatalf("queue length = %d, want 1 queued message", got)
+	}
+}
+
+func TestSubmitGoalReturnsViewportToBottom(t *testing.T) {
+	model := newScrollOffBottomModel(t, &fakeRunner{})
+	model.goalController = &modeTestGoalController{}
+	model.goalMode = true
+	model.input.SetValue("达成大目标")
+	requireSubmitResultAtBottom(t, model)
+}
+
+func TestSubmitPlanReturnsViewportToBottom(t *testing.T) {
+	model := newScrollOffBottomModel(t, &fakeRunner{})
+	model.planController = &modeTestPlanController{}
+	model.planMode = true
+	model.input.SetValue("修一下登录流程")
+	requireSubmitResultAtBottom(t, model)
+}
+
+func TestSubmitShellCommandReturnsViewportToBottom(t *testing.T) {
+	model := newScrollOffBottomModel(t, &fakeRunner{})
+	model.terminalMode = true
+	model.input.SetValue("echo hi")
+	requireSubmitResultAtBottom(t, model)
+}
+
+func TestBusyChatSubmitKeepsViewportOffset(t *testing.T) {
+	model := newScrollOffBottomModel(t, &fakeRunner{})
+	model.planController = &modeTestPlanController{}
+	model.planWorking = true
+	model.input.SetValue("hello")
+	before := model.viewport.YOffset
+	next, _ := model.handleSubmit()
+	updated := next.(appModel)
+	if updated.viewport.AtBottom() {
+		t.Fatal("rejected (busy) submit should not jump to bottom")
+	}
+	if updated.viewport.YOffset != before {
+		t.Fatalf("rejected submit moved viewport: yoffset %d -> %d", before, updated.viewport.YOffset)
 	}
 }

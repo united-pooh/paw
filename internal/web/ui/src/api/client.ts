@@ -50,6 +50,13 @@ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stri
     requestJSON(`/api/workspaces/${encodeURIComponent(workspaceID)}/sessions`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command_id: commandID })
     }),
+  forkSession: (workspaceID: string, sessionID: string, commandID: string): Promise<SessionMutationResult> =>
+    requestJSON(`/api/workspaces/${encodeURIComponent(workspaceID)}/sessions/${encodeURIComponent(sessionID)}/fork`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command_id: commandID })
+    }),
+  /** 会话导出（JSON 下载）地址；<a download> 同源附带会话 Cookie，无需再取数据。 */
+  sessionExportUrl: (workspaceID: string, sessionID: string): string =>
+    `/api/workspaces/${encodeURIComponent(workspaceID)}/sessions/${encodeURIComponent(sessionID)}/export`,
   submitMessage: (workspaceID: string, sessionID: string, command: { command_id: string; session_version: number; text: string }): Promise<CommandReceipt> =>
     requestJSON(`/api/workspaces/${encodeURIComponent(workspaceID)}/sessions/${encodeURIComponent(sessionID)}/messages`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command)

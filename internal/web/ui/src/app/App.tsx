@@ -178,6 +178,12 @@ refreshNow(wid, sid);
       onSteer={(wid, sid, text, id, turnID) => run(() => api.steer(wid, sid, { command_id: id, active_turn_id: turnID, text }))}
       onQueue={(wid, sid, text, id, turnID) => run(() => api.queue(wid, sid, { command_id: id, active_turn_id: turnID, text }))}
       onCancel={(wid, sid, id, turnID) => run(() => api.cancel(wid, sid, { command_id: id, active_turn_id: turnID }))}
+      onFork={(wid, sid) => run(async () => {
+        const forked = await api.forkSession(wid, sid, commandID());
+        const page = await api.sessions(wid);
+        setSessions(page.items);
+        await selectSession(wid, forked.session_id);
+      }, false)}
     />
   </>;
 }

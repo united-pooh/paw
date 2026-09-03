@@ -1,6 +1,17 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { vi } from 'vitest';
 import { WorkbenchShell } from './WorkbenchShell';
+
+// Composer 挂载在 shell 内，候补/模型切换走 api client；测试环境统一 mock 掉网络层。
+vi.mock('../api/client', () => ({
+  api: {
+    completions: async () => ({ items: [] }),
+    modelOptions: async () => ({ models: [], active_model_id: '', effort_options: [] }),
+    selectModel: async () => ({ models: [], active_model_id: '', effort_options: [] }),
+    sessionExportUrl: () => '/api/export',
+  },
+}));
 
 const snapshotWithActivity = {
   session_id: 's',
@@ -66,6 +77,33 @@ it('会话面板可折叠为纯图标导轨并恢复', async () => {
   // 顶栏切换按钮 → 恢复面板
   await user.click(screen.getByRole('button', { name: '切换会话面板' }));
   expect(container.querySelector('.workbench-shell.panel-collapsed')).toBeNull();
+});
+
+it('发送消息时对话区强制回到底部（Composer 提交 → sendSignal 贯通）', async () => {
+  const user = userEvent.setup();
+  const submitted: string[] = [];
+  const { container } = render(<WorkbenchShell
+    workspaces={[{ id: 'w', name: 'Project', path: '/project', last_opened_at: new Date().toISOString() }]}
+    sessions={[{ session_id: 's', title: 'Conversation', created_at: new Date().toISOString(), last_used_at: new Date().toISOString(), transcript_size: 1 }]}
+    snapshot={snapshotWithActivity}
+    parts={{}}
+    onSubmit={async (_workspace, _session, text) => { submitted.push(text); }}
+  />);
+  // jsdom 无量布局：手动指定滚动几何并上翻脱离跟随
+  const scrollEl = container.querySelector('.conversation-view')!;
+  Object.defineProperties(scrollEl, {
+    scrollHeight: { value: 2000, configurable: true },
+    clientHeight: { value: 500, configurable: true },
+  });
+  (scrollEl as HTMLElement).scrollTop = 0;
+  fireEvent.scroll(scrollEl);
+  expect((scrollEl as HTMLElement).scrollTop).toBe(0);
+
+  // 在 Composer 输入并发送：即使未贴底也应立即回到底部
+  await user.type(screen.getByLabelText('消息'), '新的问题');
+  await user.click(screen.getByRole('button', { name: '发送' }));
+  expect(submitted).toEqual(['新的问题']);
+  expect((scrollEl as HTMLElement).scrollTop).toBe(2000);
 });
 
 it('switches from conversation summary to trace detail', async () => {
