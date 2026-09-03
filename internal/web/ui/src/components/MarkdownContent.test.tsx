@@ -68,3 +68,34 @@ it('公式解析失败（流式残式）时回退原样源码展示', () => {
   expect(document.querySelector('.math-block .katex')).toBeNull();
   expect(document.querySelector('.math-block pre')).toHaveTextContent('\\frac{a}{');
 });
+
+it('带语言标识的代码块按语言语法高亮并展示语言标签', () => {
+  render(<MarkdownContent text={'```js\nconst answer = 42;\n```'} />);
+  // 关键字被高亮为 span，非纯文本
+  expect(document.querySelector('.hljs')).not.toBeNull();
+  expect(document.querySelector('.hljs-keyword')).toHaveTextContent('const');
+  expect(document.querySelector('.code-block .hljs')).toHaveTextContent('const answer = 42;');
+  // 有语言标签
+  expect(document.querySelector('.code-lang')).toHaveTextContent('js');
+});
+
+it('不同语言产生不同高亮结果（按语言切换配色）', () => {
+  const js = render(<MarkdownContent text={'```python\ndef f():\n    return 1\n```'} />);
+  expect(js.container.querySelector('.hljs.language-python')).not.toBeNull();
+  js.unmount();
+  render(<MarkdownContent text={'```go\npackage main\nfunc main() {}\n```'} />);
+  expect(document.querySelector('.hljs.language-go')).not.toBeNull();
+  expect(document.querySelector('.hljs.language-python')).toBeNull();
+});
+
+it('未声明或未知语言的代码块原样展示，不出语言标签', () => {
+  const view = render(<MarkdownContent text={'```\nplain text\n```'} />);
+  expect(view.container.querySelector('.hljs')).toBeNull();
+  expect(view.container.querySelector('.code-lang')).toBeNull();
+  expect(view.container.querySelector('.code-block pre')).toHaveTextContent('plain text');
+  view.unmount();
+  // 未知语言标识：回退原样且无高亮
+  render(<MarkdownContent text={'```notalang\nplain text\n```'} />);
+  expect(document.querySelector('.hljs')).toBeNull();
+  expect(document.querySelector('.code-block pre')).toHaveTextContent('plain text');
+});

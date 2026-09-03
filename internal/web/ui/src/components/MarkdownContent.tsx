@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
+import hljs from 'highlight.js/lib/common';
+import 'highlight.js/styles/atom-one-dark.css';
 import { CopyButton } from './CopyButton';
 
 /** KaTeX 渲染数学公式。解析失败时（如流式打字机的未闭合残式）回退原样源码展示。 */
@@ -57,7 +59,7 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
 }
 
 type Block =
-  | { type: 'code'; content: string }
+  | { type: 'code'; content: string; lang: string }
   | { type: 'math'; content: string }
   | { type: 'heading'; level: number; content: string }
   | { type: 'table'; header: string[]; rows: string[][] }
@@ -97,13 +99,14 @@ function parseBlocks(text: string): Block[] {
     const trimmed = line.trim();
     if (trimmed === '') { i++; continue; }
 
-    // 代码块 ```...```
+    // 代码块 ```lang ... ```（语言标识用于语法高亮）
     if (trimmed.startsWith('```')) {
+      const lang = trimmed.slice(3).trim();
       const buf: string[] = [];
       i++;
       while (i < lines.length && !lines[i].trim().startsWith('```')) { buf.push(lines[i]); i++; }
       i++; // 跳过收尾 ```
-      blocks.push({ type: 'code', content: buf.join('\n') });
+      blocks.push({ type: 'code', content: buf.join('\n'), lang });
       continue;
     }
 
@@ -199,6 +202,15 @@ function parseBlocks(text: string): Block[] {
 
 const HEADING_TAGS = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'] as const;
 
+/** 代码块高亮：按 fence 声明的语言走 highlight.js；未声明/未知语言原样展示。 */
+function renderCode(content: string, lang: string): ReactNode {
+  if (lang && hljs.getLanguage(lang)) {
+    const result = hljs.highlight(content, { language: lang, ignoreIllegals: true });
+    return <code className={`hljs language-${lang}`} dangerouslySetInnerHTML={{ __html: result.value }} />;
+  }
+  return content;
+}
+
 export function MarkdownContent({ text }: { text: string }) {
   return (
     <div className="markdown-content">
@@ -209,7 +221,8 @@ export function MarkdownContent({ text }: { text: string }) {
           case 'code':
             return (
               <div className="code-block" key={key}>
-                <pre>{block.content}</pre>
+                {block.lang && <span className="code-lang">{block.lang}</span>}
+                <pre>{renderCode(block.content, block.lang)}</pre>
                 <CopyButton text={block.content} label="复制代码" />
               </div>
             );

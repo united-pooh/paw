@@ -220,6 +220,17 @@ font-variant-numeric: tabular-nums;
 .code-block .copy-btn:hover { background: rgba(255, 255, 255, 0.18); color: #fff; }
 .code-block .copy-btn.copied { color: #8fd6a8; }
 
+/* 代码语言标签：左上角小字，与悬停复制的右上角对称 */
+.code-block .code-lang {
+  position: absolute; top: 8px; left: 16px; z-index: 1;
+  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--code-text); opacity: .42; pointer-events: none;
+}
+/* 有语言标签时首行让位，避免重叠 */
+.code-block .code-lang ~ pre { padding-top: 27px; }
+/* highlight.js 主题背景透明化：沿用代码块统一的深色底与字号 */
+.markdown-content .code-block .hljs { background: transparent; color: inherit; padding: 0; font-family: inherit; font-size: inherit; }
+
 /* 流式正文的光标：泵未追平期间跟随最后一段文字末尾脉动 */
 .message.assistant.stream-typing .markdown-content > *:last-child:not(pre):not(table):not(blockquote)::after {
   content: '▍'; color: var(--accent); margin-left: 2px; animation: meta-pulse 1s ease-in-out infinite;
