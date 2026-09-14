@@ -36,12 +36,6 @@ func (runner *Engine) runTurnWithTiming(ctx context.Context, userInput message.M
 	if runner == nil {
 		return TurnExecution{}, fmt.Errorf("runner 未初始化")
 	}
-	if timing != nil {
-		// 记录回合开始前的会话累计用量，completeTurnExecution 据此计算本轮增量。
-		// 会话尚无用量记录时（首个回合）以零为基线，否则第一轮永远拿不到增量。
-		timing.usageAtStart, _ = runner.usage.sessionUsage()
-		timing.usageAtStartKnown = true
-	}
 	turnCtx, finishTurn := runner.beginActiveTurn(ctx)
 	defer finishTurn()
 	ctx = turnCtx
@@ -63,6 +57,19 @@ func (runner *Engine) runTurnWithTiming(ctx context.Context, userInput message.M
 func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput message.Message, timing *TurnTiming) (execution TurnExecution, err error) {
 	if err := runner.validate(); err != nil {
 		return execution, err
+	}
+	if timing != nil {
+		turnTiming := *timing
+		timing = &turnTiming
+		timing.TurnID, err = runner.resolveTurnID(timing)
+		if err != nil {
+			return execution, err
+		}
+		if timing.StartedAt.IsZero() {
+			timing.StartedAt = runner.now()
+		}
+		timing.usageAtStart, _ = runner.usage.sessionUsage()
+		timing.usageAtStartKnown = true
 	}
 	if err := runner.persistInputAttachments(ctx, &userInput); err != nil {
 		return execution, err

@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"paw/internal/message"
 )
@@ -22,6 +23,7 @@ const (
 type Task struct {
 	ID               string
 	Input            message.Message
+	InitialTiming    *TurnTiming
 	Status           TaskStatus
 	ContinuationUsed int
 	NoProgressCount  int
@@ -108,11 +110,14 @@ func (o TaskOrchestrator) Run(ctx context.Context, task *Task) (TurnExecution, e
 	o.emit(TaskEvent{Type: TaskEventStarted, TaskID: task.ID})
 
 	input := task.Input
-	var timing *TurnTiming
+	timing := task.InitialTiming
+	var metadataErr error
 	for {
 		turnNumber := len(task.Turns) + 1
 		o.emit(TaskEvent{Type: TaskEventTurnStart, TaskID: task.ID, TurnNumber: turnNumber, ContinuationUsed: task.ContinuationUsed})
 		execution, err := o.Executor.ExecuteTurn(ctx, input, timing)
+		metadataErr = errors.Join(metadataErr, execution.MetadataPersistErr)
+		execution.MetadataPersistErr = metadataErr
 		if err != nil {
 			task.Status = TaskFailed
 			o.emit(TaskEvent{Type: TaskEventFailed, TaskID: task.ID, TurnNumber: turnNumber, Error: err})
@@ -145,7 +150,9 @@ func (o TaskOrchestrator) Run(ctx context.Context, task *Task) (TurnExecution, e
 		}
 		task.ContinuationUsed++
 		input = evaluation.NextInput
-		timing = nil
+		if timing != nil {
+			timing = &TurnTiming{}
+		}
 		o.emit(TaskEvent{Type: TaskEventContinued, TaskID: task.ID, TurnNumber: turnNumber, ContinuationUsed: task.ContinuationUsed, Decision: decision})
 	}
 }
@@ -216,7 +223,7 @@ func (runner *Engine) taskOrchestrator() TaskOrchestrator {
 }
 
 func (runner *Engine) runTask(ctx context.Context, userInput message.Message, timing *TurnTiming) (TurnExecution, error) {
-	task := &Task{ID: taskIDFromTiming(timing), Input: userInput, Status: TaskRunning}
+	task := &Task{ID: taskIDFromTiming(timing), Input: userInput, InitialTiming: timing, Status: TaskRunning}
 	return runner.taskOrchestrator().Run(ctx, task)
 }
 

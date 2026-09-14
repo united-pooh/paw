@@ -118,5 +118,25 @@ func eventTypes(events []TaskEvent) []string {
 	return result
 }
 
+func TestTaskOrchestratorPreservesMetadataErrorAcrossContinuation(t *testing.T) {
+	wantErr := errors.New("first sidecar unavailable")
+	executor := &orchestratorExecutor{turns: []TurnExecution{
+		{Message: message.Message{Content: "first"}, MetadataPersistErr: wantErr},
+		{Message: message.Message{Content: "final"}},
+	}}
+	evaluator := &orchestratorEvaluator{evaluations: []CompletionEvaluation{
+		{HasSignal: true, Decision: CompletionDecision{Action: CompletionContinue}, NextInput: message.Message{Content: "continue"}},
+		{HasSignal: true, Decision: CompletionDecision{Action: CompletionComplete}},
+	}}
+	task := &Task{Input: message.Message{Role: message.RoleUser, Content: "start"}}
+	result, err := (TaskOrchestrator{Executor: executor, Evaluator: evaluator}).Run(context.Background(), task)
+	if err != nil || result.Message.Content != "final" || task.Status != TaskCompleted {
+		t.Fatalf("result=%+v err=%v status=%s", result, err, task.Status)
+	}
+	if !errors.Is(result.MetadataPersistErr, wantErr) {
+		t.Fatalf("metadata error=%v, want %v", result.MetadataPersistErr, wantErr)
+	}
+}
+
 var _ TurnExecutor = (*orchestratorExecutor)(nil)
 var _ CompletionEvaluator = (*orchestratorEvaluator)(nil)

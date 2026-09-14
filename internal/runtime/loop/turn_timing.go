@@ -14,7 +14,7 @@ import (
 type TurnTiming struct {
 	TurnID    string
 	StartedAt time.Time
-	// usageAtStart 记录回合开始前的会话累计用量（由 runTurnWithTiming 捕获），
+	// usageAtStart 记录回合开始前的会话累计用量（由单轮执行入口捕获），
 	// completeTurnExecution 用它计算本轮的 token 增量。
 	usageAtStart      model.Usage
 	usageAtStartKnown bool
