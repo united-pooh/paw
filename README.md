@@ -57,7 +57,7 @@ make check        # vet 和构建检查
 
 构建入口现为 `cmd/paw`，原 `cmd/agent` 已移除。参数解析和各运行模式位于 `internal/entry`。
 
-`make build` 默认更新 `~/go/bin/paw`；需要输出到其他位置时，使用 `make build BINDIR=bin`。
+`make build` 默认更新 `~/go/bin/paw`；需要输出到其他位置时，使用 `make build BINDIR=bin`。构建前会校验工作台和 Token Tracer 的 embed 资产指纹，前端源码比 `dist` 新时会中止并提示运行对应目录的 `npm run build`。
 
 - [执行层次与目录地图](./docs/architecture/layout.md)
 - [使用与配置](./docs/guides/usage.md)

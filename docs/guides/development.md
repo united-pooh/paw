@@ -2,9 +2,22 @@
 
 [文档导航](../README.md)
 
-构建入口为 `cmd/paw`，不保留 `cmd/agent`。在仓库根运行 `make build` 默认生成或覆盖 `~/go/bin/paw`（目录不存在时自动创建）；可用 `make build BINDIR=bin` 指定输出目录。`make test` 运行完整 Go 测试，`make check` 运行 vet 和构建检查。直接运行用 `go run ./cmd/paw`。
+构建入口为 `cmd/paw`，不保留 `cmd/agent`。在仓库根运行 `make build` 默认生成或覆盖 `~/go/bin/paw`（目录不存在时自动创建）；可用 `make build BINDIR=bin` 指定输出目录。构建前会校验两套 embed 前端资产的内容指纹，源码修改后未重新执行对应目录的 `npm run build` 会直接报错，而不会静默打包旧 UI；仅在明确接受旧资产时可用 `PAW_SKIP_WEB_DIST_CHECK=1 make build` 跳过。`make test` 运行完整 Go 测试，`make check` 运行 vet 和构建检查。直接运行用 `go run ./cmd/paw`。
 
-浏览器工作台开发目录为 `internal/ui/web/ui`，看板仍在 `internal/tokentracer/dashboard`；两套资产分别由所在 Go 包 embed。修改前端后运行该目录的 npm test、npm run build，并运行相应 E2E。
+浏览器工作台开发目录为 `internal/ui/web/ui`，看板仍在 `internal/tokentracer/dashboard`；两套资产分别由所在 Go 包 embed。修改前端后运行该目录的 `npm test`、`npm run build`，并运行相应 E2E。依赖未安装时先运行 `npm ci`。
+
+`npm run build` 仅在 typecheck 和 Vite 成功后更新 `dist/.paw-source-sha256`，记录构建输入与产物的 SHA-256。输入包括 `src`、`public`、入口 HTML、依赖清单/lockfile、TypeScript/Vite/PostCSS/Tailwind 配置、`.env*` 和指纹脚本。源码改动、产物丢失/被覆盖或指纹缺失均会中止构建；仅修改时间戳不会误报。提交前端修改时须同时提交生成的 `dist`（含指纹文件），不能单独运行脚本的 `--write` 给旧资产补指纹。
+
+可在仓库根运行 `make check-web-dist` 单独检查；检查只需要 Bash 和 SHA-256 工具，不运行 Node/npm，不修改 `dist`。报错时只需在提示的前端目录手动重建，例如：
+
+```bash
+npm --prefix internal/ui/web/ui run build
+make build
+```
+
+Token Tracer 对应 `npm --prefix internal/tokentracer/dashboard run build`。`make web-build` 是工作台的完整 npm ci/lint/test/build 流程，既有全量 lint 失败需要单独修复，不影响上述检查机制；直接 `npm run build` 不等于 lint 已通过。
+
+门禁覆盖 `make build` 和 pre-push 的安装路径；直接 `go build`、`go run`、`make check` 不经过它。不要并行运行前端重建和消费 `dist` 的 Go 编译，因为 Vite 会先清空输出目录。内容指纹不保证不同 Node/环境变量下的构建可复现，也不替代测试或发布签名。
 
 ## 自动发布（pre-push hook）
 
@@ -20,6 +33,7 @@ git config core.hooksPath .githooks
 
 - 钩子文件：`.githooks/pre-push`（源码副本 `scripts/pre-push.sh`）
 - 触发条件：推送目标为 `refs/heads/dev`；其他分支直接放行
+- 构建前门禁：先运行 `scripts/check-web-dist.sh`，embed 前端产物陈旧时中止推送
 - 构建命令：`go build -trimpath -ldflags "-s -w" -o ~/go/bin/paw ./cmd/paw`
 - 版本一致性：用被推送的 `refs/heads/dev` 快照构建（不在 dev 上时会自动创建临时 worktree），保证二进制与推送内容一致
 - 构建失败会中止本次 push；安装目录可用 `GOBIN` 环境变量覆盖

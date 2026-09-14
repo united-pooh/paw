@@ -7,6 +7,7 @@
 #
 # 行为:
 #   - 仅当推送目标是 refs/heads/dev 时才构建安装，其他分支直接放行
+#   - 先校验两套 embed 前端 dist 的内容指纹，再构建并安装 paw
 #   - 构建产物: go build -trimpath -ldflags "-s -w" ./cmd/paw -> ~/go/bin/paw
 #   - 若 HEAD 不是 dev，则用临时 worktree 构建被推送的 dev 快照，保证与推送内容一致
 #   - 构建失败会中止本次 push（相当于 release gate），可用 exit 0 取消
@@ -42,7 +43,7 @@ echo "==> pre-push: 推送 dev (${short})，构建并安装 paw -> ${BIN}"
 
 build_in() {
   local dir="$1"
-  ( cd "$dir" && go build -trimpath -ldflags "-s -w" -o "$BIN.tmp" ./cmd/paw ) \
+  ( cd "$dir" && ./scripts/check-web-dist.sh && go build -trimpath -ldflags "-s -w" -o "$BIN.tmp" ./cmd/paw ) \
     && mv -f "$BIN.tmp" "$BIN"
 }
 
