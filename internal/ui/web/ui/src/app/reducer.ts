@@ -147,6 +147,7 @@ function reduceEvent(state: WorkbenchState, event: AppEvent): WorkbenchState {
     const existing = state.tools[payload.tool_use_id];
     const tool: ToolCallState = {
       tool_use_id: payload.tool_use_id,
+      turn_id: event.turn_id ?? existing?.turn_id,
       name: payload.name ?? existing?.name ?? 'tool',
       target: payload.target ?? existing?.target,
       args_summary: payload.args_summary ?? existing?.args_summary,
@@ -163,6 +164,7 @@ function reduceEvent(state: WorkbenchState, event: AppEvent): WorkbenchState {
     const failed = event.type === 'tool.failed';
     const tool: ToolCallState = {
       tool_use_id: payload.tool_use_id,
+      turn_id: existing?.turn_id ?? event.turn_id,
       name: payload.name ?? existing?.name ?? 'tool',
       target: existing?.target,
       args_summary: existing?.args_summary,

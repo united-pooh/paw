@@ -198,7 +198,8 @@ font-variant-numeric: tabular-nums;
 /* ---------- 消息页脚：元信息 + 操作条 ---------- */
 .message-footer { display: flex; align-items: center; gap: 12px; margin-top: 7px; min-height: 22px; }
 .message-footer .message-meta { margin-top: 0; }
-.message.assistant .message-footer { justify-content: space-between; }
+/* assistant 页脚整体靠左：操作条与元信息（含 tok/s）在同一行左端依次排开 */
+.message.assistant .message-footer { justify-content: flex-start; }
 .message.user .message-footer { justify-content: flex-end; }
 .message-actions { display: flex; align-items: center; gap: 2px; opacity: 0; transition: opacity .15s var(--ease-out); }
 .message:hover .message-actions, .message-actions:focus-within { opacity: 1; }
@@ -291,110 +292,83 @@ font-variant-numeric: tabular-nums;
 .markdown-content a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(193, 95, 60, 0.3); }
 .markdown-content a:hover { color: var(--accent-strong); border-bottom-color: var(--accent-strong); }
 
-/* ---------- 工作段聚合（WorkSegment / Activity Group） ---------- */
-/* 动画壳：对话 ↔ 轨迹 切换时平滑插入 / 移除工作段 */
-.activity-shell {
-  display: grid; grid-template-rows: 0fr; opacity: 0; transform: translateY(-6px);
-  margin-bottom: 0;
-  transition: grid-template-rows .34s var(--ease-out), opacity .26s var(--ease-out),
-    transform .34s var(--ease-out), margin-bottom .34s var(--ease-out);
-}
-.activity-shell.open { grid-template-rows: 1fr; opacity: 1; transform: none; margin-bottom: 18px; }
-.activity-shell-inner { overflow: hidden; min-height: 0; }
-
-.activity-group {
-  border: 1px solid var(--border); border-radius: var(--radius-md);
-  background: var(--surface); box-shadow: var(--shadow-xs); overflow: hidden;
-  transition: border-color .2s var(--ease-out), box-shadow .2s var(--ease-out);
-}
-.activity-group:hover { border-color: var(--border-strong); }
-.activity-group > summary {
-  cursor: pointer; padding: 10px 14px; font-size: 13px; font-weight: 550; color: var(--text-soft);
-  user-select: none; display: flex; align-items: center; gap: 9px; list-style: none;
-  background: var(--surface-warm);
-}
-.activity-group > summary::-webkit-details-marker { display: none; }
-.activity-group > summary::after {
-  content: '›'; margin-left: auto; font-size: 15px; color: var(--muted);
-  transition: transform .22s var(--ease-out); transform: rotate(0deg); line-height: 1;
-}
-.activity-group[open] > summary::after { transform: rotate(90deg); }
-.activity-group[open] > summary { border-bottom: 1px solid var(--border); }
-
-.activity-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-.activity-dot.think { background: var(--thinking); }
-.activity-dot.ok { background: var(--success); }
-.activity-dot.err { background: var(--danger); }
-.activity-dot.pending { background: var(--muted); animation: pulse 1.2s ease-in-out infinite; }
-
-.activity-summary { font-weight: 600; color: var(--text); }
-.activity-names { color: var(--muted); font-size: 12px; font-family: var(--font-mono); margin-left: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-.activity-items {
-  padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 6px;
-  background: var(--surface);
+/* ---------- 工作段竖轨（WorkSegment / Activity Rail） ---------- */
+/* 一条竖线贯穿过程区，思考与工具是轨道上的节点（紫=思考 / 绿=工具 / 红=失败）。
+   对话与轨迹两个标签都渲染：对话默认折叠，轨迹默认全部展开。 */
+.activity-rail { position: relative; margin: 4px 0 20px; padding-left: 20px; animation: fade-up .3s var(--ease-out); }
+.activity-rail::before {
+  content: ''; position: absolute; left: 4px; top: 8px; bottom: 8px; width: 2px;
+  border-radius: 1px; background: var(--border);
 }
 
-/* 思考展开项 */
-.activity-reasoning { border-radius: 8px; background: var(--thinking-soft); border: 1px solid var(--thinking-border); }
-.activity-reasoning > summary {
-  cursor: pointer; padding: 8px 12px; font-size: 12.5px; font-weight: 600; color: var(--thinking);
-  display: flex; align-items: center; gap: 8px; list-style: none; user-select: none;
+.rail-node { position: relative; }
+.rail-node + .rail-node { margin-top: 3px; }
+/* 轨道节点：描边圆环套在竖线上 */
+.rail-node::before {
+  content: ''; position: absolute; left: -19px; top: 9px; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--surface); border: 2px solid var(--border-strong);
 }
-.activity-reasoning > summary::-webkit-details-marker { display: none; }
-.activity-reasoning > summary::after {
-  content: '›'; margin-left: auto; font-size: 13px; color: var(--thinking);
-  transition: transform .2s var(--ease-out); transform: rotate(0deg); opacity: .7;
+.rail-node.think::before { border-color: var(--thinking); }
+.rail-node.tool::before { border-color: var(--success); }
+.rail-node.tool.error::before { border-color: var(--danger); }
+/* 实时竖轨：思考节点呼吸，标记正在生成 */
+.activity-rail.live .rail-node.think::before { animation: pulse 1.2s ease-in-out infinite; }
+
+.rail-node > summary {
+  display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none;
+  user-select: none; font-size: 12.5px; color: var(--text-soft); padding: 4px 0;
 }
-.activity-reasoning[open] > summary::after { transform: rotate(90deg); }
-.activity-reasoning-content {
-  padding: 0 12px 10px; color: var(--text-soft); font-size: 12.5px; line-height: 1.7;
+.rail-node > summary::-webkit-details-marker { display: none; }
+.rail-chev { margin-left: auto; font-size: 11px; color: var(--faint); transition: transform .2s var(--ease-out); }
+.rail-node[open] > summary .rail-chev, .rail-tool[open] > summary .rail-chev { transform: rotate(90deg); }
+.rail-label { font-weight: 600; color: var(--text); font-size: 12px; flex-shrink: 0; }
+.rail-node.tool.error .rail-label { color: var(--danger); }
+.rail-names {
+  color: var(--muted); font-size: 11px; font-family: var(--font-mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.rail-body { margin: 2px 0 8px; display: flex; flex-direction: column; gap: 4px; }
+
+/* 思考内容：合并后的完整 reasoning，就地展开阅读 */
+.rail-think-content {
+  color: var(--text-soft); font-size: 12.5px; line-height: 1.7;
   white-space: pre-wrap; max-height: 300px; overflow-y: auto;
 }
 
-/* 工具行项 */
-.activity-tool {
-  border-radius: 8px; background: var(--surface-muted); border: 1px solid var(--border);
-  font-size: 12.5px; overflow: hidden;
-}
-.activity-tool > summary, .activity-tool:not(details) {
-  padding: 7px 10px; display: flex; align-items: center; gap: 8px; color: var(--text-soft);
+/* 工具行：状态点 + 名称 + 目标；有结果内容时行内 details 可展开 */
+.rail-tool { font-size: 12px; }
+.rail-tool > summary, .rail-tool-row {
+  display: flex; align-items: center; gap: 8px; padding: 3px 0; color: var(--text-soft);
   user-select: none;
 }
-.activity-tool > summary { cursor: pointer; list-style: none; }
-.activity-tool > summary::-webkit-details-marker { display: none; }
-.activity-tool > summary::after {
-  content: '›'; margin-left: auto; font-size: 13px; color: var(--muted);
-  transition: transform .2s var(--ease-out); transform: rotate(0deg); opacity: .7;
-}
-.activity-tool[open] > summary::after { transform: rotate(90deg); }
-.activity-tool-icon { display: grid; place-items: center; color: var(--muted); flex-shrink: 0; }
-.activity-tool-name { font-weight: 600; font-family: var(--font-mono); font-size: 12px; color: var(--text); flex-shrink: 0; }
-.activity-tool-target {
-  font-family: var(--font-mono); font-size: 11.5px; color: var(--muted);
+.rail-tool > summary { cursor: pointer; list-style: none; }
+.rail-tool > summary::-webkit-details-marker { display: none; }
+.rail-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.rail-dot.ok { background: var(--success); }
+.rail-dot.err { background: var(--danger); }
+.rail-dot.pending { background: var(--muted); animation: pulse 1.2s ease-in-out infinite; }
+.rail-tool-name { font-weight: 600; font-family: var(--font-mono); font-size: 11.5px; color: var(--text); flex-shrink: 0; }
+.rail-tool.error .rail-tool-name { color: var(--danger); }
+.rail-tool-target {
+  font-family: var(--font-mono); font-size: 11px; color: var(--muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
 }
-.activity-tool.error { border-color: rgba(191, 74, 68, 0.3); background: var(--danger-soft); }
-.activity-tool.error .activity-tool-name { color: var(--danger); }
-.activity-pre {
-  margin: 0; padding: 8px 12px 10px; border-top: 1px solid var(--border);
-  max-height: 220px; overflow: auto; white-space: pre-wrap;
-  font-family: var(--font-mono); font-size: 11.5px; line-height: 1.6; color: var(--text-soft);
-  background: var(--surface);
+.rail-pre {
+  margin: 2px 0 4px 14px; padding: 6px 9px; background: var(--surface-muted); border-radius: 6px;
+  font-family: var(--font-mono); font-size: 10.5px; line-height: 1.6; color: var(--text-soft);
+  white-space: pre-wrap; max-height: 220px; overflow: auto;
 }
 
 /* <details> 展开/收起高度动画：::details-content + calc-size 平滑过渡，
-   思考过程（含嵌套思考块）与工具行共用；不支持的浏览器退化为瞬时切换。 */
-.activity-group::details-content,
-.activity-reasoning::details-content,
-.activity-tool::details-content {
+   竖轨节点与工具行共用；不支持的浏览器退化为瞬时切换。 */
+.rail-node::details-content,
+.rail-tool::details-content {
   block-size: 0;
   overflow: hidden;
   transition: block-size .28s var(--ease-out), content-visibility .28s ease allow-discrete;
 }
-.activity-group[open]::details-content,
-.activity-reasoning[open]::details-content,
-.activity-tool[open]::details-content {
+.rail-node[open]::details-content,
+.rail-tool[open]::details-content {
   block-size: calc-size(auto, size);
 }
 

@@ -67,7 +67,7 @@ it('缺少时间与用量时不渲染页脚', () => {
   expect(document.querySelector('.message-meta')).toBeNull();
 });
 
-it('纯思考的工作段直接平铺内容，不再嵌套「思考过程」折叠框', () => {
+it('工作段以竖轨穿插在对话流中：思考节点默认折叠，内容就地展开', () => {
   render(<ConversationView
     snapshot={snapshotWithTurn({
       messages: [
@@ -77,32 +77,110 @@ it('纯思考的工作段直接平铺内容，不再嵌套「思考过程」折�
       ],
     })}
     parts={{}}
+    showActivity={false}
     onInspect={() => undefined}
   />);
-  // 外层工作段卡片存在，摘要为「思考过程」
-  expect(document.querySelector('.activity-group')).not.toBeNull();
-  // 内部不再有同名的折叠框，内容直接平铺
-  expect(document.querySelector('.activity-reasoning')).toBeNull();
-  expect(document.querySelector('.activity-reasoning-content')?.textContent).toContain('先梳理思路');
+  // 竖轨存在且为思考节点（紫色），对话模式下默认折叠
+  const rail = document.querySelector('.activity-rail')!;
+  expect(rail).not.toBeNull();
+  const thinkNode = rail.querySelector<HTMLDetailsElement>('.rail-node.think')!;
+  expect(thinkNode).not.toBeNull();
+  expect(thinkNode.open).toBe(false);
+  // 思考内容保留在 DOM 中，展开即可见
+  expect(rail.querySelector('.rail-think-content')?.textContent).toContain('先梳理思路');
 });
 
-it('混合段（思考 + 工具）中的思考块保持可折叠区块', () => {
+it('同一段的多段思考合并为一个思考节点', () => {
   render(<ConversationView
     snapshot={snapshotWithTurn({
       messages: [
         { role: 'user', content: '问题' },
-        { role: 'assistant', assistant_parts: [
-          { type: 'reasoning', reasoning: { text: '想先调用工具' } },
-          { type: 'tool_call', tool_call: { id: 'call-1', name: 'Read' } },
-        ] },
+        { role: 'assistant', assistant_parts: [{ type: 'reasoning', reasoning: { text: '第一段' } }] },
+        { role: 'assistant', assistant_parts: [{ type: 'reasoning', reasoning: { text: '第二段' } }] },
         { role: 'assistant', content: '答案' },
       ],
     })}
     parts={{}}
     onInspect={() => undefined}
   />);
-  expect(document.querySelector('.activity-reasoning')).not.toBeNull();
-  expect(document.querySelector('.activity-tool-name')?.textContent).toBe('Read');
+  expect(document.querySelectorAll('.rail-node.think')).toHaveLength(1);
+  const content = document.querySelector('.rail-think-content')!;
+  expect(content.textContent).toContain('第一段');
+  expect(content.textContent).toContain('第二段');
+});
+
+it('混合段：思考与工具各占一个节点，工具结果收纳在可展开的行内', () => {
+  render(<ConversationView
+    snapshot={snapshotWithTurn({
+      messages: [
+        { role: 'user', content: '问题' },
+        { role: 'assistant', assistant_parts: [
+          { type: 'reasoning', reasoning: { text: '想先调用工具' } },
+          { type: 'tool_call', tool_call: { id: 'call-1', name: 'Read', input: { file_path: 'a.go' } } },
+        ], tool_results: [{ tool_use_id: 'call-1', content: '42 lines' }] },
+        { role: 'assistant', content: '答案' },
+      ],
+    })}
+    parts={{}}
+    showActivity={false}
+    onInspect={() => undefined}
+  />);
+  const rail = document.querySelector('.activity-rail')!;
+  expect(rail.querySelector('.rail-node.think')).not.toBeNull();
+  const toolNode = rail.querySelector<HTMLDetailsElement>('.rail-node.tool')!;
+  expect(toolNode.querySelector('.rail-label')?.textContent).toBe('1 项操作');
+  expect(toolNode.open).toBe(false);
+  // 工具行：名称 + 目标 + 结果内容（折叠在行内 details 里）
+  const row = toolNode.querySelector<HTMLDetailsElement>('.rail-tool')!;
+  expect(row.querySelector('.rail-tool-name')?.textContent).toBe('Read');
+  expect(row.querySelector('.rail-tool-target')?.textContent).toBe('a.go');
+  expect(row.querySelector('.rail-pre')?.textContent).toBe('42 lines');
+  expect(row.open).toBe(false);
+});
+
+it('含失败工具的段：工具节点变红并自动展开，失败行就地展示错误内容', () => {
+  render(<ConversationView
+    snapshot={snapshotWithTurn({
+      messages: [
+        { role: 'user', content: '问题' },
+        { role: 'assistant', assistant_parts: [
+          { type: 'tool_call', tool_call: { id: 'call-1', name: 'Bash', input: { command: 'vitest run' } } },
+        ], tool_results: [{ tool_use_id: 'call-1', content: 'FAIL 1 test', is_error: true }] },
+        { role: 'assistant', content: '答案' },
+      ],
+    })}
+    parts={{}}
+    onInspect={() => undefined}
+  />);
+  const toolNode = document.querySelector<HTMLDetailsElement>('.rail-node.tool')!;
+  expect(toolNode.classList.contains('error')).toBe(true);
+  expect(toolNode.open).toBe(true);
+  expect(toolNode.querySelector('.rail-label')?.textContent).toContain('1 项失败');
+  // 失败行同样自动展开，错误内容直接可见
+  const row = toolNode.querySelector<HTMLDetailsElement>('.rail-tool.error')!;
+  expect(row.open).toBe(true);
+  expect(row.querySelector('.rail-pre')?.textContent).toBe('FAIL 1 test');
+});
+
+it('轨迹模式（showActivity）下竖轨节点默认全部展开', () => {
+  render(<ConversationView
+    snapshot={snapshotWithTurn({
+      messages: [
+        { role: 'user', content: '问题' },
+        { role: 'assistant', assistant_parts: [
+          { type: 'reasoning', reasoning: { text: '思路' } },
+          { type: 'tool_call', tool_call: { id: 'call-1', name: 'Read' } },
+        ] },
+        { role: 'assistant', content: '答案' },
+      ],
+    })}
+    parts={{}}
+    showActivity
+    onInspect={() => undefined}
+  />);
+  const nodes = document.querySelectorAll<HTMLDetailsElement>('.activity-rail .rail-node');
+  expect(nodes).toHaveLength(2);
+  nodes.forEach((node) => expect(node.open).toBe(true));
 });
 
 it('流式正文即时渲染标记 live，快照正文到达后由快照接管', async () => {
@@ -152,27 +230,68 @@ it('消息操作条：复制正文，assistant 消息支持分叉与导出', asy
   spy.mockRestore();
 });
 
-it('对话模式只展示进行中的思考过程卡，回合结束即消失；轨迹模式展示全部过程卡', () => {
+it('assistant 页脚操作条在前、元信息紧随其后，同行左排', () => {
+  render(<ConversationView
+    snapshot={snapshotWithTurn({
+      status: 'completed',
+      started_at: '2026-09-02T14:30:00Z',
+      duration_ms: 10_000,
+      input_tokens: 100,
+      output_tokens: 50,
+    })}
+    parts={{}}
+    onInspect={() => undefined}
+    onFork={() => undefined}
+  />);
+  const assistant = screen.getByText('你好，有什么可以帮你？').closest('article')!;
+  const footer = assistant.querySelector('.message-footer')!;
+  expect(footer.firstElementChild).toHaveClass('message-actions');
+  expect(footer.lastElementChild).toHaveClass('message-meta');
+});
+
+it('对话模式：进行中回合以实时竖轨呈现思考与工具呼吸节点，回合结束即消失；轨迹模式保留过程卡', () => {
   const parts = {
-    p1: { part_id: 'p1', session_id: 's1', turn_id: 't1', kind: 'reasoning', text: '思考中' },
+    p1: { part_id: 'p1', session_id: 's1', turn_id: 't1', kind: 'reasoning', text: '梳理思路中' },
     p2: { part_id: 'p2', session_id: 's1', turn_id: 't1', kind: 'assistant', text: '书写中' },
   };
-  // 回合进行中：对话模式只显示推理临时卡，正文过程卡由打字机气泡替代
+  const tools = {
+    c1: { tool_use_id: 'c1', turn_id: 't1', name: 'Read', target: 'a.go', status: 'running' as const },
+  };
+  // 回合进行中：对话模式显示实时竖轨（思考中 + 运行中的工具行），不再有临时过程卡
   const running = snapshotWithTurn({ status: 'running' });
   running.turns[0].messages = [{ role: 'user', content: '你好' }];
   running.active_turn_id = 't1';
-  const view = render(<ConversationView snapshot={running} parts={parts} showActivity={false} onInspect={() => undefined} />);
-  expect(document.querySelectorAll('.process-card')).toHaveLength(1);
-  expect(document.querySelector('.process-card')!.textContent).toContain('思考过程');
-
-  // 回合结束（active 清除）：对话模式不再有任何过程卡
-  const finished = snapshotWithTurn({ status: 'completed' });
-  view.rerender(<ConversationView snapshot={finished} parts={parts} showActivity={false} onInspect={() => undefined} />);
+  const view = render(<ConversationView snapshot={running} parts={parts} tools={tools} showActivity={false} onInspect={() => undefined} />);
+  const live = document.querySelector('.activity-rail.live')!;
+  expect(live).not.toBeNull();
+  expect(live.querySelector('.rail-think-content')?.textContent).toContain('梳理思路中');
+  expect(live.querySelector('.rail-tool-name')?.textContent).toBe('Read');
+  expect(live.querySelector('.rail-dot.pending')).not.toBeNull();
   expect(document.querySelector('.process-card')).toBeNull();
 
-  // 轨迹模式：始终展示全部流式片段
-  view.rerender(<ConversationView snapshot={finished} parts={parts} showActivity onInspect={() => undefined} />);
+  // 回合结束（active 清除）：实时竖轨消失，由快照里的静息竖轨接管
+  const finished = snapshotWithTurn({ status: 'completed' });
+  view.rerender(<ConversationView snapshot={finished} parts={parts} tools={tools} showActivity={false} onInspect={() => undefined} />);
+  expect(document.querySelector('.activity-rail.live')).toBeNull();
+
+  // 轨迹模式：始终展示全部流式片段过程卡
+  view.rerender(<ConversationView snapshot={finished} parts={parts} tools={tools} showActivity onInspect={() => undefined} />);
   expect(document.querySelectorAll('.process-card')).toHaveLength(2);
+});
+
+it('实时竖轨只展示当前回合的工具，其它回合的历史工具不混入', () => {
+  const running = snapshotWithTurn({ status: 'running' });
+  running.turns[0].messages = [{ role: 'user', content: '你好' }];
+  running.active_turn_id = 't1';
+  const tools = {
+    c1: { tool_use_id: 'c1', turn_id: 't0', name: 'Read', status: 'completed' as const },
+    c2: { tool_use_id: 'c2', turn_id: 't1', name: 'Bash', status: 'running' as const },
+  };
+  render(<ConversationView snapshot={running} parts={{}} tools={tools} showActivity={false} onInspect={() => undefined} />);
+  const live = document.querySelector('.activity-rail.live')!;
+  expect(live).not.toBeNull();
+  expect(live.querySelectorAll('.rail-tool')).toHaveLength(1);
+  expect(live.querySelector('.rail-tool-name')?.textContent).toBe('Bash');
 });
 
 /** jsdom 无量布局：手动指定滚动几何并触发 scroll 事件 */

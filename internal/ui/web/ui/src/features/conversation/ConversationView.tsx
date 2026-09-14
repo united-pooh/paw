@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { MessagePart, SessionSnapshot, StreamingPart, ToolCall, ToolResult } from '../../api/types';
+import type { MessagePart, SessionSnapshot, StreamingPart, ToolCall, ToolCallState, ToolResult } from '../../api/types';
 import { CopyButton } from '../../components/CopyButton';
 import { MarkdownContent } from '../../components/MarkdownContent';
 import { TurnNavigator } from './TurnNavigator';
@@ -62,7 +62,8 @@ function isVisible(message: MessagePart): boolean {
 /* ---------- 工作段（WorkSegment）聚类 ----------
  * 复刻 TUI 端 transcript_worksegment 的语义：连续的 reasoning / tool_call /
  * tool_result 运行被收编为一个“活动段”，正文（assistant 文本）与用户消息
- * 是段边界。渲染时整段折叠为一行摘要，展开后呈现紧凑时间轴。 */
+ * 是段边界。渲染为竖轨时间轴：思考与工具是轨道上的节点，默认折叠穿插在
+ * 对话流中，就地展开查看内容。 */
 
 type ActivityItem =
   | { kind: 'reasoning'; text: string }
@@ -265,82 +266,106 @@ function LiveTextBubble({ part, active, startedAt, showMeta, onPumpState }: {
   </article>;
 }
 
-function ToolGlyph() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
-    </svg>
-  );
-}
-
-function ActivityToolRow({ item }: { item: Extract<ActivityItem, { kind: 'tool' }> }) {
-  const target = toolTarget(item.call);
-  const failed = Boolean(item.result?.is_error);
-  const dotClass = failed ? 'activity-dot err' : item.result ? 'activity-dot ok' : 'activity-dot pending';
-  const row = <>
+/** 工具行（竖轨节点内）：状态点 + 名称 + 目标；有结果内容时行内可展开。
+ *  静息段与实时段共用：静息段由 ToolCall+ToolResult 驱动，实时段由 ToolCallState 驱动。 */
+function RailToolRow({ name, target, failed, pending, content }: {
+  name: string; target?: string; failed: boolean; pending: boolean; content?: string;
+}) {
+  const dotClass = failed ? 'rail-dot err' : pending ? 'rail-dot pending' : 'rail-dot ok';
+  const label = <>
     <span className={dotClass} aria-hidden="true" />
-    <span className="activity-tool-icon" aria-hidden="true"><ToolGlyph /></span>
-    <span className="activity-tool-name">{item.call.name}</span>
-    {target && <span className="activity-tool-target">{target}</span>}
+    <span className="rail-tool-name">{name}</span>
+    {target && <span className="rail-tool-target">{target}</span>}
   </>;
-  if (!item.result?.content) return <div className={`activity-tool${failed ? ' error' : ''}`}>{row}</div>;
+  if (!content) return <div className={`rail-tool${failed ? ' error' : ''}`}><div className="rail-tool-row">{label}</div></div>;
+  // 失败行默认展开：错误内容直接可见，无需多点一次
+  return <details className={`rail-tool${failed ? ' error' : ''}`} open={failed}>
+    <summary>{label}<span className="rail-chev" aria-hidden="true">›</span></summary>
+    <pre className="rail-pre">{content}</pre>
+  </details>;
+}
+
+/** 静息工作段竖轨：一条竖线贯穿过程区，思考与工具是轨道上的节点
+ * （紫=思考 / 绿=工具 / 红=失败）。同段多段思考合并为一个思考节点；
+ * 对话模式默认折叠，轨迹模式（expanded）默认全部展开；含失败时自动展开。 */
+function ActivityRail({ items, expanded }: { items: ActivityItem[]; expanded: boolean }) {
+  const reasoning = items.flatMap((item) => item.kind === 'reasoning' ? [item.text] : []).join('\n\n');
+  const tools = items.filter((item): item is Extract<ActivityItem, { kind: 'tool' }> => item.kind === 'tool');
+  const errorCount = tools.filter((item) => item.result?.is_error).length;
   return (
-    <details className={`activity-tool${failed ? ' error' : ''}`}>
-      <summary>{row}</summary>
-      <pre className="activity-pre">{item.result.content}</pre>
-    </details>
+    <div className="activity-rail">
+      {reasoning.trim() !== '' && (
+        <details className="rail-node think" open={expanded}>
+          <summary><span className="rail-label">思考</span><span className="rail-chev" aria-hidden="true">›</span></summary>
+          <div className="rail-body"><div className="rail-think-content">{reasoning}</div></div>
+        </details>
+      )}
+      {tools.length > 0 && (
+        <details className={`rail-node tool${errorCount > 0 ? ' error' : ''}`} open={expanded || errorCount > 0}>
+          <summary>
+            <span className="rail-label">{tools.length} 项操作{errorCount > 0 ? ` · ${errorCount} 项失败` : ''}</span>
+            <span className="rail-names">{summarizeToolNames(items)}</span>
+            <span className="rail-chev" aria-hidden="true">›</span>
+          </summary>
+          <div className="rail-body">
+            {tools.map((item, index) => (
+              <RailToolRow key={item.call.id || `tool-${index}`}
+                name={item.call.name} target={toolTarget(item.call)}
+                failed={Boolean(item.result?.is_error)} pending={!item.result}
+                content={item.result?.content} />
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
   );
 }
 
-function ActivityGroup({ items }: { items: ActivityItem[] }) {
-  const toolCount = items.filter((item) => item.kind === 'tool').length;
-  const errorCount = items.filter((item) => item.kind === 'tool' && item.result?.is_error).length;
-  const hasReasoning = items.some((item) => item.kind === 'reasoning');
-  // 纯思考的工作段摘要已是「思考过程」，内容直接平铺展示，不再嵌套同名折叠框；
-  // 混合段（思考 + 工具）里思考块才需要可折叠的独立区块与工具行区分。
-  const onlyReasoning = items.every((item) => item.kind === 'reasoning');
-  const names = summarizeToolNames(items);
-
-  let summary: string;
-  if (toolCount === 0) summary = '思考过程';
-  else if (hasReasoning) summary = `完成思考，执行了 ${toolCount} 项操作`;
-  else summary = `执行了 ${toolCount} 项操作`;
-  if (errorCount > 0) summary += ` · ${errorCount} 项失败`;
-
-  const groupDot = errorCount > 0 ? 'activity-dot err' : toolCount === 0 ? 'activity-dot think' : 'activity-dot ok';
-
+/** 实时竖轨：回合进行中以呼吸节点呈现流式思考与工具调用（状态实时翻转），
+ *  回合结束（快照接管）后由静息竖轨接替，不会残留。 */
+function LiveActivityRail({ reasoningText, hasReasoning, tools }: {
+  reasoningText: string; hasReasoning: boolean; tools: ToolCallState[];
+}) {
+  const runningCount = tools.filter((tool) => tool.status === 'running').length;
+  const failedCount = tools.filter((tool) => tool.status === 'failed').length;
   return (
-    <details className="activity-group" open={errorCount > 0}>
-      <summary>
-        <span className={groupDot} aria-hidden="true" />
-        <span className="activity-summary">{summary}</span>
-        {names && <span className="activity-names">{names}</span>}
-      </summary>
-      <div className="activity-items">
-        {items.map((item, index) => item.kind === 'reasoning' ? (
-          onlyReasoning
-            ? <div className="activity-reasoning-content" key={`reasoning-${index}`}>{item.text}</div>
-            : <details className="activity-reasoning" key={`reasoning-${index}`}>
-              <summary>
-                <span className="activity-dot think" aria-hidden="true" />
-                <span className="activity-reasoning-label">思考过程</span>
-              </summary>
-              <div className="activity-reasoning-content">{item.text}</div>
-            </details>
-        ) : (
-          <ActivityToolRow item={item} key={item.call.id || `tool-${index}`} />
-        ))}
-      </div>
-    </details>
+    <div className="activity-rail live">
+      {hasReasoning && (
+        <details className="rail-node think" open>
+          <summary><span className="rail-label">思考中</span><span className="rail-chev" aria-hidden="true">›</span></summary>
+          <div className="rail-body"><div className="rail-think-content">{reasoningText.trim() !== '' ? reasoningText : '等待内容…'}</div></div>
+        </details>
+      )}
+      {tools.length > 0 && (
+        <details className={`rail-node tool${failedCount > 0 ? ' error' : ''}`} open>
+          <summary>
+            <span className="rail-label">
+              {tools.length} 项操作{runningCount > 0 ? ` · ${runningCount} 进行中` : ''}{failedCount > 0 ? ` · ${failedCount} 项失败` : ''}
+            </span>
+            <span className="rail-chev" aria-hidden="true">›</span>
+          </summary>
+          <div className="rail-body">
+            {tools.map((tool) => (
+              <RailToolRow key={tool.tool_use_id}
+                name={tool.name} target={tool.target}
+                failed={tool.status === 'failed'} pending={tool.status === 'running'}
+                content={tool.status === 'failed' ? (tool.error_message ?? tool.result_summary) : tool.result_summary} />
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
   );
 }
 
 // 贴底判定阈值（像素）：容忍滚动圆整与惯性滚动的末端过冲。
 const BOTTOM_STICK_THRESHOLD = 32;
 
-export function ConversationView({ snapshot, parts, showActivity = true, onInspect, onFork, exportUrl, sendSignal = 0, navigationHost }: {
+export function ConversationView({ snapshot, parts, tools = {}, showActivity = true, onInspect, onFork, exportUrl, sendSignal = 0, navigationHost }: {
   snapshot: SessionSnapshot | null;
   parts: Record<string, StreamingPart>;
+  /** 工具调用的实时聚合（tool.started/completed/failed 事件流）：驱动实时竖轨的工具行 */
+  tools?: Record<string, ToolCallState>;
   showActivity?: boolean;
   onInspect: (partID: string) => void;
   /** 分叉当前会话（未提供时隐藏分叉按钮） */
@@ -443,13 +468,22 @@ export function ConversationView({ snapshot, parts, showActivity = true, onInspe
 
   // 发送消息时强制回到底部：用户主动提交即表达了关注最新内容的意图，
   // 即使此前上翻脱离跟随，也恢复贴底并清未读（TUI submit 回底同款契约）。
-  // 首挂载不触发：ref 以当前信号为基线，仅信号递增时执行。
+  // 状态在渲染期按 prev 对比模式同步（React 推荐做法，避免 effect 内级联 setState）；
+  // ref 与 DOM 滚动仍留在 layout effect。首挂载不触发：state/ref 以当前信号为基线。
+  const [lastSendSignal, setLastSendSignal] = useState(sendSignal);
+  if (lastSendSignal !== sendSignal) {
+    setLastSendSignal(sendSignal);
+    setStickToBottom(true);
+    setPendingCount(0);
+  }
   const lastSendSignalRef = useRef(sendSignal);
   useLayoutEffect(() => {
     if (lastSendSignalRef.current === sendSignal) return;
     lastSendSignalRef.current = sendSignal;
-    scrollToBottomNow();
-  }, [sendSignal, scrollToBottomNow]);
+    stickRef.current = true;
+    const el = nodeRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [sendSignal]);
 
   const jumpToLatest = scrollToBottomNow;
 
@@ -465,9 +499,11 @@ export function ConversationView({ snapshot, parts, showActivity = true, onInspe
   }
   const pumpingTurns = new Set(Object.values(parts).filter((part) => pumping.has(part.part_id)).map((part) => part.turn_id));
   const streamingTexts = Object.values(parts).filter((part) => part.kind === 'assistant' && part.text !== '' && (!snapshotContentTurns.has(part.turn_id) || pumping.has(part.part_id)));
-  // 对话模式下 reasoning 阶段（模型长考、正文未出）也给出即时反馈：临时思考卡，
+  // 对话模式下 reasoning 阶段（模型长考、正文未出）也给出即时反馈：实时竖轨，
   // 回合结束或快照接管后自动消失，不会在结尾残留。
   const liveReasoning = Object.values(parts).filter((part) => part.kind === 'reasoning' && !snapshotContentTurns.has(part.turn_id) && snapshot.active_turn_id === part.turn_id);
+  // 实时竖轨的工具行：tools 通道跨回合累积，按当前回合过滤；快照接管后退出实时态。
+  const liveTools = Object.values(tools).filter((tool) => tool.turn_id !== undefined && tool.turn_id === snapshot.active_turn_id && !snapshotContentTurns.has(tool.turn_id));
   return <div className="conversation-wrap">
     <div className="conversation-view" ref={scrollRef}>
     <div className="conversation-content">
@@ -495,13 +531,8 @@ export function ConversationView({ snapshot, parts, showActivity = true, onInspe
           </div>
         </article>;
       }
-      // 工作段始终挂载在 DOM 中，通过外壳的 grid-rows/透明度过渡动画
-      // 在「对话」（隐藏）与「轨迹」（显示）之间平滑插入与移除。
-      return <div className={`activity-shell${showActivity ? ' open' : ''}`} key={block.key} aria-hidden={!showActivity}>
-        <div className="activity-shell-inner">
-          <ActivityGroup items={block.items} />
-        </div>
-      </div>;
+      // 工作段竖轨在两个标签下都渲染：对话模式默认折叠，轨迹模式（showActivity）默认全部展开。
+      return <ActivityRail key={block.key} items={block.items} expanded={showActivity} />;
     })}
     {streamingTexts.map((part, index) => {
       const turn = snapshot.turns.find((item) => item.turn_id === part.turn_id);
@@ -509,8 +540,15 @@ export function ConversationView({ snapshot, parts, showActivity = true, onInspe
       const isLast = index === streamingTexts.length - 1;
       return <LiveTextBubble key={`stream-${part.part_id}`} part={part} active={active} startedAt={turn?.started_at} showMeta={isLast} onPumpState={onPumpState} />;
     })}
-    {/* 过程卡：轨迹模式展示全部流式片段；对话模式只展示进行中的思考过程（正文已由打字机气泡呈现）。 */}
-    {(showActivity ? Object.values(parts) : liveReasoning).map((part) => <button className={`process-card ${part.kind}`} type="button" onClick={() => onInspect(part.part_id)} key={part.part_id}>
+    {/* 实时竖轨：对话模式下进行中回合的思考与工具以呼吸节点呈现（正文由打字机气泡呈现）。 */}
+    {!showActivity && (liveReasoning.length > 0 || liveTools.length > 0) && (
+      <LiveActivityRail
+        reasoningText={liveReasoning.map((part) => part.text).join('\n\n')}
+        hasReasoning={liveReasoning.length > 0}
+        tools={liveTools} />
+    )}
+    {/* 过程卡：轨迹模式展示全部流式片段，点击打开详情抽屉。 */}
+    {showActivity && Object.values(parts).map((part) => <button className={`process-card ${part.kind}`} type="button" onClick={() => onInspect(part.part_id)} key={part.part_id}>
       <span>{part.kind === 'reasoning' ? '思考过程' : '实时响应'}</span><small>{part.text.slice(0, 140) || '等待内容…'}</small>
     </button>)}
     </div>

@@ -36,7 +36,7 @@ const snapshotWithActivity = {
   }],
 };
 
-it('对话与轨迹共用内容流，仅工作段随标签切换显示', async () => {
+it('对话与轨迹共用内容流：竖轨始终可见，随标签切换默认折叠 / 展开', async () => {
   const user = userEvent.setup();
   const { container } = render(<WorkbenchShell
     workspaces={[{ id: 'w', name: 'Project', path: '/project', last_opened_at: new Date().toISOString() }]}
@@ -45,18 +45,18 @@ it('对话与轨迹共用内容流，仅工作段随标签切换显示', async (
     parts={{}}
   />);
   expect(screen.getByRole('heading', { name: 'Conversation' })).toBeInTheDocument();
-  // 两个标签渲染同一内容流：正文始终可见
+  // 两个标签渲染同一内容流：正文与竖轨始终可见
   expect(screen.getByText('这是文章摘要。')).toBeInTheDocument();
-  // 对话标签下工作段挂载但处于收起外壳中
-  expect(container.querySelector('.activity-shell')).not.toBeNull();
-  expect(container.querySelector('.activity-shell.open')).toBeNull();
-  // 切换到轨迹标签：工作段外壳展开
+  expect(screen.getByText(/1 项操作/)).toBeInTheDocument();
+  // 对话标签下竖轨节点默认折叠
+  const toolNode = () => container.querySelector<HTMLDetailsElement>('.rail-node.tool')!;
+  expect(toolNode().open).toBe(false);
+  // 切换到轨迹标签：节点默认全部展开
   await user.click(screen.getByRole('button', { name: '轨迹' }));
-  expect(container.querySelector('.activity-shell.open')).not.toBeNull();
-  expect(screen.getByText(/执行了 1 项操作/)).toBeInTheDocument();
-  // 切回对话：工作段重新收起
+  expect(toolNode().open).toBe(true);
+  // 切回对话：恢复默认折叠
   await user.click(screen.getByRole('button', { name: '对话' }));
-  expect(container.querySelector('.activity-shell.open')).toBeNull();
+  expect(toolNode().open).toBe(false);
   expect(screen.getByText('这是文章摘要。')).toBeInTheDocument();
 });
 

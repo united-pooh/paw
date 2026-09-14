@@ -36,12 +36,12 @@ it('handles UTF-8 offsets, duplicates, gaps and leaves session version unchanged
 it('aggregates tool lifecycle events into tools state', () => {
   let state = reducer(initialState, { type: 'snapshot.loaded', snapshot });
   state = reducer(state, { type: 'event.received', event: event(3, 'tool.started', { tool_use_id: 'c1', name: 'Read', target: '/tmp/a.go', args_summary: '{"file_path":"/tmp/a.go"}', started_at: new Date().toISOString() }) });
-  expect(state.tools.c1).toMatchObject({ name: 'Read', target: '/tmp/a.go', status: 'running' });
+  expect(state.tools.c1).toMatchObject({ name: 'Read', target: '/tmp/a.go', status: 'running', turn_id: 't1' });
   state = reducer(state, { type: 'event.received', event: event(4, 'tool.completed', { tool_use_id: 'c1', name: 'Read', result_summary: '42 lines', detail_id: 'detail-1', finished_at: new Date().toISOString(), duration_ms: 81 }) });
-  expect(state.tools.c1).toMatchObject({ status: 'completed', result_summary: '42 lines', detail_id: 'detail-1', duration_ms: 81, target: '/tmp/a.go' });
+  expect(state.tools.c1).toMatchObject({ status: 'completed', result_summary: '42 lines', detail_id: 'detail-1', duration_ms: 81, target: '/tmp/a.go', turn_id: 't1' });
   state = reducer(state, { type: 'event.received', event: event(5, 'tool.started', { tool_use_id: 'c2', name: 'Bash', target: 'rm -rf /', args_summary: '{}' }) });
   state = reducer(state, { type: 'event.received', event: event(6, 'tool.failed', { tool_use_id: 'c2', name: 'Bash', error_code: 'permission_denied', message: 'blocked', finished_at: new Date().toISOString() }) });
-  expect(state.tools.c2).toMatchObject({ status: 'failed', error_code: 'permission_denied', error_message: 'blocked', target: 'rm -rf /' });
+  expect(state.tools.c2).toMatchObject({ status: 'failed', error_code: 'permission_denied', error_message: 'blocked', target: 'rm -rf /', turn_id: 't1' });
 });
 
 it('resets tools when a snapshot arrives for a different session', () => {

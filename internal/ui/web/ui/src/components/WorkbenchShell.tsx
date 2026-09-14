@@ -29,7 +29,7 @@ export interface WorkbenchShellProps {
   onDecide?: (workspaceID: string, sessionID: string, requestID: string, decision: 'allow_once' | 'deny') => void;
 }
 
-export function WorkbenchShell({ workspaces, sessions, snapshot, parts, interactions, onSelectWorkspace, onSelectSession, onOpenWorkspace, onCreateSession, onSubmit, onSteer, onQueue, onCancel, onFork, onAnswer, onDecide }: WorkbenchShellProps) {
+export function WorkbenchShell({ workspaces, sessions, snapshot, parts, tools, interactions, onSelectWorkspace, onSelectSession, onOpenWorkspace, onCreateSession, onSubmit, onSteer, onQueue, onCancel, onFork, onAnswer, onDecide }: WorkbenchShellProps) {
   const workspaceRef = useRef<HTMLElement>(null);
   const dockRef = useRef<HTMLDivElement>(null);
   const [navigationHost, setNavigationHost] = useState<HTMLDivElement | null>(null);
@@ -74,10 +74,10 @@ export function WorkbenchShell({ workspaces, sessions, snapshot, parts, interact
           </svg>
         </button>
         <h1>{sessions.find((item) => item.session_id === selectedSessionID)?.title || '浏览器工作台'}</h1><span className="connection-badge">本地连接</span></div><div><div className="turn-navigation-slot" ref={setNavigationHost} /><nav><button className={tab === 'conversation' ? 'active' : ''} onClick={() => setTab('conversation')} type="button">对话</button><button className={tab === 'trace' ? 'active' : ''} onClick={() => setTab('trace')} type="button">轨迹</button></nav></div></header>
-      {/* 对话与轨迹渲染同一内容流，唯一区别是工作段（思考 / 工具活动）是否显示；
-          组件保持挂载，切换标签时工作段以过渡动画插入或移除。 */}
+      {/* 对话与轨迹渲染同一内容流：工作段竖轨始终可见，
+          区别在默认折叠（对话）还是默认全部展开（轨迹），以及轨迹标签额外展示过程卡。 */}
       {/* key 按会话重挂载：会话切换时自动重置跟随滚动、未读计数与打字泵等局部状态 */}
-      <ConversationView key={selectedSessionID ?? 'none'} snapshot={activeSnapshot} parts={parts} showActivity={tab === 'trace'} onInspect={inspect} sendSignal={sendSignal}
+      <ConversationView key={selectedSessionID ?? 'none'} snapshot={activeSnapshot} parts={parts} tools={tools} showActivity={tab === 'trace'} onInspect={inspect} sendSignal={sendSignal}
         navigationHost={navigationHost}
         onFork={onFork && selectedWorkspaceID && selectedSessionID ? () => void onFork(selectedWorkspaceID, selectedSessionID) : undefined}
         exportUrl={selectedWorkspaceID && selectedSessionID ? api.sessionExportUrl(selectedWorkspaceID, selectedSessionID) : undefined} />

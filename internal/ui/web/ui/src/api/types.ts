@@ -175,6 +175,8 @@ export interface ToolFailedPayload { tool_use_id: string; name: string; error_co
 /** 工具调用的前端聚合状态（来自 tool.started/completed/failed 事件流） */
 export interface ToolCallState {
   tool_use_id: string;
+  /** 所属回合（来自事件的 turn_id）：实时竖轨按当前回合过滤工具 */
+  turn_id?: string;
   name: string;
   target?: string;
   args_summary?: string;
