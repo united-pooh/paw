@@ -4,6 +4,10 @@ import { Composer } from './Composer';
 
 beforeEach(() => localStorage.clear());
 
+// 卡片堆的常用查询（胶囊与模型候选 listbox 在测试中反复出现）
+const modelPill = () => screen.getByRole('button', { name: '切换模型' });
+const modelListbox = () => within(screen.getByRole('listbox', { name: '模型候选' }));
+
 it('starts with one row and no shortcut hint', () => {
   render(<Composer workspaceID="w" sessionID="s" onSubmit={async () => undefined} />);
   expect(screen.getByLabelText('消息')).toHaveAttribute('rows', '1');
@@ -242,25 +246,24 @@ it('卡片堆加载模型目录，胶囊 morph 成搜索框筛选切换模型与
   // 点击胶囊 → morph 成搜索框，候选列表出现（查询限定在 listbox 内，避开原生 select 的 option）
   await user.click(pill);
   expect(await screen.findByLabelText('搜索模型')).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '切换模型' })).toHaveAttribute('aria-expanded', 'true');
-  const listbox = screen.getByRole('listbox', { name: '模型候选' });
-  expect(within(listbox).getAllByRole('option')).toHaveLength(3);
+  expect(modelPill()).toHaveAttribute('aria-expanded', 'true');
+  expect(modelListbox().getAllByRole('option')).toHaveLength(3);
 
   // 输入筛选：只剩 beta
   await user.type(screen.getByLabelText('搜索模型'), 'beta');
-  expect(within(screen.getByRole('listbox', { name: '模型候选' })).getAllByRole('option')).toHaveLength(1);
+  expect(modelListbox().getAllByRole('option')).toHaveLength(1);
   // Enter 选定
   await user.keyboard('{Enter}');
   expect(selections).toEqual([{ model_id: 'local/beta' }]);
   // 胶囊文案更新；选择器延迟 140ms 收起（让打勾动画可见），用 waitFor 等落定
   expect(await screen.findByRole('button', { name: '切换模型' })).toHaveTextContent('local/beta');
-  await waitFor(() => expect(screen.getByRole('button', { name: '切换模型' })).toHaveAttribute('aria-expanded', 'false'));
+  await waitFor(() => expect(modelPill()).toHaveAttribute('aria-expanded', 'false'));
   // beta 不支持推理 → 推理强度选择器禁用
   expect(screen.getByLabelText('推理强度')).toBeDisabled();
 
   // 再次打开，用鼠标点击切回 alpha
-  await user.click(screen.getByRole('button', { name: '切换模型' }));
-  await user.click(within(screen.getByRole('listbox', { name: '模型候选' })).getByRole('option', { name: 'local/alpha' }));
+  await user.click(modelPill());
+  await user.click(modelListbox().getByRole('option', { name: 'local/alpha' }));
   expect(selections).toContainEqual({ model_id: 'local/alpha' });
   expect(await screen.findByRole('button', { name: '切换模型' })).toHaveTextContent('local/alpha');
 
@@ -280,16 +283,16 @@ it('模型搜索：Esc 先清空再关闭，空结果显示占位', async () => 
     loadModelOptions={async () => options} onSelectModel={async () => options} />);
   await user.click(await screen.findByRole('button', { name: '切换模型' }));
   await user.type(screen.getByLabelText('搜索模型'), 'zzz');
-  expect(within(screen.getByRole('listbox', { name: '模型候选' })).queryByRole('option')).toBeNull();
+  expect(modelListbox().queryByRole('option')).toBeNull();
   expect(screen.getByText('没有匹配「zzz」的模型')).toBeInTheDocument();
   // 第一次 Esc 清空输入，列表恢复；第二次 Esc 关闭
   await user.keyboard('{Escape}');
   expect(screen.getByLabelText('搜索模型')).toHaveValue('');
-  expect(within(screen.getByRole('listbox', { name: '模型候选' })).getAllByRole('option')).toHaveLength(1);
+  expect(modelListbox().getAllByRole('option')).toHaveLength(1);
   await user.keyboard('{Escape}');
   // 输入框不从 DOM 卸载（同体 morph），关闭后胶囊回到未展开态、搜索框不可见
-  await waitFor(() => expect(screen.getByRole('button', { name: '切换模型' })).toHaveAttribute('aria-expanded', 'false'));
-  expect(screen.getByRole('button', { name: '切换模型' })).not.toHaveClass('searching');
+  await waitFor(() => expect(modelPill()).toHaveAttribute('aria-expanded', 'false'));
+  expect(modelPill()).not.toHaveClass('searching');
 });
 
 it('未提供模型数据源时不渲染卡片堆', () => {

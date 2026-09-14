@@ -464,15 +464,20 @@ font-variant-numeric: tabular-nums;
    动画向上抽出（负 margin 不变，输入卡纹丝不动），可见区固定为 47px。视觉上
    是一张被抽出的卡片而不是两张分离卡片。 */
 .deck-card {
+--row-h: 47px;  /* 控件行高 = 静置时卡片可见高度，也是候选列表的 top */
+--open-h: 82px; /* 抽出（hover / focus / 搜索态）后的卡片高度 */
 width: min(748px, calc(100% - 68px)); margin: 0 auto -35px; position: relative; z-index: 0;
-height: 47px; box-sizing: border-box; overflow: hidden;
+height: var(--row-h); box-sizing: border-box; overflow: hidden;
 background: var(--surface-muted); border: 1px solid var(--border);
 border-radius: var(--radius-xl); box-shadow: var(--shadow-sm);
 transition: height .3s var(--ease-out), background .3s ease, box-shadow .3s var(--ease-out);
 }
-.deck-card:hover, .deck-card:focus-within {
-height: 82px; background: var(--surface); box-shadow: var(--shadow-md);
+/* hover / focus / 搜索态共用同一副「抽出」外观；高度各自声明（搜索态见下方
+   .deck-card.search-open，要在此基础上再加候选列表高度） */
+.deck-card:hover, .deck-card:focus-within, .deck-card.search-open {
+background: var(--surface); box-shadow: var(--shadow-md);
 }
+.deck-card:hover, .deck-card:focus-within { height: var(--open-h); }
 /* 静置时露出的预览带显示当前模型·强度摘要，抽出时淡出 */
 .deck-peek {
 position: absolute; top: 0; left: 0; right: 0; height: 12px;
@@ -481,10 +486,10 @@ font-size: 9.5px; letter-spacing: .04em; color: var(--faint);
 pointer-events: none; white-space: nowrap; overflow: hidden;
 transition: opacity .15s ease;
 }
-.deck-card:hover .deck-peek, .deck-card:focus-within .deck-peek { opacity: 0; }
+.deck-card:hover .deck-peek, .deck-card:focus-within .deck-peek, .deck-card.search-open .deck-peek { opacity: 0; }
 /* 控件行固定在可见区（卡片顶部 47px），底部 35px 始终藏在输入卡之下 */
 .deck-row {
-position: absolute; top: 0; left: 0; right: 0; height: 47px; box-sizing: border-box;
+position: absolute; top: 0; left: 0; right: 0; height: var(--row-h); box-sizing: border-box;
 display: flex; align-items: center; justify-content: space-between; gap: 12px;
 padding: 16px 16px 7px;
 opacity: 0; transform: translateY(3px); visibility: hidden;
@@ -504,18 +509,14 @@ max-width: 240px; text-overflow: ellipsis; cursor: pointer;
 .deck-field select:hover:not(:disabled) { color: var(--text); }
 .deck-field select:disabled { opacity: .5; cursor: default; }
 
-/* 搜索态：卡片高度 = 82px（控件行）+ 候选列表高度（--list-h 由 JS 同步），
-   列表在卡片内部把卡片往上挤；margin-bottom 交叠不变，输入卡纹丝不动 */
-.deck-card.search-open {
-height: calc(82px + var(--list-h, 0px));
-background: var(--surface); box-shadow: var(--shadow-md);
-}
-.deck-card.search-open .deck-peek { opacity: 0; }
+/* 搜索态：卡片高度 = 抽出高度 + 候选列表高度（--list-h 由 JS 同步），
+   列表在卡片内部把卡片往上挤；margin-bottom 交叠不变，输入卡纹丝不动。
+   「抽出」外观与 hover/focus 共用上方分组规则，此处只覆盖高度（等权重，靠后胜出） */
+.deck-card.search-open { height: calc(var(--open-h) + var(--list-h, 0px)); }
 
 /* ---------- 模型胶囊 ⇄ 搜索框 morph ---------- */
 /* 同一元素 .model-pill 承担两种形态：胶囊态宽度由内容自适应撑开；
    搜索态由 JS 驱动 --pill-w 做过渡（向右延展），内容交叉淡入淡出。 */
-.model-field { position: relative; }
 .model-pill {
 position: relative; display: inline-flex; align-items: center;
 height: 26px; padding: 0 10px;
@@ -535,7 +536,7 @@ display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 10
 transition: opacity .15s ease, transform .2s var(--ease-out);
 }
 .pill-face .pill-name { font-size: 12px; font-weight: 550; color: var(--text-soft); overflow: hidden; text-overflow: ellipsis; }
-.pill-face .chev, .pill-face svg { flex-shrink: 0; color: var(--faint); display: flex; transition: transform .3s var(--ease-out); }
+.pill-face svg { flex-shrink: 0; color: var(--faint); display: flex; }
 .model-pill.searching .pill-face { opacity: 0; transform: translateX(-6px); pointer-events: none; }
 /* 搜索态内容：放大镜 + input + 清除；胶囊态下 absolute 脱离布局，
    避免 flex:1 的 input 把胶囊撑宽 */
@@ -563,15 +564,17 @@ align-items: center; justify-content: center;
 /* 候选列表：位于 deck-card 内部、控件行之下；高度由 --list-h 驱动，
    筛选时卡片高度随列表平滑回落 */
 .model-dropdown {
-position: absolute; top: 47px; left: 10px; right: 10px; z-index: 20;
+position: absolute; top: var(--row-h); left: 10px; right: 10px; z-index: 20;
 overflow: hidden; height: var(--list-h, 0px); opacity: 0; pointer-events: none;
 transition: height .26s var(--ease-out), opacity .18s ease;
 }
 .deck-card.search-open .model-dropdown { opacity: 1; pointer-events: auto; }
+/* max-height 与 Composer.tsx 的 LIST_MAX_H 对应；滚动条用组件色系（--border-strong），
+   宽度/主题色沿用全局 * 滚动条规则，只覆盖 webkit 宽度做细 */
 .dropdown-list {
 overflow-y: auto; max-height: 216px; height: 100%;
 border-top: 1px solid var(--border); padding: 6px 2px 2px;
-scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent;
+scrollbar-color: var(--border-strong) transparent;
 }
 .dropdown-list::-webkit-scrollbar { width: 5px; }
 .dropdown-list::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
@@ -590,7 +593,7 @@ color: var(--text-soft); overflow: hidden; text-overflow: ellipsis; white-space:
 }
 .model-option .o-name mark { background: none; color: var(--accent); }
 .model-option.selected .o-name { color: var(--accent); }
-.model-option .o-check { flex-shrink: 0; color: var(--accent); opacity: 0; transform: scale(.5); transition: all .15s ease; }
+.model-option .o-check { flex-shrink: 0; color: var(--accent); opacity: 0; transform: scale(.5); transition: opacity .15s ease, transform .15s ease; }
 .model-option.selected .o-check { opacity: 1; transform: scale(1); }
 .dropdown-empty { padding: 14px 10px; text-align: center; color: var(--faint); font-size: 12px; }
 /* 输入卡压在模型配置卡上方（deck-card 是定位元素，默认绘制顺序更高） */

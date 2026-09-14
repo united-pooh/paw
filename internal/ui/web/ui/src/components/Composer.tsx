@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CompletionItem, ModelOptionsResponse } from '../api/types';
 import { QueueIndicator } from '../features/conversation/QueueIndicator';
 
@@ -106,12 +106,14 @@ function CheckIcon() {
 const SEARCH_MIN_W = 220;
 const SEARCH_MAX_W = 460;
 const SEARCH_W_GROW = 90;
-/** 候选列表最大高度（px，约 6 条），超出后列表内部滚动 */
+/** 候选列表最大高度（px，约 6 条），超出后列表内部滚动；与 workbench.css .dropdown-list 的 max-height 对应 */
 const LIST_MAX_H = 216;
 /** 展开后聚焦输入框的延迟（等宽度动画起步） */
 const FOCUS_DELAY_MS = 200;
 /** 选定后延迟关闭（让打勾动画可见） */
 const CHOOSE_CLOSE_MS = 140;
+/** 收缩宽度过渡（CSS width .38s）结束后移除 --pill-w，交还 auto 布局 */
+const PILL_CLEANUP_MS = 420;
 
 /** 高亮模型 ID 中与查询匹配的片段。 */
 function highlightModelID(id: string, query: string): React.ReactNode {
@@ -200,10 +202,12 @@ export function Composer({ workspaceID, sessionID, activeTurnID, queueCount = 0,
     return modelOptions.models.filter((m) => m.id.toLowerCase().includes(q));
   }, [modelOptions, modelQuery]);
 
-  // 展开/收缩时驱动 --pill-w 实现宽度过渡；搜索态时驱动 --list-h 让列表把卡片往上挤
+  // 展开/收缩时驱动 --pill-w 实现宽度过渡（width:auto 不可过渡，用 FLIP：
+  // 钉住起点宽 → 强制 reflow 提交 → 下一帧写到目标宽，靠 CSS transition 走过去）
   useLayoutEffect(() => {
     const pill = pillRef.current;
     if (!pill) return;
+    let cleanup: ReturnType<typeof setTimeout> | undefined;
     if (searchOpen) {
       // ① 起点 = 胶囊当前内容宽度；② 下一帧过渡到自适应目标宽度
       const startW = pill.offsetWidth;
@@ -211,44 +215,50 @@ export function Composer({ workspaceID, sessionID, activeTurnID, queueCount = 0,
       void pill.offsetWidth; // 强制 reflow
       const targetW = Math.max(SEARCH_MIN_W, Math.min(SEARCH_MAX_W, startW + SEARCH_W_GROW));
       requestAnimationFrame(() => pill.style.setProperty('--pill-w', `${targetW}px`));
-    } else {
-      // 收缩：从当前搜索框宽度过渡到胶囊自然内容宽度，结束后交还 auto
-      pill.style.setProperty('--pill-w', `${pill.offsetWidth}px`);
+    } else if (pill.style.getPropertyValue('--pill-w')) {
+      // 收缩（对称 FLIP）：钉住当前搜索框宽 → 摘下 --pill-w 量出自然内容宽 →
+      // 钉回起点并 reflow → 下一帧过渡到自然宽，动画结束交还 auto。
+      // --pill-w 未设置说明从未展开过（如挂载首帧），无事可做。
+      const startW = pill.offsetWidth;
+      pill.style.removeProperty('--pill-w');
+      const naturalW = pill.offsetWidth;
+      pill.style.setProperty('--pill-w', `${startW}px`);
       void pill.offsetWidth;
       requestAnimationFrame(() => {
-        pill.style.removeProperty('--pill-w');
-        const naturalW = pill.offsetWidth;
-        pill.style.setProperty('--pill-w', `${pill.offsetWidth}px`);
-        void pill.offsetWidth;
         pill.style.setProperty('--pill-w', `${naturalW}px`);
-        setTimeout(() => pill.style.removeProperty('--pill-w'), 420);
+        cleanup = setTimeout(() => pill.style.removeProperty('--pill-w'), PILL_CLEANUP_MS);
       });
     }
+    // 收缩途中重新展开时取消清理定时器，避免 --pill-w 被中途摘掉
+    return () => clearTimeout(cleanup);
   }, [searchOpen]);
 
-  // 列表高度（夹紧上限）同步 --list-h 到 deck-card 与 dropdown，筛选变少时卡片平滑回落
+  // 列表高度（夹紧上限）写入 --list-h：CSS 自定义属性沿 DOM 继承，dropdown 是
+  // deck-card 的子元素，设一次即可同时驱动卡片高度与列表高度，筛选变少时平滑回落
   useLayoutEffect(() => {
     const list = modelListRef.current;
-    const dropdown = list?.parentElement;
-    if (!searchOpen || !deckCardRef.current || !list || !dropdown) return;
-    const listH = `${Math.min(list.scrollHeight, LIST_MAX_H)}px`;
-    deckCardRef.current.style.setProperty('--list-h', listH);
-    dropdown.style.setProperty('--list-h', listH);
+    const card = deckCardRef.current;
+    if (!searchOpen || !card || !list) return;
+    card.style.setProperty('--list-h', `${Math.min(list.scrollHeight, LIST_MAX_H)}px`);
   }, [searchOpen, filteredModels]);
+
+  const resetModelSearch = (query = '') => {
+    setModelQuery(query);
+    setModelActiveIdx(0);
+  };
 
   const openModelSearch = () => {
     if (searchOpen || !modelOptions) return;
-    setModelQuery('');
-    setModelActiveIdx(0);
+    resetModelSearch();
     setSearchOpen(true);
     setTimeout(() => searchInputRef.current?.focus(), FOCUS_DELAY_MS);
   };
 
-  const closeModelSearch = () => {
+  const closeModelSearch = useCallback(() => {
     if (!searchOpen) return;
     setSearchOpen(false);
     searchInputRef.current?.blur();
-  };
+  }, [searchOpen]);
 
   const chooseModel = (id: string) => {
     void applyModelSelection({ model_id: id });
@@ -263,7 +273,7 @@ export function Composer({ workspaceID, sessionID, activeTurnID, queueCount = 0,
     };
     document.addEventListener('click', onDocClick);
     return () => document.removeEventListener('click', onDocClick);
-  }, [searchOpen]);
+  }, [searchOpen, closeModelSearch]);
 
   const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'ArrowDown') {
@@ -277,7 +287,7 @@ export function Composer({ workspaceID, sessionID, activeTurnID, queueCount = 0,
       if (target) chooseModel(target.id);
     } else if (event.key === 'Escape') {
       event.stopPropagation();
-      if (modelQuery) { setModelQuery(''); setModelActiveIdx(0); }
+      if (modelQuery) resetModelSearch();
       else closeModelSearch();
     }
   };
@@ -405,12 +415,13 @@ export function Composer({ workspaceID, sessionID, activeTurnID, queueCount = 0,
           {activeModel ? `${activeModel.name}${activeEffort !== 'default' ? ` · ${effortLabel(activeEffort)}` : ''}` : '模型'}
         </div>
         <div className="deck-row">
-          <div className="deck-field model-field">
+          <div className="deck-field">
             <span className="deck-tag">模型</span>
-            {/* 胶囊/搜索框同体 morph：同一元素双形态，width 过渡向右延展 */}
+            {/* 胶囊/搜索框同体 morph：同一元素双形态，width 过渡向右延展。
+                卡片内部点击不拦截冒泡——document 级监听用 contains() 判断外部点击，单一机制 */}
             <div className={searchOpen ? 'model-pill searching' : 'model-pill'} ref={pillRef}
               role="button" tabIndex={0} aria-label="切换模型" aria-expanded={searchOpen}
-              onClick={(event) => { event.stopPropagation(); openModelSearch(); }}
+              onClick={openModelSearch}
               onKeyDown={(event) => {
                 if ((event.key === 'Enter' || event.key === ' ') && !searchOpen) {
                   event.preventDefault(); openModelSearch();
@@ -424,15 +435,11 @@ export function Composer({ workspaceID, sessionID, activeTurnID, queueCount = 0,
                 <SearchIcon />
                 <input ref={searchInputRef} type="text" aria-label="搜索模型" placeholder="搜索模型…"
                   autoComplete="off" spellCheck={false} value={modelQuery}
-                  onChange={(event) => { setModelQuery(event.target.value); setModelActiveIdx(0); }}
+                  onChange={(event) => resetModelSearch(event.target.value)}
                   onKeyDown={handleSearchKeyDown} />
                 {modelQuery && (
                   <button type="button" className="clear-btn" tabIndex={-1} aria-label="清空搜索"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setModelQuery(''); setModelActiveIdx(0);
-                      searchInputRef.current?.focus();
-                    }}>✕</button>
+                    onClick={() => { resetModelSearch(); searchInputRef.current?.focus(); }}>✕</button>
                 )}
               </span>
             </div>
@@ -457,7 +464,7 @@ export function Composer({ workspaceID, sessionID, activeTurnID, queueCount = 0,
                   className={['model-option', model.id === modelOptions.active_model_id ? 'selected' : '', index === modelActiveIdx ? 'active' : ''].filter(Boolean).join(' ')}
                   style={{ animationDelay: `${index * 18}ms` }}
                   onMouseEnter={() => setModelActiveIdx(index)}
-                  onClick={(event) => { event.stopPropagation(); chooseModel(model.id); }}
+                  onClick={() => chooseModel(model.id)}
                   disabled={selectingModel}>
                   <span className="o-name">{highlightModelID(model.id, modelQuery)}</span>
                   <CheckIcon />
