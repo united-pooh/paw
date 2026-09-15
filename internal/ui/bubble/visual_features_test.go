@@ -95,18 +95,18 @@ func TestHighlightToolDetailLineRainbowBrackets(t *testing.T) {
 		t.Fatalf("rainbow bracket highlighting emitted too few styles: %q", got)
 	}
 }
-func TestUserTranscriptMessageUsesBrightOrangeForeground(t *testing.T) {
+func TestUserTranscriptMessageUsesNeutralForeground(t *testing.T) {
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
 
 	got := renderEntry(transcriptEntry{kind: entryUser, body: "submitted message"}, 40)
-	if !strings.Contains(got, "38;2;255;175;0") {
-		t.Fatalf("user message did not use bright orange foreground: %q", got)
+	if !strings.Contains(got, "38;2;201;194;183") {
+		t.Fatalf("user message did not use neutral body foreground: %q", got)
 	}
 }
 
-func TestTokenizedUserTranscriptOrdinaryTextUsesBrightOrangeForeground(t *testing.T) {
+func TestTokenizedUserTranscriptOrdinaryTextUsesNeutralForeground(t *testing.T) {
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
@@ -121,8 +121,8 @@ func TestTokenizedUserTranscriptOrdinaryTextUsesBrightOrangeForeground(t *testin
 			Label: "file.go",
 		}},
 	}, 40)
-	if !strings.Contains(got, "38;2;255;175;0") {
-		t.Fatalf("tokenized user message ordinary text did not use bright orange: %q", got)
+	if !strings.Contains(got, "38;2;201;194;183") {
+		t.Fatalf("tokenized user message ordinary text did not use neutral body: %q", got)
 	}
 	if plain := ansi.Strip(got); !strings.Contains(plain, "ask file.go now") {
 		t.Fatalf("tokenized user message changed visible text: %q", plain)

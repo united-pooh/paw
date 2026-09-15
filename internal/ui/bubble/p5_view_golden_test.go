@@ -30,6 +30,11 @@ func TestP5ViewsMatchGolden(t *testing.T) {
 			assertFixedFrame(t, view, test.width, test.height)
 			got := normalizeP5GoldenView(view)
 			path := filepath.Join("testdata", test.golden)
+			if os.Getenv("PAW_UPDATE_GOLDEN") == "1" {
+				if err := os.WriteFile(path, []byte(got), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
 			want, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatalf("read golden %s: %v\nactual:\n%s", path, err, got)

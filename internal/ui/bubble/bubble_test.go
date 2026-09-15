@@ -2633,7 +2633,7 @@ func TestViewFramesTranscriptHistoryPanel(t *testing.T) {
 	}
 }
 
-func TestInputHintIsDimAndDisappearsAfterFirstSubmission(t *testing.T) {
+func TestInputHintIsDimAndRemainsAfterFirstSubmission(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
 	model.width = 80
@@ -2651,8 +2651,8 @@ func TestInputHintIsDimAndDisappearsAfterFirstSubmission(t *testing.T) {
 	if !model.hasInteracted {
 		t.Fatal("submission did not mark the input as interacted")
 	}
-	if strings.Contains(model.View(), "Ask anything…") {
-		t.Fatalf("post-submit view = %q, hint should be hidden", model.View())
+	if !strings.Contains(model.View(), "Ask anything…") {
+		t.Fatalf("post-submit view = %q, hint should remain visible", model.View())
 	}
 }
 
@@ -2714,8 +2714,8 @@ func TestViewFillsTerminalHeightAndPinsInputToBottom(t *testing.T) {
 		t.Fatalf("bottom input not visible near frame bottom:\n%s", ansi.Strip(rendered))
 	}
 	lastLine := lines[len(lines)-1]
-	if strings.TrimSpace(lastLine) == "" || !strings.Contains(lastLine, "─") {
-		t.Fatalf("last rendered line = %q, want one fixed main-frame bottom rule", lastLine)
+	if strings.TrimSpace(lastLine) == "" || !strings.Contains(lastLine, "上下文") {
+		t.Fatalf("last rendered line = %q, want fixed bottom metadata", lastLine)
 	}
 }
 
@@ -5077,16 +5077,16 @@ func TestMarkdownWrappingUsesTerminalGraphemeWidth(t *testing.T) {
 func TestMarkdownTableRendersAsAlignedTable(t *testing.T) {
 	rendered := ansi.Strip(renderMarkdown("| Name | Value |\n| :---: | ---: |\n| alpha | 1 |\n| beta | two |", 80))
 	lines := strings.Split(rendered, "\n")
-	if len(lines) != 7 {
-		t.Fatalf("rendered table lines = %d, want 7:\n%s", len(lines), rendered)
+	if len(lines) != 4 {
+		t.Fatalf("rendered table lines = %d, want 4:\n%s", len(lines), rendered)
 	}
 
-	for _, want := range []string{"Name", "Value", "alpha", "beta", "┌", "┬", "┼", "└", "┴", "─────"} {
+	for _, want := range []string{"Name", "Value", "alpha", "beta", "─────"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered table = %q, want %q", rendered, want)
 		}
 	}
-	for _, unwanted := range []string{":---", "---:"} {
+	for _, unwanted := range []string{":---", "---:", "┌", "┬", "┼", "└", "┴", "│"} {
 		if strings.Contains(rendered, unwanted) {
 			t.Fatalf("rendered table = %q, should not contain %q", rendered, unwanted)
 		}
@@ -5096,11 +5096,11 @@ func TestMarkdownTableRendersAsAlignedTable(t *testing.T) {
 			t.Fatalf("table line %d width = %d, want %d: %q", i+1, got, terminalCellWidth(lines[0]), line)
 		}
 	}
-	if !strings.Contains(lines[1], " Name ") || !strings.Contains(lines[1], " Value ") {
-		t.Fatalf("header row = %q, want centered cells", lines[1])
+	if !strings.Contains(lines[0], " Name ") || !strings.Contains(lines[0], " Value ") {
+		t.Fatalf("header row = %q, want aligned cells", lines[0])
 	}
-	if !strings.Contains(lines[3], " alpha ") || !strings.Contains(lines[3], " 1 ") {
-		t.Fatalf("first body row = %q, want centered cells", lines[3])
+	if !strings.Contains(lines[2], " alpha ") || !strings.Contains(lines[2], " 1 ") {
+		t.Fatalf("first body row = %q, want aligned cells", lines[2])
 	}
 }
 
@@ -5156,7 +5156,7 @@ func TestMarkdownTableWrapsLongCellsWithoutTruncating(t *testing.T) {
 		}
 	}
 	assertRenderedLineWidthsAtMost(t, rendered, width)
-	if lines := strings.Split(rendered, "\n"); len(lines) <= 7 {
+	if lines := strings.Split(rendered, "\n"); len(lines) <= 4 {
 		t.Fatalf("wrapped table lines = %d, want long cells to occupy multiple lines:\n%s", len(lines), rendered)
 	}
 }
@@ -6940,18 +6940,18 @@ func TestRenderDockStatusLine_ContainsModelTokenAndFree(t *testing.T) {
 	model.width = 100
 	model.cursorFrameAt = time.Now()
 	dock := model.renderDockStatusLine(98)
-	if strings.Contains(dock, "5k / 100k") {
+	if strings.Contains(dock, "5k/100k") {
 		t.Errorf("status dock = %q, token count should live in the bottom border", dock)
 	}
-	if !strings.ContainsAny(dock, "░▒█") {
-		t.Errorf("status dock = %q, want frontier progress glyphs", dock)
+	if !strings.Contains(dock, "─") {
+		t.Errorf("status dock = %q, want an input separator", dock)
 	}
 	bottom := model.renderBottomDockLine(98)
-	if !strings.Contains(bottom, "5k / 100k") {
+	if !strings.Contains(bottom, "5k/100k") {
 		t.Errorf("bottom border = %q, want token count", bottom)
 	}
-	if !strings.ContainsAny(bottom, "─") {
-		t.Errorf("bottom border = %q, want embedded hairline rule", bottom)
+	if !strings.Contains(bottom, "上下文") {
+		t.Errorf("bottom border = %q, want labeled context usage", bottom)
 	}
 	// 模型名现在在 header，不在 dock。
 	if strings.Contains(dock, "model-a") {
@@ -7070,7 +7070,7 @@ func TestFullLayout_StatusDockVisibleWithoutSidebar(t *testing.T) {
 	model.relayout()
 
 	view := model.View()
-	if !strings.Contains(view, "0 / 131k") {
+	if !strings.Contains(view, "0/131k") {
 		t.Errorf("View() = %q, want bottom token status", view)
 	}
 	if strings.Contains(view, "taskController") {

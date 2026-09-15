@@ -123,7 +123,7 @@ func (m appModel) renderHeaderEmbedded(width int) string {
 	if now.IsZero() {
 		now = time.Now()
 	}
-	return renderHeaderCompact(m.collectHeaderData(now), width)
+	return contextFreeStyle.Render(renderHeaderCompact(m.collectHeaderData(now), width))
 }
 
 func (m appModel) renderActivityHeader(width int) string {
@@ -140,7 +140,7 @@ func (m appModel) renderActivityHeader(width int) string {
 
 func (m appModel) renderHeaderActivityHint() string {
 	if count := len(m.runningTasks()); count > 0 {
-		return "● " + strconv.Itoa(count) + " running · Ctrl+G"
+		return contextFreeStyle.Render("● " + strconv.Itoa(count) + " running · Ctrl+G")
 	}
-	return "Activity · Ctrl+G"
+	return contextFreeStyle.Render("Activity · Ctrl+G")
 }

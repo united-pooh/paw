@@ -416,8 +416,16 @@ func renderWorkSegmentEntry(entry transcriptEntry, width int, at time.Time, show
 		}
 		return rendered + "\n" + window
 	}
-	title := thinkingBodyStyle.Width(bodyWidth).Render(workSegmentTitle(data, at))
-	return indentLines(title, transcriptEntryGutter)
+	title := thinkingBodyStyle.Render(workSegmentTitle(data, at))
+	if data.failed > 0 {
+		failure := fmt.Sprintf("%d failed", data.failed)
+		title = strings.Replace(title, failure, labelErrorStyle.Render(failure), 1)
+	}
+	marker := "▸"
+	if data.header {
+		marker = "▾"
+	}
+	return thinkingBodyStyle.Render(marker) + " " + truncateStyledCellLine(title, bodyWidth)
 }
 
 // renderWorkSegmentChild 平铺渲染段内子条目：reasoning 直接渲染暗色正文

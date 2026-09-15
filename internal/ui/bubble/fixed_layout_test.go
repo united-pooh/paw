@@ -299,7 +299,7 @@ func TestDockStatusLineFitsNarrowWidths(t *testing.T) {
 
 	// 输入区上方只保留完整 context progress bar；模式位于下边框左侧。
 	top := ansi.Strip(model.renderDockStatusLine(80))
-	if strings.Contains(top, "chat") || strings.Trim(top, tokenFreeGlyph+tokenCacheGlyph+tokenUsedGlyph) != "" {
+	if strings.Contains(top, "chat") || strings.Trim(top, "─") != "" {
 		t.Fatalf("top context bar = %q, want only progress glyphs", top)
 	}
 	bottom := ansi.Strip(model.renderBottomDockLine(80))
@@ -405,7 +405,7 @@ func assertFixedFrame(t *testing.T, view string, width, height int) {
 	if strings.TrimSpace(lines[0]) == "" || !strings.Contains(strings.TrimSpace(lines[0]), "─") {
 		t.Fatalf("top border=%q, want a hairline rule", lines[0])
 	}
-	if strings.TrimSpace(lines[len(lines)-1]) == "" || !strings.Contains(strings.TrimSpace(lines[len(lines)-1]), "─") {
-		t.Fatalf("bottom border=%q, want a hairline rule", lines[len(lines)-1])
+	if strings.TrimSpace(lines[len(lines)-1]) == "" {
+		t.Fatalf("bottom metadata row is empty: %q", lines[len(lines)-1])
 	}
 }

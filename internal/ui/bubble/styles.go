@@ -115,8 +115,7 @@ func rebuildLegacyStyles() {
 		Foreground(colorManager.LipglossColor(colorLabelAssistant)).
 		Bold(true)
 	labelThinkingStyle = lipgloss.NewStyle().
-		Foreground(colorManager.LipglossColor(colorMarkdownQuote)).
-		Italic(true)
+		Foreground(colorManager.LipglossColor(colorMarkdownQuote))
 	labelToolStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorLabelTool)).
 		Bold(true)
@@ -173,11 +172,9 @@ func rebuildLegacyStyles() {
 		Bold(true)
 	userTranscriptRowStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorLabelUser)).
-		Background(colorManager.LipglossColor(colorWorktreeBackground)).
-		Bold(true)
+		Background(lipgloss.Color(interpolateHexColor(colorManager.Hex(colorTerminalBackground), colorManager.Hex(colorSignal), 0.16)))
 	thinkingBodyStyle = lipgloss.NewStyle().
-		Foreground(colorManager.LipglossColor(colorMarkdownQuote)).
-		Italic(true)
+		Foreground(colorManager.LipglossColor(colorMarkdownQuote))
 	markdownBoldStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorMarkdownBold)).
 		Bold(true)

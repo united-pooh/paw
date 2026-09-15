@@ -9,7 +9,7 @@ import (
 	"paw/internal/runtime/loop"
 )
 
-func TestDockBorderLayoutUsesFullProgressTopAndSwappedBottomMetadata(t *testing.T) {
+func TestDockLayoutUsesHairlineAndLabeledBottomMetadata(t *testing.T) {
 	model := newTestModel(&fakeRunner{stats: loop.ContextStats{UsedTokens: 12000, LimitTokens: 128000}})
 	model.cursorFrameAt = time.Unix(0, 0)
 	model.worktree = worktreeSnapshot{name: "paw", ref: "dev", state: worktreeDirty, isGit: true}
@@ -18,13 +18,13 @@ func TestDockBorderLayoutUsesFullProgressTopAndSwappedBottomMetadata(t *testing.
 	if got := terminalCellWidth(top); got != 80 {
 		t.Fatalf("top context bar width = %d, want 80: %q", got, top)
 	}
-	if strings.Trim(top, tokenFreeGlyph+tokenCacheGlyph+tokenUsedGlyph) != "" {
+	if strings.Trim(top, "─") != "" {
 		t.Fatalf("top context bar = %q, want only context progress glyphs", top)
 	}
 
 	bottom := ansi.Strip(model.renderBottomDockLine(80))
 	modeAt := strings.Index(bottom, "chat")
-	usageAt := strings.Index(bottom, "12k / 128k")
+	usageAt := strings.Index(bottom, "12k/128k")
 	worktreeAt := strings.Index(bottom, "paw  dev")
 	if modeAt < 0 || modeAt > 3 {
 		t.Fatalf("bottom border = %q, want chat anchored near the left edge", bottom)
@@ -63,7 +63,7 @@ func TestBottomDockLongCJKWorktreeKeepsRegionOrder(t *testing.T) {
 		t.Fatalf("bottom border cell width=%d, want 100: %q", got, bottom)
 	}
 	modeAt := strings.Index(bottom, "chat")
-	usageAt := strings.Index(bottom, "12k / 128k")
+	usageAt := strings.Index(bottom, "12k/128k")
 	worktreeAt := strings.Index(bottom, "项目")
 	if modeAt < 0 || usageAt < 0 || worktreeAt < 0 || !(modeAt < usageAt && usageAt < worktreeAt) {
 		t.Fatalf("bottom border = %q, want mode, usage, then CJK project/branch", bottom)
@@ -97,7 +97,7 @@ func TestStatusLineShowsTokenCountWithoutStatusWord(t *testing.T) {
 	model := newTestModel(&fakeRunner{stats: loop.ContextStats{UsedTokens: 12000, LimitTokens: 128000}})
 	model.cursorFrameAt = time.Unix(0, 0)
 	bottom := ansi.Strip(model.renderBottomDockLine(100))
-	if !strings.Contains(bottom, "12k / 128k") {
+	if !strings.Contains(bottom, "12k/128k") {
 		t.Fatalf("bottom border = %q, want token count", bottom)
 	}
 	for _, unwanted := range []string{"ready", "working", "generating"} {
@@ -234,11 +234,11 @@ func TestBottomDockShowsCacheHitRatioWhenCachePresent(t *testing.T) {
 	model := newTestModel(&fakeRunner{stats: loop.ContextStats{UsedTokens: 12000, CacheTokens: 11000, LimitTokens: 128000}})
 	model.cursorFrameAt = time.Unix(0, 0)
 	bottom := ansi.Strip(model.renderBottomDockLine(100))
-	if !strings.Contains(bottom, "12k / 128k") {
+	if !strings.Contains(bottom, "12k/128k") {
 		t.Fatalf("bottom border = %q, want token count", bottom)
 	}
-	if !strings.Contains(bottom, "ⓒ91%") {
-		t.Fatalf("bottom border = %q, want cache hit ratio ⓒ91%%", bottom)
+	if !strings.Contains(bottom, "缓存占比 91%") {
+		t.Fatalf("bottom border = %q, want cache hit ratio 缓存占比 91%%", bottom)
 	}
 }
 
@@ -246,7 +246,7 @@ func TestBottomDockOmitsCacheHitRatioWhenZero(t *testing.T) {
 	model := newTestModel(&fakeRunner{stats: loop.ContextStats{UsedTokens: 12000, CacheTokens: 0, LimitTokens: 128000}})
 	model.cursorFrameAt = time.Unix(0, 0)
 	bottom := ansi.Strip(model.renderBottomDockLine(100))
-	if strings.Contains(bottom, "ⓒ") {
+	if strings.Contains(bottom, "缓存占比") {
 		t.Fatalf("bottom border = %q, must not show cache ratio when cache is zero", bottom)
 	}
 }

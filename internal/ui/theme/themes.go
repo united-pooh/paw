@@ -1,31 +1,32 @@
 package theme
 
 func palette(bg, surface, fg, muted, primary, secondary, cyan, green, yellow, red, diffAddedBackground, diffDeletedBackground string) Palette {
+	secondaryText := blendHex(bg, fg, 0.65)
+	border := blendHex(bg, fg, 0.20)
 	return Palette{
 		TerminalBackground: bg, HeaderBackground: surface, HeaderForeground: fg,
-		LabelUser: "#ffaf00", LabelAssistant: fg, LabelTool: green, LabelResult: green, LabelSystem: muted, LabelError: red,
+		LabelUser: fg, LabelAssistant: fg, LabelTool: green, LabelResult: green, LabelSystem: secondaryText, LabelError: red,
 		Body: fg, ToolDetailBackground: surface,
-		MarkdownHeading: primary, MarkdownRule: muted, MarkdownBullet: cyan,
-		// bold 用主题黄（与标题的 primary 拉开层次）；italic 用 secondary 紫：
-		// 很多终端不渲染 italic 属性，颜色偏移是斜体唯一的可见信号。
-		MarkdownBold: yellow, MarkdownItalic: secondary, MarkdownHighlight: yellow, MarkdownHighlightForeground: bg,
-		MarkdownCodeForeground: fg, MarkdownCodeBackground: surface, MarkdownCodeBorder: primary,
-		MarkdownLink: cyan, MarkdownQuote: muted, MarkdownQuoteBorder: muted, MarkdownQuoteText: muted,
+		MarkdownHeading: fg, MarkdownRule: border, MarkdownBullet: cyan,
+		// Semantic colors are reserved for status; prose uses font attributes.
+		MarkdownBold: fg, MarkdownItalic: fg, MarkdownHighlight: yellow, MarkdownHighlightForeground: bg,
+		MarkdownCodeForeground: fg, MarkdownCodeBackground: blendHex(bg, fg, 0.07), MarkdownCodeBorder: primary,
+		MarkdownLink: cyan, MarkdownQuote: secondaryText, MarkdownQuoteBorder: muted, MarkdownQuoteText: muted,
 		// 语法高亮默认映射（keyword 紫 / string 绿 / number 黄 / comment 灰），
 		// 与各主题官方语法色系一致；个别主题在 init() 中按官方值覆盖。
 		SyntaxKeyword: secondary, SyntaxString: green, SyntaxNumber: yellow, SyntaxComment: muted,
 		SyntaxBrackets: [4]string{cyan, secondary, yellow, green},
-		PanelBorder: muted, InputFocusedBorder: cyan, InputWaitingBorder: muted, InputMultilineBorder: yellow,
+		PanelBorder:    border, InputFocusedBorder: cyan, InputWaitingBorder: muted, InputMultilineBorder: yellow,
 		InputTerminal: secondary, InputTokenCommand: secondary, InputTokenFile: green,
 		UnselectedProvider: muted,
-		WizardTitle: primary, WizardBorder: primary,
+		WizardTitle:        primary, WizardBorder: primary,
 		// 选区背景 = 正文背景与前景按 30% 混合：深色主题下同时满足
 		// “选区文字 ≥4.5:1”与“选区 vs 正文 ≥2:1”双对比度约束，且与
 		// markdown 高亮 / diff 背景等语义色不冲突（见 docs/mouse-selection-research.md §4）。
 		// 浅色主题（TokyoNightLight）与 Default 在 init() 中用手工特例覆盖。
 		SelectionBackground: blendHex(bg, fg, 0.30), SelectionForeground: fg,
-		ContextCache: "#81a1f1", ContextUsed: cyan, ContextFree: muted, Signal: primary,
-		WorktreeBackground: surface, WorktreeBorder: muted, WorktreeClean: green, WorktreeDirty: yellow, WorktreeConflict: red,
+		ContextCache: "#81a1f1", ContextUsed: cyan, ContextFree: secondaryText, Signal: primary,
+		WorktreeBackground: blendHex(bg, fg, 0.055), WorktreeBorder: muted, WorktreeClean: green, WorktreeDirty: yellow, WorktreeConflict: red,
 		CursorNormalBright: green, CursorTerminalBright: secondary,
 		DiffAddedForeground: green, DiffAddedBackground: diffAddedBackground, DiffDeletedForeground: red, DiffDeletedBackground: diffDeletedBackground,
 	}
@@ -45,21 +46,13 @@ func init() {
 	p := &builtIns[0].Colors
 	p.HeaderBackground = "#242830"
 	p.HeaderForeground = "#f0e6d5"
-	p.LabelUser = "#ffaf00"
 	p.LabelAssistant = "#f0e6d5"
-	p.MarkdownHeading = "#ffffaf"
-	p.MarkdownRule = "#808080"
 	p.MarkdownBullet = "#5fd7d7"
-	// bold 继承主题黄 #e5b66e（与标题的浅黄 #ffffaf 拉开层次）；italic 用
-	// 柔和蓝：Default 的 secondary 是 hot pink，做斜体太吵。
-	p.MarkdownItalic = "#81a1f1"
 	p.MarkdownHighlight = "#5f5fd7"
 	p.MarkdownHighlightForeground = "#ffffff"
 	p.MarkdownCodeForeground = "#ffffd7"
-	p.MarkdownCodeBackground = "#303030"
 	// 代码块边框改青色：#5f5fd7 此前被 highlight/provider/wizard 多处复用。
 	p.MarkdownCodeBorder = "#5f9ea8"
-	p.MarkdownQuote = "#8a8a8a"
 	p.MarkdownQuoteBorder = "#808080"
 	p.InputWaitingBorder = "#808080"
 	p.InputMultilineBorder = "#ffaf00"

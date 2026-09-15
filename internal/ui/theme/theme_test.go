@@ -90,8 +90,8 @@ func TestDefaultPaletteMatchesLegacyBaseline(t *testing.T) {
 	}
 	want := map[string]string{
 		"terminal.background": "#292c33", "header.background": "#242830", "header.foreground": "#f0e6d5",
-		"label.user": "#ffaf00", "label.assistant": "#f0e6d5", "label.tool": "#a9c8b5", "label.error": "#ef7d7d",
-		"body": "#c9c2b7", "tool.detail.background": "#182830", "markdown.link": "#76d5e8", "panel.border": "#8e98a8",
+		"label.user": "#c9c2b7", "label.assistant": "#f0e6d5", "label.tool": "#a9c8b5", "label.error": "#ef7d7d",
+		"body": "#c9c2b7", "tool.detail.background": "#182830", "markdown.link": "#76d5e8", "panel.border": "#494a4d",
 		"input.terminal": "#ff5ac8", "context.used": "#76d5e8", "worktree.clean": "#a9c8b5",
 	}
 	values := item.Colors.Values()

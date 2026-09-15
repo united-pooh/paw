@@ -18,6 +18,7 @@ const maxRenderedCodeBlockLines = 32
 // renderMarkdown 将 assistant 返回的 Markdown 文本转换为带样式的终端文本。
 func renderMarkdown(markdown string, width int) string {
 	width = maxInt(1, width)
+	proseWidth := minInt(width, 104)
 	lines := strings.Split(strings.TrimRight(markdown, "\n"), "\n")
 	parts := make([]string, 0, len(lines))
 
@@ -60,7 +61,7 @@ func renderMarkdown(markdown string, width int) string {
 			continue
 		}
 		if level, text, ok := markdownHeading(trimmed); ok {
-			parts = append(parts, leading+renderMarkdownHeading(level, text, width))
+			parts = append(parts, leading+renderMarkdownHeading(level, text, maxInt(1, proseWidth-terminalCellWidth(leading))))
 			continue
 		}
 		if _, ok := strings.CutPrefix(trimmed, ">"); ok {
@@ -81,12 +82,12 @@ func renderMarkdown(markdown string, width int) string {
 		}
 		if marker, text, ok := markdownListItem(trimmed); ok {
 			body := restoreForegroundAfterANSIReset(renderInlineMarkdown(text), colorManager.Hex(colorBody))
-			parts = append(parts, leading+markdownBulletStyle.Render(marker)+" "+bodyStyle.Width(maxInt(1, width-terminalCellWidth(marker)-1)).Render(body))
+			parts = append(parts, leading+markdownBulletStyle.Render(marker)+" "+bodyStyle.Width(maxInt(1, proseWidth-terminalCellWidth(leading)-terminalCellWidth(marker)-1)).Render(body))
 			continue
 		}
 
 		body := restoreForegroundAfterANSIReset(renderInlineMarkdown(strings.TrimRight(line, " \t")), colorManager.Hex(colorBody))
-		parts = append(parts, bodyStyle.Width(width).Render(wrapCompact(leading+body, width)))
+		parts = append(parts, bodyStyle.Width(proseWidth).Render(wrapCompact(leading+body, proseWidth)))
 	}
 
 	return strings.TrimRight(strings.Join(parts, "\n"), "\n")
@@ -391,13 +392,10 @@ func renderMarkdownTable(lines []string, width int) string {
 	alignments := markdownTableAlignments(parseMarkdownTableRow(lines[1]), columnCount)
 	widths := markdownTableColumnWidths(rows, columnCount, width)
 	renderedRows := make([]string, 0, len(rows)+2)
-	renderedRows = append(renderedRows, renderMarkdownTableBorder("┌", "┬", "┐", widths))
 	for i, row := range rows {
 		renderedRows = append(renderedRows, renderMarkdownTableRowLines(row, widths, i == 0, alignments)...)
-		if i == len(rows)-1 {
-			renderedRows = append(renderedRows, renderMarkdownTableBorder("└", "┴", "┘", widths))
-		} else {
-			renderedRows = append(renderedRows, renderMarkdownTableBorder("├", "┼", "┤", widths))
+		if i == 0 {
+			renderedRows = append(renderedRows, renderMarkdownTableBorder(" ", " ", " ", widths))
 		}
 	}
 	return strings.Join(renderedRows, "\n")
@@ -601,7 +599,7 @@ func renderMarkdownTableRowLines(row []string, widths []int, header bool, alignm
 	lines := make([]string, 0, lineCount)
 	for lineIndex := 0; lineIndex < lineCount; lineIndex++ {
 		var rendered strings.Builder
-		rendered.WriteString(markdownRuleStyle.Render("│"))
+		rendered.WriteString(" ")
 		for i, width := range widths {
 			cell := ""
 			if lineIndex < len(wrapped[i]) {
@@ -610,10 +608,6 @@ func renderMarkdownTableRowLines(row []string, widths []int, header bool, alignm
 			alignment := markdownTableAlignLeft
 			if i < len(alignments) {
 				alignment = alignments[i]
-			}
-			if header {
-				// 表头列名统一居中，不跟随 Markdown 声明的对齐方式。
-				alignment = markdownTableAlignCenter
 			}
 			padded := padMarkdownTableCell(cell, width, alignment)
 			if header {
@@ -627,7 +621,7 @@ func renderMarkdownTableRowLines(row []string, widths []int, header bool, alignm
 			rendered.WriteString(" ")
 			rendered.WriteString(padded)
 			rendered.WriteString(" ")
-			rendered.WriteString(markdownRuleStyle.Render("│"))
+			rendered.WriteString(" ")
 		}
 		lines = append(lines, rendered.String())
 	}

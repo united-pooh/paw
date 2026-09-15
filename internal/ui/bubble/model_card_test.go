@@ -88,10 +88,10 @@ func TestRenderModelSwitchCardLayout(t *testing.T) {
 		RetryCount:         3,
 		APIKeyEnvName:      "OPENROUTER_API_KEY",
 	}
-	rendered := renderModelSwitchCard(formatModelSwitchBlock(cfg, 0), 60)
+	rendered := renderModelSwitchNotice(formatModelSwitchBlock(cfg, 0), 60, true)
 	plain := ansi.Strip(rendered)
 	for _, want := range []string{
-		"✓ 模型已生效",
+		"✓ 已切换模型",
 		"stealth/ox-alpha",
 		"openrouter · 131072 ctx · retry ×3",
 		"base",
@@ -118,7 +118,7 @@ func TestRenderModelSwitchCardHidesEmptyDetails(t *testing.T) {
 			t.Fatalf("empty detail %q leaked:\n%s", banned, plain)
 		}
 	}
-	if !strings.Contains(plain, "✓ 模型已生效") || !strings.Contains(plain, "m1") {
+	if !strings.Contains(plain, "✓ 已切换模型") || !strings.Contains(plain, "m1") {
 		t.Fatalf("card missing essentials:\n%s", plain)
 	}
 }
@@ -135,10 +135,10 @@ func TestRenderEntryRendersModelCardWithoutLabel(t *testing.T) {
 	entry := transcriptEntry{kind: entrySystem, title: "model", body: body}
 	rendered := ansi.Strip(renderEntry(entry, 80))
 	trimmed := strings.TrimLeft(rendered, " ")
-	if !strings.HasPrefix(trimmed, "╭") {
-		t.Fatalf("model card entry should start with rounded border:\n%s", rendered)
+	if !strings.HasPrefix(trimmed, "✓") || strings.Contains(rendered, "\n") {
+		t.Fatalf("model notification should occupy one line:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "✓ 模型已生效") {
+	if !strings.Contains(rendered, "✓ 已切换模型") {
 		t.Fatalf("missing card title:\n%s", rendered)
 	}
 	if strings.Contains(rendered, "\nmodel\n") {

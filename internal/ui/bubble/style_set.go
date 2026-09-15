@@ -33,7 +33,7 @@ func NewStyleSet(p theme.Palette) StyleSet {
 		ToolDetail:               lipgloss.NewStyle().Foreground(c.LipglossColor(colorBody)).Background(surface),
 		LabelUser:                lipgloss.NewStyle().Foreground(c.LipglossColor(colorLabelUser)).Bold(true),
 		LabelAssistant:           lipgloss.NewStyle().Foreground(c.LipglossColor(colorLabelAssistant)).Bold(true),
-		LabelThinking:            lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownQuote)).Italic(true),
+		LabelThinking:            lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownQuote)),
 		LabelTool:                lipgloss.NewStyle().Foreground(c.LipglossColor(colorLabelTool)).Bold(true),
 		LabelSystem:              lipgloss.NewStyle().Foreground(c.LipglossColor(colorLabelSystem)).Bold(true),
 		LabelError:               lipgloss.NewStyle().Foreground(c.LipglossColor(colorLabelError)).Bold(true),

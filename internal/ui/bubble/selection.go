@@ -106,6 +106,15 @@ func (m appModel) handleTranscriptMouse(msg tea.MouseMsg) (appModel, bool, tea.C
 		if msg.Button != tea.MouseButtonLeft {
 			return m, false, nil
 		}
+		if loc, ok := m.stickyUserAtMouse(msg.X, msg.Y); ok {
+			m.selecting, m.selectionActive = false, false
+			m.resetClickTracking()
+			m.clickActionSeq++
+			m.setToolHover(-1)
+			m.viewport.SetYOffset(loc.startRow)
+			m.refreshViewportPreservingOffset()
+			return m, true, nil
+		}
 		point, ok := m.transcriptPointForMouse(msg.X, msg.Y)
 		if !ok {
 			return m, false, nil
@@ -235,6 +244,9 @@ func (m appModel) performTranscriptClick(point selectionPoint) (appModel, bool, 
 	if target := m.transcriptHyperlinkAtPoint(point); target != "" {
 		m.refreshViewportPreservingOffset()
 		return m, true, openTerminalURLCmd(target)
+	}
+	if m.toggleModelNoticeAtRow(point.row) {
+		return m, true, nil
 	}
 	if index, ok := m.reasoningHitAtTranscriptRow(point.row); ok {
 		m.toggleReasoningExpansion(index)
@@ -474,6 +486,9 @@ func (m appModel) isInputDockMouse(msg tea.MouseMsg) bool {
 // 多选按下点左侧一个字符/空格）。col 允许等于行宽（行尾后一格的虚拟 cell），
 // 保证拖到行尾时最后一个字符（无论中文/英文）能被选中。
 func (m appModel) transcriptPointForMouse(x, y int) (selectionPoint, bool) {
+	if _, ok := m.stickyUserAtMouse(x, y); ok {
+		return selectionPoint{}, false
+	}
 	row, ok := m.transcriptContentRow(y)
 	if !ok {
 		return selectionPoint{}, false
@@ -514,6 +529,9 @@ func (m appModel) transcriptPointForMouse(x, y int) (selectionPoint, bool) {
 }
 
 func (m appModel) toolHoverIndexAtMouse(x, y int) (int, bool) {
+	if _, ok := m.stickyUserAtMouse(x, y); ok {
+		return -1, true
+	}
 	row, ok := m.transcriptContentRow(y)
 	if !ok {
 		return -1, true

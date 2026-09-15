@@ -1,7 +1,6 @@
 // 底部 dock 渲染层。
 //
-// 布局：输入区上方整行是 context progress bar；最下方边框左侧显示输入模式，
-// 中间显示 token usage 或临时反馈，右侧显示项目/分支。
+// 输入区上方用细线分隔；下方显示模式、带标签的用量和项目/分支。
 // ready/working/generating 状态词只保留在 header。所有内容按 terminal cell
 // 预算截断，整体严格等于目标宽度，数据内容绝不破坏布局。
 package bubble
@@ -104,15 +103,10 @@ const (
 	tokenRippleGlyph = "█"
 )
 
-// renderDockStatusLine 渲染输入区上方完整的 context progress bar。
-// 模式、token 数值和工作树都位于最下方边框，避免切断进度条。
+// renderDockStatusLine separates input from transcript without a filled band.
 func (m appModel) renderDockStatusLine(width int) string {
 	width = maxInt(1, width)
-	stats := m.contextStats()
-	limit := maxInt(1, stats.LimitTokens)
-	used := clampInt(stats.UsedTokens, 0, limit)
-	cache := clampInt(stats.CacheTokens, 0, used)
-	return m.renderTokenFrontierWith(width, used, cache, limit, m.currentModeHex())
+	return dockRuleStyle.Render(strings.Repeat("─", width))
 }
 
 // renderBottomDockLine 渲染最下方边框：模式靠左，项目/分支靠右；中间剩余
@@ -127,7 +121,7 @@ func (m appModel) renderBottomDockLineWithRight(width int, right string) string 
 		if n <= 0 {
 			return ""
 		}
-		return lineStyle.Render(strings.Repeat("─", n))
+		return lineStyle.Render(strings.Repeat(" ", n))
 	}
 
 	left := m.renderModeIndicator()
@@ -196,22 +190,30 @@ func (m appModel) renderActivityBottomLine(width int) string {
 }
 
 func (m appModel) renderBottomDockUsage() string {
+	return m.renderBottomDockUsageWithin(1000)
+}
+
+func (m appModel) renderBottomDockUsageWithin(width int) string {
 	stats := m.contextStats()
 	limit := maxInt(1, stats.LimitTokens)
 	used := clampInt(stats.UsedTokens, 0, limit)
 	cache := clampInt(stats.CacheTokens, 0, used)
-	countStyle := contextUsedStyle
-	if modeHex := m.currentModeHex(); modeHex != "" {
-		countStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(modeHex)).Bold(true)
-	}
-	usage := countStyle.Render(formatCompactTokenCount(used) + " / " + formatCompactTokenCount(limit))
+	percent := int(float64(used)*100/float64(limit) + 0.5)
+	compact := fmt.Sprintf("上下文 %d%%", percent)
+	usage := compact + " · " + formatCompactTokenCount(used) + "/" + formatCompactTokenCount(limit)
+	full := usage
 	if cache > 0 {
 		ratio := int(float64(cache) * 100 / float64(maxInt(1, used)))
 		if ratio >= 1 {
-			usage += statusSegmentSeparator + countStyle.Render(fmt.Sprintf("ⓒ%d%%", ratio))
+			full += fmt.Sprintf(" · 缓存占比 %d%%", ratio)
 		}
 	}
-	return usage
+	for _, candidate := range []string{full, usage, compact} {
+		if terminalCellWidth(candidate) <= width {
+			return contextFreeStyle.Render(candidate)
+		}
+	}
+	return truncateStyledCellLine(contextFreeStyle.Render(compact), width)
 }
 
 func (m appModel) renderBottomDockMiddle(width int) string {
@@ -221,7 +223,7 @@ func (m appModel) renderBottomDockMiddle(width int) string {
 	if toast := m.renderStatusLeftSegment(); toast != "" {
 		return truncateStyledCellLine(toast, width)
 	}
-	return truncateStyledCellLine(m.renderBottomDockUsage(), width)
+	return m.renderBottomDockUsageWithin(width)
 }
 
 func (m appModel) renderBottomDockWorktree(totalWidth int) string {

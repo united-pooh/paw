@@ -364,6 +364,9 @@ func (m appModel) renderTranscriptRegion(layout tuiLayout) string {
 		content = renderEmptyState(layout.contentWidth, layout.transcriptHeight)
 		contentFromViewport = false
 	}
+	if contentFromViewport {
+		content = m.overlayStickyUser(content)
+	}
 	var base string
 	if contentFromViewport {
 		// viewport.View() 输出恒为 viewport.Width×viewport.Height 的精确矩形
@@ -818,9 +821,6 @@ func (m appModel) renderInputContentWithHints(width, height int) string {
 		return ""
 	}
 	if strings.TrimSpace(m.input.Value()) == "" && !m.isGoalInputActive() && !m.isTerminalInputActive() && !m.runningTerminal {
-		if m.hasInteracted {
-			return fitStyledRect("", width, height)
-		}
 		left := inputPromptStyle.Render("›") + " " + inputHintStyle.Render("Ask anything…")
 		hint := inputHintStyle.Render("/help @file !shell")
 		line := left

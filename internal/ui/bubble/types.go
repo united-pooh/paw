@@ -52,6 +52,7 @@ type transcriptEntry struct {
 	title                 string
 	body                  string
 	newMessageNoticeCycle uint64       // UI-only marker; 不参与 transcript 文本渲染。
+	modelDetailsExpanded  *bool        // UI-only override of the global detail view.
 	inputTokens           []inputToken // visual-only metadata; body remains the raw submitted/session text
 	color                 string       // 可选：标题颜色（lipgloss 颜色字符串），与 taskController 面板保持一致
 	isError               bool         // true for tool results with IsError=true
@@ -603,6 +604,7 @@ type appModel struct {
 	transcriptContentCached             bool
 	transcriptLines                     []string              // 增量渲染行缓存：与 viewport 行同步（末尾保留一行空隙）
 	transcriptEntrySpans                []transcriptEntrySpan // 每条目渲染行区间，与 transcript 等长；startRow<0 表示未渲染
+	stickyUserLocations                []transcriptEntryLocation
 	transcriptInteraction               transcriptInteractionIndex
 	transcriptLinesValid                bool   // 行缓存与 transcript 结构对齐（条目数一致）
 	viewportShowsSelection              bool   // viewport 当前显示的是选择高亮版内容

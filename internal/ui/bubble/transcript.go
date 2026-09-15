@@ -1413,6 +1413,7 @@ func (m *appModel) ensureTranscriptLinesAt(width int, showThinking bool, at time
 	if len(m.viewEntries) == 0 {
 		m.transcriptLines = nil
 		m.transcriptEntrySpans = nil
+		m.stickyUserLocations = nil
 		m.transcriptInteraction.set(nil, nil, true)
 		m.transcriptLinesValid = true
 		m.transcriptContentCached = true
@@ -1426,6 +1427,7 @@ func (m *appModel) ensureTranscriptLinesAt(width int, showThinking bool, at time
 		segment, spans := m.renderTranscriptEntriesFrom(0, width, showThinking, at)
 		m.transcriptLines = transcriptSegmentLines(segment)
 		m.transcriptEntrySpans = spans
+		m.refreshStickyUserLocations(0)
 		m.setTranscriptInteractionRows(m.transcriptLines, 0)
 		m.transcriptLinesValid = true
 		m.transcriptContentCached = true
@@ -1472,6 +1474,7 @@ func (m *appModel) ensureTranscriptLinesAt(width int, showThinking bool, at time
 	for i := startIdx; i < len(m.viewEntries); i++ {
 		m.transcriptEntrySpans[i] = spans[i-startIdx]
 	}
+	m.refreshStickyUserLocations(startIdx)
 	// 替换起点 = 段内第一个渲染条目的 startRow：条目间的分隔符空行属于
 	// 前缀（保留在 lines 中），替换只从条目本体开始。段内无渲染条目时
 	// 回退到上一渲染条目的结束行（截断尾部）。
@@ -2435,10 +2438,13 @@ func renderEntryAt(entry transcriptEntry, width int, at time.Time, showThinking 
 		}
 		return indentLines(card, transcriptEntryGutter)
 	}
-	// 结构化 <model> 切换块：整块渲染为绿框状态卡，不显示 "model" 标签
-	// （卡片标题自带 ✓ 状态标记），与 <task> 完成卡同一套视觉语言。
+	// Model configuration stays behind an inline disclosure.
 	if entry.kind == entrySystem && isModelCardBlock(entry.body) {
-		card := renderModelSwitchCard(entry.body, bodyWidth)
+		expanded := showThinking
+		if entry.modelDetailsExpanded != nil {
+			expanded = *entry.modelDetailsExpanded
+		}
+		card := renderModelSwitchNotice(entry.body, bodyWidth, expanded)
 		if card == "" {
 			return ""
 		}
@@ -2475,7 +2481,7 @@ func renderEntryAt(entry transcriptEntry, width int, at time.Time, showThinking 
 	if entry.kind == entryUser {
 		// 用户消息与 assistant 共用两列外部 gutter：assistant 首行显示 ✦，
 		// 用户消息保留空 gutter，正文从同一列开始，避免两类消息视觉错位。
-		return userTranscriptRowStyle.Width(width).Render(indentLines(body, transcriptEntryGutter))
+		return renderUserTranscriptRow(indentLines(body, transcriptEntryGutter), width)
 	}
 	if entry.kind == entryAssistant {
 		// ✦ 位于 transcript 左侧外部 gutter。首行用 marker 占据 gutter，

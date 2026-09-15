@@ -172,7 +172,7 @@ func TestBottomDockPlacesTokenUsageBetweenModeAndWorktree(t *testing.T) {
 	model.worktree = worktreeSnapshot{name: "paw", ref: "dev", state: worktreeDirty, isGit: true}
 	bottom := ansi.Strip(model.renderBottomDockLine(100))
 	mode := strings.Index(bottom, "chat")
-	count := strings.Index(bottom, " / ")
+	count := strings.Index(bottom, "上下文")
 	worktree := strings.Index(bottom, "paw  dev")
 	if mode < 0 || count < 0 || worktree < 0 || !(mode < count && count < worktree) {
 		t.Fatalf("bottom border order = %q", bottom)

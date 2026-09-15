@@ -55,11 +55,8 @@ func TestMarkdownTableNarrowWidthKeepsBordersIntact(t *testing.T) {
 	assertTableLinesFit(t, rendered, 40)
 
 	plain := ansi.Strip(rendered)
-	if !strings.HasPrefix(plain, "┌") || !strings.Contains(plain, "┐") {
-		t.Errorf("top border broken: %q", plain)
-	}
-	if !strings.HasSuffix(plain, "┘") {
-		t.Errorf("bottom border broken: %q", plain)
+	if strings.ContainsAny(plain, "┌┐└┘│") || len(strings.Split(plain, "\n")) != 3 {
+		t.Errorf("compact table should contain header, separator and data: %q", plain)
 	}
 	// 第 10 列（"j" / "10"）超出 (40-1)/4=9 列上限，应被整体丢弃，
 	// 而不是把 "10" 拆进 1 格列里显示成两行。
@@ -112,16 +109,13 @@ func TestMarkdownTableManyWideColumnsStillFit(t *testing.T) {
 	assertTableLinesFit(t, rendered, 20)
 }
 
-// TestMarkdownTableHeaderCentered 验证表头列名始终居中，
-// 即使该列在 Markdown 里声明了右对齐（---:）；正文行仍保留声明的对齐。
-func TestMarkdownTableHeaderCentered(t *testing.T) {
+func TestMarkdownTableHeaderFollowsDeclaredAlignment(t *testing.T) {
 	header := ansi.Strip(renderMarkdownTableRowLines(
-		[]string{"Name", "Value"}, []int{5, 5}, true,
-		[]markdownTableAlignment{markdownTableAlignCenter, markdownTableAlignRight},
+		[]string{"Name", "Value"}, []int{9, 8}, true,
+		[]markdownTableAlignment{markdownTableAlignLeft, markdownTableAlignRight},
 	)[0])
-	// 表头单元格两侧对称填充：左侧无额外空格（居中），右侧声明右对齐也被覆盖。
-	if !strings.Contains(header, " Name  ") || !strings.Contains(header, " Value ") {
-		t.Fatalf("header row = %q, want centered cells", header)
+	if cutStyledCellsExact(header, 2, 11) != "Name     " || cutStyledCellsExact(header, 14, 22) != "   Value" {
+		t.Fatalf("header row = %q, want declared left/right alignment", header)
 	}
 
 	body := ansi.Strip(renderMarkdownTableRowLines(
@@ -131,7 +125,7 @@ func TestMarkdownTableHeaderCentered(t *testing.T) {
 	if !strings.Contains(body, " alpha ") {
 		t.Fatalf("body row = %q, want centered alpha", body)
 	}
-	if !strings.HasSuffix(body, "1 │") {
+	if !strings.HasSuffix(body, "1  ") {
 		t.Fatalf("body row = %q, want right-aligned value cell preserved", body)
 	}
 }
@@ -182,7 +176,7 @@ func TestMarkdownTableStyledLongCellsKeepANSIAndBordersIntact(t *testing.T) {
 		columnWidths := markdownTableColumnWidths(rows, 2, width)
 		var firstColumn strings.Builder
 		for _, renderedLine := range strings.Split(rendered, "\n") {
-			if strings.HasPrefix(ansi.Strip(renderedLine), "│") {
+			if !strings.Contains(ansi.Strip(renderedLine), "─") {
 				cell := cutStyledCellsExact(renderedLine, 2, 2+columnWidths[0])
 				firstColumn.WriteString(strings.TrimSpace(ansi.Strip(cell)))
 			}
@@ -258,15 +252,15 @@ func TestMarkdownTableCellsCarryBodyForeground(t *testing.T) {
 
 	rendered := renderMarkdown("| a | b |\n|---|---|\n| x | `y` |\n", 40)
 	lines := strings.Split(rendered, "\n")
-	// 渲染顺序：┌ 顶边、表头行、├ 分隔、数据行、└ 底边。
-	if len(lines) < 5 {
-		t.Fatalf("table rows = %d, want at least 5:\n%q", len(lines), rendered)
+	// Header, one separator, then data.
+	if len(lines) != 3 {
+		t.Fatalf("table rows = %d, want 3:\n%q", len(lines), rendered)
 	}
 	bodyFG := styleForegroundSGR(t, bodyStyle)
 	headingFG := styleForegroundSGR(t, markdownHeadingStyle)
 	codeSegment := markdownCodeStyle.Render("y")
 
-	dataLine := lines[3]
+	dataLine := lines[2]
 	if !strings.Contains(dataLine, bodyFG) {
 		t.Fatalf("data row missing body foreground %q:\n%q", bodyFG, dataLine)
 	}
@@ -276,7 +270,7 @@ func TestMarkdownTableCellsCarryBodyForeground(t *testing.T) {
 	if strings.Contains(dataLine, headingFG) {
 		t.Fatalf("data row must not use heading foreground %q:\n%q", headingFG, dataLine)
 	}
-	headerLine := lines[1]
+	headerLine := lines[0]
 	if !strings.Contains(headerLine, headingFG) {
 		t.Fatalf("header row missing heading foreground %q:\n%q", headingFG, headerLine)
 	}
