@@ -30,10 +30,9 @@ func formatTurnDuration(durationMS int64) string {
 }
 
 // formatTurnFooter is intentionally label-free because it is a transcript
-// decoration, not assistant content: "1m35s  07:47:47 AM".
+// decoration, not assistant content. The header already shows the response
+// clock in 24-hour form, so the footer keeps only the turn duration instead of
+// repeating the same moment in a second (12-hour) format.
 func formatTurnFooter(metadata session.TurnMetadata) string {
-	if metadata.ResponseAt == nil || metadata.ResponseAt.IsZero() {
-		return formatTurnDuration(metadata.DurationMS)
-	}
-	return formatTurnDuration(metadata.DurationMS) + "  " + metadata.ResponseAt.Local().Format("03:04:05 PM")
+	return formatTurnDuration(metadata.DurationMS)
 }

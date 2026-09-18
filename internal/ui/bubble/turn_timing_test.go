@@ -36,9 +36,12 @@ func (r *timedBubbleRunner) RunRichTurnWithTiming(_ context.Context, _ message.M
 func TestFormatTurnFooter(t *testing.T) {
 	response := time.Date(2026, 7, 30, 23, 47, 47, 0, time.UTC)
 	got := formatTurnFooter(session.TurnMetadata{DurationMS: 95000, ResponseAt: &response})
-	want := "1m35s  " + response.Local().Format("03:04:05 PM")
+	want := "1m35s"
 	if got != want {
 		t.Fatalf("formatTurnFooter() = %q, want %q", got, want)
+	}
+	if strings.Contains(got, response.Local().Format("03:04:05 PM")) {
+		t.Fatalf("formatTurnFooter() retained the 12-hour response clock: %q", got)
 	}
 	if got := formatTurnDuration(950); got != "950ms" {
 		t.Fatalf("formatTurnDuration(950) = %q, want 950ms", got)
@@ -74,7 +77,7 @@ func TestFormatTurnFooterSupportsNineHours(t *testing.T) {
 		DurationMS: int64(9 * time.Hour / time.Millisecond),
 		ResponseAt: &response,
 	})
-	want := "9h00m00s  " + response.Local().Format("03:04:05 PM")
+	want := "9h00m00s"
 	if got != want {
 		t.Fatalf("formatTurnFooter() = %q, want %q", got, want)
 	}
