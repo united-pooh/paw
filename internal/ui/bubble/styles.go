@@ -102,6 +102,11 @@ var (
 	syntaxBracketStyles          []lipgloss.Style
 )
 
+var (
+	markdownTableBorderStyle lipgloss.Style
+	markdownTableHeaderStyle lipgloss.Style
+)
+
 func rebuildLegacyStyles() {
 
 	headerStyle = lipgloss.NewStyle().
@@ -191,6 +196,11 @@ func rebuildLegacyStyles() {
 		Bold(true)
 	markdownRuleStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorMarkdownRule))
+	markdownTableBorderStyle = lipgloss.NewStyle().
+		Foreground(colorManager.LipglossColor(colorPanelBorder))
+	markdownTableHeaderStyle = lipgloss.NewStyle().
+		Foreground(colorManager.LipglossColor(colorMarkdownHeading)).
+		Bold(true)
 	markdownBulletStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorMarkdownBullet)).
 		Bold(true)

@@ -60,6 +60,22 @@ func TestWrapStyledCellLineKeepsTrueColorANSIAtomic(t *testing.T) {
 	}
 }
 
+func TestSemanticWrapKeepsFittingTailTogether(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		width int
+		want  string
+	}{
+		{"a_b_c_d", 5, "a_b_\nc_d"},
+		{"internal/ui/main.go", 10, "internal/\nui/main.go"},
+	} {
+		got := strings.Join(wrapStyledCellTextAtSemanticBoundaries(tc.input, tc.width), "\n")
+		if got != tc.want {
+			t.Errorf("wrap %q = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestWrapStyledCellLineKeepsOSC8AndUnicodeAtomic(t *testing.T) {
 	input := ansi.SetHyperlink("https://example.com") + "中👩‍💻e\u0301हिन्दीالعربية" + ansi.ResetHyperlink()
 	lines := wrapStyledCellLine(input, 4)

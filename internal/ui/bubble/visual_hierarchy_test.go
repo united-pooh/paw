@@ -85,8 +85,8 @@ func TestQuietTableRetainsValuesAndDeclaredAlignment(t *testing.T) {
 	plain := ansi.Strip(renderMarkdownTable([]string{
 		"| 项目 | 大小 |", "| :--- | ---: |", "| ~/.cache/uv | 10G |", "| ~/.npm | 3.7G |",
 	}, 60))
-	if strings.ContainsAny(plain, "┌┐└┘│├┼┤") || len(strings.Split(plain, "\n")) != 4 {
-		t.Fatalf("table must have one header separator and no outer/row grid: %s", plain)
+	if !strings.ContainsAny(plain, "╭╮╰╯│├┼┤") || len(strings.Split(plain, "\n")) != 7 {
+		t.Fatalf("table must expose an outer frame and row grid: %s", plain)
 	}
 	for _, want := range []string{"项目", "大小", "~/.cache/uv", "10G", "~/.npm", "3.7G"} {
 		if !strings.Contains(plain, want) {

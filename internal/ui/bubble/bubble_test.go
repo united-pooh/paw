@@ -5077,8 +5077,8 @@ func TestMarkdownWrappingUsesTerminalGraphemeWidth(t *testing.T) {
 func TestMarkdownTableRendersAsAlignedTable(t *testing.T) {
 	rendered := ansi.Strip(renderMarkdown("| Name | Value |\n| :---: | ---: |\n| alpha | 1 |\n| beta | two |", 80))
 	lines := strings.Split(rendered, "\n")
-	if len(lines) != 4 {
-		t.Fatalf("rendered table lines = %d, want 4:\n%s", len(lines), rendered)
+	if len(lines) != 7 {
+		t.Fatalf("rendered table lines = %d, want framed header + 2 data rows:\n%s", len(lines), rendered)
 	}
 
 	for _, want := range []string{"Name", "Value", "alpha", "beta", "─────"} {
@@ -5086,9 +5086,14 @@ func TestMarkdownTableRendersAsAlignedTable(t *testing.T) {
 			t.Fatalf("rendered table = %q, want %q", rendered, want)
 		}
 	}
-	for _, unwanted := range []string{":---", "---:", "┌", "┬", "┼", "└", "┴", "│"} {
+	for _, unwanted := range []string{":---", "---:"} {
 		if strings.Contains(rendered, unwanted) {
 			t.Fatalf("rendered table = %q, should not contain %q", rendered, unwanted)
+		}
+	}
+	for _, marker := range []string{"╭", "╮", "├", "┼", "╰", "╯", "│"} {
+		if !strings.Contains(rendered, marker) {
+			t.Fatalf("rendered table = %q, want frame marker %q", rendered, marker)
 		}
 	}
 	for i, line := range lines {
@@ -5096,11 +5101,11 @@ func TestMarkdownTableRendersAsAlignedTable(t *testing.T) {
 			t.Fatalf("table line %d width = %d, want %d: %q", i+1, got, terminalCellWidth(lines[0]), line)
 		}
 	}
-	if !strings.Contains(lines[0], " Name ") || !strings.Contains(lines[0], " Value ") {
-		t.Fatalf("header row = %q, want aligned cells", lines[0])
+	if !strings.Contains(lines[1], " Name ") || !strings.Contains(lines[1], " Value ") {
+		t.Fatalf("header row = %q, want aligned cells", lines[1])
 	}
-	if !strings.Contains(lines[2], " alpha ") || !strings.Contains(lines[2], " 1 ") {
-		t.Fatalf("first body row = %q, want aligned cells", lines[2])
+	if !strings.Contains(lines[3], " alpha ") || !strings.Contains(lines[3], " 1 ") {
+		t.Fatalf("first body row = %q, want aligned cells", lines[3])
 	}
 }
 

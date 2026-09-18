@@ -391,13 +391,17 @@ func renderMarkdownTable(lines []string, width int) string {
 	normalizeMarkdownTableRows(rows, columnCount)
 	alignments := markdownTableAlignments(parseMarkdownTableRow(lines[1]), columnCount)
 	widths := markdownTableColumnWidths(rows, columnCount, width)
-	renderedRows := make([]string, 0, len(rows)+2)
-	for i, row := range rows {
-		renderedRows = append(renderedRows, renderMarkdownTableRowLines(row, widths, i == 0, alignments)...)
-		if i == 0 {
-			renderedRows = append(renderedRows, renderMarkdownTableBorder(" ", " ", " ", widths))
+	renderedRows := make([]string, 0, len(rows)*2+3)
+	renderedRows = append(renderedRows, renderMarkdownTableBorder("╭", "┬", "╮", widths))
+	renderedRows = append(renderedRows, renderMarkdownTableRowLinesFramed(rows[0], widths, true, alignments)...)
+	renderedRows = append(renderedRows, renderMarkdownTableBorder("├", "┼", "┤", widths))
+	for i, row := range rows[1:] {
+		renderedRows = append(renderedRows, renderMarkdownTableRowLinesFramed(row, widths, false, alignments)...)
+		if i < len(rows)-2 {
+			renderedRows = append(renderedRows, renderMarkdownTableBorder("├", "┼", "┤", widths))
 		}
 	}
+	renderedRows = append(renderedRows, renderMarkdownTableBorder("╰", "┴", "╯", widths))
 	return strings.Join(renderedRows, "\n")
 }
 
@@ -485,7 +489,7 @@ func markdownTableColumnWidths(rows [][]string, columnCount, maxWidth int) []int
 	}
 	for _, row := range rows {
 		for i, cell := range row {
-			widths[i] = maxInt(widths[i], terminalCellWidth(renderInlineMarkdown(cell)))
+			widths[i] = maxInt(widths[i], terminalCellWidth(renderMarkdownTableInline(cell)))
 			if minWidths[i] < 2 && markdownTextHasWideChar(cell) {
 				minWidths[i] = 2
 			}
@@ -508,6 +512,17 @@ func markdownTableColumnWidths(rows [][]string, columnCount, maxWidth int) []int
 			break
 		}
 		widths[widest]--
+	}
+	// 表格使用可用宽度，避免内容只占左侧一小块而失去整行的阅读轨道。
+	// 余量优先给当前最宽列（通常是目录/描述列），保持数值列的紧凑对齐。
+	for markdownTableTotalWidth(widths) < available {
+		widest := 0
+		for i := 1; i < len(widths); i++ {
+			if widths[i] > widths[widest] {
+				widest = i
+			}
+		}
+		widths[widest]++
 	}
 	for i := range widths {
 		widths[i] = maxInt(1, widths[i])
@@ -583,14 +598,19 @@ func markdownTableAlignments(separator []string, columnCount int) []markdownTabl
 // renderMarkdownTableRowLines 渲染一行表格，并对表头应用强调样式。
 // 每个单元格都按自己的列宽换行，避免用省略号丢失模型返回的内容。
 func renderMarkdownTableRowLines(row []string, widths []int, header bool, alignments []markdownTableAlignment) []string {
+	return renderMarkdownTableRowLinesFramed(row, widths, header, alignments)
+}
+
+// 表头和单元格都沿用终端底色，用文字强调和分隔线建立层次。
+func renderMarkdownTableRowLinesFramed(row []string, widths []int, header bool, alignments []markdownTableAlignment) []string {
 	wrapped := make([][]string, len(widths))
 	lineCount := 1
 	for i, width := range widths {
 		cell := ""
 		if i < len(row) {
-			cell = restoreForegroundAfterANSIReset(renderInlineMarkdown(row[i]), colorManager.Hex(colorBody))
+			cell = restoreForegroundAfterANSIReset(renderMarkdownTableInline(row[i]), colorManager.Hex(colorBody))
 		}
-		wrapped[i] = wrapStyledCellText(cell, width)
+		wrapped[i] = wrapStyledCellTextAtSemanticBoundaries(cell, width)
 		if len(wrapped[i]) > lineCount {
 			lineCount = len(wrapped[i])
 		}
@@ -599,7 +619,7 @@ func renderMarkdownTableRowLines(row []string, widths []int, header bool, alignm
 	lines := make([]string, 0, lineCount)
 	for lineIndex := 0; lineIndex < lineCount; lineIndex++ {
 		var rendered strings.Builder
-		rendered.WriteString(" ")
+		rendered.WriteString(markdownTableBorderStyle.Render("│"))
 		for i, width := range widths {
 			cell := ""
 			if lineIndex < len(wrapped[i]) {
@@ -611,7 +631,7 @@ func renderMarkdownTableRowLines(row []string, widths []int, header bool, alignm
 			}
 			padded := padMarkdownTableCell(cell, width, alignment)
 			if header {
-				padded = markdownHeadingStyle.Render(padded)
+				padded = markdownTableHeaderStyle.Render(padded)
 			} else {
 				// 普通单元格必须自带正文前景色：renderInlineMarkdown 的纯文本
 				// 段不带 SGR，若没有这层包裹会回退为终端默认前景色，与正文
@@ -621,11 +641,15 @@ func renderMarkdownTableRowLines(row []string, widths []int, header bool, alignm
 			rendered.WriteString(" ")
 			rendered.WriteString(padded)
 			rendered.WriteString(" ")
-			rendered.WriteString(" ")
+			rendered.WriteString(markdownTableBorderStyle.Render("│"))
 		}
-		lines = append(lines, rendered.String())
+		lines = append(lines, fitStyledCellLine(rendered.String(), markdownTableRenderedWidth(widths)))
 	}
 	return lines
+}
+
+func markdownTableRenderedWidth(widths []int) int {
+	return markdownTableTotalWidth(widths) + len(widths)*3 + 1
 }
 
 // renderMarkdownTableRow 保留单行调用方的兼容包装；新表格渲染使用多行版本。
@@ -650,14 +674,14 @@ func padMarkdownTableCell(cell string, width int, alignment markdownTableAlignme
 // renderMarkdownTableBorder 渲染表格外框或行间的完整横线。
 func renderMarkdownTableBorder(left, junction, right string, widths []int) string {
 	var rendered strings.Builder
-	rendered.WriteString(markdownRuleStyle.Render(left))
+	rendered.WriteString(markdownTableBorderStyle.Render(left))
 	for i, width := range widths {
-		rendered.WriteString(markdownRuleStyle.Render(strings.Repeat("─", width+2)))
+		rendered.WriteString(markdownTableBorderStyle.Render(strings.Repeat("─", width+2)))
 		if i < len(widths)-1 {
-			rendered.WriteString(markdownRuleStyle.Render(junction))
+			rendered.WriteString(markdownTableBorderStyle.Render(junction))
 		}
 	}
-	rendered.WriteString(markdownRuleStyle.Render(right))
+	rendered.WriteString(markdownTableBorderStyle.Render(right))
 	return rendered.String()
 }
 
@@ -784,6 +808,15 @@ func restoreForegroundAfterANSIReset(text, foreground string) string {
 // 在本地被消费后再输出 ANSI 样式，未闭合标记则原样保留，避免模型输出
 // 不完整时吞掉后续文本。
 func renderInlineMarkdown(line string) string {
+	return renderInlineMarkdownWithStyles(line, markdownCodeStyle, markdownHighlightStyle)
+}
+
+func renderMarkdownTableInline(line string) string {
+	return renderInlineMarkdownWithStyles(line,
+		markdownCodeStyle.UnsetBackground().Padding(0).Bold(true), markdownBoldStyle)
+}
+
+func renderInlineMarkdownWithStyles(line string, codeStyle, highlightStyle lipgloss.Style) string {
 	var rendered strings.Builder
 	for line != "" {
 		start, marker, _, ok := nextInlineMarkdownSpan(line)
@@ -804,11 +837,11 @@ func renderInlineMarkdown(line string) string {
 		content := rest[:end]
 		switch marker {
 		case "`":
-			rendered.WriteString(markdownCodeStyle.Render(content))
+			rendered.WriteString(codeStyle.Render(content))
 		case "**", "__":
 			rendered.WriteString(renderTerminalLinksWithStyle(content, markdownBoldStyle))
 		case "==":
-			rendered.WriteString(renderTerminalLinksWithStyle(content, markdownHighlightStyle))
+			rendered.WriteString(renderTerminalLinksWithStyle(content, highlightStyle))
 		case "*", "_":
 			rendered.WriteString(renderTerminalLinksWithStyle(content, markdownItalicStyle))
 		}

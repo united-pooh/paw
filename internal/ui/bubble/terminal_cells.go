@@ -38,6 +38,68 @@ func wrapStyledCellText(text string, width int) []string {
 	return wrapped
 }
 
+// wrapStyledCellTextAtSemanticBoundaries keeps the same ANSI/grapheme safety
+// as wrapStyledCellText, but lets table cells break after path and identifier
+// separators before falling back to a hard terminal-cell boundary.
+func wrapStyledCellTextAtSemanticBoundaries(text string, width int) []string {
+	lines := strings.Split(text, "\n")
+	wrapped := make([]string, 0, len(lines))
+	for _, line := range lines {
+		wrapped = append(wrapped, wrapStyledCellLineAtSemanticBoundaries(line, width)...)
+	}
+	return wrapped
+}
+
+func wrapStyledCellLineAtSemanticBoundaries(text string, width int) []string {
+	width = maxInt(1, width)
+	parsed := parseStyledCellLine(text)
+	safeText := renderStyledCellAtoms(parsed.atoms, 0, maxInt(1, parsed.width))
+	if parsed.width <= width {
+		return []string{safeText}
+	}
+
+	lines := make([]string, 0, (parsed.width+width-1)/width)
+	for left := 0; left < parsed.width; {
+		limit := minInt(parsed.width, left+width)
+		right := limit
+		if limit < parsed.width {
+			right = semanticStyledCellBoundary(parsed.atoms, left, limit)
+		}
+		if right <= left {
+			right = floorStyledCellBoundary(parsed.boundaries, limit)
+		}
+		if right <= left {
+			next := ceilStyledCellBoundary(parsed.boundaries, left+1)
+			if next <= left {
+				break
+			}
+			lines = append(lines, "…")
+			left = next
+			continue
+		}
+		lines = append(lines, renderStyledCellAtoms(parsed.atoms, left, right))
+		left = right
+	}
+	if len(lines) == 0 {
+		return []string{""}
+	}
+	return lines
+}
+
+func semanticStyledCellBoundary(atoms []styledCellAtom, left, limit int) int {
+	boundary := 0
+	for _, atom := range atoms {
+		if atom.control || atom.cellEnd <= left || atom.cellEnd > limit {
+			continue
+		}
+		visible := ansi.Strip(atom.text)
+		if strings.ContainsAny(visible, "/._-") || strings.TrimSpace(visible) == "" {
+			boundary = atom.cellEnd
+		}
+	}
+	return boundary
+}
+
 // wrapStyledCellLine wraps one rendered line at legal terminal-cell
 // boundaries. ANSI CSI/OSC sequences are zero-width atoms and are replayed as
 // complete sequences on every fragment that needs their style state.
