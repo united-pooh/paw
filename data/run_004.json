@@ -1,0 +1,11 @@
+{
+  "experiment": "run_004_clean_rerank",
+  "dataset": "clean index excluding 2026/09/12",
+  "queries": 8,
+  "candidate": "chunk hybrid + deterministic local rerank",
+  "top1": "not scored (gold labels not frozen)",
+  "top5": "not scored (gold labels not frozen)",
+  "latency_p50_ms": 415.1,
+  "latency_p95_ms": 522.6,
+  "decision": "reject as default: latency tail exceeds 500 ms and ranking did not visibly improve on audit queries"
+}

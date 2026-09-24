@@ -1,0 +1,1 @@
+{"experiment":"run_001_chunk_fts","sessions":125,"chunks":1523,"chunk_chars":1800,"stride_chars":1400,"latency_ms":{"min":0.07,"max":0.33},"baseline_top1":0.375,"baseline_top5":0.5,"candidate_top1":null,"candidate_top5":null,"status":"needs_gold_labels"}

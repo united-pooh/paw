@@ -1,0 +1,6 @@
+project: agent-history-search-mcp
+objective: improve Top-1 and Top-5 retrieval accuracy under bounded resource growth
+status: running
+baseline: session-level hybrid BM25+dense
+next_hypothesis: chunked hybrid retrieval with deterministic query expansion and reranking
+metrics: [top1, top5, mrr, p95_latency_ms, index_bytes, peak_rss_mb]

@@ -1,5 +1,51 @@
 # Progress
 
+## 会话切换提示与终端串屏（2026-09-20）
+
+- [x] 定位 applySessionPickerRestore 成功提示与 runtime/loop/history.go 的标准日志直写 stderr；恢复测试复现同款日志。
+- [x] 去掉普通切换提示，显式 relayout/refresh；旧正文/弹窗消失及空会话、Activity 宽度恢复验证通过。
+- [x] 交互诊断日志文件隔离与退出恢复，后台并发写入和设置失败不污染终端通过。
+- [x] Bubble/interactive/loop 完整包、定向 race、全仓 vet/build、三张新截图与独立审核通过；证据 .agent/visual/session-restore.md。
+- [x] make build 安装至 ~/go/bin/paw，--help 通过；原程序保留 .agent/bin/paw-before-session-restore-fix。没有提交/推送本轮变更，保留已有研究资料。
+- [x] 真实隔离 PTY 120×40：/resume 恢复故意缺失工具结果的会话；repair 日志落盘且不进入 stdout/stderr，切换提示不存在，退出 0、无模型 HTTP 请求。结构化验证与原始 ANSI 已保存 .agent/visual/session-restore/。
+
+## TUI 表格背景纠正（2026-09-18）
+
+- [x] 复现表头/行内代码/高亮背景遗漏；独立复核测试盲点和语义换行尾部问题。
+- [x] 统一表内无背景样式与列宽测量，保留表外 Markdown 行内样式。
+- [x] 五列表格视觉验收、完整 View 背景验证和回归检查；7 主题 × 3 宽度、NoColor、深浅色截图通过。
+- [x] 已提交 `a6de3e6`（时间去重）、`1b17bfd`（表格）；推送到 origin/dev 并用 ls-remote 核对完整 SHA 一致。make build 更新 ~/go/bin/paw，--help 通过；原二进制备份在 .agent/bin/paw-before-table-background-fix。研究资料与原有 progress 差异未纳入提交。
+
+## TUI 视觉层级（2026-09-15）
+
+- [x] 用户新增要求：当前轮输入吸顶，原输入可见时取消，跨轮切换；整行底色更清楚，鼠标命中/选择不误映射。
+
+- [x] 截图和现有代码调查；用户批准调整方案。
+- [x] 模型通知折叠、点击/键盘可达性与宽度回归。
+- [x] Markdown/表格/摘要/用户消息视觉规则统一。
+- [x] 输入提示与带标签的底部指标。
+- [x] 同一中文 fixture 三尺寸前后截图、Go 检查和交付。
+
+## 任务复杂度与模型路由研究（2026-09-09）
+
+- [x] 冻结三项RQ与worker权限边界，读取deep-research及全部参考规则；启用三路只读检索，OpenAI部分按官方文档源顺序核验。
+- [x] 三路完成产品/开源/评测取证；主agent核验Cursor Compass原文、Anthropic安全降级、OpenAI官方推理/子agent文档及关键源码，补充级联和模型内生推理、固定档/随机路由反证。
+- [x] 完成docs/local/research/2026-09-09-任务复杂度研判与模型路由工程综述.md；24组来源含12篇论文，三路独立复核后收紧版本日期、阈值保证、推理增量、重复样本及因果归因表述。
+- [x] 1–11章节、24引用定义/首次顺序/正文链接、RQ闭环及空白检查通过；产品元信息、论文元信息与11个关键源码/AWS路径再核验。未复现模型实验、未推断Paw节省比例、未改源码/配置/技能，未提交推送。
+
+## 更新本机 brainstorming（2026-09-09）
+
+- [x] 用户授权更新；检查本机旧目录和安装工具，限定只更新brainstorming。
+- [x] 使用skill-installer临时安装obra/superpowers v6.3.0（b36e0829c6d0140e93cfef2ca599b1b07d4a7797）；旧配套文件的content/state拆分和owner PID修复已包含于新版，8文件内容与权限符合上游。
+- [x] 已切换/Users/united_pooh/.codex/skills/brainstorming；旧目录完整移至/Users/united_pooh/.codex/skill-backups/brainstorming-20260909.7eZJCB/brainstorming，切换后逐文件hash/权限复核一致。Node/Bash语法、隔离HTTP鉴权/片段包装/helper注入和停止验证通过；未改其他技能或Paw源码，未提交推送。
+
+## grill-me 与 brainstorming 提示词风格研究（2026-09-09）
+
+- [x] 冻结三项RQ及原文/作者解释/实测证据边界；按deep-research分三路只读检索。
+- [x] GitHub当前grill-me wrapper→grilling/frontier，brainstorming三路由；锁定两main SHA，本机与2026-03-24上游文件SHA256一致。
+- [x] 完成docs/local/research/2026-09-09-grill-me与brainstorming提示词风格比较.md；11证据组含原文、历史、作者说明、PR2063与Workflow Arena实测边界、两篇论文旁证。
+- [x] 独立只读审查后修正审批点/终态、路径覆盖权/审批权、调查/实施边界三处；引文编号、连续章节、来源元数据、本机hash和diff检查通过。未运行模型A/B，不宣称某风格获胜；未改源码或安装技能。
+
 ## 认知成本清理（2026-09-07）
 
 - [x] simplify-it 三路只读审查；基线 Go 全量和前端46 tests通过，保留用户既有dirty改动。
@@ -308,3 +354,28 @@
 - [x] 用户明确选择密集刻度；同步替换旧规格的桌面最小24px约束，CSS仅25→10px行高、3→2px线厚，移动菜单44px不变。
 - [x] 密度回归先红后绿；68单测/typecheck/build/改动测试lint/Go全量/make check/临时构建help通过。5项导航E2E两轮均通过；完整套件首轮7/9、全新实例复跑9/9，首轮null-messages白屏及后续bootstrap认证失败均保留，不声称竞态已修。
 - [x] 生产截图和限定.agent/visual/navigation-density.md，日志/tmp/paw-density.E9PaJe；未覆盖安装程序、用户配置或会话，未提交/推送。
+- [x] 最终校验：git status 干净、提交历史可读 <!-- todo:t6 -->
+
+## 前端产物新鲜度门禁（2026-09-09）
+
+- [x] 用户批准B；发现工作区已有未提交指纹脚本与Makefile/npm/pre-push接入，保留并补齐，不重复覆盖。
+- [x] 隔离回归先红后绿：source/public/config/lockfile、缺失输入、dist篡改/删除、hash失败、mtime独立与Make入口阻断；换目录/还原源码同内容通过。10个测试组通过，npm失败不写stamp，pre-push旧产物不调用Go或覆盖binary。
+- [x] 工作台69、看板47项npm测试及两套typecheck/Vite build通过；串行Go全量、make check、临时含空格BINDIR构建/help和diff检查通过。证据/tmp/paw-web-dist.TMr2HJ；新binary含pill-face/search-face，不宣称UI视觉验收。
+- [x] 保留并加固已有B实现；两份v2 stamp由真实npm build生成。不改历史统计源码、安装程序、前端src或全局lint；不提交/推送。已有跳过变量仍明确告警；raw go build不受此门禁保护。
+- [ ] 独立既有项：pre-push当前HEAD=dev时使用dirty工作树，且依据本地ref而非stdin实际推送SHA；本轮只接入/验证新鲜度，不声称修复完整发布快照一致性。
+
+## 历史回合统计调查与修复（2026-09-08，已完成）
+
+- [x] investigation-first：现场会话9319dd的六轮中前五轮仅时间、最后16:45完整统计；磁盘仅最后一条sidecar，浏览器DOM与之对应，当前服务JS与dist逐字节一致。
+- [x] 定位runTask丢弃TurnTiming、TaskOrchestrator传nil、completeTurnExecution跳过统计写盘；隔离Go overlay测试gate关闭通过、开启漏存失败且无persist error。既有11项Go与15项ConversationView测试通过，不能否定新增复现。
+- [x] 结论与源码/现场/测试边界记于docs/local/plans/2026-09-08-history-turn-metadata-investigation.md；临时证据/tmp/paw-history-investigation.s9RaML。未改生产代码、真实会话、安装程序或配置，保留既有dirty内容。
+- [x] 用户回复“要”，授权修复保存链路与历史恢复测试；旧token回填不纳入本次实施。
+- [x] 先补gate首轮/自动续行/ExecuteTurn计量失败测试，再修最小执行链。生产仅3文件，Task保留首轮timing、续行重置、单轮入口初始化ID/start/usage。
+- [x] 覆盖中间轮写盘错误不丢失，以及真实Host执行后重新加载历史统计。历史集成测试覆盖ConsistentSnapshot、actor assistant_seq和读取前后文件字节不变；旧源码overlay复测缺sidecar失败。
+- [x] 最终串行Go全量、3包race、历史集成race重复5次、vet/临时构建/help、15项前端页脚测试和diff检查通过。真实隔离Web API页面刷新后两轮统计仍在，截图.agent/visual/history-turn-metadata.png；fixture已退出。未覆盖安装程序、真实会话或配置，未提交推送；旧缺失统计未回填。
+- [x] 运行 go test ./... 验证通过 <!-- todo:test -->
+- [x] 梳理各组变更的差异，确定原子提交分组 <!-- todo:group -->
+- [x] 创建原子提交：fix(loop) 与 feat(build) 两个 commit（memory/progress.md 保留本地） <!-- todo:commit -->
+- [x] 推送到 origin/dev <!-- todo:push -->
+- [x] 盘点 ~/.codex 中可清理的配置类文件与条目 <!-- todo:inventory -->
+- [x] 按确认范围执行清理（备份删除走废纸篓，config.toml 改动先留检查点） <!-- todo:execute -->

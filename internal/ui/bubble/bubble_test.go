@@ -5484,6 +5484,9 @@ func TestSessionPickerRestoreReplacesTranscriptAndViewport(t *testing.T) {
 	if strings.Contains(rendered, "old conversation") {
 		t.Fatalf("viewport = %q, retained previous session history", rendered)
 	}
+	if strings.Contains(rendered, "已切换到会话") || len(model.transcript) != 1 {
+		t.Fatalf("session restore added a success hint: %#v", model.transcript)
+	}
 }
 
 func TestSessionPickerRestoreClearsTranscriptForEmptyHistory(t *testing.T) {
@@ -5502,8 +5505,8 @@ func TestSessionPickerRestoreClearsTranscriptForEmptyHistory(t *testing.T) {
 	if strings.Contains(rendered, "old conversation") {
 		t.Fatalf("viewport = %q, retained previous session history for empty session", rendered)
 	}
-	if !strings.Contains(rendered, "已切换到会话: empty-session") {
-		t.Fatalf("viewport = %q, want session switch status", rendered)
+	if len(model.transcript) != 0 || strings.TrimSpace(rendered) != "" {
+		t.Fatalf("empty session retained transcript content: %q", rendered)
 	}
 }
 

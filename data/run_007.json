@@ -1,0 +1,18 @@
+{
+  "experiment": "run_007_60_anchor_queries",
+  "n": 60,
+  "labeling": "target session is source of extracted sentence; excludes 2026/09/12",
+  "baseline": {
+    "top1": 0.8833,
+    "top5": 1.0,
+    "p50_ms": 6.18,
+    "p95_ms": 7.82
+  },
+  "chunk": {
+    "top1": 0.8833,
+    "top5": 1.0,
+    "p50_ms": 6.32,
+    "p95_ms": 10.0
+  },
+  "scope": "exact/anchor retrieval; synonym accuracy still needs separate manually reviewed set"
+}

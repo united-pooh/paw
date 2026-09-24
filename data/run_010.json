@@ -1,0 +1,22 @@
+{
+  "experiment": "run_010_chunk_dense",
+  "dataset": "clean 60 anchor + 60 controlled sentence paraphrases",
+  "vectors": "1535x512 smallint8 BGE; 3.1 MB",
+  "anchor": {
+    "baseline_top1": 0.8833,
+    "baseline_top5": 1.0,
+    "candidate_top1": 0.8833,
+    "candidate_top5": 1.0,
+    "candidate_p50_ms": 7.57,
+    "candidate_p95_ms": 13.78
+  },
+  "paraphrase": {
+    "baseline_top1": 0.8833,
+    "baseline_top5": 1.0,
+    "candidate_top1": 0.8833,
+    "candidate_top5": 1.0,
+    "candidate_p50_ms": 7.24,
+    "candidate_p95_ms": 8.99
+  },
+  "decision": "no accuracy gain observed; keep chunk dense lane behind experiment flag until free-form human paraphrase set"
+}

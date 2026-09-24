@@ -1,0 +1,1 @@
+{"experiment":"run_002_bounded_aliases","change":"terms() adds 7 curated alias groups","model_change":false,"index_change":false,"resource_delta":"negligible","validation":"py_compile and formal MCP CLI search passed","baseline_top1":0.375,"baseline_top5":0.5,"accuracy":"pending fixed gold set","status":"candidate"}

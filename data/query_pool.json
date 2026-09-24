@@ -1,0 +1,482 @@
+[
+  {
+    "query": "- [ ] 对照现有测试和未提交改动，确认判定边界。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/05/rollout-2026-09-05T19-02-19-01a0713b-cc91-7370-9bdf-b68d7354928a.jsonl",
+    "session_id": "rollout-2026-09-05T19-02-19-01a0713b-cc91-7370-9bdf-b68d7354928a",
+    "type": "anchor"
+  },
+  {
+    "query": "我先检查当前 Codex 配置与模型可用性，再按现有配置风格加入 `gpt-6-astra`；如果本机版本或服务端不接受这个模型名，我会把具体限制说明清楚，喵。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/05/rollout-2026-09-05T17-44-23-01a070f4-7194-7430-bcf8-e53c2126850f.jsonl",
+    "session_id": "rollout-2026-09-05T17-44-23-01a070f4-7194-7430-bcf8-e53c2126850f",
+    "type": "anchor"
+  },
+  {
+    "query": "仅使用本地 fixture 和虚构 token；未改仓库、未访问真实模型凭据、未重启用户进程。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/05/rollout-2026-09-05T19-25-52-01a07151-5bd7-7cd0-9b21-e5a295790a59.jsonl",
+    "session_id": "rollout-2026-09-05T19-25-52-01a07151-5bd7-7cd0-9b21-e5a295790a59",
+    "type": "anchor"
+  },
+  {
+    "query": "主人，我会先按 `investigation-first` 查证，再修复。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/05/rollout-2026-09-05T19-00-21-01a0713a-0024-7ae3-a94b-99271e4cf85c.jsonl",
+    "session_id": "rollout-2026-09-05T19-00-21-01a0713a-0024-7ae3-a94b-99271e4cf85c",
+    "type": "anchor"
+  },
+  {
+    "query": "** 数学上的主要贡献则在架构约束、递推计算和计算依赖优化；它没有提出新的训练优化器，训练仍使用 AdamW。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/11/rollout-2026-09-11T16-11-24-01a03859-e630-7092-bc37-dd1ff8033b4e_01a08f85-7939-71d3-9cc3-e2144a3b9355.jsonl",
+    "session_id": "rollout-2026-09-11T16-11-24-01a03859-e630-7092-bc37-dd1ff8033b4e_01a08f85-7939-71d3-9cc3-e2144a3b9355",
+    "type": "anchor"
+  },
+  {
+    "query": "主人，按这次核对到的财报和行情，**我的判断是：京东方 A 的经营有所改善，但当前价格已经包含较强的盈利复苏预期，暂时不符合这套价值投资模型的买入条件；短期走势",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/11/rollout-2026-09-11T09-59-48-01a08e31-434c-79a3-a8ac-46364460b6e0.jsonl",
+    "session_id": "rollout-2026-09-11T09-59-48-01a08e31-434c-79a3-a8ac-46364460b6e0",
+    "type": "anchor"
+  },
+  {
+    "query": "交互测试已经确认新预览页尚不存在，接下来开始实现页面；现有首页和后台保持可用，完成后我会直接打开暖白手记预览。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/10/rollout-2026-09-10T00-07-42-01a0867f-4624-7821-bcc2-172fad2ff051_01a086ec-d31f-7d82-ae7d-fa592645a73e.jsonl",
+    "session_id": "rollout-2026-09-10T00-07-42-01a0867f-4624-7821-bcc2-172fad2ff051_01a086ec-d31f-7d82-ae7d-fa592645a73e",
+    "type": "anchor"
+  },
+  {
+    "query": "接下来会重点核对三个容易混淆的点：token count 是否等于最终计费、缓存字段是否包含在 input 中，以及工具返回值在后续请求中重复出现时怎样记账。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/07/rollout-2026-09-07T01-09-51-01a077b2-a476-7d90-931c-97c695a6eba6.jsonl",
+    "session_id": "rollout-2026-09-07T01-09-51-01a077b2-a476-7d90-931c-97c695a6eba6",
+    "type": "anchor"
+  },
+  {
+    "query": "我会只读核对 Paw 的 token 数据链路，重点确认统计从哪里产生、怎样聚合，以及重试和缓存会不会重复或漏计；不启动模型或 MCP 喵。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/07/rollout-2026-09-07T01-09-25-01a077b2-40bf-7860-92f1-a2c8494e4325.jsonl",
+    "session_id": "rollout-2026-09-07T01-09-25-01a077b2-40bf-7860-92f1-a2c8494e4325",
+    "type": "anchor"
+  },
+  {
+    "query": "Efficiency Review 完成，只读，未修改文件、未运行全仓测试。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/07/rollout-2026-09-07T17-35-57-01a07b39-7286-7d31-8697-bd9560c6a997.jsonl",
+    "session_id": "rollout-2026-09-07T17-35-57-01a07b39-7286-7d31-8697-bd9560c6a997",
+    "type": "anchor"
+  },
+  {
+    "query": "当前有 75 个已跟踪文件改动，另有不少新增文件，主要涉及全局存储、Responses 流、上下文上限和 Token Tracer。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/07/rollout-2026-09-07T17-33-57-01a07b37-9c5d-77c3-aa3c-3fb451da8d2a.jsonl",
+    "session_id": "rollout-2026-09-07T17-33-57-01a07b37-9c5d-77c3-aa3c-3fb451da8d2a",
+    "type": "anchor"
+  },
+  {
+    "query": "只读审查完成，未编辑、回滚或运行额外全仓测试。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/07/rollout-2026-09-07T17-35-42-01a07b39-38fa-7581-be10-ffeeefe8000f.jsonl",
+    "session_id": "rollout-2026-09-07T17-35-42-01a07b39-38fa-7581-be10-ffeeefe8000f",
+    "type": "anchor"
+  },
+  {
+    "query": "主人，这次我会把范围扩展为“跨项目 Token Tracer 工作台”的设计调查，先不改实现。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/07/rollout-2026-09-07T01-06-27-01a07277-eec2-7503-8672-c3201e3fde3e_01a077af-88dc-77b1-a94b-322001dfad01.jsonl",
+    "session_id": "rollout-2026-09-07T01-06-27-01a07277-eec2-7503-8672-c3201e3fde3e_01a077af-88dc-77b1-a94b-322001dfad01",
+    "type": "anchor"
+  },
+  {
+    "query": "已完成只读两轮检索与 Paw 源码核对。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/07/rollout-2026-09-07T01-10-19-01a077b3-1274-7bd3-a6a1-1b1e5a5f945c.jsonl",
+    "session_id": "rollout-2026-09-07T01-10-19-01a077b3-1274-7bd3-a6a1-1b1e5a5f945c",
+    "type": "anchor"
+  },
+  {
+    "query": "我正在用最小反例检查匹配兼容性，并核对快照测试会漏掉哪些变化。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/07/rollout-2026-09-07T14-47-04-01a07a9e-d45b-79d0-bc4c-b5776dec75d4.jsonl",
+    "session_id": "rollout-2026-09-07T14-47-04-01a07a9e-d45b-79d0-bc4c-b5776dec75d4",
+    "type": "anchor"
+  },
+  {
+    "query": "未逐行通读全部新增测试文件；测试覆盖结论不冒充全量测试审计。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/07/rollout-2026-09-07T17-35-26-01a07b38-f8fb-78d3-b3e5-956f3a0d1c6a.jsonl",
+    "session_id": "rollout-2026-09-07T17-35-26-01a07b38-f8fb-78d3-b3e5-956f3a0d1c6a",
+    "type": "anchor"
+  },
+  {
+    "query": "已完成只读核验：3 个开源实现固定到 commit，另核验 Bedrock 产品契约与价格；未安装、调用模型或复现性能。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/09/rollout-2026-09-09T14-34-20-01a084df-e509-7cd0-830a-1df83bb1df00.jsonl",
+    "session_id": "rollout-2026-09-09T14-34-20-01a084df-e509-7cd0-830a-1df83bb1df00",
+    "type": "anchor"
+  },
+  {
+    "query": "### 先纠正一个版本印象 截至本次检索： - `grill-me` 已是入口，实际调用 `grilling`。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/09/rollout-2026-09-09T11-39-52-01a08418-bafa-7a31-9de0-a62eae3d6b53_01a08440-27bb-7723-bd35-d35469926887.jsonl",
+    "session_id": "rollout-2026-09-09T11-39-52-01a08418-bafa-7a31-9de0-a62eae3d6b53_01a08440-27bb-7723-bd35-d35469926887",
+    "type": "anchor"
+  },
+  {
+    "query": "发现了比旧版 Auto 说明更直接的新资料：Cursor 在 2026 年 8 月公开了 Compass 复杂度预测器，并说明它如何用用户后续行为训练、按每一轮",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/09/rollout-2026-09-09T14-32-53-01a084de-914d-7a23-a4dc-9e6d5248d1e7.jsonl",
+    "session_id": "rollout-2026-09-09T14-32-53-01a084de-914d-7a23-a4dc-9e6d5248d1e7",
+    "type": "anchor"
+  },
+  {
+    "query": "已有一个关键反例：RouterBench 的简单预测路由即使比单个模型便宜，也未稳定胜过内容无关的随机混合基线；其级联优势还依赖低错误率的答案判别器。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/09/rollout-2026-09-09T14-34-49-01a084e0-53c9-7af2-86b4-763305cfcf02.jsonl",
+    "session_id": "rollout-2026-09-09T14-34-49-01a084e0-53c9-7af2-86b4-763305cfcf02",
+    "type": "anchor"
+  },
+  {
+    "query": "接下来核查其模型范围与实验限制。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/09/rollout-2026-09-09T11-43-11-01a08443-31c9-7721-b580-f191ef0dd59f.jsonl",
+    "session_id": "rollout-2026-09-09T11-43-11-01a08443-31c9-7721-b580-f191ef0dd59f",
+    "type": "anchor"
+  },
+  {
+    "query": "我会按 `arming-thought` 的实事求是原则先区分术语：如果你说的是语言模型指标，“混淆度”通常指困惑度（Perplexity），下面按这个意思解释",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/09/rollout-2026-09-09T14-04-57-01a084c4-fdee-7b13-ae0d-9ca03f6b4d59.jsonl",
+    "session_id": "rollout-2026-09-09T14-04-57-01a084c4-fdee-7b13-ae0d-9ca03f6b4d59",
+    "type": "anchor"
+  },
+  {
+    "query": "** 调度程序只负责检查必填内容、权限、预算和启动相应角色，不再调用另一个模型判断任务复杂度。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/09/rollout-2026-09-09T14-09-17-01a08418-bafa-7a31-9de0-a62eae3d6b53_01a084c8-f543-7d63-8ee7-d670feab0713.jsonl",
+    "session_id": "rollout-2026-09-09T14-09-17-01a08418-bafa-7a31-9de0-a62eae3d6b53_01a084c8-f543-7d63-8ee7-d670feab0713",
+    "type": "anchor"
+  },
+  {
+    "query": "解释性判断：可称“**高压措辞包装的决策澄清/压力测试**”，但正文并未规定“必须反驳用户”“总当 devil’s advocate”“列反例/找证据反证”“质",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/09/rollout-2026-09-09T11-42-32-01a08442-99c2-7470-b1e2-6daff908fff2.jsonl",
+    "session_id": "rollout-2026-09-09T11-42-32-01a08442-99c2-7470-b1e2-6daff908fff2",
+    "type": "anchor"
+  },
+  {
+    "query": "md#L181-L187)：自己认为理解后展示设计；简单段落几句，复杂段落最多约200–300词；每节询问是否正确；覆盖架构、组件、数据流、错误处理、测试。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/09/rollout-2026-09-09T11-42-49-01a08442-dd51-7183-b5ef-98b244a0974b.jsonl",
+    "session_id": "rollout-2026-09-09T11-42-49-01a08442-dd51-7183-b5ef-98b244a0974b",
+    "type": "anchor"
+  },
+  {
+    "query": "local` 仍指向旧的 `8080/api/v1`，导致首页加载失败。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/09/rollout-2026-09-09T22-10-12-01a0867f-4624-7821-bcc2-172fad2ff051_01a08681-3f8a-7d62-a115-11b37bef22b9.jsonl",
+    "session_id": "rollout-2026-09-09T22-10-12-01a0867f-4624-7821-bcc2-172fad2ff051_01a08681-3f8a-7d62-a115-11b37bef22b9",
+    "type": "anchor"
+  },
+  {
+    "query": "- 基于以上，我会备份后移除这两项选择覆盖，保留模型选择、第三方配置定义及其他设置；登录仍需你完成。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/09/rollout-2026-09-09T21-52-20-01a08670-e365-78b1-b994-f9a5bf328106.jsonl",
+    "session_id": "rollout-2026-09-09T21-52-20-01a08670-e365-78b1-b994-f9a5bf328106",
+    "type": "anchor"
+  },
+  {
+    "query": "我会按“先调查、后判断”处理：只采官方仓库/官方文档，分别核验 Lightpanda 的协议、Agent/MCP 能力、性能、Web API、成熟度、许可证和部",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/01/rollout-2026-09-01T16-05-56-01a05c00-e0bf-7700-9ed0-45167a7640e3.jsonl",
+    "session_id": "rollout-2026-09-01T16-05-56-01a05c00-e0bf-7700-9ed0-45167a7640e3",
+    "type": "anchor"
+  },
+  {
+    "query": "com/microsoft/playwright-cli)：Microsoft 官方方案，明确面向 coding agent，配合 `SKILLS` 使用，输出",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/01/rollout-2026-09-01T16-00-41-01a05bfc-12aa-7e03-922d-9888526c8016.jsonl",
+    "session_id": "rollout-2026-09-01T16-00-41-01a05bfc-12aa-7e03-922d-9888526c8016",
+    "type": "anchor"
+  },
+  {
+    "query": "新的 Python MCP 服务、数据库、采集器、测试和 App 均尚未实现。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/06/rollout-2026-09-06T00-42-42-01a07273-6d48-7612-a906-f05a3ab2bcd4.jsonl",
+    "session_id": "rollout-2026-09-06T00-42-42-01a07273-6d48-7612-a906-f05a3ab2bcd4",
+    "type": "anchor"
+  },
+  {
+    "query": "非 `EADDRINUSE` 错误直接报告，不静默换地址。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/06/rollout-2026-09-06T00-50-46-01a0727a-cf93-7b11-b0f8-141804c9ff29.jsonl",
+    "session_id": "rollout-2026-09-06T00-50-46-01a0727a-cf93-7b11-b0f8-141804c9ff29",
+    "type": "anchor"
+  },
+  {
+    "query": "05450 snippet: At a fixed image resolution, each patch is represented by one tok",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/06/rollout-2026-09-06T00-42-42-01a07273-6d04-7c50-b4b3-5cd1f87c015e.jsonl",
+    "session_id": "rollout-2026-09-06T00-42-42-01a07273-6d04-7c50-b4b3-5cd1f87c015e",
+    "type": "anchor"
+  },
+  {
+    "query": "不过有个问题要先对齐：Claude Code 同一时间只用**一组** `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/06/rollout-2026-09-06T00-42-42-01a07273-6d18-7472-a805-694e47ffdec3.jsonl",
+    "session_id": "rollout-2026-09-06T00-42-42-01a07273-6d18-7472-a805-694e47ffdec3",
+    "type": "anchor"
+  },
+  {
+    "query": "三个内置变量分别是什么 这些变量由 CUDA 自动提供，只能在 kernel 中使用。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/06/rollout-2026-09-06T00-42-42-01a07273-6ce5-79d1-8a7d-e388d0e8bebf.jsonl",
+    "session_id": "rollout-2026-09-06T00-42-42-01a07273-6ce5-79d1-8a7d-e388d0e8bebf",
+    "type": "anchor"
+  },
+  {
+    "query": "- [ ] 读取项目约定、启动入口和 Token Tracer 初始化路径。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/06/rollout-2026-09-06T00-47-37-01a07277-eec2-7503-8672-c3201e3fde3e.jsonl",
+    "session_id": "rollout-2026-09-06T00-47-37-01a07277-eec2-7503-8672-c3201e3fde3e",
+    "type": "anchor"
+  },
+  {
+    "query": "降级为官方文档 URL 检索。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/06/rollout-2026-09-06T00-50-23-01a0727a-7638-72b1-8409-4dd33fd32335.jsonl",
+    "session_id": "rollout-2026-09-06T00-50-23-01a0727a-7638-72b1-8409-4dd33fd32335",
+    "type": "anchor"
+  },
+  {
+    "query": "\"}],\"multiSelect\":false},{\"header\":\"认证方式\",\"question\":\"Jina MCP 使用哪种认证方式？",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/06/rollout-2026-09-06T00-42-42-01a07273-6d03-7903-8bbc-59c3fb0b4700.jsonl",
+    "session_id": "rollout-2026-09-06T00-42-42-01a07273-6d03-7903-8bbc-59c3fb0b4700",
+    "type": "anchor"
+  },
+  {
+    "query": "进行 LU 分解时，如果当前主元是 `0` 或数值太小，直接消元可能失败或产生较大的数值误差，因此算法会先交换行，也就是**部分主元选取（partial piv",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/06/rollout-2026-09-06T00-42-42-01a07273-6cea-7693-a48a-ec948aa7252e.jsonl",
+    "session_id": "rollout-2026-09-06T00-42-42-01a07273-6cea-7693-a48a-ec948aa7252e",
+    "type": "anchor"
+  },
+  {
+    "query": "114:22` 是否可达 - [ ] 检查是否已设置 `SSHPASS` 环境变量；若有则尝试登录并执行无害命令 - [ ] 汇总实际连接结果 哼，本喵只会做最",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/06/rollout-2026-09-06T00-42-42-01a07273-6cf3-7de0-a602-0e8b7b5fc72e.jsonl",
+    "session_id": "rollout-2026-09-06T00-42-42-01a07273-6cf3-7de0-a602-0e8b7b5fc72e",
+    "type": "anchor"
+  },
+  {
+    "query": "95元，短线可能重新测试更低区域。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/06/rollout-2026-09-06T00-42-42-01a07273-6ce5-79d1-8a7d-e3a32d26ec2e.jsonl",
+    "session_id": "rollout-2026-09-06T00-42-42-01a07273-6ce5-79d1-8a7d-e3a32d26ec2e",
+    "type": "anchor"
+  },
+  {
+    "query": "正常退出或崩溃后，若没有其他进程继承并保持引用，内核锁会释放；“退出就必然释放”需带上继承 FD 的限定。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/09/06/rollout-2026-09-06T00-51-37-01a0727b-9729-74e1-9ad0-52ac4b29d13e.jsonl",
+    "session_id": "rollout-2026-09-06T00-51-37-01a0727b-9729-74e1-9ad0-52ac4b29d13e",
+    "type": "anchor"
+  },
+  {
+    "query": "我还核对了附录中的检索实验，用来区分“省计算”和“能力更强”这两个结论。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/03/rollout-2026-08-03T17-40-24-019fc6fe-ef8c-7800-8b53-80d33d418a5a.jsonl",
+    "session_id": "rollout-2026-08-03T17-40-24-019fc6fe-ef8c-7800-8b53-80d33d418a5a",
+    "type": "anchor"
+  },
+  {
+    "query": "喵，我会按“只读终审”的方式来做：先快速查一下项目记忆和审查规则，然后只检查实现/测试、跑聚焦测试，不改任何文件。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/04/rollout-2026-08-04T21-58-56-019fcd11-ff8e-7692-bc19-dfc13842b97b.jsonl",
+    "session_id": "rollout-2026-08-04T21-58-56-019fcd11-ff8e-7692-bc19-dfc13842b97b",
+    "type": "anchor"
+  },
+  {
+    "query": "我接手为唯一写入的 Execution worker 来做这个修复，喵。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/04/rollout-2026-08-04T22-42-37-019fcd39-fd3d-79d0-b8d3-0d1df5bb52e1.jsonl",
+    "session_id": "rollout-2026-08-04T22-42-37-019fcd39-fd3d-79d0-b8d3-0d1df5bb52e1",
+    "type": "anchor"
+  },
+  {
+    "query": "`tool_calls` reason 空 calls 会直接协议错误。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/04/rollout-2026-08-04T21-28-53-019fccf6-7b32-7011-a228-4659b4f5c6c0.jsonl",
+    "session_id": "rollout-2026-08-04T21-28-53-019fccf6-7b32-7011-a228-4659b4f5c6c0",
+    "type": "anchor"
+  },
+  {
+    "query": "我会严格只读：先快速拉一下相关记忆/当前 git 状态，再审当前 diff，最后跑你点名的测试与检查，只报告仍可行动的问题和命令结果。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/04/rollout-2026-08-04T21-58-56-019fcd11-ff30-7ea2-8d14-f04d973e5bf1.jsonl",
+    "session_id": "rollout-2026-08-04T21-58-56-019fcd11-ff30-7ea2-8d14-f04d973e5bf1",
+    "type": "anchor"
+  },
+  {
+    "query": "调查目的：我要弄清楚的是：Paw 在模型输出到一半后停止，究竟发生在上游响应流、流解析、主循环错误处理，还是 TUI 渲染/缓冲层。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/04/rollout-2026-08-04T09-45-17-019fca72-52e6-7db1-900a-12c84781c597.jsonl",
+    "session_id": "rollout-2026-08-04T09-45-17-019fca72-52e6-7db1-900a-12c84781c597",
+    "type": "anchor"
+  },
+  {
+    "query": "因为这是代码审查/验证任务，我先读取 code-review-excellence 技能说明，并做一次轻量 memory 检索；之后只跑检查命令和读取 diff",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/04/rollout-2026-08-04T21-46-20-019fcd06-74bf-7301-ab1f-b84b7e955ec7.jsonl",
+    "session_id": "rollout-2026-08-04T21-46-20-019fcd06-74bf-7301-ab1f-b84b7e955ec7",
+    "type": "anchor"
+  },
+  {
+    "query": "喵，我会严格只读：先按 code-review skill 做审查流程，再核对记忆里的相关上下文，然后只看你限定的 diff/测试范围，不改文件不提交。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/04/rollout-2026-08-04T21-46-20-019fcd06-7530-7c00-981e-129036ff2af1.jsonl",
+    "session_id": "rollout-2026-08-04T21-46-20-019fcd06-7530-7c00-981e-129036ff2af1",
+    "type": "anchor"
+  },
+  {
+    "query": "我会保持只读 QA：先用代码审查技能做检查框架，再查相关实现/测试并只运行必要的聚焦测试；不会修改任何文件。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/04/rollout-2026-08-04T21-46-20-019fcd06-7462-7c21-96b6-e628777863e7.jsonl",
+    "session_id": "rollout-2026-08-04T21-46-20-019fcd06-7462-7c21-96b6-e628777863e7",
+    "type": "anchor"
+  },
+  {
+    "query": "go` 明确被改过；中文输入则先从 `input_token.",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/05/rollout-2026-08-05T09-36-03-019fcf90-38fc-7db3-a003-d5c659f9661f.jsonl",
+    "session_id": "rollout-2026-08-05T09-36-03-019fcf90-38fc-7db3-a003-d5c659f9661f",
+    "type": "anchor"
+  },
+  {
+    "query": "我会先按你点名的 `investigation-first` 查清事实，再决定要不要动修复；同时按仓库约定先用 `arming-thought` 校准假设，喵。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/05/rollout-2026-08-05T14-18-57-019fd093-38c4-7860-b282-f262a2ce9864.jsonl",
+    "session_id": "rollout-2026-08-05T14-18-57-019fd093-38c4-7860-b282-f262a2ce9864",
+    "type": "anchor"
+  },
+  {
+    "query": "我会把这次请求按“现状审查”处理：先读取项目的持久化状态与代码审查规范，再核对 Git 变更、进度清单、验证契约和实际测试结果，最后给你一份基于证据的完成度判断",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/18/rollout-2026-08-18T20-25-14-01a014d5-3c28-7db3-ad44-e753767bc7e4.jsonl",
+    "session_id": "rollout-2026-08-18T20-25-14-01a014d5-3c28-7db3-ad44-e753767bc7e4",
+    "type": "anchor"
+  },
+  {
+    "query": "因此我的任务会从“新建一套计划”调整为“审计现有计划、补齐设计覆盖、校准里程碑和执行字段”，避免造出第二套互相打架的看板喵。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/11/rollout-2026-08-11T20-47-42-019ff0dd-4a30-7342-9536-b54515728575.jsonl",
+    "session_id": "rollout-2026-08-11T20-47-42-019ff0dd-4a30-7342-9536-b54515728575",
+    "type": "anchor"
+  },
+  {
+    "query": "红测试需要的 5 份 golden 文件已经补齐了喵。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/11/rollout-2026-08-11T23-52-45-019ff186-b51c-7f02-bab3-a9015efcd8e1.jsonl",
+    "session_id": "rollout-2026-08-11T23-52-45-019ff186-b51c-7f02-bab3-a9015efcd8e1",
+    "type": "anchor"
+  },
+  {
+    "query": "红测试需要的 5 份 golden 文件已经补齐了喵。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/11/rollout-2026-08-11T23-52-52-019ff186-d2e0-7a71-bdab-a8dba49c6cd1.jsonl",
+    "session_id": "rollout-2026-08-11T23-52-52-019ff186-d2e0-7a71-bdab-a8dba49c6cd1",
+    "type": "anchor"
+  },
+  {
+    "query": "红测试需要的 5 份 golden 文件已经补齐了喵。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/11/rollout-2026-08-11T23-52-57-019ff186-e6dd-7a70-a06b-f9d9358f3a16.jsonl",
+    "session_id": "rollout-2026-08-11T23-52-57-019ff186-e6dd-7a70-a06b-f9d9358f3a16",
+    "type": "anchor"
+  },
+  {
+    "query": "本喵继续沿用已完成的诊断与 TDD 修复，只做最终构建、全量测试、差异审计和进程清理喵。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/17/rollout-2026-08-17T02-30-46-01a00bd7-2d6c-79b2-9a6d-09c05a0b11f6.jsonl",
+    "session_id": "rollout-2026-08-17T02-30-46-01a00bd7-2d6c-79b2-9a6d-09c05a0b11f6",
+    "type": "anchor"
+  },
+  {
+    "query": "Hover 的失败回退也确有缓存命中导致“恢复无效”的 correctness 风险；本地测试目前只证明“命中过一些工具”，没有证明“命中当前视口全部工具”，也",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/17/rollout-2026-08-17T19-08-42-01a00f68-d071-7413-8a7e-76413a3b7060.jsonl",
+    "session_id": "rollout-2026-08-17T19-08-42-01a00f68-d071-7413-8a7e-76413a3b7060",
+    "type": "anchor"
+  },
+  {
+    "query": "## 官方源码确认的会话/Transcript结构 需要区分“持久化会话模型”和“TUI 渲染投影”。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/17/rollout-2026-08-17T15-00-31-01a00e85-96f4-7243-bf2b-9e2e34c888c5.jsonl",
+    "session_id": "rollout-2026-08-17T15-00-31-01a00e85-96f4-7243-bf2b-9e2e34c888c5",
+    "type": "anchor"
+  },
+  {
+    "query": "先按 `$investigation-first` 复核证据与 diff，再做独立审查、清理 smoke 进程，并跑最终卫生检查；如果审查发现缺口，会补测试后再",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/17/rollout-2026-08-17T16-03-24-01a00ebf-2953-7162-bafc-7afb475768a7.jsonl",
+    "session_id": "rollout-2026-08-17T16-03-24-01a00ebf-2953-7162-bafc-7afb475768a7",
+    "type": "anchor"
+  },
+  {
+    "query": "/cmd/agent` 进程启动后 24 秒内，而配置文件自前一天起未改；说明不能只读磁盘配置推断当时模型，运行时选择或新进程初始化路径也必须核对。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/17/rollout-2026-08-17T11-52-34-01a00dd9-84a7-7f82-9ca6-63726237c017.jsonl",
+    "session_id": "rollout-2026-08-17T11-52-34-01a00dd9-84a7-7f82-9ca6-63726237c017",
+    "type": "anchor"
+  },
+  {
+    "query": "外部 `codewhale` 的身份可能存在同名项目，我已单独委托只读核验其官方来源；本地这边先继续梳理当前仓库的真实渲染链路和性能测试，避免把不同产品混在一起",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/17/rollout-2026-08-17T14-59-36-01a00e84-c2db-7a10-8371-c57206a91db2.jsonl",
+    "session_id": "rollout-2026-08-17T14-59-36-01a00e84-c2db-7a10-8371-c57206a91db2",
+    "type": "anchor"
+  },
+  {
+    "query": "- surface 过期时返回 `valid=false`；filter 保守放行事件，由 `Update` 同步后处理，禁止回退到历史扫描。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/17/rollout-2026-08-17T17-22-35-01a00f07-aaf5-72f1-baf4-7d7ed44538d3.jsonl",
+    "session_id": "rollout-2026-08-17T17-22-35-01a00f07-aaf5-72f1-baf4-7d7ed44538d3",
+    "type": "anchor"
+  },
+  {
+    "query": "调查目的：确认 hover/反向滚动修复在真实长 session 上既正确又只处理变化行，并把剩余验证闭环。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/17/rollout-2026-08-17T18-13-55-01a00f36-a8de-7ba1-a117-80627fef88dc.jsonl",
+    "session_id": "rollout-2026-08-17T18-13-55-01a00f36-a8de-7ba1-a117-80627fef88dc",
+    "type": "anchor"
+  },
+  {
+    "query": "调查目的：确认 hover/反向滚动修复在真实长 session 上既正确又只处理变化行，并把剩余验证闭环。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/17/rollout-2026-08-17T18-13-55-01a00f36-aa42-70b2-aacc-585458081cd4.jsonl",
+    "session_id": "rollout-2026-08-17T18-13-55-01a00f36-aa42-70b2-aacc-585458081cd4",
+    "type": "anchor"
+  },
+  {
+    "query": "- 延迟 click 的 generation 失效时安全 no-op，不能作用到 restore 后的另一条记录。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/17/rollout-2026-08-17T17-22-35-01a00f07-aa38-71f1-b26a-09c2d4ba2d3f.jsonl",
+    "session_id": "rollout-2026-08-17T17-22-35-01a00f07-aa38-71f1-b26a-09c2d4ba2d3f",
+    "type": "anchor"
+  },
+  {
+    "query": "我先用现有测试与 race 检查确认没有被其他路径抵消。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/17/rollout-2026-08-17T19-08-42-01a00f68-d1a6-7a32-9ef2-89494da39617.jsonl",
+    "session_id": "rollout-2026-08-17T19-08-42-01a00f68-d1a6-7a32-9ef2-89494da39617",
+    "type": "anchor"
+  },
+  {
+    "query": "调查目的：我要弄清楚的是，当前 coalescer 实现是否完整满足“旧方向积压可取消、反向立即响应”，以及真实 10MB session 测试是否真的走到生产",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/17/rollout-2026-08-17T22-32-36-01a01023-7c57-77d1-8bf0-a6b830a4416a.jsonl",
+    "session_id": "rollout-2026-08-17T22-32-36-01a01023-7c57-77d1-8bf0-a6b830a4416a",
+    "type": "anchor"
+  },
+  {
+    "query": "先按 `$investigation-first` 复核证据与 diff，再做独立审查、清理 smoke 进程，并跑最终卫生检查；如果审查发现缺口，会补测试后再",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/17/rollout-2026-08-17T16-03-23-01a00ebf-2881-7913-9267-44f7cb3de313.jsonl",
+    "session_id": "rollout-2026-08-17T16-03-23-01a00ebf-2881-7913-9267-44f7cb3de313",
+    "type": "anchor"
+  },
+  {
+    "query": "- `Commit` 是唯一可能返回错误的入口；`Route` 热路径无错误、无分配。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/17/rollout-2026-08-17T17-22-35-01a00f07-aa89-78b3-917c-a2f891536200.jsonl",
+    "session_id": "rollout-2026-08-17T17-22-35-01a00f07-aa89-78b3-917c-a2f891536200",
+    "type": "anchor"
+  },
+  {
+    "query": "这里我会用 `arming-thought` 和 `investigation-first` 两个技能，把事实、推断和修复建议分开。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/10/rollout-2026-08-10T08-05-16-019fe8fc-e870-7472-bfc2-39a3b8119e43.jsonl",
+    "session_id": "rollout-2026-08-10T08-05-16-019fe8fc-e870-7472-bfc2-39a3b8119e43",
+    "type": "anchor"
+  },
+  {
+    "query": "调查目的：我要弄清楚的是，这次失败发生在“服务端校验请求”还是“客户端解析响应”，以及 496,925 列附近究竟是哪一个对象缺少 `output` 字段，喵。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/06/rollout-2026-08-06T07-29-33-019fd442-c452-7172-99d5-4e376a20c165.jsonl",
+    "session_id": "rollout-2026-08-06T07-29-33-019fd442-c452-7172-99d5-4e376a20c165",
+    "type": "anchor"
+  },
+  {
+    "query": "`superpowers` 的 TDD 约束在这里直接适用：它要求先看到新增测试明确变红，再写实现并回归。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/06/rollout-2026-08-06T08-18-12-019fd46f-5099-7b32-80b7-e14fb25c40e7.jsonl",
+    "session_id": "rollout-2026-08-06T08-18-12-019fd46f-5099-7b32-80b7-e14fb25c40e7",
+    "type": "anchor"
+  },
+  {
+    "query": "我负责模型层这块，按严格 TDD 先制造红测，再修 Responses 序列化、统一 HTTP 错误与上下文溢出分类，喵。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/06/rollout-2026-08-06T08-18-02-019fd46f-27c0-7852-94f7-ca2bcbe6ca01.jsonl",
+    "session_id": "rollout-2026-08-06T08-18-02-019fd46f-27c0-7852-94f7-ca2bcbe6ca01",
+    "type": "anchor"
+  },
+  {
+    "query": "两层各自的 targeted 测试都已通过。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/06/rollout-2026-08-06T08-37-30-019fd480-fb3f-7671-afc8-9a9228b99b79.jsonl",
+    "session_id": "rollout-2026-08-06T08-37-30-019fd480-fb3f-7671-afc8-9a9228b99b79",
+    "type": "anchor"
+  },
+  {
+    "query": "是的，Electron + React 已经真正开工了喵：独立分支、依赖链、测试/类型检查/构建门禁都已落地。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/12/rollout-2026-08-12T00-45-14-019ff1b6-c46b-7090-905b-45e93c7c6390.jsonl",
+    "session_id": "rollout-2026-08-12T00-45-14-019ff1b6-c46b-7090-905b-45e93c7c6390",
+    "type": "anchor"
+  },
+  {
+    "query": "是的，Electron + React 已经真正开工了喵：独立分支、依赖链、测试/类型检查/构建门禁都已落地。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/12/rollout-2026-08-12T00-22-40-019ff1a2-1c2e-7a21-8c1f-ebb960a41db7.jsonl",
+    "session_id": "rollout-2026-08-12T00-22-40-019ff1a2-1c2e-7a21-8c1f-ebb960a41db7",
+    "type": "anchor"
+  },
+  {
+    "query": "是的，Electron + React 已经真正开工了喵：独立分支、依赖链、测试/类型检查/构建门禁都已落地。",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/12/rollout-2026-08-12T01-41-37-019ff1ea-6117-7370-b4fb-ab190f1edeee.jsonl",
+    "session_id": "rollout-2026-08-12T01-41-37-019ff1ea-6117-7370-b4fb-ab190f1edeee",
+    "type": "anchor"
+  },
+  {
+    "query": "接下来我在跑整仓测试并收敛文档/fixture 交叉语义，重点检查新的 RPC 结果字段、release digest 和 React UI 快照是否还有旧假设",
+    "source": "/Users/united_pooh/.codex/sessions/2026/08/12/rollout-2026-08-12T08-06-05-019ff34a-5f08-7d60-9c90-2bc2596fda50.jsonl",
+    "session_id": "rollout-2026-08-12T08-06-05-019ff34a-5f08-7d60-9c90-2bc2596fda50",
+    "type": "anchor"
+  }
+]

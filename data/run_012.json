@@ -1,0 +1,27 @@
+{
+  "experiment": "run_012_free_paraphrase_60_alias_chunk_lex",
+  "n": 60,
+  "dataset": "10 topics x 6 Codex-authored natural rewrites; target session manually assigned from source evidence; all 2026/09/12 results excluded",
+  "baseline_no_alias": {
+    "top1": 0.4166667,
+    "top5": 0.7,
+    "mrr": 0.5294444,
+    "p50_ms": 2.94,
+    "p95_ms": 3.58
+  },
+  "candidate_phrase_alias_chunk_lex": {
+    "top1": 0.4666667,
+    "top5": 0.7,
+    "mrr": 0.5636111,
+    "p50_ms": 5.56,
+    "p95_ms": 6.74
+  },
+  "delta": {
+    "top1_pp": 5.0,
+    "top5_pp": 0.0,
+    "mrr": 0.03417,
+    "p50_ms": 2.62,
+    "p95_ms": 3.16
+  },
+  "decision": "promote default; chunk dense remains available but weight 0 by default"
+}

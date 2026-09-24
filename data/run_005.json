@@ -1,0 +1,13 @@
+{
+  "experiment": "run_005_light_rerank",
+  "dataset": "clean corpus excluding 2026/09/12",
+  "queries": 8,
+  "gold": "Codex-reviewed provisional labels; frozen for next ablation",
+  "baseline_top1": 0.625,
+  "baseline_top5": 1.0,
+  "candidate_top1": 0.5,
+  "candidate_top5": 0.625,
+  "candidate_warm_p50_ms": 14.1,
+  "candidate_warm_p95_ms": 16.9,
+  "decision": "reject current weights; latency fixed but relevance regressed; retain rerank opt-in only"
+}

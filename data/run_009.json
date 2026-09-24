@@ -1,0 +1,19 @@
+{
+  "experiment": "run_009_60_sentence_paraphrases",
+  "n": 60,
+  "dataset": "clean sessions excluding 2026/09/12",
+  "baseline": {
+    "top1": 0.9,
+    "top5": 1.0,
+    "p50_ms": 6.09,
+    "p95_ms": 7.57
+  },
+  "chunk_alias": {
+    "top1": 0.9,
+    "top5": 1.0,
+    "p50_ms": 6.35,
+    "p95_ms": 10.12
+  },
+  "labeling": "gold source session retained from original sentence; paraphrase templates and audited substitutions",
+  "status": "no accuracy gain; no regression"
+}

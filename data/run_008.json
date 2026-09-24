@@ -1,0 +1,17 @@
+{
+  "experiment": "run_008_60_controlled_synonyms",
+  "n": 60,
+  "dataset": "clean sessions excluding 2026/09/12",
+  "baseline_no_alias": {
+    "top1": 0.9,
+    "top5": 1.0,
+    "p50_ms": 5.92
+  },
+  "candidate_alias_chunk": {
+    "top1": 0.9,
+    "top5": 1.0,
+    "p50_ms": 5.8
+  },
+  "construction": "one audited synonym substitution per anchor query; gold=session source",
+  "interpretation": "no measured accuracy gain; no regression and slight latency noise"
+}

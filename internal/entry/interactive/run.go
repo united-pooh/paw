@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	appcore "paw/internal/app"
 	selecttool "paw/internal/capability/tool/select"
@@ -17,6 +18,16 @@ import (
 )
 
 func Run(ctx context.Context, opts Options) error {
+	root, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	restoreLogs, err := redirectDiagnosticLogs(root)
+	if err != nil {
+		return err
+	}
+	defer restoreLogs()
+
 	clearTerminalWindow(os.Stdout)
 
 	output := bubbleui.New()
@@ -25,11 +36,6 @@ func Run(ctx context.Context, opts Options) error {
 	defer todoBroker.Close()
 	output.SetSelectionBroker(selectionBroker)
 	output.SetTodoBroker(todoBroker)
-	root, err := os.Getwd()
-	if err != nil {
-		selectionBroker.Close()
-		return err
-	}
 	app, err := appcore.BuildWorkspaceRuntime(ctx, appcore.WorkspaceRuntimeOptions{
 		Root: root, SessionID: opts.SessionID, Output: output,
 		AllowOutsideRead: opts.AllowOutsideRead, AllowIncomplete: true,
@@ -155,7 +161,7 @@ func startTokenTracer(ctx context.Context, sessionID string, opts Options) (*tok
 		}
 		// 请求的端口被占（常见：另一个 Paw 会话已在跑）时回退到随机空闲
 		// 端口继续，而不是杀死整个会话；显式端口仍大声失败。
-		fmt.Fprintf(os.Stderr, "paw: token tracer port %d unavailable (%v); falling back to a free port\n", port, err)
+		log.Printf("paw: token tracer port %d unavailable (%v); falling back to a free port", port, err)
 		server = tokentracer.NewServer(tracer, tokentracer.ServerConfig{
 			Host:        "127.0.0.1",
 			Port:        0,
