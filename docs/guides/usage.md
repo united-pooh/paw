@@ -4,6 +4,8 @@
 
 ## 入口
 
+长程任务可以使用 [Goal 指标探索与 Plan 对话规划](../reference/goal-plan.md)：Goal 接受可量化验收目标并自主探索实现方法；Plan 用于讨论、保存方案，明确 `/plan execute` 后才实施。
+
 文件: [cmd/paw/main.go](../../cmd/paw/main.go)
 
 ### `main()`
@@ -178,6 +180,7 @@ enabled = true
 - `/export` 默认导出到 `~/.paw/projects/<id>/exports/conversation-YYYY-MM-DD-HHMMSS.txt`（`PAW_CONFIG_HOME` 可替换 `~/.paw`）；优先按 runner 的显式工作区定位项目，未提供时使用当前目录。也支持工作区内显式路径，保持 `.txt` 导出；导出文件权限为 `0600`
 - `/setting` 无参数时与 `/config` 打开统一配置中心；`/setting translate on|off` 是只改内存、立即生效且不写盘的会话级动态开关；`/config reload|status|path` 用于热重载、诊断和路径查询
 - `/theme` 打开内置主题选择器；↑/↓、j/k、Home/End 会实时预览，Enter 保存到统一全局配置目录的 `settings.json`，Esc 恢复打开前的主题且不写盘
+- `default` 跟随终端：使用终端默认前景/背景与 ANSI 调色板，选区反色；Ghostty 的透明度由 Ghostty 自身设置控制。其他内置主题继续使用固定配色。切回 `default` 会恢复终端光标颜色。
 - `/sessions` 列出所有历史会话（ID 前缀、日期、文件大小、首条消息），选中条目后直接恢复该会话
 - `/subagent` 支持 `empty` 与 `fork` 两种上下文模式，以及 `sync` 与 `background` 两种运行模式；后台任务完成后会发 UI 系统通知，并把截断后的结果作为补充上下文注入后续模型轮次（完整结果仍在任务 output/transcript 路径中）
 - `/streamma <prompt>` 显式把当前任务交给 StreamMA runtime；runtime 会按任务选择一个小型 DAG，并把每个 StreamMA worker 映射为真实 subagent。一次 run 内同一个 logical agent 复用同一个 subagent session 作为真实 `ctx_a`；首次调用写入 agent base context + problem，后续调用只追加新 inbound step。只有同步到精确 `END_STEP` step 后才继续在 DAG 中传播；缺失 `END_STEP` 会失败而不是在 agent `Done` 时兜底传播，最终由 finalizer 的最后一步作为 assistant 回复写回会话历史。可选参数包括 `--profile`、`--topology`、`--agents`/`--a`、`--steps`/`--s`、`--protocol`；默认 `adaptive` profile 会保留任务模板图，显式 `--topology` 或 `paper` profile 可按指定拓扑生成 chain/tree/graph 形状
@@ -243,17 +246,28 @@ Skills:
 - 输入中出现 `$skill` 或 `[$skill](/abs/path/SKILL.md)` 时，Runner 会在本轮 system prompt 中注入对应 `SKILL.md` 的完整内容；该注入只对当前 turn 生效，不写入会话历史
 - `/subagent` 的 prompt 中显式提到 skill 时，subagent worker 会按同样规则加载；`/streamma` 和 `/streamma-trace` 会把本轮选中的 skill context 传入每个 StreamMA worker 的 system prompt
 
-context meter 的 token 数只来自模型服务端返回的真实 `usage` 字段；不会根据草稿、历史文本或本地字符数做估算。左侧 `↑/↓` 数字展示本次打开后的 session 累计 token 消耗，每次启动从 0 开始，`/clear` 也会清零；每次模型请求的 input/prompt、output/completion 与 cache hit 会按 provider 返回值入账，同一条流里多次 `usage` 会先合并成该请求的累计值再计入 session，避免 `message_start` / `message_delta` 重复计数。进度条、used 百分比、cache hit 百分比和 `free(...)` 仍然展示最近一次真实 usage 对应的当前上下文窗口占用；新一轮请求尚未返回 usage 时，会继续显示上一条上下文窗口 usage。
+输入框上沿显示上下文容量条：`▒` 表示已知缓存部分，`█` 表示其余已用部分，`░` 表示剩余容量。宽度足够时显示 `CTX` 百分比和用量；未知时显示 `CTX —`。容量沿用最近一次主会话请求的 input + output 占用，不加入子任务的累计消耗，也不代表任务完成进度。超过配置窗口时条形填满，数字保留实际占用与超限百分比。请求尚未返回用量时沿用上次记录；恢复缺少用量记录的历史会话时沿用原有的历史估算。草稿不计入容量条。
 
-context meter 左侧显示紧凑 token 与比例，例如 `260k↑ 2.05k↓ 25%(10%)`：`↑` 是 session 累计上传/input token，`↓` 是 session 累计回答/output token，两个百分比分别是当前 context 用量和当前 cache hit 用量占总 limit 的比例。右侧只显示当前 context 剩余比例，例如 `free(75%)`。超过三位的 token 会压缩成 `k`，超过 `999k` 会压缩成 `M`，数字最多保留三位有效数字。
+底部“缓存占比”以已用上下文（input + output）为分母；侧栏的 `Cache hit` 以累计 input 为分母，两者统计范围和分母不同。
+
+Activity 侧栏默认展开，上半自动显示最近有实际内容更新的 Todo 或子智能体，下半固定显示 `TOKEN HISTORY · MAIN TURN`。无需切页或切换焦点，可以边输入边看曲线。
+
+- `Turn avg`：本次前台任务累计输出 token ÷ 从任务开始至当前的总耗时，包含等待和工具执行时间；跨多次模型请求及自动恢复累计，任务结束后冻结，下次任务重新计量。`Σout` 是同一范围的累计输出，不叠加子任务。优先采用服务端 output 用量；缺失时估算实际收到的片段，早期用量之后的新片段也暂作估算，最终用量到达后校正。含估算时显示 `≈`，未知显示 `—`。
+- 曲线：主会话实际接收的正文、可见推理和工具参数片段的近 60 秒变化；`recent` 为近 3 秒平均 TPS。`≈` 表示按片段字符估算，不包含服务端未传回的隐藏思考。采样独立于正文显示缓冲，完成时的整段回填不会制造尖峰；当前请求没有真实片段时显示 `—`。有采样的请求结束后 recent TPS 为 0。
+- 读数：当前会话及同工作区内可证明归属的子任务的服务端输入、输出、缓存命中 token 和命中率。缺失字段显示 `—`，部分记录显示覆盖数。
+- `Tools in`：工具定义、参数及结果回传进入模型输入的估算量，已包含于 input；历史结果被反复携带时会重复占用输入。工具汇总不因原子明细保留上限而丢失；来源缺失时仍标未知或部分覆盖。`main calls` 是当前主轮次的工具调用次数。
+
+侧栏可见时约每秒刷新一次账本；收起或终端不足 65 列时停止轮询。空闲连续输入期间延后刷新以保护输入法，模型工作时继续更新。账本可跨重启读取，曲线只保留当前进程的采样；切换会话会清除旧会话的实时状态。重复轮询和相同内容的 Todo 重播不会抢占上半区域。
+
+模型返回损坏的工具协议或参数时，Paw 保留已完成的工作，在后台要求模型重新生成尚未执行的工具调用，并记录失败、重试和恢复结果。同一次连续故障最多重试 10 次，成功响应后清零；普通工具执行失败会作为错误结果回给模型，由模型修正请求继续。取消和权限拒绝仍然有效，已完成的调用不会由恢复机制重新执行。
 
 快捷键:
 - 模型工作时，`Enter` 会把纯文本作为 steering 指令送入当前 turn 的下一次模型请求，不会插入已经建立的 token stream；`Tab` 会把输入排入后续独立 turn。若当前 turn 已封口或 runner 不支持 steering，`Enter` 会安全降级为 queue。
 - 模型工作时，`ctrl+c` 仍用于取消当前工具/turn。带图片的输入按 `Enter` 时不会尝试 steering，而会保留附件并进入 queue。
 - `ctrl+v`: 从剪贴板粘贴图片时插入 `[Image N]` 图片芯片；连续粘贴会按顺序生成多个芯片，芯片可以像一个整体一样删除。剪贴板没有图片时保持原有文本粘贴行为。
 - `ctrl+o`: 展开/折叠模型 thinking 过程；折叠时 thinking 仍保存在 transcript 中，但不渲染到 viewport。
-- `ctrl+g`: 展开/收起主外框内的全高 Activity 右侧栏；打开后 transcript、状态行、输入框和 queue 会共同缩窄，不遮挡主内容。右栏包含 Tasks/Todo，使用 ↑↓ 选择，Enter 在左侧预览 task transcript。终端窄于 85 列时 Activity 使用内部全页模式；输入始终提交到主 session。
-- Activity 可见时，先按 `ctrl+w`，再按 `h/l` 切换 workspace/Activity 焦点，或按 `</>` 以 4 列步长调整右栏宽度。Esc 从 task preview 返回主 transcript；没有 preview 时把焦点交回 workspace。
+- `ctrl+g`: 展开/收起默认常驻的 Activity 侧栏；草稿、补全和输入焦点保留。80 列终端仍分栏，更窄至不足 65 列时自动隐藏侧栏、恢复宽度后再次显示。输入始终提交到主 session。
+- 侧栏不拦截 `Tab`、方向键、`f/h/j/k/l` 或 `Ctrl+W`，这些键继续用于输入和原有编辑操作。Esc 从已有 task preview 返回主 transcript。
 
 鼠标选择:
 - 在消息历史区按住左键拖拽即可选择文本；拖到面板顶部/底部会自动滚动；释放时把选中内容写入系统剪贴板（本地剪贴板 + OSC 52 终端剪贴板双写，SSH/远程会话同样可用），并在状态栏短暂提示「已复制 N 字符」。

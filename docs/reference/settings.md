@@ -17,7 +17,7 @@
 ##### `UIConfig`
 
 字段:
-- `Theme` — 内置主题 ID，非法值回退到 `default`
+- `Theme` — 内置主题 ID，非法值回退到 `default`；`default` 使用终端默认前景/背景和 ANSI 调色板，可保留终端透明背景
 - `ContextLimitTokens` — 通用上下文 token 上限（默认 `0` 表示自动；正整数为通用值，负数无效，模型专属窗口优先）
 - `ContextMeterLocation` — context meter 位置（`"input-title"` / `"header"` / `"input-above"`）
 

@@ -9,5 +9,7 @@
 - [internal/ui](./ui.md)
 - [internal/runtime/loop](./loop.md)
 - [internal/runtime/task](./task.md)
+- [TODO 前置依赖](./todo-dependencies.md)
+- [Goal 指标探索与 Plan 对话规划](./goal-plan.md)
 - [internal/platform/settings](./settings.md)
 - [internal/tokentracer](./tokentracer.md)

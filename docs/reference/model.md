@@ -155,14 +155,20 @@ provider 的 `discovery.enabled` 为 `true` 时，顶层进程会在启动时执
 
 #### Responses 流式防御
 
-`responses_transport.go`、`responses_sse.go`、`responses_failure.go`、`responses_replay.go`、`responses_completion.go` 将传输编排、分帧诊断、重放和完成提交分开，保持 `StreamMessage` / `StreamEvent` 接口不变。
+`responses_transport.go`、`responses_sse.go`、`responses_failure.go`、`responses_completion.go` 将传输编排、分帧诊断、安全重试和完成提交分开，保持 `StreamMessage` / `StreamEvent` 接口不变。
 
-1. **协议与诊断**：支持多行 SSE、BOM、CR/LF/CRLF；保留帧大小上限，错误包含事件阶段、底层错误类别与 request ID，不输出原始响应体。
-2. **生命周期**：空闲 watchdog 与取消共用幂等关闭路径，清理计时器和 context callback，避免旧超时回调关闭已经恢复的连接。
+1. **协议与诊断**：支持多行 SSE、BOM、CR/LF/CRLF；只在空行结束事件后派发，连接结束时丢弃未闭合的末尾事件，保留原始 EOF/read/idle 分类，而不把截断尾块误报为 JSON decode。即使末尾 JSON 看起来完整，缺少事件终止空行也不提交正文、工具或完成状态。此边界遵循 [SSE 解析规则](https://html.spec.whatwg.org/multipage/server-sent-events.html#parsing-an-event-stream)。保留帧大小上限，错误包含事件阶段、底层错误类别与 request ID，不输出原始响应体。首个完整事件的坏帧错误未被完整完成快照修复时，后续空闲、读取或 EOF 错误不能覆盖它；取消仍立即生效。
+2. **生命周期**：空闲 watchdog 只累计等待底层 `Read` 的时间，默认预算为 90 秒；解析、事件交付、UI 或输出消费者暂停不计入网络空闲。读到字节后重置预算，零字节读取保留剩余预算。空闲超时与取消共用幂等关闭路径，消费暂停时取消仍有效；清理计时器和 context callback，避免旧超时回调关闭已经恢复的连接。
 3. **重试预算**：HTTP 与流失败共用 `retries + 1` 次总请求预算及退避，尊重 `Retry-After`，取消立即结束；认证、协议限制等确定性错误不盲目重试。
-4. **重放与提交**：传输中断后的文本/思考以严格前缀核对去重；内容不一致就显式停止，已输出内容后的 provider failed 不重放。工具、用量及完成状态仅在完成校验后一起提交；坏帧恢复只信任完整完成快照，不能用残缺参数覆盖它。
+4. **输出边界与提交**：只有尚未输出正文或思考时，流失败才可重新 POST；未完成的工具参数仍留在缓冲区，不属于已发布输出。已输出后重发会产生新的生成结果，因此直接报告首次错误，保留事件阶段、底层错误类别、request ID 及已输出正文/思考字节数，不用新的输出覆盖或拼接旧内容。工具、用量及完成状态仅在完成快照前缀校验后一起提交；坏帧恢复只信任完整完成快照，不能用残缺参数覆盖它。
 
-这能恢复一部分瞬断或截断，不保证供应商故障永不发生，也不会自动切换模型或降级为非流式请求。
+这能自动恢复尚无可见输出的部分瞬断。已有输出后，适配层不做跨请求逐字重放；运行时通过 `IsRecoverableResponsesInterruption` 识别已经发布正文或思考的 `stream_idle`、`stream_read`、`unexpected_eof`，从已完成步骤发起新的模型响应。每次连续断流最多自动续接 10 次，成功完成模型响应后清零，后续再断流重新从 1/10 开始。首次无输出的失败仍仅遵守 provider 的 `retries`；已进入续接后，即使下一次未输出就再次断流，也会用剩余续接次数。每次请求内部未输出时的 provider 重试配置保持原样；取消、协议错误和 provider 错误不走运行时续接。
+
+正文或纯思考的 partial 先收尾并保存，仅供历史展示；新响应使用已提交的步骤和工具结果，不携带未完成内容与工具参数，不拼接旧输出。退避为 1、2、4、5 秒并封顶，等待可取消；用完次数后保留故障，可输入“继续”手动接续。不自动切换模型或降级为非流式请求。
+
+启用请求观测时，每次进入消费阶段的 Responses 流以 `attempt_stream_end` 写入现有 tracer JSONL，并关联所属 HTTP attempt。记录协议解析终态、底层读取结束类别、读等待与消费暂停的最长时间、最后收到字节距结束的时间、本地超时/取消标记，以及未闭合 SSE 尾部长度。字节数是 HTTP 自动解压后的应用层字节，`uncompressed` 标记自动解压；协议和编码仅记录固定白名单值，不记录正文、认证头或原始错误文本。
+
+完成快照验证通过后先持久化该诊断，再交付最终完成事件；清理连接的耗时不进入统计。若最终交付被取消，传输诊断仍可为 `completed`，逻辑请求的 `request_end` 则保留取消状态。中途取消时上游读取和调用方退出是异步的，进程立即退出仍可能缺少这条诊断；缺失记录不能当成没有断流。
 
 #### Anthropic 流式层
 
@@ -173,4 +179,3 @@ provider 的 `discovery.enabled` 为 `true` 时，顶层进程会在启动时执
 - 处理 thinking、text、tool_use 内容块
 - 支持 system prompt 的 `cache_control`（`type: "ephemeral"`）
 - 把 provider 返回的 usage 汇总到 `StreamEvent.Usage`
-
