@@ -219,7 +219,7 @@ func TestResponsesCompletedOnlyReasoningKeepsFormatting(t *testing.T) {
 	}
 }
 
-func TestResponsesReasoningReplayUsesRawCompletedSnapshot(t *testing.T) {
+func TestResponsesReasoningCompletionUsesRawSnapshot(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		published string
@@ -236,11 +236,9 @@ func TestResponsesReasoningReplayUsesRawCompletedSnapshot(t *testing.T) {
 			summary, _ := json.Marshal(tc.summaries)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "text/event-stream")
-				if requests.Add(1) == 1 {
-					data, _ := json.Marshal(responsesStreamEvent{Type: "response.reasoning_summary_text.delta", Delta: tc.published})
-					fmt.Fprintf(w, "data: %s\n\n", data)
-					return
-				}
+				requests.Add(1)
+				data, _ := json.Marshal(responsesStreamEvent{Type: "response.reasoning_summary_text.delta", Delta: tc.published})
+				fmt.Fprintf(w, "data: %s\n\n", data)
 				fmt.Fprintf(w, `data: {"type":"response.completed","response":{"output":[{"type":"reasoning","summary":%s},{"type":"function_call","call_id":"call","name":"Read","arguments":"{}"}]}}`+"\n\n", summary)
 			}))
 			defer server.Close()
@@ -265,13 +263,13 @@ func TestResponsesReasoningReplayUsesRawCompletedSnapshot(t *testing.T) {
 					gotErr = event.Err
 				}
 			}
-			if requests.Load() != 2 {
-				t.Fatalf("requests=%d want=2", requests.Load())
+			if requests.Load() != 1 {
+				t.Fatalf("requests=%d want=1", requests.Load())
 			}
 			if tc.wantErr {
 				var failure *responsesStreamFailure
-				if !errors.As(gotErr, &failure) || failure.EventType != "replay_mismatch" || thinking != tc.published || done != 0 || tools != 0 || providerData != 0 {
-					t.Fatalf("unsafe replay: thinking=%q done=%d tools=%d providerData=%d err=%v", thinking, done, tools, providerData, gotErr)
+				if !errors.As(gotErr, &failure) || failure.EventType != "completion_mismatch" || thinking != tc.published || done != 0 || tools != 0 || providerData != 0 {
+					t.Fatalf("unsafe completion: thinking=%q done=%d tools=%d providerData=%d err=%v", thinking, done, tools, providerData, gotErr)
 				}
 			} else if gotErr != nil || thinking != strings.Join(tc.summaries, "") || done != 1 || tools != 1 || providerData != 1 {
 				t.Fatalf("thinking=%q done=%d tools=%d providerData=%d err=%v", thinking, done, tools, providerData, gotErr)

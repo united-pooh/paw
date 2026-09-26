@@ -12,13 +12,15 @@ import (
 )
 
 type responsesStreamFailure struct {
-	EventType string
-	Type      string
-	Code      string
-	Message   string
-	RequestID string
-	Retryable bool
-	cause     error
+	EventType              string
+	Type                   string
+	Code                   string
+	Message                string
+	RequestID              string
+	Retryable              bool
+	cause                  error
+	publishedTextBytes     int
+	publishedThinkingBytes int
 }
 
 func (e *responsesStreamFailure) Error() string {
@@ -42,7 +44,56 @@ func (e *responsesStreamFailure) Error() string {
 	if e.RequestID != "" {
 		detail += " (request_id=" + e.RequestID + ")"
 	}
+	if e.publishedTextBytes > 0 || e.publishedThinkingBytes > 0 {
+		detail += fmt.Sprintf(" (published_text_bytes=%d, published_thinking_bytes=%d)", e.publishedTextBytes, e.publishedThinkingBytes)
+		detail += "；已有部分输出，已停止重新生成。可输入“继续”从已完成的步骤接续"
+	}
 	return "模型接口返回错误: " + detail
+}
+
+func responsesFailureAfterOutput(err error, textBytes, thinkingBytes int) error {
+	var failure *responsesStreamFailure
+	if textBytes+thinkingBytes == 0 || !errors.As(err, &failure) {
+		return err
+	}
+	copy := *failure
+	copy.Retryable = false
+	copy.publishedTextBytes, copy.publishedThinkingBytes = textBytes, thinkingBytes
+	return &copy
+}
+
+func canRetryResponsesStream(ctx context.Context, err error, published bool) bool {
+	// Re-POST creates a new generation, not a resumable copy of published output.
+	return !published && isRetryableResponsesStreamError(ctx, err)
+}
+
+// IsRecoverableResponsesInterruption identifies published transport failures
+// that can start a bounded continuation episode. Initial empty responses remain
+// subject to the adapter retry budget; this never permits replaying the request.
+func IsRecoverableResponsesInterruption(err error) bool {
+	if !IsResponsesTransportInterruption(err) {
+		return false
+	}
+	var failure *responsesStreamFailure
+	return errors.As(err, &failure) && failure != nil && (failure.publishedTextBytes > 0 || failure.publishedThinkingBytes > 0)
+}
+
+// IsResponsesTransportInterruption classifies typed transport failures without
+// requiring published output. Callers must still enforce their recovery budget.
+func IsResponsesTransportInterruption(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, bufio.ErrTooLong) {
+		return false
+	}
+	var failure *responsesStreamFailure
+	if !errors.As(err, &failure) || failure == nil {
+		return false
+	}
+	switch failure.EventType {
+	case "stream_idle", "stream_read", "unexpected_eof":
+		return true
+	default:
+		return false
+	}
 }
 
 func (e *responsesStreamFailure) Unwrap() error {

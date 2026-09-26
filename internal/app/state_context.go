@@ -2,9 +2,11 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"paw/internal/runtime/goal"
 	"paw/internal/runtime/plan"
 	"paw/internal/todo"
 	"strings"
@@ -13,8 +15,9 @@ import (
 
 // stateBlockProvider 组装模式 B（状态压缩）恢复用的结构化状态块
 // （设计文档 D9 字节稳定 / D12 时间戳标注）。
-// 组件级容错：单个组件读取失败跳过该组件，不阻断恢复。
+// 习惯与进度可缺失；Goal 验收状态读取失败必须返回错误。
 type stateBlockProvider struct {
+	goalStore  goal.GoalStore
 	planStore  plan.DocStore
 	todoBroker *todo.Broker
 	todoStore  interface {
@@ -42,6 +45,31 @@ func (p *stateBlockProvider) BuildStateContext(ctx context.Context) (string, err
 	}
 	var b strings.Builder
 	any := false
+	if p.goalStore != nil && strings.TrimSpace(p.sessionID) != "" {
+		goals, err := p.goalStore.List(ctx, p.sessionID)
+		if err != nil {
+			return "", fmt.Errorf("load goal state: %w", err)
+		}
+		var current *goal.GoalSnapshot
+		for i := range goals {
+			candidate := &goals[i]
+			if current == nil || (current.Status.Terminal() && !candidate.Status.Terminal()) ||
+				(current.Status.Terminal() == candidate.Status.Terminal() && candidate.UpdatedAt.After(current.UpdatedAt)) {
+				current = candidate
+			}
+		}
+		if current != nil {
+			if len(current.Measurements) > 5 {
+				current.Measurements = current.Measurements[len(current.Measurements)-5:]
+			}
+			raw, err := json.Marshal(current)
+			if err != nil {
+				return "", fmt.Errorf("encode goal state: %w", err)
+			}
+			fmt.Fprintf(&b, "## 目标（goal）\n验收指标固定；TODO 完成不代表达标。以下为持久化状态（最多保留最近五次测量）：\n%s\n", raw)
+			any = true
+		}
+	}
 
 	if p.planStore != nil {
 		if docs, err := p.planStore.List(ctx); err == nil {
@@ -52,7 +80,7 @@ func (p *stateBlockProvider) BuildStateContext(ctx context.Context) (string, err
 				planLines = append(planLines, fmt.Sprintf("- [%s] %s (updated %s)", status, oneLine(doc.Title), ts.Format(time.RFC3339)))
 			}
 			if len(planLines) > 0 {
-				fmt.Fprintf(&b, "## 目标（plan）\n%s\n", strings.Join(planLines, "\n"))
+				fmt.Fprintf(&b, "## 计划（plan）\n%s\n", strings.Join(planLines, "\n"))
 				any = true
 			}
 		}
@@ -70,6 +98,9 @@ func (p *stateBlockProvider) BuildStateContext(ctx context.Context) (string, err
 			for _, item := range snap.Items {
 				status := string(item.Status)
 				todoLines = append(todoLines, fmt.Sprintf("- [%s] %s (id: %s)", status, oneLine(item.Content), oneLine(item.ID)))
+				if len(item.BlockedBy) > 0 {
+					todoLines = append(todoLines, fmt.Sprintf("  id: %q; blocked_by: %q; unresolved_blockers: %q", item.ID, item.BlockedBy, snap.UnresolvedBlockers(item.ID)))
+				}
 			}
 			if len(todoLines) > 0 {
 				fmt.Fprintf(&b, "%s\n", strings.Join(todoLines, "\n"))

@@ -391,7 +391,7 @@ func (c *Client) consumeAnthropicStream(ctx context.Context, resp *http.Response
 					}
 					tool.args.WriteString(chunk.Delta.PartialJSON)
 				}
-				if !emitStreamEvent(ctx, events, anEvent(AssistantPartLifecycleDelta, "tool_call", idx, "")) {
+				if !emitStreamEvent(ctx, events, withStreamActivity(anEvent(AssistantPartLifecycleDelta, "tool_call", idx, ""), "", "", chunk.Delta.PartialJSON)) {
 					return
 				}
 			}
@@ -416,7 +416,7 @@ func (c *Client) consumeAnthropicStream(ctx context.Context, resp *http.Response
 }
 
 func anEvent(lifecycle AssistantPartLifecycle, partType string, blockIndex int, delta string) StreamEvent {
-	return StreamEvent{
+	event := StreamEvent{
 		AssistantPart: &AssistantPartEvent{
 			Lifecycle:  lifecycle,
 			BlockIndex: blockIndex,
@@ -424,6 +424,15 @@ func anEvent(lifecycle AssistantPartLifecycle, partType string, blockIndex int, 
 			Delta:      delta,
 		},
 	}
+	if lifecycle == AssistantPartLifecycleDelta {
+		switch partType {
+		case "text":
+			event = withStreamActivity(event, delta, "", "")
+		case "reasoning":
+			event = withStreamActivity(event, "", delta, "")
+		}
+	}
+	return event
 }
 
 func finalizeAndFlushToolCalls(events chan<- StreamEvent, ctx context.Context, toolCalls map[int]*activeAnthropicToolCall, completedIndices []int) error {

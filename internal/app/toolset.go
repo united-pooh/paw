@@ -10,19 +10,22 @@ import (
 	"paw/internal/capability/tool/memory"
 	selecttool "paw/internal/capability/tool/select"
 	transcripttool "paw/internal/capability/tool/transcript"
+	"paw/internal/message"
 	"paw/internal/platform/pawpath"
+	"paw/internal/runtime/goal"
 	"paw/internal/runtime/plan"
 	"paw/internal/storage/session"
 	"paw/internal/todo"
 )
 
 type Toolset struct {
-	todo             *todo.Tool
-	searchTranscript *transcripttool.Tool
-	memory           *memory.UpdateMemoryTool
-	ariadne          *memory.UpdateAriadneTool
-	finalize         *plan.FinalizeTool
-	question         *selecttool.Tool
+	todo                *todo.Tool
+	searchTranscript    *transcripttool.Tool
+	memory              *memory.UpdateMemoryTool
+	ariadne             *memory.UpdateAriadneTool
+	finalize            *plan.FinalizeTool
+	question            *selecttool.Tool
+	interactiveRegistry *tool.Registry
 }
 
 func NewToolset(broker *todo.Broker) *Toolset {
@@ -62,6 +65,23 @@ func (t *Toolset) RegisterInteractive(registry *tool.Registry, broker *selecttoo
 	t.question = selecttool.New(broker)
 	registry.Register(t.question)
 	registry.Register(t.finalize)
+	t.interactiveRegistry = registry
+	return nil
+}
+
+func (a *WorkspaceRuntime) BindGoalController(controller *goal.SessionController) error {
+	if a == nil || a.SessionHost == nil || a.Store == nil || a.Toolset == nil || a.Toolset.interactiveRegistry == nil || controller == nil {
+		return fmt.Errorf("goal controller requires an interactive runtime and session store")
+	}
+	controller.SetHistory(func(ctx context.Context) ([]message.Message, error) {
+		snapshot, err := a.Store.LoadSnapshot(ctx, a.SessionHost.CurrentSessionID())
+		if err != nil {
+			return nil, err
+		}
+		return snapshot.ActiveHistory, nil
+	})
+	a.Toolset.interactiveRegistry.Register(goal.NewSetMetricTool(controller))
+	a.Toolset.interactiveRegistry.Register(goal.NewRecordMetricTool(controller))
 	return nil
 }
 

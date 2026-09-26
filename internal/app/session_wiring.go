@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"paw/internal/platform/pawpath"
 	"paw/internal/platform/settings"
+	"paw/internal/runtime/goal"
 	"paw/internal/runtime/loop"
 	"paw/internal/runtime/plan"
 	"paw/internal/storage/session"
@@ -90,5 +91,10 @@ func stateBlockProviderFor(sessionID string, store *session.JSONLStore, broker *
 	}
 	provider := newStateBlockProvider(docStore, broker, sessionID, sessionBase, memoryPath)
 	provider.todoStore = store
+	if store != nil {
+		if goals, err := goal.NewEventStore(sessionBase); err == nil {
+			provider.goalStore = goals
+		}
+	}
 	return provider
 }
