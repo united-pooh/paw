@@ -11,21 +11,29 @@ import (
 	"time"
 )
 
+type responsesEventSink func(StreamEvent) error
+
 func (c *Client) consumeResponsesStream(ctx context.Context, resp *http.Response, events chan<- StreamEvent, idleTimeout time.Duration) responsesStreamResult {
 	return c.consumeResponsesAttempt(ctx, resp, func(event StreamEvent) error {
 		if !emitStreamEvent(ctx, events, event) {
 			return ctx.Err()
 		}
 		return nil
-	}, idleTimeout, false)
+	}, idleTimeout)
 }
 
-func (c *Client) consumeResponsesAttempt(ctx context.Context, resp *http.Response, emit responsesEventSink, idleTimeout time.Duration, replayingReasoning bool) responsesStreamResult {
-	body := newStreamIdleWatchdog(ctx, resp.Body, idleTimeout)
+func (c *Client) consumeResponsesAttempt(ctx context.Context, resp *http.Response, emit responsesEventSink, idleTimeout time.Duration) (result responsesStreamResult) {
+	reader := resp.Body
+	diagnostics := newResponsesDiagnosticBody(ctx, resp)
+	if diagnostics != nil {
+		reader = diagnostics
+	}
+	body := newStreamIdleWatchdog(ctx, reader, idleTimeout)
 	defer func() {
+		diagnostics.finish(ctx, result.err, body.TimedOut())
 		_ = body.Close()
 	}()
-	result := responsesStreamResult{retryAfter: providerRetryAfter(resp.Header, time.Now())}
+	result = responsesStreamResult{retryAfter: providerRetryAfter(resp.Header, time.Now())}
 
 	scanner := bufio.NewScanner(body)
 	scanner.Split(splitResponsesSSEEvents)
@@ -51,12 +59,14 @@ func (c *Client) consumeResponsesAttempt(ctx context.Context, resp *http.Respons
 		}
 		var event responsesStreamEvent
 		if err := json.Unmarshal(payload, &event); err != nil {
-			decodeFailure = &responsesStreamFailure{
-				EventType: "decode",
-				Message:   fmt.Sprintf("解析 Responses 流式数据失败（event_bytes=%d）: %v", len(payload), err),
-				RequestID: providerRequestID(resp.Header),
-				Retryable: true,
-				cause:     err,
+			if decodeFailure == nil {
+				decodeFailure = &responsesStreamFailure{
+					EventType: "decode",
+					Message:   fmt.Sprintf("解析 Responses 流式数据失败（event_bytes=%d）: %v", len(payload), err),
+					RequestID: providerRequestID(resp.Header),
+					Retryable: true,
+					cause:     err,
+				}
 			}
 			continue
 		}
@@ -72,7 +82,7 @@ func (c *Client) consumeResponsesAttempt(ctx context.Context, resp *http.Respons
 			if event.Delta != "" {
 				if decodeFailure == nil {
 					streamedText.WriteString(event.Delta)
-					if err := emit(StreamEvent{Delta: event.Delta}); err != nil {
+					if err := emit(withStreamActivity(StreamEvent{Delta: event.Delta}, event.Delta, "", "")); err != nil {
 						result.err = err
 						return result
 					}
@@ -86,7 +96,7 @@ func (c *Client) consumeResponsesAttempt(ctx context.Context, resp *http.Respons
 			if event.Delta != "" {
 				if decodeFailure == nil {
 					streamedThinking.WriteString(event.Delta)
-					if err := emit(StreamEvent{Thinking: event.Delta}); err != nil {
+					if err := emit(withStreamActivity(StreamEvent{Thinking: event.Delta}, "", event.Delta, "")); err != nil {
 						result.err = err
 						return result
 					}
@@ -131,6 +141,12 @@ func (c *Client) consumeResponsesAttempt(ctx context.Context, resp *http.Respons
 				}
 			}
 			call.args.WriteString(event.Delta)
+			if event.Delta != "" {
+				if err := emit(withStreamActivity(StreamEvent{}, "", "", event.Delta)); err != nil {
+					result.err = err
+					return result
+				}
+			}
 			if call.item == nil {
 				call.item = json.RawMessage(fmt.Sprintf(`{"type":"function_call","id":%q,"call_id":%q,"name":%q}`, call.id, call.callID, call.name))
 			}
@@ -162,7 +178,7 @@ func (c *Client) consumeResponsesAttempt(ctx context.Context, resp *http.Respons
 			if event.Response != nil {
 				usage = event.Response.Usage
 			}
-			finalEvent, err := completedResponsesEvent(output, usage, replayingReasoning || streamedThinking.Len() > 0)
+			finalEvent, err := completedResponsesEvent(output, usage, streamedThinking.Len() > 0)
 			if err != nil {
 				result.err = err
 				return result
@@ -171,6 +187,10 @@ func (c *Client) consumeResponsesAttempt(ctx context.Context, resp *http.Respons
 				result.err = err
 				return result
 			}
+			// A Done consumer may immediately close its recorder. Persist the
+			// validated stream terminal before delivery; delivery cancellation is
+			// still reported independently by request_end.
+			diagnostics.finish(ctx, nil, body.TimedOut())
 			if err := emit(finalEvent); err != nil {
 				result.err = err
 				return result
@@ -185,6 +205,10 @@ func (c *Client) consumeResponsesAttempt(ctx context.Context, resp *http.Respons
 		result.err = err
 		return result
 	}
+	if decodeFailure != nil {
+		result.err = decodeFailure
+		return result
+	}
 	if body.TimedOut() {
 		result.err = &responsesStreamFailure{EventType: "stream_idle", Message: fmt.Sprintf("模型流 %s 无任何数据，连接已中断（可能是 provider 网络抖动）", idleTimeout), RequestID: providerRequestID(resp.Header), Retryable: true}
 		return result
@@ -195,10 +219,6 @@ func (c *Client) consumeResponsesAttempt(ctx context.Context, resp *http.Respons
 		} else {
 			result.err = responsesReadFailure(err, resp.Header)
 		}
-		return result
-	}
-	if decodeFailure != nil {
-		result.err = decodeFailure
 		return result
 	}
 	result.err = &responsesStreamFailure{EventType: "unexpected_eof", Message: "Responses stream ended before response.completed", RequestID: providerRequestID(resp.Header), Retryable: true}

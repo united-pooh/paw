@@ -80,10 +80,12 @@ func TestStreamIdleWatchdogIgnoresExpireAfterClose(t *testing.T) {
 func TestStreamIdleWatchdogIgnoresStaleExpireAfterRead(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		body := newWatchdogTestBody()
-		body.read = func(p []byte) (int, error) { return copy(p, "x"), nil }
+		body.read = func(p []byte) (int, error) {
+			time.Sleep(750 * time.Millisecond)
+			return copy(p, "x"), nil
+		}
 		watcher := newStreamIdleWatchdog(nil, body, time.Second)
 		defer watcher.Close()
-		time.Sleep(750 * time.Millisecond)
 		if n, err := watcher.Read(make([]byte, 1)); n != 1 || err != nil {
 			t.Fatalf("Read() = (%d, %v), want (1, nil)", n, err)
 		}
@@ -92,16 +94,28 @@ func TestStreamIdleWatchdogIgnoresStaleExpireAfterRead(t *testing.T) {
 		if watcher.TimedOut() || body.closeCalls.Load() != 0 {
 			t.Fatal("callback for the original deadline closed the recently active body")
 		}
-		time.Sleep(749 * time.Millisecond)
+		time.Sleep(2 * time.Second)
 		synctest.Wait()
 		if watcher.TimedOut() || body.closeCalls.Load() != 0 {
-			t.Fatal("watchdog expired before the reset deadline")
+			t.Fatal("watchdog expired without a pending Read")
 		}
-		time.Sleep(time.Millisecond)
+		body.read = nil
+		readDone := make(chan struct{})
+		go func() {
+			_, _ = watcher.Read(make([]byte, 1))
+			close(readDone)
+		}()
+		synctest.Wait()
+		watcher.expire()
+		if watcher.TimedOut() || body.closeCalls.Load() != 0 {
+			t.Fatal("stale callback closed the next Read before its deadline")
+		}
+		time.Sleep(time.Second)
 		synctest.Wait()
 		if !watcher.TimedOut() || body.closeCalls.Load() != 1 {
 			t.Fatal("watchdog did not expire at the reset deadline")
 		}
+		<-readDone
 	})
 }
 
@@ -209,6 +223,8 @@ func TestStreamIdleWatchdogStopsContextCallback(t *testing.T) {
 					t.Fatalf("context callback registrations = %d, want 1", got)
 				}
 				if termination == "idle" {
+					go func() { _, _ = watcher.Read(make([]byte, 1)) }()
+					synctest.Wait()
 					time.Sleep(time.Second)
 					synctest.Wait()
 				} else {
@@ -247,6 +263,8 @@ func TestStreamIdleWatchdogCloseErrorAndReentry(t *testing.T) {
 				watcher = newStreamIdleWatchdog(nil, body, time.Second)
 				close(ready)
 				if idle {
+					go func() { _, _ = watcher.Read(make([]byte, 1)) }()
+					synctest.Wait()
 					time.Sleep(time.Second)
 					synctest.Wait()
 				} else if err := watcher.Close(); !errors.Is(err, body.closeErr) {
@@ -261,6 +279,67 @@ func TestStreamIdleWatchdogCloseErrorAndReentry(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestStreamIdleWatchdogOnlyCountsPendingReads(t *testing.T) {
+	for _, progress := range []bool{false, true} {
+		t.Run(map[bool]string{false: "zero_read_keeps_budget", true: "data_resets_budget"}[progress], func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				body := newWatchdogTestBody()
+				watcher := newStreamIdleWatchdog(ctx, body, time.Second)
+				defer watcher.Close()
+				time.Sleep(2 * time.Second)
+				if body.closeCalls.Load() != 0 {
+					t.Fatal("body closed before its first Read")
+				}
+				body.read = func([]byte) (int, error) {
+					time.Sleep(600 * time.Millisecond)
+					return 0, nil
+				}
+				_, _ = watcher.Read(make([]byte, 1))
+				if progress {
+					body.read = func(p []byte) (int, error) {
+						time.Sleep(300 * time.Millisecond)
+						return copy(p, "x"), nil
+					}
+					_, _ = watcher.Read(make([]byte, 1))
+				}
+				time.Sleep(2 * time.Second)
+				if body.closeCalls.Load() != 0 {
+					t.Fatal("consumer time was charged to the read budget")
+				}
+				body.read = nil
+				start := time.Now()
+				_, err := watcher.Read(make([]byte, 1))
+				want := 400 * time.Millisecond
+				if progress {
+					want = time.Second
+				}
+				if !errors.Is(err, io.ErrClosedPipe) || time.Since(start) != want || !watcher.TimedOut() {
+					t.Fatalf("Read err=%v waited=%s timedOut=%v, want blocked read timeout after %s", err, time.Since(start), watcher.TimedOut(), want)
+				}
+			})
+		})
+	}
+}
+
+func TestStreamIdleWatchdogCancellationWhileConsumerIsPaused(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		body := newWatchdogTestBody()
+		body.read = func(p []byte) (int, error) { return copy(p, "x"), nil }
+		watcher := newStreamIdleWatchdog(ctx, body, time.Second)
+		_, _ = watcher.Read(make([]byte, 1))
+		time.Sleep(2 * time.Second)
+		cancel()
+		synctest.Wait()
+		if watcher.TimedOut() || body.closeCalls.Load() != 1 {
+			t.Fatalf("paused consumer cancellation: timedOut=%v closeCalls=%d", watcher.TimedOut(), body.closeCalls.Load())
+		}
+	})
 }
 
 func TestStreamIdleWatchdogConcurrentLifecycle(t *testing.T) {

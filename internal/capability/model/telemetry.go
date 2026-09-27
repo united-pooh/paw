@@ -19,22 +19,23 @@ type RequestScope struct {
 }
 
 type RequestEvent struct {
-	Kind               string       `json:"kind"`
-	RequestID          string       `json:"request_id"`
-	Timestamp          time.Time    `json:"timestamp"`
-	Scope              RequestScope `json:"scope"`
-	Provider           string       `json:"provider,omitempty"`
-	ProviderResponseID string       `json:"provider_response_id,omitempty"`
-	UsageFinality      string       `json:"usage_finality,omitempty"`
-	Model              string       `json:"model,omitempty"`
-	Transport          string       `json:"transport,omitempty"`
-	Attempt            int          `json:"attempt,omitempty"`
-	Status             string       `json:"status,omitempty"`
-	HTTPStatus         int          `json:"http_status,omitempty"`
-	Usage              *Usage       `json:"usage,omitempty"`
-	Atoms              []InputAtom  `json:"atoms,omitempty"`
-	AtomsState         string       `json:"atoms_state,omitempty"`
-	RequestBodyBytes   int64        `json:"request_body_bytes,omitempty"`
+	Kind               string                      `json:"kind"`
+	RequestID          string                      `json:"request_id"`
+	Timestamp          time.Time                   `json:"timestamp"`
+	Scope              RequestScope                `json:"scope"`
+	Provider           string                      `json:"provider,omitempty"`
+	ProviderResponseID string                      `json:"provider_response_id,omitempty"`
+	UsageFinality      string                      `json:"usage_finality,omitempty"`
+	Model              string                      `json:"model,omitempty"`
+	Transport          string                      `json:"transport,omitempty"`
+	Attempt            int                         `json:"attempt,omitempty"`
+	Status             string                      `json:"status,omitempty"`
+	HTTPStatus         int                         `json:"http_status,omitempty"`
+	Usage              *Usage                      `json:"usage,omitempty"`
+	Atoms              []InputAtom                 `json:"atoms,omitempty"`
+	AtomsState         string                      `json:"atoms_state,omitempty"`
+	RequestBodyBytes   int64                       `json:"request_body_bytes,omitempty"`
+	StreamDiagnostics  *ResponsesStreamDiagnostics `json:"stream_diagnostics,omitempty"`
 }
 
 type requestScopeKey struct{}

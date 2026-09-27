@@ -85,14 +85,22 @@ func (c *Client) streamResponsesMessage(ctx context.Context, cfg Config, message
 	events := make(chan StreamEvent)
 	go func() {
 		defer close(events)
-		var replay responsesReplay
+		textBytes, thinkingBytes := 0, 0
+		emit := func(event StreamEvent) error {
+			if !emitStreamEvent(ctx, events, event) {
+				return ctx.Err()
+			}
+			textBytes += len(event.Delta)
+			thinkingBytes += len(event.Thinking)
+			return nil
+		}
 		for {
-			result := c.consumeResponsesAttempt(ctx, resp, replay.attempt(ctx, events), streamIdleTimeout(cfg), replay.thinking.Len() > 0)
+			result := c.consumeResponsesAttempt(ctx, resp, emit, streamIdleTimeout(cfg))
 			if result.err == nil {
 				return
 			}
-			if !attempts.available() || !canRetryResponsesStream(ctx, result.err, replay.published()) {
-				_ = emitStreamEvent(ctx, events, StreamEvent{Err: result.err})
+			if !attempts.available() || !canRetryResponsesStream(ctx, result.err, textBytes+thinkingBytes > 0) {
+				_ = emitStreamEvent(ctx, events, StreamEvent{Err: responsesFailureAfterOutput(result.err, textBytes, thinkingBytes)})
 				return
 			}
 			attempts.retryAfter = result.retryAfter

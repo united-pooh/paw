@@ -47,6 +47,8 @@ type AssistantPartEvent struct {
 // 4) Done=true：当前协议响应结束
 // 5) Err 非空：流中出现错误
 type StreamEvent struct {
+	ReceivedAt     time.Time
+	Activity       *StreamActivity
 	RequestStartID string
 	AssistantPart  *AssistantPartEvent
 	GeneratedBy    *message.MessageOrigin
@@ -525,9 +527,8 @@ func streamIdleTimeout(cfg Config) time.Duration {
 	return defaultStreamIdleTimeout
 }
 
-// streamIdleWatchdog 包装流式响应 body：任何字节到达都会重置空闲计时器；
-// 计时器到期或 ctx 取消（ESC/回合结束）都会关闭 body，使阻塞中的
-// scanner.Scan 立即返回。
+// streamIdleWatchdog 只累计等待读取数据的时间，排除消费者处理事件的时间。
+// 读到字节后恢复完整预算；零字节读取保留剩余预算。ctx 取消始终关闭 body。
 type streamIdleWatchdog struct {
 	body    io.ReadCloser
 	timeout time.Duration
@@ -535,18 +536,15 @@ type streamIdleWatchdog struct {
 	mu          sync.Mutex
 	timer       *time.Timer
 	deadline    time.Time
+	remaining   time.Duration
 	stopContext func() bool
 	timedOut    bool
 	closed      bool
 }
 
 func newStreamIdleWatchdog(ctx context.Context, body io.ReadCloser, timeout time.Duration) *streamIdleWatchdog {
-	watcher := &streamIdleWatchdog{body: body, timeout: timeout}
+	watcher := &streamIdleWatchdog{body: body, timeout: timeout, remaining: timeout}
 	watcher.mu.Lock()
-	if timeout > 0 {
-		watcher.deadline = time.Now().Add(timeout)
-		watcher.timer = time.AfterFunc(timeout, watcher.expire)
-	}
 	if ctx != nil {
 		watcher.stopContext = context.AfterFunc(ctx, func() { _ = watcher.Close() })
 	}
@@ -559,20 +557,29 @@ func (w *streamIdleWatchdog) expire() {
 }
 
 func (w *streamIdleWatchdog) Read(p []byte) (int, error) {
-	n, err := w.body.Read(p)
-	if n > 0 {
-		w.kick()
-	}
-	return n, err
-}
-
-func (w *streamIdleWatchdog) kick() {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	if !w.closed && w.timer != nil {
-		w.deadline = time.Now().Add(w.timeout)
-		w.timer.Reset(w.timeout)
+	if !w.closed && w.timeout > 0 {
+		w.deadline = time.Now().Add(w.remaining)
+		if w.timer == nil {
+			w.timer = time.AfterFunc(w.remaining, w.expire)
+		} else {
+			w.timer.Reset(w.remaining)
+		}
 	}
+	w.mu.Unlock()
+
+	n, err := w.body.Read(p)
+	w.mu.Lock()
+	if !w.closed && !w.deadline.IsZero() {
+		w.remaining = max(0, time.Until(w.deadline))
+		if n > 0 {
+			w.remaining = w.timeout
+		}
+		w.deadline = time.Time{}
+		w.timer.Stop()
+	}
+	w.mu.Unlock()
+	return n, err
 }
 
 func (w *streamIdleWatchdog) Close() error {
@@ -661,6 +668,9 @@ func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events 
 					call.name = tc.Function.Name
 				}
 				call.args.WriteString(tc.Function.Arguments)
+				if tc.Function.Arguments != "" && !emitStreamEvent(ctx, events, withStreamActivity(StreamEvent{}, "", "", tc.Function.Arguments)) {
+					return
+				}
 			}
 		}
 
@@ -681,14 +691,14 @@ func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events 
 			reasoningText = chunk.Choices[0].Delta.Reasoning
 		}
 		if reasoningText != "" && !finishSeen {
-			if !emitStreamEvent(ctx, events, StreamEvent{Thinking: reasoningText}) {
+			if !emitStreamEvent(ctx, events, withStreamActivity(StreamEvent{Thinking: reasoningText}, "", reasoningText, "")) {
 				return
 			}
 		}
 
 		// 文本内容 delta
 		if delta := chunk.Choices[0].Delta.Content; delta != "" && !finishSeen {
-			if !emitStreamEvent(ctx, events, StreamEvent{Delta: delta}) {
+			if !emitStreamEvent(ctx, events, withStreamActivity(StreamEvent{Delta: delta}, delta, "", "")) {
 				return
 			}
 		}
@@ -755,6 +765,9 @@ func emitStreamEvent(ctx context.Context, events chan<- StreamEvent, ev StreamEv
 }
 
 func sendStreamEvent(ctx context.Context, events chan<- StreamEvent, ev StreamEvent) bool {
+	if ev.ReceivedAt.IsZero() {
+		ev.ReceivedAt = time.Now()
+	}
 	select {
 	case events <- ev:
 		return true

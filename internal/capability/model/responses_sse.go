@@ -22,7 +22,8 @@ func splitResponsesSSEEvents(data []byte, atEOF bool) (advance int, token []byte
 		lineStart = nextLine
 	}
 	if atEOF && len(data) != 0 {
-		return len(data), data, nil
+		// EOF does not dispatch an SSE event without its terminating blank line.
+		return len(data), nil, nil
 	}
 	return 0, nil, nil
 }
