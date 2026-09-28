@@ -149,6 +149,22 @@ func (g *Goal) Apply(payload es.Payload, env es.Envelope) error {
 		return fmt.Errorf("goal is nil")
 	}
 	switch env.Type {
+	case EventMetricConfigured:
+		p, ok := payload.(metricPayload)
+		if !ok || p.Metric == nil || g.Metric != nil {
+			return fmt.Errorf("goal: invalid or repeated metric configuration")
+		}
+		g.Metric = cloneMetric(p.Metric)
+		g.UpdatedAt = env.OccurredAt
+		g.Revision++
+	case EventMetricRecorded:
+		p, ok := payload.(metricPayload)
+		if !ok || p.Result == nil || g.Metric == nil {
+			return fmt.Errorf("goal: measurement requires a metric")
+		}
+		g.Measurements = append(g.Measurements, *p.Result)
+		g.UpdatedAt = env.OccurredAt
+		g.Revision++
 	case evCreated:
 		p, ok := payload.(createdPayload)
 		if !ok {
@@ -159,6 +175,7 @@ func (g *Goal) Apply(payload es.Payload, env es.Envelope) error {
 		g.Objective = p.Objective
 		g.AcceptanceCriteria = append([]string(nil), p.AcceptanceCriteria...)
 		g.Verification = append([]VerificationSpec(nil), p.Verification...)
+		g.Metric = cloneMetric(p.Metric)
 		g.Budget = p.Budget
 		g.Status = p.Status
 		g.CreatedAt = p.CreatedAt

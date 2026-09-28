@@ -146,6 +146,14 @@ func (s *EventStore) maybeSnapshot(ctx context.Context, id GoalID, last int64) {
 }
 
 func (s *EventStore) Create(ctx context.Context, g Goal) error {
+	if len(g.Measurements) != 0 {
+		return fmt.Errorf("new goals cannot contain measurements; record verified tool evidence after creation")
+	}
+	if g.Metric != nil {
+		if err := g.Metric.Validate(); err != nil {
+			return err
+		}
+	}
 	if err := contextErr(ctx); err != nil {
 		return err
 	}
@@ -175,6 +183,7 @@ func (s *EventStore) Create(ctx context.Context, g Goal) error {
 		Objective:          g.Objective,
 		AcceptanceCriteria: append([]string(nil), g.AcceptanceCriteria...),
 		Verification:       append([]VerificationSpec(nil), g.Verification...),
+		Metric:             cloneMetric(g.Metric),
 		Budget:             g.Budget,
 		Status:             g.Status,
 		CreatedAt:          g.CreatedAt,
@@ -263,7 +272,10 @@ func (s *EventStore) List(ctx context.Context, sessionID string) ([]GoalSnapshot
 	out := make([]GoalSnapshot, 0)
 	for _, id := range ids {
 		g, ok, err := s.Get(ctx, id)
-		if err != nil || !ok {
+		if err != nil {
+			return nil, fmt.Errorf("load goal %s: %w", id, err)
+		}
+		if !ok {
 			continue
 		}
 		if sessionID == "" || g.SessionID == sessionID {
@@ -598,6 +610,9 @@ func (s *EventStore) CheckpointStore() CheckpointStore { return checkpointStoreA
 // diffGoal 比较当前与传入状态，产出领域事件。状态转移经 CanTransition
 // 校验；统计字段变化产出 goal.stats.updated；不可变字段变更报错。
 func diffGoal(current, next Goal) ([]es.Envelope, error) {
+	if err := validateMetricChange(current, next); err != nil {
+		return nil, err
+	}
 	if !goalsEqualImmutable(current, next) {
 		return nil, fmt.Errorf("goal: immutable fields (objective/acceptance criteria/verification/budget/session) must not change")
 	}
@@ -605,6 +620,21 @@ func diffGoal(current, next Goal) ([]es.Envelope, error) {
 	now := next.UpdatedAt
 	if now.IsZero() {
 		now = time.Now()
+	}
+	if current.Metric == nil && next.Metric != nil {
+		raw, err := json.Marshal(metricPayload{Metric: next.Metric})
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, es.Envelope{Type: EventMetricConfigured, OccurredAt: now, SchemaVersion: 1, Payload: raw})
+	}
+	if len(next.Measurements) > len(current.Measurements) {
+		result := next.Measurements[len(next.Measurements)-1]
+		raw, err := json.Marshal(metricPayload{Result: &result})
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, es.Envelope{Type: EventMetricRecorded, OccurredAt: now, SchemaVersion: 1, Payload: raw})
 	}
 	if next.Status != current.Status {
 		if !CanTransition(current.Status, next.Status) {

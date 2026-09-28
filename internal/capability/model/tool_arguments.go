@@ -7,6 +7,23 @@ import (
 	"strings"
 )
 
+// ToolArgumentsError rejects native tool arguments before any call is exposed
+// for execution. The runtime can request corrected arguments without treating
+// execution failures or uncertain side effects as safe to replay.
+type ToolArgumentsError struct {
+	Provider string
+	CallID   string
+	Tool     string
+}
+
+func (err *ToolArgumentsError) Error() string {
+	label := strings.TrimSpace(err.Tool)
+	if label == "" {
+		label = strings.TrimSpace(err.CallID)
+	}
+	return fmt.Sprintf("%s returned invalid JSON object arguments for tool %q", err.Provider, label)
+}
+
 // decodeToolArguments accepts only a complete JSON object. Native provider
 // protocols must never silently replace malformed tool arguments with {}.
 //
@@ -15,23 +32,19 @@ import (
 // truncated output still fails so the model can re-issue the call.
 func decodeToolArguments(provider, callID, name string, raw []byte) (json.RawMessage, error) {
 	trimmed := bytes.TrimSpace(raw)
-	label := strings.TrimSpace(name)
-	if label == "" {
-		label = strings.TrimSpace(callID)
-	}
 	if len(trimmed) == 0 || trimmed[0] != '{' {
-		return nil, fmt.Errorf("%s returned invalid JSON object arguments for tool %q", provider, label)
+		return nil, &ToolArgumentsError{Provider: provider, CallID: callID, Tool: name}
 	}
 	if !json.Valid(trimmed) {
 		repaired := repairJSONStringLiterals(trimmed)
 		if !json.Valid(repaired) {
-			return nil, fmt.Errorf("%s returned invalid JSON object arguments for tool %q", provider, label)
+			return nil, &ToolArgumentsError{Provider: provider, CallID: callID, Tool: name}
 		}
 		trimmed = repaired
 	}
 	var object map[string]json.RawMessage
 	if err := json.Unmarshal(trimmed, &object); err != nil || object == nil {
-		return nil, fmt.Errorf("%s returned invalid JSON object arguments for tool %q", provider, label)
+		return nil, &ToolArgumentsError{Provider: provider, CallID: callID, Tool: name}
 	}
 	return append(json.RawMessage(nil), trimmed...), nil
 }

@@ -90,6 +90,9 @@ func Run(ctx context.Context, opts Options) error {
 		sessionBase = app.Store.Dir()
 	}
 	goalController := goal.NewSessionController(host, todoBroker, sessionBase)
+	if err := app.BindGoalController(goalController); err != nil {
+		return fmt.Errorf("bind goal tools: %w", err)
+	}
 	if err := goalController.Rebind(sessionID); err != nil {
 		return fmt.Errorf("restore goal controller: %w", err)
 	}

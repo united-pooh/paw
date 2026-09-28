@@ -14,7 +14,7 @@ func pendingGoalTodo() todo.Snapshot {
 }
 
 func TestEvaluatorContinuesForPendingTodo(t *testing.T) {
-	d := NewEvaluator(DefaultPolicy()).Evaluate(Observation{GoalID: "g1", HasTodo: true, Todo: pendingGoalTodo()})
+	d := NewEvaluator(DefaultPolicy()).Evaluate(Observation{GoalID: "g1", Metric: testMetric(), HasTodo: true, Todo: pendingGoalTodo()})
 	if d.Action != ActionContinue || d.NextPrompt.Content == "" {
 		t.Fatalf("decision = %+v", d)
 	}
@@ -23,9 +23,9 @@ func TestEvaluatorContinuesForPendingTodo(t *testing.T) {
 	}
 }
 
-func TestEvaluatorCompletesOnlyWithoutPendingTodo(t *testing.T) {
+func TestEvaluatorDoesNotCompleteFromTodoAlone(t *testing.T) {
 	d := NewEvaluator(DefaultPolicy()).Evaluate(Observation{HasTodo: true, Todo: todo.Snapshot{Items: []todo.Item{{ID: "step-1", Status: todo.StatusCompleted}}}})
-	if d.Action != ActionComplete {
+	if d.Action != ActionPause {
 		t.Fatalf("action = %q", d.Action)
 	}
 }
@@ -40,7 +40,7 @@ func TestEvaluatorMapsMaintenanceToCompact(t *testing.T) {
 func TestEvaluatorPausesAtBudget(t *testing.T) {
 	p := DefaultPolicy()
 	p.Budget.MaxContinuations = 1
-	d := NewEvaluator(p).Evaluate(Observation{HasTodo: true, Todo: pendingGoalTodo(), ContinuationUsed: 1})
+	d := NewEvaluator(p).Evaluate(Observation{Metric: testMetric(), HasTodo: true, Todo: pendingGoalTodo(), ContinuationUsed: 1})
 	if d.Action != ActionPause || d.PauseReason != PauseBudgetExhausted {
 		t.Fatalf("decision = %+v", d)
 	}
@@ -50,7 +50,7 @@ func TestEvaluatorPausesAfterRepeatedFingerprint(t *testing.T) {
 	p := DefaultPolicy()
 	p.Budget.MaxNoProgress = 2
 	e := NewEvaluator(p)
-	o := Observation{GoalID: "g1", HasTodo: true, Todo: pendingGoalTodo(), Assistant: message.Message{Content: "same"}}
+	o := Observation{GoalID: "g1", Metric: testMetric(), HasTodo: true, Todo: pendingGoalTodo(), Assistant: message.Message{Content: "same"}}
 	first, second, third := e.Evaluate(o), e.Evaluate(o), e.Evaluate(o)
 	if first.Action != ActionContinue || second.Action != ActionContinue {
 		t.Fatalf("first two = %+v, %+v", first, second)

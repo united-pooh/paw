@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"paw/internal/message"
 	"paw/internal/runtime/loop"
 	"paw/internal/todo"
 )
@@ -33,6 +34,7 @@ type SessionController struct {
 	sessionID string
 	activeID  GoalID
 	stopped   func(reason string)
+	history   HistorySource
 }
 
 func NewSessionController(host sessionHost, broker *todo.Broker, storeDir string) *SessionController {
@@ -60,10 +62,11 @@ func NewSessionController(host sessionHost, broker *todo.Broker, storeDir string
 func (c *SessionController) bindRuntime(sessionID string) {
 	c.runtime = NewRuntime(RuntimeConfig{
 		Store:       c.store,
-		Executor:    c.host.GoalTurnExecutor(),
+		Executor:    goalSessionExecutor{host: c.host, sessionID: sessionID},
 		Todo:        c.todo,
 		Evidence:    c.evidence,
 		Checkpoints: c.checkpoints,
+		History:     c.boundHistory(sessionID, c.history),
 		Bind: func(ctx context.Context, snapshot GoalSnapshot) error {
 			return c.host.ActivateGoalFor(ctx, sessionID, string(snapshot.ID), string(snapshot.Status))
 		},
@@ -72,10 +75,10 @@ func (c *SessionController) bindRuntime(sessionID string) {
 		},
 		Events: func(e Event) {
 			terminal := e.Type == EventCompleted || e.Type == EventFailed || e.Type == EventCancelled
-			stoppedEvent := terminal || e.Type == EventPaused
+			stoppedEvent := terminal || e.Type == EventPaused || e.Type == EventBlocked
 			c.mu.Lock()
 			current := c.sessionID == sessionID
-			if current && terminal {
+			if current && terminal && c.activeID == e.GoalID {
 				c.activeID = ""
 			}
 			stopped := c.stopped
@@ -93,6 +96,85 @@ func (c *SessionController) SetStopped(fn func(reason string)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.stopped = fn
+}
+
+func (c *SessionController) SetHistory(source HistorySource) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.history = source
+	if c.runtime != nil {
+		c.runtime.mu.Lock()
+		c.runtime.history = c.boundHistory(c.sessionID, source)
+		c.runtime.mu.Unlock()
+	}
+}
+
+func (c *SessionController) boundHistory(sessionID string, source HistorySource) HistorySource {
+	if source == nil {
+		return nil
+	}
+	return func(ctx context.Context) ([]message.Message, error) {
+		if c.host.CurrentSessionID() != sessionID {
+			return nil, fmt.Errorf("goal session changed; resume it in its original session")
+		}
+		history, err := source(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if c.host.CurrentSessionID() != sessionID {
+			return nil, fmt.Errorf("goal session changed while reading measurement evidence")
+		}
+		return history, nil
+	}
+}
+
+type goalSessionExecutor struct {
+	host      sessionHost
+	sessionID string
+}
+
+func (e goalSessionExecutor) ExecuteTurn(ctx context.Context, input message.Message, timing *loop.TurnTiming) (loop.TurnExecution, error) {
+	if e.host.CurrentSessionID() != e.sessionID {
+		return loop.TurnExecution{}, fmt.Errorf("goal session changed; resume it in its original session")
+	}
+	return e.host.GoalTurnExecutor().ExecuteTurn(ctx, input, timing)
+}
+
+func (c *SessionController) Submit(input string) (string, error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return "", fmt.Errorf("goal input is empty")
+	}
+	if err := c.ensureCurrentSession(); err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	id, runtime := c.activeID, c.runtime
+	c.mu.Unlock()
+	if id == "" {
+		return c.Start(input)
+	}
+	snapshot, err := runtime.Status(context.Background(), id)
+	if err != nil {
+		return "", err
+	}
+	if snapshot.Status.Terminal() {
+		return c.Start(input)
+	}
+	if snapshot.Status == GoalRunning {
+		var submitSteer func(string) bool
+		if steer, ok := c.host.(interface{ SubmitSteer(string) bool }); ok {
+			submitSteer = steer.SubmitSteer
+		}
+		if err := runtime.submitRunning(id, input, submitSteer); err != nil {
+			return "", err
+		}
+		return string(id), nil
+	}
+	if err := runtime.ResumeWithInput(context.Background(), id, input); err != nil {
+		return "", err
+	}
+	return string(id), nil
 }
 
 func (c *SessionController) Start(objective string) (string, error) {
@@ -197,7 +279,12 @@ func (c *SessionController) current() (GoalSnapshot, error) {
 	id, runtime := c.activeID, c.runtime
 	c.mu.Unlock()
 	if id == "" {
-		return GoalSnapshot{}, fmt.Errorf("no active goal")
+		runtime.mu.Lock()
+		id = runtime.activeID
+		runtime.mu.Unlock()
+		if id == "" {
+			return GoalSnapshot{}, fmt.Errorf("no active goal")
+		}
 	}
 	return runtime.Status(context.Background(), id)
 }
@@ -208,6 +295,19 @@ func (c *SessionController) Status() string {
 		return err.Error()
 	}
 	body := fmt.Sprintf("id: %s\nsession: %s\nobjective: %s\nstatus: %s\ncontinuations: %d/%d\nno-progress: %d", snapshot.ID, snapshot.SessionID, snapshot.Objective, snapshot.Status, snapshot.ContinuationUsed, snapshot.Budget.MaxContinuations, snapshot.NoProgressCount)
+	if snapshot.Metric == nil {
+		body += "\n验收指标：尚未定义，目标未完成"
+	} else {
+		metric := snapshot.Metric
+		body += fmt.Sprintf("\n验收指标：%s %s %g %s", metric.Name, metric.Comparison, metric.Target, metric.Unit)
+		if len(snapshot.Measurements) == 0 {
+			body += "\n当前值：尚无经过工具验证的测量"
+		} else {
+			latest := snapshot.Measurements[len(snapshot.Measurements)-1]
+			body += fmt.Sprintf("\n最近测量：%g %s（来源 %s）", latest.Value, metric.Unit, latest.ToolCallID)
+		}
+		body += "\n测量命令：" + metric.Measurement.Command + "\n数值路径：" + metric.Measurement.JSONPointer
+	}
 	if snapshot.PauseReason != "" {
 		body += "\npause reason: " + string(snapshot.PauseReason)
 	}

@@ -5,13 +5,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"regexp"
 	"strings"
 )
 
-const defaultGrepMaxResults = 200
+const (
+	defaultGrepMaxResults = 200
+	maxGrepLineBytes      = 1024 * 1024
+	maxGrepWarnings       = 10
+)
 
 type GrepTool struct {
 	Root      string
@@ -70,11 +75,18 @@ func (t *GrepTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 	}
 
 	var results []string
+	var warnings []string
+	skippedLines := 0
 	err = walkReadPaths(ctx, searchRoot, policy, func(path string, entry fs.DirEntry) error {
 		if entry.IsDir() {
 			return nil
 		}
-		matches, err := grepFile(ctx, t.Root, path, matcher, maxResults-len(results))
+		matches, err := grepFile(ctx, t.Root, path, matcher, maxResults-len(results), func(line int) {
+			skippedLines++
+			if len(warnings) < maxGrepWarnings {
+				warnings = append(warnings, fmt.Sprintf("- %s:%d: line exceeds %d bytes", displayPath(t.Root, path), line, maxGrepLineBytes))
+			}
+		})
 		if err != nil {
 			return err
 		}
@@ -87,10 +99,18 @@ func (t *GrepTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 	if err != nil && err != errGrepLimitReached {
 		return "", err
 	}
-	if len(results) == 0 {
-		return "no matches", nil
+	output := strings.Join(results, "\n")
+	if output == "" {
+		output = "no matches"
 	}
-	return strings.Join(results, "\n"), nil
+	if skippedLines > 0 {
+		output += fmt.Sprintf("\n\nWarning: skipped %d oversized lines (limit %d bytes per line); search results may be incomplete.\n", skippedLines, maxGrepLineBytes)
+		output += strings.Join(warnings, "\n")
+		if omitted := skippedLines - len(warnings); omitted > 0 {
+			output += fmt.Sprintf("\n- %d additional oversized lines omitted", omitted)
+		}
+	}
+	return output, nil
 }
 
 type lineMatcher func(string) bool
@@ -111,7 +131,7 @@ func buildLineMatcher(pattern string, literal bool) (lineMatcher, error) {
 
 var errGrepLimitReached = fmt.Errorf("grep max results reached")
 
-func grepFile(ctx context.Context, workspaceRoot, path string, matcher lineMatcher, limit int) ([]string, error) {
+func grepFile(ctx context.Context, workspaceRoot, path string, matcher lineMatcher, limit int, skipped func(int)) ([]string, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
@@ -122,18 +142,27 @@ func grepFile(ctx context.Context, workspaceRoot, path string, matcher lineMatch
 	}
 	defer func() { _ = f.Close() }()
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	reader := bufio.NewReaderSize(f, 64*1024)
 
 	relPath := displayPath(workspaceRoot, path)
 	matches := make([]string, 0, min(limit, 8))
 	lineNo := 0
-	for scanner.Scan() {
+	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		line, oversized, err := readGrepLine(ctx, reader)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
 		lineNo++
-		line := scanner.Text()
+		if oversized {
+			skipped(lineNo)
+			continue
+		}
 		if !matcher(line) {
 			continue
 		}
@@ -142,10 +171,39 @@ func grepFile(ctx context.Context, workspaceRoot, path string, matcher lineMatch
 			return matches, nil
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
 	return matches, nil
+}
+
+func readGrepLine(ctx context.Context, reader *bufio.Reader) (string, bool, error) {
+	var line []byte
+	oversized := false
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", false, err
+		}
+		fragment, err := reader.ReadSlice('\n')
+		if err == io.EOF && len(fragment) == 0 && len(line) == 0 && !oversized {
+			return "", false, io.EOF
+		}
+		if len(fragment) > 0 && fragment[len(fragment)-1] == '\n' {
+			fragment = fragment[:len(fragment)-1]
+		}
+		if !oversized {
+			if len(line)+len(fragment) > maxGrepLineBytes {
+				oversized = true
+				line = nil
+			} else {
+				line = append(line, fragment...)
+			}
+		}
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		if err != nil && err != io.EOF {
+			return "", false, err
+		}
+		return strings.TrimSuffix(string(line), "\r"), oversized, nil
+	}
 }
 
 func min(a, b int) int {

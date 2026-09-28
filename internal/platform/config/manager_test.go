@@ -135,6 +135,68 @@ func discoveryTestProvider(endpoint string) Provider {
 	}
 }
 
+func TestManagerAsyncDiscoveryDoesNotBlockOpen(t *testing.T) {
+	clearDetectionEnv(t)
+	paths := isolatedPaths(t, false)
+	provider := discoveryTestProvider("http://127.0.0.1:1234/v1")
+	document := emptyDocument()
+	document.Providers["local"] = provider
+	document.Models["local/manual"] = Model{Provider: "local", Name: "manual"}
+	document.ActiveModel = "local/manual"
+	writeManagerDocument(t, paths, document)
+
+	discoverer := &blockingModelDiscoverer{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		models:  []DiscoveredModel{{Name: "live"}},
+	}
+	manager, err := Open(context.Background(), Options{
+		Paths:               paths,
+		Credentials:         &FakeCredentialStore{Unavailable: true},
+		DisableWatch:        true,
+		AsyncModelDiscovery: true,
+		Discoverer:          discoverer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		select {
+		case <-discoverer.release:
+		default:
+			close(discoverer.release)
+		}
+		_ = manager.Close()
+	})
+
+	select {
+	case <-discoverer.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for background discovery")
+	}
+	if got := manager.Snapshot(); got.ActiveModelID != "local/manual" {
+		t.Fatalf("initial snapshot changed while discovery was blocked: %#v", got)
+	}
+	if _, ok := manager.Snapshot().EffectiveModels["local/live"]; ok {
+		t.Fatal("initial snapshot exposed a blocked live discovery result")
+	}
+
+	close(discoverer.release)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, ok := manager.Snapshot().EffectiveModels["local/live"]; ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("background discovery did not publish live model: %#v", manager.Snapshot())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := discoverer.calls.Load(); got != 1 {
+		t.Fatalf("discovery calls = %d, want 1", got)
+	}
+}
+
 func profileByID(t *testing.T, profiles []model.Profile, id string) model.Profile {
 	t.Helper()
 	for _, profile := range profiles {

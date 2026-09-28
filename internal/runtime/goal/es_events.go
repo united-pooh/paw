@@ -3,6 +3,7 @@ package goal
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"time"
 
 	"paw/internal/message"
@@ -18,10 +19,12 @@ import (
 // （goal.evidence.added / goal.evidence.stale_marked / goal.checkpoint.saved /
 // goal.checkpoint.deleted），见设计文档 5.1。
 const (
-	EventCreated     = "goal.created"
-	EventReplanned   = "goal.replanned"
-	EventDeleted     = "goal.deleted"
-	EventStatsUpdate = "goal.stats.updated"
+	EventCreated          = "goal.created"
+	EventReplanned        = "goal.replanned"
+	EventDeleted          = "goal.deleted"
+	EventStatsUpdate      = "goal.stats.updated"
+	EventMetricConfigured = "goal.metric.configured"
+	EventMetricRecorded   = "goal.metric.recorded"
 	// EventEvidenceStaleMarked / EventCheckpointDeleted 无对应运行时 EventType
 	// 常量（events.go 只有 added/saved），直接以字符串定义。
 	EventEvidenceStaleMarked = "goal.evidence.stale_marked"
@@ -55,6 +58,7 @@ type createdPayload struct {
 	Objective          string             `json:"objective"`
 	AcceptanceCriteria []string           `json:"acceptance_criteria,omitempty"`
 	Verification       []VerificationSpec `json:"verification,omitempty"`
+	Metric             *MetricSpec        `json:"metric,omitempty"`
 	Budget             GoalBudget         `json:"budget"`
 	Status             GoalStatus         `json:"status"`
 	CreatedAt          time.Time          `json:"created_at"`
@@ -62,6 +66,11 @@ type createdPayload struct {
 
 type reasonPayload struct {
 	Reason PauseReason `json:"reason"`
+}
+
+type metricPayload struct {
+	Metric *MetricSpec   `json:"metric,omitempty"`
+	Result *MetricResult `json:"result,omitempty"`
 }
 
 type failedPayload struct {
@@ -137,6 +146,28 @@ func errField(typ, field string) error {
 // 返回错误，注册表保持原状。
 func RegisterEvents(reg *es.Registry) error {
 	specs := []es.TypeSpec{
+		{
+			Type:   EventMetricConfigured,
+			Decode: func(raw json.RawMessage) (es.Payload, error) { return decodePayload[metricPayload](raw) },
+			Validate: func(p es.Payload) error {
+				value, ok := p.(metricPayload)
+				if !ok || value.Metric == nil {
+					return errField(EventMetricConfigured, "metric")
+				}
+				return value.Metric.Validate()
+			},
+		},
+		{
+			Type:   EventMetricRecorded,
+			Decode: func(raw json.RawMessage) (es.Payload, error) { return decodePayload[metricPayload](raw) },
+			Validate: func(p es.Payload) error {
+				value, ok := p.(metricPayload)
+				if !ok || value.Result == nil || value.Result.ToolCallID == "" || value.Result.Digest == "" || value.Result.RecordedAt.IsZero() || math.IsNaN(value.Result.Value) || math.IsInf(value.Result.Value, 0) {
+					return errField(EventMetricRecorded, "verified result")
+				}
+				return nil
+			},
+		},
 		{
 			Type: evCreated,
 			Decode: func(raw json.RawMessage) (es.Payload, error) {

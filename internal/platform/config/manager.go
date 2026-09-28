@@ -28,6 +28,7 @@ type Options struct {
 	Credentials           CredentialStore
 	DisableWatch          bool
 	DisableModelDiscovery bool
+	AsyncModelDiscovery   bool
 	Discoverer            ModelDiscoverer
 	Debounce              time.Duration
 }
