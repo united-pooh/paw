@@ -2,6 +2,7 @@ package goal
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"paw/internal/message"
@@ -15,6 +16,8 @@ import (
 
 type TodoSource func() (todo.Snapshot, bool)
 
+type goalExecutionContextKey struct{}
+
 type RuntimeConfig struct {
 	Store       GoalStore
 	Executor    loop.TurnExecutor
@@ -27,25 +30,32 @@ type RuntimeConfig struct {
 	Inputs      GoalInputQueue
 	Bind        func(context.Context, GoalSnapshot) error
 	Clear       func(context.Context) error
+	History     HistorySource
 }
 
 type Runtime struct {
-	store       GoalStore
-	executor    loop.TurnExecutor
-	todo        TodoSource
-	policy      Policy
-	events      EventSink
-	now         func() time.Time
-	evidence    EvidenceStore
-	checkpoints CheckpointStore
-	inputs      GoalInputQueue
-	bind        func(context.Context, GoalSnapshot) error
-	clear       func(context.Context) error
-	mu          sync.Mutex
-	active      bool
-	activeID    GoalID
-	cancel      context.CancelFunc
-	sequence    uint64
+	store          GoalStore
+	executor       loop.TurnExecutor
+	todo           TodoSource
+	policy         Policy
+	events         EventSink
+	now            func() time.Time
+	evidence       EvidenceStore
+	checkpoints    CheckpointStore
+	inputs         GoalInputQueue
+	bind           func(context.Context, GoalSnapshot) error
+	clear          func(context.Context) error
+	mu             sync.Mutex
+	active         bool
+	closing        bool
+	notifying      bool
+	pendingStop    *Event
+	activeID       GoalID
+	cancel         context.CancelFunc
+	sequence       uint64
+	history        HistorySource
+	metricExcluded map[string]bool
+	nextInput      string
 }
 
 var ErrGoalActive = errors.New("a goal is already running")
@@ -67,7 +77,7 @@ func NewRuntime(cfg RuntimeConfig) *Runtime {
 	return &Runtime{
 		store: store, executor: cfg.Executor, todo: cfg.Todo, policy: policy.Normalize(),
 		events: cfg.Events, now: nowFn, evidence: cfg.Evidence,
-		checkpoints: cfg.Checkpoints, inputs: cfg.Inputs, bind: cfg.Bind, clear: cfg.Clear,
+		checkpoints: cfg.Checkpoints, inputs: cfg.Inputs, bind: cfg.Bind, clear: cfg.Clear, history: cfg.History,
 	}
 }
 
@@ -79,12 +89,19 @@ func (r *Runtime) Start(ctx context.Context, goal Goal) (GoalSnapshot, error) {
 		return GoalSnapshot{}, errors.New("goal objective is empty")
 	}
 	r.mu.Lock()
-	if r.active {
+	if r.active || r.notifying {
 		r.mu.Unlock()
 		return GoalSnapshot{}, ErrGoalActive
 	}
 	if goal.ID == "" {
-		goal.ID = GoalID(fmt.Sprintf("goal-%d", atomic.AddUint64(&r.sequence, 1)))
+		var bytes [16]byte
+		if _, err := rand.Read(bytes[:]); err != nil {
+			r.mu.Unlock()
+			return GoalSnapshot{}, err
+		}
+		bytes[6] = (bytes[6] & 0x0f) | 0x40
+		bytes[8] = (bytes[8] & 0x3f) | 0x80
+		goal.ID = GoalID(fmt.Sprintf("goal-%x-%x-%x-%x-%x", bytes[0:4], bytes[4:6], bytes[6:8], bytes[8:10], bytes[10:16]))
 	}
 	if goal.Status == "" {
 		goal.Status = GoalDraft
@@ -108,7 +125,8 @@ func (r *Runtime) Start(ctx context.Context, goal Goal) (GoalSnapshot, error) {
 		r.mu.Unlock()
 		return GoalSnapshot{}, err
 	}
-	r.active, r.activeID = true, goal.ID
+	r.active, r.activeID, r.closing = true, goal.ID, false
+	r.nextInput = ""
 	r.mu.Unlock()
 	r.emit(Event{Type: EventStarted, GoalID: goal.ID, Snapshot: goal.Snapshot(), At: r.now()})
 	r.checkpointBestEffort(context.Background(), goal.ID, Decision{Reason: "goal started"})
@@ -121,6 +139,9 @@ func (r *Runtime) runAsync(id GoalID) {
 	r.mu.Lock()
 	if r.activeID == id {
 		r.cancel = cancel
+		if r.closing {
+			cancel()
+		}
 	}
 	r.mu.Unlock()
 	_ = r.Run(ctx, id)
@@ -131,6 +152,7 @@ func (r *Runtime) Run(ctx context.Context, id GoalID) error {
 	if r == nil {
 		return errors.New("goal runtime is nil")
 	}
+	ctx = context.WithValue(ctx, goalExecutionContextKey{}, id)
 	goal, ok, err := r.store.Get(ctx, id)
 	if err != nil {
 		return err
@@ -138,39 +160,73 @@ func (r *Runtime) Run(ctx context.Context, id GoalID) error {
 	if !ok {
 		return ErrGoalNotFound
 	}
-	if r.executor == nil {
-		return r.finishWithError(ctx, goal, errors.New("goal executor is nil"))
-	}
 	r.mu.Lock()
 	if !r.active {
-		r.active, r.activeID = true, id
+		r.active, r.activeID, r.closing = true, id, false
 	}
 	r.mu.Unlock()
 	defer func() {
 		r.mu.Lock()
+		var stopped *Event
 		if r.activeID == id {
 			r.active, r.activeID, r.cancel = false, "", nil
+			stopped, r.pendingStop = r.pendingStop, nil
+			r.notifying = stopped != nil
 		}
 		r.mu.Unlock()
+		if stopped != nil {
+			r.emit(*stopped)
+		}
 	}()
+	if goal.Status != GoalRunning {
+		return nil
+	}
+	if r.executor == nil {
+		return r.finishWithError(ctx, goal, errors.New("goal executor is nil"))
+	}
+	if ctx.Err() != nil {
+		return r.finishWithError(ctx, goal, ctx.Err())
+	}
 	goal.CurrentTaskID = fmt.Sprintf("task-%d", atomic.AddUint64(&r.sequence, 1))
 	goal.UpdatedAt = r.now()
 	if err := r.updateGoal(ctx, goal); err != nil {
 		return err
 	}
 	r.emit(Event{Type: EventTaskStarted, GoalID: id, TaskID: goal.CurrentTaskID, Snapshot: goal.Snapshot(), At: r.now()})
-	evaluator := NewEvaluatorWithConfig(EvaluatorConfig{Policy: r.policy, Now: r.now})
-	adapter := &completionAdapter{runtime: r, goalID: id, evaluator: evaluator}
-	input := message.Message{Role: message.RoleUser, Content: goal.Objective}
+	policy := r.policy
+	policy.Budget = goal.Budget
+	evaluator := NewEvaluatorWithConfig(EvaluatorConfig{Policy: policy, Now: r.now})
+	adapter := &completionAdapter{runtime: r, goalID: id, evaluator: evaluator, startTurns: goal.TurnsUsed, startTools: goal.ToolCallsUsed}
+	r.mu.Lock()
+	historySource := r.history
+	supplement := r.nextInput
+	r.nextInput = ""
+	r.mu.Unlock()
+	if historySource != nil {
+		history, historyErr := historySource(ctx)
+		if historyErr != nil {
+			return r.finishWithError(ctx, goal, historyErr)
+		}
+		r.mu.Lock()
+		r.metricExcluded = historyCalls(history)
+		r.mu.Unlock()
+	}
+	input := message.Message{Role: message.RoleUser, Content: goalPrompt(goal, supplement)}
 	if queued, ok := r.dequeueInput(context.Background(), id); ok && strings.TrimSpace(queued.Content) != "" {
-		input.Content = queued.Content
+		input.Content += "\n用户排队补充（同一目标）：\n" + queued.Content
 	}
 	task := &loop.Task{ID: goal.CurrentTaskID, Input: input, Status: loop.TaskRunning}
 	_, runErr := (loop.TaskOrchestrator{Executor: r.executor, Evaluator: adapter, Events: r.taskEvents}).Run(ctx, task)
+	if ctx.Err() != nil && runErr == nil {
+		runErr = ctx.Err()
+	}
 	if runErr != nil {
 		latest, found, getErr := r.store.Get(context.Background(), id)
-		if getErr == nil && found && latest.Status.Terminal() {
+		if getErr == nil && found && latest.Status != GoalRunning {
 			return nil
+		}
+		if getErr == nil && found {
+			goal = latest
 		}
 		return r.finishWithError(ctx, goal, runErr)
 	}
@@ -228,6 +284,9 @@ func (r *Runtime) Run(ctx context.Context, id GoalID) error {
 }
 
 func (r *Runtime) finishWithError(ctx context.Context, goal Goal, err error) error {
+	r.mu.Lock()
+	r.closing = true
+	r.mu.Unlock()
 	reason := ClassifyError(err)
 	if transitionErr := goal.Transition(GoalPaused, reason); transitionErr != nil {
 		return transitionErr
@@ -242,85 +301,135 @@ func (r *Runtime) finishWithError(ctx context.Context, goal Goal, err error) err
 }
 
 func (r *Runtime) Resume(ctx context.Context, id GoalID) error {
+	return r.resume(ctx, id, "")
+}
+
+func (r *Runtime) ResumeWithInput(ctx context.Context, id GoalID, input string) error {
+	return r.resume(ctx, id, strings.TrimSpace(input))
+}
+
+func (r *Runtime) resume(ctx context.Context, id GoalID, input string) error {
 	r.mu.Lock()
-	if r.active {
+	if r.active || r.notifying {
 		r.mu.Unlock()
 		return ErrGoalActive
 	}
-	r.mu.Unlock()
 	goal, ok, err := r.store.Get(ctx, id)
 	if err != nil {
+		r.mu.Unlock()
 		return err
 	}
 	if !ok {
+		r.mu.Unlock()
 		return ErrGoalNotFound
 	}
 	if goal.Status != GoalPaused && goal.Status != GoalBlocked {
+		r.mu.Unlock()
 		return fmt.Errorf("goal %q is not resumable from %s", id, goal.Status)
 	}
 	if err := goal.Transition(GoalRunning, ""); err != nil {
+		r.mu.Unlock()
 		return err
 	}
 	if err := r.updateGoal(ctx, goal); err != nil {
+		r.mu.Unlock()
 		return err
 	}
+	if input != "" {
+		if r.nextInput != "" {
+			r.nextInput += "\n"
+		}
+		r.nextInput += input
+	}
+	r.active, r.activeID, r.closing = true, id, false
+	r.mu.Unlock()
 	r.emit(Event{Type: EventResumed, GoalID: id, Snapshot: goal.Snapshot(), At: r.now()})
 	r.checkpointBestEffort(context.Background(), id, Decision{Reason: "goal resumed"})
-	r.mu.Lock()
-	r.active = true
-	r.activeID = id
-	r.mu.Unlock()
 	go r.runAsync(id)
 	return nil
 }
 
+func (r *Runtime) submitRunning(id GoalID, input string, steer func(string) bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.active || r.activeID != id || r.closing {
+		return fmt.Errorf("goal is stopping; retry the input after it has paused")
+	}
+	goal, ok, err := r.store.Get(context.Background(), id)
+	if err != nil {
+		return err
+	}
+	if !ok || goal.Status != GoalRunning {
+		return fmt.Errorf("goal is not running; retry the input after it has paused")
+	}
+	if steer != nil && steer(input) {
+		return nil
+	}
+	if r.nextInput != "" {
+		r.nextInput += "\n"
+	}
+	r.nextInput += input
+	return nil
+}
+
 func (r *Runtime) Pause(ctx context.Context, id GoalID) error {
-	r.mu.Lock()
-	if r.activeID == id && r.cancel != nil {
-		r.cancel()
-	}
-	r.mu.Unlock()
-	goal, ok, err := r.store.Get(ctx, id)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return ErrGoalNotFound
-	}
-	if goal.Status == GoalRunning {
-		_ = goal.Transition(GoalPaused, PauseUserInputRequired)
-		if err := r.updateGoal(ctx, goal); err != nil {
-			return err
-		}
-		r.emit(Event{Type: EventPaused, GoalID: id, Snapshot: goal.Snapshot(), At: r.now()})
-		r.checkpointBestEffort(context.Background(), id, Decision{Action: ActionPause, Reason: "goal paused", PauseReason: PauseUserInputRequired})
-	}
-	return nil
+	return r.stop(ctx, id, GoalPaused, PauseUserInputRequired, EventPaused)
 }
+
 func (r *Runtime) Cancel(ctx context.Context, id GoalID) error {
+	return r.stop(ctx, id, GoalCancelled, "", EventCancelled)
+}
+
+func (r *Runtime) stop(ctx context.Context, id GoalID, status GoalStatus, reason PauseReason, eventType EventType) error {
 	r.mu.Lock()
-	if r.activeID == id && r.cancel != nil {
-		r.cancel()
+	if r.notifying {
+		r.mu.Unlock()
+		return ErrGoalActive
 	}
-	r.mu.Unlock()
 	goal, ok, err := r.store.Get(ctx, id)
 	if err != nil {
+		r.mu.Unlock()
 		return err
 	}
 	if !ok {
+		r.mu.Unlock()
 		return ErrGoalNotFound
 	}
-	if !goal.Status.Terminal() {
-		if err := goal.Transition(GoalCancelled, ""); err != nil {
-			return err
-		}
-		if err := r.updateGoal(ctx, goal); err != nil {
-			return err
-		}
-		r.emit(Event{Type: EventCancelled, GoalID: id, Snapshot: goal.Snapshot(), At: r.now()})
+	if goal.Status.Terminal() || (status == GoalPaused && goal.Status != GoalRunning) {
+		r.mu.Unlock()
+		return nil
+	}
+	if err := goal.Transition(status, reason); err != nil {
+		r.mu.Unlock()
+		return err
+	}
+	if err := r.updateGoal(ctx, goal); err != nil {
+		r.mu.Unlock()
+		return err
+	}
+	event := Event{Type: eventType, GoalID: id, Snapshot: goal.Snapshot(), At: r.now()}
+	active := r.active && r.activeID == id
+	var cancel context.CancelFunc
+	if active {
+		r.closing = true
+		r.pendingStop = &event
+		cancel = r.cancel
+	} else {
+		r.notifying = true
+	}
+	r.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if !active {
+		r.emit(event)
+	}
+	if status == GoalPaused {
+		r.checkpointBestEffort(context.Background(), id, Decision{Action: ActionPause, Reason: "goal paused", PauseReason: reason})
 	}
 	return nil
 }
+
 func (r *Runtime) Status(ctx context.Context, id GoalID) (GoalSnapshot, error) {
 	g, ok, err := r.store.Get(ctx, id)
 	if err != nil {
@@ -476,6 +585,22 @@ func (r *Runtime) EnqueueInput(ctx context.Context, input GoalInput) error {
 	return nil
 }
 func (r *Runtime) emit(e Event) {
+	switch e.Type {
+	case EventPaused, EventBlocked, EventCompleted, EventFailed, EventCancelled:
+		r.mu.Lock()
+		if r.active && r.activeID == e.GoalID {
+			r.pendingStop = &e
+			r.mu.Unlock()
+			return
+		}
+		r.notifying = true
+		r.mu.Unlock()
+		defer func() {
+			r.mu.Lock()
+			r.notifying = false
+			r.mu.Unlock()
+		}()
+	}
 	if e.At.IsZero() {
 		e.At = r.now()
 	}
@@ -484,11 +609,14 @@ func (r *Runtime) emit(e Event) {
 	}
 }
 func (r *Runtime) taskEvents(e loop.TaskEvent) {
+	r.mu.Lock()
 	goalID := r.activeID
+	r.mu.Unlock()
 	if e.Type == loop.TaskEventTurnDone {
 		if goalID != "" {
 			if g, ok, err := r.store.Get(context.Background(), goalID); err == nil && ok {
 				g.TurnsUsed++
+				g.ToolCallsUsed += e.Execution.SuccessfulToolCalls
 				g.UpdatedAt = r.now()
 				if err := r.updateGoal(context.Background(), g); err == nil {
 					r.checkpointBestEffort(context.Background(), goalID, Decision{Reason: fmt.Sprintf("turn %d completed", e.TurnNumber)})
@@ -500,7 +628,7 @@ func (r *Runtime) taskEvents(e loop.TaskEvent) {
 	if e.Type == loop.TaskEventContinued {
 		if goalID != "" {
 			if g, ok, err := r.store.Get(context.Background(), goalID); err == nil && ok {
-				g.ContinuationUsed = e.ContinuationUsed
+				g.ContinuationUsed++
 				g.UpdatedAt = r.now()
 				_ = r.updateGoal(context.Background(), g)
 			}
@@ -510,25 +638,33 @@ func (r *Runtime) taskEvents(e loop.TaskEvent) {
 }
 
 type completionAdapter struct {
-	runtime   *Runtime
-	goalID    GoalID
-	evaluator *Evaluator
-	last      Decision
+	runtime      *Runtime
+	goalID       GoalID
+	evaluator    *Evaluator
+	last         Decision
+	startTurns   int
+	startTools   int
+	lastProgress string
 }
 
-func (a *completionAdapter) EvaluateCompletion(assistant message.Message, used, noProgress int) loop.CompletionEvaluation {
+func (a *completionAdapter) EvaluateCompletion(execution loop.TurnExecution, used, noProgress int) loop.CompletionEvaluation {
 	var snap todo.Snapshot
 	has := false
 	if a.runtime.todo != nil {
 		snap, has = a.runtime.todo()
 	}
 	observation := Observation{
-		GoalID: a.goalID, Assistant: assistant, Todo: snap, HasTodo: has,
+		GoalID: a.goalID, Assistant: execution.Message, Todo: snap, HasTodo: has,
 		ContinuationUsed: used, NoProgressCount: noProgress,
 	}
 	if goal, ok, err := a.runtime.store.Get(context.Background(), a.goalID); err == nil && ok {
-		observation.TurnsUsed = goal.TurnsUsed
-		observation.ToolCallsUsed = goal.ToolCallsUsed
+		observation.TurnsUsed = goal.TurnsUsed - a.startTurns
+		observation.ToolCallsUsed = goal.ToolCallsUsed - a.startTools
+		observation.Metric = goal.Metric
+		if len(goal.Measurements) > 0 {
+			latest := goal.Measurements[len(goal.Measurements)-1]
+			observation.Measurement = &latest
+		}
 		observation.HasAcceptanceCriteria = len(goal.AcceptanceCriteria) > 0
 		// Acceptance criteria are deliberately conservative until a verifier
 		// records an explicit passed evidence item.
@@ -540,8 +676,56 @@ func (a *completionAdapter) EvaluateCompletion(assistant message.Message, used, 
 			}
 		}
 	}
+	if history, err := a.runtime.metricHistory(context.Background()); err == nil {
+		a.runtime.mu.Lock()
+		excluded := make(map[string]bool, len(a.runtime.metricExcluded))
+		for id, value := range a.runtime.metricExcluded {
+			excluded[id] = value
+		}
+		a.runtime.mu.Unlock()
+		observation.ProgressToken = experimentProgress(history, excluded)
+		observation.HadToolActivity = observation.ProgressToken != a.lastProgress
+		a.lastProgress = observation.ProgressToken
+		if observation.Metric != nil && observation.Measurement != nil && !excluded[observation.Measurement.ToolCallID] {
+			_, digest, verifyErr := extractMetric(*observation.Metric, observation.Measurement.ToolCallID, history)
+			observation.MeasurementValid = verifyErr == nil && digest == observation.Measurement.Digest && measurementFresh(observation.Measurement.ToolCallID, history)
+		}
+	} else {
+		a.runtime.mu.Lock()
+		hasHistory := a.runtime.history != nil
+		a.runtime.mu.Unlock()
+		if hasHistory {
+			observation.ToolError = fmt.Errorf("trusted goal evidence history unavailable: %w", err)
+		}
+		observation.HadToolActivity = execution.SuccessfulToolCalls > 0
+		if observation.HadToolActivity {
+			observation.ProgressToken = fmt.Sprintf("turn-%d", observation.TurnsUsed)
+		}
+	}
 	d := a.evaluator.Evaluate(observation)
+	a.runtime.mu.Lock()
+	queued := a.runtime.nextInput
+	if queued != "" {
+		if d.Action == ActionComplete {
+			observation.MeasurementValid = false
+			d = a.evaluator.Evaluate(observation)
+		}
+		if d.Action == ActionContinue || d.Action == ActionCompact {
+			d.NextPrompt.Content += "\n用户补充（同一目标）：\n" + queued
+			a.runtime.nextInput = ""
+		}
+	}
+	if d.Action != ActionContinue && d.Action != ActionCompact {
+		a.runtime.closing = true
+	}
+	a.runtime.mu.Unlock()
 	a.last = d
+	if g, ok, err := a.runtime.store.Get(context.Background(), a.goalID); err == nil && ok {
+		g.NoProgressCount = d.NoProgress
+		g.LastDecision = d.Reason
+		g.UpdatedAt = a.runtime.now()
+		_ = a.runtime.updateGoal(context.Background(), g)
+	}
 	action := loop.CompletionComplete
 	if d.Action == ActionContinue || d.Action == ActionCompact {
 		action = loop.CompletionContinue
@@ -552,5 +736,5 @@ func (a *completionAdapter) EvaluateCompletion(assistant message.Message, used, 
 	if d.Action == ActionPause || d.Action == ActionFailed {
 		action = loop.CompletionPause
 	}
-	return loop.CompletionEvaluation{Decision: loop.CompletionDecision{Action: action, Reason: d.Reason}, HasSignal: true, NoProgress: noProgress, NextInput: d.NextPrompt}
+	return loop.CompletionEvaluation{Decision: loop.CompletionDecision{Action: action, Reason: d.Reason}, HasSignal: true, NoProgress: d.NoProgress, NextInput: d.NextPrompt}
 }

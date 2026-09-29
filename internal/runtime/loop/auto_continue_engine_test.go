@@ -3,6 +3,8 @@ package loop
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"paw/internal/capability/model"
 	"paw/internal/capability/tool"
 	"paw/internal/message"
@@ -157,6 +159,88 @@ func TestRunTurnAutoContinueSilentUntilPause(t *testing.T) {
 	}
 	if !syntheticSeen {
 		t.Fatalf("committed history missing synthetic continuation prompt: %#v", runner.currentHistory())
+	}
+}
+
+func TestRunTurnAutoContinuePausesForRewordedPlans(t *testing.T) {
+	broker := todo.NewBroker()
+	defer broker.Close()
+	ui := &fakeUI{}
+	modelClient := &autoContinueModel{rounds: []fakeRound{
+		{events: []model.StreamEvent{{Delta: "调查清单：先定位启动入口。"}, {Done: true}}},
+		{events: []model.StreamEvent{{Delta: "调查目的：找出首帧之前的同步工作。"}, {Done: true}}},
+		{events: []model.StreamEvent{{Delta: "继续调查：准备读取启动入口。"}, {Done: true}}},
+		{events: []model.StreamEvent{{Delta: "仍然只在重写计划。"}, {Done: true}}},
+		{events: []model.StreamEvent{{Delta: "最后一次重写计划。"}, {Done: true}}},
+	}}
+	runner := NewEngine(modelClient, ui, tool.NewRegistry(), nil, "")
+	runner.SetTodoBroker(broker)
+	runner.SetAutoContinueConfig(AutoContinueConfig{Enabled: true, BaseBudget: 3, AbsoluteMax: 4, MaxNoProgress: 2})
+	broker.Publish(todo.Snapshot{Items: []todo.Item{{ID: "inspect", Content: "inspect startup", Status: todo.StatusInProgress}}})
+
+	if _, err := runner.RunTurn(context.Background(), "investigate startup"); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if got := len(modelClient.calls); got != 3 {
+		t.Fatalf("model calls = %d, want initial + two continuations before no-progress pause", got)
+	}
+	events := ui.systemEvents()
+	if len(events) == 0 || !strings.Contains(events[len(events)-1].Body, "连续 2 轮没有可验证的进展") {
+		t.Fatalf("expected no-progress pause notice, got %#v", events)
+	}
+	for _, want := range []string{"调查清单：先定位启动入口。", "同一个任务的续行"} {
+		if !messagesContainContent(modelClient.calls[1], want) {
+			t.Fatalf("continuation lost existing task context %q", want)
+		}
+	}
+}
+
+func TestRunTurnAutoContinueDistinguishesToolProgressFromRepeatedPlans(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		toolError  error
+		todoOnly   bool
+		wantCalls  int
+		wantNotice string
+	}{
+		{name: "successful tools reach budget", wantCalls: 10, wantNotice: "续行次数已达上限"},
+		{name: "failed tools make no progress", toolError: errors.New("read failed"), wantCalls: 6, wantNotice: "连续 2 轮没有可验证的进展"},
+		{name: "unchanged todo tool makes no progress", todoOnly: true, wantCalls: 6, wantNotice: "连续 2 轮没有可验证的进展"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			broker := todo.NewBroker()
+			defer broker.Close()
+			registry := tool.NewRegistry()
+			registry.Register(&fakeTool{name: "Read", output: "source evidence", err: test.toolError})
+			registry.Register(todo.NewTool(broker))
+			ui := &fakeUI{}
+			modelClient := &autoContinueModel{}
+			for i := 0; i < 5; i++ {
+				call := fmt.Sprintf(`{"type":"tool_use","id":"read-%d","name":"Read","input":{"file_path":"source-%d.go"}}`, i, i)
+				if test.todoOnly {
+					call = fmt.Sprintf(`{"type":"tool_use","id":"todo-%d","name":"update_todo","input":{"items":[{"id":"inspect","content":"inspect startup","status":"in_progress"}]}}`, i)
+				}
+				modelClient.rounds = append(modelClient.rounds,
+					fakeRound{events: []model.StreamEvent{{Delta: call}, {Done: true}}},
+					fakeRound{events: []model.StreamEvent{{Delta: "调查仍在进行。"}, {Done: true}}},
+				)
+			}
+			runner := NewEngine(modelClient, ui, registry, nil, "")
+			runner.SetTodoBroker(broker)
+			runner.SetAutoContinueConfig(AutoContinueConfig{Enabled: true, BaseBudget: 3, AbsoluteMax: 4, MaxNoProgress: 2})
+			broker.Publish(todo.Snapshot{Items: []todo.Item{{ID: "inspect", Content: "inspect startup", Status: todo.StatusInProgress}}})
+
+			if _, err := runner.RunTurn(context.Background(), "investigate startup"); err != nil {
+				t.Fatalf("RunTurn() error = %v", err)
+			}
+			if got := len(modelClient.calls); got != test.wantCalls {
+				t.Fatalf("model calls = %d, want %d", got, test.wantCalls)
+			}
+			events := ui.systemEvents()
+			if len(events) == 0 || !strings.Contains(events[len(events)-1].Body, test.wantNotice) {
+				t.Fatalf("expected %q pause notice, got %#v", test.wantNotice, events)
+			}
+		})
 	}
 }
 

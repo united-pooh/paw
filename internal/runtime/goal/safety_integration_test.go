@@ -30,7 +30,7 @@ func TestEvaluatorFiniteBudgetTerminates(t *testing.T) {
 	policy.Budget.MaxContinuations = 2
 	policy.Budget.MaxNoProgress = 10
 	e := NewEvaluator(policy)
-	observation := Observation{GoalID: "g1", HasTodo: true, Todo: todo.Snapshot{Items: []todo.Item{{ID: "step", Status: todo.StatusPending}}}}
+	observation := Observation{GoalID: "g1", Metric: testMetric(), HasTodo: true, Todo: todo.Snapshot{Items: []todo.Item{{ID: "step", Status: todo.StatusPending}}}}
 	for i := 0; i < 2; i++ {
 		decision := e.Evaluate(observation)
 		if decision.Action != ActionContinue {

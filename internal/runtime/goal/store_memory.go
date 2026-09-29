@@ -38,6 +38,14 @@ func contextErr(ctx context.Context) error {
 }
 
 func (s *MemoryStore) Create(ctx context.Context, g Goal) error {
+	if len(g.Measurements) != 0 {
+		return fmt.Errorf("new goals cannot contain measurements; record verified tool evidence after creation")
+	}
+	if g.Metric != nil {
+		if err := g.Metric.Validate(); err != nil {
+			return err
+		}
+	}
 	if err := contextErr(ctx); err != nil {
 		return err
 	}
@@ -87,6 +95,9 @@ func (s *MemoryStore) Update(ctx context.Context, g Goal) error {
 	current, ok := s.goals[g.ID]
 	if !ok {
 		return fmt.Errorf("goal %q not found", g.ID)
+	}
+	if err := validateMetricChange(current, g); err != nil {
+		return err
 	}
 	if g.Revision == 0 {
 		return fmt.Errorf("%w: goal %q", ErrRevisionConflict, g.ID)

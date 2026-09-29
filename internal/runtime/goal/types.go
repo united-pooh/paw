@@ -65,6 +65,8 @@ type Goal struct {
 	Objective          string
 	AcceptanceCriteria []string
 	Verification       []VerificationSpec
+	Metric             *MetricSpec
+	Measurements       []MetricResult
 	Status             GoalStatus
 	CurrentTaskID      string
 	ContinuationUsed   int
@@ -88,6 +90,8 @@ type GoalSnapshot struct {
 	Objective          string
 	AcceptanceCriteria []string
 	Verification       []VerificationSpec
+	Metric             *MetricSpec
+	Measurements       []MetricResult
 	Status             GoalStatus
 	CurrentTaskID      string
 	ContinuationUsed   int
@@ -108,10 +112,12 @@ func (g Goal) Snapshot() GoalSnapshot {
 	for i := range verification {
 		verification[i].Scope = append([]string(nil), verification[i].Scope...)
 	}
-	return GoalSnapshot{ID: g.ID, SessionID: g.SessionID, Objective: g.Objective, AcceptanceCriteria: criteria, Verification: verification, Status: g.Status, CurrentTaskID: g.CurrentTaskID, ContinuationUsed: g.ContinuationUsed, NoProgressCount: g.NoProgressCount, TurnsUsed: g.TurnsUsed, ToolCallsUsed: g.ToolCallsUsed, Budget: g.Budget, PauseReason: g.PauseReason, LastDecision: g.LastDecision, CreatedAt: g.CreatedAt, UpdatedAt: g.UpdatedAt, Revision: g.Revision}
+	return GoalSnapshot{ID: g.ID, SessionID: g.SessionID, Objective: g.Objective, AcceptanceCriteria: criteria, Verification: verification, Metric: cloneMetric(g.Metric), Measurements: append([]MetricResult(nil), g.Measurements...), Status: g.Status, CurrentTaskID: g.CurrentTaskID, ContinuationUsed: g.ContinuationUsed, NoProgressCount: g.NoProgressCount, TurnsUsed: g.TurnsUsed, ToolCallsUsed: g.ToolCallsUsed, Budget: g.Budget, PauseReason: g.PauseReason, LastDecision: g.LastDecision, CreatedAt: g.CreatedAt, UpdatedAt: g.UpdatedAt, Revision: g.Revision}
 }
 
 func cloneGoal(g Goal) Goal {
+	g.Metric = cloneMetric(g.Metric)
+	g.Measurements = append([]MetricResult(nil), g.Measurements...)
 	g.AcceptanceCriteria = append([]string(nil), g.AcceptanceCriteria...)
 	g.Verification = append([]VerificationSpec(nil), g.Verification...)
 	for i := range g.Verification {

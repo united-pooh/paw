@@ -66,7 +66,7 @@ func TestStartPersistsGoalThenBindingBeforeExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitGoal(t, runtime, snapshot.ID, GoalCompleted)
+	waitGoal(t, runtime, snapshot.ID, GoalPaused)
 	mu.Lock()
 	got := append([]string(nil), order...)
 	mu.Unlock()
@@ -117,14 +117,14 @@ func waitGoal(t *testing.T, r *Runtime, id GoalID, want GoalStatus) GoalSnapshot
 	return snapshot
 }
 
-func TestRuntimeCompletesGoalWithoutPendingTodo(t *testing.T) {
+func TestRuntimeMissingMetricPausesEvenWithoutTodo(t *testing.T) {
 	executor := &fakeExecutor{}
 	runtime := NewRuntime(RuntimeConfig{Policy: Policy{Budget: GoalBudget{MaxContinuations: 1, MaxNoProgress: 2}}, Executor: executor, Todo: func() (todo.Snapshot, bool) { return todo.Snapshot{}, false }})
 	snapshot, err := runtime.Start(context.Background(), Goal{SessionID: "s1", Objective: "finish"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := waitGoal(t, runtime, snapshot.ID, GoalCompleted)
+	got := waitGoal(t, runtime, snapshot.ID, GoalPaused)
 	if executor.count() != 1 {
 		t.Fatalf("executor calls = %d, want 1", executor.count())
 	}
@@ -151,14 +151,14 @@ func TestRuntimePausesForPendingTodoAndResumesExplicitly(t *testing.T) {
 	if err := runtime.Resume(context.Background(), snapshot.ID); err != nil {
 		t.Fatal(err)
 	}
-	waitGoal(t, runtime, snapshot.ID, GoalCompleted)
-	if executor.count() != 3 {
-		t.Fatalf("executor calls = %d, want 3", executor.count())
+	waitGoal(t, runtime, snapshot.ID, GoalPaused)
+	if executor.count() != 2 {
+		t.Fatalf("executor calls = %d, want one clarification turn per submission", executor.count())
 	}
 }
 
 func TestRuntimeRejectsConcurrentStart(t *testing.T) {
-	started := make(chan struct{})
+	started := make(chan struct{}, 1)
 	release := make(chan struct{})
 	executor := &blockingExecutor{started: started, release: release}
 	runtime := NewRuntime(RuntimeConfig{Executor: executor})
@@ -171,7 +171,7 @@ func TestRuntimeRejectsConcurrentStart(t *testing.T) {
 		t.Fatalf("error = %v, want ErrGoalActive", err)
 	}
 	close(release)
-	waitGoal(t, runtime, first.ID, GoalCompleted)
+	waitGoal(t, runtime, first.ID, GoalPaused)
 }
 
 type blockingExecutor struct {

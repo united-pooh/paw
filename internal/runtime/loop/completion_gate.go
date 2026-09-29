@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"paw/internal/message"
 	"paw/internal/todo"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -140,13 +141,14 @@ func pendingTodoCount(snapshot todo.Snapshot) int {
 	return count
 }
 
-func progressFingerprint(snapshot todo.Snapshot, assistant message.Message, hadToolCalls bool) string {
+// Narrative changes alone are not verifiable progress toward unfinished todos.
+func progressFingerprint(snapshot todo.Snapshot) string {
 	var b strings.Builder
 	for _, item := range snapshot.Items {
-		fmt.Fprintf(&b, "%s\x00%s\x00%s\x00", item.ID, item.Status, item.Content)
+		blockers := append([]string(nil), item.BlockedBy...)
+		sort.Strings(blockers)
+		fmt.Fprintf(&b, "%s\x00%s\x00%s\x00%q\x00", item.ID, item.Status, item.Content, blockers)
 	}
-	b.WriteString(strings.TrimSpace(assistant.Content))
-	fmt.Fprintf(&b, "\x00%t", hadToolCalls)
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])
 }
@@ -158,7 +160,9 @@ func todoFingerprint(snapshot todo.Snapshot) string {
 	b.WriteString(snapshot.Explanation)
 	b.WriteByte('\x00')
 	for _, item := range snapshot.Items {
-		fmt.Fprintf(&b, "%s\x00%s\x00%s\x00", item.ID, item.Status, item.Content)
+		blockers := append([]string(nil), item.BlockedBy...)
+		sort.Strings(blockers)
+		fmt.Fprintf(&b, "%s\x00%s\x00%s\x00%q\x00", item.ID, item.Status, item.Content, blockers)
 	}
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])
@@ -166,11 +170,23 @@ func todoFingerprint(snapshot todo.Snapshot) string {
 
 func buildContinuationPrompt(decision CompletionDecision, snapshot todo.Snapshot, noProgress int) string {
 	var b strings.Builder
-	b.WriteString("任务尚未完成，请继续执行，不要只做总结。\n\n当前未完成事项：\n")
+	b.WriteString("任务尚未完成，请继续执行，不要只做总结。\n")
+	b.WriteString("这是同一个任务的续行；沿用已有计划、调查证据和已读取的技能，不要重新输出调查提纲或重复已完成的步骤。\n\n当前未完成事项：\n")
+	b.WriteString("当前可执行事项：\n")
+	var waiting strings.Builder
 	for _, item := range snapshot.Items {
 		if item.Status == todo.StatusPending || item.Status == todo.StatusInProgress {
-			fmt.Fprintf(&b, "- [%s] %s\n", item.Status, item.Content)
+			if blockers := snapshot.UnresolvedBlockers(item.ID); len(blockers) > 0 {
+				fmt.Fprintf(&waiting, "- [blocked] #%s %s（等待：#%s）\n", item.ID, item.Content, strings.Join(blockers, ", #"))
+			} else {
+				fmt.Fprintf(&b, "- [%s] #%s %s\n", item.Status, item.ID, item.Content)
+			}
 		}
+	}
+	if waiting.Len() > 0 {
+		b.WriteString("\n等待前置事项：\n")
+		b.WriteString(waiting.String())
+		b.WriteString("先执行可执行的前置事项；等待项保持 pending，前置全部完成后继续原事项，不要跳过或提前标记完成。\n")
 	}
 	fmt.Fprintf(&b, "\n续行原因：%s\n", decision.Reason)
 	if noProgress > 0 {
@@ -262,10 +278,10 @@ func (runner *Engine) evaluateCompletion(assistant message.Message, hadToolCalls
 	if !ok {
 		return CompletionGate{Config: config}.Evaluate(CompletionObservation{Assistant: assistant, TurnHadToolCalls: hadToolCalls, ContinuationUsed: used, NoProgressCount: noProgress}), todo.Snapshot{}, false, noProgress
 	}
-	hash := progressFingerprint(snapshot, assistant, hadToolCalls)
+	hash := progressFingerprint(snapshot)
 	todoHash := todoFingerprint(snapshot)
 	previousHash, staleTodoTurns := runner.gate.recordProgress(hash, todoHash)
-	if used > 0 && hash == previousHash {
+	if used > 0 && hash == previousHash && !hadToolCalls {
 		noProgress++
 	} else {
 		noProgress = 0

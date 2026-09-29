@@ -62,10 +62,31 @@ func TestCompletionGatePauseKindClassified(t *testing.T) {
 }
 
 func TestProgressFingerprintChangesWithTodo(t *testing.T) {
-	first := progressFingerprint(todo.Snapshot{Items: []todo.Item{{ID: "one", Status: todo.StatusPending}}}, message.Message{Content: "check"}, false)
-	second := progressFingerprint(todo.Snapshot{Items: []todo.Item{{ID: "one", Status: todo.StatusCompleted}}}, message.Message{Content: "check"}, false)
+	first := progressFingerprint(todo.Snapshot{Items: []todo.Item{{ID: "one", Status: todo.StatusPending}}})
+	second := progressFingerprint(todo.Snapshot{Items: []todo.Item{{ID: "one", Status: todo.StatusCompleted}}})
 	if first == second {
 		t.Fatal("progress fingerprint did not change after todo status changed")
+	}
+}
+
+func TestEvaluateCompletionIgnoresAssistantWording(t *testing.T) {
+	snapshot := todo.Snapshot{Items: []todo.Item{{ID: "one", Content: "inspect startup", Status: todo.StatusInProgress}}}
+	broker := todo.NewBroker()
+	defer broker.Close()
+	broker.Publish(snapshot)
+	runner := &Engine{gate: progressGate{autoContinue: DefaultAutoContinueConfig(), broker: broker}}
+	runner.evaluateCompletion(message.Message{Content: "I will investigate startup."}, false, 0, 0)
+	_, _, _, noProgress := runner.evaluateCompletion(message.Message{Content: "Here is the investigation checklist again."}, false, 1, 0)
+	if noProgress != 1 {
+		t.Fatalf("no progress = %d, want 1 after only assistant wording changed", noProgress)
+	}
+
+	updated := snapshot.Clone()
+	updated.Items[0].Status = todo.StatusCompleted
+	broker.Publish(updated)
+	decision, _, _, noProgress := runner.evaluateCompletion(message.Message{Content: "finished"}, false, 2, noProgress)
+	if noProgress != 0 || decision.Action != CompletionComplete {
+		t.Fatalf("completion after todo update = %#v, no progress = %d, want complete/0", decision, noProgress)
 	}
 }
 
@@ -76,6 +97,15 @@ func TestBuildContinuationPromptIncludesPendingItems(t *testing.T) {
 	}}, 0)
 	if prompt == "" || !containsAll(prompt, "run tests", "todo remains", "直接执行下一项最有价值的工作") {
 		t.Fatalf("prompt = %q", prompt)
+	}
+}
+
+func TestBuildContinuationPromptPreservesExistingInvestigation(t *testing.T) {
+	prompt := buildContinuationPrompt(CompletionDecision{Reason: "todo remains"}, todo.Snapshot{}, 0)
+	for _, want := range []string{"同一个任务的续行", "沿用已有计划、调查证据和已读取的技能", "不要重新输出调查提纲或重复已完成的步骤"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("continuation prompt is missing %q", want)
+		}
 	}
 }
 
