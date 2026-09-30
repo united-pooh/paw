@@ -28,6 +28,24 @@ func TestPromptBuilderWithToolsKeepsToolUseContract(t *testing.T) {
 	}
 }
 
+func TestPromptBuilderKeepsExistingTaskAndRepositoryContext(t *testing.T) {
+	prompt := NewPromptBuilder(nil).Build([]string{"Read: read files"})
+	for _, want := range []string{
+		"Tool results and automatic continuations belong to the existing task",
+		"continue from its current plan, evidence, and unfinished step",
+		"Do not repeat skill introductions or investigation checklists",
+		"A checklist alone does not complete an execution request",
+		"launch working directory may differ from the task's target repository",
+		"Confirm the target repository before broad searches",
+		"read project instructions and memory from that repository",
+		"Do not infer that the tool working directory has changed",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt is missing task continuity guidance %q", want)
+		}
+	}
+}
+
 func TestPromptBuilderWithQuestionAddsStructuredQuestionPolicy(t *testing.T) {
 	prompt := NewPromptBuilder(nil).Build([]string{
 		"Read: read files",

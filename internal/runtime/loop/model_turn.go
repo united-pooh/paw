@@ -9,6 +9,7 @@ import (
 	"paw/internal/message"
 	"paw/internal/tokentracer"
 	"strings"
+	"time"
 )
 
 const (
@@ -296,7 +297,19 @@ func marshalJSON(v any) string {
 }
 
 func (runner *Engine) consumeStream(ctx context.Context, events <-chan model.StreamEvent, state *turnState, finalizeOnDone bool) (message.Message, model.FinishReason, error) {
+	var endedAt time.Time
+	defer func() {
+		if endedAt.IsZero() {
+			endedAt = time.Now()
+		}
+		if runner.display != nil {
+			_ = runner.display.Publish(DisplayEvent{Kind: DisplayModelRequestEnd, RequestID: state.requestUsage.RequestID, At: endedAt})
+		}
+	}()
 	for ev := range events {
+		if ev.Done || ev.Err != nil {
+			endedAt = ev.ReceivedAt
+		}
 		state.streamEstablished = true
 		msg, finishReason, done, err := runner.handleEvent(state, ev, finalizeOnDone)
 		if err != nil {
@@ -315,6 +328,9 @@ func (runner *Engine) consumeStream(ctx context.Context, events <-chan model.Str
 }
 
 func (runner *Engine) handleEvent(state *turnState, ev model.StreamEvent, finalizeOnDone bool) (message.Message, model.FinishReason, bool, error) {
+	if ev.Activity != nil && runner.display != nil {
+		_ = runner.display.Publish(DisplayEvent{Kind: DisplayModelStreamActivity, RequestID: state.requestUsage.RequestID, Activity: *ev.Activity})
+	}
 	if ev.Err != nil {
 		if err := runner.flushContinuationOverlap(state); err != nil {
 			return runner.partialAssistantMessage(state), "", false, err
@@ -607,9 +623,12 @@ func (runner *Engine) appendResolvedDelta(state *turnState, delta string) error 
 		// A model may switch from ordinary prose to a text-encoded tool call
 		// after the first visible delta. Do not forward that candidate to the UI;
 		// once a delta has been rendered it cannot be retracted from the transcript.
-		if looksLikeToolPayloadStart(delta) {
+		if offset := toolPayloadStartOffset(delta); offset >= 0 {
+			if err := runner.writeDelta(state, delta[:offset]); err != nil {
+				return err
+			}
 			state.toolPayload.active = true
-			state.toolPayload.buffer.WriteString(delta)
+			state.toolPayload.buffer.WriteString(delta[offset:])
 			return runner.resolveToolPayloadCandidate(state, false)
 		}
 		return runner.writeDelta(state, delta)
@@ -651,7 +670,11 @@ func (runner *Engine) resolveToolPayloadCandidate(state *turnState, final bool) 
 	}
 
 	candidate := state.toolPayload.buffer.String()
-	switch classifyToolPayloadCandidate(candidate, final) {
+	decision := classifyToolPayloadCandidate(candidate, final)
+	if decision == toolPayloadCandidateSuppress && toolProtocolProblem(candidate) != nil && toolProtocolProblem(state.content.String()) == nil {
+		decision = toolPayloadCandidateFlush
+	}
+	switch decision {
 	case toolPayloadCandidatePending:
 		return nil
 	case toolPayloadCandidateSuppress:
@@ -677,6 +700,12 @@ func classifyToolPayloadCandidate(candidate string, final bool) toolPayloadCandi
 
 	if len(extractToolUseEnvelopes(trimmed)) > 0 {
 		return toolPayloadCandidateSuppress
+	}
+	if toolProtocolProblem(candidate) != nil {
+		return toolPayloadCandidateSuppress
+	}
+	if possibleDSMLProtocolStart(trimmed) && !final {
+		return toolPayloadCandidatePending
 	}
 
 	switch {
@@ -776,6 +805,9 @@ func looksLikeToolPayloadStart(delta string) bool {
 	if trimmed == "" {
 		return false
 	}
+	if possibleDSMLProtocolStart(trimmed) {
+		return true
+	}
 	if strings.HasPrefix(trimmed, "{") ||
 		strings.HasPrefix(trimmed, "[") ||
 		strings.HasPrefix(trimmed, "```") {
@@ -798,6 +830,12 @@ func detectOutputMode(content string) outputMode {
 	// 只要当前累计内容里已经能提取出合法 tool_use，就直接压制输出。
 	if len(extractToolUseEnvelopes(trimmed)) > 0 {
 		return outputModeSuppressed
+	}
+	if toolProtocolProblem(content) != nil {
+		return outputModeSuppressed
+	}
+	if possibleDSMLProtocolStart(trimmed) {
+		return outputModeUndecided
 	}
 
 	// 对“看起来像工具前置说明”的内容持续保持观望，避免模型先输出大段
@@ -886,7 +924,13 @@ func (runner *Engine) appendThinking(state *turnState, thinking string) error {
 		"text":  thinking,
 		"bytes": len([]byte(thinking)),
 	})
-	return runner.display.Publish(DisplayEvent{Kind: DisplayThinkingDelta, Text: thinking})
+	if err := runner.display.Publish(DisplayEvent{Kind: DisplayThinkingDelta, Text: thinking}); err != nil {
+		return err
+	}
+	if state != nil {
+		state.wroteThinking = true
+	}
+	return nil
 }
 
 func (runner *Engine) ensureLegacyAssistantPart(state *turnState, partType message.AssistantPartType) {
@@ -920,7 +964,9 @@ func (runner *Engine) finalizeLegacyAssistantPart(state *turnState) {
 
 func (runner *Engine) sendReasoningStart(state *turnState, blockIndex int, redacted bool) {
 	if runner.display != nil {
-		_ = runner.display.Publish(DisplayEvent{Kind: DisplayReasoningStart, PartIndex: blockIndex, Redacted: redacted})
+		if err := runner.display.Publish(DisplayEvent{Kind: DisplayReasoningStart, PartIndex: blockIndex, Redacted: redacted}); err == nil && state != nil {
+			state.wroteThinking = true
+		}
 	}
 }
 
@@ -933,7 +979,9 @@ func (runner *Engine) sendReasoningDelta(state *turnState, blockIndex int, text 
 		"bytes": len([]byte(text)),
 	})
 	if runner.display != nil {
-		_ = runner.display.Publish(DisplayEvent{Kind: DisplayReasoningDelta, PartIndex: blockIndex, Text: text})
+		if err := runner.display.Publish(DisplayEvent{Kind: DisplayReasoningDelta, PartIndex: blockIndex, Text: text}); err == nil && state != nil {
+			state.wroteThinking = true
+		}
 	}
 }
 
@@ -965,6 +1013,10 @@ func (runner *Engine) writeDelta(state *turnState, delta string) error {
 }
 
 func (runner *Engine) finalizeAssistantMessage(state *turnState) (message.Message, error) {
+	if err := toolProtocolProblem(state.content.String()); err != nil {
+		state.resetToolPayloadCandidate()
+		return message.Message{}, err
+	}
 	if err := runner.resolveToolPayloadCandidate(state, true); err != nil {
 		return message.Message{}, err
 	}
@@ -1059,7 +1111,23 @@ func (runner *Engine) failModelTurnWithPartial(state *turnState, err error) (mes
 	if flushErr := runner.resolveToolPayloadCandidate(state, true); flushErr != nil {
 		err = flushErr
 	}
-	return runner.partialAssistantMessage(state), runner.failAfterPartialOutputForState(state, err)
+	msg := runner.partialAssistantMessage(state)
+	if toolProtocolProblem(state.content.String()) != nil {
+		msg = toolProtocolPartialMessage(msg)
+	}
+	if _, repairable := toolProtocolErrorFormat(err); repairable {
+		if state.parts != nil {
+			for _, index := range state.parts.order {
+				if part, active := state.parts.active[index]; active && part.Type == message.AssistantPartReasoning {
+					runner.sendReasoningEnd(state, index)
+				}
+			}
+		}
+		// A rejected batch is an unfinished model round, not the end of the
+		// foreground turn. Keep partial output while the next request repairs it.
+		return msg, err
+	}
+	return msg, runner.failAfterPartialOutputForState(state, err)
 }
 
 func (runner *Engine) failAfterPartialOutputForState(state *turnState, err error) error {
@@ -1069,10 +1137,10 @@ func (runner *Engine) failAfterPartialOutputForState(state *turnState, err error
 	if state.uiFinalized {
 		return err
 	}
-	if state.wroteOutput {
+	if state.wroteOutput || state.wroteThinking {
 		state.uiFinalized = true
 	}
-	return runner.failAfterPartialOutput(state.wroteOutput, err)
+	return runner.failAfterPartialOutput(state.wroteOutput || state.wroteThinking, err)
 }
 
 func (runner *Engine) partialAssistantMessage(state *turnState) message.Message {
@@ -1088,7 +1156,14 @@ func (runner *Engine) partialAssistantMessage(state *turnState) message.Message 
 	msg.Content = content
 	msg.ProviderData = append(json.RawMessage(nil), state.providerData...)
 	if state.parts != nil {
-		msg.AssistantParts = state.parts.finalize()
+		parts := append([]message.AssistantPart(nil), state.parts.completedParts...)
+		for _, index := range state.parts.order {
+			if part, active := state.parts.active[index]; active {
+				part.Status = message.AssistantPartPartial
+				parts = append(parts, part)
+			}
+		}
+		msg.AssistantParts = message.CloneAssistantParts(parts)
 		for i := range msg.AssistantParts {
 			if msg.AssistantParts[i].Status == "" {
 				msg.AssistantParts[i].Status = message.AssistantPartPartial

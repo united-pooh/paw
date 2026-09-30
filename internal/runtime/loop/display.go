@@ -3,6 +3,7 @@ package loop
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"paw/internal/capability/model"
 	"paw/internal/ui"
@@ -11,17 +12,19 @@ import (
 type DisplayEventKind string
 
 const (
-	DisplayAssistantDelta    DisplayEventKind = "assistant.delta"
-	DisplayThinkingDelta     DisplayEventKind = "thinking.delta"
-	DisplayReasoningStart    DisplayEventKind = "reasoning.start"
-	DisplayReasoningDelta    DisplayEventKind = "reasoning.delta"
-	DisplayReasoningEnd      DisplayEventKind = "reasoning.end"
-	DisplayToolCall          DisplayEventKind = "tool.call"
-	DisplayToolResult        DisplayEventKind = "tool.result"
-	DisplayDone              DisplayEventKind = "turn.done"
-	DisplaySystem            DisplayEventKind = "system.message"
-	DisplayModelUsage        DisplayEventKind = "model.usage"
-	DisplayModelRequestStart DisplayEventKind = "model.request_start"
+	DisplayAssistantDelta      DisplayEventKind = "assistant.delta"
+	DisplayThinkingDelta       DisplayEventKind = "thinking.delta"
+	DisplayReasoningStart      DisplayEventKind = "reasoning.start"
+	DisplayReasoningDelta      DisplayEventKind = "reasoning.delta"
+	DisplayReasoningEnd        DisplayEventKind = "reasoning.end"
+	DisplayToolCall            DisplayEventKind = "tool.call"
+	DisplayToolResult          DisplayEventKind = "tool.result"
+	DisplayDone                DisplayEventKind = "turn.done"
+	DisplaySystem              DisplayEventKind = "system.message"
+	DisplayModelUsage          DisplayEventKind = "model.usage"
+	DisplayModelRequestStart   DisplayEventKind = "model.request_start"
+	DisplayModelStreamActivity DisplayEventKind = "model.stream_activity"
+	DisplayModelRequestEnd     DisplayEventKind = "model.request_end"
 )
 
 // DisplayEvent is intentionally ephemeral. Durable conversation and control
@@ -36,6 +39,8 @@ type DisplayEvent struct {
 	System     ui.SystemEvent
 	Usage      model.Usage
 	RequestID  string
+	Activity   model.StreamActivity
+	At         time.Time
 }
 
 // DisplaySubscriber is the display seam used by the ordered in-memory bus.
@@ -140,6 +145,16 @@ func (a *uiDisplayAdapter) Publish(event DisplayEvent) error {
 	case DisplayModelRequestStart:
 		if receiver, ok := a.output.(interface{ OnModelRequestStart(string) }); ok {
 			receiver.OnModelRequestStart(event.RequestID)
+		}
+	case DisplayModelStreamActivity:
+		if receiver, ok := a.output.(interface {
+			OnModelStreamActivity(string, model.StreamActivity)
+		}); ok {
+			receiver.OnModelStreamActivity(event.RequestID, event.Activity)
+		}
+	case DisplayModelRequestEnd:
+		if receiver, ok := a.output.(interface{ OnModelRequestEnd(string, time.Time) }); ok {
+			receiver.OnModelRequestEnd(event.RequestID, event.At)
 		}
 	default:
 		return fmt.Errorf("unknown display event: %s", event.Kind)

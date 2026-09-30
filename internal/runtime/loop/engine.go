@@ -80,12 +80,13 @@ type modelUsageReceiver interface {
 }
 
 type enginePorts struct {
-	model    ModelStreamer
-	display  *DisplayBus
-	registry *tool.Registry
-	store    HistoryStore
-	prompt   *PromptBuilder
-	nowFn    func() time.Time
+	model                 ModelStreamer
+	display               *DisplayBus
+	registry              *tool.Registry
+	store                 HistoryStore
+	prompt                *PromptBuilder
+	nowFn                 func() time.Time
+	waitForStreamRecovery func(context.Context, time.Duration) error
 }
 
 type engineSessionState struct {
@@ -139,6 +140,14 @@ type ContextStats struct {
 	UsedTokens  int
 	CacheTokens int
 	LimitTokens int
+	// InputTokens includes cached input; UsedTokens also includes OutputTokens.
+	InputTokens  int
+	OutputTokens int
+	Known        bool
+	TotalKnown   bool
+	InputKnown   bool
+	OutputKnown  bool
+	CacheKnown   bool
 	// SessionUsedTokens is the cumulative token usage across the whole session
 	// (sum of every turn's delta), distinct from UsedTokens which reflects the
 	// current context window. Exposed for display; the UI must not reach into
@@ -204,6 +213,7 @@ type turnState struct {
 	toolCalls           []message.ToolCall
 	providerData        json.RawMessage
 	wroteOutput         bool
+	wroteThinking       bool
 	outputMode          outputMode
 	usage               model.Usage
 	usageKnown          bool
@@ -795,6 +805,7 @@ func (runner *Engine) ContextStats(limitTokens int, _ string) ContextStats {
 
 	contextUsage, contextKnown := runner.usage.contextUsage()
 	current := usageTotalsFromUsage(contextUsage, contextKnown)
+	knowledge := contextUsage.Knowledge()
 	taskTokens := 0
 	if provider := runner.taskEnv.tokens(); provider != nil {
 		taskTokens = provider.TotalTaskTokens(sessionID)
@@ -804,9 +815,16 @@ func (runner *Engine) ContextStats(limitTokens int, _ string) ContextStats {
 	sessionTotals := usageTotalsFromUsage(sessionUsage, sessionKnown)
 
 	return ContextStats{
-		UsedTokens:        current.used + taskTokens,
+		UsedTokens:        current.used,
 		CacheTokens:       current.cache,
 		LimitTokens:       limitTokens,
+		InputTokens:       maxInt(0, current.used-current.output),
+		OutputTokens:      current.output,
+		Known:             contextKnown,
+		TotalKnown:        contextKnown && knowledge.Total,
+		InputKnown:        contextKnown && knowledge.Input,
+		OutputKnown:       contextKnown && knowledge.Output,
+		CacheKnown:        contextKnown && knowledge.CacheRead,
 		SessionUsedTokens: sessionTotals.used + taskTokens,
 	}
 }

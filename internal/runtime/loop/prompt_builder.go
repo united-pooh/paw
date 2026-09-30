@@ -69,6 +69,12 @@ func (b *PromptBuilder) Build(toolDescriptions []string) string {
 	}
 
 	prompt.WriteString("You can use tools.\n")
+	prompt.WriteString("Task continuity and repository scope:\n")
+	prompt.WriteString("- Tool results and automatic continuations belong to the existing task; continue from its current plan, evidence, and unfinished step.\n")
+	prompt.WriteString("- Do not repeat skill introductions or investigation checklists that are already present after reading a skill or receiving tool results. Reuse the existing outline and only revise it when new evidence changes the work.\n")
+	prompt.WriteString("- A checklist alone does not complete an execution request. Carry out the authorized next step after presenting a plan, unless the user requested planning only, approval is required, or a concrete blocker prevents execution.\n")
+	prompt.WriteString("- The launch working directory may differ from the task's target repository. Confirm the target repository before broad searches; use supplied paths and narrow discovery first. Once confirmed, read project instructions and memory from that repository.\n")
+	prompt.WriteString("- Do not infer that the tool working directory has changed after locating a repository; use its absolute paths or explicitly set the command working directory.\n")
 	prompt.WriteString("Available tools:\n")
 	for _, description := range toolDescriptions {
 		description = strings.TrimSpace(description)
@@ -91,6 +97,8 @@ func (b *PromptBuilder) Build(toolDescriptions []string) string {
 		prompt.WriteString("Progress tracking policy:\n")
 		prompt.WriteString("- For complex multi-step work, call update_todo before substantial execution to establish a todo snapshot, and update it whenever the plan or status materially changes.\n")
 		prompt.WriteString("- Mark items completed as soon as each milestone finishes; do not batch all status updates into one final call at the very end.\n")
+		prompt.WriteString("- If a todo requires prerequisite work, add that work as separate items in the same full snapshot and list their stable ids in its blocked_by array. Keep the dependent item pending while any prerequisite is unfinished; do not mark it in_progress or completed.\n")
+		prompt.WriteString("- Work on ready prerequisites first. Once every prerequisite is completed, resume the original item; keep its declared blocked_by ids and completed prerequisites in subsequent snapshots. Internal todo dependencies do not mean the entire task must stop.\n")
 		prompt.WriteString("- update_todo is the in-session tracking mechanism: track live task steps with it. agent.md memory/*.md files are the cross-session archive: do not duplicate live steps there; instead write milestone results, lessons, and completed records to memory/*.md when a stage finishes.\n")
 		prompt.WriteString("- Do not call update_todo for simple questions or one-step edits.\n")
 	}

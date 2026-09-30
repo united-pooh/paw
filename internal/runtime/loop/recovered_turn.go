@@ -86,14 +86,22 @@ func (runner *Engine) ContinueRecoveredTurn(ctx context.Context, recovered Recov
 	}
 
 	turnState := &TurnState{ToolRounds: 1}
-	for round := 1; round < maxToolRounds; round++ {
-		assistant, modelErr := runner.runModelTurn(ctx, history, turnState)
+	var protocolRecovery toolProtocolRecovery
+	for round := 1; round < maxToolRounds; {
+		assistant, modelErr := runner.runModelTurn(ctx, protocolRecovery.requestHistory(history), turnState)
 		if modelErr != nil {
 			if persistErr := runner.persistPartialAssistant(context.WithoutCancel(ctx), journal, recovered.TurnID, assistant); persistErr != nil {
 				return execution, persistErr
 			}
+			var retryProtocol bool
+			retryProtocol, modelErr = protocolRecovery.retry(ctx, runner, modelErr)
+			if retryProtocol {
+				continue
+			}
 			return execution, modelErr
 		}
+		protocolRecovery.complete(ctx, runner)
+		round++
 		assistantSeq := int64(-1)
 		if sequenced, ok := journal.(sequencedTurnJournal); ok {
 			assistantSeq, err = sequenced.AppendAssistantWithSequence(ctx, runner.sessionID, recovered.TurnID, assistant)
