@@ -80,7 +80,7 @@ type CompletionEvaluation struct {
 // CompletionEvaluator evaluates one completed turn and returns the next input
 // when the task should continue.
 type CompletionEvaluator interface {
-	EvaluateCompletion(message.Message, int, int) CompletionEvaluation
+	EvaluateCompletion(TurnExecution, int, int) CompletionEvaluation
 }
 
 // TaskEventSink receives lifecycle events. A nil sink is valid.
@@ -132,7 +132,7 @@ func (o TaskOrchestrator) Run(ctx context.Context, task *Task) (TurnExecution, e
 			o.emit(TaskEvent{Type: TaskEventCompleted, TaskID: task.ID, TurnNumber: turnNumber, Execution: execution})
 			return execution, nil
 		}
-		evaluation := o.Evaluator.EvaluateCompletion(execution.Message, task.ContinuationUsed, task.NoProgressCount)
+		evaluation := o.Evaluator.EvaluateCompletion(execution, task.ContinuationUsed, task.NoProgressCount)
 		task.NoProgressCount = evaluation.NoProgress
 		decision := evaluation.Decision
 		if !evaluation.HasSignal || decision.Action == CompletionComplete {
@@ -192,8 +192,8 @@ func (e runnerTurnExecutor) SetSystemSupplement(supplement string) {
 // runnerCompletionEvaluator adapts the existing Completion Gate signals.
 type runnerCompletionEvaluator struct{ runner *Engine }
 
-func (e runnerCompletionEvaluator) EvaluateCompletion(assistant message.Message, used, noProgress int) CompletionEvaluation {
-	decision, snapshot, hasTodo, nextNoProgress := e.runner.evaluateCompletion(assistant, false, used, noProgress)
+func (e runnerCompletionEvaluator) EvaluateCompletion(execution TurnExecution, used, noProgress int) CompletionEvaluation {
+	decision, snapshot, hasTodo, nextNoProgress := e.runner.evaluateCompletion(execution.Message, execution.SuccessfulToolCalls > 0, used, noProgress)
 	return CompletionEvaluation{
 		Decision:   decision,
 		Snapshot:   snapshot,

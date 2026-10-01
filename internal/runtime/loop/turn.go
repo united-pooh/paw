@@ -238,7 +238,11 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 	}
 	runner.promptCtx.beginSteerAdmission()
 	defer runner.promptCtx.endSteerAdmission()
-	for round := 0; round < maxToolRounds; round++ {
+	successfulToolCalls := 0
+	streamRecoveries := 0
+	recoveringStream := false
+	var protocolRecovery toolProtocolRecovery
+	for round := 0; round < maxToolRounds; {
 		var injected []pendingSupplement
 		history, injected = runner.appendPendingSupplements(history)
 		if journal != nil && len(injected) > 0 {
@@ -250,7 +254,7 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 			injectedSupplements = append(injectedSupplements, injected...)
 		}
 
-		if round == 0 {
+		if round == 0 && !recoveringStream && protocolRecovery.attempts == 0 {
 			maintenance, maintenanceErr := runner.maintainContextProjection(ctx, history, true)
 			if maintenanceErr != nil {
 				runner.notifySystem("context-compaction", "context cleanup skipped: "+maintenanceErr.Error())
@@ -269,7 +273,17 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 		// 完成门还会把它计为无进展。静默重试有限次后再接受。
 		for emptyAttempt := 0; ; emptyAttempt++ {
 			for recoveryAttempt := 0; ; recoveryAttempt++ {
-				assistantMessage, modelErr = runner.runModelTurn(ctx, history, turnState)
+				requestHistory := history
+				if recoveringStream {
+					requestHistory = streamRecoveryHistory(history)
+				}
+				requestHistory = protocolRecovery.requestHistory(requestHistory)
+				assistantMessage, modelErr = runner.runModelTurn(ctx, requestHistory, turnState)
+				if modelErr == nil {
+					protocolRecovery.complete(ctx, runner)
+					streamRecoveries = 0
+					recoveringStream = false
+				}
 				if modelErr == nil || recoveryAttempt > 0 || assistantMessageHasPartialStream(assistantMessage) || !model.IsContextOverflowError(modelErr) {
 					break
 				}
@@ -298,8 +312,27 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 			if persistErr := runner.persistPartialAssistant(context.WithoutCancel(ctx), journal, turnID, assistantMessage); persistErr != nil {
 				return execution, persistErr
 			}
+			var retryProtocol bool
+			retryProtocol, modelErr = protocolRecovery.retry(ctx, runner, modelErr)
+			if retryProtocol {
+				continue
+			}
+			recoverable := model.IsRecoverableResponsesInterruption(modelErr) || (recoveringStream && model.IsResponsesTransportInterruption(modelErr))
+			if ctx.Err() == nil && recoverable {
+				if streamRecoveries >= maxStreamRecoveries {
+					return execution, fmt.Errorf("本次断流自动续接已达 %d 次上限: %w", maxStreamRecoveries, modelErr)
+				}
+				streamRecoveries++
+				runner.notifySystem("stream-recovery", fmt.Sprintf("模型连接中断，正在从已完成步骤自动继续（%d/%d）。已完成工具结果已保留。", streamRecoveries, maxStreamRecoveries))
+				if waitErr := runner.pauseStreamRecovery(ctx, streamRecoveries); waitErr != nil {
+					return execution, waitErr
+				}
+				recoveringStream = true
+				continue
+			}
 			return execution, modelErr
 		}
+		round++
 		assistantSeq := int64(-1)
 		if journal != nil {
 			if sequencedJournal, ok := journal.(sequencedTurnJournal); ok {
@@ -333,7 +366,9 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 			runner.setHistory(stripRecoveryMessages(history))
 			settled = true
 			runner.flushToolPhaseTrace(turnState)
-			return runner.completeTurnExecution(ctx, timing, assistantMessage, assistantSeq), nil
+			execution = runner.completeTurnExecution(ctx, timing, assistantMessage, assistantSeq)
+			execution.SuccessfulToolCalls = successfulToolCalls
+			return execution, nil
 		}
 
 		var checkpoint toolResultCheckpoint
@@ -345,6 +380,15 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 		toolResult, err := runner.runToolCallsWithPhases(ctx, toolCalls, checkpoint, turnState.ToolArgsGenAt, &turnState.ToolPhases)
 		if err != nil {
 			return execution, err
+		}
+		workCalls := make(map[string]bool, len(toolCalls))
+		for _, call := range toolCalls {
+			workCalls[call.ID] = call.Name != "update_todo"
+		}
+		for _, result := range toolResultsFromMessage(toolResult) {
+			if !result.IsError && workCalls[result.ToolUseID] {
+				successfulToolCalls++
+			}
 		}
 		history = append(history, toolResult)
 		turnState.ToolRounds++

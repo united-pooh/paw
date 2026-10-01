@@ -74,9 +74,6 @@ func (c *SessionController) bindRuntime(sessionID string) {
 		OnFinalized: func(doc PlanDoc) {
 			c.mu.Lock()
 			current := c.sessionID == sessionID
-			if current {
-				c.activeID = ""
-			}
 			notify := c.notify
 			c.mu.Unlock()
 			if current && notify != nil {
@@ -130,6 +127,56 @@ func (c *SessionController) Start(requirement string) (string, error) {
 	c.activeID = session.ID
 	c.mu.Unlock()
 	return string(session.ID), nil
+}
+
+func (c *SessionController) Submit(input string) (string, error) {
+	if err := c.ensureCurrentSession(); err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	runtime := c.runtime
+	c.mu.Unlock()
+	snapshot, err := runtime.Submit(context.Background(), input)
+	if err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	c.activeID = snapshot.ID
+	c.mu.Unlock()
+	return string(snapshot.ID), nil
+}
+
+func (c *SessionController) Execute() (PlanDoc, error) {
+	if err := c.ensureCurrentSession(); err != nil {
+		return PlanDoc{}, err
+	}
+	c.mu.Lock()
+	id, runtime := c.activeID, c.runtime
+	c.mu.Unlock()
+	if id == "" {
+		return PlanDoc{}, ErrNoActivePlan
+	}
+	doc, err := runtime.Execute(context.Background(), id)
+	if err != nil {
+		return PlanDoc{}, err
+	}
+	c.mu.Lock()
+	c.activeID = ""
+	c.mu.Unlock()
+	return doc, nil
+}
+
+func (c *SessionController) Pause() error {
+	if err := c.ensureCurrentSession(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	id, runtime := c.activeID, c.runtime
+	c.mu.Unlock()
+	if id == "" {
+		return ErrNoActivePlan
+	}
+	return runtime.Pause(context.Background(), id)
 }
 
 func (c *SessionController) Rebind(sessionID string) error {
@@ -206,7 +253,7 @@ func (c *SessionController) Status() string {
 		return err.Error()
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "id: %s\nsession: %s\nstatus: %s\nrequirement: %s\nturns: %d/%d\ncontinuations: %d/%d", s.ID, s.SessionID, s.Status, s.Requirement, s.TurnsUsed, s.MaxTurns, s.Continuations, s.MaxContinuations)
+	fmt.Fprintf(&b, "id: %s\nsession: %s\nstatus: %s\nrequirement: %s\nconversation turns: %d", s.ID, s.SessionID, s.Status, s.Requirement, s.TurnsUsed)
 	if s.PauseReason != "" {
 		b.WriteString("\npause reason: " + string(s.PauseReason))
 	}
@@ -272,6 +319,9 @@ func (c *SessionController) Cancel() error {
 
 var _ interface {
 	Start(string) (string, error)
+	Submit(string) (string, error)
+	Execute() (PlanDoc, error)
+	Pause() error
 	Status() string
 	List() string
 	Show(string) string

@@ -27,7 +27,7 @@ type orchestratorEvaluator struct {
 	calls       []struct{ used, noProgress int }
 }
 
-func (e *orchestratorEvaluator) EvaluateCompletion(_ message.Message, used, noProgress int) CompletionEvaluation {
+func (e *orchestratorEvaluator) EvaluateCompletion(_ TurnExecution, used, noProgress int) CompletionEvaluation {
 	e.calls = append(e.calls, struct{ used, noProgress int }{used, noProgress})
 	return e.evaluations[len(e.calls)-1]
 }

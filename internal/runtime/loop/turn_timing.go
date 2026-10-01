@@ -20,7 +20,7 @@ type TurnTiming struct {
 	usageAtStartKnown bool
 }
 
-// TurnExecution contains the assistant result plus display-only metadata.
+// TurnExecution contains the assistant result, execution evidence, and display metadata.
 // MetadataPersistErr is non-fatal: the answer remains successful and the UI
 // can show the footer from this in-memory value while reporting the sidecar
 // failure separately.
@@ -28,6 +28,8 @@ type TurnExecution struct {
 	Message            message.Message
 	Metadata           session.TurnMetadata
 	MetadataPersistErr error
+	// SuccessfulToolCalls excludes todo bookkeeping and failed tool results.
+	SuccessfulToolCalls int
 }
 
 // SequencedHistoryStore is an optional extension implemented by the JSONL
