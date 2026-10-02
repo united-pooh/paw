@@ -1,7 +1,7 @@
 // Package plan implements a standalone plan-authoring runtime. Plans are
 // spec/scope documents that exist independently of Goals: plan mode clarifies
 // a requirement with the user, writes a markdown plan file under
-// docs/local/plans/, and finalizes it after user approval. Goals do not
+// docs/local/plans/, and keeps it ready until the user requests execution. Goals do not
 // reference plans; the agent explores freely inside a Goal.
 package plan
 
@@ -16,6 +16,7 @@ type PlanStatus string
 
 const (
 	PlanDraft    PlanStatus = "draft"
+	PlanReady    PlanStatus = "ready"
 	PlanApproved PlanStatus = "approved"
 )
 
@@ -42,6 +43,8 @@ type SessionStatus string
 const (
 	SessionClarifying     SessionStatus = "clarifying"
 	SessionDrafting       SessionStatus = "drafting"
+	SessionAwaitingInput  SessionStatus = "awaiting_input"
+	SessionReady          SessionStatus = "ready"
 	SessionAwaitingApprov SessionStatus = "awaiting_approval"
 	SessionApproved       SessionStatus = "approved"
 	SessionPaused         SessionStatus = "paused"
@@ -61,6 +64,7 @@ const (
 	PauseBudgetExhausted   PauseReason = "budget_exhausted"
 	PauseBlocked           PauseReason = "blocked"
 	PauseUserInputRequired PauseReason = "user_input_required"
+	PauseUserRequested     PauseReason = "user_requested"
 )
 
 // Session is the in-memory lifecycle state of a plan session.
@@ -70,6 +74,8 @@ type Session struct {
 	Status           SessionStatus
 	ResumeStatus     SessionStatus
 	Requirement      string
+	PendingInputs    []string `json:",omitempty"`
+	ReadyContentHash string   `json:",omitempty"`
 	Continuations    int
 	NoProgress       int
 	PauseReason      PauseReason
@@ -85,6 +91,7 @@ type Session struct {
 }
 
 func (s Session) Snapshot() Session {
+	s.PendingInputs = append([]string(nil), s.PendingInputs...)
 	return s
 }
 

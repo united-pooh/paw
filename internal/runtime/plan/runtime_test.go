@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -152,7 +153,7 @@ func TestRestorePreservesCompletePausedSessionSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != want || persisted != want {
+	if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(persisted, want) {
 		t.Fatalf("restored=%#v persisted=%#v want=%#v", got, persisted, want)
 	}
 }
@@ -164,7 +165,7 @@ func TestStartRejectsEmptyRequirement(t *testing.T) {
 	}
 }
 
-func TestRunFinalizesWhenDocApproved(t *testing.T) {
+func TestRunNotifiesWhenDocReady(t *testing.T) {
 	store := newTestStore(t)
 	dir := store.Dir()
 	ctx := context.Background()
@@ -211,15 +212,15 @@ func TestRunFinalizesWhenDocApproved(t *testing.T) {
 	if finalized.Load() == nil {
 		t.Fatal("OnFinalized not invoked after approval")
 	}
-	if finalized.Load().Status != PlanApproved {
+	if finalized.Load().Status != PlanReady {
 		t.Fatalf("finalized status = %s", finalized.Load().Status)
 	}
 	doc, ok, err := store.Get(ctx, finalized.Load().ID)
 	if err != nil || !ok {
 		t.Fatalf("doc = ok:%v err:%v", ok, err)
 	}
-	if doc.Status != PlanApproved {
-		t.Fatalf("persisted status = %s, want approved", doc.Status)
+	if doc.Status != PlanReady {
+		t.Fatalf("persisted status = %s, want ready", doc.Status)
 	}
 	// The tool filter and instructions must have been scoped onto the executor
 	// during the plan turns (they are restored afterwards).
@@ -271,6 +272,9 @@ func TestStateTransitions(t *testing.T) {
 	if CanTransition(SessionApproved, SessionDrafting) {
 		t.Fatal("approved -> drafting allowed")
 	}
+	if err := s.Transition(SessionReady, ""); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Transition(SessionApproved, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -278,10 +282,10 @@ func TestStateTransitions(t *testing.T) {
 
 func TestFinalizeToolInputValidation(t *testing.T) {
 	tool := NewFinalizeTool(func(ctx context.Context, id PlanID, path string) (PlanDoc, error) {
-		return PlanDoc{ID: id, Path: path, Status: PlanApproved}, nil
+		return PlanDoc{ID: id, Path: path, Status: PlanReady}, nil
 	})
 	out, err := tool.Run(context.Background(), json.RawMessage(`{"plan_id":"p1","path":"/tmp/p.md"}`))
-	if err != nil || !strings.Contains(out, "approved") {
+	if err != nil || !strings.Contains(out, "ready") || strings.Contains(out, "approved") {
 		t.Fatalf("out=%q err=%v", out, err)
 	}
 	if _, err := tool.Run(context.Background(), json.RawMessage(`{}`)); err == nil {

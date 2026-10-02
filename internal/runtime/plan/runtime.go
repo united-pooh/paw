@@ -31,7 +31,7 @@ type RuntimeConfig struct {
 	MaxNoProgress    int
 	Snapshot         func(context.Context, Session) error
 	ClearSnapshot    func(context.Context) error
-	// OnFinalized is invoked once when a plan document is approved.
+	// OnFinalized reports a saved, ready document; it never requests execution.
 	OnFinalized func(PlanDoc)
 }
 
@@ -40,6 +40,7 @@ var (
 	ErrPlanNotFound  = errors.New("plan not found")
 	ErrNoActivePlan  = errors.New("no active plan session")
 	ErrPlanFinalized = errors.New("plan session is already approved")
+	ErrPlanNotReady  = errors.New("plan is not ready; finish reviewing and save it before execution")
 )
 
 type Runtime struct {
@@ -59,6 +60,7 @@ type Runtime struct {
 
 	mu          sync.Mutex
 	active      bool
+	closing     bool
 	activeID    PlanID
 	cancel      context.CancelFunc
 	sequence    uint64
@@ -105,7 +107,7 @@ func (r *Runtime) Start(ctx context.Context, requirement string) (Session, error
 		return Session{}, errors.New("plan requirement is empty")
 	}
 	r.mu.Lock()
-	if r.active || r.activeID != "" {
+	if r.active || r.closing || r.activeID != "" {
 		r.mu.Unlock()
 		return Session{}, ErrPlanActive
 	}
@@ -130,25 +132,20 @@ func (r *Runtime) Start(ctx context.Context, requirement string) (Session, error
 		return Session{}, err
 	}
 	r.active, r.activeID = true, id
+	runCtx, cancel := context.WithCancel(context.Background())
+	r.cancel = cancel
 	r.mu.Unlock()
 	r.emit(Event{Type: EventStarted, PlanID: id, Status: session.Status, At: r.now()})
-	go r.runAsync(id, requirement)
+	go r.runAsync(runCtx, id, requirement)
 	return session.Snapshot(), nil
 }
 
-func (r *Runtime) runAsync(id PlanID, requirement string) {
-	ctx, cancel := context.WithCancel(context.Background())
-	r.mu.Lock()
-	if r.activeID == id {
-		r.cancel = cancel
-	}
-	r.mu.Unlock()
+func (r *Runtime) runAsync(ctx context.Context, id PlanID, requirement string) {
 	_ = r.Run(ctx, id, requirement)
-	cancel()
 }
 
-// Run executes the plan session until the document is approved, the session
-// pauses, or an error occurs.
+// Run answers one user submission, then waits. Queued user submissions are
+// consumed before the run ends; they are never synthetic continuations.
 func (r *Runtime) Run(ctx context.Context, id PlanID, requirement string) error {
 	if r == nil {
 		return errors.New("plan runtime is nil")
@@ -156,22 +153,15 @@ func (r *Runtime) Run(ctx context.Context, id PlanID, requirement string) error 
 	if r.executor == nil {
 		return r.finishWithError(ctx, id, errors.New("plan executor is nil"))
 	}
-	session, ok := r.loadSession(id)
-	if !ok {
+	r.mu.Lock()
+	if _, ok := r.memSessions[id]; !ok {
+		r.mu.Unlock()
 		return ErrPlanNotFound
 	}
-	r.mu.Lock()
 	if !r.active {
 		r.active, r.activeID = true, id
 	}
 	r.mu.Unlock()
-	defer func() {
-		r.mu.Lock()
-		if r.activeID == id {
-			r.active, r.activeID, r.cancel = false, "", nil
-		}
-		r.mu.Unlock()
-	}()
 
 	// Scope tools and inject plan instructions for the whole session. Restore
 	// the previous runner state afterwards.
@@ -181,52 +171,65 @@ func (r *Runtime) Run(ctx context.Context, id PlanID, requirement string) error 
 		savedSupplement = applier.SystemSupplement()
 		applier.SetTurnToolFilter(r.filter)
 		applier.SetSystemSupplement(Instructions)
-		defer func() {
+	}
+	defer func() {
+		if scoped {
 			applier.SetTurnToolFilter(nil)
 			applier.SetSystemSupplement(savedSupplement)
-		}()
-	}
-
-	session.CurrentTaskID = fmt.Sprintf("plan-task-%d", atomic.AddUint64(&r.sequence, 1))
-	session.UpdatedAt = r.now()
-	if err := r.storeSession(ctx, session); err != nil {
-		return err
-	}
-	planPath := filepath.Join(r.store.Dir(), string(id)+".md")
-	input := message.Message{
-		Role: message.RoleUser,
-		Content: "你现在处于 PLAN MODE。需求如下：\n\n" + requirement +
-			"\n\n计划文件必须写入：" + planPath + "\n完成澄清与文档撰写后按流程展示并询问【执行/修改】。",
-	}
-	evaluator := &evaluator{runtime: r, id: id, session: &session}
-	var eventErr error
-	task := &loop.Task{ID: session.CurrentTaskID, Input: input, Status: loop.TaskRunning}
-	_, runErr := (loop.TaskOrchestrator{Executor: r.executor, Evaluator: evaluator, Events: r.taskEvents(id, &eventErr)}).Run(ctx, task)
-	if runErr != nil {
-		return r.finishWithError(ctx, id, runErr)
-	}
-	if evaluator.err != nil {
-		return evaluator.err
-	}
-	if eventErr != nil {
-		return eventErr
-	}
-
-	latest, _ := r.loadSession(id)
-	switch latest.Status {
-	case SessionApproved:
-		r.emit(Event{Type: EventFinalized, PlanID: id, Status: latest.Status, Decision: latest.LastDecision, At: r.now()})
-		if doc, found, getErr := r.store.Get(context.Background(), id); getErr == nil && found {
-			if r.onFinalized != nil {
-				r.onFinalized(doc)
-			}
 		}
-	case SessionFailed:
-		r.emit(Event{Type: EventFailed, PlanID: id, Status: latest.Status, Decision: latest.LastDecision, At: r.now()})
-	default:
-		r.emit(Event{Type: EventPaused, PlanID: id, Status: latest.Status, Decision: latest.LastDecision, At: r.now()})
+		r.finishRun(id)
+	}()
+	for {
+		if err := ctx.Err(); err != nil {
+			return r.finishWithError(context.Background(), id, err)
+		}
+		r.mu.Lock()
+		session := r.memSessions[id]
+		session.CurrentTaskID = fmt.Sprintf("plan-task-%d", atomic.AddUint64(&r.sequence, 1))
+		session.UpdatedAt = r.now()
+		err := r.persistSessionLocked(ctx, session)
+		r.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		planPath := filepath.Join(r.store.Dir(), string(id)+".md")
+		input := message.Message{Role: message.RoleUser, Content: "当前 PLAN 对话的用户输入：\n\n" + requirement +
+			"\n\n计划文件必须写入：" + planPath + "\n沿用当前对话继续澄清或修改；需要用户回答时直接提问并等待。保存就绪计划不代表批准执行。"}
+		evaluator := &evaluator{runtime: r, id: id}
+		var eventErr error
+		task := &loop.Task{ID: session.CurrentTaskID, Input: input, Status: loop.TaskRunning}
+		_, runErr := (loop.TaskOrchestrator{Executor: r.executor, Evaluator: evaluator, Events: r.taskEvents(id, &eventErr)}).Run(ctx, task)
+		if runErr != nil {
+			return r.finishWithError(context.Background(), id, runErr)
+		}
+		if evaluator.err != nil {
+			return evaluator.err
+		}
+		if eventErr != nil {
+			return eventErr
+		}
+		r.mu.Lock()
+		latest := r.memSessions[id]
+		if latest.Status == SessionPaused || latest.Status.Terminal() || len(latest.PendingInputs) == 0 {
+			// Seal admission before releasing the lock; Submit starts a fresh
+			// user turn once this run has restored its scoped tools.
+			r.closing = true
+			r.mu.Unlock()
+			return nil
+		}
+		requirement = latest.PendingInputs[0]
+		latest.PendingInputs = latest.PendingInputs[1:]
+		if err := r.invalidateReadyLocked(ctx, &latest); err != nil {
+			r.mu.Unlock()
+			return r.finishWithError(context.Background(), id, err)
+		}
+		latest.Status = SessionDrafting
+		err = r.persistSessionLocked(ctx, latest)
+		r.mu.Unlock()
+		if err != nil {
+			return err
+		}
 	}
-	return nil
 }
 
 func (r *Runtime) finishWithError(ctx context.Context, id PlanID, err error) error {
@@ -234,7 +237,7 @@ func (r *Runtime) finishWithError(ctx context.Context, id PlanID, err error) err
 	if !ok {
 		return err
 	}
-	if session.Status.Terminal() {
+	if session.Status.Terminal() || session.Status == SessionPaused {
 		return err
 	}
 	_ = session.Transition(SessionFailed, PauseBlocked)
@@ -242,58 +245,85 @@ func (r *Runtime) finishWithError(ctx context.Context, id PlanID, err error) err
 	if storeErr := r.storeSession(ctx, session); storeErr != nil {
 		return storeErr
 	}
-	r.emit(Event{Type: EventFailed, PlanID: id, Status: session.Status, Decision: err.Error(), Err: err, At: r.now()})
 	return err
 }
 
-// Finalize approves the plan document. It is invoked by the plan_finalize
-// tool: the path must live under the store directory. The document file is
-// the source of truth; this method writes the front matter marker with
-// status=approved.
+// Finalize saves a ready plan. Only the explicit user Execute entry point can
+// approve execution.
 func (r *Runtime) Finalize(ctx context.Context, id PlanID, path string) (PlanDoc, error) {
 	if r == nil {
 		return PlanDoc{}, errors.New("plan runtime is nil")
 	}
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	if !r.active || r.activeID != id {
-		r.mu.Unlock()
 		return PlanDoc{}, ErrNoActivePlan
 	}
 	session := r.memSessions[id]
-	if session.Status == SessionApproved {
-		r.mu.Unlock()
+	if session.Status.Terminal() || session.Status == SessionPaused {
 		return PlanDoc{}, ErrPlanFinalized
 	}
-	r.mu.Unlock()
 
 	cleanPath, err := r.validatePath(path)
 	if err != nil {
 		return PlanDoc{}, err
 	}
+	expected, err := filepath.Abs(filepath.Join(r.store.Dir(), string(id)+".md"))
+	if err != nil || cleanPath != expected {
+		return PlanDoc{}, errors.New("plan path must match the current plan id")
+	}
 	doc, ok, err := r.store.Get(ctx, id)
 	if err != nil {
 		return PlanDoc{}, err
 	}
+	data, readErr := os.ReadFile(cleanPath)
+	if readErr != nil {
+		return PlanDoc{}, fmt.Errorf("read plan file: %w", readErr)
+	}
+	written, _ := decodeDoc(string(data), string(id), cleanPath)
+	if written.Status == PlanApproved {
+		return PlanDoc{}, errors.New("plan metadata cannot approve execution")
+	}
 	if !ok {
-		data, readErr := os.ReadFile(cleanPath)
-		if readErr != nil {
-			return PlanDoc{}, fmt.Errorf("plan file not found at %s", cleanPath)
+		doc = written
+	} else {
+		doc.Content = written.Content
+		if written.Title != "" {
+			doc.Title = written.Title
 		}
-		doc, _ = decodeDoc(string(data), string(id), cleanPath)
 	}
 	doc.ID = id
 	doc.SessionID = session.SessionID
 	doc.Path = cleanPath
-	doc.Status = PlanApproved
+	if strings.TrimSpace(doc.Title) == "" {
+		doc.Title = session.Requirement
+	}
+	if strings.TrimSpace(doc.Content) == "" {
+		return PlanDoc{}, errors.New("plan document is empty")
+	}
+	doc.Status = written.Status
 	if err := r.store.Update(ctx, doc); err != nil {
 		return PlanDoc{}, err
 	}
-	_ = session.Transition(SessionApproved, "")
-	session.LastDecision = "plan approved"
-	if err := r.storeSession(ctx, session); err != nil {
+	doc.Status = PlanReady
+	if err := r.store.Update(ctx, doc); err != nil {
 		return PlanDoc{}, err
 	}
-	r.emit(Event{Type: EventFinalized, PlanID: id, Status: SessionApproved, Decision: session.LastDecision, At: r.now()})
+	doc, ok, err = r.store.Get(ctx, id)
+	if err != nil {
+		return PlanDoc{}, fmt.Errorf("read saved plan: %w", err)
+	}
+	if !ok {
+		return PlanDoc{}, ErrPlanNotFound
+	}
+	if err := session.Transition(SessionReady, ""); err != nil {
+		return PlanDoc{}, err
+	}
+	session.ReadyContentHash = readyContentHash(doc)
+	session.LastDecision = "plan saved and ready; awaiting explicit user execution"
+	if err := r.persistSessionLocked(ctx, session); err != nil {
+		return PlanDoc{}, err
+	}
 	return doc, nil
 }
 
@@ -323,34 +353,55 @@ func (r *Runtime) validatePath(path string) (string, error) {
 // Resume continues a paused plan session.
 func (r *Runtime) Resume(ctx context.Context, id PlanID) error {
 	r.mu.Lock()
-	if r.active {
+	if r.active || r.closing {
 		r.mu.Unlock()
 		return ErrPlanActive
 	}
 	session, ok := r.memSessions[id]
-	r.mu.Unlock()
 	if !ok {
+		r.mu.Unlock()
 		return ErrPlanNotFound
 	}
-	if session.Status != SessionPaused {
+	if session.Status != SessionPaused && session.Status != SessionAwaitingInput && session.Status != SessionReady {
+		r.mu.Unlock()
 		return fmt.Errorf("plan %q is not resumable from %s", id, session.Status)
 	}
-	resumeStatus := session.ResumeStatus
-	if resumeStatus == "" || resumeStatus == SessionPaused || resumeStatus.Terminal() {
-		resumeStatus = SessionClarifying
+	if len(session.PendingInputs) == 0 && (session.Status == SessionReady || session.Status == SessionAwaitingInput || session.ResumeStatus == SessionReady || session.ResumeStatus == SessionAwaitingInput) {
+		if session.Status == SessionPaused {
+			session.Status = session.ResumeStatus
+		}
+		session.ResumeStatus, session.PauseReason = "", ""
+		if err := r.persistSessionLocked(ctx, session); err != nil {
+			r.mu.Unlock()
+			return err
+		}
+		r.closing = true
+		r.mu.Unlock()
+		r.finishRun(id)
+		return nil
 	}
-	if err := session.Transition(resumeStatus, ""); err != nil {
+	input := "继续当前计划对话；沿用已有内容，需要用户补充时提问并等待。"
+	if err := r.invalidateReadyLocked(ctx, &session); err != nil {
+		r.mu.Unlock()
 		return err
 	}
-	session.ResumeStatus = ""
-	if err := r.storeSession(ctx, session); err != nil {
+	if len(session.PendingInputs) > 0 {
+		input = session.PendingInputs[0]
+		session.PendingInputs = session.PendingInputs[1:]
+	}
+	session.Status = SessionDrafting
+	session.ResumeStatus, session.PauseReason = "", ""
+	session.LastDecision = "user resumed the plan conversation"
+	session.UpdatedAt = r.now()
+	if err := r.persistSessionLocked(ctx, session); err != nil {
+		r.mu.Unlock()
 		return err
 	}
-	r.mu.Lock()
-	r.active, r.activeID = true, id
+	runCtx, cancel := context.WithCancel(context.Background())
+	r.active, r.activeID, r.cancel = true, id, cancel
 	r.mu.Unlock()
 	r.emit(Event{Type: EventResumed, PlanID: id, Status: session.Status, At: r.now()})
-	go r.runAsync(id, session.Requirement)
+	go r.runAsync(runCtx, id, input)
 	return nil
 }
 
@@ -366,6 +417,14 @@ func (r *Runtime) Restore(snapshot Session) error {
 	if snapshot.Status.Terminal() {
 		return fmt.Errorf("plan %q is terminal at %s", snapshot.ID, snapshot.Status)
 	}
+	if len(snapshot.PendingInputs) > 0 {
+		snapshot.Status = SessionPaused
+		snapshot.ResumeStatus = SessionDrafting
+		snapshot.PauseReason = PauseUserInputRequired
+	}
+	if snapshot.Status == SessionAwaitingApprov {
+		snapshot.Status = SessionAwaitingInput
+	}
 	resumeStatus := snapshot.Status
 	if resumeStatus == SessionPaused && snapshot.ResumeStatus != "" {
 		resumeStatus = snapshot.ResumeStatus
@@ -373,14 +432,16 @@ func (r *Runtime) Restore(snapshot Session) error {
 	if resumeStatus == SessionPaused || resumeStatus.Terminal() || resumeStatus == "" {
 		resumeStatus = SessionClarifying
 	}
-	snapshot.ResumeStatus = resumeStatus
-	if snapshot.Status != SessionPaused {
+	if snapshot.Status != SessionReady && snapshot.Status != SessionAwaitingInput {
+		snapshot.ResumeStatus = resumeStatus
+	}
+	if snapshot.Status != SessionPaused && snapshot.Status != SessionReady && snapshot.Status != SessionAwaitingInput {
 		if err := snapshot.Transition(SessionPaused, PauseUserInputRequired); err != nil {
 			return err
 		}
 	}
 	r.mu.Lock()
-	if r.active {
+	if r.active || r.closing {
 		r.mu.Unlock()
 		return ErrPlanActive
 	}
@@ -396,6 +457,10 @@ func (r *Runtime) Restore(snapshot Session) error {
 // Cancel stops the active plan session.
 func (r *Runtime) Cancel(ctx context.Context, id PlanID) error {
 	r.mu.Lock()
+	if r.closing && !r.active {
+		r.mu.Unlock()
+		return ErrPlanActive
+	}
 	if r.activeID == id && r.cancel != nil {
 		r.cancel()
 	}
@@ -406,11 +471,19 @@ func (r *Runtime) Cancel(ctx context.Context, id PlanID) error {
 	}
 	if !session.Status.Terminal() {
 		_ = session.Transition(SessionCancelled, "")
-		r.mu.Unlock()
-		if err := r.storeSession(ctx, session); err != nil {
+		session.PendingInputs = nil
+		if err := r.persistSessionLocked(ctx, session); err != nil {
+			r.mu.Unlock()
 			return err
 		}
-		r.emit(Event{Type: EventCancelled, PlanID: id, Status: session.Status, At: r.now()})
+		active := r.active
+		if !active {
+			r.closing = true
+		}
+		r.mu.Unlock()
+		if !active {
+			r.finishRun(id)
+		}
 		return nil
 	}
 	r.mu.Unlock()
@@ -477,33 +550,30 @@ func (r *Runtime) taskEvents(id PlanID, sinkErr *error) loop.TaskEventSink {
 		if sinkErr != nil && *sinkErr != nil {
 			return
 		}
-		session, _ := r.loadSession(id)
+		r.mu.Lock()
+		session := r.memSessions[id]
 		if e.Type == loop.TaskEventTurnDone {
 			session.TurnsUsed++
 			session.UpdatedAt = r.now()
-			if _, ok, err := r.store.Get(context.Background(), id); err == nil && ok {
-				if session.Status != SessionApproved && session.Status != SessionPaused {
-					session.Status = SessionAwaitingApprov
-				}
-			} else if session.Status == SessionClarifying || session.Status == SessionPaused {
-				session.Status = SessionDrafting
-			}
-			session.LastDecision = fmt.Sprintf("turn %d completed", e.TurnNumber)
-			if err := r.storeSession(context.Background(), session); err != nil {
+			if err := r.persistSessionLocked(context.Background(), session); err != nil {
 				if sinkErr != nil {
 					*sinkErr = err
 				}
+				r.mu.Unlock()
 				return
 			}
+			r.mu.Unlock()
 			r.emit(Event{Type: EventTurnDone, PlanID: id, Status: session.Status, Decision: session.LastDecision, At: r.now()})
+			return
 		}
 		if e.Type == loop.TaskEventContinued {
 			session.Continuations = e.ContinuationUsed
 			session.UpdatedAt = r.now()
-			if err := r.storeSession(context.Background(), session); err != nil && sinkErr != nil {
+			if err := r.persistSessionLocked(context.Background(), session); err != nil && sinkErr != nil {
 				*sinkErr = err
 			}
 		}
+		r.mu.Unlock()
 	}
 }
 

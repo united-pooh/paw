@@ -255,6 +255,9 @@ func (s *EventStore) Update(ctx context.Context, doc PlanDoc) error {
 		if fileDoc.SessionID == "" {
 			fileDoc.SessionID = doc.SessionID
 		}
+		if fileDoc.Title == "" {
+			fileDoc.Title = doc.Title
+		}
 		if err := s.appendCreated(ctx, EventBaseline, fileDoc); err != nil {
 			return err
 		}
@@ -271,6 +274,12 @@ func (s *EventStore) Update(ctx context.Context, doc PlanDoc) error {
 			// 投影缺失但事件流存在：拒绝更新，避免事件提交后投影写入失败
 			// 造成事件流与文件分裂。
 			return ErrExternalEditConflict
+		}
+		if diskDoc.SessionID == "" {
+			diskDoc.SessionID = current.Doc.SessionID
+		}
+		if diskDoc.Title == "" {
+			diskDoc.Title = current.Doc.Title
 		}
 		if !planDocContentEqual(diskDoc, current.Doc) && !planDocContentEqual(doc, diskDoc) {
 			return ErrExternalEditConflict
@@ -306,8 +315,8 @@ func (s *EventStore) Update(ctx context.Context, doc PlanDoc) error {
 		events = append(events, es.Envelope{Type: EventDocUpdated, OccurredAt: now, SchemaVersion: 1, Payload: raw})
 	}
 	if doc.Status != current.Doc.Status {
-		if doc.Status == PlanApproved {
-			raw, err := json.Marshal(statusChangedPayload{Status: SessionApproved, UpdatedAt: now})
+		if current.Doc.Status != PlanApproved && (doc.Status == PlanApproved || doc.Status == PlanReady || doc.Status == PlanDraft) {
+			raw, err := json.Marshal(statusChangedPayload{Status: sessionStatusFromPlanStatus(doc.Status), UpdatedAt: now})
 			if err != nil {
 				return fmt.Errorf("plan: encode status payload: %w", err)
 			}

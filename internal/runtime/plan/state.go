@@ -13,13 +13,17 @@ func CanTransition(from, to SessionStatus) bool {
 	}
 	switch from {
 	case SessionClarifying:
-		return to == SessionDrafting || to == SessionAwaitingApprov || to == SessionApproved || to == SessionPaused || to == SessionFailed || to == SessionCancelled
+		return to == SessionDrafting || to == SessionAwaitingInput || to == SessionReady || to == SessionAwaitingApprov || to == SessionPaused || to == SessionFailed || to == SessionCancelled
 	case SessionDrafting:
-		return to == SessionAwaitingApprov || to == SessionApproved || to == SessionPaused || to == SessionFailed || to == SessionCancelled
+		return to == SessionAwaitingInput || to == SessionReady || to == SessionAwaitingApprov || to == SessionPaused || to == SessionFailed || to == SessionCancelled
+	case SessionAwaitingInput:
+		return to == SessionClarifying || to == SessionDrafting || to == SessionReady || to == SessionPaused || to == SessionFailed || to == SessionCancelled
+	case SessionReady:
+		return to == SessionDrafting || to == SessionAwaitingInput || to == SessionApproved || to == SessionPaused || to == SessionFailed || to == SessionCancelled
 	case SessionAwaitingApprov:
 		return to == SessionDrafting || to == SessionApproved || to == SessionPaused || to == SessionFailed || to == SessionCancelled
 	case SessionPaused:
-		return to == SessionClarifying || to == SessionDrafting || to == SessionAwaitingApprov || to == SessionCancelled
+		return to == SessionClarifying || to == SessionDrafting || to == SessionAwaitingInput || to == SessionReady || to == SessionAwaitingApprov || to == SessionCancelled
 	default:
 		return false
 	}

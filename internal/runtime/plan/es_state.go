@@ -54,7 +54,9 @@ func (s *esState) Apply(payload es.Payload, env es.Envelope) error {
 		s.PauseReason = p.Reason
 		if p.Status == SessionApproved {
 			s.Doc.Status = PlanApproved
-		} else if s.Doc.Status == PlanApproved && p.Status != SessionApproved {
+		} else if p.Status == SessionReady {
+			s.Doc.Status = PlanReady
+		} else if p.Status != SessionPaused {
 			s.Doc.Status = PlanDraft
 		}
 		s.Doc.UpdatedAt = p.UpdatedAt
@@ -67,6 +69,9 @@ func (s *esState) Apply(payload es.Payload, env es.Envelope) error {
 func sessionStatusFromPlanStatus(status PlanStatus) SessionStatus {
 	if status == PlanApproved {
 		return SessionApproved
+	}
+	if status == PlanReady {
+		return SessionReady
 	}
 	return SessionClarifying
 }

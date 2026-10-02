@@ -7,13 +7,11 @@ import (
 	"sync"
 )
 
-// FinalizeHook approves a plan document. Implementations must validate the
-// session and path, mark the document approved, and return the updated doc.
+// FinalizeHook validates and saves a ready plan without authorizing execution.
 type FinalizeHook func(ctx context.Context, id PlanID, path string) (PlanDoc, error)
 
-// FinalizeTool is the deterministic approval signal of a plan session: the
-// agent calls it only after the user picks "执行" in the final Select. It is
-// only visible (and only accepted) while a plan session is active.
+// FinalizeTool preserves the existing tool name for saving a usable plan.
+// Execution approval is available only through the host's user action.
 type FinalizeTool struct {
 	mu   sync.RWMutex
 	hook FinalizeHook
@@ -34,9 +32,9 @@ func (t *FinalizeTool) SetHook(hook FinalizeHook) {
 func (t *FinalizeTool) Name() string { return "plan_finalize" }
 
 func (t *FinalizeTool) Description() string {
-	return "Finalize the current plan document after the user approved it (chose 执行). " +
+	return "Save the current plan document as ready for the user to review or execute later. This does not approve or start implementation. " +
 		"Input: {\"plan_id\": \"<id>\", \"path\": \"<absolute path of the plan file>\"}. " +
-		"Only call this AFTER the user selected 执行; do not call it when the user chose 修改."
+		"The user may continue discussing or revising the plan; execution requires the explicit /plan execute user action."
 }
 
 func (t *FinalizeTool) InputSchema() json.RawMessage {
@@ -64,5 +62,5 @@ func (t *FinalizeTool) Run(ctx context.Context, raw json.RawMessage) (string, er
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("plan finalized and approved: %s (status=%s)", doc.Path, doc.Status), nil
+	return fmt.Sprintf("plan saved and ready: %s (status=%s); implementation has not started", doc.Path, doc.Status), nil
 }

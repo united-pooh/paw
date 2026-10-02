@@ -20,7 +20,8 @@ const updateTodoInputSchema = `{
         "properties": {
           "id": {"type": "string"},
           "content": {"type": "string"},
-          "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}
+          "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]},
+          "blocked_by": {"type": "array", "items": {"type": "string"}, "uniqueItems": true, "description": "IDs of prerequisite items in this snapshot. Keep this item pending until all prerequisites are completed."}
         },
         "required": ["id", "content", "status"]
       }
@@ -44,7 +45,7 @@ func NewTool(broker *Broker) *Tool {
 func (*Tool) Name() string { return "update_todo" }
 
 func (*Tool) Description() string {
-	return "Maintain a full todo snapshot for complex multi-step work. Use it before substantial execution and when status materially changes; do not create a todo list for simple questions or one-step edits. Submit the complete ordered list every time, preserve stable item ids, use only pending/in_progress/completed, and keep at most one item in_progress. Mark items completed as soon as each milestone finishes; do not batch all status updates into one final call at the very end."
+	return "Maintain a full todo snapshot for complex multi-step work. Use it before substantial execution and when status materially changes; do not create a todo list for simple questions or one-step edits. Submit the complete ordered list every time, preserve stable item ids, use only pending/in_progress/completed, and keep at most one item in_progress. When an item needs prerequisite work, add those prerequisites as items and set blocked_by to their IDs. Keep blocked items pending; they cannot become in_progress or completed until every prerequisite is completed. Complete unblocked prerequisites first, then resume the original items. Preserve dependency IDs in subsequent snapshots, including completed prerequisites; do not use self-references, duplicate IDs, or cycles. Mark items completed as soon as each milestone finishes; do not batch all status updates into one final call at the very end."
 }
 
 func (*Tool) InputSchema() json.RawMessage {
