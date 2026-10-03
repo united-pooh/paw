@@ -113,7 +113,7 @@ func (r *Recorder) Record(event model.RequestEvent) error {
 		return r.failLocked(err)
 	}
 	r.seq++
-	if event.Kind == "request_end" {
+	if event.Kind == "request_end" || event.Kind == "attempt_stream_end" {
 		if err := r.file.Sync(); err != nil {
 			return r.failLocked(err)
 		}
@@ -128,7 +128,7 @@ func validLedgerEvent(event model.RequestEvent) bool {
 	switch event.Kind {
 	case "request_start", "request_end":
 		return true
-	case "attempt_start", "attempt_headers", "attempt_usage", "attempt_response":
+	case "attempt_start", "attempt_headers", "attempt_usage", "attempt_response", "attempt_stream_end":
 		return event.Attempt > 0
 	default:
 		return false

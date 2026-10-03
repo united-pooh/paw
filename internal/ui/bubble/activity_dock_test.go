@@ -12,7 +12,6 @@ import (
 func TestRenderActivityPaneHasExactSizeAndNoNestedBorder(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.activity.visible = true
-	model.activity.focus = activityFocusPanel
 	model.activity.tab = activityTabTasks
 	model.activity.tasks = []task.TaskSnapshot{{
 		ID: "worker-1", Name: "layout-research", Status: task.TaskRunning,
@@ -32,7 +31,7 @@ func TestRenderActivityPaneHasExactSizeAndNoNestedBorder(t *testing.T) {
 		}
 	}
 	plain := ansi.Strip(rendered)
-	for _, want := range []string{"Activity", "Tasks 1", "Todo", "layout-research", "running", "8.2k"} {
+	for _, want := range []string{"Activity", "Tasks 1", "TOKEN HISTORY", "layout-research", "running", "8.2k"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("pane missing %q:\n%s", want, plain)
 		}
@@ -72,24 +71,15 @@ func TestViewRendersFullHeightDockWithoutCoveringWorkspace(t *testing.T) {
 	}
 }
 
-func TestActivityDockCursorAnchorsOnlyForWorkspaceFocus(t *testing.T) {
+func TestActivityDockKeepsInputCursorAtEverySize(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	model.ready = true
-	model.width = 120
-	model.height = 30
-	model.openActivity(activityTabTasks)
-	if model.shouldAnchorTextInputCursor() {
-		t.Fatal("Activity focus should hide terminal cursor")
-	}
-	model.activity.focus = activityFocusWorkspace
-	model.input.Focus()
-	if !model.shouldAnchorTextInputCursor() {
-		t.Fatal("workspace focus should anchor terminal cursor")
-	}
-	model.width = 80
-	model.relayout()
-	if model.shouldAnchorTextInputCursor() {
-		t.Fatal("fullscreen Activity should hide terminal cursor")
+	model.ready, model.height = true, 30
+	for _, width := range []int{120, 80, 64, 120} {
+		model.width = width
+		model.openActivity(activityTabTasks)
+		if !model.shouldAnchorTextInputCursor() || !model.input.Focused() {
+			t.Fatalf("width %d lost input cursor", width)
+		}
 	}
 }
 
@@ -140,7 +130,6 @@ func TestCompletionStaysInsideWorkspaceWhenActivityDocked(t *testing.T) {
 	model.width = 120
 	model.height = 30
 	model.openActivity(activityTabTasks)
-	model.activity.focus = activityFocusWorkspace
 	model.input.Focus()
 	model.completion = &completion{kind: completionKindCommand, items: []string{"/help", "/tasks"}}
 	model.relayout()

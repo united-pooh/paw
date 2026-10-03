@@ -37,7 +37,10 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 
 func NormalizeAndValidate(input UpdateInput) (UpdateInput, error) {
 	input.Explanation = strings.TrimSpace(input.Explanation)
-	input.Items = append([]Item{}, input.Items...)
+	input.Items = (Snapshot{Items: input.Items}).Clone().Items
+	if input.Items == nil {
+		input.Items = []Item{}
+	}
 
 	seen := make(map[string]struct{}, len(input.Items))
 	active := 0
@@ -65,6 +68,9 @@ func NormalizeAndValidate(input UpdateInput) (UpdateInput, error) {
 	}
 	if active > 1 {
 		return UpdateInput{}, fmt.Errorf("items may contain at most one in_progress item")
+	}
+	if err := validateDependencies(input.Items); err != nil {
+		return UpdateInput{}, err
 	}
 	return input, nil
 }

@@ -13,14 +13,14 @@ func TestComputeActivityGeometryHiddenAndBreakpoint(t *testing.T) {
 		t.Fatalf("hidden = %+v", hidden)
 	}
 
-	docked := computeActivityGeometry(85, true, 0)
-	if docked.mode != activityLayoutDocked || docked.workspaceWidth != 52 || docked.activityWidth != 32 || docked.separatorWidth != 1 {
-		t.Fatalf("85 columns = %+v, want 52+1+32 dock", docked)
+	docked := computeActivityGeometry(65, true, 0)
+	if docked.mode != activityLayoutDocked || docked.workspaceWidth != 32 || docked.activityWidth != 32 || docked.separatorWidth != 1 {
+		t.Fatalf("65 columns = %+v, want 32+1+32 dock", docked)
 	}
 
-	fullscreen := computeActivityGeometry(84, true, 0)
-	if fullscreen.mode != activityLayoutFullscreen || fullscreen.activityWidth != 84 || fullscreen.separatorWidth != 0 {
-		t.Fatalf("84 columns = %+v, want fullscreen", fullscreen)
+	hiddenNarrow := computeActivityGeometry(64, true, 0)
+	if hiddenNarrow.mode != activityLayoutHidden || hiddenNarrow.workspaceWidth != 64 || hiddenNarrow.activityWidth != 0 {
+		t.Fatalf("64 columns = %+v, want input workspace", hiddenNarrow)
 	}
 }
 
@@ -33,7 +33,7 @@ func TestComputeActivityGeometryDefaultAndClamp(t *testing.T) {
 		{200, 0, 52},
 		{120, 12, 32},
 		{120, 90, 52},
-		{90, 52, 37},
+		{90, 52, 52},
 	}
 	for _, tc := range cases {
 		got := computeActivityGeometry(tc.width, true, tc.requested)
@@ -43,21 +43,6 @@ func TestComputeActivityGeometryDefaultAndClamp(t *testing.T) {
 		if got.workspaceWidth+got.separatorWidth+got.activityWidth != tc.width {
 			t.Fatalf("geometry does not fill width: %+v", got)
 		}
-	}
-}
-
-func TestResizeActivityWidthUsesFourColumnStep(t *testing.T) {
-	if got := resizeActivityWidth(40, -1); got != 36 {
-		t.Fatalf("shrink = %d, want 36", got)
-	}
-	if got := resizeActivityWidth(40, 1); got != 44 {
-		t.Fatalf("grow = %d, want 44", got)
-	}
-	if got := resizeActivityWidth(32, -1); got != 32 {
-		t.Fatalf("min clamp = %d, want 32", got)
-	}
-	if got := resizeActivityWidth(52, 1); got != 52 {
-		t.Fatalf("max clamp = %d, want 52", got)
 	}
 }
 

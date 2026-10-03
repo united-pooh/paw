@@ -1,6 +1,9 @@
 package todo
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 type Status string
 
@@ -11,9 +14,10 @@ const (
 )
 
 type Item struct {
-	ID      string `json:"id"`
-	Content string `json:"content"`
-	Status  Status `json:"status"`
+	ID        string   `json:"id"`
+	Content   string   `json:"content"`
+	Status    Status   `json:"status"`
+	BlockedBy []string `json:"blocked_by,omitempty"`
 }
 
 type Snapshot struct {
@@ -35,6 +39,9 @@ type UpdateResult struct {
 func (s Snapshot) Clone() Snapshot {
 	if s.Items != nil {
 		s.Items = append([]Item{}, s.Items...)
+		for i := range s.Items {
+			s.Items[i].BlockedBy = slices.Clone(s.Items[i].BlockedBy)
+		}
 	}
 	return s
 }

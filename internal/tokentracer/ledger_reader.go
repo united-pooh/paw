@@ -313,12 +313,20 @@ func (r *LedgerReader) apply(id string, event model.RequestEvent) {
 		attempt.UsageFinality = event.UsageFinality
 	}
 	switch event.Kind {
+	case "attempt_stream_end":
+		if event.StreamDiagnostics != nil && attempt.StreamDiagnostics == nil {
+			diagnostics := *event.StreamDiagnostics
+			attempt.StreamDiagnostics = &diagnostics
+		}
 	case "attempt_response":
 		if event.Status != "" {
 			attempt.Status = event.Status
 		}
 	case "attempt_start":
 		attempt.AtomsState, attempt.RequestBodyBytes = event.AtomsState, event.RequestBodyBytes
+		attempt.toolTotal = summarizeToolAtoms(event.Atoms)
+		attempt.toolSummarySet = true
+		attempt.toolSummaryComplete = event.AtomsState == "complete"
 		if r.atoms+len(event.Atoms) <= maxLedgerAtoms {
 			attempt.Atoms = cloneInputAtoms(event.Atoms)
 			r.atoms += len(event.Atoms)
@@ -341,6 +349,29 @@ func (r *LedgerReader) apply(id string, event model.RequestEvent) {
 			}
 		}
 	}
+}
+
+func summarizeToolAtoms(atoms []model.InputAtom) LedgerTool {
+	var total LedgerTool
+	for _, atom := range atoms {
+		if atom.ToolName == "" {
+			continue
+		}
+		total.Occurrences++
+		if atom.EstimatedTokens == nil {
+			total.Unknown++
+			continue
+		}
+		switch atom.Category {
+		case "tool_definition":
+			total.Definitions += *atom.EstimatedTokens
+		case "tool_arguments":
+			total.Arguments += *atom.EstimatedTokens
+		case "tool_result":
+			total.Results += *atom.EstimatedTokens
+		}
+	}
+	return total
 }
 
 func ledgerDirectory(path string, limit int) ([]os.DirEntry, error) {

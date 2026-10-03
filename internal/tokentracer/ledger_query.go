@@ -318,6 +318,10 @@ func cloneRequest(request *LedgerRequest, states map[string]string) LedgerReques
 	result.Attempts = make([]LedgerAttempt, len(request.Attempts))
 	for i, attempt := range request.Attempts {
 		result.Attempts[i] = attempt
+		if attempt.StreamDiagnostics != nil {
+			diagnostics := *attempt.StreamDiagnostics
+			result.Attempts[i].StreamDiagnostics = &diagnostics
+		}
 		result.Attempts[i].Atoms = cloneInputAtoms(attempt.Atoms)
 		if attempt.Usage != nil {
 			usage := *attempt.Usage

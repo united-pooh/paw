@@ -10,9 +10,8 @@ const (
 	activityDefaultPercent = 36
 	activityMinWidth       = 32
 	activityMaxWidth       = 52
-	activityWorkspaceMin   = 52
+	activityWorkspaceMin   = 32
 	activitySeparatorWidth = 1
-	activityResizeStep     = 4
 	activityDockMinWidth   = activityWorkspaceMin + activitySeparatorWidth + activityMinWidth
 )
 
@@ -29,7 +28,7 @@ func computeActivityGeometry(fullWidth int, visible bool, requestedWidth int) ac
 		return activityGeometry{mode: activityLayoutHidden, workspaceWidth: fullWidth}
 	}
 	if fullWidth < activityDockMinWidth {
-		return activityGeometry{mode: activityLayoutFullscreen, activityWidth: fullWidth}
+		return activityGeometry{mode: activityLayoutHidden, workspaceWidth: fullWidth}
 	}
 	width := requestedWidth
 	if width <= 0 {
@@ -43,13 +42,6 @@ func computeActivityGeometry(fullWidth int, visible bool, requestedWidth int) ac
 		activityWidth:  width,
 		separatorWidth: activitySeparatorWidth,
 	}
-}
-
-func resizeActivityWidth(width, direction int) int {
-	if width <= 0 {
-		width = activityMinWidth
-	}
-	return clampInt(width+direction*activityResizeStep, activityMinWidth, activityMaxWidth)
 }
 
 func applyActivityGeometry(layout tuiLayout, visible bool, requestedWidth int) tuiLayout {

@@ -40,21 +40,25 @@ type ledgerRecord struct {
 }
 
 type LedgerAttempt struct {
-	ProviderResponseID string                `json:"provider_response_id,omitempty"`
-	UsageFinality      string                `json:"usage_finality,omitempty"`
-	Number             int                   `json:"number"`
-	Transport          string                `json:"transport"`
-	StartedAt          time.Time             `json:"started_at"`
-	Status             string                `json:"status"`
-	HTTPStatus         int                   `json:"http_status,omitempty"`
-	Usage              *model.Usage          `json:"usage,omitempty"`
-	Tokens             *model.UsageBreakdown `json:"tokens,omitempty"`
-	Known              model.UsageKnowledge  `json:"known"`
-	UsageSource        string                `json:"usage_source,omitempty"`
-	Precision          string                `json:"precision,omitempty"`
-	Atoms              []model.InputAtom     `json:"atoms,omitempty"`
-	AtomsState         string                `json:"atoms_state,omitempty"`
-	RequestBodyBytes   int64                 `json:"request_body_bytes,omitempty"`
+	ProviderResponseID  string                            `json:"provider_response_id,omitempty"`
+	UsageFinality       string                            `json:"usage_finality,omitempty"`
+	Number              int                               `json:"number"`
+	Transport           string                            `json:"transport"`
+	StartedAt           time.Time                         `json:"started_at"`
+	Status              string                            `json:"status"`
+	HTTPStatus          int                               `json:"http_status,omitempty"`
+	Usage               *model.Usage                      `json:"usage,omitempty"`
+	Tokens              *model.UsageBreakdown             `json:"tokens,omitempty"`
+	Known               model.UsageKnowledge              `json:"known"`
+	UsageSource         string                            `json:"usage_source,omitempty"`
+	Precision           string                            `json:"precision,omitempty"`
+	Atoms               []model.InputAtom                 `json:"atoms,omitempty"`
+	AtomsState          string                            `json:"atoms_state,omitempty"`
+	RequestBodyBytes    int64                             `json:"request_body_bytes,omitempty"`
+	StreamDiagnostics   *model.ResponsesStreamDiagnostics `json:"stream_diagnostics,omitempty"`
+	toolTotal           LedgerTool
+	toolSummarySet      bool
+	toolSummaryComplete bool
 }
 
 type LedgerRequest struct {
