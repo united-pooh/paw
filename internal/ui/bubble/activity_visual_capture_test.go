@@ -68,20 +68,19 @@ pre{display:inline-block;margin:0;padding:18px 20px;background:#11151b;border:1p
 		},
 	}
 	preview.replaceTranscript(renderTaskPreviewTranscript(preview.taskPreview, preview.cursorFrameAt))
-	preview.activity.focus = activityFocusWorkspace
 	preview.input.Focus()
 	capture("activity-docked-preview", "Task transcript preview · input stays on main session", preview)
 
 	closed := newActivityVisualModel(120, 30)
+	closed.closeActivity()
 	capture("activity-docked-closed", "Activity closed · running task in top hairline", closed)
 
 	narrow := newActivityVisualModel(80, 24)
 	narrow.openActivity(activityTabTasks)
-	capture("activity-fullscreen-narrow", "Activity fullscreen · 80 columns", narrow)
+	capture("activity-docked-narrow", "Passive Activity sidebar · 80 columns", narrow)
 
 	overlay := newActivityVisualModel(120, 30)
 	overlay.openActivity(activityTabTasks)
-	overlay.activity.focus = activityFocusWorkspace
 	overlay.input.Focus()
 	overlay.completion = &completion{kind: completionKindCommand, items: []string{"/help", "/tasks", "/todo"}}
 	capture("activity-docked-overlay-priority", "Completion remains inside workspace", overlay)

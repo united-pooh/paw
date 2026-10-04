@@ -20,6 +20,8 @@ func TestContextLimitVisualFixture(t *testing.T) {
 	for _, width := range []int{80, 120} {
 		t.Run(fmt.Sprint(width), func(t *testing.T) {
 			m, _, runner := openGeneralCenter(t)
+			runner.stats.Known, runner.stats.TotalKnown = true, true
+			runner.stats.UsedTokens = 12000
 			m.width, m.height = width, 36
 			m.relayout()
 			m = editGeneralContextLimit(m, "270000")

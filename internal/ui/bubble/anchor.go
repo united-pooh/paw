@@ -90,6 +90,13 @@ func (a *terminalCursorAnchor) setAnimation(animation terminalCursorAnimation) {
 	if a == nil {
 		return
 	}
+	if animation == (terminalCursorAnimation{}) {
+		a.mu.Lock()
+		a.animation = terminalCursorAnimation{}
+		a.hasAnimation = false
+		a.mu.Unlock()
+		return
+	}
 	background, backgroundOK := normalizeTerminalHexColor(animation.background)
 	bright, brightOK := normalizeTerminalHexColor(animation.bright)
 	if !backgroundOK || !brightOK {
@@ -345,13 +352,20 @@ func terminalCursorVisualSequence(previous, next terminalCursorVisual) string {
 	if previous.color == next.color {
 		return ""
 	}
+	if next.color == "" {
+		return resetTerminalCursorColorSequence()
+	}
 	return terminalCursorColorSequence(next.color)
 }
 
 func activateTerminalCursor(position terminalCursorPosition, visual terminalCursorVisual) string {
+	colorSequence := terminalCursorColorSequence(visual.color)
+	if visual.color == "" {
+		colorSequence = resetTerminalCursorColorSequence()
+	}
 	return moveTerminalCursorToAnchor(position) +
 		terminalBackgroundSequence(position.background) +
-		terminalCursorColorSequence(visual.color) +
+		colorSequence +
 		terminalCursorShow
 }
 

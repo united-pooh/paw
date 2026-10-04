@@ -62,6 +62,11 @@ func (m *appModel) beginModelWorkContext() context.Context {
 	if m == nil {
 		return context.Background()
 	}
+	started := m.turnStartedAt
+	if started.IsZero() {
+		started = time.Now()
+	}
+	m.tokenMonitor.live.beginTurn(started)
 	if m.activeModelCancel != nil {
 		m.activeModelCancel(context.Canceled)
 	}

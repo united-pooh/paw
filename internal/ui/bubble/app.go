@@ -81,8 +81,8 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 		taskController: taskController,
 		sessionStore:   sessionStore,
 		activity: activityState{
-			focus: activityFocusWorkspace,
-			tab:   activityTabTasks,
+			visible: true,
+			tab:     activityTabTasks,
 		},
 		commandRegistry:           NewCommandRegistry(),
 		skillRegistry:             skill.NewRegistry(skill.DefaultRoots(skillRoot)),
@@ -138,8 +138,35 @@ func (m appModel) Init() tea.Cmd {
 // Update 是 Bubble Tea 的核心状态机，负责把输入事件、模型事件和工具事件规约为新状态。
 func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+	m.syncTokenMonitorSession()
 
 	switch msg := msg.(type) {
+	case tokenMonitorStartMsg:
+		m.tokenMonitor.live.start(msg.id, msg.at)
+		cmd := m.tokenMonitorCommand()
+		return m, cmd
+	case tokenMonitorActivityMsg:
+		m.tokenMonitor.live.activity(msg.id, msg.activity)
+		return m, nil
+	case tokenMonitorEndMsg:
+		m.tokenMonitor.live.requestEnd(msg.id, msg.at)
+		return m, nil
+	case tokenMonitorUsageMsg:
+		m.tokenMonitor.live.usage(model.Usage(msg))
+		cmd := m.tokenMonitorCommand()
+		return m, cmd
+	case tokenMonitorResultMsg:
+		cmd := m.applyTokenMonitorResult(msg)
+		return m, cmd
+	case tokenMonitorTickMsg:
+		m.tokenMonitor.scheduled = false
+		if !m.isAgentWorking() && time.Since(m.lastKeyEventAt) < idleClockInputGuard {
+			cmd := m.scheduleTokenMonitorTick()
+			return m, cmd
+		}
+		m.refreshActivityFromTasks(time.Now())
+		cmd := m.tokenMonitorCommand()
+		return m, cmd
 	case transcriptWheelBatchMsg:
 		m = m.applyTranscriptWheelBatch(msg.lines, msg.x, msg.y)
 		return m, m.renewDeferredTranscriptRefresh()
@@ -183,7 +210,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.relayout()
 		m.resizeStreamingBuffers()
 		m.refreshViewportWithBottomState(wasAtBottom)
-		return m, nil
+		m.refreshActivityTasks()
+		cmd := m.tokenMonitorCommand()
+		return m, cmd
 	case taskUpdateMsg:
 		m.refreshActivityTasks()
 		previewChanged := m.refreshTaskPreviewFromTasks()
@@ -261,6 +290,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleAssistantPartEvent(msg)
 		return m, nil
 	case toolCallMsg:
+		m.tokenMonitor.live.toolStart(msg.ID, time.Now())
 		m.turnHasModelOutput = true
 		m.batchTranscriptRefresh(func() {
 			m.finalizeThinkingStream()
@@ -270,6 +300,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 		return m, nil
 	case toolResultMsg:
+		m.tokenMonitor.live.toolEnd(msg.ToolUseID, time.Now())
 		status := "ok"
 		if msg.IsError {
 			status = "error"
@@ -293,6 +324,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 		return m, nil
 	case doneMsg:
+		m.tokenMonitor.live.finish(time.Now())
 		var deferredRefresh tea.Cmd
 		deferCanceledRefresh := m.modelCancelRequested
 		if deferCanceledRefresh {
@@ -302,6 +334,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			deferredRefresh = m.renewDeferredTranscriptRefresh()
 		}
 		m.finalizeThinkingStream()
+		if index := m.activeReasoning; index >= 0 && index < len(m.transcript) {
+			m.finalizeReasoningEntry(m.transcript[index].reasoningPartIndex)
+		}
+		m.activeReasoning = -1
 		m.doneAssistant = m.finalizeAssistantStream()
 		m.isGenerating = false
 		if deferCanceledRefresh {
@@ -310,32 +346,47 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, nil
 	case planFinalizedMsg:
+		m.tokenMonitor.live.endTurn(time.Now())
 		m.planWorking = false
-		m.planMode = false
-		m.addEntry(transcriptEntry{kind: entrySystem, title: "plan", body: "plan 已定稿：" + msg.path + "\n切换到 chat 模式开始执行。"})
-		m.inputSource = inputSourceFresh
-		next, cmd := m.startChatTurn("开始执行已批准的计划：" + msg.path)
-		return next, cmd
+		m.planMode, m.goalMode = true, false
+		m.turnStartedAt = time.Time{}
+		m.turnID = ""
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "plan", body: "计划已就绪：" + msg.path + "\n输入补充内容继续修改，或使用 /plan execute 开始执行。"})
+		m.input.Focus()
+		return m, nil
 	case planStoppedMsg:
+		m.tokenMonitor.live.endTurn(time.Now())
 		m.planWorking = false
-		m.planMode = false
+		waiting := msg.reason == "paused" || msg.reason == "awaiting_input"
+		m.planMode = waiting
 		m.turnStartedAt = time.Time{}
 		m.turnID = ""
 		body := "plan 会话已结束"
-		if strings.TrimSpace(msg.reason) != "" {
+		if waiting {
+			m.goalMode = false
+			body = "计划等待补充；输入内容继续当前计划，或使用 /plan resume 恢复。"
+		} else if strings.TrimSpace(msg.reason) != "" {
 			body += "：" + msg.reason
 		}
 		m.addEntry(transcriptEntry{kind: entrySystem, title: "plan", body: body})
 		cmds = append(cmds, m.input.Focus())
 		return m, tea.Batch(cmds...)
 	case goalStoppedMsg:
+		m.tokenMonitor.live.endTurn(time.Now())
 		wasWorking := m.isAgentWorking()
 		m.goalWorking = false
-		m.goalMode = false
+		waiting := msg.reason == "goal.paused" || msg.reason == "goal.blocked" || msg.reason == "paused" || msg.reason == "blocked"
+		m.goalMode = waiting
 		m.turnStartedAt = time.Time{}
 		m.turnID = ""
 		body := "goal 会话已结束"
-		if strings.TrimSpace(msg.reason) != "" {
+		if waiting {
+			m.planMode = false
+			body = "目标已暂停；输入补充内容继续，或使用 /goal resume 恢复。"
+			if m.goalController != nil {
+				body += "\n" + m.goalController.Status()
+			}
+		} else if strings.TrimSpace(msg.reason) != "" {
 			body += "：" + msg.reason
 		}
 		m.addEntry(transcriptEntry{kind: entrySystem, title: "goal", body: body})
@@ -348,6 +399,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.input.Focus())
 		return m, tea.Batch(cmds...)
 	case contextCompactionFinishedMsg:
+		m.tokenMonitor.live.endTurn(time.Now())
 		m.finishModelWork()
 		m.modelCancelRequested = false
 		m.queryGuard.FinishModel()
@@ -373,6 +425,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.input.Focus())
 		return m, tea.Batch(cmds...)
 	case turnFinishedMsg:
+		m.tokenMonitor.live.endTurn(time.Now())
 		wasWorking := m.isAgentWorking()
 		hadModelOutput := m.turnHasModelOutput
 		expectedCancel := m.modelCancelRequested && errors.Is(msg.err, context.Canceled)
@@ -466,6 +519,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 		cmds = append(cmds, m.input.Focus())
 	case taskFinishedMsg:
+		m.tokenMonitor.live.endTurn(time.Now())
 		wasWorking := m.isAgentWorking()
 		expectedCancel := m.modelCancelRequested && errors.Is(msg.err, context.Canceled)
 		m.finishModelWork()
@@ -561,7 +615,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.applySessionPickerRestore(msg)
 			}
 		}
-		cmds = append(cmds, m.input.Focus())
+		cmds = append(cmds, m.input.Focus(), m.tokenMonitorCommand())
 		return m, tea.Batch(cmds...)
 	case fileCompletionLoadedMsg:
 		// 丢弃与当前 searchDir 不匹配的过期结果
@@ -654,13 +708,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.translatePanel = &panel
 		return m, nil
 	case tea.KeyMsg:
-		// Ctrl+W pane chord 的第二键必须先于 raw mouse 碎片过滤处理；字符 `<`
-		// 同时是 SGR mouse 序列前缀，否则调窄命令会被误吞。
-		if m.activity.commandPrefix == activityCommandCtrlW {
-			if next, handled, cmd := m.handleActivityGlobalKey(msg); handled {
-				return next, cmd
-			}
-		}
 		var rawMouseFragment bool
 		msg, rawMouseFragment = m.filterRawMouseEscapeKey(msg)
 		if rawMouseFragment {
@@ -701,9 +748,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if next, handled, cmd := m.handleActivityGlobalKey(msg); handled {
 			return next, cmd
-		}
-		if m.activity.visible && m.activity.focus == activityFocusPanel {
-			return m.handleActivityKey(msg)
 		}
 		if m.toolInspectActive {
 			return m.handleToolInspectKey(msg)

@@ -37,7 +37,7 @@ func TestTaskEntriesSortByAttentionPriorityThenNewest(t *testing.T) {
 	}
 }
 
-func TestRenderActivityTaskSelectedShowsColoredWorkerStatusAndWrappedDescription(t *testing.T) {
+func TestRenderActivityTaskSummaryShowsColoredStatusAndDescriptionWithoutSelection(t *testing.T) {
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
@@ -89,9 +89,12 @@ func TestRenderActivityTaskSelectedShowsColoredWorkerStatusAndWrappedDescription
 		}
 	}
 
-	selectedWorkerStyle := model.styles.SelectionSelected.Copy().Foreground(lipgloss.Color("#669988"))
-	if expected := selectedWorkerStyle.Render("八潮瑠唯"); !strings.Contains(rendered, expected) {
-		t.Fatalf("selected worker name lost support color/background pairing\nwant fragment: %q\nrendered: %q", expected, rendered)
+	workerStyle := unselectedProviderStyle.Copy().Bold(true).Foreground(lipgloss.Color("#669988"))
+	if expected := workerStyle.Render("八潮瑠唯"); !strings.Contains(rendered, expected) {
+		t.Fatalf("worker name lost its color\nwant fragment: %q\nrendered: %q", expected, rendered)
+	}
+	if strings.Contains(rendered, "\x1b[7m") || strings.Contains(rendered, ";7m") {
+		t.Fatal("passive task summary still uses inverse selection")
 	}
 }
 

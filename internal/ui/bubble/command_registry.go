@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"paw/internal/runtime/plan"
 )
 
 // CommandHandler mutates appModel for a slash command and may return a tea.Cmd.
@@ -154,7 +155,7 @@ func NewCommandRegistry() *CommandRegistry {
 		AllowWhileRunning: true,
 		Handler: func(m *appModel, invocation string) tea.Cmd {
 			m.openActivity(activityTabTasks)
-			return nil
+			return m.tokenMonitorCommand()
 		},
 	})
 	registry.Register(Command{
@@ -163,7 +164,7 @@ func NewCommandRegistry() *CommandRegistry {
 		AllowWhileRunning: true,
 		Handler: func(m *appModel, invocation string) tea.Cmd {
 			m.openActivity(activityTabTodo)
-			return nil
+			return m.tokenMonitorCommand()
 		},
 	})
 	registry.Register(Command{
@@ -218,7 +219,7 @@ func NewCommandRegistry() *CommandRegistry {
 	registry.Register(Command{
 		Name:              "/plan",
 		Description:       "author an independent plan document (spec/scope)",
-		ArgumentHint:      "[new <requirement>|status|list|show <id>|stop]",
+		ArgumentHint:      "[new <requirement>|status|list|show <id>|resume|execute|stop|cancel]",
 		AllowWhileRunning: true,
 		Handler: func(m *appModel, invocation string) tea.Cmd {
 			return m.handlePlanCommand(invocation)
@@ -350,7 +351,7 @@ func (r *CommandRegistry) Dispatch(m *appModel, line string) (bool, tea.Cmd) {
 		m.addEntry(transcriptEntry{kind: entryError, title: "command", body: fmt.Sprintf("unknown command: %s", token)})
 		return true, nil
 	}
-	if m.isWorkRunning() && !command.AllowWhileRunning {
+	if (m.isWorkRunning() || m.goalWorking || m.planWorking) && !command.AllowWhileRunning {
 		m.addEntry(transcriptEntry{kind: entrySystem, title: "busy", body: fmt.Sprintf("%s is unavailable while a turn is running", token)})
 		return true, nil
 	}
@@ -476,7 +477,9 @@ func (m *appModel) handleGoalCommand(invocation string) tea.Cmd {
 			return nil
 		}
 		m.addEntry(transcriptEntry{kind: entrySystem, title: "goal", body: "started goal " + id})
+		m.tokenMonitor.live.beginTurn(time.Now())
 		m.goalWorking = true
+		m.goalMode, m.planMode = true, false
 		m.turnStartedAt = time.Now()
 		m.turnID = id
 		m.applyCursorAnimation()
@@ -486,7 +489,13 @@ func (m *appModel) handleGoalCommand(invocation string) tea.Cmd {
 			m.addEntry(transcriptEntry{kind: entryError, title: "goal", body: err.Error()})
 			return nil
 		}
+		if m.goalWorking {
+			m.addEntry(transcriptEntry{kind: entrySystem, title: "goal", body: "正在暂停目标，等待当前执行退出。"})
+			return nil
+		}
+		m.tokenMonitor.live.endTurn(time.Now())
 		m.goalWorking = false
+		m.goalMode, m.planMode = true, false
 		m.turnStartedAt = time.Time{}
 		m.turnID = ""
 		m.addEntry(transcriptEntry{kind: entrySystem, title: "goal", body: "goal paused"})
@@ -495,7 +504,9 @@ func (m *appModel) handleGoalCommand(invocation string) tea.Cmd {
 			m.addEntry(transcriptEntry{kind: entryError, title: "goal", body: err.Error()})
 			return nil
 		}
+		m.tokenMonitor.live.beginTurn(time.Now())
 		m.goalWorking = true
+		m.goalMode, m.planMode = true, false
 		m.turnStartedAt = time.Now()
 		m.applyCursorAnimation()
 		return m.scheduleUIAnimationFrame()
@@ -507,6 +518,11 @@ func (m *appModel) handleGoalCommand(invocation string) tea.Cmd {
 			m.addEntry(transcriptEntry{kind: entryError, title: "goal", body: err.Error()})
 			return nil
 		}
+		if m.goalWorking {
+			m.addEntry(transcriptEntry{kind: entrySystem, title: "goal", body: "正在取消目标，等待当前执行退出。"})
+			return nil
+		}
+		m.tokenMonitor.live.endTurn(time.Now())
 		m.goalWorking = false
 		m.goalMode = false
 		m.turnStartedAt = time.Time{}
@@ -543,7 +559,9 @@ func (m *appModel) handlePlanCommand(invocation string) tea.Cmd {
 			m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: err.Error()})
 			return nil
 		}
+		m.tokenMonitor.live.beginTurn(time.Now())
 		m.planWorking = true
+		m.planMode, m.goalMode = true, false
 		m.addEntry(transcriptEntry{kind: entrySystem, title: "plan", body: "started " + id + "\nrequirement: " + requirement})
 	case "list":
 		m.addEntry(transcriptEntry{kind: entrySystem, title: "plan list", body: m.planController.List()})
@@ -558,22 +576,75 @@ func (m *appModel) handlePlanCommand(invocation string) tea.Cmd {
 			m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: err.Error()})
 			return nil
 		}
+		m.tokenMonitor.live.beginTurn(time.Now())
 		m.planWorking = true
 		m.planMode = true
+		m.goalMode = false
 		m.turnStartedAt = time.Now()
 		m.addEntry(transcriptEntry{kind: entrySystem, title: "plan", body: "plan resumed"})
 		m.applyCursorAnimation()
 		return m.scheduleUIAnimationFrame()
-	case "stop", "cancel":
+	case "execute":
+		if m.goalWorking || m.planWorking || m.isWorkRunning() {
+			m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: "wait for the current work to pause before executing the plan"})
+			return nil
+		}
+		executor, ok := m.planController.(interface{ Execute() (plan.PlanDoc, error) })
+		if !ok {
+			m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: "plan execution is unavailable"})
+			return nil
+		}
+		doc, err := executor.Execute()
+		if err != nil {
+			m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: err.Error()})
+			return nil
+		}
+		if strings.TrimSpace(doc.Path) == "" {
+			m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: "approved plan path is empty"})
+			return nil
+		}
+		m.planMode, m.goalMode = false, false
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "plan", body: "开始执行计划：" + doc.Path})
+		next, cmd := m.startChatTurn("开始执行已批准的计划：" + doc.Path)
+		*m = next
+		return cmd
+	case "stop":
+		controller, ok := m.planController.(interface{ Pause() error })
+		if !ok {
+			m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: "plan pause is unavailable"})
+			return nil
+		}
+		if err := controller.Pause(); err != nil {
+			m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: err.Error()})
+			return nil
+		}
+		if m.planWorking {
+			m.addEntry(transcriptEntry{kind: entrySystem, title: "plan", body: "正在暂停计划，等待当前执行退出。"})
+			return nil
+		}
+		m.tokenMonitor.live.endTurn(time.Now())
+		m.planWorking = false
+		m.planMode, m.goalMode = true, false
+		m.turnStartedAt = time.Time{}
+		m.turnID = ""
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "plan", body: "计划已暂停；输入补充内容或使用 /plan resume 继续。"})
+	case "cancel":
 		if err := m.planController.Cancel(); err != nil {
 			m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: err.Error()})
 			return nil
 		}
+		if m.planWorking {
+			m.addEntry(transcriptEntry{kind: entrySystem, title: "plan", body: "正在取消计划，等待当前执行退出。"})
+			return nil
+		}
+		m.tokenMonitor.live.endTurn(time.Now())
 		m.planWorking = false
 		m.planMode = false
-		m.addEntry(transcriptEntry{kind: entrySystem, title: "plan", body: "plan session stopped"})
+		m.turnStartedAt = time.Time{}
+		m.turnID = ""
+		m.addEntry(transcriptEntry{kind: entrySystem, title: "plan", body: "plan session cancelled"})
 	default:
-		m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: "usage: /plan new <requirement>|status|list|show <id>|resume|stop"})
+		m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: "usage: /plan new <requirement>|status|list|show <id>|resume|execute|stop|cancel"})
 	}
 	return nil
 }

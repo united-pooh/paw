@@ -153,7 +153,8 @@ type GoalController interface {
 
 // PlanController exposes lifecycle controls for the standalone Plan mode.
 // Plans are spec/scope documents independent of Goals; plan mode authors them
-// through a clarification → draft → approval workflow.
+// through a clarification → draft → ready workflow. Execution requires an
+// explicit user action after the document is ready.
 type PlanController interface {
 	Start(requirement string) (string, error)
 	Status() string
@@ -260,8 +261,7 @@ func (u *UI) SetPlanController(controller PlanController) {
 	u.planController = controller
 }
 
-// NotifyPlanFinalized routes a plan-approval event into the running Bubble
-// Tea program so the TUI can switch back to chat mode and start execution.
+// NotifyPlanFinalized announces a ready plan without starting execution.
 func (u *UI) NotifyPlanFinalized(path string) error {
 	return u.send(planFinalizedMsg{path: path})
 }

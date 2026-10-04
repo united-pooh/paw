@@ -214,8 +214,7 @@ func (c ColorManager) Hex(role colorRole) string {
 		value = p.DiffDeletedForeground
 	case colorDiffDeletedBackground:
 		value = p.DiffDeletedBackground
-	}
-	if value == "" {
+	default:
 		value = p.Body
 	}
 	return strings.ToLower(value)
@@ -226,6 +225,9 @@ func (c ColorManager) LipglossColor(role colorRole) lipgloss.Color {
 }
 
 func (c ColorManager) CursorColor(intensity float64, terminal bool) string {
+	if c.palette.TerminalBackground == "" {
+		return ""
+	}
 	bright := colorCursorNormalBright
 	if terminal {
 		bright = colorCursorTerminalBright

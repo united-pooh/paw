@@ -2,20 +2,11 @@ package bubble
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"paw/internal/todo"
 )
-
-var activityPages = []struct {
-	id    activityTab
-	title string
-}{
-	{id: activityTabTasks, title: "Tasks"},
-	{id: activityTabTodo, title: "Todo"},
-}
 
 var (
 	activityFocusStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorSignal)).Bold(true)
@@ -25,72 +16,25 @@ var (
 func (m appModel) renderActivityPane(width, height int) string {
 	width = maxInt(1, width)
 	height = maxInt(1, height)
-	headerHeight := minInt(2, height)
-	footerHeight := 0
-	if height >= 4 {
-		footerHeight = 1
-	}
-	bodyHeight := maxInt(0, height-headerHeight-footerHeight)
-
-	focus := ""
-	if m.activity.focus == activityFocusPanel {
-		focus = activityFocusStyle.Render("FOCUSED")
-	}
-	title := renderSidebarRow(width, "Activity", focus, wizardTitleStyle, activityFocusStyle)
-	parts := []string{title}
-	if headerHeight > 1 {
-		parts = append(parts, m.renderActivityTabs(width))
-	}
-
-	body := ""
-	switch m.activity.tab {
-	case activityTabTodo:
-		body = m.renderActivityTodo(width, bodyHeight)
-	default:
-		body = m.renderActivityTasks(width, bodyHeight)
-	}
-	if bodyHeight > 0 {
-		parts = append(parts, fitStyledRect(body, width, bodyHeight))
-	}
-	if footerHeight > 0 {
-		parts = append(parts, activityHintStyle.Render(truncateStyledCellLine(m.activityFooterHint(), width)))
-	}
-	return fitStyledRect(strings.Join(parts, "\n"), width, height)
-}
-
-func (m appModel) renderActivityTabs(width int) string {
-	labels := make([]string, 0, len(activityPages))
-	for _, page := range activityPages {
-		label := page.title
-		switch page.id {
-		case activityTabTasks:
-			label += " " + strconv.Itoa(len(m.activity.tasks))
-		case activityTabTodo:
-			if m.hasCurrentTodo && !m.currentTodo.Cleared() {
-				label += fmt.Sprintf(" %d/%d", m.currentTodo.CompletedCount(), m.currentTodo.TotalCount())
-			}
-		}
-		style := unselectedProviderStyle
-		if page.id == m.activity.tab {
-			style = m.styles.SelectionSelected
-		}
-		labels = append(labels, style.Render(" "+label+" "))
-	}
-	return truncateStyledCellLine(strings.Join(labels, " "), width)
-}
-
-func (m appModel) activityFooterHint() string {
+	topHeight := height / 2
+	top := ""
 	if m.activity.tab == activityTabTodo {
-		return "Tab/←/→ page · Esc main"
+		top = m.renderActivityTodo(width, topHeight)
+	} else if topHeight > 0 {
+		title := wizardTitleStyle.Render(fmt.Sprintf("Activity / Tasks %d", len(m.activity.tasks)))
+		top = title + "\n" + m.renderActivityTasks(width, topHeight-1)
 	}
-	return "↑/↓ select · Enter preview · Tab page · Esc main"
-}
-
-func (m appModel) renderActivityFullscreenBottomContent(width int) string {
-	return truncateStyledCellLine("ACTIVITY · Esc/Ctrl+G back", width)
+	bottom := renderTokenHistory(m.tokenMonitorView(), width, height-topHeight)
+	if topHeight == 0 {
+		return bottom
+	}
+	return fitStyledRect(top, width, topHeight) + "\n" + bottom
 }
 
 func (m appModel) renderActivityTodo(width, height int) string {
+	if height <= 0 {
+		return ""
+	}
 	if !m.hasCurrentTodo || m.currentTodo.Cleared() {
 		return unselectedProviderStyle.Render("No active todo list")
 	}
@@ -109,24 +53,62 @@ func (m appModel) renderActivityTodo(width, height int) string {
 	if len(snapshot.Items) > 0 {
 		lines = append(lines, "")
 	}
-	for _, item := range snapshot.Items {
-		lines = append(lines, renderTodoItemLine(item, width, contentWidth)...)
+	if len(lines) >= height && len(snapshot.Items) > 0 {
+		lines = lines[:maxInt(1, height-2)]
 	}
-	if len(lines) > height {
-		lines = lines[:height-1]
-		lines = append(lines, unselectedProviderStyle.Render("↑↓ scroll for more"))
+	for index, item := range snapshot.Items {
+		remaining := len(snapshot.Items) - index
+		if len(lines) >= height-1 && remaining > 1 {
+			lines = append(lines, unselectedProviderStyle.Render(fmt.Sprintf("+%d more items", remaining)))
+			break
+		}
+		itemLines := renderTodoItemLine(snapshot, item, width)
+		available := height - len(lines)
+		if remaining > 1 {
+			available--
+		}
+		if available <= 0 {
+			break
+		}
+		if len(itemLines) > available {
+			if available > 1 {
+				hidden := len(itemLines) - available + 1
+				itemLines[available-1] = fitStyledCellLine(todoSummaryStyle.Render(fmt.Sprintf("    +%d more blockers", hidden)), width)
+			}
+			itemLines = itemLines[:available]
+		}
+		lines = append(lines, itemLines...)
 	}
-	return strings.Join(lines, "\n")
+	return fitStyledRect(strings.Join(lines, "\n"), width, height)
 }
 
-func renderTodoItemLine(item todo.Item, width, contentWidth int) []string {
+func renderTodoItemLine(snapshot todo.Snapshot, item todo.Item, width int) []string {
 	icon, iconStyle := todoStatusDisplay(item.Status)
+	var blockers []string
+	if item.Status == todo.StatusPending {
+		blockers = snapshot.UnresolvedBlockers(item.ID)
+		if len(blockers) > 0 {
+			icon, iconStyle = "⊘", todoInProgressStyle
+		}
+	}
 	mark := iconStyle.Render(icon + " ")
 	remainingWidth := maxInt(1, width-terminalCellWidth(mark)-2)
 	content := truncateStyledCellLine(item.Content, remainingWidth)
 	prefix := "  "
 	line := prefix + mark + content
-	return []string{fitStyledCellLine(line, width)}
+	lines := []string{fitStyledCellLine(line, width)}
+	for _, id := range blockers {
+		label := "等待 " + id
+		for _, dependency := range snapshot.Items {
+			if dependency.ID == id {
+				label += " · " + dependency.Content
+				break
+			}
+		}
+		label = truncateStyledCellLine(label, maxInt(1, width-4))
+		lines = append(lines, fitStyledCellLine("    "+todoSummaryStyle.Render(label), width))
+	}
+	return lines
 }
 
 func todoStatusDisplay(status todo.Status) (string, lipgloss.Style) {

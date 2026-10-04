@@ -18,11 +18,11 @@ func TestOpenAndCloseActivityPreserveWidthTabAndSelection(t *testing.T) {
 	model.taskController = &fakeTaskController{tasks: []task.TaskSnapshot{{ID: "task-2", ParentSessionID: model.sessionID}}}
 
 	model.openActivity(activityTabTasks)
-	if !model.activity.visible || model.activity.focus != activityFocusPanel || model.activity.tab != activityTabTasks {
+	if !model.activity.visible || !model.input.Focused() || model.activity.tab != activityTabTasks {
 		t.Fatalf("opened activity = %+v", model.activity)
 	}
 	model.closeActivity()
-	if model.activity.visible || model.activity.focus != activityFocusWorkspace {
+	if model.activity.visible || !model.input.Focused() {
 		t.Fatalf("closed activity = %+v", model.activity)
 	}
 	if model.activity.widthColumns != 44 || model.activity.selectedTaskID != "task-2" {
@@ -50,62 +50,18 @@ func TestRefreshActivityTasksPreservesSelectionByID(t *testing.T) {
 	}
 }
 
-func TestActivityGlobalKeysToggleFocusAndResize(t *testing.T) {
+func TestActivityTogglePreservesInputAndCompletion(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	model.ready = true
-	model.width = 120
-	model.height = 30
-	model.relayout()
-
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
-	model = next.(appModel)
-	if !model.activity.visible || model.activity.focus != activityFocusPanel {
-		t.Fatalf("ctrl+g open = %+v", model.activity)
-	}
-	defaultWidth := model.currentLayout().activityWidth
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
-	model = next.(appModel)
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'>'}})
-	model = next.(appModel)
-	if model.activity.widthColumns != defaultWidth+activityResizeStep {
-		t.Fatalf("first grow width = %d, want %d", model.activity.widthColumns, defaultWidth+activityResizeStep)
-	}
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
-	model = next.(appModel)
-	if model.activity.commandPrefix != activityCommandCtrlW {
-		t.Fatalf("second ctrl+w prefix = %v", model.activity.commandPrefix)
-	}
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'<'}})
-	model = next.(appModel)
-	if model.activity.widthColumns != defaultWidth {
-		t.Fatalf("grow+shrink width = %d, want %d; prefix=%v mode=%v key=%q", model.activity.widthColumns, defaultWidth, model.activity.commandPrefix, model.currentLayout().activityMode, (tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'<'}}).String())
-	}
-
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
-	model = next.(appModel)
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
-	model = next.(appModel)
-	if model.activity.focus != activityFocusWorkspace || !model.input.Focused() {
-		t.Fatalf("ctrl+w h = %+v focused=%v", model.activity, model.input.Focused())
-	}
-
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
-	model = next.(appModel)
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
-	model = next.(appModel)
-	if model.activity.focus != activityFocusPanel || model.input.Focused() {
-		t.Fatalf("ctrl+w l = %+v focused=%v", model.activity, model.input.Focused())
-	}
-
-	model.activity.widthColumns = 40
-	for _, key := range []rune{'<', '>'} {
-		next, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
+	model.ready, model.width, model.height = true, 120, 30
+	model.activity.visible = true
+	model.input.SetValue("draft")
+	model.completion = &completion{kind: completionKindCommand, items: []string{"/help"}}
+	for _, visible := range []bool{false, true} {
+		next, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
 		model = next.(appModel)
-		next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
-		model = next.(appModel)
-	}
-	if model.activity.widthColumns != 40 {
-		t.Fatalf("shrink+grow width = %d, want 40", model.activity.widthColumns)
+		if model.activity.visible != visible || !model.input.Focused() || model.input.Value() != "draft" || model.completion == nil {
+			t.Fatalf("toggle lost editor state: visible=%v input=%q focus=%v completion=%v", model.activity.visible, model.input.Value(), model.input.Focused(), model.completion)
+		}
 	}
 }
 
@@ -118,33 +74,30 @@ func TestWideActivityEscReturnsFocusWithoutClosingDock(t *testing.T) {
 
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	model = next.(appModel)
-	if !model.activity.visible || model.activity.focus != activityFocusWorkspace || !model.input.Focused() {
+	if !model.activity.visible || !model.input.Focused() {
 		t.Fatalf("Esc state = %+v focused=%v", model.activity, model.input.Focused())
 	}
 }
 
 func TestClosedActivityDoesNotInterceptCtrlW(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
+	model.closeActivity()
 	if _, handled, _ := model.handleActivityGlobalKey(tea.KeyMsg{Type: tea.KeyCtrlW}); handled {
 		t.Fatal("closed Activity intercepted Ctrl+W")
 	}
 }
 
-func TestActivityInvalidCtrlWChordIsConsumed(t *testing.T) {
+func TestActivityCtrlWEditsWordWithoutSwallowingNextKey(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	model.ready = true
-	model.width = 120
-	model.height = 30
+	model.ready, model.width, model.height = true, 120, 30
 	model.openActivity(activityTabTasks)
-	model.activity.focus = activityFocusWorkspace
-	model.input.Focus()
-	model.input.SetValue("draft")
-
+	model.input.SetValue("keep draft")
+	model.input.CursorEnd()
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
 	model = next.(appModel)
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
 	model = next.(appModel)
-	if model.input.Value() != "draft" || model.activity.commandPrefix != activityCommandIdle {
-		t.Fatalf("invalid chord leaked: value=%q activity=%+v", model.input.Value(), model.activity)
+	if model.input.Value() != "keep x" || !model.input.Focused() {
+		t.Fatalf("Ctrl+W did not edit input: value=%q focus=%v", model.input.Value(), model.input.Focused())
 	}
 }

@@ -292,7 +292,7 @@ func (c *fakeModelConfigController) SaveModelConfig(cfg modelcfg.Config) error {
 
 // newTestModel 创建带默认配置 profile 的测试用 appModel。
 func newTestModel(runner Runner) appModel {
-	return newModel(context.Background(), runner, "session-1", &fakeModelConfigController{
+	model := newModel(context.Background(), runner, "session-1", &fakeModelConfigController{
 		current: modelcfg.Config{
 			ProfileID:     "gateway",
 			ProfileName:   "Gateway",
@@ -331,6 +331,8 @@ func newTestModel(runner Runner) appModel {
 			Timeout: time.Minute,
 		},
 	}, nil, nil, nil, newTerminalCursorAnchor())
+	model.tokenMonitor.reader = &fakeTokenMonitorReader{}
+	return model
 }
 
 func writeBubbleTestSkill(t *testing.T, root, name, body string) string {
@@ -2612,6 +2614,7 @@ func TestViewUsesMinimalPlaceholderAndOmitsHelpLine(t *testing.T) {
 // TestViewFramesTranscriptHistoryPanel 验证聊天历史区域使用细线结构并展示空状态。
 func TestViewFramesTranscriptHistoryPanel(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
+	model.activity.visible = false
 	model.ready = true
 	model.width = 80
 	model.height = 24
@@ -2659,6 +2662,7 @@ func TestInputHintIsDimAndRemainsAfterFirstSubmission(t *testing.T) {
 // TestRelayoutReservesSpaceForTranscriptFrame 验证布局会为历史面板边框保留空间。
 func TestRelayoutReservesSpaceForTranscriptFrame(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
+	model.activity.visible = false
 	model.ready = true
 	model.width = 80
 	model.height = 10
@@ -2714,7 +2718,7 @@ func TestViewFillsTerminalHeightAndPinsInputToBottom(t *testing.T) {
 		t.Fatalf("bottom input not visible near frame bottom:\n%s", ansi.Strip(rendered))
 	}
 	lastLine := lines[len(lines)-1]
-	if strings.TrimSpace(lastLine) == "" || !strings.Contains(lastLine, "上下文") {
+	if strings.TrimSpace(lastLine) == "" || !strings.Contains(lastLine, "CTX —") {
 		t.Fatalf("last rendered line = %q, want fixed bottom metadata", lastLine)
 	}
 }
@@ -2796,7 +2800,7 @@ func TestFirstTypedLineUsesThemeBackground(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
 
-	model := newTestModel(&fakeRunner{})
+	model := newRGBTestModel(t)
 	model.width = 80
 
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
@@ -2911,7 +2915,7 @@ func TestTaskCommandUsesDefaultsAndTasksRender(t *testing.T) {
 	model.relayout()
 
 	handled, cmd := model.handleCommand("/task summarize recent changes")
-	if !handled || cmd != nil {
+	if !handled {
 		t.Fatalf("/task handled/cmd = %v/%v", handled, cmd)
 	}
 	if len(taskController.launchRequests) != 1 {
@@ -2929,7 +2933,7 @@ func TestTaskCommandUsesDefaultsAndTasksRender(t *testing.T) {
 	}
 
 	handled, cmd = model.handleCommand("/tasks")
-	if !handled || cmd != nil {
+	if !handled {
 		t.Fatalf("/tasks handled/cmd = %v/%v", handled, cmd)
 	}
 	if !model.activity.visible || model.activity.tab != activityTabTasks {
@@ -3439,6 +3443,7 @@ func TestClickInputDockExitsKeyScrollMode(t *testing.T) {
 
 func TestFullWidthTranscriptMouseWheelScrollsViewport(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
+	model.activity.visible = false
 	model.ready = true
 	model.width = 80
 	model.height = 10
@@ -3595,6 +3600,7 @@ func TestRawMouseEscapeDetectorDoesNotRejectNormalText(t *testing.T) {
 
 func TestFullWidthTranscriptMouseClickStartsSelection(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
+	model.activity.visible = false
 	model.ready = true
 	model.width = 80
 	model.height = 10
@@ -3801,6 +3807,7 @@ func TestTranscriptDragSelectsThroughLineEnd(t *testing.T) {
 
 	const body = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" // 74 chars
 	model := newTestModel(&fakeRunner{})
+	model.activity.visible = false
 	model.ready = true
 	model.width = 80
 	model.height = 12
@@ -4360,6 +4367,7 @@ func TestSelectionStyleFallsBackToReverseIn16Color(t *testing.T) {
 // TestSelectionStyleUsesThemeColorsInTrueColor 验证真彩色终端里选区样式使用
 // 主题的 selection.background / selection.foreground，且不启用反色。
 func TestSelectionStyleUsesThemeColorsInTrueColor(t *testing.T) {
+	newRGBTestModel(t)
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() {
@@ -5278,6 +5286,7 @@ func TestMarkdownCodeBlockTruncatesLongLanguageLabelWithinWidth(t *testing.T) {
 }
 
 func TestMarkdownCodeBlockLabelStyleUsesSignalCyan(t *testing.T) {
+	newRGBTestModel(t)
 	if got := markdownCodeBlockLabelStyle.GetBackground(); got != colorManager.LipglossColor(colorSignal) {
 		t.Fatalf("label background = %#v, want %#v", got, colorManager.LipglossColor(colorSignal))
 	}
@@ -5571,7 +5580,7 @@ func TestRestoredSkillReferenceRebuildsTranscriptAndInputTokens(t *testing.T) {
 	}
 }
 
-func TestCtrlGtaskPickerEnterPreviewsSelectedtask(t *testing.T) {
+func TestTaskTranscriptPreviewPreservesMainInput(t *testing.T) {
 	transcriptPath := filepath.Join(t.TempDir(), "agent-2.jsonl")
 	transcript := strings.Join([]string{
 		`{"seq":0,"message":{"role":"user","content":"task prompt"},"created_at":"2026-06-28T00:00:00Z"}`,
@@ -5590,8 +5599,7 @@ func TestCtrlGtaskPickerEnterPreviewsSelectedtask(t *testing.T) {
 	model.transcript = []transcriptEntry{{kind: entryUser, title: "you", body: "main draft"}}
 	model.input.SetValue("main input")
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
-	model = next.(appModel)
+	model.openActivity(activityTabTasks)
 	if !model.activity.visible {
 		t.Fatalf("taskPicker = nil, want picker")
 	}
@@ -5609,7 +5617,7 @@ func TestCtrlGtaskPickerEnterPreviewsSelectedtask(t *testing.T) {
 		t.Fatalf("priority-sorted selection = index:%d tasks:%#v, want running agent-2 first", model.activity.selectedIndex, model.activity.tasks)
 	}
 
-	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := model.previewTaskTranscript(model.activity.tasks[0])
 	model = next.(appModel)
 	if cmd == nil {
 		t.Fatalf("enter on task picker returned nil cmd")
@@ -5650,7 +5658,7 @@ func TestCtrlGtaskPickerEnterPreviewsSelectedtask(t *testing.T) {
 	}
 }
 
-func TestTaskPickerEscAndCtrlGCloseSelection(t *testing.T) {
+func TestActivityEscKeepsSidebarAndCtrlGCloses(t *testing.T) {
 	for _, key := range []tea.KeyType{tea.KeyEsc, tea.KeyCtrlG} {
 		model := newTestModel(&fakeRunner{})
 		model.taskController = &fakeTaskController{tasks: []taskpkg.TaskSnapshot{
@@ -5658,15 +5666,14 @@ func TestTaskPickerEscAndCtrlGCloseSelection(t *testing.T) {
 		}}
 		model.input.SetValue("main input")
 
-		next, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
-		model = next.(appModel)
+		model.openActivity(activityTabTasks)
 		if !model.activity.visible {
 			t.Fatalf("key %v: taskPicker = nil after ctrl+g", key)
 		}
 
-		next, _ = model.Update(tea.KeyMsg{Type: key})
+		next, _ := model.Update(tea.KeyMsg{Type: key})
 		model = next.(appModel)
-		if model.activity.visible {
+		if model.activity.visible != (key == tea.KeyEsc) {
 			t.Fatalf("key %v: taskPicker = %#v, want nil", key, model.activity)
 		}
 		if got := model.input.Value(); got != "main input" {
@@ -5721,7 +5728,6 @@ func TestCtrlGClosesActivityButKeepsTaskPreview(t *testing.T) {
 	model.viewport.Width = 80
 	model.viewport.Height = 2
 	model.activity.visible = true
-	model.activity.focus = activityFocusPanel
 	model.taskPreview = &taskTranscriptPreview{
 		task:             taskpkg.TaskSnapshot{ID: "agent-2", SessionID: "agent-2"},
 		parentSessionID:  "session-1",
@@ -6906,6 +6912,7 @@ func TestCtrlCDoublePressWhileTerminalWorkDoesNotQuit(t *testing.T) {
 
 func TestRelayout_TranscriptUsesFullFrameWidth(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
+	model.activity.visible = false
 	model.width = 120
 	model.height = 40
 	model.ready = true
@@ -6940,19 +6947,19 @@ func TestRenderToolEntryBody_UsesQuietDetailLines(t *testing.T) {
 	}
 }
 
-// TestRenderDockStatusLine_ContainsModelTokenAndFree 验证上边框保留模式与
-// 进度线，token 用量移到下边框，模型名仍只在 header。
+// TestRenderDockStatusLine_ContainsModelTokenAndFree 验证输入上沿包含上下文
+// 进度和用量，模型名仍只在 header。
 func TestRenderDockStatusLine_ContainsModelTokenAndFree(t *testing.T) {
-	runner := &fakeRunner{stats: loop.ContextStats{UsedTokens: 5000, LimitTokens: 100000}}
+	runner := &fakeRunner{stats: loop.ContextStats{Known: true, TotalKnown: true, UsedTokens: 5000, LimitTokens: 100000}}
 	model := newTestModel(runner)
 	model.width = 100
 	model.cursorFrameAt = time.Now()
 	dock := model.renderDockStatusLine(98)
-	if strings.Contains(dock, "5k/100k") {
-		t.Errorf("status dock = %q, token count should live in the bottom border", dock)
+	if !strings.Contains(dock, "5k / 100k") || !strings.Contains(dock, "CTX 5%") {
+		t.Errorf("status dock = %q, want labeled context usage", dock)
 	}
-	if !strings.Contains(dock, "─") {
-		t.Errorf("status dock = %q, want an input separator", dock)
+	if !strings.Contains(dock, tokenFreeGlyph) {
+		t.Errorf("status dock = %q, want context progress", dock)
 	}
 	bottom := model.renderBottomDockLine(98)
 	if !strings.Contains(bottom, "5k/100k") {
@@ -7078,7 +7085,7 @@ func TestFullLayout_StatusDockVisibleWithoutSidebar(t *testing.T) {
 	model.relayout()
 
 	view := model.View()
-	if !strings.Contains(view, "0/131k") {
+	if !strings.Contains(view, "CTX —") {
 		t.Errorf("View() = %q, want bottom token status", view)
 	}
 	if strings.Contains(view, "taskController") {
@@ -7157,8 +7164,8 @@ func TestTokenInputUsesSingleRealCursorWithoutReverseVideo(t *testing.T) {
 }
 
 func TestViewPublishesCursorThemeBackgroundAndVisual(t *testing.T) {
-	anchor := newTerminalCursorAnchor()
-	model := newModel(context.Background(), &fakeRunner{}, "session-1", &fakeModelConfigController{}, nil, nil, nil, anchor)
+	model := newRGBTestModel(t)
+	anchor := model.cursorAnchor
 	model.ready = true
 	model.width = 80
 	model.height = 24
