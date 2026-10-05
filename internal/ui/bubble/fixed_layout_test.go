@@ -241,7 +241,7 @@ func TestCompletionAndModalDoNotRelayoutViewport(t *testing.T) {
 	}
 }
 
-func TestActivityCommandsAndTabs(t *testing.T) {
+func TestActivityCommandsKeepInputFocused(t *testing.T) {
 	model := newModel(
 		context.Background(),
 		&fakeRunner{},
@@ -262,13 +262,13 @@ func TestActivityCommandsAndTabs(t *testing.T) {
 	model.relayout()
 
 	handled, cmd := model.handleCommand("/tasks")
-	if !handled || cmd != nil || !model.activity.visible || model.activity.tab != activityTabTasks {
+	if !handled || !model.activity.visible || model.activity.tab != activityTabTasks {
 		t.Fatalf("/tasks handled=%v cmd=%v activity=%#v", handled, cmd, model.activity)
 	}
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	model = next.(appModel)
-	if model.activity.tab != activityTabTodo {
-		t.Fatalf("tab=%v, want Pipeline", model.activity.tab)
+	if model.activity.tab != activityTabTasks {
+		t.Fatalf("tab=%v, want unchanged Tasks", model.activity.tab)
 	}
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
 	model = next.(appModel)
@@ -277,12 +277,12 @@ func TestActivityCommandsAndTabs(t *testing.T) {
 	}
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	model = next.(appModel)
-	if model.activity.visible {
-		t.Fatalf("Esc activity=%#v, want nil", model.activity)
+	if !model.activity.visible || !model.input.Focused() {
+		t.Fatalf("Esc activity=%#v, want open passive sidebar", model.activity)
 	}
 
 	handled, cmd = model.handleCommand("/todo")
-	if !handled || cmd != nil || !model.activity.visible || model.activity.tab != activityTabTodo {
+	if !handled || !model.activity.visible || model.activity.tab != activityTabTodo {
 		t.Fatalf("/todo handled=%v cmd=%v activity=%#v", handled, cmd, model.activity)
 	}
 }
@@ -290,17 +290,17 @@ func TestActivityCommandsAndTabs(t *testing.T) {
 func TestDockStatusLineFitsNarrowWidths(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.cursorFrameAt = time.Now()
-	for _, width := range []int{8, 16, 32, 80} {
+	for _, width := range []int{1, 2, 8, 16, 20, 21, 32, 80} {
 		line := model.renderDockStatusLine(width)
 		if got := terminalCellWidth(line); got != width {
 			t.Fatalf("width=%d status display width=%d line=%q", width, got, ansi.Strip(line))
 		}
 	}
 
-	// 输入区上方只保留完整 context progress bar；模式位于下边框左侧。
+	// 输入区上方显示 context progress bar；模式位于下边框左侧。
 	top := ansi.Strip(model.renderDockStatusLine(80))
-	if strings.Contains(top, "chat") || strings.Trim(top, "─") != "" {
-		t.Fatalf("top context bar = %q, want only progress glyphs", top)
+	if strings.Contains(top, "chat") || !strings.HasPrefix(top, "CTX — ") || strings.Contains(top, "%") {
+		t.Fatalf("top context bar = %q, want context progress without mode", top)
 	}
 	bottom := ansi.Strip(model.renderBottomDockLine(80))
 	if !strings.Contains(bottom, "chat") {

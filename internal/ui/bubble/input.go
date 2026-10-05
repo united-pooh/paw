@@ -2,6 +2,7 @@
 package bubble
 
 import (
+	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
 	"paw/internal/ui/bubble/textareax"
 	"strings"
@@ -24,20 +25,28 @@ func (m appModel) handleSubmit() (tea.Model, tea.Cmd) {
 		_, cmd := m.handleCommand(line)
 		return m, cmd
 	}
+	if m.commandRegistry != nil && strings.HasPrefix(line, "/") {
+		if _, known := m.commandRegistry.Lookup(commandToken(line)); known {
+			before := len(m.transcript)
+			_, cmd := m.handleCommand(line)
+			if len(m.transcript) > before {
+				last := m.transcript[len(m.transcript)-1]
+				if last.kind == entryError || last.title == "busy" {
+					m.restoreModeDraft(line)
+				}
+			}
+			return m, cmd
+		}
+	}
 	if line == "!" {
 		m.toggleTerminalMode()
 		return m, nil
 	}
-	if m.planMode {
+	if m.planWorking || (m.planMode && !m.goalWorking) {
 		return m.submitPlan(line)
 	}
-	if m.goalMode {
-		m.rememberInputHistory(line)
+	if m.goalWorking || m.goalMode {
 		return m.submitGoal(line)
-	}
-	if m.planWorking {
-		m.addEntry(transcriptEntry{kind: entrySystem, title: "busy", body: "chat is unavailable while a plan session is running"})
-		return m, nil
 	}
 	if m.terminalMode {
 		m.rememberInputHistory(line)
@@ -232,28 +241,56 @@ func (m *appModel) toggleGoalMode() {
 	m.cycleInputMode()
 }
 
-// submitPlan 将 Plan 输入提交给独立的 plan 控制器：提交需求后运行时负责
-// 澄清、撰写文档、展示并最终确认【执行/修改】。Plan 独立于 Goal 存在，
-// 不需要任何 Goal 上下文。
+type modeInputController interface {
+	Submit(string) (string, error)
+}
+
+func submitModeInput(controller interface{ Start(string) (string, error) }, line string, working bool) (string, error) {
+	if input, ok := controller.(modeInputController); ok {
+		return input.Submit(line)
+	}
+	if working {
+		return "", fmt.Errorf("current controller cannot accept supplemental input")
+	}
+	return controller.Start(line)
+}
+
+func (m *appModel) restoreModeDraft(line string) {
+	draft := m.submittedDraft
+	if strings.TrimSpace(draft.Text) != line {
+		draft = inputDraft{Text: line}
+	}
+	m.setInputDraft(draft)
+	m.input.Focus()
+	m.clearCompletionAndRelayout()
+}
+
 func (m appModel) submitPlan(line string) (tea.Model, tea.Cmd) {
 	if m.planController == nil {
 		m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: "plan controller is unavailable"})
+		m.restoreModeDraft(line)
 		return m, nil
 	}
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return m, nil
 	}
-	m.rememberInputHistory(line)
-	id, err := m.planController.Start(line)
+	wasWorking := m.planWorking
+	id, err := submitModeInput(m.planController, line, wasWorking)
 	if err != nil {
 		m.addEntry(transcriptEntry{kind: entryError, title: "plan", body: err.Error()})
+		m.restoreModeDraft(line)
 		return m, nil
 	}
-	m.addEntry(transcriptEntry{kind: entrySystem, title: "plan", body: "started " + id + "\nrequirement: " + line})
+	m.rememberInputHistory(line)
+	m.addEntry(m.userTranscriptEntry("you (plan)", line))
 	m.inputSource = inputSourceFresh
+	if !wasWorking {
+		m.tokenMonitor.live.beginTurn(time.Now())
+		m.turnStartedAt = time.Now()
+	}
+	m.planMode, m.goalMode = true, false
 	m.planWorking = true
-	m.turnStartedAt = time.Now()
 	m.turnID = id
 	m.scrollToBottomAfterSubmit()
 	m.applyCursorAnimation()
@@ -268,19 +305,25 @@ func (m appModel) submitGoal(line string) (tea.Model, tea.Cmd) {
 	}
 	if m.goalController == nil {
 		m.addEntry(transcriptEntry{kind: entryError, title: "goal", body: "goal controller is unavailable"})
+		m.restoreModeDraft(line)
+		return m, nil
+	}
+	wasWorking := m.goalWorking
+	id, err := submitModeInput(m.goalController, line, wasWorking)
+	if err != nil {
+		m.addEntry(transcriptEntry{kind: entryError, title: "goal", body: err.Error()})
+		m.restoreModeDraft(line)
 		return m, nil
 	}
 	m.rememberInputHistory(line)
-	id, err := m.goalController.Start(line)
-	if err != nil {
-		m.addEntry(transcriptEntry{kind: entryError, title: "goal", body: err.Error()})
-		return m, nil
-	}
 	m.addEntry(m.userTranscriptEntry("you (goal)", line))
-	m.addEntry(transcriptEntry{kind: entrySystem, title: "goal", body: "started " + id})
 	m.inputSource = inputSourceFresh
+	if !wasWorking {
+		m.tokenMonitor.live.beginTurn(time.Now())
+		m.turnStartedAt = time.Now()
+	}
+	m.goalMode, m.planMode = true, false
 	m.goalWorking = true
-	m.turnStartedAt = time.Now()
 	m.turnID = id
 	m.scrollToBottomAfterSubmit()
 	m.applyCursorAnimation()

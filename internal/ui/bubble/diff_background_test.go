@@ -9,17 +9,18 @@ import (
 )
 
 func TestDiffLineBackgroundRestored(t *testing.T) {
+	newRGBTestModel(t)
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
 
 	out := renderToolDetailLinesWithHint([]string{"1 + │ added line", "2 - │ removed line", "3   │ context"}, 40, "")
-	// added: green fg #a9c8b5 (169,200,181) + dark green bg #0f2e1d (15,46,29)
-	if !strings.Contains(out, "38;2;169;200;181;48;2;15;46;29") {
+	// Tokyo Night added/deleted lines retain their semantic RGB backgrounds.
+	if !strings.Contains(out, "48;2;20;48;42") {
 		t.Fatalf("added line missing green background: %q", out)
 	}
-	// deleted: red fg #ef7d7d (239,125,125) + dark red bg #2e0f15 (46,15,21)
-	if !strings.Contains(out, "38;2;239;125;125;48;2;46;15;21") {
+	// Deleted line uses the same explicit theme.
+	if !strings.Contains(out, "48;2;46;20;32") {
 		t.Fatalf("deleted line missing red background: %q", out)
 	}
 }
@@ -28,6 +29,7 @@ func TestDiffLineBackgroundRestored(t *testing.T) {
 // 行的背景：子样式渲染自带的尾部 reset（\x1b[0m）会清掉外层背景，因此每个
 // token 段都必须自行恢复背景，背景需从行首延续到行尾。
 func TestDiffLineBackgroundPersistsAcrossHighlight(t *testing.T) {
+	newRGBTestModel(t)
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })

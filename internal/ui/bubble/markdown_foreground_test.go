@@ -42,6 +42,7 @@ func foregroundLostInLine(out string) bool {
 }
 
 func TestMarkdownInlineStyleRestoresForeground(t *testing.T) {
+	newRGBTestModel(t)
 	previousProfile := lipgloss.ColorProfile()
 	defer lipgloss.SetColorProfile(previousProfile)
 	lipgloss.SetColorProfile(termenv.TrueColor)
@@ -62,6 +63,7 @@ func TestMarkdownInlineStyleRestoresForeground(t *testing.T) {
 }
 
 func TestMarkdownInlineStyleRestoresForegroundQuoteAndHeading(t *testing.T) {
+	newRGBTestModel(t)
 	previousProfile := lipgloss.ColorProfile()
 	defer lipgloss.SetColorProfile(previousProfile)
 	lipgloss.SetColorProfile(termenv.TrueColor)

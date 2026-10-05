@@ -130,6 +130,7 @@ func (m appModel) renderActivityHeader(width int) string {
 	page := "Tasks"
 	if m.activity.tab == activityTabTodo {
 		page = "Todo"
+
 	}
 	text := "Activity / " + page
 	if count := len(m.runningTasks()); count > 0 {

@@ -3,6 +3,7 @@ package bubble
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -84,9 +85,6 @@ func (m appModel) currentLayout() tuiLayout {
 	if m.selectionDock != nil {
 		base := applyActivityGeometry(computeTUILayout(m.width, m.height, inputMinVisibleLines), m.activity.visible, m.activity.widthColumns)
 		selectionWidth := base.workspaceWidth
-		if base.activityMode == activityLayoutFullscreen {
-			selectionWidth = base.contentWidth
-		}
 		inputHeight := m.selectionDock.preferredHeight(inputDockContentWidth(selectionWidth))
 		layout := computeTUILayoutWithInputLimit(m.width, m.height, inputHeight, selectionDockMaxVisibleLines)
 		return applyActivityGeometry(layout, m.activity.visible, m.activity.widthColumns)
@@ -149,25 +147,10 @@ func (m appModel) View() string {
 	layout := m.currentLayout()
 	var view string
 	switch layout.activityMode {
-	case activityLayoutFullscreen:
-		inner := m.renderActivityPane(layout.activityWidth, layout.contentHeight)
-		view = renderDockedFrame(
-			inner,
-			m.renderActivityHeader(layout.activityWidth),
-			m.renderActivityFullscreenBottomContent(layout.activityWidth),
-			layout.frameWidth,
-			layout.frameHeight,
-		)
 	case activityLayoutDocked:
 		workspace := m.renderWorkspaceBody(layout)
 		activity := m.renderActivityPane(layout.activityWidth, layout.contentHeight)
 		separatorColor := colorManager.Hex(colorMarkdownQuoteBorder)
-		if m.activity.focus == activityFocusPanel {
-			separatorColor = m.currentModeHex()
-			if separatorColor == "" {
-				separatorColor = colorManager.Hex(colorSignal)
-			}
-		}
 		separatorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(separatorColor))
 		inner := joinActivityColumns(
 			workspace,
@@ -205,7 +188,7 @@ func (m appModel) View() string {
 		bottom := m.renderBottomDockLine(layout.contentWidth)
 		view = top + "\n" + inner + "\n" + bottom
 	}
-	if layout.queueInlineHeight > 0 && layout.activityMode != activityLayoutFullscreen {
+	if layout.queueInlineHeight > 0 {
 		rightInset := terminalCellWidth(m.renderBottomDockWorktree(layout.frameWidth)) + 2
 		if layout.activityMode == activityLayoutDocked {
 			rightInset = layout.activitySeparatorWidth + layout.activityWidth
@@ -269,11 +252,8 @@ func paintStyleIsFlat(style lipgloss.Style) bool {
 		style.GetVerticalFrameSize() == 0
 }
 
-// restoreBackgroundAfterANSIReset keeps the application canvas opaque and
-// consistently colored when a nested style (Markdown, code, selection, etc.)
-// emits an SGR reset. Without this, the reset also clears the outer frame's
-// foreground and background and exposes the terminal's own defaults between
-// styled spans.
+// restoreBackgroundAfterANSIReset restores the theme canvas after nested resets.
+// Empty colors restore the terminal defaults without painting an opaque surface.
 func restoreBackgroundAfterANSIReset(text, background, foreground string) string {
 	restore := backgroundSGR(background) + foregroundSGR(foreground)
 	text = strings.ReplaceAll(text, "\x1b[0m", "\x1b[0m"+restore)
@@ -283,6 +263,16 @@ func restoreBackgroundAfterANSIReset(text, background, foreground string) string
 }
 
 func backgroundSGR(hex string) string {
+	if hex == "" {
+		return "\x1b[49m"
+	}
+	if n, err := strconv.Atoi(hex); err == nil && n >= 0 && n < 16 {
+		code := 40 + n
+		if n >= 8 {
+			code = 100 + n - 8
+		}
+		return fmt.Sprintf("\x1b[%dm", code)
+	}
 	if !strings.HasPrefix(hex, "#") {
 		return ""
 	}
@@ -291,6 +281,16 @@ func backgroundSGR(hex string) string {
 }
 
 func foregroundSGR(hex string) string {
+	if hex == "" {
+		return "\x1b[39m"
+	}
+	if n, err := strconv.Atoi(hex); err == nil && n >= 0 && n < 16 {
+		code := 30 + n
+		if n >= 8 {
+			code = 90 + n - 8
+		}
+		return fmt.Sprintf("\x1b[%dm", code)
+	}
 	if !strings.HasPrefix(hex, "#") {
 		return ""
 	}
@@ -731,9 +731,7 @@ func (m appModel) shouldAnchorTextInputCursor() bool {
 		m.modelWizard == nil &&
 		m.settingWizard == nil &&
 		m.configCenter == nil &&
-		m.sessionPicker == nil &&
-		(!m.activity.visible || (m.activity.focus == activityFocusWorkspace && m.currentLayout().activityMode != activityLayoutFullscreen)) &&
-		true
+		m.sessionPicker == nil
 }
 
 // inputCursorTerminalPosition 直接由固定布局矩形计算，不再依赖拼接后字符串高度。
@@ -882,9 +880,6 @@ func (m *appModel) relayout() {
 	}
 	base := applyActivityGeometry(computeTUILayout(m.width, m.height, inputMinVisibleLines), m.activity.visible, m.activity.widthColumns)
 	workspaceModelWidth := base.workspaceWidth
-	if base.activityMode == activityLayoutFullscreen {
-		workspaceModelWidth = base.contentWidth
-	}
 	inputWidth := inputDockContentWidth(workspaceModelWidth)
 	transcriptWidth := maxInt(1, workspaceModelWidth-transcriptContentStyle.GetHorizontalPadding())
 	m.input.SetWidth(inputWidth)

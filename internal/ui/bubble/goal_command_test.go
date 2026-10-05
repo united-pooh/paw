@@ -114,7 +114,7 @@ func TestGoalModeSubmitPreservesTokenizedTranscript(t *testing.T) {
 		start int
 		label string
 	}{
-		{name: "command", raw: "/help", kind: inputTokenCommand, start: 0, label: "help"},
+		{name: "command mention", raw: "explain /help", kind: inputTokenCommand, start: len([]rune("explain ")), label: "help"},
 		{name: "file", raw: "read @README.md", kind: inputTokenFile, start: len([]rune("read ")), label: "README.md"},
 	}
 
@@ -143,11 +143,10 @@ func TestGoalModeSubmitPreservesTokenizedTranscript(t *testing.T) {
 			if model.input.Value() != "" || len(model.inputTokens) != 0 {
 				t.Fatalf("submitted input retained state: value=%q tokens=%#v", model.input.Value(), model.inputTokens)
 			}
-			if len(model.transcript) < 2 {
-				t.Fatalf("transcript = %#v, want objective and start confirmation", model.transcript)
+			if len(model.transcript) != 1 {
+				t.Fatalf("transcript = %#v, want one objective entry", model.transcript)
 			}
-			objective := model.transcript[len(model.transcript)-2]
-			confirmation := model.transcript[len(model.transcript)-1]
+			objective := model.transcript[0]
 			if objective.kind != entryUser || objective.title != "you (goal)" || objective.body != test.raw {
 				t.Fatalf("goal objective entry = %#v", objective)
 			}
@@ -165,12 +164,6 @@ func TestGoalModeSubmitPreservesTokenizedTranscript(t *testing.T) {
 			}
 			if !strings.Contains(rendered, inputTokenStyleFor(test.kind).Render(test.label)) {
 				t.Fatalf("rendered goal objective missed token style: %q", rendered)
-			}
-			if confirmation.kind != entrySystem || confirmation.title != "goal" || confirmation.body != "started goal-1" {
-				t.Fatalf("goal confirmation entry = %#v", confirmation)
-			}
-			if strings.Contains(confirmation.body, "objective:") || strings.Contains(confirmation.body, test.raw) {
-				t.Fatalf("goal confirmation leaked objective: %q", confirmation.body)
 			}
 			if !model.goalWorking || model.turnStartedAt.IsZero() || model.turnID != "goal-1" {
 				t.Fatalf("goal state = working:%v started:%v turnID:%q", model.goalWorking, model.turnStartedAt, model.turnID)
@@ -206,7 +199,7 @@ func TestGoalModeSubmitFailureDoesNotRecordSuccessfulObjective(t *testing.T) {
 }
 
 // TestGoalCommandSyncsWorkingState 验证 /goal 生命周期命令与 goalWorking
-// 标志同步：start 进入工作态，pause/stop 释放，resume 恢复。goalWorking
+// 标志同步：start 进入工作态，pause/stop 等待停止事件释放，resume 恢复。goalWorking
 // 一旦残留，header 会在会话结束后永久显示 working 0s。
 func TestGoalCommandSyncsWorkingState(t *testing.T) {
 	model := newModel(nil, &fakeRunner{}, "session-1", nil, nil, nil, nil, nil)
@@ -231,6 +224,11 @@ func TestGoalCommandSyncsWorkingState(t *testing.T) {
 	if !handled {
 		t.Fatal("pause command was not handled")
 	}
+	if !model.goalWorking {
+		t.Fatal("pause request released working state before stopped event")
+	}
+	next, _ := model.Update(goalStoppedMsg{reason: "goal.paused"})
+	model = next.(appModel)
 	if model.goalWorking {
 		t.Fatal("goalWorking = true, want false after /goal pause")
 	}
@@ -251,6 +249,11 @@ func TestGoalCommandSyncsWorkingState(t *testing.T) {
 	if !handled {
 		t.Fatal("stop command was not handled")
 	}
+	if !model.goalWorking {
+		t.Fatal("cancel request released working state before stopped event")
+	}
+	next, _ = model.Update(goalStoppedMsg{reason: "goal.cancelled"})
+	model = next.(appModel)
 	if model.goalWorking {
 		t.Fatal("goalWorking = true, want false after /goal stop")
 	}

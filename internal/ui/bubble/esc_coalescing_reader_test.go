@@ -12,13 +12,13 @@ import (
 
 // newPipeReader 构造一个基于 os.Pipe 的 ESC 聚合 reader 及其写入端。
 // os.Pipe 的 fd 支持 fcntl/O_NONBLOCK，可模拟真实终端的读边界。
-func newPipeReader(t *testing.T, heldMax int) (*escCoalescingReader, *os.File) {
+func newPipeReader(t *testing.T, maxSequenceBytes int) (*escCoalescingReader, *os.File) {
 	t.Helper()
 	rp, wp, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("os.Pipe: %v", err)
 	}
-	r := &escCoalescingReader{File: rp, heldMax: heldMax}
+	r := &escCoalescingReader{File: rp, maxSequenceBytes: maxSequenceBytes}
 	return r, wp
 }
 
@@ -71,9 +71,8 @@ func TestLoneESCPassesThrough(t *testing.T) {
 	}
 }
 
-// TestCSIFragmentHeldAcrossReads: \x1b[ 写入后无续接，应挂起；
-// 之后写 A 应与挂起部分拼成 \x1b[A。
-func TestCSIFragmentHeldAcrossReads(t *testing.T) {
+// 超过续接等待期限的输入仍保持原字节顺序。
+func TestCSIFragmentDelayedAcrossReads(t *testing.T) {
 	r, wp := newPipeReader(t, 64)
 	go func() {
 		wp.Write([]byte{0x1b, '['})
@@ -87,7 +86,7 @@ func TestCSIFragmentHeldAcrossReads(t *testing.T) {
 	}
 }
 
-// TestPlainTextNotFragmented: 普通文本应原样通过，held 为空。
+// TestPlainTextNotFragmented: 普通文本应原样通过。
 func TestPlainTextNotFragmented(t *testing.T) {
 	r, wp := newPipeReader(t, 64)
 	go func() {
@@ -97,9 +96,6 @@ func TestPlainTextNotFragmented(t *testing.T) {
 	got := drainAll(t, r)
 	if got != "hello world" {
 		t.Fatalf("got %q, want %q", got, "hello world")
-	}
-	if len(r.held) != 0 {
-		t.Fatalf("held = %q, want empty after complete text", r.held)
 	}
 }
 
@@ -117,17 +113,16 @@ func TestCompleteSequenceFollowedByText(t *testing.T) {
 	}
 }
 
-// TestHeldCapProtectsAgainstBloat: 连续写大量 \x1b[ 无续接，
-// held 不应超过 heldMax。
-func TestHeldCapProtectsAgainstBloat(t *testing.T) {
+// 超出单条序列上限的异常输入仍原样送出。
+func TestSequenceCapPreservesAbnormalInput(t *testing.T) {
 	r, wp := newPipeReader(t, 8) // 小上限便于触发
 	go func() {
 		// 写 20 个 \x1b[ 序列头，均无续接到终止符
 		wp.Write(bytes.Repeat([]byte{0x1b, '['}, 20))
 		wp.Close()
 	}()
-	_ = drainAll(t, r)
-	if len(r.held) > r.heldMax {
-		t.Fatalf("held len = %d, want <= %d", len(r.held), r.heldMax)
+	got := drainAll(t, r)
+	if want := string(bytes.Repeat([]byte{0x1b, '['}, 20)); got != want {
+		t.Fatalf("abnormal sequence changed: got %q, want %q", got, want)
 	}
 }

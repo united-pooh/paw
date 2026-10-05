@@ -750,7 +750,7 @@ func TestCursorLineTextKeepsInputForeground(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
 
-	model := newTestModel(&fakeRunner{})
+	model := newRGBTestModel(t)
 	model.input.SetValue("第一行\n第二行")
 	model.input.CursorEnd()
 	model.input.SetWidth(40)
@@ -764,7 +764,7 @@ func TestCursorLineTextKeepsInputForeground(t *testing.T) {
 		t.Fatalf("non-cursor line missing body foreground %q:\n%q", bodyFG, firstLine)
 	}
 
-	terminalModel := newTestModel(&fakeRunner{})
+	terminalModel := newRGBTestModel(t)
 	terminalModel.terminalMode = true
 	terminalModel.input.SetValue("第一行\n第二行")
 	terminalModel.input.CursorEnd()

@@ -32,6 +32,7 @@ func (c *modeTestPlanController) Status() string        { return "status" }
 func (c *modeTestPlanController) List() string          { return "list" }
 func (c *modeTestPlanController) Show(id string) string { return "show " + id }
 func (c *modeTestPlanController) Resume() error         { c.resumes++; return nil }
+func (c *modeTestPlanController) Pause() error          { return nil }
 func (c *modeTestPlanController) Cancel() error         { c.stopped = true; return nil }
 
 func TestCycleInputModeChatGoalPlan(t *testing.T) {
@@ -98,7 +99,7 @@ func TestPlanModeSubmitsStartsPlanSession(t *testing.T) {
 		t.Fatalf("transcript = %#v, want one plan entry", model.transcript)
 	}
 	entry := model.transcript[0]
-	if entry.title != "plan" || !strings.Contains(entry.body, "fix the login flow") {
+	if entry.title != "you (plan)" || entry.kind != entryUser || !strings.Contains(entry.body, "fix the login flow") {
 		t.Fatalf("plan entry = %#v", entry)
 	}
 }
@@ -120,7 +121,7 @@ func TestPlanResumeCommandExplicitlyRestartsAttachedPlan(t *testing.T) {
 	}
 }
 
-func TestChatSubmitBlockedWhilePlanWorking(t *testing.T) {
+func TestLegacyPlanControllerRejectsSupplementWithoutLosingDraft(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.planController = &modeTestPlanController{}
 	model.planWorking = true
@@ -129,10 +130,10 @@ func TestChatSubmitBlockedWhilePlanWorking(t *testing.T) {
 	next, _ := model.handleSubmit()
 	model = next.(appModel)
 	if len(model.transcript) != 1 {
-		t.Fatalf("transcript = %#v, want one busy entry", model.transcript)
+		t.Fatalf("transcript = %#v, want one error entry", model.transcript)
 	}
-	if model.transcript[0].title != "busy" {
-		t.Fatalf("entry = %#v, want busy", model.transcript[0])
+	if model.transcript[0].kind != entryError || model.input.Value() != "hello" {
+		t.Fatalf("unsupported supplemental input was lost: entry=%#v input=%q", model.transcript[0], model.input.Value())
 	}
 }
 

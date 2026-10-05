@@ -7,17 +7,15 @@
 // 不会等续接：lone \x1b 被当 KeyEscape 投递，后续 [<...M 被当 KeyRunes，
 // 于是触控板滑动时输入框偶发出现 [[[[[。
 //
-// 本 reader 在字节进入 BubbleTea 之前做一道聚合（移植自 Claude Code 的
-// termio tokenizer + App.tsx 的 readableLength 守卫思路）：读到一个 chunk 后，
-// 若末尾悬空在一条不完整 ESC 序列上，立即对底层 fd 做一次非阻塞 peek。
-// 终端对鼠标事件是单次 write 整条序列的，剩余字节通常已在内核缓冲区，
-// peek 立即拿到并拼成完整序列，BubbleTea 即可正确解析为 MouseMsg。
-// peek 返回 EAGAIN（真按 ESC 后无续接）则把悬空字节当完整事件送出，
-// 保证 ESC 键不延迟、不失灵。
+// 本 reader 为尾部 ESC 序列预留续接空间，在同一次 Read 内最多等待 15ms。
+// 已到达的鼠标续接会立即拼接；真正的 ESC 在截止后原样送出。
+// 不跨 Read 挂起字节，因为外层 cancelreader 会先等待底层 fd 可读。
 package bubble
 
 import (
 	"os"
+	"time"
+	"unicode/utf8"
 )
 
 // escCoalescingReader 包装 *os.File，在 Read 时聚合被读边界切断的 ESC 序列。
@@ -25,89 +23,55 @@ import (
 // term.File 与 cancelreader.File 接口 —— MakeRaw 与 kqueue 路径均不受影响。
 type escCoalescingReader struct {
 	*os.File
-	held    []byte // 跨 Read 挂起的不完整 ESC 序列
-	heldMax int    // held 字节上限，防止异常输入无限增长
+	maxSequenceBytes int
 }
 
 // newESCCoalescingReader 用 f 构造一个 ESC 聚合 reader。f 通常是 os.Stdin。
 func newESCCoalescingReader(f *os.File) *escCoalescingReader {
 	return &escCoalescingReader{
-		File:    f,
-		heldMax: 64, // 单条 ESC 序列不会超过此长度；超出视为异常，原样放出
+		File:             f,
+		maxSequenceBytes: 64,
 	}
 }
 
-// Read 实现 io.Reader。它先冲刷上一次挂起的悬空字节，再读底层 fd，
-// 然后对末尾仍悬空的 ESC 序列做非阻塞 peek 拼接。
+// Read 实现 io.Reader，在同一次读取内拼接尾部不完整的 ESC 序列。
 func (r *escCoalescingReader) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
 
-	// 先冲刷挂起字节。held 是上次 Read 末尾悬空、已 peek 到的续接，
-	// 必须立即完整送出，不能与本次 fd 读取混在一起——否则 fd 读返回
-	// EOF 时会把刚放出的字节重新挂起并丢失。所以 held 非空时单独返回。
-	if len(r.held) > 0 {
-		n := copy(p, r.held)
-		if n == len(r.held) {
-			r.held = r.held[:0]
-		} else {
-			r.held = r.held[n:]
-		}
-		return n, nil
+	limit := len(p)
+	if limit > r.maxSequenceBytes {
+		limit -= r.maxSequenceBytes
 	}
-
-	// 阻塞读底层 fd。cancelreader 已保证此处 fd 可读，立即返回。
-	n, err := r.File.Read(p)
+	n, err := r.File.Read(p[:limit])
 	if n == 0 {
 		return n, err
 	}
-	// 读到 EOF 等错误也先把已读字节返回；末尾若悬空则等下次 Read 拼接。
-
-	// 对末尾悬空的 ESC 序列做非阻塞 peek 拼接。
 	n = r.coalesceTrailing(p, n)
-
-	// 末尾仍悬空：切下存入 held，等下次 Read 续接。
-	// 超出 heldMax 视为异常输入，原样放出避免无限累积。
-	if trim := trailingEscapeSlice(p[:n]); trim > 0 {
-		if trim <= r.heldMax {
-			r.held = append(r.held[:0], p[n-trim:n]...)
-			n -= trim
-		}
-	}
-	return n, firstErr(err, nil)
+	return n, err
 }
 
-// coalesceTrailing 对 p[:n] 末尾悬空的 ESC 序列做非阻塞 peek 拼接，
-// 把读到的续接字节追加进 p 并返回新的有效长度。peek EAGAIN 时停止。
+// 逐字节续接，避免拼好一条序列后又吞入下一条不完整序列。
 func (r *escCoalescingReader) coalesceTrailing(p []byte, n int) int {
+	deadline := time.Now().Add(15 * time.Millisecond)
 	for {
-		trim := trailingEscapeSlice(p[:n])
-		if trim == 0 {
-			return n // 末尾完整
+		trim := trailingInputSequence(p[:n])
+		if trim == 0 || trim > r.maxSequenceBytes || n == len(p) {
+			return n
 		}
-		if n == len(p) {
-			return n // p 已满，无法再拼；悬空部分留待下次 Read 处理
+		if !r.waitForContinuation(deadline) {
+			return n
 		}
-		got, ok := r.peekOne(p[n:])
+		got, ok := r.peekOne(p[n : n+1])
 		if !ok {
-			return n // peek 无数据（EAGAIN），停止
+			return n
 		}
 		n += got
 	}
 }
 
-// firstErr 返回第一个非 nil 的错误。
-func firstErr(errs ...error) error {
-	for _, e := range errs {
-		if e != nil {
-			return e
-		}
-	}
-	return nil
-}
-
-// trailingEscapeSlice 返回 b 末尾"可能是不完整 ESC 序列"的字节数。
+// trailingInputSequence 返回尾部不完整 ESC 序列或 UTF-8 字符的字节数。
 // 返回 0 表示末尾完整（可安全交给 BubbleTea）。判定移植自 Claude Code
 // termio/tokenize.ts 的 CSI/OSC 状态机，仅做末尾悬空判断，不重写完整解析。
 //
@@ -116,12 +80,16 @@ func firstErr(errs ...error) error {
 //
 // 覆盖的悬空形态：lone ESC、CSI 头、SGR 鼠标未完成、OSC 未到 ST/BEL、
 // SS3 未到终止符、DCS/APC 未到 ST。
-func trailingEscapeSlice(b []byte) int {
+func trailingInputSequence(b []byte) int {
 	lastStart := -1 // 最后一条 ESC 序列的起点；-1 表示尚无
 	i := 0
 	for i < len(b) {
 		if b[i] != 0x1b {
-			i++
+			if !utf8.FullRune(b[i:]) {
+				return len(b) - i
+			}
+			_, size := utf8.DecodeRune(b[i:])
+			i += size
 			continue
 		}
 		lastStart = i
@@ -150,6 +118,9 @@ func escapeSequenceComplete(seq []byte) (bool, int) {
 	}
 	switch seq[1] {
 	case '[': // CSI
+		if len(seq) >= 3 && seq[2] == 'M' {
+			return len(seq) >= 6, 6 // X10 鼠标头后是三个原始坐标字节
+		}
 		return csiComplete(seq[2:])
 	case ']': // OSC，以 BEL 或 ST(\x1b\\) 结束
 		return oscComplete(seq[2:])
@@ -164,8 +135,12 @@ func escapeSequenceComplete(seq []byte) (bool, int) {
 		}
 		return true, 2 // 非法，按完整处理交给上层
 	default:
+		if !utf8.FullRune(seq[1:]) {
+			return false, 0
+		}
+		_, size := utf8.DecodeRune(seq[1:])
 		// 两字符 ESC 序列（ESC + final）或非法。
-		return true, 2
+		return true, 1 + size
 	}
 }
 
