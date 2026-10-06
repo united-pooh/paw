@@ -371,6 +371,7 @@ func styleForegroundSGR(t *testing.T, style lipgloss.Style) string {
 // 与正文颜色不一致。现在每个非表头单元格必须自带正文前景色，同时行内代码
 // 片段使用无底色的强调样式。
 func TestMarkdownTableCellsCarryBodyForeground(t *testing.T) {
+	newRGBTestModel(t)
 	previousProfile := lipgloss.ColorProfile()
 	previousCodeStyle := markdownCodeStyle
 	lipgloss.SetColorProfile(termenv.TrueColor)

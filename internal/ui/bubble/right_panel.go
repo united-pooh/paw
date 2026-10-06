@@ -141,7 +141,7 @@ func (m appModel) renderActivityTasks(width, height int) string {
 		if index == selected {
 			selectedStart = len(lines)
 		}
-		lines = append(lines, m.renderActivityTaskHeader(snapshot, width, index == selected))
+		lines = append(lines, m.renderActivityTaskHeader(snapshot, width))
 		if index == selected {
 			lines = append(lines, m.renderSelectedActivityTaskDetails(snapshot, width)...)
 			selectedEnd = len(lines)
@@ -172,21 +172,12 @@ func activityTaskViewportStart(total, height, selectedStart, selectedEnd int) in
 	return clampInt(start, 0, total-height)
 }
 
-func (m appModel) renderActivityTaskHeader(snapshot task.TaskSnapshot, width int, selected bool) string {
+func (m appModel) renderActivityTaskHeader(snapshot task.TaskSnapshot, width int) string {
 	glyph, status, glyphStyle, statusStyle := m.activityTaskStatus(snapshot)
 	nameStyle := unselectedProviderStyle.Copy().Bold(true)
 	fillStyle := unselectedProviderStyle
 	if color := strings.TrimSpace(snapshot.Color); color != "" {
 		nameStyle = nameStyle.Foreground(lipgloss.Color(color))
-	}
-	if selected {
-		fillStyle = m.styles.SelectionSelected
-		glyphStyle = fillStyle
-		statusStyle = fillStyle
-		nameStyle = fillStyle.Copy()
-		if color := strings.TrimSpace(snapshot.Color); color != "" {
-			nameStyle = nameStyle.Foreground(lipgloss.Color(color))
-		}
 	}
 	return renderActivityTaskHeaderRow(width, glyph, taskDisplayName(snapshot), status, fillStyle, glyphStyle, nameStyle, statusStyle)
 }
@@ -220,7 +211,7 @@ func (m appModel) renderSelectedActivityTaskDetails(snapshot task.TaskSnapshot, 
 	wrapped := strings.Split(wrapCompact(ansi.Strip(description), contentWidth), "\n")
 	lines := make([]string, 0, len(wrapped)+1)
 	for _, line := range wrapped {
-		lines = append(lines, m.styles.SelectionSelected.Render(fitStyledCellLine("  "+line, width)))
+		lines = append(lines, bodyStyle.Render(fitStyledCellLine("  "+line, width)))
 	}
 
 	meta := make([]string, 0, 2)
@@ -236,7 +227,7 @@ func (m appModel) renderSelectedActivityTaskDetails(snapshot task.TaskSnapshot, 
 	}
 	if len(meta) > 0 {
 		text := "  " + truncateStyledCellLine(strings.Join(meta, " · "), contentWidth)
-		lines = append(lines, m.styles.SelectionSelected.Render(fitStyledCellLine(text, width)))
+		lines = append(lines, unselectedProviderStyle.Render(fitStyledCellLine(text, width)))
 	}
 	return lines
 }

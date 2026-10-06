@@ -30,11 +30,27 @@ func renderMarkdown(markdown string, width int) string {
 			parts = append(parts, "")
 			continue
 		}
+		if tuiTeXEnabled() {
+			if rendered, end, ok := renderExtendedTeXFence(lines, i, width); ok {
+				parts = append(parts, rendered)
+				i = end
+				continue
+			}
+		}
 
 		if lang, ok := fencedCodeStart(trimmed); ok {
+			fenceStart := i
 			codeLines, end := collectFencedCodeLines(lines, i, lang)
 			i = end
 			code := strings.Join(codeLines, "\n")
+			if tuiTeXEnabled() && lang == "tikzcd" {
+				if isFencedCodeClose(strings.TrimSpace(lines[end])) && end > fenceStart {
+					parts = append(parts, styleTeXBlock(renderTikZBlock(code, code, width)))
+				} else {
+					parts = append(parts, styleTeXBlock(renderTeXLiteral(code, width)))
+				}
+				continue
+			}
 			// 模型有时把整段回答包进一个 ```text 围栏（内部还有嵌套围栏与
 			// 引用块）：仅当围栏横跨整条消息且内容本身像 Markdown（含嵌套
 			// 围栏/标题/引用标记）时才视为传输包装解开；纯文本片段（哪怕
@@ -49,6 +65,13 @@ func renderMarkdown(markdown string, width int) string {
 			}
 			parts = append(parts, renderCodeBlock(lang, code, width))
 			continue
+		}
+		if tuiTeXEnabled() {
+			if rendered, end, ok := renderMarkdownTeXBlock(lines, i, width); ok {
+				parts = append(parts, styleTeXBlock(rendered))
+				i = end
+				continue
+			}
 		}
 		if isMarkdownTableStart(lines, i) {
 			tableLines, end := collectMarkdownTableLines(lines, i)
@@ -109,10 +132,19 @@ func renderMarkdownQuoteBlock(inner string, width int) string {
 	// 会把引用文字色顶掉；逐行把正文前景序列替换为引用文字色（标题/粗体/
 	// 代码等其他角色保持各自配色），再在 ANSI reset 后补回引用色。
 	bodySeq := foregroundSGR(colorManager.Hex(colorBody))
+	// Lip Gloss may quantize RGB channels; explicit resets use the original values.
+	encodedBodySeq := ""
+	if color := lipgloss.ColorProfile().Color(colorManager.Hex(colorBody)); color != nil {
+		if sequence := color.Sequence(false); sequence != "" {
+			encodedBodySeq = "\x1b[" + sequence + "m"
+		}
+	}
 	quoteSeq := foregroundSGR(quoteText)
 	for _, line := range lines {
-		if bodySeq != "" && quoteSeq != "" && bodySeq != quoteSeq {
-			line = strings.ReplaceAll(line, bodySeq, quoteSeq)
+		for _, sequence := range []string{bodySeq, encodedBodySeq} {
+			if sequence != "" && quoteSeq != "" && sequence != quoteSeq {
+				line = strings.ReplaceAll(line, sequence, quoteSeq)
+			}
 		}
 		out = append(out, markdownQuoteStyle.Width(innerWidth).Render(restoreForegroundAfterANSIReset(line, quoteText)))
 	}
@@ -414,6 +446,9 @@ func parseMarkdownTableRow(line string) []string {
 	line = strings.TrimPrefix(line, "|")
 	line = strings.TrimSuffix(line, "|")
 	parts := strings.Split(line, "|")
+	if tuiTeXEnabled() {
+		parts = splitMarkdownTeXTable(line)
+	}
 	cells := make([]string, 0, len(parts))
 	for _, part := range parts {
 		cells = append(cells, strings.TrimSpace(part))
@@ -817,6 +852,9 @@ func renderMarkdownTableInline(line string) string {
 }
 
 func renderInlineMarkdownWithStyles(line string, codeStyle, highlightStyle lipgloss.Style) string {
+	if tuiTeXEnabled() && (strings.ContainsAny(line, "$\\") || strings.Contains(line, "``")) {
+		return renderInlineTeX(line, codeStyle, highlightStyle)
+	}
 	var rendered strings.Builder
 	for line != "" {
 		start, marker, _, ok := nextInlineMarkdownSpan(line)
@@ -950,6 +988,14 @@ func renderTerminalHyperlink(label, target string) string {
 }
 
 func parseMarkdownTerminalLink(text string) (label, target string, consumed int, ok bool) {
+	label, target, consumed, ok = parseMarkdownLinkSyntax(text)
+	if !ok || !isClickableTerminalTarget(target) {
+		return "", "", 0, false
+	}
+	return label, target, consumed, true
+}
+
+func parseMarkdownLinkSyntax(text string) (label, target string, consumed int, ok bool) {
 	if !strings.HasPrefix(text, "[") {
 		return "", "", 0, false
 	}
@@ -977,9 +1023,6 @@ func parseMarkdownTerminalLink(text string) (label, target string, consumed int,
 			target = strings.TrimSpace(text[targetStart : targetStart+offset])
 			if strings.HasPrefix(target, "<") && strings.HasSuffix(target, ">") {
 				target = strings.TrimSpace(target[1 : len(target)-1])
-			}
-			if !isClickableTerminalTarget(target) {
-				return "", "", 0, false
 			}
 			return label, target, targetStart + offset + 1, true
 		}

@@ -473,7 +473,7 @@ func (m appModel) isInputDockMouse(msg tea.MouseMsg) bool {
 		return false
 	}
 	layout := m.currentLayout()
-	if msg.X < 0 || msg.X >= layout.frameWidth {
+	if msg.X < 0 || msg.X >= layout.workspaceWidth {
 		return false
 	}
 	top := 1 + layout.headerHeight + layout.transcriptHeight + layout.statusHeight

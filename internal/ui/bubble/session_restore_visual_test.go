@@ -17,7 +17,9 @@ func TestSessionRestoreDismissesPickerAndRebuildsFrame(t *testing.T) {
 		t.Run(fmt.Sprint(width), func(t *testing.T) {
 			m := newThemedTestModel(t, "dracula")
 			m.ready, m.hasInteracted = true, true
-			m.width, m.height = width, 32
+			// The default sidebar makes the 80-column table 30 rows tall; this
+			// fixture shows the whole transcript without changing restore scroll behavior.
+			m.width, m.height = width, 36
 			m.cursorFrameAt = time.Date(2026, 9, 20, 11, 10, 0, 0, time.UTC)
 			m.transcript = []transcriptEntry{{kind: entryAssistant, body: strings.Repeat("OLD-SESSION-CONTENT\n\n", 40)}}
 			m.relayout()
@@ -42,8 +44,13 @@ func TestSessionRestoreDismissesPickerAndRebuildsFrame(t *testing.T) {
 				view := m.View()
 				plain := ansi.Strip(view)
 				assertFixedFrame(t, view, width, m.height)
-				if m.sessionPicker != nil || m.activity.visible || len(m.transcript) != len(restored) {
-					t.Fatal("restore retained modal, activity, or added transcript content")
+				if m.sessionPicker != nil || !m.activity.visible || len(m.transcript) != len(restored) {
+					t.Fatal("restore retained modal, hid activity, or added transcript content")
+				}
+				for i, entry := range restored {
+					if got := m.transcript[i]; got.kind != entry.kind || got.title != entry.title || got.body != entry.body {
+						t.Fatalf("restore changed transcript entry %d", i)
+					}
 				}
 				wantWidth := m.currentLayout().workspaceWidth - transcriptContentStyle.GetHorizontalPadding()
 				if m.viewport.Width != wantWidth {
@@ -55,9 +62,17 @@ func TestSessionRestoreDismissesPickerAndRebuildsFrame(t *testing.T) {
 					}
 				}
 				if len(restored) > 0 {
-					for _, want := range []string{"查看项目表格", "internal/runtime", "previous turn failed"} {
-						if !strings.Contains(plain, want) {
-							t.Fatalf("restored frame missing %q", want)
+					if !strings.Contains(m.transcript[1].body, "internal/runtime") {
+						t.Fatal("restore lost table content")
+					}
+					var workspaceLines []string
+					for _, line := range strings.Split(view, "\n") {
+						workspaceLines = append(workspaceLines, ansi.Strip(cutStyledCellsExact(line, 0, m.currentLayout().workspaceWidth)))
+					}
+					workspace := strings.Join(strings.Fields(strings.Join(workspaceLines, " ")), " ")
+					for _, want := range []string{"查看项目表格", "previous turn failed: context canceled"} {
+						if !strings.Contains(workspace, want) {
+							t.Fatalf("restored frame missing %q:\n%s", want, view)
 						}
 					}
 				} else if strings.Contains(plain, "internal/runtime") || strings.Contains(plain, "recovery") {
