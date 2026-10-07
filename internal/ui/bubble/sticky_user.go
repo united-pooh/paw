@@ -36,7 +36,7 @@ func (m appModel) stickyUserLocation() (transcriptEntryLocation, bool) {
 }
 
 func (m appModel) stickyUserAtMouse(x, y int) (transcriptEntryLocation, bool) {
-	if m.currentLayout().activityMode == activityLayoutFullscreen || m.configCenter != nil || m.settingWizard != nil {
+	if m.configCenter != nil || m.settingWizard != nil {
 		return transcriptEntryLocation{}, false
 	}
 	if y != m.transcriptScreenTop() {
@@ -66,7 +66,11 @@ func (m appModel) overlayStickyUser(content string) string {
 	}
 	line := cutStyledCellsExact(m.transcriptLines[loc.startRow], 0, maxInt(0, width-terminalCellWidth(hint))) + hint
 	line = truncateStyledCellLine(line, width)
-	return renderUserTranscriptRow(line, width) + "\n" + tail
+	row := renderUserTranscriptRow(line, width)
+	if colorManager.palette.TerminalBackground == "" && lipgloss.ColorProfile() != termenv.Ascii {
+		row = restoreBackgroundAfterANSIReset(row, "0", colorManager.Hex(colorLabelUser))
+	}
+	return row + "\n" + tail
 }
 
 func renderUserTranscriptRow(body string, width int) string {

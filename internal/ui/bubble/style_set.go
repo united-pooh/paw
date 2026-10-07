@@ -25,7 +25,7 @@ func NewStyleSet(p theme.Palette) StyleSet {
 	c := NewColorManager(p)
 	bg := c.LipglossColor(colorTerminalBackground)
 	surface := c.LipglossColor(colorToolDetailBackground)
-	return StyleSet{
+	s := StyleSet{
 		Colors:                   c,
 		Frame:                    lipgloss.NewStyle().Foreground(c.LipglossColor(colorPanelBorder)).Background(bg),
 		Header:                   lipgloss.NewStyle().Background(c.LipglossColor(colorHeaderBackground)).Foreground(c.LipglossColor(colorHeaderForeground)).Padding(0, 1),
@@ -78,4 +78,14 @@ func NewStyleSet(p theme.Palette) StyleSet {
 		Notice:                   lipgloss.NewStyle().Foreground(c.LipglossColor(colorSignal)).Background(c.LipglossColor(colorWorktreeBackground)).Bold(true).Padding(0, 1),
 		NoticeHover:              lipgloss.NewStyle().Foreground(bg).Background(c.LipglossColor(colorSignal)).Bold(true).Padding(0, 1),
 	}
+	if p.TerminalBackground == "" {
+		s.Frame = s.Frame.UnsetForeground()
+		s.MarkdownCode = s.MarkdownCode.Bold(true)
+		s.SelectionSelected = s.SelectionNormal.Reverse(true).Bold(true)
+		s.SelectionFocusedSelected = s.SelectionSelected
+		s.MarkdownHighlight = lipgloss.NewStyle().Foreground(c.LipglossColor(colorMarkdownHighlight)).Bold(true).Underline(true)
+		s.MarkdownCodeBlockLabel = lipgloss.NewStyle().Foreground(c.LipglossColor(colorSignal)).Bold(true)
+		s.NoticeHover = s.Notice.Reverse(true)
+	}
+	return s
 }

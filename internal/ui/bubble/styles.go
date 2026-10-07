@@ -178,6 +178,10 @@ func rebuildLegacyStyles() {
 	userTranscriptRowStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorLabelUser)).
 		Background(lipgloss.Color(interpolateHexColor(colorManager.Hex(colorTerminalBackground), colorManager.Hex(colorSignal), 0.16)))
+	if colorManager.palette.TerminalBackground == "" {
+		userTranscriptRowStyle = userTranscriptRowStyle.UnsetBackground().Bold(true)
+	}
+
 	thinkingBodyStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorMarkdownQuote))
 	markdownBoldStyle = lipgloss.NewStyle().
@@ -221,6 +225,15 @@ func rebuildLegacyStyles() {
 		Foreground(colorManager.LipglossColor(colorTerminalBackground)).
 		Background(colorManager.LipglossColor(colorSignal)).
 		Bold(true)
+	if colorManager.palette.TerminalBackground == "" {
+		toolStatusOKStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorWorktreeClean)).Bold(true)
+		toolStatusRunningStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorWorktreeDirty)).Bold(true)
+		toolStatusErrorStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorWorktreeConflict)).Bold(true)
+		markdownCodeBlockLabelStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorSignal)).Bold(true)
+		markdownHighlightStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorMarkdownHighlight)).Bold(true).Underline(true)
+		markdownCodeStyle = markdownCodeStyle.Bold(true)
+	}
+
 	// 引用样式只启用左边框：lipgloss 的 .Border() 会同时启用四边，
 	// top/bottom 无字符时会为每个引用行渲染上下空白填充行。
 	markdownQuoteStyle = lipgloss.NewStyle().
@@ -310,6 +323,11 @@ func rebuildLegacyStyles() {
 		Background(colorManager.LipglossColor(colorSignal)).
 		Foreground(colorManager.LipglossColor(colorTerminalBackground)).
 		Bold(true)
+	if colorManager.palette.TerminalBackground == "" {
+		modeGoalStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorInputTokenCommand)).Bold(true)
+		modePlanStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorSignal)).Bold(true)
+	}
+
 	inputCommandTokenStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorInputTokenCommand)).
 		Bold(true)
@@ -367,7 +385,7 @@ func rebuildLegacyStyles() {
 	// 16 色及以下终端没有可靠的 RGB 背景近似：选区降级为反色渲染，
 	// 与终端原生选区观感一致，避免 lipgloss 把真彩色近似成奇怪颜色。
 	lowColorSelection := lipgloss.ColorProfile() == termenv.ANSI || lipgloss.ColorProfile() == termenv.Ascii
-	if lowColorSelection {
+	if lowColorSelection || colorManager.palette.TerminalBackground == "" {
 		toolFocusedStyle = lipgloss.NewStyle().
 			Bold(true).
 			Reverse(true)
@@ -401,7 +419,7 @@ func rebuildLegacyStyles() {
 	todoSummaryStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorMarkdownQuote))
 
-	if lowColorSelection {
+	if lowColorSelection || colorManager.palette.TerminalBackground == "" {
 		selectedTranscriptLineStyle = lipgloss.NewStyle().
 			Reverse(true)
 	} else {

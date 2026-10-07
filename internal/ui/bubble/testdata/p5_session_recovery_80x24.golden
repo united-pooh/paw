@@ -1,24 +1,24 @@
-─ model-a  ready  12:00 ──────────────────────────────────── Activity · Ctrl+G ─
-   resume
-   Goal goal-p5 已恢复为 paused；使用 /goal resume 继续。
-   Plan plan-p5 已恢复为 paused；使用 /plan resume 继续。
-   存在待处理的 Read 权限请求，请先完成 Allow once 或 Deny。
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-────────────────────────────────────────────────────────────────────────────────
- › Ask anything…                                           /help @file !shell
- chat                     上下文 0% · 0/131k                      go-code  dev
+──────────── model-a  ready  12:00 ────────────┬─────── Activity / Tasks ───────
+   resume                                      │Activity / Tasks 0
+   Goal goal-p5 已恢复为 paused；使用 /goal    │Task controller is unavailable.
+   resume 继续。                               │
+   Plan plan-p5 已恢复为 paused；使用 /plan    │
+   resume 继续。                               │
+   存在待处理的 Read 权限请求，请先完成 Allow  │
+   once 或 Deny。                              │
+                                               │
+                                               │
+                                               │
+                                               │
+                                               │TOKEN HISTORY · MAIN TURN
+                                               │Turn avg — tok/s
+                                               │Σout —              — incl tools
+                                               │
+                                               │暂无流片段
+                                               │60s chart · recent       — tok/s
+                                               │Input —                 Output —
+                                               │Cache hit                      —
+                                               │Tools in —          main 0 calls
+CTX — ·········································│Σ session+tasks · tools ⊂ input
+ › Ask anything…          /help @file !shell   │Loading token ledger…
+ chat                  CTX —                   ┴────────  go-code  dev  ────────

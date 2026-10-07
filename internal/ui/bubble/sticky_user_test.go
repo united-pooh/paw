@@ -95,18 +95,18 @@ func TestStickyUserPreservesBottomAndUpdatesAfterResize(t *testing.T) {
 	}
 }
 
-func TestStickyUserControlIsInactiveBehindFullscreenActivity(t *testing.T) {
+func TestStickyUserControlRemainsActiveWhenNarrowSidebarIsHidden(t *testing.T) {
 	m := stickyUserFixture()
 	m.width = 40
 	m.activity.visible = true
 	m.relayout()
 	m.refreshViewport()
 	m.viewport.GotoBottom()
-	if m.currentLayout().activityMode != activityLayoutFullscreen {
-		t.Fatal("fixture did not open fullscreen Activity")
+	if m.currentLayout().activityMode != activityLayoutHidden {
+		t.Fatal("narrow sidebar should be hidden")
 	}
-	if _, ok := m.stickyUserAtMouse(6, m.transcriptScreenTop()); ok {
-		t.Fatal("hidden sticky input intercepted Activity")
+	if _, ok := m.stickyUserAtMouse(6, m.transcriptScreenTop()); !ok {
+		t.Fatal("visible sticky input lost hit target")
 	}
 }
 
@@ -126,6 +126,7 @@ func BenchmarkStickyUserLookup(b *testing.B) {
 }
 
 func TestUserBackgroundCoversEveryCellIncludingTokenResetsAndTrailingSpace(t *testing.T) {
+	newRGBTestModel(t)
 	setTrueColorForTest(t)
 	want := string(userTranscriptRowStyle.GetBackground().(lipgloss.Color))
 	entry := transcriptEntry{kind: entryUser, body: "检查 file.go", inputTokens: []inputToken{{Kind: inputTokenFile, Start: len("检查 "), End: len("检查 file.go"), Label: "file.go"}}}

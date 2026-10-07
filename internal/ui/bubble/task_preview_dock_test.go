@@ -15,7 +15,6 @@ func TestDockedTaskPreviewKeepsActivityOpen(t *testing.T) {
 	model.width = 120
 	model.height = 30
 	model.activity.visible = true
-	model.activity.focus = activityFocusPanel
 	model.activity.tasks = []task.TaskSnapshot{{ID: "worker", SessionID: "worker", Name: "worker"}}
 	model.activity.selectedTaskID = "worker"
 
@@ -39,19 +38,19 @@ func TestTaskPreviewLoadErrorKeepsLastSnapshot(t *testing.T) {
 	}
 }
 
-func TestNarrowActivityEnterClosesPanelAndStartsPreview(t *testing.T) {
+func TestNarrowActivityEnterSubmitsInputWithPanelVisible(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
 	model.width = 80
 	model.height = 24
 	model.activity.visible = true
-	model.activity.focus = activityFocusPanel
 	model.activity.tab = activityTabTasks
 	model.activity.tasks = []task.TaskSnapshot{{ID: "worker", SessionID: "worker"}}
 
-	next, cmd := model.handleActivityKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model.input.SetValue("continue main")
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
-	if model.activity.visible || cmd == nil {
+	if !model.activity.visible || cmd == nil || model.taskPreview != nil {
 		t.Fatalf("narrow Enter visible=%v cmd=%v", model.activity.visible, cmd)
 	}
 }
@@ -63,7 +62,6 @@ func TestSubmitFromTaskPreviewRestoresMainAndKeepsDock(t *testing.T) {
 	model.height = 30
 	model.sessionID = "main"
 	model.activity.visible = true
-	model.activity.focus = activityFocusWorkspace
 	model.taskPreview = &taskTranscriptPreview{
 		parentSessionID:  "main",
 		parentTranscript: []transcriptEntry{{kind: entryUser, body: "main transcript"}},

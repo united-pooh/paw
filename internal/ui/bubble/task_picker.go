@@ -35,12 +35,14 @@ func waitTaskUpdateCmd(ctx context.Context, updates <-chan struct{}) tea.Cmd {
 
 func (m appModel) openTaskPicker() (tea.Model, tea.Cmd) {
 	m.openActivity(activityTabTasks)
-	return m, nil
+	cmd := m.tokenMonitorCommand()
+	return m, cmd
 }
 
 func (m appModel) openTodoPicker() (tea.Model, tea.Cmd) {
 	m.openActivity(activityTabTodo)
-	return m, nil
+	cmd := m.tokenMonitorCommand()
+	return m, cmd
 }
 
 func (m *appModel) openActivity(tab activityTab) {
@@ -48,15 +50,15 @@ func (m *appModel) openActivity(tab activityTab) {
 		return
 	}
 	m.activity.visible = true
-	m.activity.focus = activityFocusPanel
 	m.activity.tab = tab
-	m.activity.commandPrefix = activityCommandIdle
 	m.sessionPicker = nil
 	m.modelWizard = nil
 	m.settingWizard = nil
-	m.clearCompletionAndRelayout()
 	m.refreshActivityTasks()
-	m.input.Blur()
+	if tab == activityTabTasks || tab == activityTabTodo {
+		m.activity.tab = tab
+	}
+	m.input.Focus()
 	m.relayout()
 	m.refreshViewport()
 }
@@ -66,8 +68,6 @@ func (m *appModel) closeActivity() {
 		return
 	}
 	m.activity.visible = false
-	m.activity.focus = activityFocusWorkspace
-	m.activity.commandPrefix = activityCommandIdle
 	m.input.Focus()
 	m.relayout()
 	m.refreshViewport()
@@ -80,98 +80,16 @@ func (m appModel) handleActivityGlobalKey(msg tea.KeyMsg) (appModel, bool, tea.C
 			m.closeActivity()
 		} else {
 			m.openActivity(m.activity.tab)
+			m.activity.tab = m.activitySummaryTab()
 		}
-		return m, true, nil
+		cmd := m.tokenMonitorCommand()
+		return m, true, cmd
 	}
-	if !m.activity.visible {
-		return m, false, nil
-	}
-	if m.activity.commandPrefix == activityCommandCtrlW {
-		m.activity.commandPrefix = activityCommandIdle
-		switch keyName {
-		case "h":
-			m.activity.focus = activityFocusWorkspace
-			return m, true, m.input.Focus()
-		case "l":
-			if m.currentLayout().activityMode == activityLayoutDocked {
-				m.activity.focus = activityFocusPanel
-				m.input.Blur()
-			}
-			return m, true, nil
-		case "<":
-			layout := m.currentLayout()
-			if layout.activityMode == activityLayoutDocked {
-				m.activity.widthColumns = resizeActivityWidth(layout.activityWidth, -1)
-				m.relayout()
-				m.refreshViewport()
-			}
-			return m, true, nil
-		case ">":
-			layout := m.currentLayout()
-			if layout.activityMode == activityLayoutDocked {
-				m.activity.widthColumns = resizeActivityWidth(layout.activityWidth, 1)
-				m.relayout()
-				m.refreshViewport()
-			}
-			return m, true, nil
-		default:
-			return m, true, nil
-		}
-	}
-	if keyName == "ctrl+w" {
-		m.activity.commandPrefix = activityCommandCtrlW
-		return m, true, nil
-	}
-	if keyName == "esc" {
-		if m.currentLayout().activityMode == activityLayoutFullscreen {
-			m.closeActivity()
-			return m, true, m.input.Focus()
-		}
-		if m.taskPreview != nil {
-			m.restoreMainTranscriptFromTaskPreview()
-			return m, true, nil
-		}
-		if m.activity.focus == activityFocusPanel {
-			m.activity.focus = activityFocusWorkspace
-			return m, true, m.input.Focus()
-		}
+	if keyName == "esc" && m.taskPreview != nil {
+		m.restoreMainTranscriptFromTaskPreview()
+		return m, true, m.input.Focus()
 	}
 	return m, false, nil
-}
-
-func (m appModel) handleActivityKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "ctrl+c":
-		m.closeActivity()
-		return m, m.input.Focus()
-	case "tab", "right", "l":
-		m.activity.tab = activityTabTodo
-		return m, nil
-	case "shift+tab", "left", "h":
-		m.activity.tab = activityTabTasks
-		return m, nil
-	case "up", "k":
-		if m.activity.tab == activityTabTasks {
-			m.selectActivityTask(m.activity.selectedIndex - 1)
-		}
-		return m, nil
-	case "down", "j":
-		if m.activity.tab == activityTabTasks {
-			m.selectActivityTask(m.activity.selectedIndex + 1)
-		}
-		return m, nil
-	case "enter":
-		if m.activity.tab != activityTabTasks || len(m.activity.tasks) == 0 {
-			return m, nil
-		}
-		selected := clampInt(m.activity.selectedIndex, 0, len(m.activity.tasks)-1)
-		task := m.activity.tasks[selected]
-		if m.currentLayout().activityMode == activityLayoutFullscreen {
-			m.closeActivity()
-		}
-		return m.previewTaskTranscript(task)
-	}
-	return m, nil
 }
 
 func (m *appModel) refreshActivityTasks() {
@@ -180,7 +98,9 @@ func (m *appModel) refreshActivityTasks() {
 	}
 	oldIndex := m.activity.selectedIndex
 	selectedID := strings.TrimSpace(m.activity.selectedTaskID)
-	m.activity.tasks = append(m.activity.tasks[:0], m.taskEntries()...)
+	tasks := m.taskEntries()
+	m.observeActivityTasks(tasks, time.Now())
+	m.activity.tasks = append(m.activity.tasks[:0], tasks...)
 	if len(m.activity.tasks) == 0 {
 		m.activity.selectedIndex = 0
 		m.activity.selectedTaskID = ""
@@ -190,21 +110,12 @@ func (m *appModel) refreshActivityTasks() {
 		for index, snapshot := range m.activity.tasks {
 			if strings.TrimSpace(snapshot.ID) == selectedID {
 				m.activity.selectedIndex = index
+				m.activity.selectedTaskID = selectedID
 				return
 			}
 		}
 	}
 	m.activity.selectedIndex = clampInt(oldIndex, 0, len(m.activity.tasks)-1)
-	m.activity.selectedTaskID = strings.TrimSpace(m.activity.tasks[m.activity.selectedIndex].ID)
-}
-
-func (m *appModel) selectActivityTask(index int) {
-	if len(m.activity.tasks) == 0 {
-		m.activity.selectedIndex = 0
-		m.activity.selectedTaskID = ""
-		return
-	}
-	m.activity.selectedIndex = clampInt(index, 0, len(m.activity.tasks)-1)
 	m.activity.selectedTaskID = strings.TrimSpace(m.activity.tasks[m.activity.selectedIndex].ID)
 }
 
@@ -785,10 +696,8 @@ func (m *appModel) applySessionPickerRestore(msg sessionRestoredMsg) {
 	m.activeTurnUserEntry = -1
 	m.doneAssistant = -1
 	m.sessionID = msg.sessionID
+	m.syncTokenMonitorSession()
 	m.sessionPicker = nil
-	m.activity.visible = false
-	m.activity.focus = activityFocusWorkspace
-	m.activity.commandPrefix = activityCommandIdle
 	m.taskPreview = nil
 	m.goalMode = false
 	m.planMode = false
@@ -802,6 +711,8 @@ func (m *appModel) applySessionPickerRestore(msg sessionRestoredMsg) {
 	m.currentTodo = msg.currentTodo.Clone()
 	m.hasCurrentTodo = msg.hasCurrentTodo
 	m.todoWasCleared = msg.todoWasCleared
+	m.resetActivitySummary()
+	m.refreshActivityTasks()
 	m.inputHistory = inputHistoryFromTranscript(msg.entries)
 	m.resetHistoryNavigation()
 	var title, body string
@@ -833,7 +744,11 @@ func restoredModeGuidance(modes *loop.SessionModeSnapshot) string {
 		lines = append(lines, fmt.Sprintf("Goal %s 已恢复为 %s；使用 /goal resume 继续。", modes.ActiveGoalID, modes.GoalStatus))
 	}
 	if modes.ActivePlanID != "" {
-		lines = append(lines, fmt.Sprintf("Plan %s 已恢复为 %s；使用 /plan resume 继续。", modes.ActivePlanID, modes.PlanStatus))
+		guidance := "使用 /plan resume 继续。"
+		if modes.PlanStatus == "ready" {
+			guidance = "使用 /plan execute 执行，或 /plan resume 后输入补充内容继续修改。"
+		}
+		lines = append(lines, fmt.Sprintf("Plan %s 已恢复为 %s；%s", modes.ActivePlanID, modes.PlanStatus, guidance))
 	}
 	if modes.PendingPermissionID != "" {
 		lines = append(lines, "存在待处理的 Read 权限请求，请先完成 Allow once 或 Deny。")

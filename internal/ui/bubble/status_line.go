@@ -1,6 +1,6 @@
 // 底部 dock 渲染层。
 //
-// 输入区上方用细线分隔；下方显示模式、带标签的用量和项目/分支。
+// 输入区上方显示上下文进度；下方显示模式、带标签的用量和项目/分支。
 // ready/working/generating 状态词只保留在 header。所有内容按 terminal cell
 // 预算截断，整体严格等于目标宽度，数据内容绝不破坏布局。
 package bubble
@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"paw/internal/runtime/loop"
 )
 
 // statusSegmentSeparator separates compact metadata inside token usage.
@@ -103,10 +104,35 @@ const (
 	tokenRippleGlyph = "█"
 )
 
-// renderDockStatusLine separates input from transcript without a filled band.
 func (m appModel) renderDockStatusLine(width int) string {
 	width = maxInt(1, width)
-	return dockRuleStyle.Render(strings.Repeat("─", width))
+	stats := m.contextStats()
+	if !contextCapacityKnown(stats) {
+		return contextFreeStyle.Render(fitStyledCellLine("CTX — "+strings.Repeat("·", maxInt(0, width-6)), width))
+	}
+	limit := maxInt(1, stats.LimitTokens)
+	used := maxInt(0, stats.UsedTokens)
+	cache := maxInt(0, stats.CacheTokens)
+	if width <= 20 {
+		return m.renderTokenFrontierWith(width, used, cache, limit, m.currentModeHex())
+	}
+
+	percent := int(float64(used)*100/float64(limit) + 0.5)
+	label := fmt.Sprintf("CTX %d%% ", percent)
+	usage := " " + formatCompactTokenCount(used) + " / " + formatCompactTokenCount(limit)
+	barWidth := width - terminalCellWidth(label)
+	if barWidth-terminalCellWidth(usage) >= 12 {
+		barWidth -= terminalCellWidth(usage)
+	} else {
+		usage = ""
+	}
+	return contextFreeStyle.Render(label) +
+		m.renderTokenFrontierWith(barWidth, used, cache, limit, m.currentModeHex()) +
+		contextFreeStyle.Render(usage)
+}
+
+func contextCapacityKnown(stats loop.ContextStats) bool {
+	return stats.Known && stats.LimitTokens > 0 && (stats.TotalKnown || stats.InputKnown && stats.OutputKnown)
 }
 
 // renderBottomDockLine 渲染最下方边框：模式靠左，项目/分支靠右；中间剩余
@@ -195,9 +221,12 @@ func (m appModel) renderBottomDockUsage() string {
 
 func (m appModel) renderBottomDockUsageWithin(width int) string {
 	stats := m.contextStats()
+	if !contextCapacityKnown(stats) {
+		return truncateStyledCellLine(contextFreeStyle.Render("CTX —"), width)
+	}
 	limit := maxInt(1, stats.LimitTokens)
-	used := clampInt(stats.UsedTokens, 0, limit)
-	cache := clampInt(stats.CacheTokens, 0, used)
+	used := maxInt(0, stats.UsedTokens)
+	cache := maxInt(0, stats.CacheTokens)
 	percent := int(float64(used)*100/float64(limit) + 0.5)
 	compact := fmt.Sprintf("上下文 %d%%", percent)
 	usage := compact + " · " + formatCompactTokenCount(used) + "/" + formatCompactTokenCount(limit)
@@ -291,8 +320,10 @@ func (m appModel) renderTokenFrontierWith(width, used, cache, limit int, modeHex
 	rippleHex := colorManager.Hex(colorContextUsed)
 	if modeHex != "" {
 		usedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(modeHex)).Bold(true)
-		cacheStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(interpolateHexColor(colorManager.Hex(colorTerminalBackground), modeHex, 0.9))).Bold(true)
-		freeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(interpolateHexColor(colorManager.Hex(colorTerminalBackground), modeHex, 0.45)))
+		if colorManager.palette.TerminalBackground != "" {
+			cacheStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(interpolateHexColor(colorManager.Hex(colorTerminalBackground), modeHex, 0.9))).Bold(true)
+			freeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(interpolateHexColor(colorManager.Hex(colorTerminalBackground), modeHex, 0.45)))
+		}
 		rippleHex = modeHex
 	}
 
@@ -395,6 +426,9 @@ func (m appModel) tokenRippleHead(usedCells, freeCells int, now time.Time) int {
 func renderTokenRippleCell(distance int, background, rippleHex string) string {
 	alpha := float64(tokenRippleTail-distance) / float64(tokenRippleTail)
 	alpha = clamp01(alpha)
+	if background == "" {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(rippleHex)).Faint(alpha < 0.5).Render(tokenRippleGlyph)
+	}
 	color := interpolateHexColor(background, rippleHex, alpha)
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(tokenRippleGlyph)
 }
