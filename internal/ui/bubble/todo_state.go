@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"paw/internal/todo"
@@ -34,15 +35,26 @@ func (m *appModel) applyTodoSnapshot(snapshot todo.Snapshot, live bool) bool {
 		return false
 	}
 	copy := normalized.Clone()
+	if m.activity.summarySessionID != m.sessionID {
+		m.resetActivitySummary()
+	}
 	if copy.Cleared() {
+		m.activity.todoUpdatedAt = time.Time{}
 		m.currentTodo = todo.Snapshot{}
 		m.hasCurrentTodo = false
 		m.todoWasCleared = true
 	} else {
+		if !m.hasCurrentTodo || !activityTodoEqual(m.currentTodo, copy) {
+			m.activity.todoUpdatedAt = copy.UpdatedAt
+			if m.activity.todoUpdatedAt.IsZero() && live {
+				m.activity.todoUpdatedAt = time.Now()
+			}
+		}
 		m.currentTodo = copy.Clone()
 		m.hasCurrentTodo = true
 		m.todoWasCleared = false
 	}
+	m.activity.tab = m.activitySummaryTab()
 	return true
 }
 
