@@ -44,6 +44,7 @@ test-results/
 # IDE & tool config
 .ccagent/
 .codex/
+.commandcode/
 .paw/
 
 # Docs / misc artifacts
