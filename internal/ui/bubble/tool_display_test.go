@@ -64,6 +64,7 @@ func TestToolStatusLabelsAreChinese(t *testing.T) {
 }
 
 func TestToolStatusChipUsesSemanticBackgrounds(t *testing.T) {
+	newRGBTestModel(t)
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })

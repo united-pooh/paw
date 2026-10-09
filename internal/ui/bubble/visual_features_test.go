@@ -96,17 +96,19 @@ func TestHighlightToolDetailLineRainbowBrackets(t *testing.T) {
 	}
 }
 func TestUserTranscriptMessageUsesNeutralForeground(t *testing.T) {
+	newRGBTestModel(t)
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
 
 	got := renderEntry(transcriptEntry{kind: entryUser, body: "submitted message"}, 40)
-	if !strings.Contains(got, "38;2;201;194;183") {
+	if !strings.Contains(got, "38;2;192;202;245") {
 		t.Fatalf("user message did not use neutral body foreground: %q", got)
 	}
 }
 
 func TestTokenizedUserTranscriptOrdinaryTextUsesNeutralForeground(t *testing.T) {
+	newRGBTestModel(t)
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
@@ -121,7 +123,7 @@ func TestTokenizedUserTranscriptOrdinaryTextUsesNeutralForeground(t *testing.T) 
 			Label: "file.go",
 		}},
 	}, 40)
-	if !strings.Contains(got, "38;2;201;194;183") {
+	if !strings.Contains(got, "38;2;192;202;245") {
 		t.Fatalf("tokenized user message ordinary text did not use neutral body: %q", got)
 	}
 	if plain := ansi.Strip(got); !strings.Contains(plain, "ask file.go now") {

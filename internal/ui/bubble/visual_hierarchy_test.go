@@ -66,7 +66,7 @@ func TestModelNoticeNarrowWidthsPreserveExpandedConfiguration(t *testing.T) {
 }
 
 func TestContextOccupancyIsDistinctFromCacheProportion(t *testing.T) {
-	m := newTestModel(&fakeRunner{stats: loop.ContextStats{UsedTokens: 68700, CacheTokens: 65265, LimitTokens: 256000}})
+	m := newTestModel(&fakeRunner{stats: loop.ContextStats{Known: true, TotalKnown: true, CacheKnown: true, UsedTokens: 68700, CacheTokens: 65265, LimitTokens: 256000}})
 	full := ansi.Strip(m.renderBottomDockUsage())
 	for _, want := range []string{"上下文 27%", "68.7k/256k", "缓存占比 95%"} {
 		if !strings.Contains(full, want) {
@@ -102,8 +102,8 @@ func TestInputPromptRemainsVisibleAfterInteraction(t *testing.T) {
 	if !strings.Contains(ansi.Strip(m.renderInputContentWithHints(60, 1)), "›") {
 		t.Fatal("empty input lost its visible entry point after a turn")
 	}
-	if got := ansi.Strip(m.renderDockStatusLine(60)); got != strings.Repeat("─", 60) {
-		t.Fatalf("input separator should be a hairline: %q", got)
+	if got := ansi.Strip(m.renderDockStatusLine(60)); !strings.HasPrefix(got, "CTX — ") || strings.Contains(got, "%") {
+		t.Fatalf("input separator should expose context progress: %q", got)
 	}
 }
 

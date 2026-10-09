@@ -11,8 +11,7 @@ import (
 //   - 选区文字 vs 选区背景 ≥ 4.2:1（WCAG AA 正文，深色主题按 4.5 设计）
 //   - 选区背景 vs 正文背景：深色主题 ≥ 2:1，浅色主题（TokyoNightLight）≥ 1.5:1
 //
-// 选区背景由 palette() 的 30% 混合公式自动推导；Default 主题在 init() 中
-// 用 25% 混合覆盖。任何新增主题若破坏该预算，测试会直接失败。
+// RGB 主题选区由 palette() 的 30% 混合公式推导；Default 使用终端反色。
 func TestSelectionColorsMeetContrastBudget(t *testing.T) {
 	const (
 		minTextContrast     = 4.2
@@ -20,6 +19,9 @@ func TestSelectionColorsMeetContrastBudget(t *testing.T) {
 		minLightDistinction = 1.5
 	)
 	for _, item := range List() {
+		if item.ID == Default {
+			continue
+		}
 		bg := item.Colors.SelectionBackground
 		fg := item.Colors.SelectionForeground
 		terminalBG := item.Colors.TerminalBackground
@@ -30,8 +32,7 @@ func TestSelectionColorsMeetContrastBudget(t *testing.T) {
 		}
 		distinction := contrastRatio(bg, terminalBG)
 		minDistinction := minDarkDistinction
-		if item.Mode == ModeLight || item.ID == Default {
-			// Default 用 25% 混合换取文字 ≥4.5:1，区分度 1.79:1 是刻意取舍；
+		if item.Mode == ModeLight {
 			// 浅色主题 1.5:1 是浅色背景的现实上限（报告 §4.2/§4.3）。
 			minDistinction = minLightDistinction
 		}
@@ -46,7 +47,6 @@ func TestSelectionColorsMeetContrastBudget(t *testing.T) {
 // 防止混合公式或手工特例被意外改动。
 func TestSelectionBlendFormulaMatchesResearchValues(t *testing.T) {
 	expected := map[ThemeID]string{
-		Default:         "#515254", // 25% 混合特例
 		TokyoNight:      "#4c5064", // 30% 混合
 		TokyoNightStorm: "#535973",
 		CatppuccinMocha: "#535569",

@@ -1,5 +1,139 @@
 # Progress
 
+## Goal / Plan 重做（2026-10-09）
+
+- [x] 调查历史设计与源码，真实handleSubmit六个问题复现。
+- [x] 用户澄清：Goal是量化指标驱动的自主探索，Plan持续对话后明确执行。
+- [x] Goal指标契约、探索循环、真实/native证据、持久化、恢复、预算和补充输入；通知交付窗口补测完成。
+- [x] Plan持续对话、ready/execute分离及恢复；排队/失败恢复/通知窗口均先红后绿，包内race通过。
+- [x] 输入路由、补充、状态和视觉验证；宽窄4图独立复核通过，运行中切会话/切回Chat仍受守卫。
+- [x] 工具/证据源/压缩状态接线：真实Actor→Engine→Bash→JSONL低40/高90量化验收、Plan澄清/保存/显式执行集成通过；空session不混入其他目标。
+- [x] 独立审核、8相关包race与末次5包复验、全仓41包（排除已知config挂起测试）、vet、隔离构建/help、gofmt/diff和中文文档通过。
+- 产物 .agent/bin/goal-plan-rework/paw，SHA256 962bf055cdeb9a264b5876f402a4ea1b250b5a8d5558553a168702204ab0cd70；未替换安装、提交或推送。用法 docs/reference/goal-plan.md；证据 .agent/verification/goal-plan-rework/验证记录.md，四图 .agent/visual/goal-plan-workflow/验证记录.md。
+
+## TODO 前置依赖（2026-10-09，已完成）
+
+- [x] 调查现有 TODO、普通/Goal 续行、持久化、TUI 与官方依赖语义。
+- [x] 数据/工具与依赖图校验先红后绿，克隆隔离与331776组合独立审核。
+- [x] 普通和 Goal 续行/依赖指纹；真实 Engine+工具的6请求2续行合成流程。
+- [x] 状态压缩、JSONL 重开恢复及旧快照兼容。
+- [x] TUI 阻塞显示、短高度溢出修复、宽窄/解除后三图及独立审核。
+- [x] 6相关包全包/race、vet、隔离 build/help、文档、gofmt/diff通过。全仓已知config测试60秒超时；其余39包通过，最终Bubble race与config排除该项通过。初次同步编入的overflow红测保留记录。
+- 交付 .agent/bin/todo-dependencies/paw，SHA256 b28519d6459d6cdeb7da2f91353248498bbe084e61b020f315c9627fbd3da55a；未覆盖安装、提交、推送。用法 docs/reference/todo-dependencies.md；证据 .agent/verification/todo-dependencies/验证记录.md。
+
+## 单次任务平均速度与工具协议自动恢复（2026-10-05）
+
+- [x] 识别并复现 request avg 重置、工具协议直接终止；按单次前台任务实现累计/冻结/重置。
+- [x] 早期 usage 后流量与独立 /task 完成计时的失败测试及修复；24行布局保留工具汇总。
+- [x] typed native arguments error、正常/恢复入口后台纠正、10次有界预算、日志/trace、取消及整批拒绝；普通工具失败后模型修正继续的回归。
+- [x] Bubble/Loop/Model/Token Tracer相关完整race、全仓vet、隔离构建；统计与恢复分别独立审核通过。
+- [x] 原生PTY19项通过：三请求120输出、Read实际2.005秒，总7.6秒/15.7tok/s，结束冻结；失败→重试→恢复均记录，Read只执行一次。四张非空图及证据 `.agent/visual/turn-rate-tool-recovery.md`、`.agent/verification/turn-rate-tool-recovery/验证记录.md`。binary SHA76702c68…c4e57；未安装、提交、推送。
+
+## 工具协议泄漏与流采样（2026-10-04）
+
+- [x] 对齐实际session、运行binary和provider ledger；确定非旧版本问题。
+- [x] 工具协议typed error及超长行Grep修复；半合法批次不执行，损坏正文/恢复不泄漏。
+- [x] stream到达时间/三类增量的独立采样、完整请求平均速率；completed回填不造峰。
+- [x] CTX真实超限与ledger有界工具汇总、文案/图和独立验收。
+- [x] Model/Loop/File/Bubble/Token Tracer race、vet/build/help；41测试包串行通过（只跳过既有config阻塞单项）。原生PTY 15项全通过，2次localhost合成请求、exit0。
+
+最终binary `.agent/bin/token-monitor/paw`，SHA256 `0b35fa5650029d7a27ec1fc6df9301cd1b9fbadd66d8b6d283a78bc5a3b51e04`。证据 `.agent/verification/token-monitor/stream-repair/调查与验证.md`、`.agent/visual/token-monitor-received-stream.md` 和原生PTY结果。未向外部模型发送用户历史、未覆盖日常安装/提交/推送。流速是实际收到片段的字符估算；服务端未传回的隐藏推理不可观测。
+
+
+## 常驻 Token 侧栏（2026-10-04）
+
+- [x] 调查输入焦点、轮询、任务/Todo更新路径；确认复用数据和采样。
+- [x] 默认常驻与被动输入、轮询/会话/尺寸生命周期。
+- [x] 上半真实更新自动切换，下半大面积实时图。
+- [x] 回归、构建、实际渲染与PTY、独立审查；更新使用说明。
+
+
+最终17项原生PTY通过，bubble全race/vet/build/help与41包串行测试通过（仅跳过已证实旧config阻塞测试）。binary 1693b387…db9d77，证据 .agent/visual/passive-token-sidebar.md 与 .agent/visual/token-monitor/pty-evidence.md。未安装、提交或推送。
+
+## Token Monitor 与上下文条（2026-10-04，已实施）
+
+- [x] 确认旧条/波纹仍在，用户批准侧栏摘要＋全屏 Tokens 设计并要求复用现有代码。
+- [x] 上下文条恢复与主请求/子任务累计分离；完整总量未知时显示CTX —，保留显式零与历史估算。
+- [x] 当前会话及子任务账本投影、可见输出采样和异步TUI接线；工具归因和provider账单分开，采样/列表有界。
+- [x] Tokens 导航、全屏、终端渲染与未知/部分数据处理；修复跨tab全屏泄漏、mode/queued工具计数和窄屏内容裁切。
+- [x] 6张真实View fixture新截图、Chat/Responses/工具回传本地SSE端到端、独立视觉/语义审核；相关race、vet/build及排除已确认旧config阻塞单项后的41包Go门禁通过。
+- [x] 原生PTY发现的单独Esc等待下一键缺陷已修复；同Read有界续接，鼠标/UTF8/EOF/取消/fd flags回归、独立审核和Linux交叉编译通过。最终隔离PTY14项全通过、退出0，仅一次localhost合成请求。
+- 交付 .agent/bin/token-monitor/paw，SHA256 e9d1381457d44f61583a017131724000d6adf6d19379a8380b50cd1a13e2a070；视觉和运行证据 .agent/visual/token-monitor.md。
+- 计划 docs/codex/plans/2026-10-04-token-monitor.md；保留既有dirty工作，不提交/推送/覆盖日常安装。
+
+## 本地误断连与安全诊断（2026-10-03）
+
+- [x] 旧版真实92秒输出暂停触发误断连，修复版保持单请求完成；Responses/Chat/Anthropic的Read预算、零字节、旧timer、取消均经回归和独立审核。
+- [x] Responses逐attempt诊断先红后绿，避免Close污染、gzip歧义及Done后退出丢记录；无正文，JSONL/查询副本隔离。最终四种真实CLI场景及逐次诊断一致，90.002秒真正空闲仍保护并恢复。
+- [x] 最终model+tokentracer完整race、全仓vet、build/help、独立审查通过；全仓仅排除既有AsyncModelDiscovery阻塞单项后41包通过。
+- [x] 备份ec071f4c…14c11至.agent/bin/connection-interruption/paw.before，原子安装8ab2eb4b166a1723cedb5ec2da3443cab8859e24fa706253a0cbc6474ddbb91e；安装help/hash通过。未重启用户PID90606，需重启Paw使用新版；未提交/推送。
+- [x] 第2目标轮补两条602602字节公网合成输入，服务报告141449 tokens，代理/直连均完整成功；缓存差异不作速度归因。12:14续查原会话仍无安装后请求，PID未重启；源码和安装hash未变。阶段审计见 .agent/verification/connection-interruption-20261003/followup/阶段审计.md。
+- [ ] 整体目标未完成：16:52恢复后补齐原journal近似复现助手，64条真实消息/44工具对/414618字节，5项安全测试与独立代码审核通过。自动审批拒绝执行，要求用户明确许可私有内容发往原网关；进程未启动、请求未发送。17:35第三轮仍未收到许可或新故障日志，62个实例/事件文件无新增写入，claim/result不存在，原journal未变，已标blocked。不得以自动续行或替代方式绕过；等明确许可或新的可分析证据。见 followup/real-context-probe/授权等待审计.md 及原安全证据。
+- 证据 .agent/verification/connection-interruption-20261003/调查记录.md；最终真实四场景 .agent/verification/responses-disconnect-rootcause-20261003/final-runtime-mr2wb1kd/results.json。
+
+## 已安装版真实复现（2026-10-03）
+
+- [x] 同一合成 SSE：旧版复现 3751 字节 decode / 907 字节思考报错，已安装新版自动恢复；完整坏帧仍停止。
+- [x] 实际 CLI 跑满连续十次上限、两段各十次成功清零、真实 90 秒看门狗；真实 PTY 显示 1/10 后完成并正常退出。工具副作用、结构化请求及 JSONL 一致。
+- 证据 .agent/verification/responses-installed-reproduction-20261003/验证记录.md；仅新增验证脚本/证据，生产源码与真实配置未改。原始 provider 数据仍缺失，不把模拟复现当作当时原始取证。
+
+## Responses 截断尾帧（2026-10-03）
+
+- [x] 确认 10:20:36 的 decode 报错发生于上一轮新版实际进程；无原始 SSE，无法确认当次帧边界。
+- [x] 分帧缺口先红后绿：EOF/read/idle 截断尾不再误报 decode；完整坏帧仍停止，未闭合 completed 工具不提交。
+- [x] 独立审核、相关 race、全仓 vet、build/help 通过；串行全仓仅排除原有 AsyncModelDiscovery 阻塞单项后 41 包通过。
+- [x] 已备份并原子更新 ~/go/bin/paw，SHA256 ec071f4c98eb8ff1cb2b9da0b072ae3b7a168874908877ad457ab0fda1d14c11；安装 help 通过，未强制重启、提交或推送。
+- 旧程序备份 .agent/bin/responses-truncated-frame/paw.before；证据 .agent/verification/responses-truncated-frame-20261003/验证记录.md。用户需重启 Paw 后恢复会话。
+
+## 断流自动续接（2026-10-03）
+
+- [x] 输出后暂时性断流自动续接，单次连续失败最多 10 次；完整成功响应（包括空 completed）清零，后续故障从 1/10 开始。恢复期间空流仍使用剩余额度，取消/协议/provider 错误停止。
+- [x] 保留已完成工具与等待期间新指令；临时恢复提示、partial、不完整工具不进入权威历史。思考流独立收尾，Bubble blockIndex 复用不拼接旧思考。
+- [x] 先红后绿、独立边界审核、model/loop/bubble 定向 race、全仓 vet、构建/help、六帧实际 View 验证通过。
+- [x] 最终串行全仓仅跳过 TestManagerAsyncDiscoveryDoesNotBlockOpen 后 41 包通过；原始 actor 超时及 exec 偶发空 PID 日志保留，独立复核未关联本次实现。
+- [ ] 原有 AsyncModelDiscovery 测试阻塞仍未解决，不能声称无条件全仓全绿。本任务未修改 config manager 两文件。
+- 交付 .agent/bin/stream-auto-recovery/paw，未安装、提交、推送；证据 .agent/verification/stream-auto-recovery-20261003/验证记录.md。
+
+## 重复调查与 Responses 断流（2026-10-03）
+
+- [x] 六种正文/思考断流先失败复现，修复后不重发，保留原始错误/cause/request ID；无输出重试与完成快照校验仍有效。
+- [x] 沿用提纲与目标仓库范围提示；仅改写文案不算进展，接入真实成功工具结果避免误停。Goal/Plan 原判据保持。
+- [x] 本地 HTTP → Engine → Journal 断流/明确继续集成回归、相关 race、全仓 vet、隔离构建/help、独立审核通过。
+- [ ] 全仓无条件绿灯仍受原有未完成 AsyncModelDiscovery 测试阻塞（45 秒独立超时重现）；未触碰原两文件。仅排除此单项后 41 包全部通过。证据 .agent/verification/responses-recovery-20261003/验证记录.md。
+- 独立二进制 .agent/bin/responses-recovery/paw；未安装、提交、推送。模型遵从提示和透明网络断点恢复均不在已验证保证内。
+
+## 限制映射块公式回归（2026-09-25）
+
+- [x] 两段原式失败复现：底层库拒绝孤立竖线后带下标；适配为可挂脚标的竖线字符。
+- [x] 窄屏/行内带标签箭头另有缺失，先失败再补带方向和上下标签的单行表示；语义和 TestTeX 定向通过。
+- [x] Bubble 全包、TeX race、全仓 vet、隔离 build/help、diff 通过；深浅新截图与真实 PTY 60/140/100 列通过。证据 `.agent/visual/tui-latex-restriction/`，实验程序重建，未安装/提交/推送。
+
+## 行内上横线回归（2026-09-25）
+
+- [x] 截图原式先失败复现：termtex 的 overline 在 Inline 下仍占两行，Paw 缺少线性转换导致整式回退源码。
+- [x] 单字符组合横线与复合表达式显式分组；定向语义、Markdown 容器及流式/复制回归通过。
+- [x] Bubble 全包、TeX race、全仓 vet、隔离构建/help、diff 通过；深浅截图及真实 PTY 60/140/100 列验证通过。证据 `.agent/visual/tui-latex-overline/`，未安装/提交/推送。
+
+## Default 浅金加粗与置顶背景（2026-09-24）
+
+- [x] 浅金 ANSI 3、置顶 ANSI 0 局部底色完成；全仓测试重跑通过，vet/build/help 通过，正式 View 截图及安装 SHA256 核验完成。首次全仓的进程池 stderr 测试失败、单测连续 10 次通过，保留日志。证据 `.agent/visual/default-emphasis/gold-sticky.md`；重启 Paw 生效。
+
+## 加粗主题色与引用可读性（2026-09-24）
+
+- [x] 用户确认实际渲染预览，核实当前新增的 Default 原生色和 LaTeX 实验。
+- [x] 先失败回归，再落实主题主色加粗与引用可读性；另复现并修复 Catppuccin 引用前景被 RGB 编码取整破坏的问题。
+- [x] 主题切换/深浅色/原生 ANSI/无色/换行和表格无底色验证；Bubble/theme 全包、定向回归、vet、diff 通过。
+- [x] 3 张正式渲染截图与独立代码/视觉复核通过；make build 和 --help 通过，交付 .agent/bin/emphasis-color/paw。包含当前工作树其他实验，未覆盖日常安装、未提交推送；证据 .agent/visual/emphasis-color.md。
+
+## TUI LaTeX / tikzcd 实验（2026-09-24）
+
+- [x] 调查并取得用户完整方案批准，创建实验分支。
+- [x] 失败回归、固定 termtex 公式适配与 Markdown/表格接入；代码/链接/金额/未知语法保护。
+- [x] tikzcd 解析、直线/折线网格排版及碰撞/超宽关系降级，保留重复边与孤立节点。
+- [x] 流式/取消/恢复/复制/缩放验证，Bubble 全包、定向 race、vet、隔离 build/help、diff 通过。
+- [x] 6 张深浅主题 × 60/100/140 列截图、随机输入检查、三轮基准和真实隔离 PTY 验收；原始消息持久化未改变。
+- [x] 交付 `.agent/bin/paw-tui-latex` 与 `.agent/visual/tui-latex/`；未安装/提交/推送。同工作区并行发生的 default 主题改动未由本任务修改。
+
 ## 会话切换提示与终端串屏（2026-09-20）
 
 - [x] 定位 applySessionPickerRestore 成功提示与 runtime/loop/history.go 的标准日志直写 stderr；恢复测试复现同款日志。
@@ -379,3 +513,15 @@
 - [x] 推送到 origin/dev <!-- todo:push -->
 - [x] 盘点 ~/.codex 中可清理的配置类文件与条目 <!-- todo:inventory -->
 - [x] 按确认范围执行清理（备份删除走废纸篓，config.toml 改动先留检查点） <!-- todo:execute -->
+
+## Default 跟随终端（2026-09-24）
+
+- [x] 用户批准完整方案；已定位全帧补底色、局部背景与 RGB 插值路径。
+- [x] 失败测试与调色板/样式修复。
+- [x] 主题切换、终端光标及动画兼容。
+- [x] 全仓测试、定向 race、vet、独立构建/help 通过；视觉证据 `.agent/visual/default-terminal.md`。未覆盖安装程序，保留并行 LaTeX 改动，未提交推送。
+
+## 透明主题对比度修正（2026-09-24）
+
+- [x] 用户实机截图显示 ANSI 8 与亮桌面合成背景近乎同色；对比度测试和真实 View 测试复现。
+- [x] default 辅助文字改终端默认前景，边框 ANSI 7、注释 ANSI 15；theme/bubble 测试、vet、亮背景预览与构建通过。已更新 ~/go/bin/paw，旧文件备份和哈希见 .agent/visual/default-terminal/contrast-install.json；需重启现有进程。

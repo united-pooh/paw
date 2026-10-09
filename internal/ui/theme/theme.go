@@ -35,8 +35,9 @@ type ThemeID string
 type ThemeMode string
 
 const (
-	ModeDark  ThemeMode = "dark"
-	ModeLight ThemeMode = "light"
+	ModeTerminal ThemeMode = "auto"
+	ModeDark     ThemeMode = "dark"
+	ModeLight    ThemeMode = "light"
 
 	Default         ThemeID = "default"
 	TokyoNight      ThemeID = "tokyo-night"
@@ -48,26 +49,26 @@ const (
 )
 
 type Palette struct {
-	TerminalBackground, HeaderBackground, HeaderForeground                                                      string
-	LabelUser, LabelAssistant, LabelTool, LabelResult, LabelSystem, LabelError                                  string
-	Body, ToolDetailBackground                                                                                  string
+	TerminalBackground, HeaderBackground, HeaderForeground                                                                      string
+	LabelUser, LabelAssistant, LabelTool, LabelResult, LabelSystem, LabelError                                                  string
+	Body, ToolDetailBackground                                                                                                  string
 	MarkdownHeading, MarkdownRule, MarkdownBullet, MarkdownBold, MarkdownItalic, MarkdownHighlight, MarkdownHighlightForeground string
-	MarkdownCodeForeground, MarkdownCodeBackground, MarkdownCodeBorder                                          string
-	MarkdownLink, MarkdownQuote, MarkdownQuoteBorder                                                            string
+	MarkdownCodeForeground, MarkdownCodeBackground, MarkdownCodeBorder                                                          string
+	MarkdownLink, MarkdownQuote, MarkdownQuoteBorder                                                                            string
 	// MarkdownQuoteText 是 markdown 引用块文字的独立角色：MarkdownQuote 同时被
 	// Thoughts 暗色正文/工具引用/todo 说明复用，引用文字单独配色不影响它们。
 	MarkdownQuoteText string
 	// 语法高亮专用色：独立于 UI 语义角色，避免代码 token 与界面元素撞色。
-	SyntaxKeyword, SyntaxString, SyntaxNumber, SyntaxComment string
-	SyntaxBrackets                                           [4]string // 彩虹括号，按嵌套深度循环
-	PanelBorder, InputFocusedBorder, InputWaitingBorder, InputMultilineBorder                                   string
-	InputTerminal, InputTokenCommand, InputTokenFile                                                            string
-	UnselectedProvider                                                                                          string
-	WizardTitle, WizardBorder, SelectionBackground, SelectionForeground                                         string
-	ContextCache, ContextUsed, ContextFree, Signal                                                              string
-	WorktreeBackground, WorktreeBorder, WorktreeClean, WorktreeDirty, WorktreeConflict                          string
-	CursorNormalBright, CursorTerminalBright                                                                    string
-	DiffAddedForeground, DiffAddedBackground, DiffDeletedForeground, DiffDeletedBackground                      string
+	SyntaxKeyword, SyntaxString, SyntaxNumber, SyntaxComment                               string
+	SyntaxBrackets                                                                         [4]string // 彩虹括号，按嵌套深度循环
+	PanelBorder, InputFocusedBorder, InputWaitingBorder, InputMultilineBorder              string
+	InputTerminal, InputTokenCommand, InputTokenFile                                       string
+	UnselectedProvider                                                                     string
+	WizardTitle, WizardBorder, SelectionBackground, SelectionForeground                    string
+	ContextCache, ContextUsed, ContextFree, Signal                                         string
+	WorktreeBackground, WorktreeBorder, WorktreeClean, WorktreeDirty, WorktreeConflict     string
+	CursorNormalBright, CursorTerminalBright                                               string
+	DiffAddedForeground, DiffAddedBackground, DiffDeletedForeground, DiffDeletedBackground string
 }
 
 type Theme struct {
@@ -89,7 +90,7 @@ func (p Palette) Values() map[string]string {
 		"panel.border": p.PanelBorder, "input.focused.border": p.InputFocusedBorder, "input.waiting.border": p.InputWaitingBorder, "input.multiline.border": p.InputMultilineBorder,
 		"input.terminal": p.InputTerminal, "input.token.command": p.InputTokenCommand, "input.token.file": p.InputTokenFile,
 		"provider.unselected": p.UnselectedProvider,
-		"wizard.title": p.WizardTitle, "wizard.border": p.WizardBorder, "selection.background": p.SelectionBackground, "selection.foreground": p.SelectionForeground,
+		"wizard.title":        p.WizardTitle, "wizard.border": p.WizardBorder, "selection.background": p.SelectionBackground, "selection.foreground": p.SelectionForeground,
 		"context.cache": p.ContextCache, "context.used": p.ContextUsed, "context.free": p.ContextFree, "signal": p.Signal,
 		"worktree.background": p.WorktreeBackground, "worktree.border": p.WorktreeBorder, "worktree.clean": p.WorktreeClean, "worktree.dirty": p.WorktreeDirty, "worktree.conflict": p.WorktreeConflict,
 		"cursor.normal.bright": p.CursorNormalBright, "cursor.terminal.bright": p.CursorTerminalBright,

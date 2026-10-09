@@ -212,21 +212,17 @@ type systemEventMsg ui.SystemEvent
 // doneMsg 表示当前 assistant 输出已经结束。
 type doneMsg struct{}
 
-// planFinalizedMsg 表示 plan 会话已定稿（用户选择"执行"且文档已落盘）。
-// Path 指向已批准的 plan 文档，UI 收到后切回 chat 模式并自动开始执行轮。
+// planFinalizedMsg 表示计划文档已就绪；执行仍需用户明确提交 /plan execute。
 type planFinalizedMsg struct {
 	path string
 }
 
-// planStoppedMsg 表示 plan 会话非定稿结束（暂停/失败/取消），UI 释放
-// planWorking 并回到 chat 模式。
+// planStoppedMsg 释放 planWorking，等待输入或暂停时保留规划模式。
 type planStoppedMsg struct {
 	reason string
 }
 
-// goalStoppedMsg 表示 goal 会话结束（完成/失败/取消/暂停），UI 释放
-// goalWorking 并回到 chat 模式。goal 在后台长期运行，UI 无法自行感知
-// 结束时刻，必须由 goal 控制器经 NotifyGoalStopped 投递。
+// goalStoppedMsg 释放 goalWorking，暂停或阻塞时保留目标模式。
 type goalStoppedMsg struct {
 	reason string
 }
@@ -460,29 +456,17 @@ type sessionSummaryItem struct {
 	transcriptSize int64
 }
 
-type activityPaneFocus uint8
-
-const (
-	activityFocusWorkspace activityPaneFocus = iota
-	activityFocusPanel
-)
-
-type activityCommandPrefix uint8
-
-const (
-	activityCommandIdle activityCommandPrefix = iota
-	activityCommandCtrlW
-)
-
 type activityState struct {
-	visible        bool
-	focus          activityPaneFocus
-	tab            activityTab
-	widthColumns   int
-	tasks          []task.TaskSnapshot
-	selectedIndex  int
-	selectedTaskID string
-	commandPrefix  activityCommandPrefix
+	summarySessionID   string
+	summaryTasksSeeded bool
+	todoUpdatedAt      time.Time
+	tasksUpdatedAt     time.Time
+	visible            bool
+	tab                activityTab
+	widthColumns       int
+	tasks              []task.TaskSnapshot
+	selectedIndex      int
+	selectedTaskID     string
 }
 
 type taskTranscriptPreview struct {
@@ -497,6 +481,7 @@ type taskTranscriptPreview struct {
 
 // appModel 是 Bubble Tea TUI 的唯一状态中心。
 type appModel struct {
+	tokenMonitor              tokenMonitorState
 	ctx                       context.Context
 	theme                     theme.Theme
 	styles                    StyleSet
@@ -604,7 +589,7 @@ type appModel struct {
 	transcriptContentCached             bool
 	transcriptLines                     []string              // 增量渲染行缓存：与 viewport 行同步（末尾保留一行空隙）
 	transcriptEntrySpans                []transcriptEntrySpan // 每条目渲染行区间，与 transcript 等长；startRow<0 表示未渲染
-	stickyUserLocations                []transcriptEntryLocation
+	stickyUserLocations                 []transcriptEntryLocation
 	transcriptInteraction               transcriptInteractionIndex
 	transcriptLinesValid                bool   // 行缓存与 transcript 结构对齐（条目数一致）
 	viewportShowsSelection              bool   // viewport 当前显示的是选择高亮版内容
@@ -680,7 +665,6 @@ type activityLayoutMode uint8
 const (
 	activityLayoutHidden activityLayoutMode = iota
 	activityLayoutDocked
-	activityLayoutFullscreen
 )
 
 type activityTab int

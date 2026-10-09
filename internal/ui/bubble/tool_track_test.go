@@ -1122,6 +1122,7 @@ func TestTurnFinishedWithoutAssistantKeepsPendingToolsIndividual(t *testing.T) {
 // 但点击被 toggleToolExpansion 拒绝（running 不可切换），看起来"无法展开"。
 func TestSessionRestoreFinalizesOrphanedRunningToolsAndExpands(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
+	model.activity.visible = false
 	model.ready = true
 	model.width = 80
 	model.height = 24

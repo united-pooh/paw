@@ -8,10 +8,9 @@ func palette(bg, surface, fg, muted, primary, secondary, cyan, green, yellow, re
 		LabelUser: fg, LabelAssistant: fg, LabelTool: green, LabelResult: green, LabelSystem: secondaryText, LabelError: red,
 		Body: fg, ToolDetailBackground: surface,
 		MarkdownHeading: fg, MarkdownRule: border, MarkdownBullet: cyan,
-		// Semantic colors are reserved for status; prose uses font attributes.
-		MarkdownBold: fg, MarkdownItalic: fg, MarkdownHighlight: yellow, MarkdownHighlightForeground: bg,
+		MarkdownBold: primary, MarkdownItalic: fg, MarkdownHighlight: yellow, MarkdownHighlightForeground: bg,
 		MarkdownCodeForeground: fg, MarkdownCodeBackground: blendHex(bg, fg, 0.07), MarkdownCodeBorder: primary,
-		MarkdownLink: cyan, MarkdownQuote: secondaryText, MarkdownQuoteBorder: muted, MarkdownQuoteText: muted,
+		MarkdownLink: cyan, MarkdownQuote: secondaryText, MarkdownQuoteBorder: muted, MarkdownQuoteText: blendHex(bg, fg, 0.70),
 		// 语法高亮默认映射（keyword 紫 / string 绿 / number 黄 / comment 灰），
 		// 与各主题官方语法色系一致；个别主题在 init() 中按官方值覆盖。
 		SyntaxKeyword: secondary, SyntaxString: green, SyntaxNumber: yellow, SyntaxComment: muted,
@@ -23,7 +22,7 @@ func palette(bg, surface, fg, muted, primary, secondary, cyan, green, yellow, re
 		// 选区背景 = 正文背景与前景按 30% 混合：深色主题下同时满足
 		// “选区文字 ≥4.5:1”与“选区 vs 正文 ≥2:1”双对比度约束，且与
 		// markdown 高亮 / diff 背景等语义色不冲突（见 docs/mouse-selection-research.md §4）。
-		// 浅色主题（TokyoNightLight）与 Default 在 init() 中用手工特例覆盖。
+		// Default 使用终端原生反色，不依赖此 RGB 混合色。
 		SelectionBackground: blendHex(bg, fg, 0.30), SelectionForeground: fg,
 		ContextCache: "#81a1f1", ContextUsed: cyan, ContextFree: secondaryText, Signal: primary,
 		WorktreeBackground: blendHex(bg, fg, 0.055), WorktreeBorder: muted, WorktreeClean: green, WorktreeDirty: yellow, WorktreeConflict: red,
@@ -33,7 +32,7 @@ func palette(bg, surface, fg, muted, primary, secondary, cyan, green, yellow, re
 }
 
 var builtIns = []Theme{
-	{ID: Default, Name: "Default", Mode: ModeDark, Colors: palette("#292c33", "#182830", "#c9c2b7", "#8e98a8", "#76d5e8", "#ff5ac8", "#76d5e8", "#a9c8b5", "#e5b66e", "#ef7d7d", "#0f2e1d", "#2e0f15")},
+	{ID: Default, Name: "Default", Mode: ModeTerminal, Colors: terminalPalette()},
 	{ID: TokyoNight, Name: "Tokyo Night", Mode: ModeDark, Colors: palette("#1a1b26", "#24283b", "#c0caf5", "#565f89", "#7aa2f7", "#bb9af7", "#7dcfff", "#9ece6a", "#e0af68", "#f7768e", "#14302a", "#2e1420")},
 	{ID: TokyoNightStorm, Name: "Tokyo Night Storm", Mode: ModeDark, Colors: palette("#24283b", "#1f2335", "#c0caf5", "#737aa2", "#7aa2f7", "#bb9af7", "#7dcfff", "#9ece6a", "#e0af68", "#f7768e", "#14302a", "#2e1420")},
 	{ID: TokyoNightLight, Name: "Tokyo Night Light", Mode: ModeLight, Colors: palette("#d5d6db", "#cbccd1", "#343b58", "#6172b0", "#34548a", "#5a4a78", "#0f4b6e", "#485e30", "#8f5e15", "#8c4351", "#d8e8d0", "#f0d8d8")},
@@ -43,27 +42,6 @@ var builtIns = []Theme{
 }
 
 func init() {
-	p := &builtIns[0].Colors
-	p.HeaderBackground = "#242830"
-	p.HeaderForeground = "#f0e6d5"
-	p.LabelAssistant = "#f0e6d5"
-	p.MarkdownBullet = "#5fd7d7"
-	p.MarkdownHighlight = "#5f5fd7"
-	p.MarkdownHighlightForeground = "#ffffff"
-	p.MarkdownCodeForeground = "#ffffd7"
-	// 代码块边框改青色：#5f5fd7 此前被 highlight/provider/wizard 多处复用。
-	p.MarkdownCodeBorder = "#5f9ea8"
-	p.MarkdownQuoteBorder = "#808080"
-	p.InputWaitingBorder = "#808080"
-	p.InputMultilineBorder = "#ffaf00"
-	p.UnselectedProvider = "#8a8a8a"
-	p.WizardTitle = "#ffffaf"
-	p.WizardBorder = "#5f5fd7"
-	// Default 主题文字对比本身较弱，30% 混合时选区文字只有 3.96:1（低于 AA），
-	// 因此用 25% 混合：#515254，文字 4.43:1、与正文 1.79:1。
-	p.SelectionBackground = blendHex("#292c33", "#c9c2b7", 0.25)
-	p.SelectionForeground = "#eeeeee"
-
 	// 各主题官方语法色微调：generic 推导（keyword 紫/string 绿/number 黄）
 	// 未覆盖的按官方值覆盖。
 	override := func(id ThemeID, fn func(*Palette)) {
@@ -80,7 +58,10 @@ func init() {
 		// 复用 markdown.quote 的暗色文字）。
 		p.MarkdownQuoteText = "#bb9af7"
 	})
-	override(TokyoNightLight, func(p *Palette) { p.SyntaxNumber = "#965027" })
+	override(TokyoNightLight, func(p *Palette) {
+		p.SyntaxNumber = "#965027"
+		p.MarkdownQuoteText = blendHex(p.TerminalBackground, p.Body, 0.85)
+	})
 	override(CatppuccinMocha, func(p *Palette) { p.SyntaxNumber = "#fab387" })
 	override(Dracula, func(p *Palette) {
 		p.SyntaxKeyword = "#ff79c6"
@@ -91,4 +72,21 @@ func init() {
 		p.SyntaxKeyword = "#fb4934"
 		p.SyntaxNumber = "#d3869b"
 	})
+}
+
+// Empty roles inherit the terminal defaults; indexed colors use its ANSI palette.
+func terminalPalette() Palette {
+	return Palette{
+		LabelTool: "2", LabelResult: "2", LabelSystem: "", LabelError: "1",
+		MarkdownRule: "", MarkdownBullet: "6", MarkdownBold: "3", MarkdownHighlight: "3",
+		MarkdownCodeBorder: "6", MarkdownLink: "6", MarkdownQuote: "", MarkdownQuoteBorder: "7", MarkdownQuoteText: "",
+		SyntaxKeyword: "5", SyntaxString: "2", SyntaxNumber: "3", SyntaxComment: "15",
+		SyntaxBrackets: [4]string{"6", "5", "3", "2"},
+		PanelBorder:    "7", InputFocusedBorder: "6", InputWaitingBorder: "7", InputMultilineBorder: "3",
+		InputTerminal: "5", InputTokenCommand: "5", InputTokenFile: "2", UnselectedProvider: "",
+		WizardTitle: "6", WizardBorder: "6",
+		ContextCache: "4", ContextUsed: "6", ContextFree: "", Signal: "6",
+		WorktreeBorder: "7", WorktreeClean: "2", WorktreeDirty: "3", WorktreeConflict: "1",
+		DiffAddedForeground: "2", DiffDeletedForeground: "1",
+	}
 }

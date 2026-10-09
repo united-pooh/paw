@@ -3,6 +3,8 @@ package theme
 import (
 	"reflect"
 	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -30,6 +32,16 @@ func TestBuiltInThemesHaveCompleteTrueColorPalettes(t *testing.T) {
 			t.Fatalf("theme %q has empty name", item.ID)
 		}
 		for role, color := range item.Colors.Values() {
+			if item.ID == Default {
+				if color == "" {
+					continue
+				}
+				n, err := strconv.Atoi(color)
+				if err != nil || n < 0 || n > 15 {
+					t.Fatalf("default %s = %q, want terminal default or ANSI 0–15", role, color)
+				}
+				continue
+			}
 			if !hex.MatchString(color) {
 				t.Fatalf("theme %q role %q color = %q, want #RRGGBB", item.ID, role, color)
 			}
@@ -74,6 +86,9 @@ func TestNormalizeID(t *testing.T) {
 func TestTokyoNightLightIsOnlyLightTheme(t *testing.T) {
 	for _, item := range List() {
 		want := ModeDark
+		if item.ID == Default {
+			want = ModeTerminal
+		}
 		if item.ID == TokyoNightLight {
 			want = ModeLight
 		}
@@ -83,21 +98,53 @@ func TestTokyoNightLightIsOnlyLightTheme(t *testing.T) {
 	}
 }
 
-func TestDefaultPaletteMatchesLegacyBaseline(t *testing.T) {
-	item, ok := ByID(Default)
-	if !ok {
-		t.Fatal("default theme missing")
+func TestDefaultPaletteFollowsTerminal(t *testing.T) {
+	item, _ := ByID(Default)
+	for role, color := range item.Colors.Values() {
+		if strings.HasSuffix(role, ".background") && color != "" {
+			t.Errorf("%s = %q, want terminal default", role, color)
+		}
 	}
-	want := map[string]string{
-		"terminal.background": "#292c33", "header.background": "#242830", "header.foreground": "#f0e6d5",
-		"label.user": "#c9c2b7", "label.assistant": "#f0e6d5", "label.tool": "#a9c8b5", "label.error": "#ef7d7d",
-		"body": "#c9c2b7", "tool.detail.background": "#182830", "markdown.link": "#76d5e8", "panel.border": "#494a4d",
-		"input.terminal": "#ff5ac8", "context.used": "#76d5e8", "worktree.clean": "#a9c8b5",
+	if item.Colors.Body != "" || item.Colors.HeaderForeground != "" || item.Colors.MarkdownCodeForeground != "" {
+		t.Fatal("prose must use terminal default foreground")
 	}
-	values := item.Colors.Values()
-	for role, expected := range want {
-		if values[role] != expected {
-			t.Fatalf("default %s = %q, want %q", role, values[role], expected)
+	if item.Colors.LabelError != "1" || item.Colors.WorktreeClean != "2" || item.Colors.MarkdownLink != "6" {
+		t.Fatal("semantic colors must use terminal ANSI palette")
+	}
+}
+
+func TestDefaultChromeRemainsReadableOverBrightTransparentDesktop(t *testing.T) {
+	p, _ := ByID(Default)
+	// Ghostty at 70% opacity over a white desktop is the brightest backdrop.
+	backdrop := blendHex("#282c34", "#ffffff", 0.30)
+	resolve := func(color string) string {
+		switch color {
+		case "":
+			return "#ffffff"
+		case "7":
+			return "#c5c8c6"
+		case "8":
+			return "#666666"
+		case "15":
+			return "#eaeaea"
+		default:
+			t.Fatalf("unexpected neutral color %q", color)
+			return ""
+		}
+	}
+	for role, color := range map[string]string{
+		"status/time": p.Colors.ContextFree, "system": p.Colors.LabelSystem,
+		"placeholder": p.Colors.MarkdownRule, "reasoning": p.Colors.MarkdownQuote,
+		"quote": p.Colors.MarkdownQuoteText, "unselected": p.Colors.UnselectedProvider,
+		"comment": p.Colors.SyntaxComment,
+	} {
+		if ratio := contrastRatio(resolve(color), backdrop); ratio < 4.2 {
+			t.Errorf("%s contrast %.2f:1 over %s, want >= 4.2:1", role, ratio, backdrop)
+		}
+	}
+	for role, color := range map[string]string{"table": p.Colors.PanelBorder, "quote rail": p.Colors.MarkdownQuoteBorder, "worktree": p.Colors.WorktreeBorder, "waiting": p.Colors.InputWaitingBorder} {
+		if ratio := contrastRatio(resolve(color), backdrop); ratio < 3 {
+			t.Errorf("%s contrast %.2f:1, want >= 3:1", role, ratio)
 		}
 	}
 }
