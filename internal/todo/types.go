@@ -14,10 +14,12 @@ const (
 )
 
 type Item struct {
-	ID        string   `json:"id"`
-	Content   string   `json:"content"`
-	Status    Status   `json:"status"`
-	BlockedBy []string `json:"blocked_by,omitempty"`
+	ID            string   `json:"id"`
+	Content       string   `json:"content"`
+	Status        Status   `json:"status"`
+	Group         string   `json:"group,omitempty"`
+	BlockedBy     []string `json:"blocked_by,omitempty"`
+	BlockedReason string   `json:"blocked_reason,omitempty"`
 }
 
 type Snapshot struct {

@@ -48,6 +48,8 @@ func NormalizeAndValidate(input UpdateInput) (UpdateInput, error) {
 		item := &input.Items[i]
 		item.ID = strings.TrimSpace(item.ID)
 		item.Content = strings.TrimSpace(item.Content)
+		item.Group = strings.TrimSpace(item.Group)
+		item.BlockedReason = strings.TrimSpace(item.BlockedReason)
 		if item.ID == "" {
 			return UpdateInput{}, fmt.Errorf("items[%d].id must not be empty", i)
 		}
@@ -64,6 +66,9 @@ func NormalizeAndValidate(input UpdateInput) (UpdateInput, error) {
 			active++
 		default:
 			return UpdateInput{}, fmt.Errorf("items[%d].status must be pending, in_progress, or completed", i)
+		}
+		if item.BlockedReason != "" && item.Status != StatusPending {
+			return UpdateInput{}, fmt.Errorf("item %q has an external blocker; keep it pending and clear blocked_reason before resuming or completing it", item.ID)
 		}
 	}
 	if active > 1 {
