@@ -43,7 +43,7 @@ func renderTokenHistory(v tokenMonitorView, width, height int) string {
 	if width <= 0 || height <= 0 {
 		return ""
 	}
-	title := wizardTitleStyle.Render("TOKEN HISTORY · MAIN TURN")
+	title := wizardTitleStyle.Render(copyTokenHistory + " · " + copyMainTurn)
 	current := "—"
 	if v.Rates.RequestID != "" && v.Rates.Observed {
 		current = fmt.Sprintf("≈%.1f", tokenMonitorRate(v.Rates.Current))
@@ -88,7 +88,7 @@ func renderTokenHistory(v tokenMonitorView, width, height int) string {
 	case v.Loading:
 		source = "Loading token ledger…"
 	case len(v.Snapshot.Issues) > 0:
-		source = fmt.Sprintf("Workspace %d: %s", len(v.Snapshot.Issues), tokenMonitorIssue(v.Snapshot.Issues[0].Kind))
+		source = fmt.Sprintf("%s %d: %s", copyWorkspace, len(v.Snapshot.Issues), tokenMonitorIssue(v.Snapshot.Issues[0].Kind))
 	}
 	if source != "" {
 		summary = append(summary, activityHintStyle.Render(source))

@@ -17,7 +17,7 @@ func TestAssistantMarkerUsesExternalGutterAndStableBodyColumn(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("rendered lines = %#v, want two lines", lines)
 	}
-	if !strings.HasPrefix(lines[0], "✦ ") {
+	if !strings.HasPrefix(lines[0], glyphNarration+" ") {
 		t.Fatalf("first line = %q, want external marker gutter", lines[0])
 	}
 	if strings.Contains(rendered, "agent >") || strings.Contains(rendered, "you >") {
@@ -25,10 +25,10 @@ func TestAssistantMarkerUsesExternalGutterAndStableBodyColumn(t *testing.T) {
 	}
 	firstText := terminalCellWidth(strings.Split(lines[0], "first line")[0])
 	secondText := terminalCellWidth(strings.Split(lines[1], "second line")[0])
-	if firstText != 2 || secondText != 2 {
-		t.Fatalf("body columns = first:%d second:%d, want both 2: lines=%q", firstText, secondText, lines)
+	if firstText != 3 || secondText != 3 {
+		t.Fatalf("body columns = first:%d second:%d, want both 3: lines=%q", firstText, secondText, lines)
 	}
-	if strings.Contains(lines[1], "✦") {
+	if strings.Contains(lines[1], glyphNarration) {
 		t.Fatalf("continuation line contains marker: %q", lines[1])
 	}
 }

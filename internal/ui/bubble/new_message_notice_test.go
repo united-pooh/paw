@@ -157,10 +157,10 @@ func TestViewRendersNewMessageNoticeAboveStatusLine(t *testing.T) {
 		t.Fatalf("notice row=%d\n%s", noticeRow, view)
 	}
 	// 活动指示已收敛到 ⚒ 状态行（空闲不渲染）；不变量改为：提示贴在
-	// transcript 底部，位于 CTX 状态行/输入 dock 之上。
+	// transcript 底部，位于上下文状态行/输入 dock 之上。
 	dockRow := -1
 	for i, line := range lines {
-		if strings.Contains(line, "CTX") {
+		if strings.Contains(line, copyContextLabel) {
 			dockRow = i
 			break
 		}

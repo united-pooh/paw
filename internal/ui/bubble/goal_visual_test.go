@@ -59,7 +59,7 @@ func TestGoalModeKeepsSingleInputFrameAndModeIndicator(t *testing.T) {
 	}
 
 	bottom := ansi.Strip(model.renderBottomDockLine(80))
-	if !strings.Contains(bottom, "goal") {
+	if !strings.Contains(bottom, copyModeGoal) {
 		t.Fatalf("goal bottom border = %q, want goal mode indicator", bottom)
 	}
 	for _, unwanted := range []string{"ready", "working", "generating"} {
@@ -72,7 +72,7 @@ func TestGoalModeKeepsSingleInputFrameAndModeIndicator(t *testing.T) {
 func TestChatModeKeepsChatIndicatorWithoutStatusWord(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	bottom := ansi.Strip(model.renderBottomDockLine(80))
-	if !strings.Contains(bottom, "chat") {
+	if !strings.Contains(bottom, copyModeChat) {
 		t.Fatalf("chat bottom border = %q, want chat indicator", bottom)
 	}
 	for _, unwanted := range []string{"ready", "working", "generating"} {

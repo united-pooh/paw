@@ -48,7 +48,7 @@ func (m appModel) renderDockStatusLine(width int) string {
 	width = maxInt(1, width)
 	stats := m.contextStats()
 	if !contextCapacityKnown(stats) {
-		return contextFreeStyle.Render(fitStyledCellLine("CTX — "+strings.Repeat("·", maxInt(0, width-6)), width))
+		return contextFreeStyle.Render(fitStyledCellLine(copyContextLabel+" — "+strings.Repeat("·", maxInt(0, width-6)), width))
 	}
 	limit := maxInt(1, stats.LimitTokens)
 	used := maxInt(0, stats.UsedTokens)
@@ -58,8 +58,8 @@ func (m appModel) renderDockStatusLine(width int) string {
 	}
 
 	percent := int(float64(used)*100/float64(limit) + 0.5)
-	label := fmt.Sprintf("CTX %d%% ", percent)
-	usage := " " + formatCompactTokenCount(used) + " / " + formatCompactTokenCount(limit)
+	label := fmt.Sprintf("%s %d%% ", copyContextLabel, percent)
+	usage := " " + formatCompactTokenCount(used) + "/" + formatCompactTokenCount(limit)
 	barWidth := width - terminalCellWidth(label)
 	if barWidth-terminalCellWidth(usage) >= 12 {
 		barWidth -= terminalCellWidth(usage)
@@ -75,8 +75,8 @@ func contextCapacityKnown(stats loop.ContextStats) bool {
 	return stats.Known && stats.LimitTokens > 0 && (stats.TotalKnown || stats.InputKnown && stats.OutputKnown)
 }
 
-// renderBottomDockLine 渲染最下方边框：模式靠左，项目/分支靠右；中间剩余
-// 空间显示 token usage，复制反馈出现时临时替代 usage。线色随 agentmode 变化。
+// renderBottomDockLine 渲染最下方边框：模式靠左，项目/分支靠右；中间
+// 留给复制反馈（toast），无反馈时保持空白。线色随 agentmode 变化。
 func (m appModel) renderBottomDockLineWithRight(width int, right string) string {
 	width = maxInt(1, width)
 	lineStyle := lipgloss.NewStyle()
@@ -155,36 +155,6 @@ func (m appModel) renderActivityBottomLine(width int) string {
 	return embedHairlineContent(m.renderBottomDockWorktree(maxInt(width, worktreeInlineMinimumWidth)), width, m.currentModeHex())
 }
 
-func (m appModel) renderBottomDockUsage() string {
-	return m.renderBottomDockUsageWithin(1000)
-}
-
-func (m appModel) renderBottomDockUsageWithin(width int) string {
-	stats := m.contextStats()
-	if !contextCapacityKnown(stats) {
-		return truncateStyledCellLine(contextFreeStyle.Render("CTX —"), width)
-	}
-	limit := maxInt(1, stats.LimitTokens)
-	used := maxInt(0, stats.UsedTokens)
-	cache := maxInt(0, stats.CacheTokens)
-	percent := int(float64(used)*100/float64(limit) + 0.5)
-	compact := fmt.Sprintf("上下文 %d%%", percent)
-	usage := compact + " · " + formatCompactTokenCount(used) + "/" + formatCompactTokenCount(limit)
-	full := usage
-	if cache > 0 {
-		ratio := int(float64(cache) * 100 / float64(maxInt(1, used)))
-		if ratio >= 1 {
-			full += fmt.Sprintf(" · 缓存占比 %d%%", ratio)
-		}
-	}
-	for _, candidate := range []string{full, usage, compact} {
-		if terminalCellWidth(candidate) <= width {
-			return contextFreeStyle.Render(candidate)
-		}
-	}
-	return truncateStyledCellLine(contextFreeStyle.Render(compact), width)
-}
-
 func (m appModel) renderBottomDockMiddle(width int) string {
 	if width <= 0 {
 		return ""
@@ -192,7 +162,9 @@ func (m appModel) renderBottomDockMiddle(width int) string {
 	if toast := m.renderStatusLeftSegment(); toast != "" {
 		return truncateStyledCellLine(toast, width)
 	}
-	return m.renderBottomDockUsageWithin(width)
+	// CTX 读数唯一化到底部上下文条（renderDockStatusLine），底栏不再重复；
+	// 缓存占比数字随 footer 一同退役（▒ 段仍保留缓存可视信息）。
+	return ""
 }
 
 func (m appModel) renderBottomDockWorktree(totalWidth int) string {
@@ -283,14 +255,14 @@ func (m appModel) renderTokenFrontierWith(width, used, cache, limit int, modeHex
 func (m appModel) renderModeIndicator() string {
 	switch {
 	case m.planMode:
-		return modePlanStyle.Render("plan")
+		return modePlanStyle.Render(copyModePlan)
 	case m.goalMode:
-		return modeGoalStyle.Render("goal")
+		return modeGoalStyle.Render(copyModeGoal)
 	case m.isTerminalInputActive() || m.runningTerminal:
-		return modeTerminalStyle.Render("terminal")
+		return modeTerminalStyle.Render(copyModeTerminal)
 	case hasBangPrefix(m.input.Value()):
 		return modeShellStyle.Render("!shell")
 	default:
-		return modeChatStyle.Render("chat")
+		return modeChatStyle.Render(copyModeChat)
 	}
 }

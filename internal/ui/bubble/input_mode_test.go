@@ -57,7 +57,7 @@ func TestCycleInputModeChatGoalPlan(t *testing.T) {
 
 func TestTabCyclesChatGoalPlan(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	for _, want := range []string{"goal", "plan", "chat"} {
+	for _, want := range []string{copyModeGoal, copyModePlan, copyModeChat} {
 		next, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
 		model = next.(appModel)
 		status := ansi.Strip(model.renderModeIndicator())
@@ -72,7 +72,7 @@ func TestMultilineTextKeepsChatModeAndSingleDockStyle(t *testing.T) {
 	model.input.SetValue("first\nsecond")
 	model.syncInputMode()
 
-	if got := ansi.Strip(model.renderModeIndicator()); got != "chat" {
+	if got := ansi.Strip(model.renderModeIndicator()); got != copyModeChat {
 		t.Fatalf("multiline mode indicator = %q, want chat", got)
 	}
 	if got := model.renderInputBox(); strings.Contains(ansi.Strip(got), "multiline") {
@@ -152,7 +152,7 @@ func TestPlanModeDoesNotAddInputFrame(t *testing.T) {
 		}
 	}
 	bottom := ansi.Strip(model.renderBottomDockLine(80))
-	if !strings.Contains(bottom, "plan") {
+	if !strings.Contains(bottom, copyModePlan) {
 		t.Fatalf("bottom border = %q, want plan indicator", bottom)
 	}
 }

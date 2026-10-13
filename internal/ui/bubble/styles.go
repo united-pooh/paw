@@ -157,9 +157,10 @@ func rebuildLegacyStyles() {
 	// "子智能体 高松灯 正在运行 13s" 的单行状态文字。
 	taskWaitStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorLabelTool))
+	// 助手叙述行 marker（::）使用 Narration 角色色（default 主题为 ANSI 4 蓝），
+	// 对齐 commandcode 的叙述行观感；✦ 已退役。
 	assistantMarkerStyle = lipgloss.NewStyle().
-		Foreground(colorManager.LipglossColor(colorLabelAssistant)).
-		Bold(true)
+		Foreground(colorManager.LipglossColor(colorNarration))
 	userTranscriptRowStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorLabelUser)).
 		Background(lipgloss.Color(interpolateHexColor(colorManager.Hex(colorTerminalBackground), colorManager.Hex(colorSignal), 0.16)))

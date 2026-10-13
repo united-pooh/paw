@@ -122,12 +122,7 @@ func (m appModel) renderHeaderEmbedded(width int) string {
 }
 
 func (m appModel) renderActivityHeader(width int) string {
-	page := "Tasks"
-	if m.activity.tab == activityTabTodo {
-		page = "Todo"
-
-	}
-	text := "Activity / " + page
+	text := copyActivityTitle
 	if count := len(m.runningTasks()); count > 0 {
 		text += " · ● " + strconv.Itoa(count)
 	}
@@ -136,7 +131,7 @@ func (m appModel) renderActivityHeader(width int) string {
 
 func (m appModel) renderHeaderActivityHint() string {
 	if count := len(m.runningTasks()); count > 0 {
-		return contextFreeStyle.Render("● " + strconv.Itoa(count) + " running · Ctrl+G")
+		return contextFreeStyle.Render("● " + strconv.Itoa(count) + " " + copyToolStatusRunning + " · Ctrl+G")
 	}
-	return contextFreeStyle.Render("Activity · Ctrl+G")
+	return contextFreeStyle.Render(copyActivityTitle + " · Ctrl+G")
 }

@@ -1742,9 +1742,12 @@ func (m *appModel) refreshRunningToolProgress(now time.Time) {
 	}
 }
 
-func (m *appModel) markRunningToolsError(err error) {
+// markRunningToolsError 把仍在运行的工具卡收尾为失败卡（错误文本进卡片详情）。
+// 返回是否标记了至少一张卡：调用方据此决定裸 error 行是否还需要——
+// 错误双管道已合并，失败原因只渲染在失败卡内；无运行中工具时裸行是唯一展示。
+func (m *appModel) markRunningToolsError(err error) bool {
 	if m == nil {
-		return
+		return false
 	}
 	message := "tool failed"
 	if err != nil && strings.TrimSpace(err.Error()) != "" {
@@ -1778,6 +1781,7 @@ func (m *appModel) markRunningToolsError(err error) {
 	if changed {
 		m.refreshViewport()
 	}
+	return changed
 }
 
 func (m *appModel) renderTranscriptContent() string {
@@ -2380,6 +2384,11 @@ func renderEntryAt(entry transcriptEntry, width int, at time.Time, showThinking 
 		return indentLines(taskWaitStyle.Render(body), transcriptEntryGutter)
 	}
 	bodyWidth := transcriptBodyWidth(width)
+	if entry.kind == entryAssistant {
+		// :: 叙述前缀占三列 gutter（gutter + 空格），assistant 正文相应少一列，
+		// 否则渲染总宽会超出 width 一列。
+		bodyWidth = maxInt(1, width-terminalCellWidth(assistantNarrationGutter))
+	}
 	// 结构化 <task> 完成块：整块渲染为状态色框线卡片，不显示 "task" 标签
 	// （卡片标题行自带 ✓/✗/■ 状态标记与名称）。
 	if entry.kind == entrySystem && isTaskCompletionBlock(entry.body) {
@@ -2412,12 +2421,12 @@ func renderEntryAt(entry transcriptEntry, width int, at time.Time, showThinking 
 		return ""
 	}
 	if entry.kind == entryUser {
-		// 用户消息与 assistant 共用两列外部 gutter：assistant 首行显示 ✦，
-		// 用户消息保留空 gutter，正文从同一列开始，避免两类消息视觉错位。
+		// 用户消息保留两列空 gutter；assistant 首行显示 :: 叙述前缀（三列），
+		// 两类消息正文列相差一列是 commandcode 式叙述缩进，刻意保留。
 		return renderUserTranscriptRow(indentLines(body, transcriptEntryGutter), width)
 	}
 	if entry.kind == entryAssistant {
-		// ✦ 位于 transcript 左侧外部 gutter。首行用 marker 占据 gutter，
+		// :: 位于 transcript 左侧外部 gutter。首行用 marker 占据 gutter，
 		// 后续行用等宽空格延续同一正文列，避免模型回答失去原有缩进。
 		return indentAssistantGutter(body)
 	}
@@ -3372,17 +3381,21 @@ func (m appModel) turnsCount() int {
 	return n
 }
 
-// indentAssistantGutter 将 assistant 的首行 marker 放在外部 gutter，并让后续
-// 行使用等宽 gutter 延续正文列。marker 和分隔空格共占两列，正文不会因为
-// 去掉 agent 标签而左移；body 内部的 ANSI/Markdown 样式保持不变。
+// assistantNarrationGutter 是 assistant 叙述行后续行的等宽 gutter：与首行
+// ":: "（glyphNarration + 空格）同宽，共三列。
+const assistantNarrationGutter = transcriptEntryGutter + " "
+
+// indentAssistantGutter 将 assistant 的首行 marker（:: 叙述前缀）放在外部
+// gutter，并让后续行使用等宽 gutter 延续正文列。marker 和分隔空格共占三列，
+// 正文不会因为去掉 agent 标签而左移；body 内部的 ANSI/Markdown 样式保持不变。
 func indentAssistantGutter(body string) string {
 	lines := strings.Split(body, "\n")
 	if len(lines) == 0 {
 		return ""
 	}
-	lines[0] = assistantMarkerStyle.Render("✦") + " " + lines[0]
+	lines[0] = assistantMarkerStyle.Render(glyphNarration) + " " + lines[0]
 	for i := 1; i < len(lines); i++ {
-		lines[i] = transcriptEntryGutter + lines[i]
+		lines[i] = assistantNarrationGutter + lines[i]
 	}
 	return strings.Join(lines, "\n")
 }

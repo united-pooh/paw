@@ -9,9 +9,10 @@ const (
 	copyInputHint        = "/help @文件 !shell"
 
 	// 模式词
-	copyModeChat = "聊天"
-	copyModePlan = "计划"
-	copyModeGoal = "目标"
+	copyModeChat     = "聊天"
+	copyModePlan     = "计划"
+	copyModeGoal     = "目标"
+	copyModeTerminal = "终端"
 
 	// 上下文条
 	copyContextLabel = "上下文"
@@ -42,8 +43,10 @@ const (
 	copyActivityTitle = "活动"
 	copyTasksTitle    = "任务"
 	copyTokenHistory  = "令牌历史"
+	copyMainTurn      = "主回合"
 	copyWorkspace     = "工作区"
 	copyEmptyData     = "暂无数据"
+	copyTodoEmpty     = "暂无待办"
 	copySidebarHint   = "ctrl+G 活动面板"
 )
 

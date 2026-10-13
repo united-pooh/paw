@@ -1,5 +1,5 @@
-─────────────── model-a  12:00 ────────────────┬─────── Activity / Tasks ───────
-   resume                                      │Activity / Tasks 0
+─────────────── model-a  12:00 ────────────────┬───────────── 活动 ─────────────
+   resume                                      │任务 0
    Goal goal-p5 已恢复为 paused；使用 /goal    │Task controller is unavailable.
    resume 继续。                               │
    Plan plan-p5 已恢复为 paused；使用 /plan    │
@@ -10,7 +10,7 @@
                                                │
                                                │
                                                │
-                                               │TOKEN HISTORY · MAIN TURN
+                                               │令牌历史 · 主回合
                                                │Turn avg — tok/s
                                                │Σout —              — incl tools
                                                │
@@ -19,6 +19,6 @@
                                                │Input —                 Output —
                                                │Cache hit                      —
                                                │Tools in —          main 0 calls
-CTX — ·········································│Σ session+tasks · tools ⊂ input
- › Ask anything…          /help @file !shell   │Loading token ledger…
- chat                  CTX —                   ┴────────  go-code  dev  ────────
+上下文 — ······································│Σ session+tasks · tools ⊂ input
+ › 输入你的问题 …         /help @文件 !shell   │Loading token ledger…
+ 聊天                                          ┴────────  go-code  dev  ────────

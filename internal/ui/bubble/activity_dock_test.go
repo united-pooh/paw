@@ -31,7 +31,7 @@ func TestRenderActivityPaneHasExactSizeAndNoNestedBorder(t *testing.T) {
 		}
 	}
 	plain := ansi.Strip(rendered)
-	for _, want := range []string{"Activity", "Tasks 1", "TOKEN HISTORY", "layout-research", "running", "8.2k"} {
+	for _, want := range []string{copyTasksTitle + " 1", copyTokenHistory, "layout-research", "running", "8.2k"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("pane missing %q:\n%s", want, plain)
 		}
@@ -66,7 +66,7 @@ func TestViewRendersFullHeightDockWithoutCoveringWorkspace(t *testing.T) {
 			t.Fatalf("row=%d joint=%q, want │: %q", row, joint, ansi.Strip(line))
 		}
 	}
-	if !strings.Contains(view, "LEFT-SENTINEL") || !strings.Contains(view, "Activity") {
+	if !strings.Contains(view, "LEFT-SENTINEL") || !strings.Contains(view, copyActivityTitle) {
 		t.Fatalf("dock lost content:\n%s", view)
 	}
 }
@@ -97,7 +97,7 @@ func TestClosedActivityUsesHeaderHintInsteadOfFloatingTaskCard(t *testing.T) {
 
 	plain := ansi.Strip(model.View())
 	top := strings.Split(plain, "\n")[0]
-	if !strings.Contains(top, "1 running") || !strings.Contains(top, "Ctrl+G") {
+	if !strings.Contains(top, "1 "+copyToolStatusRunning) || !strings.Contains(top, "Ctrl+G") {
 		t.Fatalf("top border missing running hint:\n%s", plain)
 	}
 	if strings.Contains(plain, "taskController ·") || strings.Contains(plain, "╭") {
@@ -116,7 +116,7 @@ func TestOpenActivityDoesNotDuplicateClosedHint(t *testing.T) {
 	}
 	model.openActivity(activityTabTasks)
 	plain := ansi.Strip(model.View())
-	if strings.Contains(strings.Split(plain, "\n")[0], "running · Ctrl+G") {
+	if strings.Contains(strings.Split(plain, "\n")[0], copyToolStatusRunning+" · Ctrl+G") {
 		t.Fatalf("closed hint leaked into open Activity:\n%s", plain)
 	}
 	if strings.Count(strings.Split(plain, "\n")[0], "● 1") != 1 {

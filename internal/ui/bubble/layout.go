@@ -833,8 +833,8 @@ func (m appModel) renderInputContentWithHints(width, height int) string {
 		return ""
 	}
 	if strings.TrimSpace(m.input.Value()) == "" && !m.isGoalInputActive() && !m.isTerminalInputActive() && !m.runningTerminal {
-		left := inputPromptStyle.Render("›") + " " + inputHintStyle.Render("Ask anything…")
-		hint := inputHintStyle.Render("/help @file !shell")
+		left := inputPromptStyle.Render("›") + " " + inputHintStyle.Render(copyInputPlaceholder)
+		hint := inputHintStyle.Render(copyInputHint)
 		line := left
 		if terminalCellWidth(left)+terminalCellWidth(hint)+1 <= width {
 			line += strings.Repeat(" ", width-terminalCellWidth(left)-terminalCellWidth(hint)) + hint

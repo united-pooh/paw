@@ -21,7 +21,7 @@ func TestQueueSummaryKeepsBottomDockAnchors(t *testing.T) {
 
 	lines := strings.Split(ansi.Strip(model.View()), "\n")
 	bottom := lines[len(lines)-1]
-	for _, want := range []string{"chat", "1 个任务排队中", "paw  dev"} {
+	for _, want := range []string{copyModeChat, "1 个任务排队中", "paw  dev"} {
 		if !strings.Contains(bottom, want) {
 			t.Fatalf("bottom border = %q, want %q", bottom, want)
 		}
@@ -50,7 +50,7 @@ func TestQueueSummaryReplacesTokenUsageButKeepsRightWorktree(t *testing.T) {
 	if strings.Contains(bottom, "12k / 128k") {
 		t.Fatalf("bottom border = %q, queue summary should replace middle token usage", bottom)
 	}
-	for _, want := range []string{"chat", "1 个任务排队中", "worktree-marker"} {
+	for _, want := range []string{copyModeChat, "1 个任务排队中", "worktree-marker"} {
 		if !strings.Contains(bottom, want) {
 			t.Fatalf("bottom border = %q, want %q", bottom, want)
 		}

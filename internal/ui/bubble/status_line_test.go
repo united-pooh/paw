@@ -18,19 +18,19 @@ func TestDockLayoutUsesContextProgressAndLabeledBottomMetadata(t *testing.T) {
 	if got := terminalCellWidth(top); got != 80 {
 		t.Fatalf("top context bar width = %d, want 80: %q", got, top)
 	}
-	if !strings.HasPrefix(top, "CTX 9% ") || !strings.HasSuffix(top, " 12k / 128k") || !strings.Contains(top, tokenUsedGlyph) || !strings.Contains(top, tokenFreeGlyph) {
+	if !strings.HasPrefix(top, copyContextLabel+" 9% ") || !strings.HasSuffix(top, " 12k/128k") || !strings.Contains(top, tokenUsedGlyph) || !strings.Contains(top, tokenFreeGlyph) {
 		t.Fatalf("top context bar = %q, want labeled context progress and usage", top)
 	}
 
 	bottom := ansi.Strip(model.renderBottomDockLine(80))
-	modeAt := strings.Index(bottom, "chat")
-	usageAt := strings.Index(bottom, "12k/128k")
+	modeAt := strings.Index(bottom, copyModeChat)
 	worktreeAt := strings.Index(bottom, "paw  dev")
 	if modeAt < 0 || modeAt > 3 {
 		t.Fatalf("bottom border = %q, want chat anchored near the left edge", bottom)
 	}
-	if usageAt < 0 || worktreeAt < 0 || !(modeAt < usageAt && usageAt < worktreeAt) {
-		t.Fatalf("bottom border = %q, want mode, token usage, then project/branch", bottom)
+	// CTX 读数唯一化：底部边框不再携带 token 用量，模式与工作区之间留白。
+	if strings.Contains(bottom, "12k") || worktreeAt < 0 || modeAt >= worktreeAt {
+		t.Fatalf("bottom border = %q, want mode then project/branch with no token usage", bottom)
 	}
 	if worktreeAt < 80-terminalCellWidth("paw  dev")-3 {
 		t.Fatalf("bottom border = %q, want project/branch anchored near the right edge", bottom)
@@ -62,11 +62,10 @@ func TestBottomDockLongCJKWorktreeKeepsRegionOrder(t *testing.T) {
 	if got := terminalCellWidth(bottom); got != 100 {
 		t.Fatalf("bottom border cell width=%d, want 100: %q", got, bottom)
 	}
-	modeAt := strings.Index(bottom, "chat")
-	usageAt := strings.Index(bottom, "12k/128k")
+	modeAt := strings.Index(bottom, copyModeChat)
 	worktreeAt := strings.Index(bottom, "项目")
-	if modeAt < 0 || usageAt < 0 || worktreeAt < 0 || !(modeAt < usageAt && usageAt < worktreeAt) {
-		t.Fatalf("bottom border = %q, want mode, usage, then CJK project/branch", bottom)
+	if modeAt < 0 || worktreeAt < 0 || modeAt >= worktreeAt {
+		t.Fatalf("bottom border = %q, want mode then CJK project/branch", bottom)
 	}
 }
 
@@ -93,11 +92,11 @@ func TestDockContextProgressPreservesSegmentsAndDropsMetadataOnNarrowWidths(t *t
 		t.Fatalf("compact context progress = %q, want %q", got, want)
 	}
 	compact := ansi.Strip(model.renderDockStatusLine(24))
-	if !strings.HasPrefix(compact, "CTX 45% ") || strings.Contains(compact, "/") {
+	if !strings.HasPrefix(compact, copyContextLabel+" 45% ") || strings.Contains(compact, "/") {
 		t.Fatalf("compact labeled progress = %q, want percentage without token counts", compact)
 	}
 	wide := ansi.Strip(model.renderDockStatusLine(80))
-	if !strings.HasPrefix(wide, "CTX 45% ") || !strings.HasSuffix(wide, " 45k / 100k") {
+	if !strings.HasPrefix(wide, copyContextLabel+" 45% ") || !strings.HasSuffix(wide, " 45k/100k") {
 		t.Fatalf("wide context progress = %q, want percentage and token counts", wide)
 	}
 }
@@ -114,7 +113,7 @@ func TestDockContextProgressStaysStaticWhileGenerating(t *testing.T) {
 		t.Fatal("dock context progress should stay static while generating（活动指示已收敛到 ⚒ 状态行）")
 	}
 	for _, line := range []string{first, second} {
-		if terminalCellWidth(line) != 100 || !strings.HasPrefix(line, "CTX 40% ") || !strings.HasSuffix(line, " 40k / 100k") {
+		if terminalCellWidth(line) != 100 || !strings.HasPrefix(line, copyContextLabel+" 40% ") || !strings.HasSuffix(line, " 40k/100k") {
 			t.Fatalf("context metadata moved: %q", line)
 		}
 	}
@@ -123,7 +122,7 @@ func TestDockContextProgressStaysStaticWhileGenerating(t *testing.T) {
 func TestBottomDockModeIndicator(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.cursorFrameAt = time.Now()
-	if bottom := ansi.Strip(model.renderBottomDockLine(80)); !strings.Contains(bottom, "chat") {
+	if bottom := ansi.Strip(model.renderBottomDockLine(80)); !strings.Contains(bottom, copyModeChat) {
 		t.Fatalf("default mode = %q, want chat", bottom)
 	}
 	model.input.SetValue("!ls")
@@ -135,17 +134,21 @@ func TestBottomDockModeIndicator(t *testing.T) {
 func TestStatusLineShowsTokenCountWithoutStatusWord(t *testing.T) {
 	model := newTestModel(&fakeRunner{stats: loop.ContextStats{Known: true, TotalKnown: true, CacheKnown: true, UsedTokens: 12000, LimitTokens: 128000}})
 	model.cursorFrameAt = time.Unix(0, 0)
-	bottom := ansi.Strip(model.renderBottomDockLine(100))
-	if !strings.Contains(bottom, "12k/128k") {
-		t.Fatalf("bottom border = %q, want token count", bottom)
+	top := ansi.Strip(model.renderDockStatusLine(100))
+	if !strings.Contains(top, "12k/128k") {
+		t.Fatalf("context bar = %q, want token count", top)
 	}
 	for _, unwanted := range []string{"ready", "working", "generating"} {
-		if strings.Contains(bottom, unwanted) {
-			t.Fatalf("bottom border = %q, should not contain %q", bottom, unwanted)
+		if strings.Contains(top, unwanted) {
+			t.Fatalf("context bar = %q, should not contain %q", top, unwanted)
 		}
 	}
-	if strings.Contains(bottom, "cache") || strings.Contains(bottom, "free") {
-		t.Fatalf("bottom border still contains retired telemetry: %q", bottom)
+	if strings.Contains(top, "cache") || strings.Contains(top, "free") {
+		t.Fatalf("context bar still contains retired telemetry: %q", top)
+	}
+	// 读数唯一化：底部边框不再重复 token 计数。
+	if bottom := ansi.Strip(model.renderBottomDockLine(100)); strings.Contains(bottom, "12k") {
+		t.Fatalf("bottom border duplicated token count: %q", bottom)
 	}
 }
 
@@ -167,7 +170,7 @@ func TestGoalInputUsesModeIndicatorWithoutStatusOrPurpleBody(t *testing.T) {
 
 	model.goalMode = true
 	bottom := ansi.Strip(model.renderBottomDockLine(100))
-	if !strings.Contains(bottom, "goal") {
+	if !strings.Contains(bottom, copyModeGoal) {
 		t.Fatalf("goal mode indicator missing from bottom border: %q", bottom)
 	}
 	for _, unwanted := range []string{"ready", "working", "generating"} {
@@ -193,20 +196,27 @@ func TestDockLinesHaveNoStatusWordDuringToolCall(t *testing.T) {
 			t.Fatalf("tool-call dock should not contain %q: top=%q bottom=%q", unwanted, top, bottom)
 		}
 	}
-	if !strings.Contains(bottom, "chat") {
+	if !strings.Contains(bottom, copyModeChat) {
 		t.Fatalf("tool-call bottom border = %q, want chat mode indicator", bottom)
 	}
 }
 
-func TestBottomDockShowsCacheHitRatioWhenCachePresent(t *testing.T) {
+func TestBottomDockOmitsUsageAndCacheRatio(t *testing.T) {
+	// CTX 读数唯一化到顶部上下文条：底部边框只剩模式与工作区；缓存可视
+	// 信息由上下文条 ▒ 段承担，不再重复数字。
 	model := newTestModel(&fakeRunner{stats: loop.ContextStats{Known: true, TotalKnown: true, CacheKnown: true, UsedTokens: 12000, CacheTokens: 11000, LimitTokens: 128000}})
 	model.cursorFrameAt = time.Unix(0, 0)
 	bottom := ansi.Strip(model.renderBottomDockLine(100))
-	if !strings.Contains(bottom, "12k/128k") {
-		t.Fatalf("bottom border = %q, want token count", bottom)
+	for _, unwanted := range []string{"12k", "128k", copyContextLabel, "缓存占比"} {
+		if strings.Contains(bottom, unwanted) {
+			t.Fatalf("bottom border = %q, must not duplicate %q (context bar owns the readout)", bottom, unwanted)
+		}
 	}
-	if !strings.Contains(bottom, "缓存占比 91%") {
-		t.Fatalf("bottom border = %q, want cache hit ratio 缓存占比 91%%", bottom)
+	top := ansi.Strip(model.renderDockStatusLine(100))
+	for _, want := range []string{copyContextLabel + " 9%", "12k/128k", tokenCacheGlyph} {
+		if !strings.Contains(top, want) {
+			t.Fatalf("context bar = %q, want %q", top, want)
+		}
 	}
 }
 
@@ -216,5 +226,8 @@ func TestBottomDockOmitsCacheHitRatioWhenZero(t *testing.T) {
 	bottom := ansi.Strip(model.renderBottomDockLine(100))
 	if strings.Contains(bottom, "缓存占比") {
 		t.Fatalf("bottom border = %q, must not show cache ratio when cache is zero", bottom)
+	}
+	if top := ansi.Strip(model.renderDockStatusLine(100)); strings.Contains(top, tokenCacheGlyph) {
+		t.Fatalf("context bar = %q, must not render cache segment when cache is zero", top)
 	}
 }

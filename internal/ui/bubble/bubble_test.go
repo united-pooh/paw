@@ -2592,7 +2592,7 @@ func TestInputHistorySkipsControlCommands(t *testing.T) {
 // TestViewUsesMinimalPlaceholderAndOmitsHelpLine 验证输入框只展示最简 > 占位符并移除帮助行。
 func TestViewUsesMinimalPlaceholderAndOmitsHelpLine(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
-	if model.input.Placeholder != "Ask anything…" {
+	if model.input.Placeholder != copyInputPlaceholder {
 		t.Fatalf("placeholder = %q", model.input.Placeholder)
 	}
 	if model.input.Prompt != "" {
@@ -2621,7 +2621,7 @@ func TestViewFramesTranscriptHistoryPanel(t *testing.T) {
 	model.relayout()
 
 	rendered := model.View()
-	for _, want := range []string{"─", "アトリ高性能ですから!", "› Ask anything…"} {
+	for _, want := range []string{"─", "アトリ高性能ですから!", "› " + copyInputPlaceholder} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("view = %q, want %q", rendered, want)
 		}
@@ -2644,7 +2644,7 @@ func TestInputHintIsDimAndRemainsAfterFirstSubmission(t *testing.T) {
 	model.relayout()
 
 	initial := model.View()
-	if !strings.Contains(initial, "Ask anything…") {
+	if !strings.Contains(initial, copyInputPlaceholder) {
 		t.Fatalf("initial view = %q, want landing hint", initial)
 	}
 
@@ -2654,7 +2654,7 @@ func TestInputHintIsDimAndRemainsAfterFirstSubmission(t *testing.T) {
 	if !model.hasInteracted {
 		t.Fatal("submission did not mark the input as interacted")
 	}
-	if !strings.Contains(model.View(), "Ask anything…") {
+	if !strings.Contains(model.View(), copyInputPlaceholder) {
 		t.Fatalf("post-submit view = %q, hint should remain visible", model.View())
 	}
 }
@@ -2718,7 +2718,7 @@ func TestViewFillsTerminalHeightAndPinsInputToBottom(t *testing.T) {
 		t.Fatalf("bottom input not visible near frame bottom:\n%s", ansi.Strip(rendered))
 	}
 	lastLine := lines[len(lines)-1]
-	if strings.TrimSpace(lastLine) == "" || !strings.Contains(lastLine, "CTX —") {
+	if strings.TrimSpace(lastLine) == "" || !strings.Contains(lastLine, copyModeChat) {
 		t.Fatalf("last rendered line = %q, want fixed bottom metadata", lastLine)
 	}
 }
@@ -3686,7 +3686,7 @@ func TestTranscriptMouseDragSelectsAndCopiesAcrossScroll(t *testing.T) {
 	if model.selecting {
 		t.Fatalf("selecting = true, want false after release")
 	}
-	if !strings.Contains(copied, "line 00") || !strings.Contains(copied, "✦") {
+	if !strings.Contains(copied, "line 00") || !strings.Contains(copied, glyphNarration) {
 		t.Fatalf("copied selection = %q start=%+v end=%+v active=%v yOffset=%d viewportHeight=%d lines=%d", copied, model.selectionStart, model.selectionEnd, model.selectionActive, model.viewport.YOffset, model.viewport.Height, len(model.transcriptLineSnapshots()))
 	}
 }
@@ -3717,21 +3717,21 @@ func TestTranscriptMouseDragCopiesCharacterRange(t *testing.T) {
 	model.viewport.GotoTop()
 
 	next, _ := model.Update(tea.MouseMsg{
-		X:      5,
+		X:      6,
 		Y:      1,
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
 	})
 	model = next.(appModel)
 	next, _ = model.Update(tea.MouseMsg{
-		X:      7,
+		X:      8,
 		Y:      1,
 		Action: tea.MouseActionMotion,
 		Button: tea.MouseButtonLeft,
 	})
 	model = next.(appModel)
 	next, _ = model.Update(tea.MouseMsg{
-		X:      7,
+		X:      8,
 		Y:      1,
 		Action: tea.MouseActionRelease,
 		Button: tea.MouseButtonLeft,
@@ -3785,11 +3785,12 @@ func TestTranscriptMouseDragSelectsExactCells(t *testing.T) {
 		}
 	}
 
-	// 英文：点击 'c'（cell 4）拖到 'e'（cell 6），恰好选中 cde，不多选 'b'。
-	run(t, "abcde", "cde", mainContentPadding+4, mainContentPadding+6)
-	// 中文：点击 '好'（cell 4-5）拖到 '世'（cell 6-7），完整选中 好世，
+	// 英文：点击 'c'（cell 5）拖到 'e'（cell 7），恰好选中 cde，不多选 'b'。
+	//（assistant 叙述 gutter 三列：正文从 cell 3 开始。）
+	run(t, "abcde", "cde", mainContentPadding+5, mainContentPadding+7)
+	// 中文：点击 '好'（cell 5-6）拖到 '世'（cell 7-8），完整选中 好世，
 	// 不多选 '你'、不切开宽字符。
-	run(t, "你好世界", "好世", mainContentPadding+5, mainContentPadding+7)
+	run(t, "你好世界", "好世", mainContentPadding+6, mainContentPadding+8)
 }
 
 // TestTranscriptDragSelectsThroughLineEnd 验证拖到行尾时最后一个字符能被
@@ -4272,11 +4273,11 @@ func TestTranscriptDragWritesOSC52Clipboard(t *testing.T) {
 	model.refreshViewport()
 	model.viewport.GotoTop()
 
-	next, _ := model.Update(tea.MouseMsg{X: 5, Y: 1, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	next, _ := model.Update(tea.MouseMsg{X: 6, Y: 1, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
 	model = next.(appModel)
-	next, _ = model.Update(tea.MouseMsg{X: 7, Y: 1, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
+	next, _ = model.Update(tea.MouseMsg{X: 8, Y: 1, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
 	model = next.(appModel)
-	next, _ = model.Update(tea.MouseMsg{X: 7, Y: 1, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
+	next, _ = model.Update(tea.MouseMsg{X: 8, Y: 1, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
 	model = next.(appModel)
 
 	if oscText != "llo" {
@@ -4783,7 +4784,7 @@ func TestAssistantEntryRendersMarkdown(t *testing.T) {
 		body:  "## Title\n\n- one with `code`\n- **bold item**\n\n> quoted **bold quote**\n\n```go\nfmt.Println(\"hi\")\n```",
 	}, 80)
 
-	for _, want := range []string{"✦", "Title", "●", "one", "code", "bold item", "│", "quoted", "bold quote", "go", "fmt.Println"} {
+	for _, want := range []string{glyphNarration, "Title", "●", "one", "code", "bold item", "│", "quoted", "bold quote", "go", "fmt.Println"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered markdown = %q, want %q", rendered, want)
 		}
@@ -6930,18 +6931,16 @@ func TestRenderDockStatusLine_ContainsModelTokenAndFree(t *testing.T) {
 	model.width = 100
 	model.cursorFrameAt = time.Now()
 	dock := model.renderDockStatusLine(98)
-	if !strings.Contains(dock, "5k / 100k") || !strings.Contains(dock, "CTX 5%") {
+	if !strings.Contains(dock, "5k/100k") || !strings.Contains(dock, copyContextLabel+" 5%") {
 		t.Errorf("status dock = %q, want labeled context usage", dock)
 	}
 	if !strings.Contains(dock, tokenFreeGlyph) {
 		t.Errorf("status dock = %q, want context progress", dock)
 	}
+	// CTX 读数唯一化：底部边框不再重复 token 计数或上下文标签。
 	bottom := model.renderBottomDockLine(98)
-	if !strings.Contains(bottom, "5k/100k") {
-		t.Errorf("bottom border = %q, want token count", bottom)
-	}
-	if !strings.Contains(bottom, "上下文") {
-		t.Errorf("bottom border = %q, want labeled context usage", bottom)
+	if strings.Contains(bottom, "5k") || strings.Contains(bottom, copyContextLabel) {
+		t.Errorf("bottom border = %q, context readout must live only in the context bar", bottom)
 	}
 	// 模型名现在在 header，不在 dock。
 	if strings.Contains(dock, "model-a") {
@@ -7060,7 +7059,7 @@ func TestFullLayout_StatusDockVisibleWithoutSidebar(t *testing.T) {
 	model.relayout()
 
 	view := model.View()
-	if !strings.Contains(view, "CTX —") {
+	if !strings.Contains(view, copyContextLabel+" —") {
 		t.Errorf("View() = %q, want bottom token status", view)
 	}
 	if strings.Contains(view, "taskController") {

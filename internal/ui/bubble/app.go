@@ -28,7 +28,7 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 	now := time.Now()
 	input := textareax.New()
 	input.Prompt = ""
-	input.Placeholder = "Ask anything…"
+	input.Placeholder = copyInputPlaceholder
 	input.ShowLineNumbers = false
 	input.EndOfBufferCharacter = ' '
 	input.CharLimit = 0
@@ -458,13 +458,17 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.relayout()
 			}
 		} else if msg.err != nil && !expectedCancel {
-			m.markRunningToolsError(msg.err)
+			marked := m.markRunningToolsError(msg.err)
 			m.pendingToolCites = nil
-			m.addEntry(transcriptEntry{
-				kind:  entryError,
-				title: "error",
-				body:  msg.err.Error(),
-			})
+			// 错误双管道合并：失败原因已进失败卡详情时不再追加裸 error 行；
+			// 没有运行中工具可收尾时裸行是唯一展示，保留。
+			if !marked {
+				m.addEntry(transcriptEntry{
+					kind:  entryError,
+					title: "error",
+					body:  msg.err.Error(),
+				})
+			}
 			if msg.restoreDraft != nil && m.input.Value() == "" {
 				m.setInputDraft(*msg.restoreDraft)
 				m.inputPasteFoldActive = false

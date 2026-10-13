@@ -208,7 +208,7 @@ func TestTokenMonitorProviderEngineLedgerIntegration(t *testing.T) {
 				t.Fatalf("tool timing did not settle: %+v", view.Rates)
 			}
 			plain := ansi.Strip(m.View())
-			for _, want := range []string{"TOKEN HISTORY", "Input", "Output", "Cache hit", "≈0.0 tok/s"} {
+			for _, want := range []string{copyTokenHistory, "Input", "Output", "Cache hit", "≈0.0 tok/s"} {
 				if !strings.Contains(plain, want) {
 					t.Fatalf("rendered View missing %q:\n%s", want, plain)
 				}

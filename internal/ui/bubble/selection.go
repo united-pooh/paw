@@ -649,7 +649,7 @@ func normalizeTranscriptHyperlinkPoint(content string, point selectionPoint) sel
 		return point
 	}
 	lines := strings.Split(content, "\n")
-	if point.row < len(lines) && strings.HasPrefix(ansi.Strip(lines[point.row]), "✦ ") {
+	if point.row < len(lines) && strings.HasPrefix(ansi.Strip(lines[point.row]), glyphNarration+" ") {
 		point.col++
 	}
 	return point
@@ -745,14 +745,14 @@ func buildTranscriptLineSnapshotsFromLines(rawLines []string) []transcriptLineSn
 	lines := make([]transcriptLineSnapshot, 0, len(rawLines))
 	for _, line := range rawLines {
 		plain := ansi.Strip(line)
-		assistantMarker := strings.HasPrefix(plain, "✦ ")
+		assistantMarker := strings.HasPrefix(plain, glyphNarration+" ")
 		// The assistant marker is a visual gutter decoration, not transcript
-		// body content. Keep the logical two-cell gutter in plain text for
+		// body content. Keep the logical three-cell gutter in plain text for
 		// hit testing while retaining the original styled line (marker +
 		// markdown rich styling) for rendering, so selections do not strip
 		// bold/code/link styles from the first line of assistant messages.
 		if assistantMarker {
-			plain = transcriptEntryGutter + strings.TrimPrefix(plain, "✦ ")
+			plain = transcriptEntryGutter + " " + strings.TrimPrefix(plain, glyphNarration+" ")
 		}
 		lines = append(lines, transcriptLineSnapshot{
 			styled:          line,
@@ -780,10 +780,10 @@ func (m appModel) selectedTranscriptText() string {
 		}
 		text := slicePlainCells(lines[row].plain, left, right)
 		if row == start.row && lines[row].assistantMarker && left == 0 {
-			// ✦ 是 transcript 外部 gutter 的视觉标记，不属于正文快照；
+			// :: 是 transcript 外部 gutter 的视觉标记，不属于正文快照；
 			// 选区从 gutter 开始时，复制内容仍保留该标记，避免用户看到的
 			// 首行与剪贴板内容不一致。
-			text = "✦ " + strings.TrimPrefix(text, transcriptEntryGutter)
+			text = glyphNarration + " " + strings.TrimPrefix(text, transcriptEntryGutter+" ")
 		}
 		selected = append(selected, text)
 	}

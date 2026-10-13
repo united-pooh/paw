@@ -152,7 +152,7 @@ func TestNewModelStartsWithEmptyTranscript(t *testing.T) {
 	model.height = 20
 	model.relayout()
 	view := ansi.Strip(model.View())
-	for _, want := range []string{"アトリ高性能ですから!", "› Ask anything…"} {
+	for _, want := range []string{"アトリ高性能ですから!", "› " + copyInputPlaceholder} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("empty view = %q, missing %q", view, want)
 		}
@@ -167,15 +167,19 @@ func TestNewModelStartsWithEmptyTranscript(t *testing.T) {
 	}
 }
 
-func TestBottomDockPlacesTokenUsageBetweenModeAndWorktree(t *testing.T) {
+func TestBottomDockPlacesModeLeftAndWorktreeRight(t *testing.T) {
+	// CTX 读数唯一化到顶部上下文条后，底部边框只剩模式（左）与工作区（右），
+	// 中间留白（或复制反馈 toast）。
 	model := newTestModel(&fakeRunner{})
 	model.worktree = worktreeSnapshot{name: "paw", ref: "dev", state: worktreeDirty, isGit: true}
 	bottom := ansi.Strip(model.renderBottomDockLine(100))
-	mode := strings.Index(bottom, "chat")
-	count := strings.Index(bottom, "CTX —")
+	mode := strings.Index(bottom, copyModeChat)
 	worktree := strings.Index(bottom, "paw  dev")
-	if mode < 0 || count < 0 || worktree < 0 || !(mode < count && count < worktree) {
+	if mode < 0 || worktree < 0 || mode >= worktree {
 		t.Fatalf("bottom border order = %q", bottom)
+	}
+	if strings.Contains(bottom, copyContextLabel) {
+		t.Fatalf("bottom border duplicated context readout = %q", bottom)
 	}
 }
 

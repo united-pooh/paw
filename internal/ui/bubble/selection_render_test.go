@@ -48,23 +48,23 @@ func TestTranscriptDragHighlightFollowsMotion(t *testing.T) {
 	}
 	y := model.transcriptScreenTop()
 
-	next, _ := model.Update(tea.MouseMsg{X: mainContentPadding + 2, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	next, _ := model.Update(tea.MouseMsg{X: mainContentPadding + 3, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
 	model = next.(appModel)
 
-	// motion1：col 2 -> 4，选区 2..5（"hel"）
-	next, _ = model.Update(tea.MouseMsg{X: mainContentPadding + 4, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
+	// motion1：col 3 -> 5，选区 3..6（"hel"）（assistant 叙述 gutter 三列，正文起始于 col 3）
+	next, _ = model.Update(tea.MouseMsg{X: mainContentPadding + 5, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
 	model = next.(appModel)
 	afterMotion1 := model.viewport.View()
 	if !strings.Contains(afterMotion1, selSGR) {
 		t.Fatalf("viewport after first motion has no selection highlight: %q", ansi.Strip(afterMotion1))
 	}
 
-	// motion2：col 4 -> 8，选区应扩展为 2..9（"hello w"）。
+	// motion2：col 5 -> 9，选区应扩展为 3..10（"hello w"）。
 	// 回归点：视口必须重绘，不能停留在 motion1 的旧选区。
-	next, _ = model.Update(tea.MouseMsg{X: mainContentPadding + 8, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
+	next, _ = model.Update(tea.MouseMsg{X: mainContentPadding + 9, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
 	model = next.(appModel)
-	if model.selectionEnd != (selectionPoint{row: 0, col: 9}) {
-		t.Fatalf("selectionEnd = %+v, want {row:0 col:9}", model.selectionEnd)
+	if model.selectionEnd != (selectionPoint{row: 0, col: 10}) {
+		t.Fatalf("selectionEnd = %+v, want {row:0 col:10}", model.selectionEnd)
 	}
 	afterMotion2 := model.viewport.View()
 	if afterMotion2 == afterMotion1 {
@@ -77,7 +77,7 @@ func TestTranscriptDragHighlightFollowsMotion(t *testing.T) {
 	}
 
 	// release：选区固定，视口高亮与复制文本一致（"hello w" = 7 个可见字符）。
-	next, _ = model.Update(tea.MouseMsg{X: mainContentPadding + 8, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
+	next, _ = model.Update(tea.MouseMsg{X: mainContentPadding + 9, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
 	model = next.(appModel)
 	if got := model.selectedTranscriptText(); got != "hello w" {
 		t.Fatalf("copied selection = %q, want hello w", got)

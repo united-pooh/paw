@@ -81,7 +81,7 @@ func TestSelectionBackgroundOverMarkdownBlock(t *testing.T) {
 	}
 }
 
-// TestSelectionKeepsAssistantMarkerStyledLine 验证 assistant 首行（✦ marker
+// TestSelectionKeepsAssistantMarkerStyledLine 验证 assistant 首行（:: marker
 // 行）在选区渲染中保留原始 markdown 富文本样式，而不是退化成纯文本。
 func TestSelectionKeepsAssistantMarkerStyledLine(t *testing.T) {
 	setTrueColorForTest(t)
@@ -110,7 +110,7 @@ func TestSelectionKeepsAssistantMarkerStyledLine(t *testing.T) {
 	if !strings.Contains(snapshots[0].styled, "38;2;192;202;245") {
 		t.Fatalf("marker line styled lost markdown styling: %q", snapshots[0].styled)
 	}
-	if !strings.Contains(snapshots[0].styled, "✦") {
+	if !strings.Contains(snapshots[0].styled, glyphNarration) {
 		t.Fatalf("marker line styled lost marker glyph: %q", snapshots[0].styled)
 	}
 	// 选中整个 marker 行时，渲染结果同样保留样式且选区背景连续。

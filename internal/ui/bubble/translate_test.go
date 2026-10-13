@@ -394,8 +394,14 @@ func TestTranslatePanelEscClosesAndKeepsSelection(t *testing.T) {
 	model.translatePanel = &translatePanel{state: translatePanelLoading, word: "world"}
 	model.selectionActive = true
 	model.selectionMode = selectionModeWord
-	model.selectionStart = selectionPoint{row: 0, col: 8}
-	model.selectionEnd = selectionPoint{row: 0, col: 13}
+	// 选区列从渲染快照实测定位，避免与 assistant 叙述 gutter 宽度耦合。
+	snapshots := model.transcriptLineSnapshots()
+	wordOffset := strings.Index(snapshots[0].plain, "world")
+	if wordOffset < 0 {
+		t.Fatalf("snapshot missing world: %q", snapshots[0].plain)
+	}
+	model.selectionStart = selectionPoint{row: 0, col: wordOffset}
+	model.selectionEnd = selectionPoint{row: 0, col: wordOffset + len("world")}
 
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	model = next.(appModel)

@@ -28,12 +28,14 @@ func TestDockContextCapacityRequiresKnownTotal(t *testing.T) {
 				if strings.Contains(top, "%") || strings.Contains(top, tokenUsedGlyph) || strings.Contains(top, tokenCacheGlyph) || strings.Contains(top, tokenFreeGlyph) {
 					t.Errorf("width %d: unknown capacity rendered as measured: %q", width, top)
 				}
-				if width >= 8 && !strings.Contains(top, "CTX —") {
+				if width >= 8 && !strings.Contains(top, copyContextLabel+" —") {
 					t.Errorf("width %d: unknown label absent: %q", width, top)
 				}
 			}
-			if bottom := ansi.Strip(m.renderBottomDockUsageWithin(60)); bottom != "CTX —" {
-				t.Errorf("unknown bottom capacity = %q, want CTX —", bottom)
+			// CTX 读数唯一化到顶部上下文条：底部边框不再携带任何上下文标签，
+			// 未知容量的空态只存在于上下文条一处。
+			if middle := ansi.Strip(m.renderBottomDockMiddle(60)); middle != "" {
+				t.Errorf("bottom dock middle = %q, want empty (context readout lives in the top bar only)", middle)
 			}
 		})
 	}

@@ -21,7 +21,7 @@ func (m appModel) renderActivityPane(width, height int) string {
 	if m.activity.tab == activityTabTodo {
 		top = m.renderActivityTodo(width, topHeight)
 	} else if topHeight > 0 {
-		title := wizardTitleStyle.Render(fmt.Sprintf("Activity / Tasks %d", len(m.activity.tasks)))
+		title := wizardTitleStyle.Render(fmt.Sprintf("%s %d", copyTasksTitle, len(m.activity.tasks)))
 		top = title + "\n" + m.renderActivityTasks(width, topHeight-1)
 	}
 	bottom := renderTokenHistory(m.tokenMonitorView(), width, height-topHeight)
@@ -36,12 +36,12 @@ func (m appModel) renderActivityTodo(width, height int) string {
 		return ""
 	}
 	if !m.hasCurrentTodo || m.currentTodo.Cleared() {
-		return unselectedProviderStyle.Render("No active todo list")
+		return unselectedProviderStyle.Render(copyTodoEmpty)
 	}
 	snapshot := m.currentTodo.Clone()
 	contentWidth := maxInt(1, width-2)
 	count := fmt.Sprintf("%d/%d", snapshot.CompletedCount(), snapshot.TotalCount())
-	title := todoTitleStyle.Render("Todo")
+	title := todoTitleStyle.Render(copyChipTodo)
 	gap := maxInt(1, contentWidth-terminalCellWidth(title)-terminalCellWidth(count))
 	lines := []string{fitStyledCellLine(title+strings.Repeat(" ", gap)+todoCountStyle.Render(count), width)}
 	if snapshot.Explanation != "" {

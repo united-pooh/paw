@@ -1,5 +1,5 @@
-────────────────────────────── model-a  12:00 ──────────────────────────────┬──────────── Activity / Tasks ─────────────
-   读取工作区外的共享设计说明，并继续当前实现。                             │Activity / Tasks 0
+────────────────────────────── model-a  12:00 ──────────────────────────────┬────────────────── 活动 ───────────────────
+   读取工作区外的共享设计说明，并继续当前实现。                             │任务 0
                                                                             │Task controller is unavailable.
                                                                             │
                                                                             │
@@ -18,14 +18,14 @@
                                                                             │
                                                                             │
                                                                             │
-                                                                            │TOKEN HISTORY · MAIN TURN
+                                                                            │令牌历史 · 主回合
                                                                             │Turn avg — tok/s
                                                                             │Σout —                         — incl tools
                                                                             │
                                                                             │
                                                                             │
                                                                             │
-CTX — ······································································│
+上下文 — ···································································│
  QUESTION  SINGLE                                      selected 0 / max 1   │暂无流片段
  Read requests access outside the workspace:                                │
  /Users/example/shared/architecture.md                                      │
@@ -37,4 +37,4 @@ CTX — ····································
  ↑ 0 answers above                                      ↓ 0 answers below   │Cache hit                                 —
  ────────────────────────────────────────────────────────────────────────   │Tools in —                     main 0 calls
  ↑↓ select  enter submit  esc cancel                                        │Σ session+tasks · tools ⊂ input
- chat                                 CTX —                                 ┴─────────────  go-code  dev  ──────────────
+ 聊天                                                                       ┴─────────────  go-code  dev  ──────────────

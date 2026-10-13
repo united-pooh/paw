@@ -40,7 +40,7 @@ func TestActivityPaneAlwaysSplitsLatestActivityAndTokenHistory(t *testing.T) {
 					}
 				}
 				lower := strings.Join(lines[height/2:], "\n")
-				for _, want := range []string{"TOKEN HISTORY", "Input", "Output", "Cache hit", "Tools in"} {
+				for _, want := range []string{copyTokenHistory, "Input", "Output", "Cache hit", "Tools in"} {
 					if !strings.Contains(ansi.Strip(lower), want) {
 						t.Errorf("%dx%d lower missing %q\n%s", width, height, want, ansi.Strip(lower))
 					}
