@@ -21,7 +21,9 @@ const updateTodoInputSchema = `{
           "id": {"type": "string"},
           "content": {"type": "string"},
           "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]},
-          "blocked_by": {"type": "array", "items": {"type": "string"}, "uniqueItems": true, "description": "IDs of prerequisite items in this snapshot. Keep this item pending until all prerequisites are completed."}
+          "group": {"type": "string", "description": "Optional phase label for grouping related items in the todo display. Reuse the same label for items in a phase and preserve it in subsequent full snapshots. Omit for an ungrouped item. This does not create a prerequisite or change execution order."},
+          "blocked_by": {"type": "array", "items": {"type": "string"}, "uniqueItems": true, "description": "IDs of prerequisite items in this snapshot. Keep this item pending until all prerequisites are completed."},
+          "blocked_reason": {"type": "string", "description": "An external condition preventing this item from progressing, such as unavailable access, a missing dependency, or a required user decision. Keep this item pending. Clear this field when the condition is resolved."}
         },
         "required": ["id", "content", "status"]
       }
@@ -45,7 +47,7 @@ func NewTool(broker *Broker) *Tool {
 func (*Tool) Name() string { return "update_todo" }
 
 func (*Tool) Description() string {
-	return "Maintain a full todo snapshot for complex multi-step work. Use it before substantial execution and when status materially changes; do not create a todo list for simple questions or one-step edits. Submit the complete ordered list every time, preserve stable item ids, use only pending/in_progress/completed, and keep at most one item in_progress. When an item needs prerequisite work, add those prerequisites as items and set blocked_by to their IDs. Keep blocked items pending; they cannot become in_progress or completed until every prerequisite is completed. Complete unblocked prerequisites first, then resume the original items. Preserve dependency IDs in subsequent snapshots, including completed prerequisites; do not use self-references, duplicate IDs, or cycles. Mark items completed as soon as each milestone finishes; do not batch all status updates into one final call at the very end."
+	return "Maintain a full todo snapshot for complex multi-step work. Use it before substantial execution and when status materially changes; do not create a todo list for simple questions or one-step edits. Submit the complete ordered list every time, preserve stable item ids, use only pending/in_progress/completed, and keep at most one item in_progress. For work with multiple phases, set group to a short phase label on each related item and preserve those labels in later snapshots; group is display metadata and does not imply dependencies. When an item needs prerequisite work, add those prerequisites as items and set blocked_by to their IDs. Keep blocked items pending; they cannot become in_progress or completed until every prerequisite is completed. For an external blocker, set blocked_reason and keep the item pending; clear blocked_reason when resolved. Continue ready items while other items are blocked. If all remaining work is blocked, report the blocker and stop. Complete unblocked prerequisites first, then resume the original items. Preserve dependency IDs in subsequent snapshots, including completed prerequisites; do not use self-references, duplicate IDs, or cycles. Mark items completed as soon as each milestone finishes; do not batch all status updates into one final call at the very end."
 }
 
 func (*Tool) InputSchema() json.RawMessage {
