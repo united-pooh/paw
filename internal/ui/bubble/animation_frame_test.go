@@ -32,8 +32,6 @@ func TestScheduleUIAnimationFrameDeduplicatesPendingTick(t *testing.T) {
 func TestCursorFrameStopsWhenIdle(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.uiAnimationFrameScheduled = true
-	model.waveAmpStartedAt = time.Time{}
-	model.tokenRippleExitAt = time.Time{}
 	model.transcriptRefreshPending = false
 
 	at := time.Unix(100, 0)
@@ -121,7 +119,10 @@ func TestSynctaskWakesAnimation(t *testing.T) {
 	}
 }
 
-func TestTurnCompletionKeepsFramesAliveForRippleExit(t *testing.T) {
+// TestTurnCompletionSchedulesFinalRepaint 验证回合结束仍会唤醒一帧动画：
+// 用于把 ⚒ 状态行从运行态重绘为「刚完成」并清空生成态指示，随后帧链在
+// 空闲分支自然停止、时钟链接手（波纹退场动画已退役）。
+func TestTurnCompletionSchedulesFinalRepaint(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.uiAnimationFrameScheduled = false
 	if !model.queryGuard.StartModel() {
@@ -133,34 +134,12 @@ func TestTurnCompletionKeepsFramesAliveForRippleExit(t *testing.T) {
 	next, _ := model.Update(turnFinishedMsg{})
 	model = next.(appModel)
 
-	if model.tokenRippleExitAt.IsZero() {
-		t.Fatal("turn completion should record a ripple exit deadline")
-	}
 	if !model.uiAnimationFrameScheduled {
-		t.Fatal("turn completion should wake and mark a ripple exit frame")
+		t.Fatal("turn completion should schedule a final repaint frame")
 	}
 }
 
-func TestRippleExitFrameStopsAfterDeadline(t *testing.T) {
-	model := newTestModel(&fakeRunner{})
-	model.uiAnimationFrameScheduled = true
-	model.waveAmpStartedAt = time.Time{}
-	model.width = 80
-	model.tokenRippleExitAt = time.Unix(500, 0)
-
-	deadline := model.tokenRippleExitAt.Add(time.Duration(80+tokenRippleTail) * tokenRippleSpeed)
-
-	next, _ := model.Update(cursorFrameMsg(deadline))
-	model = next.(appModel)
-
-	// Ignore the unrelated one-shot pipeline poll command; only the scheduler
-	// marker identifies an animation successor.
-	if model.uiAnimationFrameScheduled {
-		t.Fatal("completed ripple exit should clear scheduled marker")
-	}
-}
-
-func TestTurnOutcomesWakeRippleExit(t *testing.T) {
+func TestTurnOutcomesScheduleFinalRepaint(t *testing.T) {
 	cases := []struct {
 		name string
 		msg  turnFinishedMsg
@@ -186,10 +165,7 @@ func TestTurnOutcomesWakeRippleExit(t *testing.T) {
 			model = next.(appModel)
 
 			if !model.uiAnimationFrameScheduled {
-				t.Fatal("turn outcome should wake ripple exit animation")
-			}
-			if model.tokenRippleExitAt.IsZero() {
-				t.Fatal("turn outcome should set ripple exit deadline")
+				t.Fatal("turn outcome should schedule a final repaint frame")
 			}
 		})
 	}
@@ -290,8 +266,6 @@ func TestClockTickExitsWhileWorking(t *testing.T) {
 func TestIdleMinuteClockKeepsAdvancing(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.uiAnimationFrameScheduled = true
-	model.waveAmpStartedAt = time.Time{}
-	model.tokenRippleExitAt = time.Time{}
 	model.transcriptRefreshPending = false
 
 	t0 := time.Date(2026, 8, 8, 10, 59, 30, 0, time.Local)

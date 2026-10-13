@@ -5,7 +5,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestTerminalBackgroundSequenceUsesTrueColor(t *testing.T) {
@@ -87,13 +86,9 @@ func TestTerminalCursorAnimationUsesThemeEndpoints(t *testing.T) {
 	if animation.background != "#1a1b26" || animation.bright != "#7aa2f7" {
 		t.Fatalf("animation = %#v", animation)
 	}
-	colors := map[string]bool{}
-	for _, offset := range []time.Duration{0, cursorCycleDuration / 6, cursorCycleDuration / 4, cursorCycleDuration / 3, cursorCycleDuration / 2} {
-		intensity := cursorIntensityAt(offset)
-		colors[interpolateHexColor(animation.background, animation.bright, intensity)] = true
-	}
-	if len(colors) < 2 {
-		t.Fatalf("animation colors = %#v, want gradient", colors)
+	// 光标呼吸已退役：渲染层固定全亮，颜色恒为 bright 端点。
+	if got := interpolateHexColor(animation.background, animation.bright, 1); got != animation.bright {
+		t.Fatalf("static cursor color = %q, want bright endpoint %q", got, animation.bright)
 	}
 }
 

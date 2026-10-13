@@ -209,7 +209,7 @@ func loadTaskTranscriptEntries(ctx context.Context, store SessionStore, task tas
 		sessionID := firstNonEmptyString(strings.TrimSpace(task.SessionID), strings.TrimSpace(task.ID))
 		if sessionID != "" {
 			if records, recordsErr := loader.LoadResolvedRecords(ctx, sessionID); recordsErr == nil {
-				if entries := transcriptEntriesFromRecords(records, nil, workspaceRoot); len(entries) > 0 {
+				if entries := transcriptEntriesFromRecords(records, workspaceRoot); len(entries) > 0 {
 					return mergeTranscriptToolEntries(entries), nil
 				}
 			}

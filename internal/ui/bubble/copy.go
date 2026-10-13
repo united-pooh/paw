@@ -31,9 +31,9 @@ const (
 	copyToolStatusUnknown = "未知"
 
 	// 折叠行
-	copyThinkingFold  = "思考了 %s"   // %s = 时长（"7 秒"）
-	copyWorkedFold    = "工作了 %s"   // %s = 时长
-	copyToolGroupFold = "%d 个工具"   // 组头前缀，后接文件清单
+	copyThinkingFold  = "思考了 %s" // %s = 时长（"7 秒"）
+	copyWorkedFold    = "工作了 %s" // %s = 时长
+	copyToolGroupFold = "%d 个工具" // 组头前缀，后接文件清单
 	copyGroupAllOK    = "全部完成"
 	copyExpandHint    = "[[ctrl+O 展开]]"
 	copyMoreLines     = "还有 %d 行"

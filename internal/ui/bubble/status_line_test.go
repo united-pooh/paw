@@ -102,20 +102,20 @@ func TestDockContextProgressPreservesSegmentsAndDropsMetadataOnNarrowWidths(t *t
 	}
 }
 
-func TestDockContextProgressAnimatesWithoutMovingLabels(t *testing.T) {
+func TestDockContextProgressStaysStaticWhileGenerating(t *testing.T) {
 	model := newTestModel(&fakeRunner{stats: loop.ContextStats{Known: true, TotalKnown: true, CacheKnown: true, UsedTokens: 40000, LimitTokens: 100000}})
 	model.width = 100
 	model.isGenerating = true
 	model.cursorFrameAt = time.Unix(0, 0)
 	first := ansi.Strip(model.renderDockStatusLine(100))
-	model.cursorFrameAt = time.Unix(0, int64(tokenRippleSpeed))
+	model.cursorFrameAt = time.Unix(0, int64(40*time.Millisecond))
 	second := ansi.Strip(model.renderDockStatusLine(100))
-	if first == second {
-		t.Fatal("dock context progress does not animate while generating")
+	if first != second {
+		t.Fatal("dock context progress should stay static while generating（活动指示已收敛到 ⚒ 状态行）")
 	}
 	for _, line := range []string{first, second} {
 		if terminalCellWidth(line) != 100 || !strings.HasPrefix(line, "CTX 40% ") || !strings.HasSuffix(line, " 40k / 100k") {
-			t.Fatalf("animation moved context metadata: %q", line)
+			t.Fatalf("context metadata moved: %q", line)
 		}
 	}
 }
@@ -180,53 +180,6 @@ func TestGoalInputUsesModeIndicatorWithoutStatusOrPurpleBody(t *testing.T) {
 	}
 }
 
-func TestTokenFrontierRippleStartsAtUsedProgressAndMoves(t *testing.T) {
-	model := newTestModel(&fakeRunner{stats: loop.ContextStats{Known: true, TotalKnown: true, CacheKnown: true, UsedTokens: 40000, LimitTokens: 100000}})
-	model.isGenerating = true
-	model.width = 100
-	model.cursorFrameAt = time.Unix(0, 0)
-	first := ansi.Strip(model.renderTokenFrontier(100, 40000, 0, 100000))
-	model.cursorFrameAt = time.Unix(0, int64(tokenRippleSpeed))
-	second := ansi.Strip(model.renderTokenFrontier(100, 40000, 0, 100000))
-	if first == second {
-		t.Fatalf("ripple did not move: %q", first)
-	}
-	if !strings.Contains(string([]rune(first)[40:]), "█") {
-		t.Fatalf("ripple lacks █ glyph in free span: %q", first)
-	}
-}
-
-func TestTokenFrontierRippleSurvivesTurnCompletion(t *testing.T) {
-	model := newTestModel(&fakeRunner{stats: loop.ContextStats{Known: true, TotalKnown: true, CacheKnown: true, UsedTokens: 40000, LimitTokens: 100000}})
-	model.width = 100
-	if !model.queryGuard.StartModel() {
-		t.Fatal("StartModel failed")
-	}
-	model.syncRunningFlags()
-	model.isGenerating = true
-	model.cursorFrameAt = time.Unix(0, 0)
-
-	next, _ := model.Update(turnFinishedMsg{})
-	model = next.(appModel)
-	if model.isAgentWorking() {
-		t.Fatal("model should be idle after turn completion")
-	}
-
-	// 退场进行中：波纹仍在 free 区继续右移（不立刻消失）。
-	model.cursorFrameAt = time.Unix(0, int64(2*tokenRippleSpeed))
-	exiting := ansi.Strip(model.renderTokenFrontier(100, 40000, 0, 100000))
-	if !strings.Contains(string([]rune(exiting)[40:]), "█") {
-		t.Fatalf("completed-turn ripple disappeared during exit: %q", exiting)
-	}
-
-	// 退场结束（越过右边界 + tail）：free 区无波纹。
-	model.cursorFrameAt = time.Unix(0, int64((100+tokenRippleTail)*tokenRippleSpeed))
-	settled := ansi.Strip(model.renderTokenFrontier(100, 40000, 0, 100000))
-	if strings.Contains(string([]rune(settled)[40:]), "█") {
-		t.Fatalf("completed-turn ripple remained after exit: %q", settled)
-	}
-}
-
 func TestDockLinesHaveNoStatusWordDuringToolCall(t *testing.T) {
 	model := newTestModel(&fakeRunner{stats: loop.ContextStats{Known: true, TotalKnown: true, CacheKnown: true, UsedTokens: 45000, LimitTokens: 100000}})
 	if !model.queryGuard.StartModel() {
@@ -242,30 +195,6 @@ func TestDockLinesHaveNoStatusWordDuringToolCall(t *testing.T) {
 	}
 	if !strings.Contains(bottom, "chat") {
 		t.Fatalf("tool-call bottom border = %q, want chat mode indicator", bottom)
-	}
-}
-
-func TestStartTokenRippleExitRecordsStartTime(t *testing.T) {
-	model := newTestModel(&fakeRunner{})
-	now := time.Unix(0, 0).Add(1250 * time.Millisecond)
-	model.startTokenRippleExit(now)
-	if !model.tokenRippleExitAt.Equal(now) {
-		t.Fatalf("exitAt = %v, want %v", model.tokenRippleExitAt, now)
-	}
-}
-
-func TestTokenRippleExitRemainsActiveUntilTailCompletes(t *testing.T) {
-	model := newTestModel(&fakeRunner{})
-	model.width = 100
-	now := time.Unix(0, 0)
-	model.startTokenRippleExit(now)
-
-	if !model.tokenRippleActive(now.Add(time.Duration(2) * tokenRippleSpeed)) {
-		t.Fatal("ripple should remain active while exiting")
-	}
-	deadline := now.Add(time.Duration(100+tokenRippleTail) * tokenRippleSpeed)
-	if model.tokenRippleActive(deadline) {
-		t.Fatal("ripple should stop when the full tail has exited")
 	}
 }
 

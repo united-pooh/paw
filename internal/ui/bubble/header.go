@@ -35,11 +35,12 @@ func renderHeader(s headerSnapshot, width int) string {
 	// 模型名是唯一的用户可控长字符串，给独立预算并截断。
 	modelBudget := clampInt(width/3, 6, 28)
 	model := truncateStyledCellLine(s.modelLabel, modelBudget)
-	status := strings.TrimSpace(s.statusLabel)
-	if status == "" {
-		status = "ready"
+	// 工作状态不再占用 header（底部 ⚒ 状态行是唯一活动指示）；
+	// header 只剩模型与挂钟。
+	left := model
+	if status := strings.TrimSpace(s.statusLabel); status != "" {
+		left += headerFieldSeparator + status
 	}
-	left := model + headerFieldSeparator + status
 	clock := s.now.Format("15:04")
 
 	leftW := terminalCellWidth(left)
@@ -74,14 +75,9 @@ func (m appModel) collectHeaderData(now time.Time) headerSnapshot {
 	if label == "" {
 		label = "model"
 	}
-	status := "ready"
-	if m.isAgentWorking() {
-		status = spinnerFrame(m.spinnerFrameIdx) + " " + formatTurnTimer(m.turnStartedAt, now) + " working"
-	}
-
 	return headerSnapshot{
 		modelLabel:  label,
-		statusLabel: status,
+		statusLabel: "",
 		now:         now,
 	}
 }
@@ -104,11 +100,10 @@ func (m appModel) renderHeaderLine(width int) string {
 func renderHeaderCompact(s headerSnapshot, width int) string {
 	modelBudget := clampInt(width/3, 6, 28)
 	model := truncateStyledCellLine(s.modelLabel, modelBudget)
-	status := strings.TrimSpace(s.statusLabel)
-	if status == "" {
-		status = "ready"
+	left := model
+	if status := strings.TrimSpace(s.statusLabel); status != "" {
+		left += headerFieldSeparator + status
 	}
-	left := model + headerFieldSeparator + status
 	clock := s.now.Format("15:04")
 	return truncateStyledCellLine(left+headerFieldSeparator+clock, width)
 }

@@ -55,8 +55,7 @@ func TestFoldWorkSegmentsCollectsReasoningAndTools(t *testing.T) {
 	}
 }
 
-// 思考之间只有工具调用、没有正文输出时，多段思考合并为一行；响应时间回
-// 填到该运行（唯一/最后一段）的标题尾部。
+// 思考之间只有工具调用、没有正文输出时，多段思考合并为一行。
 func TestFoldWorkSegmentsMergesThoughtsLinkedOnlyByTools(t *testing.T) {
 	entries := []transcriptEntry{
 		wsReasoning("first", 0),
@@ -71,9 +70,6 @@ func TestFoldWorkSegmentsMergesThoughtsLinkedOnlyByTools(t *testing.T) {
 	data := out[0].segment
 	if !data.hasReasoning || data.toolCalls != 1 || len(data.children) != 3 {
 		t.Fatalf("merged segment = %#v, want both thoughts + tool in one segment", data)
-	}
-	if !out[1].responseClock {
-		t.Fatal("response following a run must carry the response clock")
 	}
 }
 
@@ -95,9 +91,6 @@ func TestFoldWorkSegmentsCutsOnVisibleText(t *testing.T) {
 	}
 	if !out[0].segment.hasReasoning {
 		t.Fatal("first segment should have reasoning")
-	}
-	if !out[1].responseClock {
-		t.Fatal("response following a run must carry the response clock")
 	}
 	if out[2].toolName != "Write" {
 		t.Fatalf("trailing raw tool = %#v, want Write", out[2])
@@ -148,13 +141,13 @@ func TestFoldWorkSegmentsStartsAtReasoningAfterRawTools(t *testing.T) {
 	}
 }
 
-func TestPureToolRunStillTimestampsFollowingResponse(t *testing.T) {
+func TestPureToolRunStaysRawBeforeResponse(t *testing.T) {
 	out := foldWorkSegments([]transcriptEntry{
 		wsTool("Read", "ok", 0),
 		wsAssistant("done", 2),
 	}, foldResting)
-	if len(out) != 2 || out[0].kind != entryTool || out[1].kind != entryAssistant || !out[1].responseClock {
-		t.Fatalf("out = %#v, want raw tool followed by timestamped response", out)
+	if len(out) != 2 || out[0].kind != entryTool || out[1].kind != entryAssistant {
+		t.Fatalf("out = %#v, want raw tool followed by response", out)
 	}
 }
 
@@ -237,17 +230,15 @@ func TestFoldWorkSegmentsTrailsResponse(t *testing.T) {
 	if len(out) != 3 || out[0].kind != entryUser || out[1].kind != entryWorkSegment || out[2].kind != entryAssistant {
 		t.Fatalf("out = %#v, want user → thought → response", out)
 	}
-	// 响应时间在响应结束的下一行，而不是段标题尾部。
-	if !out[2].responseClock {
-		t.Fatal("response following a run must carry the response clock")
-	}
+	// 响应时钟行已退役（回合耗时由 ⚒ 状态行呈现）：响应渲染不含时钟，
+	// 段标题也不携带时钟。
 	rendered := ansi.Strip(renderEntryAt(out[2], 80, wsAt(20), false))
-	bodyRow := strings.Index(rendered, "GeoRA")
-	// 时钟按本地时区显示（wsAt 是 UTC 基准，换算到本地后再断言，时区无关）。
+	if !strings.Contains(rendered, "GeoRA") {
+		t.Fatalf("response body missing:\n%s", rendered)
+	}
 	localClock := wsAt(18).Local().Format("15:04")
-	clockRow := strings.Index(rendered, localClock)
-	if bodyRow < 0 || clockRow < bodyRow {
-		t.Fatalf("clock must render on the line after the response:\n%s", rendered)
+	if strings.Contains(rendered, localClock) {
+		t.Fatalf("retired response clock still renders:\n%s", rendered)
 	}
 	if title := workSegmentTitle(out[1].segment, wsAt(20)); strings.Contains(title, localClock) {
 		t.Fatalf("segment title must not carry the clock: %q", title)
@@ -324,7 +315,7 @@ func TestFoldWorkSegmentsCountsFailedExcludingBookkeeping(t *testing.T) {
 }
 
 // live 模式下已完成的运行与 resting 一致折叠（Thought 保留在真实推理位
-// 置、响应时间记在段标题尾部），只有尾部仍在进行的运行保留为 live 实时块。
+// 置），只有尾部仍在进行的运行保留为 live 实时块。
 func TestFoldWorkSegmentsLiveFoldsCompletedRunsAtNaturalPosition(t *testing.T) {
 	entries := []transcriptEntry{
 		wsReasoning("old", 0),
@@ -343,9 +334,6 @@ func TestFoldWorkSegmentsLiveFoldsCompletedRunsAtNaturalPosition(t *testing.T) {
 	}
 	if !completed.segment.hasReasoning || completed.segment.toolCalls != 1 {
 		t.Fatalf("completed segment stats = %#v", completed.segment)
-	}
-	if !out[1].responseClock {
-		t.Fatal("response following a run must carry the response clock")
 	}
 	if out[1].kind != entryAssistant {
 		t.Fatalf("out[1] = %#v, want response after its thoughts", out[1])
@@ -442,27 +430,6 @@ func TestWorkSegmentLiveTitle(t *testing.T) {
 	empty := &workSegmentData{startedAt: wsAt(0), live: true}
 	if got := workSegmentLiveTitle(empty, wsAt(0)); got != "Thoughts · 1 s" {
 		t.Fatalf("live title without tools = %q", got)
-	}
-}
-
-func TestFormatResponseClock(t *testing.T) {
-	at := time.Date(2026, 8, 25, 9, 30, 0, 0, time.Local)
-	cases := []struct {
-		name string
-		t    time.Time
-		want string
-	}{
-		{"zero", time.Time{}, ""},
-		{"today", time.Date(2026, 8, 25, 14, 32, 0, 0, time.Local), "14:32"},
-		{"same year", time.Date(2026, 8, 24, 14, 32, 0, 0, time.Local), "8月24日 14:32"},
-		{"other year", time.Date(2025, 8, 24, 14, 32, 0, 0, time.Local), "2025年8月24日 14:32"},
-	}
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := formatResponseClock(tt.t, at); got != tt.want {
-				t.Fatalf("formatResponseClock() = %q, want %q", got, tt.want)
-			}
-		})
 	}
 }
 
@@ -628,23 +595,14 @@ func TestLiveThoughtCollapsesAtNaturalPositionOnceTextStreams(t *testing.T) {
 	if thoughtRow > textRow {
 		t.Fatalf("thought must stay at its natural position (before the response):\n%s", got)
 	}
-	// 响应时间在响应结束的下一行，而不是段标题上。
-	if clockRow := strings.Index(got, "08:01"); clockRow < 0 || clockRow < textRow {
-		t.Fatalf("response clock must render on the line after the response:\n%s", got)
+	// 响应时钟行已退役：视口不再渲染响应后的暗色时钟（回合耗时由 ⚒ 状
+	// 态行呈现）。时钟串按本地时区计算，断言时区无关。
+	localClock := started.Add(3 * time.Second).Local().Format("15:04")
+	if strings.Contains(got, localClock) {
+		t.Fatalf("retired response clock still renders:\n%s", got)
 	}
 	if strings.Contains(got, "Thoughts ·") || strings.Contains(got, "thinking out loud") {
 		t.Fatalf("stale live thought block survived the response:\n%s", got)
-	}
-}
-
-// 落库时间戳是 UTC：formatResponseClock 必须转本地时区显示，否则 resume
-// 后的响应时钟全部显示 0 时区。
-func TestFormatResponseClockNormalizesUTCToLocal(t *testing.T) {
-	at := time.Date(2026, 8, 25, 9, 30, 0, 0, time.Local)
-	utc := time.Date(2026, 8, 25, 1, 30, 0, 0, time.UTC)
-	want := utc.Local().Format("15:04")
-	if got := formatResponseClock(utc, at); got != want {
-		t.Fatalf("formatResponseClock(UTC) = %q, want local %q", got, want)
 	}
 }
 

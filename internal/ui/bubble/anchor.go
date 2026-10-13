@@ -195,14 +195,14 @@ func (w *anchoredOutput) forwardVisualUpdates() {
 			if ok {
 				_ = w.applyVisualOnly(visual)
 			}
-		case now := <-ticker.C:
+		case <-ticker.C:
 			animation, ok := w.anchor.currentAnimation()
 			if !ok {
 				continue
 			}
-			intensity := cursorIntensityAt(cursorCycleOffset(now))
+			// 光标呼吸已退役：固定全亮，ticker 仍负责主题切换后的颜色刷新。
 			_ = w.applyVisualOnly(terminalCursorVisual{
-				color:   interpolateHexColor(animation.background, animation.bright, intensity),
+				color:   interpolateHexColor(animation.background, animation.bright, 1),
 				visible: true,
 			})
 		case <-w.stop:

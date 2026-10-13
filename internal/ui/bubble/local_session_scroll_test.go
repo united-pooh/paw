@@ -745,7 +745,7 @@ func loadLocalScrollSessionModel(tb testing.TB) (appModel, localScrollSessionSta
 	if filepath.Base(storeBase) == ".paw" {
 		workspaceRoot = filepath.Dir(storeBase)
 	}
-	entries := transcriptEntriesFromRecords(records, nil, workspaceRoot)
+	entries := transcriptEntriesFromRecords(records, workspaceRoot)
 	if len(entries) == 0 {
 		tb.Fatal("local session produced no transcript entries")
 	}

@@ -11,7 +11,6 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"paw/internal/platform/settings"
-	"paw/internal/storage/session"
 	"paw/internal/ui"
 )
 
@@ -117,10 +116,8 @@ type transcriptRenderCacheKey struct {
 	toolStartedAtUnixNS  int64
 	toolFinishedAtUnixNS int64
 	toolElapsedSecond    int64
-	turnMetadata         string
 	showThinking         bool
 	segmentSnapshot      string
-	responseClock        bool
 }
 
 func (m *appModel) ensureAssistantStreamEntry() {
@@ -1870,9 +1867,7 @@ func transcriptRenderKey(entry transcriptEntry, width int, at time.Time, showThi
 		createdAtIsZero:      entry.createdAt.IsZero(),
 		toolStartedAtUnixNS:  entry.toolStartedAt.UnixNano(),
 		toolFinishedAtUnixNS: entry.toolFinishedAt.UnixNano(),
-		turnMetadata:         transcriptTurnMetadataSnapshot(entry.turnMetadata),
 		showThinking:         showThinking,
-		responseClock:        entry.responseClock,
 	}
 	if toolEntryStatus(entry) == "running" {
 		key.toolElapsedSecond = toolElapsedSeconds(entry, at)
@@ -1893,17 +1888,6 @@ func transcriptTodoSnapshot(snapshot any) string {
 		return ""
 	}
 	data, err := json.Marshal(snapshot)
-	if err != nil {
-		return ""
-	}
-	return string(data)
-}
-
-func transcriptTurnMetadataSnapshot(metadata *session.TurnMetadata) string {
-	if metadata == nil {
-		return ""
-	}
-	data, err := json.Marshal(metadata)
 	if err != nil {
 		return ""
 	}
@@ -2451,24 +2435,6 @@ func renderEntryAt(entry transcriptEntry, width int, at time.Time, showThinking 
 		return indentLines(card, transcriptEntryGutter)
 	}
 	body := renderEntryBodyAt(entry, bodyWidth, at, showThinking)
-	if entry.kind == entryAssistant && entry.responseClock {
-		// 响应时间落在响应结束的下一行（暗色时钟行），不随 Thought 段标题上移。
-		if clock := formatResponseClock(entry.createdAt, at); clock != "" {
-			if body == "" {
-				body = thinkingBodyStyle.Render(clock)
-			} else {
-				body += "\n" + thinkingBodyStyle.Render(clock)
-			}
-		}
-	}
-	if entry.kind == entryAssistant && entry.turnMetadata != nil {
-		footer := contextFreeStyle.Render(formatTurnFooter(*entry.turnMetadata))
-		if body == "" {
-			body = footer
-		} else {
-			body += "\n" + footer
-		}
-	}
 	if entry.kind == entryTool {
 		if body == "" {
 			return ""

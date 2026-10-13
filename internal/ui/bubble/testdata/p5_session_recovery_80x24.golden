@@ -1,4 +1,4 @@
-──────────── model-a  ready  12:00 ────────────┬─────── Activity / Tasks ───────
+─────────────── model-a  12:00 ────────────────┬─────── Activity / Tasks ───────
    resume                                      │Activity / Tasks 0
    Goal goal-p5 已恢复为 paused；使用 /goal    │Task controller is unavailable.
    resume 继续。                               │

@@ -5298,31 +5298,6 @@ func TestMarkdownCodeBlockLabelStyleUsesSignalCyan(t *testing.T) {
 	}
 }
 
-// TestCursorIntensityCycleIsContinuous 验证光标动画周期首尾都是暗态，避免循环边界突兀闪烁。
-func TestCursorIntensityCycleIsContinuous(t *testing.T) {
-	if got := cursorIntensityAt(0); got != 0 {
-		t.Fatalf("cursorIntensityAt(0) = %f, want 0", got)
-	}
-	if got := cursorIntensityAt(cursorCycleDuration / 12); got != 0 {
-		t.Fatalf("cursorIntensityAt(0.25s) = %f, want 0", got)
-	}
-	if got := cursorIntensityAt(cursorCycleDuration / 4); got != 1 {
-		t.Fatalf("cursorIntensityAt(0.75s) = %f, want 1", got)
-	}
-	if got := cursorIntensityAt(cursorCycleDuration / 3); got != 1 {
-		t.Fatalf("cursorIntensityAt(1s) = %f, want 1", got)
-	}
-	if got := cursorIntensityAt(cursorCycleDuration / 2); got != 0 {
-		t.Fatalf("cursorIntensityAt(1.5s) = %f, want 0", got)
-	}
-	if got := cursorIntensityAt(3 * cursorCycleDuration / 4); got != 1 {
-		t.Fatalf("cursorIntensityAt(2.25s) = %f, want 1", got)
-	}
-	if got := cursorIntensityAt(cursorCycleDuration - time.Nanosecond); got > 0.001 {
-		t.Fatalf("cursorIntensityAt(cycle end) = %f, want nearly 0", got)
-	}
-}
-
 // TestCursorDimColorMatchesTerminalBackground 验证光标最暗时融入终端主题背景色。
 func TestCursorDimColorMatchesTerminalBackground(t *testing.T) {
 	background := colorManager.Hex(colorTerminalBackground)

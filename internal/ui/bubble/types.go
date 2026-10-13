@@ -78,7 +78,6 @@ type transcriptEntry struct {
 	createdAt       time.Time
 	toolStartedAt   time.Time
 	toolFinishedAt  time.Time
-	turnMetadata    *session.TurnMetadata
 	version         int
 	// reasoning 特定字段
 	redacted              bool
@@ -87,10 +86,6 @@ type transcriptEntry struct {
 	reasoningFinishedAt   *time.Time
 	reasoningExpansionSet bool // UI-only local override; never persisted
 	reasoningExpanded     bool // value used when reasoningExpansionSet is true
-	// responseClock 仅存在于视图副本（transcript 原条目永不置位）：该响应紧跟
-	// 一个工作运行时由折叠层标记，渲染时在响应结束的下一行输出暗色时钟行，
-	// 而不是把时间挂在 Thought 段标题上（避免时间跑到响应上方）。
-	responseClock bool
 	// segment 仅在 kind == entryWorkSegment 时非空，持有收编的子条目与聚合统计。
 	segment *workSegmentData
 }
@@ -650,11 +645,6 @@ type appModel struct {
 	completion                          *completion
 	lastActivityPollAt                  time.Time // Activity 面板 ListTasks 刷新的节流时间戳
 	spinnerFrameIdx                     int       // Activity 中 running 条目的动画帧索引，由 cursorFrameMsg 驱动
-	waveAmpTarget                       bool      // 均衡器波浪振幅目标态（= isGenerating），翻转时更新
-	waveAmpStartedAt                    time.Time // 振幅目标态确立时刻，用于缓动进度
-	waveAmpFrom                         float64   // 过渡起点振幅，反向退场时从此值缓降
-	waveAmpCurrent                      float64   // 当前振幅（cursorFrameMsg 每帧更新，渲染只读）
-	tokenRippleExitAt                   time.Time // 任务结束后 Ripple 越界退场的起始时刻
 	worktreeCWD                         string
 	worktree                            worktreeSnapshot
 	worktreeReader                      worktreeStatusReader

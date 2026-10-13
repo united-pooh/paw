@@ -112,9 +112,6 @@ func TestDefaultTerminalCursorResetAndAnimations(t *testing.T) {
 	previous := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(previous) })
-	for distance := 0; distance < tokenRippleTail; distance++ {
-		assertTerminalPaletteOnly(t, renderTokenRippleCell(distance, "", "6"))
-	}
 }
 
 func TestDefaultTerminalRestoresDefaultsAfterNestedStyles(t *testing.T) {

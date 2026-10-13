@@ -106,12 +106,13 @@ func chipLabel(toolName string) string {
 }
 
 // chipStyle 构造白字彩底小标签。终端 ANSI 模式下前景固定亮白
-// （黄底 chip 用纯黑前景保证可读）；hex 主题沿用"药丸=角色底+主题底色字"。
+// （浅底色 chip——黄/浅灰——用纯黑前景保证可读）；hex 主题沿用
+// "药丸=角色底+主题底色字"。
 func chipStyle(kind chipKind) lipgloss.Style {
 	role := kind.colorRole()
 	fg := colorManager.LipglossColor(colorTerminalBackground)
 	if colorManager.palette.TerminalBackground == "" {
-		if role == colorChipTask {
+		if role == colorChipTask || role == colorChipPlugin {
 			fg = lipgloss.Color("0")
 		} else {
 			fg = lipgloss.Color("15")

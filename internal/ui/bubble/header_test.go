@@ -69,23 +69,23 @@ func TestRenderHeaderRightAlignsTime(t *testing.T) {
 	}
 }
 
-func TestHeaderShowsTurnElapsedWhileWorking(t *testing.T) {
+// TestHeaderOmitsWorkingStatus 验证 collectHeaderData 不再输出工作状态：
+// 活动指示已收敛到底部 ⚒ 状态行，header 只剩模型与挂钟。轮次耗时由
+// formatTurnTimer 继续提供（⚒ 状态行的 elapsed 数据源）。
+func TestHeaderOmitsWorkingStatus(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	started := time.Date(2026, 7, 28, 15, 0, 0, 0, time.UTC)
 	model.turnStartedAt = started
 	model.isGenerating = true
-	model.spinnerFrameIdx = 0
 	snapshot := model.collectHeaderData(started.Add(22 * time.Second))
-	if !strings.Contains(snapshot.statusLabel, "22s working") {
-		t.Fatalf("header status = %q, want 22s working", snapshot.statusLabel)
+	if snapshot.statusLabel != "" {
+		t.Fatalf("header status = %q, want empty（活动指示在 ⚒ 状态行）", snapshot.statusLabel)
 	}
 	if got := formatTurnTimer(started, started.Add(90*time.Second+3*time.Second)); got != "1m33s" {
 		t.Fatalf("formatTurnTimer = %q, want 1m33s", got)
 	}
-
-	snapshot = model.collectHeaderData(started.Add(9 * time.Hour))
-	if !strings.Contains(snapshot.statusLabel, "9h00m00s working") {
-		t.Fatalf("header status = %q, want 9h00m00s working", snapshot.statusLabel)
+	if got := formatTurnTimer(started, started.Add(9*time.Hour)); got != "9h00m00s" {
+		t.Fatalf("formatTurnTimer = %q, want 9h00m00s", got)
 	}
 }
 

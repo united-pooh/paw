@@ -40,18 +40,20 @@ func isBookkeepingToolEntry(entry transcriptEntry) bool {
 	return entry.kind == entryTool && strings.EqualFold(strings.TrimSpace(entry.toolName), "update_todo")
 }
 
-// isInteractiveToolEntry 报告条目是否为交互/权限类工具：
-// 不收编且切段（需要用户输入，前后工具不并入同一段）。
-func isInteractiveToolEntry(entry transcriptEntry) bool {
-	if entry.kind != entryTool {
-		return false
-	}
-	switch strings.ToLower(strings.TrimSpace(entry.toolName)) {
+// isInteractiveToolName 报告工具名是否为交互/权限类（question/select）。
+func isInteractiveToolName(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "question", "select":
 		return true
 	default:
 		return false
 	}
+}
+
+// isInteractiveToolEntry 报告条目是否为交互/权限类工具：
+// 不收编且切段（需要用户输入，前后工具不并入同一段）。
+func isInteractiveToolEntry(entry transcriptEntry) bool {
+	return entry.kind == entryTool && isInteractiveToolName(entry.toolName)
 }
 
 func isReasoningWorkEntry(entry transcriptEntry) bool {
@@ -61,15 +63,6 @@ func isReasoningWorkEntry(entry transcriptEntry) bool {
 func workSegmentRunHasReasoning(entries []transcriptEntry) bool {
 	for _, entry := range entries {
 		if isReasoningWorkEntry(entry) {
-			return true
-		}
-	}
-	return false
-}
-
-func workRunShouldTimestampResponse(entries []transcriptEntry) bool {
-	for _, entry := range entries {
-		if isReasoningWorkEntry(entry) || (entry.kind == entryTool && !isBookkeepingToolEntry(entry)) {
 			return true
 		}
 	}
@@ -193,12 +186,9 @@ func foldWorkSegmentsView(entries []transcriptEntry, mode foldMode, expandedFor 
 			}
 			run = append(run, entry)
 		case entry.kind == entryAssistant && len(run) > 0:
-			// Thought 保持在真实推理位置（响应之前）；响应时间不再挂在段标
-			// 题上，而是标记在响应条目上，渲染在响应结束的下一行。纯工具
-			// 运行虽不折叠，仍属于响应前工作，应保留响应时钟。
-			responseClock := workRunShouldTimestampResponse(run)
+			// Thought 保持在真实推理位置（响应之前）；响应时钟行已退役，
+			// 回合耗时由底部 ⚒ 状态行的「刚完成」窗口呈现。
 			flush(run)
-			entry.responseClock = responseClock
 			run = nil
 			emitRaw(index, entry)
 		default:
@@ -357,27 +347,6 @@ func workSegmentTitle(data *workSegmentData, at time.Time) string {
 		fmt.Fprintf(&b, " · %d failed", data.failed)
 	}
 	return b.String()
-}
-
-// formatResponseClock 格式化模型响应时间：今天只显示时分（14:32）；同年
-// 带月日（8月24日 14:32）；跨年再带年份（2025年8月24日 14:32）。
-// 落库时间戳是 UTC（jsonl_store 用 nowFn().UTC()），恢复后必须先转本地时区
-// 再取时分，否则 resume 后的时钟全部显示 0 时区；at 一并归一化，保证
-// 「今天/同年」的日期比较在同一时区进行。
-func formatResponseClock(t, at time.Time) string {
-	if t.IsZero() {
-		return ""
-	}
-	t = t.Local()
-	at = at.Local()
-	clock := fmt.Sprintf("%02d:%02d", t.Hour(), t.Minute())
-	if t.Year() == at.Year() && t.YearDay() == at.YearDay() {
-		return clock
-	}
-	if t.Year() == at.Year() {
-		return fmt.Sprintf("%d月%d日 %s", int(t.Month()), t.Day(), clock)
-	}
-	return fmt.Sprintf("%d年%d月%d日 %s", t.Year(), int(t.Month()), t.Day(), clock)
 }
 
 // workSegmentLiveTitle 生成 live 态标题（统一 Thoughts + 实时时长与计数）。

@@ -156,16 +156,17 @@ func TestViewRendersNewMessageNoticeAboveStatusLine(t *testing.T) {
 	if noticeRow < 0 {
 		t.Fatalf("notice row=%d\n%s", noticeRow, view)
 	}
-	// Runtime status is rendered in the header; the input dock no longer has
-	// a duplicate ready/working status row beneath the transcript.
-	headerRow := -1
+	// 活动指示已收敛到 ⚒ 状态行（空闲不渲染）；不变量改为：提示贴在
+	// transcript 底部，位于 CTX 状态行/输入 dock 之上。
+	dockRow := -1
 	for i, line := range lines {
-		if strings.Contains(line, "ready") && strings.Contains(line, "model-a") {
-			headerRow = i
+		if strings.Contains(line, "CTX") {
+			dockRow = i
+			break
 		}
 	}
-	if headerRow < 0 || noticeRow <= headerRow {
-		t.Fatalf("notice row=%d header row=%d\n%s", noticeRow, headerRow, view)
+	if dockRow < 0 || noticeRow >= dockRow {
+		t.Fatalf("notice row=%d dock row=%d\n%s", noticeRow, dockRow, view)
 	}
 }
 

@@ -232,7 +232,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cursorFrameAt = time.Time(msg)
 		m.spinnerFrameIdx++
 		m.applyCursorAnimation()
-		m.updateWaveAmp(time.Time(msg))
 		m.refreshActivityFromTasks(time.Time(msg))
 		m.refreshRunningToolProgress(time.Time(msg))
 		animationNow := time.Time(msg)
@@ -391,7 +390,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.addEntry(transcriptEntry{kind: entrySystem, title: "goal", body: body})
 		if wasWorking && !m.isAgentWorking() {
-			m.startTokenRippleExit(m.animationNow())
 			if frameCmd := m.scheduleUIAnimationFrame(); frameCmd != nil {
 				cmds = append(cmds, frameCmd)
 			}
@@ -438,22 +436,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.finalizeThinkingStream()
-		assistantIndex := m.doneAssistant
-		if msg.err != nil {
-			m.finalizeAssistantStream()
-		} else {
-			if finalized := m.finalizeAssistantStream(); finalized >= 0 {
-				assistantIndex = finalized
-			}
-			if msg.metadata != nil && assistantIndex >= 0 && assistantIndex < len(m.transcript) && m.transcript[assistantIndex].kind == entryAssistant {
-				metadata := *msg.metadata
-				m.transcript[assistantIndex].turnMetadata = &metadata
-				m.touchTranscriptEntryAt(assistantIndex)
-				m.refreshViewport()
-			}
-			_ = hadModelOutput
-			_ = assistantIndex
-		}
+		// 回合 footer（耗时行）已退役：⚒ 状态行的「刚完成」窗口接管耗时
+		// 呈现，metadata 仅由 loop 侧 sidecar 持久化，不再装饰 transcript 条目。
+		m.finalizeAssistantStream()
 		m.doneAssistant = -1
 		m.isGenerating = false
 		m.finishModelWork()
@@ -465,7 +450,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.toolGroupFullResult = false
 		m.syncRunningFlags()
 		if wasWorking && !m.isAgentWorking() {
-			m.startTokenRippleExit(m.animationNow())
 			if frameCmd := m.scheduleUIAnimationFrame(); frameCmd != nil {
 				cmds = append(cmds, frameCmd)
 			}
@@ -529,7 +513,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.turnStartedAt = time.Time{}
 		m.syncRunningFlags()
 		if wasWorking && !m.isAgentWorking() {
-			m.startTokenRippleExit(m.animationNow())
 			if frameCmd := m.scheduleUIAnimationFrame(); frameCmd != nil {
 				cmds = append(cmds, frameCmd)
 			}

@@ -31,6 +31,7 @@ type tuiLayout struct {
 	headerHeight           int
 	transcriptHeight       int
 	statusHeight           int
+	workStatusHeight       int
 	worktreeHeight         int
 	inputHeight            int
 	queueHeight            int
@@ -87,7 +88,7 @@ func (m appModel) currentLayout() tuiLayout {
 		selectionWidth := base.workspaceWidth
 		inputHeight := m.selectionDock.preferredHeight(inputDockContentWidth(selectionWidth))
 		layout := computeTUILayoutWithInputLimit(m.width, m.height, inputHeight, selectionDockMaxVisibleLines)
-		return applyActivityGeometry(layout, m.activity.visible, m.activity.widthColumns)
+		return m.withWorkStatusLine(applyActivityGeometry(layout, m.activity.visible, m.activity.widthColumns))
 	}
 	queueHeight := m.queuePanelHeight()
 	textareaHeight := m.input.Height()
@@ -102,7 +103,17 @@ func (m appModel) currentLayout() tuiLayout {
 	layout := computeTUILayoutWithInputLimit(m.width, m.height, requestedInputHeight, inputLimit)
 	layout.queueHeight = minInt(queueHeight, maxInt(0, layout.inputHeight-1))
 	layout.queueInlineHeight = m.queueInlineSummaryHeight()
-	return applyActivityGeometry(layout, m.activity.visible, m.activity.widthColumns)
+	return m.withWorkStatusLine(applyActivityGeometry(layout, m.activity.visible, m.activity.widthColumns))
+}
+
+// withWorkStatusLine 在工作状态行可见时为其预留一行（从 transcript 让位）。
+// 空闲时状态行整行不渲染，也不占布局。
+func (m appModel) withWorkStatusLine(layout tuiLayout) tuiLayout {
+	if m.workStatusLineVisible(m.animationNow()) {
+		layout.workStatusHeight = 1
+		layout.transcriptHeight = maxInt(0, layout.transcriptHeight-1)
+	}
+	return layout
 }
 
 func (m appModel) renderWorkspaceBody(layout tuiLayout) string {
@@ -111,6 +122,9 @@ func (m appModel) renderWorkspaceBody(layout tuiLayout) string {
 	parts := make([]string, 0, 4)
 	if workspaceLayout.transcriptHeight > 0 {
 		parts = append(parts, m.renderTranscriptRegion(workspaceLayout))
+	}
+	if workspaceLayout.workStatusHeight > 0 {
+		parts = append(parts, m.renderWorkStatusRegion(workspaceLayout.contentWidth))
 	}
 	if workspaceLayout.statusHeight > 0 {
 		parts = append(parts, m.renderDockStatusLine(workspaceLayout.contentWidth))

@@ -20,65 +20,11 @@ const statusSegmentSeparator = "  "
 // spinnerFrames 是 braille 旋转 spinner 帧序列，生成态前导。
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-// equalizerAmpDuration 是 idle↔working 振幅过渡时长。
-const equalizerAmpDuration = 400 * time.Millisecond
-
 // isAgentWorking 报告 agent 是否处于"工作中"态：流式生成 或 工具调用进行中。
 // 区别于 isGenerating（仅流式 delta 期间为 true）：toolCallMsg 会把 isGenerating
-// 置 false，但整轮未结束（queryGuard 仍 running），此时应保持 working 态——
-// 均衡器继续起伏、状态词显示 working，而非退回 idle。
+// 置 false，但整轮未结束（queryGuard 仍 running），此时应保持 working 态。
 func (m appModel) isAgentWorking() bool {
 	return m.isGenerating || m.isModelWorkRunning() || m.goalWorking || m.planWorking
-}
-
-// startTokenRippleExit 记录任务结束时刻，让波纹继续保持固定速度向右越界
-// 退出（不再循环），而不是随 working 状态切换瞬间消失。
-func (m *appModel) startTokenRippleExit(now time.Time) {
-	if m == nil || now.IsZero() {
-		return
-	}
-	m.tokenRippleExitAt = now
-}
-
-func (m appModel) tokenRippleActive(now time.Time) bool {
-	if m.isAgentWorking() {
-		return true
-	}
-	if m.tokenRippleExitAt.IsZero() {
-		return false
-	}
-	// 退场：波纹头从当前位置走到完全越过右边界（+tail）的最长耗时。
-	// 用 m.width 作保守上限（真实 bar 宽 ≤ m.width），渲染层在 head 越界后
-	// 自然渲染为空，多续几帧无害。
-	maxExit := time.Duration(maxInt(0, m.width+tokenRippleTail)) * tokenRippleSpeed
-	return now.Sub(m.tokenRippleExitAt) < maxExit
-}
-
-// updateWaveAmp 在 cursorFrameMsg 每帧推进振幅过渡（指针接收者，写持久模型）。
-// 目标态由 isAgentWorking 派生（流式 + 工具调用期间均满振幅），翻转时记录起点
-// amp 与时刻，用 easeOutCubic 在 400ms 内缓动。结果写入 waveAmpCurrent 供渲染只读。
-func (m *appModel) updateWaveAmp(now time.Time) {
-	target := m.isAgentWorking()
-	if target != m.waveAmpTarget {
-		m.waveAmpFrom = m.waveAmpCurrent
-		m.waveAmpTarget = target
-		m.waveAmpStartedAt = now
-	}
-	if m.waveAmpStartedAt.IsZero() {
-		if target {
-			m.waveAmpCurrent = 1
-		} else {
-			m.waveAmpCurrent = 0
-		}
-		return
-	}
-	p := clamp01(float64(now.Sub(m.waveAmpStartedAt)) / float64(equalizerAmpDuration))
-	eased := easeOutCubic(p)
-	if target {
-		m.waveAmpCurrent = m.waveAmpFrom + (1-m.waveAmpFrom)*eased
-	} else {
-		m.waveAmpCurrent = m.waveAmpFrom * (1 - eased)
-	}
 }
 
 // spinnerFrame 按 30fps 帧索引降速到 ~10fps 返回当前 spinner 字符。
@@ -91,17 +37,11 @@ func spinnerFrame(idx int) string {
 }
 
 const (
-	// tokenRippleSpeed 是波纹固定速度：每格耗时。循环态按此速度首尾相接
-	// 循环；退场态按此速度向右越界退出。
-	tokenRippleSpeed = 40 * time.Millisecond
-	tokenRippleTail  = 14
-
 	// token frontier 三段 glyph：free 最淡点状、cache 中等点状、used 实心，
-	// 比细线 ━/─ 更醒目。波纹块用 used 段同款实心 glyph。
-	tokenFreeGlyph   = "░"
-	tokenCacheGlyph  = "▒"
-	tokenUsedGlyph   = "█"
-	tokenRippleGlyph = "█"
+	// 比细线 ━/─ 更醒目。
+	tokenFreeGlyph  = "░"
+	tokenCacheGlyph = "▒"
+	tokenUsedGlyph  = "█"
 )
 
 func (m appModel) renderDockStatusLine(width int) string {
@@ -302,8 +242,7 @@ func (m appModel) renderTokenFrontier(width, used, cache, limit int) string {
 
 // renderTokenFrontierWith 渲染 token 进度条，三段：cache 段（最左，主题
 // cache 色加深）+ used 段 + free 段。modeHex 非空时（plan/goal agentmode）
-// 整条线使用强调色。波纹为固定速度实心块：循环态首尾相接，退场态向右越界，
-// 波纹头颜色与 used（非 cache）段一致。
+// 整条线使用强调色。活动指示由底部 ⚒ 状态行承担，进度条不再叠加波纹动画。
 func (m appModel) renderTokenFrontierWith(width, used, cache, limit int, modeHex string) string {
 	width = maxInt(1, width)
 	limit = maxInt(1, limit)
@@ -317,14 +256,12 @@ func (m appModel) renderTokenFrontierWith(width, used, cache, limit int, modeHex
 	usedStyle := contextUsedStyle
 	cacheStyle := contextCacheStyle
 	freeStyle := contextFreeStyle
-	rippleHex := colorManager.Hex(colorContextUsed)
 	if modeHex != "" {
 		usedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(modeHex)).Bold(true)
 		if colorManager.palette.TerminalBackground != "" {
 			cacheStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(interpolateHexColor(colorManager.Hex(colorTerminalBackground), modeHex, 0.9))).Bold(true)
 			freeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(interpolateHexColor(colorManager.Hex(colorTerminalBackground), modeHex, 0.45)))
 		}
-		rippleHex = modeHex
 	}
 
 	// 按段批量渲染：同一连续段只做一次 lipgloss Render，而不是逐 cell
@@ -336,112 +273,10 @@ func (m appModel) renderTokenFrontierWith(width, used, cache, limit int, modeHex
 	if usedCells > cacheCells {
 		front.WriteString(usedStyle.Render(strings.Repeat(tokenUsedGlyph, usedCells-cacheCells)))
 	}
-	freeCells := width - usedCells
-	if freeCells <= 0 {
-		return front.String()
-	}
-
-	now := m.animationNow()
-	if !m.tokenRippleActive(now) {
+	if freeCells := width - usedCells; freeCells > 0 {
 		front.WriteString(freeStyle.Render(strings.Repeat(tokenFreeGlyph, freeCells)))
-		return front.String()
 	}
-
-	background := colorManager.Hex(colorTerminalBackground)
-	looping := m.isAgentWorking()
-	head := m.tokenRippleHead(usedCells, freeCells, now)
-
-	// free 区内逐 cell 布局：空串表示普通 free glyph（最后按连续段批量
-	// 渲染），非空为已染色的波纹 cell。
-	free := make([]string, freeCells)
-	if looping && freeCells < tokenRippleTail {
-		// 窄 free 区：波纹块比 free 区长，整个 free 区都是波纹。
-		for offset := 0; offset < freeCells; offset++ {
-			distance := positiveModulo(head-usedCells-offset, tokenRippleTail)
-			free[offset] = renderTokenRippleCell(distance, background, rippleHex)
-		}
-		front.WriteString(joinStyledCellRuns(free, freeStyle))
-		return front.String()
-	}
-
-	// 宽 free 区（或退场态）：波纹块 = head 及之前 tail-1 格。
-	// 循环态跨边界时绕回 free 区首部；退场态单调越界、不绕回。
-	for i := head - tokenRippleTail + 1; i <= head; i++ {
-		cell := i
-		if looping && cell < usedCells {
-			cell += freeCells
-		}
-		if cell < usedCells || cell >= width {
-			continue
-		}
-		free[cell-usedCells] = renderTokenRippleCell(head-i, background, rippleHex)
-	}
-	front.WriteString(joinStyledCellRuns(free, freeStyle))
 	return front.String()
-}
-
-// joinStyledCellRuns 把逐 cell 布局拼成一行：空串 cell 归并为一次批量
-// Render，非空 cell（已带样式）原样输出。每个 glyph 固定 1 cell 宽。
-func joinStyledCellRuns(cells []string, plainStyle lipgloss.Style) string {
-	var b strings.Builder
-	runStart := -1
-	for i, cell := range cells {
-		if cell == "" {
-			if runStart < 0 {
-				runStart = i
-			}
-			continue
-		}
-		if runStart >= 0 {
-			b.WriteString(plainStyle.Render(strings.Repeat(tokenFreeGlyph, i-runStart)))
-			runStart = -1
-		}
-		b.WriteString(cell)
-	}
-	if runStart >= 0 {
-		b.WriteString(plainStyle.Render(strings.Repeat(tokenFreeGlyph, len(cells)-runStart)))
-	}
-	return b.String()
-}
-
-// tokenRippleHead 返回当前波纹头 cell 索引。循环态在 free 区内首尾相接；
-// 退场态从退场开始时刻的循环头位置起，按固定速度向右越界。
-func (m appModel) tokenRippleHead(usedCells, freeCells int, now time.Time) int {
-	if freeCells <= 0 {
-		return usedCells
-	}
-	loopOffset := func(at time.Time) int {
-		return int(time.Duration(at.UnixNano())/tokenRippleSpeed) % freeCells
-	}
-	if m.isAgentWorking() {
-		return usedCells + loopOffset(now)
-	}
-	if m.tokenRippleExitAt.IsZero() {
-		return usedCells
-	}
-	exitHead := usedCells + loopOffset(m.tokenRippleExitAt)
-	return exitHead + int(now.Sub(m.tokenRippleExitAt)/tokenRippleSpeed)
-}
-
-func renderTokenRippleCell(distance int, background, rippleHex string) string {
-	alpha := float64(tokenRippleTail-distance) / float64(tokenRippleTail)
-	alpha = clamp01(alpha)
-	if background == "" {
-		return lipgloss.NewStyle().Foreground(lipgloss.Color(rippleHex)).Faint(alpha < 0.5).Render(tokenRippleGlyph)
-	}
-	color := interpolateHexColor(background, rippleHex, alpha)
-	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(tokenRippleGlyph)
-}
-
-func positiveModulo(value, modulus int) int {
-	if modulus <= 0 {
-		return 0
-	}
-	result := value % modulus
-	if result < 0 {
-		result += modulus
-	}
-	return result
 }
 
 // renderModeIndicator 返回当前输入模式标记；chat/多行输入共用 chat 模式。
@@ -459,9 +294,3 @@ func (m appModel) renderModeIndicator() string {
 		return modeChatStyle.Render("chat")
 	}
 }
-
-// equalizerActiveStyle 是均衡器+百分比样式（cyan，不加粗避免块字符过重）。
-var equalizerActiveStyle = contextUsedStyle.Copy().UnsetBold()
-
-// equalizerDimStyle 是辅助信息（cache%/free%）样式，低饱和。
-var equalizerDimStyle = contextFreeStyle.Copy()

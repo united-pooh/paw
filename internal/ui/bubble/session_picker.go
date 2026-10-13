@@ -156,11 +156,10 @@ func buildSessionRestoredMsg(ctx context.Context, runner Runner, store SessionSt
 		}
 		todoWasCleared = hasCurrentTodo && currentTodo.Cleared()
 	}
-	metadata := loadRestoreTurnMetadata(ctx, store, sessionID)
 	entries := make([]transcriptEntry, 0, len(messages))
 	if recordLoader, ok := store.(ResolvedRecordLoader); ok {
 		if records, recordsErr := recordLoader.LoadResolvedRecords(ctx, sessionID); recordsErr == nil {
-			entries = transcriptEntriesFromRecords(records, metadata, workspaceRootOf(runner))
+			entries = transcriptEntriesFromRecords(records, workspaceRootOf(runner))
 		}
 	}
 	if len(entries) == 0 && len(messages) > 0 {
@@ -168,7 +167,6 @@ func buildSessionRestoredMsg(ctx context.Context, runner Runner, store SessionSt
 		for _, msg := range messages {
 			entries = append(entries, transcriptEntriesFromMessage(msg, createdAt, workspaceRootOf(runner))...)
 		}
-		attachRestoreMetadataByAssistantOrder(entries, metadata)
 	}
 	if recovery != nil {
 		entries = append(entries, transcriptEntry{
@@ -233,71 +231,16 @@ func (m appModel) handleSessionPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func loadRestoreTurnMetadata(ctx context.Context, store SessionStore, sessionID string) []session.TurnMetadata {
-	metadataStore, ok := store.(session.TurnMetadataStore)
-	if !ok {
-		return nil
-	}
-	metadata, err := metadataStore.LoadTurnMetadata(ctx, sessionID)
-	if err != nil {
-		return nil
-	}
-	return metadata
-}
-
-func transcriptEntriesFromRecords(records []session.Record, metadata []session.TurnMetadata, workspaceRoot string) []transcriptEntry {
-	metadataByRecordIndex := make(map[int]session.TurnMetadata, len(metadata))
-	for _, item := range metadata {
-		if item.Status != session.TurnStatusCompleted || item.AssistantSeq == nil || item.ResponseAt == nil {
-			continue
-		}
-		// Forks resolve parent records and current-session records together;
-		// both ranges can start at sequence zero. The last matching record is
-		// the current session's own record and avoids decorating a parent entry.
-		for index := len(records) - 1; index >= 0; index-- {
-			if records[index].Seq == *item.AssistantSeq {
-				metadataByRecordIndex[index] = item
-				break
-			}
-		}
-	}
+func transcriptEntriesFromRecords(records []session.Record, workspaceRoot string) []transcriptEntry {
 	entries := make([]transcriptEntry, 0, len(records))
-	for recordIndex, record := range records {
+	for _, record := range records {
 		createdAt := record.CreatedAt
 		if createdAt.IsZero() {
 			createdAt = time.Now()
 		}
-		recordEntries := transcriptEntriesFromMessage(record.Message, createdAt, workspaceRoot)
-		if item, ok := metadataByRecordIndex[recordIndex]; ok {
-			for index := len(recordEntries) - 1; index >= 0; index-- {
-				if recordEntries[index].kind == entryAssistant {
-					copyMetadata := item
-					recordEntries[index].turnMetadata = &copyMetadata
-					break
-				}
-			}
-		}
-		entries = append(entries, recordEntries...)
+		entries = append(entries, transcriptEntriesFromMessage(record.Message, createdAt, workspaceRoot)...)
 	}
 	return entries
-}
-
-func attachRestoreMetadataByAssistantOrder(entries []transcriptEntry, metadata []session.TurnMetadata) {
-	metadataIndex := 0
-	for index := range entries {
-		if entries[index].kind != entryAssistant {
-			continue
-		}
-		for metadataIndex < len(metadata) && metadata[metadataIndex].Status != session.TurnStatusCompleted {
-			metadataIndex++
-		}
-		if metadataIndex >= len(metadata) {
-			return
-		}
-		copyMetadata := metadata[metadataIndex]
-		entries[index].turnMetadata = &copyMetadata
-		metadataIndex++
-	}
 }
 
 // renderSessionPickerBox 渲染会话选择器面板。
