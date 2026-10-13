@@ -69,6 +69,14 @@ type Palette struct {
 	WorktreeBackground, WorktreeBorder, WorktreeClean, WorktreeDirty, WorktreeConflict     string
 	CursorNormalBright, CursorTerminalBright                                               string
 	DiffAddedForeground, DiffAddedBackground, DiffDeletedForeground, DiffDeletedBackground string
+	// Status* 是工具/任务运行状态的专用语义色：此前状态 chip 借用 worktree 三色，
+	// 与 git 状态撞色；独立角色后两处可各自策展。
+	StatusSuccess, StatusRunning, StatusWarning, StatusError string
+	// Accent 是状态行 ⚒/思考折叠行的主色；Narration 是助手 :: 叙述行的颜色。
+	Accent, Narration string
+	// Chip* 是工具类别 chip 的背景色（读取/编辑/Shell/搜索/任务/插件），
+	// 写入与编辑同色、网页与搜索同色——同类同色，压到 5 个色相。
+	ChipRead, ChipEdit, ChipShell, ChipSearch, ChipTask, ChipPlugin string
 }
 
 type Theme struct {
@@ -95,6 +103,9 @@ func (p Palette) Values() map[string]string {
 		"worktree.background": p.WorktreeBackground, "worktree.border": p.WorktreeBorder, "worktree.clean": p.WorktreeClean, "worktree.dirty": p.WorktreeDirty, "worktree.conflict": p.WorktreeConflict,
 		"cursor.normal.bright": p.CursorNormalBright, "cursor.terminal.bright": p.CursorTerminalBright,
 		"diff.added.foreground": p.DiffAddedForeground, "diff.added.background": p.DiffAddedBackground, "diff.deleted.foreground": p.DiffDeletedForeground, "diff.deleted.background": p.DiffDeletedBackground,
+		"status.success": p.StatusSuccess, "status.running": p.StatusRunning, "status.warning": p.StatusWarning, "status.error": p.StatusError,
+		"accent": p.Accent, "narration": p.Narration,
+		"chip.read": p.ChipRead, "chip.edit": p.ChipEdit, "chip.shell": p.ChipShell, "chip.search": p.ChipSearch, "chip.task": p.ChipTask, "chip.plugin": p.ChipPlugin,
 	}
 }
 

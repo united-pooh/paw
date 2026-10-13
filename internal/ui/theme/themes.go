@@ -28,6 +28,10 @@ func palette(bg, surface, fg, muted, primary, secondary, cyan, green, yellow, re
 		WorktreeBackground: blendHex(bg, fg, 0.055), WorktreeBorder: muted, WorktreeClean: green, WorktreeDirty: yellow, WorktreeConflict: red,
 		CursorNormalBright: green, CursorTerminalBright: secondary,
 		DiffAddedForeground: green, DiffAddedBackground: diffAddedBackground, DiffDeletedForeground: red, DiffDeletedBackground: diffDeletedBackground,
+		// hex 主题的新角色全部从既有色相派生，不为每套主题单独策展。
+		StatusSuccess: green, StatusRunning: cyan, StatusWarning: yellow, StatusError: red,
+		Accent: secondary, Narration: primary,
+		ChipRead: primary, ChipEdit: green, ChipShell: secondary, ChipSearch: cyan, ChipTask: yellow, ChipPlugin: muted,
 	}
 }
 
@@ -80,7 +84,9 @@ func terminalPalette() Palette {
 		LabelTool: "2", LabelResult: "2", LabelSystem: "", LabelError: "1",
 		MarkdownRule: "", MarkdownBullet: "6", MarkdownBold: "3", MarkdownHighlight: "3",
 		MarkdownCodeBorder: "6", MarkdownLink: "6", MarkdownQuote: "", MarkdownQuoteBorder: "7", MarkdownQuoteText: "",
-		SyntaxKeyword: "5", SyntaxString: "2", SyntaxNumber: "3", SyntaxComment: "15",
+		// SyntaxComment 用 ANSI 8（亮黑/灰）而非 15（亮白）：亮色终端上 15 几乎
+		// 不可见，8 在亮/暗终端上都是安全的灰。
+		SyntaxKeyword: "5", SyntaxString: "2", SyntaxNumber: "3", SyntaxComment: "8",
 		SyntaxBrackets: [4]string{"6", "5", "3", "2"},
 		PanelBorder:    "7", InputFocusedBorder: "6", InputWaitingBorder: "7", InputMultilineBorder: "3",
 		InputTerminal: "5", InputTokenCommand: "5", InputTokenFile: "2", UnselectedProvider: "",
@@ -88,5 +94,8 @@ func terminalPalette() Palette {
 		ContextCache: "4", ContextUsed: "6", ContextFree: "", Signal: "6",
 		WorktreeBorder: "7", WorktreeClean: "2", WorktreeDirty: "3", WorktreeConflict: "1",
 		DiffAddedForeground: "2", DiffDeletedForeground: "1",
+		StatusSuccess: "2", StatusRunning: "6", StatusWarning: "3", StatusError: "1",
+		Accent: "5", Narration: "4",
+		ChipRead: "4", ChipEdit: "2", ChipShell: "5", ChipSearch: "6", ChipTask: "3", ChipPlugin: "8",
 	}
 }

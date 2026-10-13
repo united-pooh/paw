@@ -75,6 +75,18 @@ const (
 	colorDiffAddedBackground         colorRole = "diff.added.background"
 	colorDiffDeletedForeground       colorRole = "diff.deleted.foreground"
 	colorDiffDeletedBackground       colorRole = "diff.deleted.background"
+	colorStatusSuccess               colorRole = "status.success"
+	colorStatusRunning               colorRole = "status.running"
+	colorStatusWarning               colorRole = "status.warning"
+	colorStatusError                 colorRole = "status.error"
+	colorAccent                      colorRole = "accent"
+	colorNarration                   colorRole = "narration"
+	colorChipRead                    colorRole = "chip.read"
+	colorChipEdit                    colorRole = "chip.edit"
+	colorChipShell                   colorRole = "chip.shell"
+	colorChipSearch                  colorRole = "chip.search"
+	colorChipTask                    colorRole = "chip.task"
+	colorChipPlugin                  colorRole = "chip.plugin"
 )
 
 type ColorManager struct{ palette theme.Palette }
@@ -214,6 +226,30 @@ func (c ColorManager) Hex(role colorRole) string {
 		value = p.DiffDeletedForeground
 	case colorDiffDeletedBackground:
 		value = p.DiffDeletedBackground
+	case colorStatusSuccess:
+		value = p.StatusSuccess
+	case colorStatusRunning:
+		value = p.StatusRunning
+	case colorStatusWarning:
+		value = p.StatusWarning
+	case colorStatusError:
+		value = p.StatusError
+	case colorAccent:
+		value = p.Accent
+	case colorNarration:
+		value = p.Narration
+	case colorChipRead:
+		value = p.ChipRead
+	case colorChipEdit:
+		value = p.ChipEdit
+	case colorChipShell:
+		value = p.ChipShell
+	case colorChipSearch:
+		value = p.ChipSearch
+	case colorChipTask:
+		value = p.ChipTask
+	case colorChipPlugin:
+		value = p.ChipPlugin
 	default:
 		value = p.Body
 	}
