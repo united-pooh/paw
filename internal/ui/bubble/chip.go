@@ -105,6 +105,18 @@ func chipLabel(toolName string) string {
 	return chipKindForTool(toolName).label()
 }
 
+// chipPlainLabel 与 renderToolChip 取词一致（MCP 显示 server 名），
+// 供窄宽度下 chip 退化为纯文本时使用。
+func chipPlainLabel(toolName string) string {
+	kind := chipKindForTool(toolName)
+	if kind == chipKindPlugin {
+		if server, _, namespaced := splitToolName(toolName); namespaced {
+			return displayServerName(server)
+		}
+	}
+	return kind.label()
+}
+
 // chipStyle 构造白字彩底小标签。终端 ANSI 模式下前景固定亮白
 // （浅底色 chip——黄/浅灰——用纯黑前景保证可读）；hex 主题沿用
 // "药丸=角色底+主题底色字"。
@@ -129,7 +141,13 @@ func chipStyle(kind chipKind) lipgloss.Style {
 // MCP 工具显示 server 名，无类别 chip 时退化为灰色工具 chip。
 func renderToolChip(toolName string) string {
 	kind := chipKindForTool(toolName)
-	return chipStyle(kind).Render(kind.label())
+	label := kind.label()
+	if kind == chipKindPlugin {
+		if server, _, namespaced := splitToolName(toolName); namespaced {
+			label = displayServerName(server)
+		}
+	}
+	return chipStyle(kind).Render(label)
 }
 
 // statusTextStyle 返回状态词对应的彩色文字样式（不再是实底药丸）。

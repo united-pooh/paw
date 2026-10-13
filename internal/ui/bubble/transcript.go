@@ -2880,32 +2880,32 @@ func renderCompactToolSummary(entry transcriptEntry, width int, at time.Time) st
 	return renderCompactToolSummaryWithHover(entry, width, at, false)
 }
 
+// renderCompactToolSummaryWithHover 渲染紧凑工具行：
+// `{icon} {chip} {target}  {状态文字}`。
+// chip 是工具类别彩底小标签（读取/编辑/Shell/…，MCP 显示 server 名）；
+// 状态词是彩色文字（完成/运行中/失败 + 时长），不再使用实底药丸；
+// 运行中图标为 ●，◌ 已退役。
 func renderCompactToolSummaryWithHover(entry transcriptEntry, width int, at time.Time, hovered bool) string {
 	width = maxInt(1, width)
 	status := toolEntryStatus(entry)
-	icon := "✓"
+	icon := glyphSuccess
 	iconStyle := toolCitationOKStyle
-	nameStyle := toolHeaderStyle
 	targetStyle := toolCitationStyle
 	switch status {
 	case "running":
-		icon = "◌"
-		iconStyle = toolHeaderStyle
+		icon = glyphActive
+		iconStyle = statusTextStyle(status)
 	case "error":
-		icon = "×"
+		icon = glyphFailure
 		iconStyle = toolCitationErrorStyle
 	}
 	if hovered && !entry.toolFocused {
 		iconStyle = iconStyle.Underline(true)
-		nameStyle = nameStyle.Underline(true)
 		targetStyle = targetStyle.Underline(true)
 	}
 
-	name := strings.Join(strings.Fields(sanitizeTerminalText(displayToolName(toolEntryDisplayName(entry)))), " ")
+	rawName := toolEntryDisplayName(entry)
 	target := strings.Join(strings.Fields(sanitizeTerminalText(entry.toolTarget)), " ")
-	if name == "" {
-		name = "tool"
-	}
 
 	focusPrefix := ""
 	if entry.toolFocused {
@@ -2918,52 +2918,56 @@ func renderCompactToolSummaryWithHover(entry transcriptEntry, width int, at time
 	} else if !entry.toolFinishedAt.IsZero() {
 		duration = formatToolDuration(entry.toolStartedAt, entry.toolFinishedAt)
 	}
-	statusStyle := toolStatusStyle(status)
+	statusStyle := statusTextStyle(status)
 	if hovered && !entry.toolFocused {
 		statusStyle = statusStyle.Underline(true)
 	}
-	statusSeparator := "  "
-	statusAvailable := width - terminalCellWidth(focusPrefix) - terminalCellWidth(iconText) - terminalCellWidth(statusSeparator)
-	if statusAvailable < terminalCellWidth(toolStatusLabel(status)) {
-		iconText = icon
-		statusSeparator = "  "
-		statusAvailable = width - terminalCellWidth(focusPrefix) - terminalCellWidth(iconText) - terminalCellWidth(statusSeparator)
+	statusLabel := statusTextLabel(status)
+	statusText := statusLabel
+	if duration != "" {
+		statusText += " " + duration
 	}
-	statusChip := toolStatusChipWithinWidth(status, duration, maxInt(1, statusAvailable), statusStyle)
+	statusRendered := statusStyle.Render(statusText)
 
-	nameWidth := terminalCellWidth(name)
-	fixedWithoutTarget := terminalCellWidth(focusPrefix) + terminalCellWidth(iconText) + terminalCellWidth(statusSeparator) + terminalCellWidth(statusChip)
-	if fixedWithoutTarget+nameWidth > width {
-		nameBudget := width - fixedWithoutTarget
-		if nameBudget >= 1 {
-			name = truncateStyledCellLine(name, nameBudget)
+	statusSeparator := "  "
+	fixedWithoutName := func() int {
+		return terminalCellWidth(focusPrefix) + terminalCellWidth(iconText) + terminalCellWidth(statusSeparator) + terminalCellWidth(statusRendered)
+	}
+	// 宽度预算收紧顺序：时长 → 分隔符/图标 → chip 退化为纯文本标签 → 截断标签 → 截断目标。
+	// 状态词是最后才牺牲的要素：窄行宁可没有图标也不能把「运行中」截断。
+	if fixedWithoutName()+1+terminalCellWidth(renderToolChip(rawName)) > width && duration != "" {
+		duration = ""
+		statusRendered = statusStyle.Render(statusLabel)
+	}
+	if fixedWithoutName() > width {
+		statusSeparator = " "
+	}
+	if fixedWithoutName() > width {
+		iconText = icon
+	}
+	if fixedWithoutName() > width {
+		statusSeparator = ""
+	}
+	if fixedWithoutName() > width {
+		iconText = ""
+	}
+	nameText := " " + renderToolChip(rawName)
+	if fixedWithoutName()+terminalCellWidth(nameText) > width {
+		budget := width - fixedWithoutName() - 1
+		if budget >= 1 {
+			nameText = " " + toolHeaderStyle.Render(truncateStyledCellLine(chipPlainLabel(rawName), budget))
 		} else {
-			name = ""
+			nameText = ""
 		}
-		nameWidth = terminalCellWidth(name)
 	}
 	targetText := ""
 	if target != "" {
-		targetBudget := width - fixedWithoutTarget - nameWidth - 1
-		if targetBudget >= 1 {
-			targetText = truncateStyledCellLine(target, targetBudget)
+		if targetBudget := width - fixedWithoutName() - terminalCellWidth(nameText) - 1; targetBudget >= 1 {
+			targetText = " " + targetStyle.Render(truncateStyledCellLine(target, targetBudget))
 		}
 	}
 
-	var line strings.Builder
-	line.WriteString(focusPrefix)
-	line.WriteString(iconStyle.Render(iconText))
-	line.WriteString(nameStyle.Render(name))
-	if targetText != "" {
-		separator := "  "
-		if strings.HasSuffix(name, ":") {
-			separator = " "
-		}
-		line.WriteString(targetStyle.Render(separator + targetText))
-	}
-	line.WriteString(statusSeparator)
-	line.WriteString(statusChip)
-	return truncateStyledCells(line.String(), width, "")
+	return truncateStyledCells(focusPrefix+iconStyle.Render(iconText)+nameText+targetText+statusSeparator+statusRendered, width, "")
 }
 
 func formatRunningToolElapsed(startedAt, at time.Time) string {

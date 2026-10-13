@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
 	filetool "paw/internal/capability/tool/file"
 	"paw/internal/todo"
 )
@@ -202,64 +201,4 @@ func isNativePathTool(name string) bool {
 		}
 	}
 	return false
-}
-
-func toolStatusLabel(status string) string {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "ok", "success", "completed", "complete":
-		return "完成"
-	case "running", "pending", "in_progress":
-		return "运行中"
-	case "error", "failed", "failure":
-		return "出错"
-	default:
-		status = strings.TrimSpace(status)
-		if status == "" {
-			return "未知"
-		}
-		return status
-	}
-}
-
-func toolStatusStyle(status string) lipgloss.Style {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "ok", "success", "completed", "complete":
-		return toolStatusOKStyle
-	case "running", "pending", "in_progress":
-		return toolStatusRunningStyle
-	case "error", "failed", "failure":
-		return toolStatusErrorStyle
-	default:
-		return toolCitationStyle
-	}
-}
-
-func renderToolStatusChip(status, duration string) string {
-	return renderToolStatusChipWithStyle(status, duration, toolStatusStyle(status))
-}
-
-func renderToolStatusChipWithStyle(status, duration string, style lipgloss.Style) string {
-	label := toolStatusLabel(status)
-	if duration = strings.TrimSpace(duration); duration != "" {
-		label += "  " + duration
-	}
-	return style.Render(label)
-}
-
-func toolStatusChipWithinWidth(status, duration string, width int, style lipgloss.Style) string {
-	width = maxInt(1, width)
-	full := renderToolStatusChipWithStyle(status, duration, style)
-	if duration != "" && terminalCellWidth(full) <= width {
-		return full
-	}
-	compact := renderToolStatusChipWithStyle(status, "", style)
-	if terminalCellWidth(compact) <= width {
-		return compact
-	}
-	withoutPadding := style.Padding(0, 0)
-	compact = renderToolStatusChipWithStyle(status, "", withoutPadding)
-	if terminalCellWidth(compact) <= width {
-		return compact
-	}
-	return truncateStyledCells(compact, width, "")
 }

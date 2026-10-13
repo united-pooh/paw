@@ -20,9 +20,6 @@ var (
 	toolCitationKeyStyle         lipgloss.Style
 	toolCitationOKStyle          lipgloss.Style
 	toolCitationErrorStyle       lipgloss.Style
-	toolStatusOKStyle            lipgloss.Style
-	toolStatusRunningStyle       lipgloss.Style
-	toolStatusErrorStyle         lipgloss.Style
 	toolCitationQuoteBorderStyle lipgloss.Style
 	toolCitationRailStyle        lipgloss.Style
 	labelSystemStyle             lipgloss.Style
@@ -141,18 +138,6 @@ func rebuildLegacyStyles() {
 	toolCitationErrorStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorLabelError)).
 		Bold(true)
-	toolStatusOKStyle = lipgloss.NewStyle().
-		Foreground(colorManager.LipglossColor(colorTerminalBackground)).
-		Background(colorManager.LipglossColor(colorWorktreeClean)).
-		Bold(true)
-	toolStatusRunningStyle = lipgloss.NewStyle().
-		Foreground(colorManager.LipglossColor(colorTerminalBackground)).
-		Background(colorManager.LipglossColor(colorWorktreeDirty)).
-		Bold(true)
-	toolStatusErrorStyle = lipgloss.NewStyle().
-		Foreground(colorManager.LipglossColor(colorTerminalBackground)).
-		Background(colorManager.LipglossColor(colorWorktreeConflict)).
-		Bold(true)
 	toolCitationQuoteBorderStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorMarkdownQuoteBorder))
 	toolCitationRailStyle = lipgloss.NewStyle().
@@ -226,9 +211,6 @@ func rebuildLegacyStyles() {
 		Background(colorManager.LipglossColor(colorSignal)).
 		Bold(true)
 	if colorManager.palette.TerminalBackground == "" {
-		toolStatusOKStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorWorktreeClean)).Bold(true)
-		toolStatusRunningStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorWorktreeDirty)).Bold(true)
-		toolStatusErrorStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorWorktreeConflict)).Bold(true)
 		markdownCodeBlockLabelStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorSignal)).Bold(true)
 		markdownHighlightStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorMarkdownHighlight)).Bold(true).Underline(true)
 		markdownCodeStyle = markdownCodeStyle.Bold(true)

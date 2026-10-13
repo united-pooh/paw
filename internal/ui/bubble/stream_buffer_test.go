@@ -478,7 +478,7 @@ func TestDynamicTranscriptRenderingSanitizesTerminalControls(t *testing.T) {
 	entries := []transcriptEntry{
 		{kind: entryAssistant, title: "assistant\x1b]0;title\x07", body: "safe\x1b[31m red\x1b[0m"},
 		{kind: entryThinking, title: "thinking", body: "thought\x00\x07"},
-		{kind: entryTool, title: "tool", body: "tool\x1bPpayload\x1b\\ result"},
+		{kind: entryTool, title: "tool", body: "tool\x1bPpayload\x1b\\ result", toolTarget: "tool\x1bPpayload\x1b\\ result"},
 		{kind: entrySystem, title: "system\x1b[2J", body: "system\x08 message"},
 		{kind: entryError, title: "error", body: "error\x1b]52;c;owned\x07 text"},
 		{

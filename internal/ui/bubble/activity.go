@@ -114,9 +114,9 @@ func renderTodoItemLine(snapshot todo.Snapshot, item todo.Item, width int) []str
 func todoStatusDisplay(status todo.Status) (string, lipgloss.Style) {
 	switch status {
 	case todo.StatusCompleted:
-		return "✓", todoCompletedStyle
+		return glyphSuccess, todoCompletedStyle
 	case todo.StatusInProgress:
-		return "◌", todoInProgressStyle
+		return glyphActive, todoInProgressStyle
 	default:
 		return "○", todoPendingStyle
 	}

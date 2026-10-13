@@ -54,51 +54,52 @@ func TestToolStatusLabelsAreChinese(t *testing.T) {
 	tests := map[string]string{
 		"ok":      "完成",
 		"running": "运行中",
-		"error":   "出错",
+		"error":   "失败",
 	}
 	for status, want := range tests {
-		if got := toolStatusLabel(status); got != want {
-			t.Fatalf("toolStatusLabel(%q) = %q, want %q", status, got, want)
+		if got := statusTextLabel(status); got != want {
+			t.Fatalf("statusTextLabel(%q) = %q, want %q", status, got, want)
 		}
 	}
 }
 
-func TestToolStatusChipUsesSemanticBackgrounds(t *testing.T) {
+// 状态词是彩色文字（不再是实底药丸）：前景色来自 status 语义角色。
+func TestToolStatusTextUsesSemanticForegrounds(t *testing.T) {
 	newRGBTestModel(t)
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
 
 	tests := map[string]string{
-		"ok":      colorManager.Hex(colorWorktreeClean),
-		"running": colorManager.Hex(colorWorktreeDirty),
-		"error":   colorManager.Hex(colorWorktreeConflict),
+		"ok":      colorManager.Hex(colorStatusSuccess),
+		"running": colorManager.Hex(colorStatusRunning),
+		"error":   colorManager.Hex(colorStatusError),
 	}
-	for status, wantBackground := range tests {
-		style := toolStatusStyle(status)
-		if got := style.GetBackground(); got != lipgloss.Color(wantBackground) {
-			t.Fatalf("%s background = %q, want %q", status, got, wantBackground)
+	for status, wantForeground := range tests {
+		style := statusTextStyle(status)
+		if got := style.GetForeground(); got != lipgloss.Color(wantForeground) {
+			t.Fatalf("%s foreground = %q, want %q", status, got, wantForeground)
 		}
-		rendered := renderToolStatusChip(status, "1.2s")
-		if !strings.Contains(rendered, toolStatusLabel(status)) || !strings.Contains(rendered, "1.2s") {
-			t.Fatalf("status chip = %q, want label and duration", rendered)
+		rendered := renderStatusText(status, "1.2s")
+		if !strings.Contains(rendered, statusTextLabel(status)) || !strings.Contains(rendered, "1.2s") {
+			t.Fatalf("status text = %q, want label and duration", rendered)
 		}
 		if !strings.Contains(rendered, "\x1b[") {
-			t.Fatalf("status chip = %q, want color escape under TrueColor", rendered)
+			t.Fatalf("status text = %q, want color escape under TrueColor", rendered)
 		}
 	}
 }
 
-func TestToolStatusChipKeepsTextWithoutColorProfile(t *testing.T) {
+func TestToolStatusTextKeepsTextWithoutColorProfile(t *testing.T) {
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.Ascii)
 	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
 
-	rendered := renderToolStatusChip("error", "")
+	rendered := renderStatusText("error", "")
 	if strings.Contains(rendered, "\x1b[") {
-		t.Fatalf("status chip = %q, want no ANSI under ASCII profile", rendered)
+		t.Fatalf("status text = %q, want no ANSI under ASCII profile", rendered)
 	}
-	if !strings.Contains(rendered, "出错") {
-		t.Fatalf("status chip = %q, want status text", rendered)
+	if !strings.Contains(rendered, "失败") {
+		t.Fatalf("status text = %q, want status text", rendered)
 	}
 }

@@ -87,7 +87,7 @@ func TestDefaultTerminalStylesAndANSIColors(t *testing.T) {
 	if got := m.styles.LabelError.Render("error"); !strings.Contains(got, "31") {
 		t.Fatalf("error does not use ANSI red: %q", got)
 	}
-	for _, s := range []lipgloss.Style{m.styles.MarkdownCode, m.styles.MarkdownCodeBlockLabel, userTranscriptRowStyle, modePlanStyle, toolStatusOKStyle, markdownHighlightStyle} {
+	for _, s := range []lipgloss.Style{m.styles.MarkdownCode, m.styles.MarkdownCodeBlockLabel, userTranscriptRowStyle, modePlanStyle, statusTextStyle("ok"), markdownHighlightStyle} {
 		assertTerminalPaletteOnly(t, s.Render("sample"))
 	}
 	if !selectedTranscriptLineStyle.GetReverse() {

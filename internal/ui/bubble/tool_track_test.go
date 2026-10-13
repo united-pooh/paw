@@ -38,7 +38,7 @@ func TestUpdateTodoToolCallUsesCompactDisplay(t *testing.T) {
 		toolTarget: displayToolTarget("update_todo", json.RawMessage(`{"items":[]}`), ""),
 	}
 	rendered := ansi.Strip(renderEntry(entry, 100))
-	if !strings.Contains(rendered, "Todo") || !strings.Contains(rendered, "update") {
+	if !strings.Contains(rendered, "待办") || !strings.Contains(rendered, "update") {
 		t.Fatalf("render = %q", rendered)
 	}
 	for _, forbidden := range []string{"secret-internal-id", "Build page", "pending", `"items"`} {
@@ -96,8 +96,8 @@ func TestToolTrackUsesSemanticEntrySpacing(t *testing.T) {
 	}
 	lines := strings.Split(ansi.Strip(renderTranscript(entries, 72, true)), "\n")
 	before := lineContaining(t, lines, "before")
-	firstTool := lineContaining(t, lines, "✓ Read: one.go  完成")
-	secondTool := lineContaining(t, lines, "◌ Read: two.go  运行中")
+	firstTool := lineContaining(t, lines, "✓   读取  one.go  完成")
+	secondTool := lineContaining(t, lines, "●   读取  two.go  运行中")
 	afterLabel := lineContainingAfter(t, lines, "✦ after", secondTool+1)
 
 	if firstTool != before+1 {
@@ -130,7 +130,7 @@ func TestToolTrackLifecycleAndResultVisibility(t *testing.T) {
 	}
 	runningAt := model.transcript[entryIndex].toolStartedAt.Add(12 * time.Second)
 	runningRendered := ansi.Strip(renderTranscriptAt(model.transcript, 80, true, runningAt))
-	if !strings.Contains(runningRendered, "运行中  12s") {
+	if !strings.Contains(runningRendered, "运行中 12s") {
 		t.Fatalf("running transcript = %q, want elapsed status", runningRendered)
 	}
 	if model.toggleToolExpansion(entryIndex, false) {
@@ -154,7 +154,7 @@ func TestToolTrackLifecycleAndResultVisibility(t *testing.T) {
 	if !entry.toolFinishedAt.Equal(startedAt.Add(13*time.Second + 100*time.Millisecond)) {
 		t.Fatalf("finished at = %v, want %v", entry.toolFinishedAt, startedAt.Add(13*time.Second+100*time.Millisecond))
 	}
-	if rendered := ansi.Strip(renderTranscript(model.transcript, 80, true)); !strings.Contains(rendered, "✓ Read: README.md  完成  13.1s") {
+	if rendered := ansi.Strip(renderTranscript(model.transcript, 80, true)); !strings.Contains(rendered, "✓   读取  README.md  完成 13.1s") {
 		t.Fatalf("completed duration = %q, want formatted actual duration", rendered)
 	}
 	if rendered := ansi.Strip(renderTranscript(model.transcript, 80, true)); strings.Contains(rendered, "full README result") {
@@ -185,7 +185,7 @@ func TestToolTrackLifecycleAndResultVisibility(t *testing.T) {
 		t.Fatalf("error entry = %#v, want collapsed pending error", errorEntry)
 	}
 	rendered := ansi.Strip(renderTranscript(model.transcript, 80, true))
-	if !strings.Contains(rendered, "× Bash: go test ./...  出错") || strings.Contains(rendered, "exit status 1") {
+	if !strings.Contains(rendered, "✗   Shell  go test ./...  失败") || strings.Contains(rendered, "exit status 1") {
 		t.Fatalf("rendered error transaction:\n%s", rendered)
 	}
 	if !model.toggleToolExpansion(len(model.transcript)-1, false) {
@@ -462,7 +462,7 @@ func TestToolResultWithoutIDUpdatesRunningEntryByName(t *testing.T) {
 		t.Fatalf("updated entry = %#v, want completed running entry", entry)
 	}
 	rendered := ansi.Strip(renderTranscript(model.transcript, 80, true))
-	if strings.Contains(rendered, "运行中") || !strings.Contains(rendered, "✓ Read: README.md  完成") {
+	if strings.Contains(rendered, "运行中") || !strings.Contains(rendered, "✓   读取  README.md  完成") {
 		t.Fatalf("rendered transcript = %q, want only completed row", rendered)
 	}
 }
@@ -545,7 +545,7 @@ func TestToolInspectModePreservesInputAndNavigatesTransactions(t *testing.T) {
 	if !model.toolInspectActive || model.toolInspectIndex != 2 || model.input.Focused() || model.shouldAnchorTextInputCursor() {
 		t.Fatalf("inspect state = active:%v index:%d focused:%v anchor:%v", model.toolInspectActive, model.toolInspectIndex, model.input.Focused(), model.shouldAnchorTextInputCursor())
 	}
-	if rendered := ansi.Strip(renderTranscript(model.transcript, 80, true)); !strings.Contains(rendered, "› × Bash: go test  出错") {
+	if rendered := ansi.Strip(renderTranscript(model.transcript, 80, true)); !strings.Contains(rendered, "› ✗   Shell  go test  失败") {
 		t.Fatalf("inspect focus lacks non-color marker:\n%s", rendered)
 	}
 	if got := model.input.Value(); got != "draft stays" {
@@ -607,7 +607,7 @@ func TestToolTrackMouseClickTogglesButDragSelects(t *testing.T) {
 	if !model.transcript[0].toolExpanded {
 		t.Fatalf("summary click did not expand tool")
 	}
-	if got := ansi.Strip(model.renderTranscriptContent()); !strings.Contains(got, "✓ Read: README.md  完成") {
+	if got := ansi.Strip(model.renderTranscriptContent()); !strings.Contains(got, "✓   读取  README.md  完成") {
 		t.Fatalf("expanded group hid tool summary:\n%s", got)
 	}
 	if got := ansi.Strip(model.renderTranscriptContent()); strings.Contains(got, "result") {
@@ -742,7 +742,7 @@ func TestReadyStateCollapsedGroupClickExpands(t *testing.T) {
 		t.Fatalf("click on collapsed header in ready state did not expand: %#v", model.transcript[2])
 	}
 	expanded := ansi.Strip(model.renderTranscriptContent())
-	if !strings.Contains(expanded, "✓ Read: a.go") || !strings.Contains(expanded, "✓ Bash: go test") {
+	if !strings.Contains(expanded, "✓   读取  a.go") || !strings.Contains(expanded, "✓   Shell  go test") {
 		t.Fatalf("expanded group missing tool summaries:\n%s", expanded)
 	}
 }
@@ -791,7 +791,7 @@ func TestReadyStateSecondGroupClickExpands(t *testing.T) {
 		t.Fatalf("first group unexpectedly expanded: %#v", model.transcript[1])
 	}
 	expanded := ansi.Strip(model.renderTranscriptContent())
-	if !strings.Contains(expanded, "✓ Read: b.go") {
+	if !strings.Contains(expanded, "✓   读取  b.go") {
 		t.Fatalf("second expanded group missing summary:\n%s", expanded)
 	}
 }
@@ -849,7 +849,7 @@ func TestPendingToolsDoNotGroupBeforeAssistantOrThinking(t *testing.T) {
 	if strings.Contains(rendered, "Tools  2 calls") {
 		t.Fatalf("pending tools grouped before assistant:\n%s", rendered)
 	}
-	for _, want := range []string{"✓ Read: a.go  完成", "✓ Bash: go test ./...  完成"} {
+	for _, want := range []string{"✓   读取  a.go  完成", "✓   Shell  go test ./...  完成"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("pending transcript missing %q:\n%s", want, rendered)
 		}
@@ -1032,7 +1032,7 @@ func TestReadyGroupMixedStatusKeepsHeaderBorderlessAndErrorInnerRow(t *testing.T
 			if strings.Contains(line, "│") || strings.Contains(line, errorPrefix) {
 				t.Fatalf("ready group header should be borderless, got %q", line)
 			}
-		case strings.Contains(plainLine, "× Bash: go test ./...  出错"):
+		case strings.Contains(plainLine, "✗   Shell  go test ./...  失败"):
 			errorSeen = true
 			if !strings.Contains(line, errorPrefix) {
 				t.Fatalf("error tool row should carry error border styling, got %q", line)
@@ -1077,7 +1077,7 @@ func TestReadyGroupMouseHitAfterOpenDetailTargetsCorrectTool(t *testing.T) {
 	model.refreshViewport()
 
 	lines := strings.Split(ansi.Strip(model.renderTranscriptContent()), "\n")
-	summaryRow := lineContaining(t, lines, "✓ Bash: go test ./...  完成")
+	summaryRow := lineContaining(t, lines, "✓   Shell  go test ./...  完成")
 	y := 1 + model.currentLayout().headerHeight + summaryRow - model.viewport.YOffset
 	model = mouseClickAt(model, 5, y)
 
@@ -1110,7 +1110,7 @@ func TestTurnFinishedWithoutAssistantKeepsPendingToolsIndividual(t *testing.T) {
 	if strings.Contains(rendered, "Tools  1 calls") {
 		t.Fatalf("turn without assistant should keep pending tool itemized:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "✓ Read: a.go  完成") {
+	if !strings.Contains(rendered, "✓   读取  a.go  完成") {
 		t.Fatalf("pending tool summary missing:\n%s", rendered)
 	}
 }
@@ -1203,7 +1203,7 @@ func TestSessionRestoreFinalizesOrphanedRunningToolsAndExpands(t *testing.T) {
 		t.Fatalf("header click on collapsed ready group did not expand: %#v", model.transcript[orphanIdx])
 	}
 	expanded := ansi.Strip(model.renderTranscriptContent())
-	for _, want := range []string{"× Read: stuck.go", "✓ Bash: go test"} {
+	for _, want := range []string{"✗   读取  stuck.go", "✓   Shell  go test"} {
 		if !strings.Contains(expanded, want) {
 			t.Fatalf("expanded group missing %q:\n%s", want, expanded)
 		}
@@ -1245,7 +1245,7 @@ func TestToolTrackMouseHoverHighlightsAndClears(t *testing.T) {
 	if model.transcriptKeyScrollActive {
 		t.Fatalf("hover must not steal keyboard scroll focus")
 	}
-	if rendered := ansi.Strip(model.View()); !strings.Contains(rendered, "┃ ✓ Read: README.md  完成") {
+	if rendered := ansi.Strip(model.View()); !strings.Contains(rendered, "┃ ✓   读取  README.md  完成") {
 		t.Fatalf("hover marker missing:\n%s", rendered)
 	}
 
@@ -1307,7 +1307,7 @@ func TestToolTrackHoverDoesNotLeakANSISequences(t *testing.T) {
 	}
 	rendered := indentLines(renderToolTransactionEntryWithHover(entry, transcriptBodyWidth(80), time.Time{}, true), transcriptEntryGutter)
 	plain := ansi.Strip(rendered)
-	if !strings.Contains(plain, "┃ ✓ Read: README.md  完成") {
+	if !strings.Contains(plain, "┃ ✓   读取  README.md  完成") {
 		t.Fatalf("hovered tool = %q, want intact summary", plain)
 	}
 	for _, leaked := range []string{"[0m", "[1;", "[4m", "[38;"} {
