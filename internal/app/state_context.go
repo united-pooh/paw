@@ -98,8 +98,14 @@ func (p *stateBlockProvider) BuildStateContext(ctx context.Context) (string, err
 			for _, item := range snap.Items {
 				status := string(item.Status)
 				todoLines = append(todoLines, fmt.Sprintf("- [%s] %s (id: %s)", status, oneLine(item.Content), oneLine(item.ID)))
+				if item.Group != "" {
+					todoLines = append(todoLines, fmt.Sprintf("  group: %q", oneLine(item.Group)))
+				}
 				if len(item.BlockedBy) > 0 {
 					todoLines = append(todoLines, fmt.Sprintf("  id: %q; blocked_by: %q; unresolved_blockers: %q", item.ID, item.BlockedBy, snap.UnresolvedBlockers(item.ID)))
+				}
+				if item.BlockedReason != "" {
+					todoLines = append(todoLines, fmt.Sprintf("  blocked_reason: %q", oneLine(item.BlockedReason)))
 				}
 			}
 			if len(todoLines) > 0 {
