@@ -44,6 +44,11 @@ func renderTokenHistory(v tokenMonitorView, width, height int) string {
 		return ""
 	}
 	title := wizardTitleStyle.Render(copyTokenHistory + " · " + copyMainTurn)
+	if tokenHistoryEmpty(v) {
+		// 空态单行：无任何数据时不渲染 8 行 — 骨架与「暂无流片段」，
+		// 打开面板也能一眼看出还没有可统计的流。
+		return fitStyledRect(title+"\n"+activityHintStyle.Render(copyEmptyData), width, height)
+	}
 	current := "—"
 	if v.Rates.RequestID != "" && v.Rates.Observed {
 		current = fmt.Sprintf("≈%.1f", tokenMonitorRate(v.Rates.Current))
@@ -97,6 +102,27 @@ func renderTokenHistory(v tokenMonitorView, width, height int) string {
 	lines = append(lines, tokenMonitorReceivedGraph(v.Rates.Samples, width, chartHeight)...)
 	lines = append(lines, summary...)
 	return fitStyledRect(strings.Join(lines, "\n"), width, height)
+}
+
+// tokenHistoryEmpty 报告令牌历史完全无数据（无在途流、无统计、无加载/错误
+// 信号）。此时空态只渲染单行「暂无数据」，不再铺开 — 骨架。Samples 是 60 槽
+// 环形缓冲，空闲时非空但全零，须按值判断而非长度。
+func tokenHistoryEmpty(v tokenMonitorView) bool {
+	if v.Err != "" ||
+		v.Loading ||
+		v.Snapshot.Summary.Attempts > 0 ||
+		v.Snapshot.ToolTotal != (tokentracer.LedgerTool{}) ||
+		v.Rates.RequestID != "" ||
+		v.Rates.ToolCalls > 0 ||
+		len(v.Snapshot.Issues) > 0 {
+		return false
+	}
+	for _, sample := range v.Rates.Samples {
+		if tokenMonitorRate(sample) > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func renderTokenMonitor(v tokenMonitorView, width, height int) string {

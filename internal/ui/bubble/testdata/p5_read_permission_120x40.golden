@@ -19,22 +19,22 @@
                                                                             │
                                                                             │
                                                                             │令牌历史 · 主回合
-                                                                            │Turn avg — tok/s
-                                                                            │Σout —                         — incl tools
+                                                                            │暂无数据
+                                                                            │
                                                                             │
                                                                             │
                                                                             │
                                                                             │
 上下文 — ···································································│
- QUESTION  SINGLE                                      selected 0 / max 1   │暂无流片段
+ QUESTION  SINGLE                                      selected 0 / max 1   │
  Read requests access outside the workspace:                                │
  /Users/example/shared/architecture.md                                      │
  2 answers  showing 1-2  choose 1                                           │
  › [ ] Allow once                                                           │
        Allow only this exact Read path for this tool call.                  │
-   [ ] Deny                                                                 │60s chart · recent                  — tok/s
-       Return a normal tool error without reading the file.                 │Input —                            Output —
- ↑ 0 answers above                                      ↓ 0 answers below   │Cache hit                                 —
- ────────────────────────────────────────────────────────────────────────   │Tools in —                     main 0 calls
- ↑↓ select  enter submit  esc cancel                                        │Σ session+tasks · tools ⊂ input
+   [ ] Deny                                                                 │
+       Return a normal tool error without reading the file.                 │
+ ↑ 0 answers above                                      ↓ 0 answers below   │
+ ────────────────────────────────────────────────────────────────────────   │
+ ↑↓ select  enter submit  esc cancel                                        │
  聊天                                                                       ┴─────────────  go-code  dev  ──────────────

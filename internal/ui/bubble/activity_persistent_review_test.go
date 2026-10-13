@@ -59,7 +59,8 @@ func persistentReviewResult(t *testing.T, cmd tea.Cmd) tokenMonitorResultMsg {
 
 func TestPersistentReviewRealDefaultAndStartupSingleFlight(t *testing.T) {
 	m, reader := newPersistentReviewModel(t)
-	if !m.activity.visible || !m.input.Focused() {
+	// 侧栏默认关闭：真实 newModel 的默认帧只有聚焦的输入框，没有侧栏。
+	if m.activity.visible || !m.input.Focused() {
 		t.Fatalf("real newModel default: visible=%t, input focused=%t", m.activity.visible, m.input.Focused())
 	}
 	for _, msg := range persistentReviewMessages(m.Init()) {
@@ -69,10 +70,17 @@ func TestPersistentReviewRealDefaultAndStartupSingleFlight(t *testing.T) {
 	if m.tokenMonitor.loading || len(reader.sessions) != 0 {
 		t.Fatal("unmeasured startup issued hidden monitor IO")
 	}
+	// 默认关闭的面板在首个有尺寸的帧上不得启动隐藏的 monitor IO。
 	next, query := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
 	m = next.(appModel)
+	if query != nil || m.tokenMonitor.loading {
+		t.Fatal("closed default panel started hidden monitor IO")
+	}
+	m.openActivity(activityTabTasks)
+	next, query = m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	m = next.(appModel)
 	if !m.tokenMonitor.loading || query == nil {
-		t.Fatal("first measured frame did not start the default monitor")
+		t.Fatal("first measured frame did not start the opened monitor")
 	}
 	next, duplicate := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
 	m = next.(appModel)
@@ -89,6 +97,7 @@ func TestPersistentReviewRealDefaultAndStartupSingleFlight(t *testing.T) {
 
 func TestPersistentReviewResizesKeepVisibleInput(t *testing.T) {
 	m, _ := newPersistentReviewModel(t)
+	m.openActivity(activityTabTasks) // 侧栏默认关闭，本用例显式打开以覆盖可见 resize 语义
 	m.input.SetValue("保留输入 draft")
 	for _, width := range []int{120, 80, 65, 64, 20, 80, 120} {
 		next, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: 24})
@@ -111,10 +120,11 @@ func TestPersistentReviewResizesKeepVisibleInput(t *testing.T) {
 
 func TestPersistentReviewHiddenAndNarrowPollingRestarts(t *testing.T) {
 	m, reader := newPersistentReviewModel(t)
+	m.openActivity(activityTabTasks) // 侧栏默认关闭，本用例显式打开以覆盖轮询重启语义
 	next, query := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
 	m = next.(appModel)
 	if query == nil {
-		t.Fatal("default monitor did not start")
+		t.Fatal("opened monitor did not start")
 	}
 	next, _ = m.Update(tea.WindowSizeMsg{Width: 64, Height: 24})
 	m = next.(appModel)
@@ -146,6 +156,7 @@ func TestPersistentReviewHiddenAndNarrowPollingRestarts(t *testing.T) {
 
 func TestPersistentReviewIdleTypingDefersAndResumesPolling(t *testing.T) {
 	m, reader := newPersistentReviewModel(t)
+	m.openActivity(activityTabTasks) // 侧栏默认关闭，本用例显式打开以覆盖轮询defer/resume语义
 	next, query := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
 	m = next.(appModel)
 	next, _ = m.Update(persistentReviewResult(t, query))
@@ -171,10 +182,11 @@ func TestPersistentReviewIdleTypingDefersAndResumesPolling(t *testing.T) {
 
 func TestPersistentReviewSessionRestoreRejectsInFlightOldData(t *testing.T) {
 	m, reader := newPersistentReviewModel(t)
+	m.openActivity(activityTabTasks) // 侧栏默认关闭，本用例显式打开以覆盖恢复保活语义
 	next, oldQuery := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
 	m = next.(appModel)
 	if oldQuery == nil {
-		t.Fatal("default monitor did not start")
+		t.Fatal("opened monitor did not start")
 	}
 	m.tokenMonitor.live.start("old-request", time.Now())
 	next, _ = m.Update(sessionRestoredMsg{sessionID: "new-session", source: sessionRestorePicker})

@@ -81,7 +81,9 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 		taskController: taskController,
 		sessionStore:   sessionStore,
 		activity: activityState{
-			visible: true,
+			// 侧栏默认关闭（约 36% 宽的黄金位置还给 transcript）；
+			// ctrl+G 唤出不变，开关状态不持久化。
+			visible: false,
 			tab:     activityTabTasks,
 		},
 		commandRegistry:           NewCommandRegistry(),

@@ -9,6 +9,37 @@ import (
 	"paw/internal/runtime/task"
 )
 
+func TestActivityDockDefaultsClosedAndEmptyTokenHistoryIsSingleLine(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	if model.activity.visible {
+		t.Fatal("activity dock should default to closed（侧栏默认关，不持久化）")
+	}
+	model.ready = true
+	model.width = 100
+	model.height = 24
+	model.relayout()
+	if view := ansi.Strip(model.View()); strings.Contains(view, copyTokenHistory) {
+		t.Fatalf("default view should not render the token history dock:\n%s", view)
+	}
+
+	// 打开但无数据：令牌历史为空态单行「暂无数据」，不渲染 — 骨架与「暂无流片段」。
+	empty := ansi.Strip(renderTokenHistory(model.tokenMonitorView(), 40, 12))
+	if !strings.Contains(empty, copyEmptyData) || strings.Contains(empty, "暂无流片段") {
+		t.Fatalf("empty token history = %q, want single-line 暂无数据", empty)
+	}
+	for _, skeleton := range []string{"Input", "Output", "Cache hit", "Tools in"} {
+		if strings.Contains(empty, skeleton) {
+			t.Fatalf("empty token history kept skeleton row %q: %q", skeleton, empty)
+		}
+	}
+
+	// ctrl+G 唤出不变。
+	model.openActivity(activityTabTasks)
+	if !model.activity.visible {
+		t.Fatal("ctrl+G should still open the dock")
+	}
+}
+
 func TestRenderActivityPaneHasExactSizeAndNoNestedBorder(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.activity.visible = true

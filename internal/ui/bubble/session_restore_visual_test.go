@@ -17,7 +17,7 @@ func TestSessionRestoreDismissesPickerAndRebuildsFrame(t *testing.T) {
 		t.Run(fmt.Sprint(width), func(t *testing.T) {
 			m := newThemedTestModel(t, "dracula")
 			m.ready, m.hasInteracted = true, true
-			// The default sidebar makes the 80-column table 30 rows tall; this
+			// The opened sidebar makes the 80-column table 30 rows tall; this
 			// fixture shows the whole transcript without changing restore scroll behavior.
 			m.width, m.height = width, 36
 			m.cursorFrameAt = time.Date(2026, 9, 20, 11, 10, 0, 0, time.UTC)
@@ -30,9 +30,8 @@ func TestSessionRestoreDismissesPickerAndRebuildsFrame(t *testing.T) {
 			if !strings.Contains(ansi.Strip(pickerView), "Resume Session") {
 				t.Fatal("fixture did not open session picker")
 			}
-			if width >= 120 {
-				m.openActivity(activityTabTasks)
-			}
+			// 侧栏默认关闭后，fixture 显式打开以保持「带侧栏恢复」的覆盖意图。
+			m.openActivity(activityTabTasks)
 			entries := []transcriptEntry{
 				{kind: entryUser, body: "查看项目表格"},
 				{kind: entryAssistant, body: markdownTableProjectFixture},

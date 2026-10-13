@@ -73,6 +73,7 @@ func p5ReadPermissionView() string {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
 	model.width, model.height = 120, 40
+	model.openActivity(activityTabTasks) // 侧栏默认关闭后，golden 显式钉住 docked 布局
 	model.cursorFrameAt = time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	model.worktree = worktreeSnapshot{name: "go-code", ref: "dev", state: worktreeDirty, isGit: true}
 	model.transcript = []transcriptEntry{{kind: entryUser, title: "you", body: "读取工作区外的共享设计说明，并继续当前实现。"}}
@@ -102,6 +103,7 @@ func p5SessionRecoveryView() string {
 	model := newTestModel(runner)
 	model.ready = true
 	model.width, model.height = 80, 24
+	model.openActivity(activityTabTasks) // 侧栏默认关闭后，golden 显式钉住 docked 布局
 	model.cursorFrameAt = time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	model.worktree = worktreeSnapshot{name: "go-code", ref: "dev", state: worktreeDirty, isGit: true}
 	model.goalController = &reboundGoalController{}
