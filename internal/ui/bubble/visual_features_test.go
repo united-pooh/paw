@@ -151,7 +151,7 @@ func TestToolGroupUsesTranscriptGutterAndStaysWithinWidth(t *testing.T) {
 		t.Fatalf("tool group header carries an outer border rail: %q", lines[0])
 	}
 	wantTextColumn := terminalCellWidth(transcriptEntryGutter)
-	if textColumn := strings.Index(lines[0], "▸"); textColumn != wantTextColumn {
+	if textColumn := strings.Index(lines[0], glyphThinking); textColumn != wantTextColumn {
 		t.Fatalf("tool group header text column = %d, want %d: %q", textColumn, wantTextColumn, lines[0])
 	}
 	for index, line := range lines {

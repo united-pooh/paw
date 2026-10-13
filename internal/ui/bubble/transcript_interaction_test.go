@@ -303,7 +303,12 @@ func TestCollapsedToolGroupHoverDoesNotRenderOverlay(t *testing.T) {
 	model.ready = true
 	model.width = 80
 	model.height = 24
-	model.transcript = []transcriptEntry{{kind: entryTool, title: "tool", toolName: "Read", toolStatus: "ok"}}
+	// 6 个连续只读成功卡：前 4 个折成组头（hover 不渲染浮层），a5/a6 平铺。
+	for _, name := range []string{"a1.go", "a2.go", "a3.go", "a4.go", "a5.go", "a6.go"} {
+		model.transcript = append(model.transcript, transcriptEntry{
+			kind: entryTool, title: "tool", toolName: "Read", toolTarget: name, toolStatus: "ok",
+		})
+	}
 	model.invalidateTranscriptStructure()
 	model.relayout()
 	model.refreshViewport()

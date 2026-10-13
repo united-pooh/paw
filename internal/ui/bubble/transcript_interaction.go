@@ -104,17 +104,6 @@ func (m *appModel) buildTranscriptInteractionRows(startRow int, lines []string, 
 	}
 	endRow := startRow + len(rows)
 	valid := true
-	pendingToolSegment := false
-	if startIdx >= 0 && startIdx < len(m.viewEntries) && isToolTransaction(m.viewEntries[startIdx]) {
-		if startIdx > 0 && isToolTransaction(m.viewEntries[startIdx-1]) {
-			m.transcriptInteractionRangeCalls++
-			if first, ok := toolSegmentStart(m.viewEntries, startIdx); ok {
-				pendingToolSegment = m.viewEntries[first].toolGroupPending
-			}
-		} else {
-			pendingToolSegment = m.viewEntries[startIdx].toolGroupPending
-		}
-	}
 	for index := maxInt(0, startIdx); index < len(m.viewEntries); index++ {
 		m.transcriptInteractionVisits++
 		if index >= len(m.transcriptEntrySpans) {
@@ -131,11 +120,7 @@ func (m *appModel) buildTranscriptInteractionRows(startRow int, lines []string, 
 		if span.startRow+span.height <= startRow || !isToolTransaction(m.viewEntries[index]) {
 			continue
 		}
-		if index > startIdx && !isToolTransaction(m.viewEntries[index-1]) {
-			pendingToolSegment = m.viewEntries[index].toolGroupPending
-		}
-		if !pendingToolSegment {
-			last := toolSegmentEnd(m.viewEntries, index)
+		if first, last, inFoldGroup := toolFoldGroupRange(m.viewEntries, index); inFoldGroup && index == first {
 			cachedToolRows := m.transcriptRenderCache[index].toolRows
 			if cachedToolRows == nil {
 				valid = false
@@ -283,17 +268,16 @@ func (m appModel) renderTranscriptHoverPatch(unit transcriptHoverPatchUnit) ([]s
 		if unit.groupStart >= len(m.viewEntries) {
 			return nil, false
 		}
-		first, last := toolGroupRange(m.viewEntries, unit.groupStart)
-		entries := toolEntriesForGroup(m.viewEntries, first)
-		expanded := m.toolGroupExpanded
-		if !toolGroupHasRunning(m.viewEntries, first, last) {
-			expanded = m.viewEntries[first].toolExpanded
+		first, last, inFoldGroup := toolFoldGroupRange(m.viewEntries, unit.groupStart)
+		if !inFoldGroup {
+			return nil, false
 		}
+		expanded := m.viewEntries[first].toolExpanded
 		hoveredOffset := -1
 		if unit.hoverActive && m.toolHoverIndex >= first && m.toolHoverIndex <= last {
 			hoveredOffset = m.toolHoverIndex - first
 		}
-		rendered, _ = renderToolsGroupWithHoverRows(entries, width, at, expanded, m.toolGroupFullResult, hoveredOffset)
+		rendered, _ = renderToolsGroupWithHoverRows(m.viewEntries[first:last+1], width, at, expanded, m.toolGroupFullResult, hoveredOffset)
 	} else {
 		if unit.toolIndex < 0 || unit.toolIndex >= len(m.viewEntries) {
 			return nil, false

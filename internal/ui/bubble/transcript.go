@@ -201,11 +201,6 @@ func (m *appModel) handleAssistantPartEvent(msg assistantPartMsg) {
 		switch msg.lifecycle {
 		case "delta":
 			m.turnHasModelOutput = true
-			m.readyPendingToolSegmentsInCurrentTurn()
-			if !m.toolInspectActive {
-				m.toolGroupExpanded = false
-				m.toolGroupFullResult = false
-			}
 			m.isGenerating = true
 			m.consumeAssistantStreamDelta(msg.delta)
 		}
@@ -548,7 +543,8 @@ func (m *appModel) normalizeTranscriptDirtyIndex(index int) int {
 	if m == nil || index < 0 || index >= len(m.transcript) {
 		return index
 	}
-	if first, ok := toolSegmentStart(m.transcript, index); ok && !m.transcript[first].toolGroupPending {
+	// 折叠组成员的任何变更都要从组首整体重渲（组头含文件清单与计数）。
+	if first, _, ok := toolFoldGroupRange(m.transcript, index); ok {
 		return first
 	}
 	return index
@@ -1105,42 +1101,6 @@ func (m *appModel) collapsePendingToolDetailsInCurrentTurn(skipIndex int) {
 	}
 }
 
-func (m *appModel) readyPendingToolSegmentsInCurrentTurn() bool {
-	start, end := currentTurnTranscriptBounds(m.transcript)
-	if start < 0 || end < start {
-		return false
-	}
-	changed := false
-	for index := start; index <= end && index < len(m.transcript); {
-		if !isToolTransaction(m.transcript[index]) {
-			index++
-			continue
-		}
-		segmentStart, segmentEnd, ok := toolSegmentRange(m.transcript, index)
-		if !ok {
-			index++
-			continue
-		}
-		if !toolSegmentIsPending(m.transcript, segmentStart) {
-			index = segmentEnd + 1
-			continue
-		}
-		for segmentIndex := segmentStart; segmentIndex <= segmentEnd; segmentIndex++ {
-			entry := &m.transcript[segmentIndex]
-			if !entry.toolGroupPending && !entry.toolExpanded && !entry.toolGroupOpen {
-				continue
-			}
-			entry.toolGroupPending = false
-			entry.toolExpanded = false
-			entry.toolGroupOpen = false
-			m.touchTranscriptEntryAt(segmentIndex)
-			changed = true
-		}
-		index = segmentEnd + 1
-	}
-	return changed
-}
-
 func currentTurnTranscriptBounds(entries []transcriptEntry) (int, int) {
 	if len(entries) == 0 {
 		return -1, -1
@@ -1552,17 +1512,6 @@ func (m *appModel) renderTranscriptEntriesFrom(startIdx int, width int, showThin
 		previousKind = prefix.lastRenderedKind
 		totalRows = prefix.contentEndRow
 	}
-	pendingToolSegment := false
-	if startIdx < len(m.viewEntries) && isToolTransaction(m.viewEntries[startIdx]) {
-		if startIdx > 0 && isToolTransaction(m.viewEntries[startIdx-1]) {
-			m.transcriptSegmentRangeCalls++
-			if first, ok := toolSegmentStart(m.viewEntries, startIdx); ok {
-				pendingToolSegment = m.viewEntries[first].toolGroupPending
-			}
-		} else {
-			pendingToolSegment = m.viewEntries[startIdx].toolGroupPending
-		}
-	}
 	for idx := startIdx; idx < len(m.viewEntries); idx++ {
 		m.transcriptRenderVisits++
 		entry := m.viewEntries[idx]
@@ -1578,19 +1527,11 @@ func (m *appModel) renderTranscriptEntriesFrom(startIdx int, width int, showThin
 		var toolRows transcriptToolRenderRows
 		kind := entry.kind
 		groupLast := idx
-		if isToolTransaction(entry) && idx > startIdx && !isToolTransaction(m.viewEntries[idx-1]) {
-			pendingToolSegment = entry.toolGroupPending
-		}
-		if isToolTransaction(entry) && !pendingToolSegment {
-			first := idx
-			last := toolSegmentEnd(m.viewEntries, idx)
+		if first, last, inFoldGroup := toolFoldGroupRange(m.viewEntries, idx); inFoldGroup && idx == first {
 			groupLast = last
 			key := transcriptRenderKey(entry, width, at, showThinking)
 			groupEntries := m.viewEntries[first : last+1]
-			groupExpanded := m.toolGroupExpanded
-			if !toolGroupHasRunning(m.viewEntries, first, last) {
-				groupExpanded = m.viewEntries[first].toolExpanded
-			}
+			groupExpanded := m.viewEntries[first].toolExpanded
 			key.body = toolGroupRenderSnapshot(groupEntries, width, at)
 			key.version = 0
 			if groupExpanded {
@@ -1610,6 +1551,17 @@ func (m *appModel) renderTranscriptEntriesFrom(startIdx int, width int, showThin
 				}
 			}
 			kind = entryTool
+		} else if inFoldGroup {
+			// 折叠组隐藏成员：由组首条目统一渲染，这里只补 span 记录。
+			for skipped := idx; skipped <= last; skipped++ {
+				groupSpan := &spans[skipped-startIdx]
+				groupSpan.startRow = -1
+				groupSpan.hasRenderedContent = hasPrevious
+				groupSpan.contentEndRow = totalRows
+				groupSpan.lastRenderedKind = previousKind
+			}
+			idx = last
+			continue
 		} else {
 			key := transcriptRenderKey(entry, width, at, showThinking)
 			if m.transcriptRenderCache[idx].key == key {
@@ -2011,11 +1963,9 @@ func renderTranscriptWithToolGroup(entries []transcriptEntry, width int, showThi
 		if !assistantEntryIsRenderable(entry) {
 			continue
 		}
-		if toolEntryUsesReadyGroup(entries, index) {
-			first, _ := toolGroupRange(entries, index)
+		if first, last, inFoldGroup := toolFoldGroupRange(entries, index); inFoldGroup {
 			if first == index {
-				groupEntries := toolEntriesForGroup(entries, index)
-				group := renderToolsGroup(groupEntries, width, at, groupExpanded, fullResult)
+				group := renderToolsGroup(entries[first:last+1], width, at, groupExpanded || entries[first].toolExpanded, fullResult)
 				appendTranscriptRenderedEntry(&renderedTranscript, group, entryTool, previousKind, hasPrevious)
 				if group != "" {
 					previousKind = entryTool
@@ -2035,30 +1985,6 @@ func renderTranscriptWithToolGroup(entries []transcriptEntry, width int, showThi
 	return renderedTranscript.String()
 }
 
-func toolGroupRange(entries []transcriptEntry, start int) (int, int) {
-	first, last, ok := toolSegmentRange(entries, start)
-	if !ok || toolSegmentIsPending(entries, start) {
-		return start, start
-	}
-	return first, last
-}
-
-// toolEntriesForGroup returns the tool transaction entries belonging to the
-// contiguous group that starts at start. It deliberately stops at the first
-// non-tool entry (agent text, thinking, etc.) so interleaved model replies
-// split one user turn into separate Tools groups.
-func toolEntriesForGroup(entries []transcriptEntry, start int) []transcriptEntry {
-	first, last, ok := toolSegmentRange(entries, start)
-	if !ok || toolSegmentIsPending(entries, start) {
-		return nil
-	}
-	tools := make([]transcriptEntry, 0, last-first+1)
-	for index := first; index <= last; index++ {
-		tools = append(tools, entries[index])
-	}
-	return tools
-}
-
 func toolEntriesForTurn(entries []transcriptEntry, start int) []transcriptEntry {
 	if start < 0 || start >= len(entries) {
 		return nil
@@ -2074,21 +2000,6 @@ func toolEntriesForTurn(entries []transcriptEntry, start int) []transcriptEntry 
 		}
 	}
 	return tools
-}
-
-// toolGroupHasRunning reports whether any tool transaction in [first, last]
-// is still running. It is used to keep completed tool groups collapsed even
-// while a later group in the same turn is active.
-func toolGroupHasRunning(entries []transcriptEntry, first, last int) bool {
-	if first < 0 || last < first || last >= len(entries) {
-		return false
-	}
-	for index := first; index <= last; index++ {
-		if isToolTransaction(entries[index]) && toolEntryStatus(entries[index]) == "running" {
-			return true
-		}
-	}
-	return false
 }
 
 // toolSegmentRange returns the raw contiguous tool segment containing index.
@@ -2123,9 +2034,56 @@ func toolSegmentIsPending(entries []transcriptEntry, index int) bool {
 	return ok && entries[first].toolGroupPending
 }
 
-func toolEntryUsesReadyGroup(entries []transcriptEntry, index int) bool {
-	first, _, ok := toolSegmentRange(entries, index)
-	return ok && !entries[first].toolGroupPending
+// 折叠新规（2026-10-13 TUI 对齐 spec §3）：折与不折是卡片序列的位置函数，
+// 不再由"助手开口"触发。可折 = 只读成功卡（读取/搜索/网页）；编辑/写入/
+// Shell/任务/插件/失败/运行中永不折。连续 ≥foldGroupMinTools 个可折卡时，
+// 前 N-foldGroupKeepExpanded 个折成组头（自带文件清单），最近 2 个保持展开。
+const (
+	foldGroupMinTools     = 6
+	foldGroupKeepExpanded = 2
+)
+
+// toolEntryFoldable 报告条目是否是只读成功卡（可参与组折）。
+// toolExpanded/toolGroupOpen 不排除：前者在组首条目上兼任"组已展开"开关，
+// 后者是组内单条详情开关，二者都不应改变组的空间归属。
+func toolEntryFoldable(entry transcriptEntry) bool {
+	if !isToolTransaction(entry) || entry.toolFocused || entry.isError {
+		return false
+	}
+	if toolEntryStatus(entry) != "ok" {
+		return false
+	}
+	switch chipKindForTool(toolEntryDisplayName(entry)) {
+	case chipKindRead, chipKindSearch, chipKindWeb:
+		return true
+	default:
+		return false
+	}
+}
+
+// toolFoldGroupRange 返回 index 所属折叠组在视图条目中的范围 [first, last]。
+// ok=false 表示该条目不折叠（永不折卡、不足 6 个的连续段、或段尾最近 2 个）。
+// 组展开状态记录在 first 条目的 toolExpanded 上。
+func toolFoldGroupRange(entries []transcriptEntry, index int) (int, int, bool) {
+	if index < 0 || index >= len(entries) || !toolEntryFoldable(entries[index]) {
+		return index, index, false
+	}
+	first := index
+	for first > 0 && entries[first-1].kind != entryUser && toolEntryFoldable(entries[first-1]) {
+		first--
+	}
+	runEnd := index
+	for runEnd+1 < len(entries) && entries[runEnd+1].kind != entryUser && toolEntryFoldable(entries[runEnd+1]) {
+		runEnd++
+	}
+	if runEnd-first+1 < foldGroupMinTools {
+		return index, index, false
+	}
+	last := runEnd - foldGroupKeepExpanded
+	if index > last {
+		return index, index, false
+	}
+	return first, last, true
 }
 
 func toolGroupBorderStyle(entries []transcriptEntry) lipgloss.Style {
@@ -2171,35 +2129,15 @@ func renderToolsGroupWithHoverRows(entries []transcriptEntry, width int, at time
 	if len(entries) == 0 {
 		return "", nil
 	}
-	status := "ok"
-	for _, entry := range entries {
-		if toolEntryStatus(entry) == "running" {
-			status = "running"
-		}
-	}
 	style := toolGroupBorderStyle(entries)
-	marker := "▸"
+	marker := glyphThinking
 	if expanded || anyToolGroupOpen(entries) {
-		marker = "▾"
+		marker = glyphExpanded
 	}
-	started, finished := time.Time{}, time.Time{}
-	for _, entry := range entries {
-		if started.IsZero() || (!entry.toolStartedAt.IsZero() && entry.toolStartedAt.Before(started)) {
-			started = entry.toolStartedAt
-		}
-		end := entry.toolFinishedAt
-		if toolEntryStatus(entry) == "running" {
-			end = at
-		}
-		if !end.IsZero() && (finished.IsZero() || end.After(finished)) {
-			finished = end
-		}
+	label := marker + " " + toolGroupFoldLabel(entries)
+	if !expanded {
+		label += " " + copyExpandHint
 	}
-	duration := formatToolDuration(started, finished)
-	if status == "running" {
-		duration = formatToolDuration(started, at)
-	}
-	label := fmt.Sprintf("%s Tools  %d calls  %s", marker, len(entries), duration)
 	// Tool groups share the same two-cell external gutter as user and assistant
 	// entries, so the header sits at the same column as every other transcript
 	// row. The group itself carries no outer border: expanding the group and
@@ -2210,7 +2148,7 @@ func renderToolsGroupWithHoverRows(entries []transcriptEntry, width int, at time
 	groupWidth := transcriptBodyWidth(width)
 	contentWidth := toolEntryContentWidth(groupWidth, style)
 	innerWidth := maxInt(1, contentWidth-style.GetHorizontalFrameSize())
-	header := toolHeaderStyle.Render(truncateStyledCellLine(label, innerWidth))
+	header := thinkingBodyStyle.Render(truncateStyledCellLine(label, innerWidth))
 	lines := []string{indentLines(header, transcriptEntryGutter)}
 	toolRows := transcriptToolRenderRows{{
 		toolOffset:   0,
@@ -2231,6 +2169,35 @@ func renderToolsGroupWithHoverRows(entries []transcriptEntry, width int, at time
 		}
 	}
 	return strings.Join(lines, "\n"), toolRows
+}
+
+// toolGroupFoldLabel 生成组头摘要：`4 个工具 · 读取 a.go · 搜索 b.go · 读取 c.go · 等 4 个 · 全部完成`。
+// 文件清单最多列 3 个，超出以「等 N 个」收口（N 为组内总数）。
+func toolGroupFoldLabel(entries []transcriptEntry) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, copyToolGroupFold, len(entries))
+	listed := 0
+	for _, entry := range entries {
+		if listed >= 3 {
+			break
+		}
+		name := chipPlainLabel(toolEntryDisplayName(entry))
+		target := strings.Join(strings.Fields(sanitizeTerminalText(entry.toolTarget)), " ")
+		if target == "" {
+			continue
+		}
+		b.WriteString(" · ")
+		b.WriteString(name)
+		b.WriteString(" ")
+		b.WriteString(target)
+		listed++
+	}
+	if len(entries) > 3 && listed > 0 {
+		fmt.Fprintf(&b, " · 等 %d 个", len(entries))
+	}
+	b.WriteString(" · ")
+	b.WriteString(copyGroupAllOK)
+	return b.String()
 }
 
 func renderGroupedToolEntry(entry transcriptEntry, width int, at time.Time, fullResult bool) string {
@@ -2738,16 +2705,16 @@ func renderEntryBodyAt(entry transcriptEntry, width int, at time.Time, showThink
 }
 
 // renderReasoningBody 渲染 reasoning 条目。
-// 已完成时默认折叠为 "Thought for N s" 标题；全局 Ctrl+O（showThinking）或
-// 单块点击（reasoningExpansionSet）展开后只渲染正文，不再保留标题行：标题
-// 只是折叠态的摘要与点击把手，展开态正文本身即内容。展开的工作段内联子条
-// 目也走这里，去掉标题可避免"段标题下每个思考块再嵌一行 Thought"的重复。
-// 点击正文任意行可重新折叠（reasoningHitAtTranscriptRow 覆盖整条目区域）。
-// redacted 块无正文，始终显示 "Thought (redacted)"。
+// 已完成时默认折叠为 "* 思考了 N 秒 [[ctrl+O 展开]]" 标题；全局 Ctrl+O
+// （showThinking）或单块点击（reasoningExpansionSet）展开后只渲染正文，
+// 不再保留标题行：标题只是折叠态的摘要与点击把手，展开态正文本身即内容。
+// 展开的工作段内联子条目也走这里，去掉标题可避免"段标题下每个思考块再嵌
+// 一行思考了"的重复。点击正文任意行可重新折叠（reasoningHitAtTranscriptRow
+// 覆盖整条目区域）。redacted 块无正文，始终显示「思考（已隐藏）」。
 func renderReasoningBody(entry transcriptEntry, width int, at time.Time, showThinking bool) string {
 	bodyWidth := transcriptBodyWidth(width)
 	if entry.redacted {
-		return thinkingBodyStyle.Width(bodyWidth).Render("Thought (redacted)")
+		return thinkingBodyStyle.Width(bodyWidth).Render(glyphThinking + " 思考（已隐藏）")
 	}
 	expanded := showThinking
 	if entry.reasoningExpansionSet {
@@ -2762,7 +2729,7 @@ func renderReasoningBody(entry transcriptEntry, width int, at time.Time, showThi
 		if entry.reasoningStartedAt != nil {
 			duration = entry.reasoningFinishedAt.Sub(*entry.reasoningStartedAt)
 		}
-		title := fmt.Sprintf("Thought for %s", formatSegmentDuration(duration))
+		title := glyphThinking + " " + fmt.Sprintf(copyThinkingFold, formatFoldDuration(duration)) + " " + copyExpandHint
 		return thinkingBodyStyle.Width(bodyWidth).Render(title)
 	}
 	content := strings.TrimSpace(entry.body)

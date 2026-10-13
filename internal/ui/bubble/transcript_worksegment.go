@@ -322,8 +322,8 @@ func firstViewSignatureDiff(previous, current []viewSlotSignature) int {
 }
 
 // workSegmentTitle 生成 resting 态标题：
-// 含 reasoning → "Thought for …"；纯工具段 → "Worked for …"；
-// 计数与失败按需追加（"· 15 tool calls · 1 failed"）。
+// 含 reasoning → "思考了 N 秒"；纯工具段 → "工作了 N 秒"；
+// 计数与失败按需追加（"· 15 个工具 · 1 个失败"）。
 func workSegmentTitle(data *workSegmentData, at time.Time) string {
 	if data == nil {
 		return ""
@@ -332,34 +332,34 @@ func workSegmentTitle(data *workSegmentData, at time.Time) string {
 	if data.live {
 		end = at
 	}
-	duration := formatSegmentDuration(end.Sub(data.startedAt))
+	duration := formatFoldDuration(end.Sub(data.startedAt))
 	var b strings.Builder
 	if data.hasReasoning {
-		b.WriteString("Thought for ")
+		fmt.Fprintf(&b, copyThinkingFold, duration)
 	} else {
-		b.WriteString("Worked for ")
+		fmt.Fprintf(&b, copyWorkedFold, duration)
 	}
-	b.WriteString(duration)
 	if data.toolCalls > 0 {
-		fmt.Fprintf(&b, " · %d tool calls", data.toolCalls)
+		fmt.Fprintf(&b, " · %d 个工具", data.toolCalls)
 	}
 	if data.failed > 0 {
-		fmt.Fprintf(&b, " · %d failed", data.failed)
+		fmt.Fprintf(&b, " · %d 个失败", data.failed)
 	}
 	return b.String()
 }
 
-// workSegmentLiveTitle 生成 live 态标题（统一 Thoughts + 实时时长与计数）。
+// workSegmentLiveTitle 生成 live 态标题（实时时长与计数）。
 func workSegmentLiveTitle(data *workSegmentData, at time.Time) string {
 	if data == nil {
 		return ""
 	}
-	duration := formatSegmentDuration(at.Sub(data.startedAt))
+	duration := formatFoldDuration(at.Sub(data.startedAt))
 	var b strings.Builder
-	b.WriteString("Thoughts · ")
+	b.WriteString(copyStatusThinking)
+	b.WriteString(" · ")
 	b.WriteString(duration)
 	if data.toolCalls > 0 {
-		fmt.Fprintf(&b, " · %d tool calls", data.toolCalls)
+		fmt.Fprintf(&b, " · %d 个工具", data.toolCalls)
 	}
 	return b.String()
 }
@@ -387,12 +387,12 @@ func renderWorkSegmentEntry(entry transcriptEntry, width int, at time.Time, show
 	}
 	title := thinkingBodyStyle.Render(workSegmentTitle(data, at))
 	if data.failed > 0 {
-		failure := fmt.Sprintf("%d failed", data.failed)
+		failure := fmt.Sprintf("%d 个失败", data.failed)
 		title = strings.Replace(title, failure, labelErrorStyle.Render(failure), 1)
 	}
-	marker := "▸"
+	marker := glyphThinking
 	if data.header {
-		marker = "▾"
+		marker = glyphExpanded
 	}
 	return thinkingBodyStyle.Render(marker) + " " + truncateStyledCellLine(title, bodyWidth)
 }
@@ -546,4 +546,29 @@ func formatSegmentDuration(d time.Duration) string {
 		return fmt.Sprintf("%dh", hours)
 	}
 	return fmt.Sprintf("%dh %dm", hours, remMins)
+}
+
+// formatFoldDuration 折叠行中文时长：最小 1 秒，格式 "7 秒" / "2 分 15 秒" / "1 小时 3 分"。
+func formatFoldDuration(d time.Duration) string {
+	secs := int(d.Seconds())
+	if secs < 1 {
+		secs = 1
+	}
+	if secs < 60 {
+		return fmt.Sprintf("%d 秒", secs)
+	}
+	mins := secs / 60
+	remSecs := secs % 60
+	if mins < 60 {
+		if remSecs == 0 {
+			return fmt.Sprintf("%d 分", mins)
+		}
+		return fmt.Sprintf("%d 分 %d 秒", mins, remSecs)
+	}
+	hours := mins / 60
+	remMins := mins % 60
+	if remMins == 0 {
+		return fmt.Sprintf("%d 小时", hours)
+	}
+	return fmt.Sprintf("%d 小时 %d 分", hours, remMins)
 }

@@ -24,7 +24,7 @@ func TestReasoningSummaryTranscriptOmitsLegacyLabel(t *testing.T) {
 	if strings.Contains(collapsed, "reasoning >") {
 		t.Fatalf("legacy reasoning label is still rendered: %q", collapsed)
 	}
-	if !strings.Contains(collapsed, "Thought for 2 s") || strings.Contains(collapsed, "provider returned summary") {
+	if !strings.Contains(collapsed, "思考了 2 秒") || strings.Contains(collapsed, "provider returned summary") {
 		t.Fatalf("collapsed reasoning = %q", collapsed)
 	}
 
@@ -33,7 +33,7 @@ func TestReasoningSummaryTranscriptOmitsLegacyLabel(t *testing.T) {
 		t.Fatalf("expanded reasoning = %q", expanded)
 	}
 	// 展开态只渲染正文，不再重复一行 "Thought for" 标题。
-	if strings.Contains(expanded, "Thought for") {
+	if strings.Contains(expanded, "思考了") {
 		t.Fatalf("expanded reasoning still renders a redundant Thought title: %q", expanded)
 	}
 }

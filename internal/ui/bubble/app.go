@@ -265,11 +265,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case assistantDeltaMsg:
 		if string(msg) != "" {
 			m.turnHasModelOutput = true
-			m.readyPendingToolSegmentsInCurrentTurn()
-			if !m.toolInspectActive {
-				m.toolGroupExpanded = false
-				m.toolGroupFullResult = false
-			}
 		}
 		m.isGenerating = true
 		m.consumeAssistantStreamDelta(string(msg))
@@ -886,8 +881,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.relayout()
 			return m, nil
 		case "ctrl+o":
-			m.showThinking = !m.showThinking
-			m.refreshViewportPreservingOffset()
+			m.toggleGlobalFold()
 			return m, nil
 		case "up":
 			return m.handleInputVerticalNavigation(-1)

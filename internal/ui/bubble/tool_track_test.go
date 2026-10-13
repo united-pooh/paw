@@ -601,49 +601,32 @@ func TestToolTrackMouseClickTogglesButDragSelects(t *testing.T) {
 		model = mouseClickAt(model, x, row)
 	}
 
-	// A collapsed group is a single header row; clicking it expands the group
-	// to list each tool's summary (the result detail stays closed).
+	// 单个工具卡（不在折叠组内）：点击直接切换详情展开态，
+	// 展开即显示 result，没有组的两级展开。
 	click(y)
 	if !model.transcript[0].toolExpanded {
 		t.Fatalf("summary click did not expand tool")
 	}
 	if got := ansi.Strip(model.renderTranscriptContent()); !strings.Contains(got, "✓   读取  README.md  完成") {
-		t.Fatalf("expanded group hid tool summary:\n%s", got)
-	}
-	if got := ansi.Strip(model.renderTranscriptContent()); strings.Contains(got, "result") {
-		t.Fatalf("expanded group leaked result before detail open:\n%s", got)
-	}
-
-	// Clicking the tool's own summary row opens just that tool's detail
-	// (toolGroupOpen); the group itself stays expanded.
-	detailY := y + 1
-	click(detailY)
-	if !model.transcript[0].toolExpanded {
-		t.Fatalf("tool detail click collapsed the whole group")
-	}
-	if !model.transcript[0].toolGroupOpen {
-		t.Fatalf("tool detail click did not open per-tool detail")
+		t.Fatalf("expanded card hid tool summary:\n%s", got)
 	}
 	if got := ansi.Strip(model.renderTranscriptContent()); !strings.Contains(got, "result") {
-		t.Fatalf("opened detail missing result:\n%s", got)
+		t.Fatalf("expanded card missing result detail:\n%s", got)
 	}
 
-	// Clicking the tool row again closes just that detail, group stays open.
-	click(detailY)
-	if model.transcript[0].toolGroupOpen {
-		t.Fatalf("second tool detail click did not close detail")
-	}
-	if !model.transcript[0].toolExpanded {
-		t.Fatalf("closing detail collapsed the whole group")
+	// 再点同一行收起详情。
+	click(y)
+	if model.transcript[0].toolExpanded {
+		t.Fatalf("second click did not collapse tool detail")
 	}
 	if got := ansi.Strip(model.renderTranscriptContent()); strings.Contains(got, "result") {
-		t.Fatalf("closed detail still visible:\n%s", got)
+		t.Fatalf("collapsed card still shows result:\n%s", got)
 	}
 
 	// Re-open the detail so the drag-selection assertion below has a stable state.
-	click(detailY)
-	if !model.transcript[0].toolGroupOpen {
-		t.Fatalf("third tool detail click did not re-open detail")
+	click(y)
+	if !model.transcript[0].toolExpanded {
+		t.Fatalf("third click did not re-open detail")
 	}
 
 	previousWriteClipboard := writeClipboard
@@ -658,9 +641,9 @@ func TestToolTrackMouseClickTogglesButDragSelects(t *testing.T) {
 	if !model.selectionActive {
 		t.Fatalf("drag selection failed: active=%v", model.selectionActive)
 	}
-	// The drag must not have collapsed the group or closed the detail.
-	if !model.transcript[0].toolExpanded || !model.transcript[0].toolGroupOpen {
-		t.Fatalf("drag selection toggled group state: expanded=%v open=%v", model.transcript[0].toolExpanded, model.transcript[0].toolGroupOpen)
+	// The drag must not have collapsed the card or closed the detail.
+	if !model.transcript[0].toolExpanded {
+		t.Fatalf("drag selection toggled card state: expanded=%v", model.transcript[0].toolExpanded)
 	}
 }
 
@@ -697,53 +680,67 @@ func styleRenderPrefix(style lipgloss.Style) string {
 	return rendered[:index]
 }
 
-// TestReadyStateCollapsedGroupClickExpands 回归：ready（空闲/一轮结束）状态下，
-// 工具组折叠为单个 header 行（▸ Tools），点击该行应整组展开，列出每个工具的摘要。
+// TestReadyStateCollapsedGroupClickExpands 回归：≥6 个连续只读成功卡折叠为
+// 组头（* N 个工具 · 文件清单 · 全部完成），点击组头整组展开，列出组内每个
+// 工具的摘要；段尾最近 2 个始终平铺，不收进组。
 func TestReadyStateCollapsedGroupClickExpands(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
-	model.width = 80
+	model.width = 100
 	model.height = 24
 
 	model.transcript = []transcriptEntry{
 		{kind: entryUser, title: "you", body: "帮我看看项目"},
 		{kind: entryAssistant, title: "assistant", body: "好的，先读取一下"},
 	}
-	model.addEntry(transcriptEntry{kind: entryTool, title: "tool", toolName: "Read", toolTarget: "a.go", toolStatus: "ok", toolResult: "full content"})
-	model.addEntry(transcriptEntry{kind: entryTool, title: "tool", toolName: "Bash", toolTarget: "go test", toolStatus: "ok", toolResult: "ok"})
-	model.toolGroupExpanded = false
+	for _, name := range []string{"a1.go", "a2.go", "a3.go", "a4.go", "a5.go", "a6.go"} {
+		model.addEntry(transcriptEntry{kind: entryTool, title: "tool", toolName: "Read", toolTarget: name, toolStatus: "ok", toolResult: "content " + name})
+	}
 	model.relayout()
 	model.refreshViewport()
 
 	rendered := ansi.Strip(model.renderTranscriptContent())
-	if !strings.Contains(rendered, "▸ Tools  2 calls") {
-		t.Fatalf("want collapsed ready group, got:\n%s", rendered)
+	for _, want := range []string{"* 4 个工具", "读取 a1.go"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("collapsed fold group header missing %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "✓   读取  a1.go  完成") {
+		t.Fatalf("collapsed fold group leaked member row:\n%s", rendered)
+	}
+	// 段尾最近 2 个保持展开，不进组。
+	for _, want := range []string{"✓   读取  a5.go", "✓   读取  a6.go"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("kept-expanded tail entry missing %q:\n%s", want, rendered)
+		}
 	}
 
-	// 工具组是 transcript 中的第 3 条（user、assistant 之后）；定位它，不能点 user 行。
+	// 折叠组头是 transcript 中的第 3 条（user、assistant 之后）；定位它，不能点 user 行。
 	locs := model.transcriptEntryLocationsAt()
 	var loc transcriptEntryLocation
 	found := false
 	for _, candidate := range locs {
-		if model.transcript[candidate.transcriptIndex].toolName == "Read" {
+		if model.transcript[candidate.transcriptIndex].toolTarget == "a1.go" {
 			loc = candidate
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatal("tool group location not found")
+		t.Fatal("fold group location not found")
 	}
 	y := 1 + model.currentLayout().headerHeight + loc.startRow - model.viewport.YOffset
 
 	model = mouseClickAt(model, 5, y)
 
 	if !model.transcript[2].toolExpanded {
-		t.Fatalf("click on collapsed header in ready state did not expand: %#v", model.transcript[2])
+		t.Fatalf("click on collapsed header did not expand: %#v", model.transcript[2])
 	}
 	expanded := ansi.Strip(model.renderTranscriptContent())
-	if !strings.Contains(expanded, "✓   读取  a.go") || !strings.Contains(expanded, "✓   Shell  go test") {
-		t.Fatalf("expanded group missing tool summaries:\n%s", expanded)
+	for _, want := range []string{"✓   读取  a1.go", "✓   读取  a4.go"} {
+		if !strings.Contains(expanded, want) {
+			t.Fatalf("expanded group missing %q:\n%s", want, expanded)
+		}
 	}
 }
 
@@ -796,29 +793,32 @@ func TestReadyStateSecondGroupClickExpands(t *testing.T) {
 	}
 }
 
-// TestReadyStateLifecycleCollapsedGroupClickExpands 回归：只有 assistant 开始回复后，
-// pending 工具段才会转成 ready 分组并默认折叠。
+// TestReadyStateLifecycleCollapsedGroupClickExpands 回归：折叠是位置函数——
+// ≥6 个连续只读成功卡即折叠，不需要 assistant 开口；回合结束后组保持折叠，
+// 点击组头整组展开。
 func TestReadyStateLifecycleCollapsedGroupClickExpands(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
-	model.width = 80
+	model.width = 100
 	model.height = 24
 
-	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{ID: "call-1", Name: "Read", Input: []byte(`{"file_path":"a.go"}`)}))
-	model = next.(appModel)
-	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{ToolUseID: "call-1", Name: "Read", Content: "full content"}))
-	model = next.(appModel)
-	next, _ = model.Update(assistantDeltaMsg("总结如下"))
-	model = next.(appModel)
-	next, _ = model.Update(turnFinishedMsg{})
+	for i, name := range []string{"a1.go", "a2.go", "a3.go", "a4.go", "a5.go", "a6.go"} {
+		id := fmt.Sprintf("call-%d", i)
+		next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{ID: id, Name: "Read", Input: []byte(`{"file_path":"` + name + `"}`)}))
+		model = next.(appModel)
+		next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{ToolUseID: id, Name: "Read", Content: "content " + name}))
+		model = next.(appModel)
+	}
+	// 没有 assistant 正文：折叠不依赖「说话」。
+	next, _ := model.Update(turnFinishedMsg{})
 	model = next.(appModel)
 
 	model.relayout()
 	model.refreshViewport()
 
 	rendered := ansi.Strip(model.renderTranscriptContent())
-	if !strings.Contains(rendered, "▸ Tools") {
-		t.Fatalf("want collapsed ready group, got:\n%s", rendered)
+	if !strings.Contains(rendered, "* 4 个工具") {
+		t.Fatalf("want collapsed fold group without assistant speech, got:\n%s", rendered)
 	}
 
 	loc := model.transcriptEntryLocationsAt()[0]
@@ -826,10 +826,13 @@ func TestReadyStateLifecycleCollapsedGroupClickExpands(t *testing.T) {
 	model = mouseClickAt(model, 5, y)
 
 	if !model.transcript[0].toolExpanded {
-		t.Fatalf("lifecycle ready-state click did not expand: %#v", model.transcript[0])
+		t.Fatalf("lifecycle fold-group click did not expand: %#v", model.transcript[0])
 	}
 }
 
+// TestPendingToolsDoNotGroupBeforeAssistantOrThinking 回归（折叠新规）：
+// 「说话即折叠」已废止——assistant 正文 delta 不得把工具卡收编进组；
+// 不足 6 个的连续只读卡与动作卡（Shell）始终平铺。
 func TestPendingToolsDoNotGroupBeforeAssistantOrThinking(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
@@ -846,8 +849,8 @@ func TestPendingToolsDoNotGroupBeforeAssistantOrThinking(t *testing.T) {
 	model = next.(appModel)
 
 	rendered := ansi.Strip(model.renderTranscriptContent())
-	if strings.Contains(rendered, "Tools  2 calls") {
-		t.Fatalf("pending tools grouped before assistant:\n%s", rendered)
+	if strings.Contains(rendered, "个工具") {
+		t.Fatalf("sub-6 mixed cards folded:\n%s", rendered)
 	}
 	for _, want := range []string{"✓   读取  a.go  完成", "✓   Shell  go test ./...  完成"} {
 		if !strings.Contains(rendered, want) {
@@ -858,30 +861,27 @@ func TestPendingToolsDoNotGroupBeforeAssistantOrThinking(t *testing.T) {
 	next, _ = model.Update(thinkingDeltaMsg("thinking only"))
 	model = next.(appModel)
 	rendered = ansi.Strip(model.renderTranscriptContent())
-	if strings.Contains(rendered, "Tools  2 calls") {
-		t.Fatalf("thinkingDelta should not group pending tools:\n%s", rendered)
+	if strings.Contains(rendered, "个工具") {
+		t.Fatalf("thinkingDelta should not group tool cards:\n%s", rendered)
 	}
 
-	next, _ = model.Update(assistantDeltaMsg("answer"))
+	// P0：assistant 开口后两张卡保持原样——不回收、不折叠、不动展开态。
+	next, _ = model.Update(assistantDeltaMsg("answer\n"))
 	model = next.(appModel)
 	rendered = ansi.Strip(model.renderTranscriptContent())
-	if !strings.Contains(rendered, "▸ Tools  2 calls") {
-		t.Fatalf("assistantDelta should group pending tools into collapsed ready group:\n%s", rendered)
+	if strings.Contains(rendered, "个工具") {
+		t.Fatalf("assistantDelta must not group tool cards:\n%s", rendered)
 	}
-	for _, hidden := range []string{"alpha", "ok"} {
-		if strings.Contains(rendered, hidden) {
-			t.Fatalf("ready group leaked detail %q:\n%s", hidden, rendered)
+	for _, want := range []string{"✓   读取  a.go  完成", "✓   Shell  go test ./...  完成", "answer"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("post-speech transcript missing %q:\n%s", want, rendered)
 		}
-	}
-	if model.transcript[0].toolGroupPending || model.transcript[1].toolGroupPending {
-		t.Fatalf("assistantDelta should clear pending flags: %#v", model.transcript)
-	}
-	if model.transcript[0].toolExpanded || model.transcript[0].toolGroupOpen || model.transcript[1].toolExpanded || model.transcript[1].toolGroupOpen {
-		t.Fatalf("assistantDelta should collapse all tool details: %#v", model.transcript)
 	}
 }
 
-func TestAssistantDeltaGroupsPendingToolsEvenWithRunningTool(t *testing.T) {
+// TestAssistantSpeechKeepsToolCardsIndividualWithRunningTool 回归（折叠新规）：
+// 有运行中工具时 assistant delta 同样不得折叠任何卡；运行中卡拒绝点击切换。
+func TestAssistantSpeechKeepsToolCardsIndividualWithRunningTool(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
 	model.width = 90
@@ -895,29 +895,38 @@ func TestAssistantDeltaGroupsPendingToolsEvenWithRunningTool(t *testing.T) {
 	model = next.(appModel)
 
 	before := ansi.Strip(model.renderTranscriptContent())
-	if strings.Contains(before, "Tools  2 calls") {
-		t.Fatalf("running pending tools grouped too early:\n%s", before)
+	if strings.Contains(before, "个工具") {
+		t.Fatalf("running tool cards folded too early:\n%s", before)
 	}
 
 	next, _ = model.Update(assistantDeltaMsg("partial answer\n"))
 	model = next.(appModel)
 	after := ansi.Strip(model.renderTranscriptContent())
-	if !strings.Contains(after, "▸ Tools  2 calls") {
-		t.Fatalf("assistantDelta should group even with running tool:\n%s", after)
+	if strings.Contains(after, "个工具") {
+		t.Fatalf("assistantDelta must not group tool cards:\n%s", after)
 	}
-	if !strings.Contains(after, "partial answer") {
-		t.Fatalf("assistant delta missing after grouping:\n%s", after)
+	for _, want := range []string{"✓   读取  a.go  完成", "Shell  go test ./...", "partial answer"} {
+		if !strings.Contains(after, want) {
+			t.Fatalf("post-speech transcript missing %q:\n%s", want, after)
+		}
 	}
 
+	// 点击已完成卡只切换它自己的详情；运行中卡不受影响。
 	loc := model.transcriptEntryLocationsAt()[0]
 	y := 1 + model.currentLayout().headerHeight + loc.startRow - model.viewport.YOffset
 	model = mouseClickAt(model, 5, y)
-	if model.transcript[0].toolExpanded || model.transcript[1].toolGroupOpen {
-		t.Fatalf("running ready group should not open on click: %#v", model.transcript)
+	if !model.transcript[0].toolExpanded {
+		t.Fatalf("completed card click should toggle its own detail: %#v", model.transcript[0])
+	}
+	if model.transcript[1].toolExpanded || model.transcript[1].toolGroupOpen {
+		t.Fatalf("running card must not open on click: %#v", model.transcript[1])
 	}
 }
 
-func TestPendingMutationAutoExpandsOnlyNewestAndAssistantCollapsesAll(t *testing.T) {
+// TestPendingMutationAutoExpandsOnlyNewestAndAssistantKeepsDiff 回归（P0）：
+// 新到的 pending 变更卡自动展开、旧的收起；assistant 开口后 diff 必须留在
+// 屏幕上——「说话即折叠」对 Edit diff 的回收已废止。
+func TestPendingMutationAutoExpandsOnlyNewestAndAssistantKeepsDiff(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
 	model.width = 100
@@ -967,18 +976,16 @@ func TestPendingMutationAutoExpandsOnlyNewestAndAssistantCollapsesAll(t *testing
 		}
 	}
 
-	next, _ = model.Update(assistantDeltaMsg("done"))
+	next, _ = model.Update(assistantDeltaMsg("done\n"))
 	model = next.(appModel)
-	if model.transcript[0].toolExpanded || model.transcript[1].toolExpanded || model.transcript[0].toolGroupPending || model.transcript[1].toolGroupPending {
-		t.Fatalf("assistantDelta should collapse and ready all mutations: %#v", model.transcript)
+	// P0 核心断言：说话不回收 Edit diff——最新变更卡保持展开，diff 仍在屏上。
+	if model.transcript[0].toolExpanded || !model.transcript[1].toolExpanded {
+		t.Fatalf("assistant speech must not touch mutation expansion state: %#v", model.transcript)
 	}
-	readyRendered := ansi.Strip(model.renderTranscriptContent())
-	if !strings.Contains(readyRendered, "▸ Tools  2 calls") {
-		t.Fatalf("assistantDelta should collapse mutations into ready group:\n%s", readyRendered)
-	}
-	for _, hidden := range []string{"one", "two", "left", "right"} {
-		if strings.Contains(readyRendered, hidden) {
-			t.Fatalf("ready group leaked diff detail %q:\n%s", hidden, readyRendered)
+	spokenRendered := ansi.Strip(model.renderTranscriptContent())
+	for _, want := range []string{"left", "right", "done"} {
+		if !strings.Contains(spokenRendered, want) {
+			t.Fatalf("post-speech transcript reclaimed diff detail %q:\n%s", want, spokenRendered)
 		}
 	}
 }
@@ -1007,40 +1014,41 @@ func TestPendingSingleToolMouseClickExpands(t *testing.T) {
 	}
 }
 
-// TestReadyGroupMixedStatusKeepsHeaderBorderlessAndErrorInnerRow 验证 ready 组
-// 展开时 header 行不带外层边框（避免与工具条目自己的边框叠成两条竖线），
-// 错误工具行仍携带错误色边框。
-func TestReadyGroupMixedStatusKeepsHeaderBorderlessAndErrorInnerRow(t *testing.T) {
+// TestFoldGroupHeaderBorderlessAndMemberRowsBordered 验证折叠组展开时组头行
+// 不带外层边框（避免与工具条目自己的边框叠成两条竖线），组内工具行仍携带
+// 各自的结果色边框。
+func TestFoldGroupHeaderBorderlessAndMemberRowsBordered(t *testing.T) {
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
 
-	rendered := renderToolsGroup([]transcriptEntry{
-		{kind: entryTool, title: "tool", toolName: "Read", toolTarget: "a.go", toolStatus: "ok"},
-		{kind: entryTool, title: "tool", toolName: "Bash", toolTarget: "go test ./...", toolStatus: "error", toolResult: "failed"},
-	}, 90, time.Time{}, true, false)
+	var entries []transcriptEntry
+	for _, name := range []string{"a1.go", "a2.go", "a3.go", "a4.go"} {
+		entries = append(entries, transcriptEntry{kind: entryTool, title: "tool", toolName: "Read", toolTarget: name, toolStatus: "ok"})
+	}
+	rendered := renderToolsGroup(entries, 90, time.Time{}, true, false)
 
 	lines := strings.Split(rendered, "\n")
-	errorPrefix := styleRenderPrefix(toolErrorBorderStyle)
+	resultPrefix := styleRenderPrefix(toolResultBorderStyle)
 	headerSeen := false
-	errorSeen := false
+	memberSeen := false
 	for _, line := range lines {
 		plainLine := ansi.Strip(line)
 		switch {
-		case strings.Contains(plainLine, "Tools  2 calls"):
+		case strings.Contains(plainLine, "4 个工具"):
 			headerSeen = true
-			if strings.Contains(line, "│") || strings.Contains(line, errorPrefix) {
-				t.Fatalf("ready group header should be borderless, got %q", line)
+			if strings.Contains(line, "│") || strings.Contains(line, resultPrefix) {
+				t.Fatalf("fold group header should be borderless, got %q", line)
 			}
-		case strings.Contains(plainLine, "✗   Shell  go test ./...  失败"):
-			errorSeen = true
-			if !strings.Contains(line, errorPrefix) {
-				t.Fatalf("error tool row should carry error border styling, got %q", line)
+		case strings.Contains(plainLine, "✓   读取  a1.go"):
+			memberSeen = true
+			if !strings.Contains(line, resultPrefix) {
+				t.Fatalf("grouped tool row should carry result border styling, got %q", line)
 			}
 		}
 	}
-	if !headerSeen || !errorSeen {
-		t.Fatalf("mixed ready group rendering incomplete:\n%s", rendered)
+	if !headerSeen || !memberSeen {
+		t.Fatalf("fold group rendering incomplete:\n%s", rendered)
 	}
 }
 
@@ -1049,44 +1057,40 @@ func TestReadyGroupMouseHitAfterOpenDetailTargetsCorrectTool(t *testing.T) {
 	model.ready = true
 	model.width = 100
 	model.height = 24
+	// 6 个连续只读成功卡：前 4 个构成折叠组（组头在 transcript[0]），
+	// a5/a6 保持平铺。组展开且 a1 的详情已打开时，点击 a3 的摘要行
+	// 必须打开 a3 的详情，不能错位到组内其他成员。
 	model.transcript = []transcriptEntry{
 		{
-			kind:             entryTool,
-			title:            "tool",
-			toolName:         "Read",
-			toolTarget:       "a.go",
-			toolStatus:       "ok",
-			toolResult:       "line-1\nline-2\nline-3",
-			toolExpanded:     true,
-			toolGroupOpen:    true,
-			toolGroupPending: false,
+			kind:          entryTool,
+			title:         "tool",
+			toolName:      "Read",
+			toolTarget:    "a1.go",
+			toolStatus:    "ok",
+			toolResult:    "line-1\nline-2\nline-3",
+			toolExpanded:  true,
+			toolGroupOpen: true,
 		},
-		{
-			kind:             entryTool,
-			title:            "tool",
-			toolName:         "Bash",
-			toolTarget:       "go test ./...",
-			toolStatus:       "ok",
-			toolResult:       "ok",
-			toolExpanded:     false,
-			toolGroupOpen:    false,
-			toolGroupPending: false,
-		},
+		{kind: entryTool, title: "tool", toolName: "Read", toolTarget: "a2.go", toolStatus: "ok", toolResult: "r2"},
+		{kind: entryTool, title: "tool", toolName: "Read", toolTarget: "a3.go", toolStatus: "ok", toolResult: "r3"},
+		{kind: entryTool, title: "tool", toolName: "Read", toolTarget: "a4.go", toolStatus: "ok", toolResult: "r4"},
+		{kind: entryTool, title: "tool", toolName: "Read", toolTarget: "a5.go", toolStatus: "ok", toolResult: "r5"},
+		{kind: entryTool, title: "tool", toolName: "Read", toolTarget: "a6.go", toolStatus: "ok", toolResult: "r6"},
 	}
 	model.relayout()
 	model.refreshViewport()
 
 	lines := strings.Split(ansi.Strip(model.renderTranscriptContent()), "\n")
-	summaryRow := lineContaining(t, lines, "✓   Shell  go test ./...  完成")
+	summaryRow := lineContaining(t, lines, "✓   读取  a3.go  完成")
 	y := 1 + model.currentLayout().headerHeight + summaryRow - model.viewport.YOffset
 	model = mouseClickAt(model, 5, y)
 
-	if !model.transcript[1].toolGroupOpen || !model.transcript[0].toolGroupOpen {
-		t.Fatalf("ready group hit-test opened wrong entry: %#v", model.transcript)
+	if !model.transcript[2].toolGroupOpen || !model.transcript[0].toolGroupOpen {
+		t.Fatalf("fold group hit-test opened wrong entry: %#v", model.transcript)
 	}
 	rendered := ansi.Strip(model.renderTranscriptContent())
-	if !strings.Contains(rendered, "line-3") || !strings.Contains(rendered, "ok") {
-		t.Fatalf("ready group detail rendering incomplete after hit-test:\n%s", rendered)
+	if !strings.Contains(rendered, "line-3") || !strings.Contains(rendered, "r3") {
+		t.Fatalf("fold group detail rendering incomplete after hit-test:\n%s", rendered)
 	}
 }
 
@@ -1118,8 +1122,8 @@ func TestTurnFinishedWithoutAssistantKeepsPendingToolsIndividual(t *testing.T) {
 // TestSessionRestoreFinalizesOrphanedRunningToolsAndExpands 回归：恢复一个
 // 上一轮被中断的会话（工具调用没有对应结果记录）时，孤儿调用会以 running
 // 状态进入历史。必须把它们收尾为 error（等价于实时流程 markRunningToolsError
-// 的处理），否则工具组渲染为折叠（running 组用全局 toolGroupExpanded=false）
-// 但点击被 toggleToolExpansion 拒绝（running 不可切换），看起来"无法展开"。
+// 的处理），否则点击被 toggleToolExpansion 拒绝（running 不可切换），
+// 看起来"无法展开"。错误卡与 Shell 卡永不折叠，恢复后以独立卡平铺。
 func TestSessionRestoreFinalizesOrphanedRunningToolsAndExpands(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	model.activity.visible = false
@@ -1179,11 +1183,17 @@ func TestSessionRestoreFinalizesOrphanedRunningToolsAndExpands(t *testing.T) {
 	model.relayout()
 	model.refreshViewport()
 	rendered := ansi.Strip(model.renderTranscriptContent())
-	if !strings.Contains(rendered, "▸ Tools  2 calls") {
-		t.Fatalf("restored tools should start as collapsed ready group:\n%s", rendered)
+	// 错误卡与 Shell 卡永不折叠：两张卡独立平铺，没有组头。
+	if strings.Contains(rendered, "个工具") {
+		t.Fatalf("restored error/shell cards must stay individual:\n%s", rendered)
+	}
+	for _, want := range []string{"✗   读取  stuck.go", "✓   Shell  go test"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("restored transcript missing %q:\n%s", want, rendered)
+		}
 	}
 
-	// 组内不再有 running：点击 header 展开组，再点击错误工具打开详情。
+	// 卡内不再有 running：点击错误卡直接展开详情。
 	var loc transcriptEntryLocation
 	found := false
 	for _, candidate := range model.transcriptEntryLocationsAt() {
@@ -1194,24 +1204,13 @@ func TestSessionRestoreFinalizesOrphanedRunningToolsAndExpands(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatal("tool group location not found")
+		t.Fatal("orphan tool location not found")
 	}
 	y := 1 + model.currentLayout().headerHeight + loc.startRow - model.viewport.YOffset
 
 	model = mouseClickAt(model, 5, y)
 	if !model.transcript[orphanIdx].toolExpanded {
-		t.Fatalf("header click on collapsed ready group did not expand: %#v", model.transcript[orphanIdx])
-	}
-	expanded := ansi.Strip(model.renderTranscriptContent())
-	for _, want := range []string{"✗   读取  stuck.go", "✓   Shell  go test"} {
-		if !strings.Contains(expanded, want) {
-			t.Fatalf("expanded group missing %q:\n%s", want, expanded)
-		}
-	}
-
-	model = mouseClickAt(model, 5, y+1)
-	if !model.transcript[orphanIdx].toolGroupOpen {
-		t.Fatalf("restored error detail did not open: %#v", model.transcript[orphanIdx])
+		t.Fatalf("click on restored error card did not expand: %#v", model.transcript[orphanIdx])
 	}
 	withDetail := ansi.Strip(model.renderTranscriptContent())
 	if !strings.Contains(withDetail, "interrupted: previous turn ended before completion") {
@@ -1361,14 +1360,16 @@ func TestHistoricalFileMutationRestoresExpandedDiffFromToolInput(t *testing.T) {
 	model.refreshViewport()
 
 	collapsed := ansi.Strip(model.renderTranscriptContent())
-	if !strings.Contains(collapsed, "▸ Tools  1 calls") {
-		t.Fatalf("historical mutation should start collapsed:\n%s", collapsed)
+	if !strings.Contains(collapsed, "✓   编辑  a.go  完成") {
+		t.Fatalf("historical mutation should start as a collapsed card:\n%s", collapsed)
+	}
+	if strings.Contains(collapsed, "return 1") {
+		t.Fatalf("collapsed mutation leaked diff detail:\n%s", collapsed)
 	}
 
 	loc := model.transcriptEntryLocationsAt()[0]
 	y := 1 + model.currentLayout().headerHeight + loc.startRow - model.viewport.YOffset
 	model = mouseClickAt(model, 5, y)
-	model = mouseClickAt(model, 5, y+1)
 
 	rendered := ansi.Strip(model.renderTranscriptContent())
 	for _, want := range []string{"return 1", "return 2"} {

@@ -32,7 +32,7 @@ func TestBufferedReasoningDurationMeasuredFromTurnStart(t *testing.T) {
 	model.refreshViewport()
 
 	got := ansi.Strip(model.viewport.View())
-	if !strings.Contains(got, "Thought for 30 s") {
+	if !strings.Contains(got, "思考了 30 秒") {
 		t.Fatalf("buffered reasoning duration did not measure from turn start:\n%s", got)
 	}
 }
@@ -126,7 +126,7 @@ func TestLiveReasoningIsVisibleThenFoldsByDefault(t *testing.T) {
 	model.queryGuard.FinishModel()
 	model.refreshViewport()
 	got := ansi.Strip(model.viewport.View())
-	if !strings.Contains(got, "Thought for 2 s") {
+	if !strings.Contains(got, "思考了 2 秒") {
 		t.Fatalf("completed reasoning did not fold to a duration title:\n%s", got)
 	}
 	if strings.Contains(got, "checking the implementation") {
@@ -161,14 +161,14 @@ func TestCtrlOTogglesCompletedReasoningBodies(t *testing.T) {
 	}
 	// 展开后思考块只渲染正文：整个视图只剩段头一行 Thought 摘要，
 	// 块自身不再重复第二行标题。
-	if occurrences := strings.Count(got, "Thought for"); occurrences != 1 {
+	if occurrences := strings.Count(got, "思考了"); occurrences != 1 {
 		t.Fatalf("expanded reasoning renders %d Thought titles, want exactly one segment header:\n%s", occurrences, got)
 	}
 
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
 	model = next.(appModel)
 	got = ansi.Strip(model.viewport.View())
-	if !strings.Contains(got, "Thought for 3 s") || strings.Contains(got, "restored reasoning body") {
+	if !strings.Contains(got, "思考了 3 秒") || strings.Contains(got, "restored reasoning body") {
 		t.Fatalf("second Ctrl+O did not collapse completed reasoning:\n%s", got)
 	}
 }

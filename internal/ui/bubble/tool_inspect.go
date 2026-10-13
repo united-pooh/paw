@@ -75,17 +75,12 @@ func transcriptEntryLocationsWith(entries []transcriptEntry, width int, showThin
 		rendered := ""
 		locationIndex := index
 		kind := entry.kind
-		if toolEntryUsesReadyGroup(entries, index) {
-			first, last := toolGroupRange(entries, index)
+		if first, last, inFoldGroup := toolFoldGroupRange(entries, index); inFoldGroup {
 			if first != index {
 				continue
 			}
-			groupEntries := toolEntriesForGroup(entries, index)
-			expanded := globalGroupExpanded
-			if !toolGroupHasRunning(entries, first, last) {
-				expanded = entries[first].toolExpanded
-			}
-			rendered = renderToolsGroup(groupEntries, width, at, expanded, fullResult)
+			expanded := globalGroupExpanded || entries[first].toolExpanded
+			rendered = renderToolsGroup(entries[first:last+1], width, at, expanded, fullResult)
 			locationIndex = first
 			kind = entryTool
 		} else {
@@ -137,14 +132,11 @@ func (m appModel) toolHitAtTranscriptRow(row int) (index int, isHeaderRow bool, 
 		if !isToolTransaction(entry) {
 			return -1, false, false
 		}
-		if !toolEntryUsesReadyGroup(m.viewEntries, location.transcriptIndex) {
+		first, _, inFoldGroup := toolFoldGroupRange(m.viewEntries, location.transcriptIndex)
+		if !inFoldGroup {
 			return location.transcriptIndex, false, true
 		}
-		first, last := toolGroupRange(m.viewEntries, location.transcriptIndex)
-		groupExpanded := m.toolGroupExpanded
-		if !toolGroupHasRunning(m.viewEntries, first, last) {
-			groupExpanded = m.viewEntries[first].toolExpanded
-		}
+		groupExpanded := m.viewEntries[first].toolExpanded
 		if row == location.startRow {
 			return first, true, true
 		}
@@ -204,7 +196,11 @@ func (m *appModel) toolDetailEntryAtRow(row int, location transcriptEntryLocatio
 	if m == nil || location.transcriptIndex < 0 || location.transcriptIndex >= len(m.viewEntries) {
 		return location.transcriptIndex, true
 	}
-	groupEntries := toolEntriesForGroup(m.viewEntries, location.transcriptIndex)
+	first, last, inFoldGroup := toolFoldGroupRange(m.viewEntries, location.transcriptIndex)
+	if !inFoldGroup {
+		return location.transcriptIndex, true
+	}
+	groupEntries := m.viewEntries[first : last+1]
 	if len(groupEntries) == 0 {
 		return location.transcriptIndex, true
 	}
@@ -411,6 +407,36 @@ func (m *appModel) clearToolFocus() {
 	}
 }
 
+// toggleGlobalFold 是 ctrl+o 的全局折叠总开关：有任何折叠内容（思考块或
+// 工具组）就全部展开，否则全部收起。单块思考的手动覆盖一并清除，让全局
+// 状态立即生效。
+func (m *appModel) toggleGlobalFold() {
+	expand := !m.showThinking
+	if !expand {
+		// 思考已全部展开时，只要还有一个折叠的工具组，方向仍是展开。
+		for index := range m.transcript {
+			if first, _, ok := toolFoldGroupRange(m.transcript, index); ok && first == index && !m.transcript[first].toolExpanded {
+				expand = true
+				break
+			}
+		}
+	}
+	m.showThinking = expand
+	for index := range m.transcript {
+		entry := &m.transcript[index]
+		if entry.reasoningExpansionSet {
+			entry.reasoningExpansionSet = false
+			entry.reasoningExpanded = false
+			m.touchTranscriptEntryAt(index)
+		}
+		if first, _, ok := toolFoldGroupRange(m.transcript, index); ok && first == index && entry.toolExpanded != expand {
+			entry.toolExpanded = expand
+			m.touchTranscriptEntryAt(index)
+		}
+	}
+	m.refreshViewportPreservingOffset()
+}
+
 func (m *appModel) moveToolInspection(direction int) {
 	if m == nil || !m.toolInspectActive || direction == 0 {
 		return
@@ -473,11 +499,12 @@ func (m *appModel) toggleToolGroupSubEntry(index int) bool {
 	return true
 }
 
-// toggleToolExpansion implements two-level expand/collapse for the Tools
-// group. When the group is collapsed, clicking anywhere inside it expands the
-// whole group (lists each tool's summary). When the group is expanded, the
-// group header row collapses the whole group, and clicking a tool's own
-// summary row expands or collapses just that tool's result detail.
+// toggleToolExpansion implements two-level expand/collapse for a folded tool
+// group. When the group is collapsed, clicking its header expands the whole
+// group (lists each tool's summary). When the group is expanded, the group
+// header row collapses it again, and clicking a tool's own summary row expands
+// or collapses just that tool's result detail. Entries outside a fold group
+// (永不折卡、不足 6 个的连续段、段尾最近 2 个) toggle their own detail.
 func (m *appModel) toggleToolExpansion(index int, isHeaderRow bool) bool {
 	if m == nil || index < 0 || index >= len(m.viewEntries) {
 		return false
@@ -489,7 +516,8 @@ func (m *appModel) toggleToolExpansion(index int, isHeaderRow bool) bool {
 	transcriptIndexFor := func(viewIndex int) (int, bool) {
 		return m.transcriptIndexForViewEntry(viewIndex)
 	}
-	if !toolEntryUsesReadyGroup(m.viewEntries, index) {
+	first, last, inFoldGroup := toolFoldGroupRange(m.viewEntries, index)
+	if !inFoldGroup {
 		transcriptIndex, ok := transcriptIndexFor(index)
 		if !ok {
 			return false
@@ -504,17 +532,7 @@ func (m *appModel) toggleToolExpansion(index int, isHeaderRow bool) bool {
 		}
 		return true
 	}
-	first, last := toolGroupRange(m.viewEntries, index)
-	if first < 0 {
-		first = index
-	}
-	if toolGroupHasRunning(m.viewEntries, first, last) {
-		return false
-	}
-	groupExpanded := m.toolGroupExpanded
-	if !toolGroupHasRunning(m.viewEntries, first, last) {
-		groupExpanded = m.viewEntries[first].toolExpanded
-	}
+	groupExpanded := m.viewEntries[first].toolExpanded
 	firstTranscriptIndex, ok := transcriptIndexFor(first)
 	if !ok {
 		return false
@@ -569,8 +587,10 @@ func (m *appModel) ensureInspectedToolVisible() {
 	}
 	beforeOffset := m.viewport.YOffset
 	targetIndex := m.toolInspectIndex
-	if targetIndex >= 0 && targetIndex < len(m.viewEntries) && toolEntryUsesReadyGroup(m.viewEntries, targetIndex) {
-		targetIndex, _ = toolGroupRange(m.viewEntries, targetIndex)
+	if targetIndex >= 0 && targetIndex < len(m.viewEntries) {
+		if first, _, inFoldGroup := toolFoldGroupRange(m.viewEntries, targetIndex); inFoldGroup {
+			targetIndex = first
+		}
 	}
 	for _, location := range m.transcriptEntryLocationsAt() {
 		if location.transcriptIndex != targetIndex {

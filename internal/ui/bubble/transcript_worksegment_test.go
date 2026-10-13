@@ -211,7 +211,7 @@ func TestRenderWorkSegmentLiveHeaderOmitsWindow(t *testing.T) {
 		children:     []transcriptEntry{wsReasoning("scrolling content marker", 0)},
 	}
 	rendered := ansi.Strip(renderWorkSegmentEntry(transcriptEntry{kind: entryWorkSegment, segment: data}, 80, wsAt(5), false))
-	if !strings.Contains(rendered, "Thoughts") {
+	if !strings.Contains(rendered, "思考中") {
 		t.Fatalf("live header must render title:\n%s", rendered)
 	}
 	if strings.Contains(rendered, "scrolling content marker") {
@@ -406,11 +406,11 @@ func TestWorkSegmentTitle(t *testing.T) {
 		data *workSegmentData
 		want string
 	}{
-		{"reasoning+tools+failed", &workSegmentData{hasReasoning: true, toolCalls: 15, failed: 1, startedAt: wsAt(0), finishedAt: wsAt(135)}, "Thought for 2m 15s · 15 tool calls · 1 failed"},
-		{"pure reasoning", &workSegmentData{hasReasoning: true, startedAt: wsAt(0), finishedAt: wsAt(12)}, "Thought for 12 s"},
-		{"pure tools", &workSegmentData{toolCalls: 5, startedAt: wsAt(0), finishedAt: wsAt(48)}, "Worked for 48 s · 5 tool calls"},
-		{"live uses at", &workSegmentData{hasReasoning: true, toolCalls: 2, startedAt: wsAt(0), finishedAt: wsAt(10), live: true}, "Thought for 3m 20s · 2 tool calls"},
-		{"no count when zero", &workSegmentData{hasReasoning: true, startedAt: wsAt(0), finishedAt: wsAt(3)}, "Thought for 3 s"},
+		{"reasoning+tools+failed", &workSegmentData{hasReasoning: true, toolCalls: 15, failed: 1, startedAt: wsAt(0), finishedAt: wsAt(135)}, "思考了 2 分 15 秒 · 15 个工具 · 1 个失败"},
+		{"pure reasoning", &workSegmentData{hasReasoning: true, startedAt: wsAt(0), finishedAt: wsAt(12)}, "思考了 12 秒"},
+		{"pure tools", &workSegmentData{toolCalls: 5, startedAt: wsAt(0), finishedAt: wsAt(48)}, "工作了 48 秒 · 5 个工具"},
+		{"live uses at", &workSegmentData{hasReasoning: true, toolCalls: 2, startedAt: wsAt(0), finishedAt: wsAt(10), live: true}, "思考了 3 分 20 秒 · 2 个工具"},
+		{"no count when zero", &workSegmentData{hasReasoning: true, startedAt: wsAt(0), finishedAt: wsAt(3)}, "思考了 3 秒"},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -424,11 +424,11 @@ func TestWorkSegmentTitle(t *testing.T) {
 func TestWorkSegmentLiveTitle(t *testing.T) {
 	data := &workSegmentData{hasReasoning: true, toolCalls: 7, startedAt: wsAt(0), live: true}
 	got := workSegmentLiveTitle(data, wsAt(83))
-	if got != "Thoughts · 1m 23s · 7 tool calls" {
+	if got != "思考中 · 1 分 23 秒 · 7 个工具" {
 		t.Fatalf("live title = %q", got)
 	}
 	empty := &workSegmentData{startedAt: wsAt(0), live: true}
-	if got := workSegmentLiveTitle(empty, wsAt(0)); got != "Thoughts · 1 s" {
+	if got := workSegmentLiveTitle(empty, wsAt(0)); got != "思考中 · 1 秒" {
 		t.Fatalf("live title without tools = %q", got)
 	}
 }
@@ -457,7 +457,7 @@ func TestWorkSegmentTitleStylingIsNeutral(t *testing.T) {
 	// 失败只在标题追加中性计数，不含任何 error 标记词。
 	data := &workSegmentData{hasReasoning: true, toolCalls: 3, failed: 2, startedAt: wsAt(0), finishedAt: wsAt(10)}
 	title := workSegmentTitle(data, wsAt(10))
-	if !strings.Contains(title, "· 2 failed") {
+	if !strings.Contains(title, "· 2 个失败") {
 		t.Fatalf("title = %q, want neutral failed count", title)
 	}
 	if strings.Contains(title, "!") || strings.Contains(title, "error") {
@@ -481,7 +481,7 @@ func TestRenderWorkSegmentEntryCollapsed(t *testing.T) {
 		t.Fatal("want segment")
 	}
 	out := ansi.Strip(renderWorkSegmentEntry(seg, 80, wsAt(10), false))
-	if !strings.Contains(out, "Thought for") {
+	if !strings.Contains(out, "思考了") {
 		t.Fatalf("collapsed render = %q, want title", out)
 	}
 	if strings.Contains(out, "思考内容不应显示") || strings.Contains(out, "go.mod") {
@@ -511,7 +511,7 @@ func TestFoldWorkSegmentsViewExpandedInlinesChildren(t *testing.T) {
 	}
 	// 标题行只渲染标题。
 	out := ansi.Strip(renderWorkSegmentEntry(header, 80, wsAt(10), false))
-	if !strings.Contains(out, "Thought for") || strings.Contains(out, "推理正文") {
+	if !strings.Contains(out, "思考了") || strings.Contains(out, "推理正文") {
 		t.Fatalf("header render = %q", out)
 	}
 	// reasoning 子条目强制内容展开（不嵌套折叠标题）；工具子条目平铺防重组。
@@ -524,7 +524,7 @@ func TestFoldWorkSegmentsViewExpandedInlinesChildren(t *testing.T) {
 	// 内联的 reasoning 子条目只渲染正文，不嵌套自身的 "Thought for" 标题
 	// （标题只属于段头一行）。
 	childOut := ansi.Strip(renderEntryAt(view[1], 80, wsAt(10), false))
-	if !strings.Contains(childOut, "推理正文") || strings.Contains(childOut, "Thought for") {
+	if !strings.Contains(childOut, "推理正文") || strings.Contains(childOut, "思考了") {
 		t.Fatalf("inline reasoning render = %q, want content without nested title", childOut)
 	}
 	// 映射：子条目指向自己的视图下标；标题行无 transcript 归属。
@@ -550,7 +550,7 @@ func TestWorkSegmentSpanUsesReasoningWindow(t *testing.T) {
 	if !ok {
 		t.Fatal("want segment")
 	}
-	if got := workSegmentTitle(seg.segment, wsAt(40)); !strings.Contains(got, "Thought for 30 s") {
+	if got := workSegmentTitle(seg.segment, wsAt(40)); !strings.Contains(got, "思考了 30 秒") {
 		t.Fatalf("title = %q, want reasoning window duration", got)
 	}
 }
@@ -575,7 +575,7 @@ func TestLiveThoughtCollapsesAtNaturalPositionOnceTextStreams(t *testing.T) {
 	next, _ = model.Update(assistantPartMsg{lifecycle: "delta", blockIndex: 0, partType: "reasoning", delta: "thinking out loud"})
 	model = next.(appModel)
 	model.refreshViewport()
-	if got := ansi.Strip(model.viewport.View()); !strings.Contains(got, "Thoughts") || !strings.Contains(got, "thinking out loud") {
+	if got := ansi.Strip(model.viewport.View()); !strings.Contains(got, "思考中") || !strings.Contains(got, "thinking out loud") {
 		t.Fatalf("live reasoning window not visible while streaming:\n%s", got)
 	}
 
@@ -588,7 +588,7 @@ func TestLiveThoughtCollapsesAtNaturalPositionOnceTextStreams(t *testing.T) {
 
 	got := ansi.Strip(model.viewport.View())
 	textRow := strings.Index(got, "你好喵～")
-	thoughtRow := strings.Index(got, "Thought for 3 s")
+	thoughtRow := strings.Index(got, "思考了 3 秒")
 	if textRow < 0 || thoughtRow < 0 {
 		t.Fatalf("response or folded thought missing mid-turn:\n%s", got)
 	}
@@ -601,7 +601,7 @@ func TestLiveThoughtCollapsesAtNaturalPositionOnceTextStreams(t *testing.T) {
 	if strings.Contains(got, localClock) {
 		t.Fatalf("retired response clock still renders:\n%s", got)
 	}
-	if strings.Contains(got, "Thoughts ·") || strings.Contains(got, "thinking out loud") {
+	if strings.Contains(got, "思考中 ·") || strings.Contains(got, "thinking out loud") {
 		t.Fatalf("stale live thought block survived the response:\n%s", got)
 	}
 }

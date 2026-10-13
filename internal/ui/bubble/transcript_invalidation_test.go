@@ -28,15 +28,26 @@ func TestTranscriptInvalidationFullDominatesEntryChanges(t *testing.T) {
 	}
 }
 
+// 折叠新规：≥6 个连续可折卡（只读成功）构成折叠组，前 N-2 个收进组头；
+// 落在组内的 dirty 下标必须归一到组头，避免增量渲染只刷半个组。
 func TestTranscriptDirtyToolEntryNormalizesToReadyGroupStart(t *testing.T) {
-	m := appModel{transcript: []transcriptEntry{
+	entries := []transcriptEntry{
 		{kind: entryAssistant, title: "assistant", body: "before"},
-		{kind: entryTool, title: "tool", toolName: "Read", toolStatus: "ok"},
-		{kind: entryTool, title: "tool", toolName: "Bash", toolStatus: "running"},
-	}}
+	}
+	for _, name := range []string{"a.go", "b.go", "c.go", "d.go", "e.go", "f.go"} {
+		entries = append(entries, transcriptEntry{
+			kind: entryTool, title: "tool", toolName: "Read", toolStatus: "ok", toolTarget: name,
+		})
+	}
+	m := appModel{transcript: entries}
 
-	if got := m.normalizeTranscriptDirtyIndex(2); got != 1 {
-		t.Fatalf("normalized dirty index = %d, want tool group start 1", got)
+	// 组头在下标 1；下标 3 落在折叠跨度 [1,4] 内，归一到组头。
+	if got := m.normalizeTranscriptDirtyIndex(3); got != 1 {
+		t.Fatalf("normalized dirty index = %d, want fold group start 1", got)
+	}
+	// 段尾最近 2 个保持展开，不属于组：下标 5 不归一。
+	if got := m.normalizeTranscriptDirtyIndex(5); got != 5 {
+		t.Fatalf("normalized dirty index = %d, want 5 (kept-expanded tail entry)", got)
 	}
 }
 

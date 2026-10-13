@@ -26,19 +26,19 @@ func TestRunningToolElapsedAdvancesAcrossFrames(t *testing.T) {
 	}
 	base := time.Now()
 
-	// 第一帧：渲染 5.00s
+	// 第一帧：渲染 5s（运行中计时为整秒）
 	m.cursorFrameAt = base
 	first := m.renderTranscriptContent()
-	if !strings.Contains(first, "5.00s") {
-		t.Fatalf("first frame elapsed = %q, want 5.00s", first)
+	if !strings.Contains(first, "运行中 5s") {
+		t.Fatalf("first frame elapsed = %q, want 运行中 5s", first)
 	}
 
 	// 第二帧：推进 3 秒，模拟 cursorFrameMsg 分支调用 refreshRunningToolProgress
 	m.cursorFrameAt = base.Add(3 * time.Second)
 	m.refreshRunningToolProgress(base.Add(3 * time.Second))
 	second := m.renderTranscriptContent()
-	if !strings.Contains(second, "8.00s") {
-		t.Fatalf("second frame elapsed = %q, want 8.00s (cache must not freeze progress)", second)
+	if !strings.Contains(second, "运行中 8s") {
+		t.Fatalf("second frame elapsed = %q, want 运行中 8s (cache must not freeze progress)", second)
 	}
 
 	// 同一秒内重复帧：不应额外 touch（版本稳定，无抖动刷新）
