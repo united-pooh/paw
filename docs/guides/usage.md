@@ -80,7 +80,8 @@ Provider/Model、YOLO、安全沙箱与连接配置只以全局 `config.jsonc` �
       "discovery": {
         "enabled": true,
         "path": "models",
-        "format": "openai-list"
+        "format": "openai-list",
+        "autoRegister": true
       }
     }
   },
@@ -93,6 +94,7 @@ Provider/Model、YOLO、安全沙箱与连接配置只以全局 `config.jsonc` �
 - `yolo` 默认 `false`；`/config` →“通用”可持久化并热应用到主 Agent 和后续 worker。`--yolo` / `--dangerously` 设置本次启动初值，`/yolo` 仍是会话内运行期开关。
 - 顶层进程启动时会发现所有合并预设后 `discovery.enabled == true` 的 provider；task worker 不执行 discovery。
 - `/config` 新建自定义 OpenAI 兼容 provider 时默认使用 `models` + `openai-list`；服务商新增或修改后会显式刷新一次。
+- `discovery.autoRegister` 默认 `false`。开启后，一次**成功**的发现会把上游模型列表写回 `config.jsonc`：上游新增的模型自动注册，上游已不再提供的模型（含手写条目）直接删除；若被删除的正是当前模型，`activeModel` 回退到该 provider 剩下最小的模型 ID。发现失败或写盘失败只产生 warning，不修改配置。
 - 普通模型切换和被动文件热重载不重复发起请求，只复用已确认结果或 endpoint/path/format 指纹匹配的缓存。
 - 发现需要合法同源 HTTP(S) URL、受支持格式，以及可从 `auth.env` 解析的凭据；失败只产生安全化 warning，并回退到匹配缓存或手工模型。
 - JSONC 定向更新保留注释、尾随逗号和未知字段，并通过 revision + 文件内容 CAS 防止并发覆盖。

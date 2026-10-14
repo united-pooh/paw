@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-13
+
+- `config.jsonc` 新增 `discovery.autoRegister`（默认 `false`）：开启后一次成功的模型发现会把上游模型列表写回 `config.jsonc`——新增上游模型、删除上游已消失的模型（含手写条目），当前模型被删除时 `activeModel` 回退到该 provider 剩下的最小模型 ID。写回复用 `/config` 的 revision + 文件内容 CAS 与 JSONC 定向补丁；发现失败或写盘失败保留原配置并只产生 warning 诊断。
+- `/config` → 服务商面板新增“自动注册模型”开关。
+
 ## 2026-08-17
 
 - `config.jsonc` 新增持久化 `yolo` 开关，并接入 `/config` 通用设置与运行时/worker 热应用。

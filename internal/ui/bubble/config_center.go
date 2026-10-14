@@ -661,6 +661,13 @@ func (m *appModel) advanceProviderAction(snapshot configv2.Snapshot) {
 		}
 		m.applyConfigOperations(configv2.UpsertProvider(state.targetID, provider))
 	case 11:
+		autoRegister := !providerDiscoveryAutoRegister(provider)
+		if provider.Discovery == nil {
+			provider.Discovery = &configv2.DiscoveryConfig{}
+		}
+		provider.Discovery.AutoRegister = &autoRegister
+		m.applyConfigOperations(configv2.UpsertProvider(state.targetID, provider))
+	case 12:
 		if !state.confirmDestructive("delete-provider:"+state.targetID, "再次按 Enter 删除该服务商及其全部模型") {
 			return
 		}
@@ -1367,7 +1374,7 @@ func (m appModel) configCenterOptions() []configCenterOption {
 		return append(result, configCenterOption{"+ 添加服务商", "使用预设或自定义配置"})
 	case configCenterProviderActions:
 		p := snapshot.Document.Providers[state.targetID]
-		return []configCenterOption{{"编辑端点", firstNonEmptyUI(p.Endpoint, "使用预设默认值")}, {"切换传输协议", firstNonEmptyUI(p.Transport, "使用预设默认值")}, {"编辑超时", optionalIntLabel(p.TimeoutSeconds, "继承")}, {"编辑重试次数", optionalIntPointerLabel(p.Retries)}, {"切换流式输出", optionalBoolLabel(p.Stream)}, {"编辑凭据环境变量", firstNonEmptyUI(strings.Join(p.Auth.Env, ", "), "预设/继承")}, {"编辑请求头", "高级 JSONC"}, {"编辑请求体", "高级 JSONC"}, {"代理模式", providerProxyModeLabel(snapshot.Document.Proxy, p.Proxy)}, {"代理地址", providerProxyURLLabel(p.Proxy)}, {"模型发现", boolConfigLabel(providerDiscoveryEnabled(state.targetID, p))}, {"删除服务商", "同时删除其模型"}}
+		return []configCenterOption{{"编辑端点", firstNonEmptyUI(p.Endpoint, "使用预设默认值")}, {"切换传输协议", firstNonEmptyUI(p.Transport, "使用预设默认值")}, {"编辑超时", optionalIntLabel(p.TimeoutSeconds, "继承")}, {"编辑重试次数", optionalIntPointerLabel(p.Retries)}, {"切换流式输出", optionalBoolLabel(p.Stream)}, {"编辑凭据环境变量", firstNonEmptyUI(strings.Join(p.Auth.Env, ", "), "预设/继承")}, {"编辑请求头", "高级 JSONC"}, {"编辑请求体", "高级 JSONC"}, {"代理模式", providerProxyModeLabel(snapshot.Document.Proxy, p.Proxy)}, {"代理地址", providerProxyURLLabel(p.Proxy)}, {"模型发现", boolConfigLabel(providerDiscoveryEnabled(state.targetID, p))}, {"自动注册模型", boolConfigLabel(providerDiscoveryAutoRegister(p))}, {"删除服务商", "同时删除其模型"}}
 	case configCenterAddProvider:
 		ids := sortedPresetIDs()
 		result := make([]configCenterOption, 0, len(ids)+1)
@@ -1499,10 +1506,10 @@ func (m appModel) renderConfigCenterBox() string {
 			}
 		}
 		maxItems := clampInt(rowBudget, 1, maxInt(1, len(matches)))
-		if statusReserve > 0 && maxItems == len(matches) && maxItems > 1 {
+		if statusReserve > 0 && maxItems > 1 {
 			// A full action list can otherwise consume the final body row that the
 			// fullscreen renderer needs for status feedback.
-			maxItems--
+			maxItems = maxInt(1, minInt(maxItems, rowBudget-1))
 		}
 		start := maxInt(0, selectedPosition-maxItems+1)
 		end := minInt(len(matches), start+maxItems)
@@ -1787,6 +1794,12 @@ func providerDiscoveryEnabled(providerID string, provider configv2.Provider) boo
 	presetID := firstNonEmptyUI(provider.Preset, providerID)
 	preset, ok := configv2.BuiltinPresets()[presetID]
 	return ok && preset.Provider.Discovery != nil && preset.Provider.Discovery.Enabled != nil && *preset.Provider.Discovery.Enabled
+}
+
+// providerDiscoveryAutoRegister 反映“自动注册模型”开关：缺省（nil）为关闭，
+// 只按显式配置判断，不从预设继承。
+func providerDiscoveryAutoRegister(provider configv2.Provider) bool {
+	return provider.Discovery != nil && provider.Discovery.AutoRegister != nil && *provider.Discovery.AutoRegister
 }
 
 func optionalIntLabel(value int, fallback string) string {

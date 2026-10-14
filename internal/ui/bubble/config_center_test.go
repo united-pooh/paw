@@ -399,6 +399,42 @@ func TestConfigCenterProviderDiscoveryToggleRefreshesCatalog(t *testing.T) {
 	}
 }
 
+func TestConfigCenterProviderAutoRegisterToggleSyncsModelList(t *testing.T) {
+	controller, _ := newConfigCenterHarnessWithDiscovery(t, []configv2.DiscoveredModel{{Name: "live"}})
+	model := newModel(context.Background(), &fakeRunner{}, "session", controller, nil, nil, nil, newTerminalCursorAnchor())
+	model.configCenterController = controller
+	model.openConfigCenter()
+	model.configCenter.page = configCenterProviderActions
+	model.configCenter.targetID = "local"
+	model.configCenter.selected = 11
+
+	model.advanceProviderAction(controller.Snapshot())
+	enabled := controller.Snapshot()
+	provider := enabled.Document.Providers["local"]
+	if provider.Discovery == nil || provider.Discovery.AutoRegister == nil || !*provider.Discovery.AutoRegister {
+		t.Fatalf("auto register was not enabled: %#v", provider.Discovery)
+	}
+	// Upstream is authoritative: the refresh that follows the provider update
+	// persists the discovered list and prunes models the provider no longer
+	// serves.
+	if _, ok := enabled.Document.Models["local/live"]; !ok {
+		t.Fatalf("auto register did not persist the discovered model: %#v", enabled.Document.Models)
+	}
+	if _, ok := enabled.Document.Models["local/one"]; ok {
+		t.Fatalf("auto register kept an upstream-removed model: %#v", enabled.Document.Models)
+	}
+	if enabled.ActiveModelID != "local/live" {
+		t.Fatalf("active model = %q, want the surviving registered model", enabled.ActiveModelID)
+	}
+
+	model.configCenter.selected = 11
+	model.advanceProviderAction(controller.Snapshot())
+	provider = controller.Snapshot().Document.Providers["local"]
+	if provider.Discovery == nil || provider.Discovery.AutoRegister == nil || *provider.Discovery.AutoRegister {
+		t.Fatalf("auto register was not disabled: %#v", provider.Discovery)
+	}
+}
+
 func TestConfigCenterTransportSwitchAlignsCanonicalAPIPath(t *testing.T) {
 	tests := []struct {
 		name     string

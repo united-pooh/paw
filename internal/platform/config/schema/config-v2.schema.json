@@ -56,6 +56,7 @@
             "path": { "type": "string" },
             "format": { "enum": ["openai-list", "ollama-tags"] },
             "mode": { "enum": ["merge", "replace"] },
+            "autoRegister": { "type": "boolean" },
             "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 10 },
             "include": { "type": "array", "items": { "type": "string" } },
             "exclude": { "type": "array", "items": { "type": "string" } }

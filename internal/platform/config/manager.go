@@ -72,6 +72,8 @@ type Manager struct {
 	configWriteHook             func() error
 	disableModelDiscovery       bool
 	retainedDiscoveries         map[string]retainedDiscovery
+	confirmedDiscoveries        []string
+	autoRegisterDiagnostic      *Diagnostic
 	pendingDiscoveries          map[string]pendingDiscovery
 	discoveryCache              discoveryCacheFile
 	discoveryCacheInvalid       bool
@@ -205,6 +207,14 @@ func openManager(ctx context.Context, options Options, cacheWriter func(string, 
 	// workspace changes during discovery, or immediately after it, are either
 	// observed by this synchronous read or queued for the watch loop.
 	candidate, loadErr = manager.loadStartupCandidate(ctx, 1)
+	if loadErr == nil && !manager.disableModelDiscovery {
+		// 自动注册必须使用确定的 CAS 基线：此时快照仍等于磁盘内容，且更新
+		// 锁未被持有，可以安全复用 /config 的提交路径。
+		if registered, changed := manager.autoRegisterFromSnapshot(ctx, candidate); changed {
+			candidate = registered
+		}
+		candidate = manager.appendAutoRegisterDiagnostic(candidate)
+	}
 	if loadErr != nil {
 		raw, readErr := os.ReadFile(paths.GlobalConfig)
 		if readErr != nil {
@@ -489,6 +499,7 @@ func (m *Manager) loadModelDiscoveryCache() {
 }
 
 func (m *Manager) initializeModelDiscovery(ctx context.Context, document Document, activeID string) {
+	m.confirmedDiscoveries = nil
 	_, cacheProviders := matchingCachedDiscoveries(document, m.discoveryCache)
 	activeProviderID := activeDiscoveryProvider(document, activeID)
 	m.discoveryStatus = DiscoveryStatus{
@@ -658,6 +669,7 @@ func (m *Manager) finalizeModelDiscovery(document Document, activeID string) {
 		retained := pending.Discovery
 		retained.Models = cloneDiscoveredModels(retained.Models)
 		m.retainedDiscoveries[pending.ProviderID] = retained
+		m.confirmedDiscoveries = append(m.confirmedDiscoveries, pending.ProviderID)
 		updatedCache.Providers[pending.ProviderID] = discoveryCacheEntry{
 			EndpointFingerprint: retained.EndpointFingerprint,
 			Format:              retained.Format,
@@ -1333,6 +1345,41 @@ func sameUpdatePreview(left, right Snapshot) bool {
 		reflect.DeepEqual(left.Active, right.Active)
 }
 
+// applyConfigOperations patches raw JSONC with targeted operations while
+// preserving comments, trailing commas, and unknown fields. It is shared by the
+// interactive update path and model auto-registration.
+func applyConfigOperations(raw []byte, operations []Operation) ([]byte, error) {
+	var err error
+	for _, operation := range operations {
+		switch operation.Kind {
+		case OperationSetActiveModel:
+			raw, err = patchJSONCMember(raw, nil, "activeModel", operation.Value, false)
+		case OperationSetYolo:
+			raw, err = patchJSONCMember(raw, nil, "yolo", operation.Value, false)
+		case OperationSetProxy:
+			if len(operation.Value) == 0 {
+				raw, err = patchJSONCMember(raw, nil, "proxy", nil, true)
+			} else {
+				raw, err = patchJSONCMember(raw, nil, "proxy", operation.Value, false)
+			}
+		case OperationUpsertProvider:
+			raw, err = patchJSONCObjectMemberFields(raw, []string{"providers"}, operation.ID, operation.Value, []string{"preset", "transport", "endpoint", "apiPath", "auth", "headers", "body", "timeoutSeconds", "retries", "stream", "proxy", "discovery"})
+		case OperationDeleteProvider:
+			raw, err = patchJSONCMember(raw, []string{"providers"}, operation.ID, nil, true)
+		case OperationUpsertModel:
+			raw, err = patchJSONCObjectMemberFields(raw, []string{"models"}, operation.ID, operation.Value, []string{"provider", "name", "adapter", "contextWindow", "stream", "capabilities", "parameters"})
+		case OperationDeleteModel:
+			raw, err = patchJSONCMember(raw, []string{"models"}, operation.ID, nil, true)
+		default:
+			return nil, fmt.Errorf("unsupported config operation %q", operation.Kind)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return raw, nil
+}
+
 // prepareUpdate requires updateMu and is shared by preview and commit so both
 // paths apply identical optimistic-concurrency, file-state, patching, and
 // validation rules.
@@ -1364,32 +1411,9 @@ func (m *Manager) prepareUpdate(ctx context.Context, expectedRevision uint64, op
 		}
 		raw = starter
 	}
-	for _, operation := range operations {
-		switch operation.Kind {
-		case OperationSetActiveModel:
-			raw, err = patchJSONCMember(raw, nil, "activeModel", operation.Value, false)
-		case OperationSetYolo:
-			raw, err = patchJSONCMember(raw, nil, "yolo", operation.Value, false)
-		case OperationSetProxy:
-			if len(operation.Value) == 0 {
-				raw, err = patchJSONCMember(raw, nil, "proxy", nil, true)
-			} else {
-				raw, err = patchJSONCMember(raw, nil, "proxy", operation.Value, false)
-			}
-		case OperationUpsertProvider:
-			raw, err = patchJSONCObjectMemberFields(raw, []string{"providers"}, operation.ID, operation.Value, []string{"preset", "transport", "endpoint", "apiPath", "auth", "headers", "body", "timeoutSeconds", "retries", "stream", "proxy", "discovery"})
-		case OperationDeleteProvider:
-			raw, err = patchJSONCMember(raw, []string{"providers"}, operation.ID, nil, true)
-		case OperationUpsertModel:
-			raw, err = patchJSONCObjectMemberFields(raw, []string{"models"}, operation.ID, operation.Value, []string{"provider", "name", "adapter", "contextWindow", "stream", "capabilities", "parameters"})
-		case OperationDeleteModel:
-			raw, err = patchJSONCMember(raw, []string{"models"}, operation.ID, nil, true)
-		default:
-			err = fmt.Errorf("unsupported config operation %q", operation.Kind)
-		}
-		if err != nil {
-			return Snapshot{}, nil, Snapshot{}, err
-		}
+	raw, err = applyConfigOperations(raw, operations)
+	if err != nil {
+		return Snapshot{}, nil, Snapshot{}, err
 	}
 	if _, _, err := parseAndValidateGlobal(raw, m.paths.GlobalConfig); err != nil {
 		return Snapshot{}, nil, Snapshot{}, err
@@ -1449,6 +1473,14 @@ func (m *Manager) RefreshModelDiscovery(ctx context.Context) (Snapshot, error) {
 	candidate := m.candidateFromParsed(ctx, files.global.raw, parsed, current.Revision+1)
 	if !candidate.Ready && current.Ready {
 		return current, fmt.Errorf("refreshed model discovery has no usable active credential; keeping last-known-good snapshot")
+	}
+	if !m.disableModelDiscovery {
+		// 自动注册在发布的同一提交路径上写回 config.jsonc；candidate 尚未发布，
+		// 其 Raw 仍等于磁盘内容，可以作为 CAS 基线。
+		if registered, changed := m.autoRegisterFromSnapshot(ctx, candidate); changed {
+			candidate = registered
+		}
+		candidate = m.appendAutoRegisterDiagnostic(candidate)
 	}
 	m.publish(candidate)
 	return candidate.Clone(), nil

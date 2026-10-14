@@ -1,5 +1,15 @@
 # Progress
 
+## 模型发现自动注册（2026-10-13）
+
+- [x] 定位缺口：discovery 只进内存 catalog，`config.jsonc` 的 `models` 不自动更新；用户配置里残留上游已下架的 `gpt-5.6-luna`，选中即 400 unknown model。
+- [x] 用户决策：只做代码机制（不改他的 config）；冲突策略为“上游列表为准，已消失的直接删除”。
+- [x] 新增 `discovery.autoRegister`（默认 false）：成功发现后写回 config.jsonc，新增上游模型、删除上游已消失模型（含手写条目），当前模型被删时 `activeModel` 回退到该 provider 剩余最小 ID。
+- [x] 写回复用 `/config` 的 JSONC 定向补丁 + revision/文件内容 CAS（`applyConfigOperations` 抽出共用）；发现失败、校验失败、写盘失败一律保留原配置并只记 warning 诊断。
+- [x] `/config` → 服务商面板新增“自动注册模型”开关；动作页索引顺延（删除服务商 11→12）。
+- [x] 验证：`go test ./internal/platform/config ./internal/ui/bubble`（含 `-race`）通过；全仓 `go test ./...` 仅剩两处先存失败——`internal/app` 的 `TestRuntimeContextLimit*`（incomplete 场景期望 131072/270000/96000 而实得 128000）与 `internal/entry/cli` 的 `TestSourceLayoutHasOneBuildEntryAndNoRuntimeArtifacts`（`cmd/` 下多出空的 `cmd/agent/`）；已在 HEAD 干净 worktree 复现，与本次改动无关。
+- 教训：本仓存在已知失败测试，交付前必须先在 HEAD 基线复现，避免误判为回归。
+
 ## Goal / Plan 重做（2026-10-09）
 
 - [x] 调查历史设计与源码，真实handleSubmit六个问题复现。
@@ -525,3 +535,9 @@
 
 - [x] 用户实机截图显示 ANSI 8 与亮桌面合成背景近乎同色；对比度测试和真实 View 测试复现。
 - [x] default 辅助文字改终端默认前景，边框 ANSI 7、注释 ANSI 15；theme/bubble 测试、vet、亮背景预览与构建通过。已更新 ~/go/bin/paw，旧文件备份和哈希见 .agent/visual/default-terminal/contrast-install.json；需重启现有进程。
+- [x] 在 DiscoveryConfig 增加 autoRegister 字段（类型/MarshalJSON/clone/mergePreset/schema） <!-- todo:schema -->
+- [x] 实现 discoveryAutoRegistrationOps：生成新增/删除/activeModel 回退的 config 操作 <!-- todo:ops -->
+- [x] 接入启动与 RefreshModelDiscovery：写回 config.jsonc 并发布新快照，失败降级为 warning <!-- todo:hook -->
+- [x] /config 服务商面板增加“自动注册模型”开关 <!-- todo:ui -->
+- [x] 更新 schema、docs（usage/model）、CHANGELOG <!-- todo:docs -->
+- [x] 阅读论文正文与附录，提取评测协议、模型和运行环境 <!-- todo:paper -->

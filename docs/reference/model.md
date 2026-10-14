@@ -44,6 +44,8 @@
 
 provider 的 `discovery.enabled` 为 `true` 时，顶层进程会在启动时执行模型发现；`/config` 中修改 provider 或切换“模型发现”后会显式刷新。普通模型切换和被动文件重载只复用已确认结果或匹配缓存。
 
+provider 的 `discovery.autoRegister` 为 `true` 时，一次成功的发现会把上游模型列表持久化到 `config.jsonc`：新增上游模型、删除上游已消失的模型（含手写条目），并在当前模型被删除时把 `activeModel` 回退到该 provider 剩下的最小模型 ID。写回走与 `/config` 相同的 revision + 文件内容 CAS 与 JSONC 定向补丁路径；发现失败、校验失败或写盘失败都保留原配置并只产生 warning 诊断，`/config` 的“自动注册模型”开关可随时切换。
+
 ##### `type RequestBody map[string]any`
 
 任意 JSON 对象，通过 `extraBody` / `modelExtraBody` 合并进 provider 请求体。受保护字段（如 `model`、`system`、`messages`、`tools`、`stream` 等）不允许出现在 extra body 中；`ValidateExtraRequestBodies` 会在加载配置时校验。

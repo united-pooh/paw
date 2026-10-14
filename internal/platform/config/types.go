@@ -110,6 +110,10 @@ type DiscoveryConfig struct {
 	Include        []string `json:"include,omitempty"`
 	Exclude        []string `json:"exclude,omitempty"`
 	Mode           string   `json:"mode,omitempty"`
+	// AutoRegister 为 true 时，一次成功的发现会把上游模型列表写回
+	// config.jsonc：新增缺失模型、删除上游已消失的模型，并在当前模型被删除
+	// 时回退 activeModel。默认关闭（nil 视为 false）。
+	AutoRegister *bool `json:"autoRegister,omitempty"`
 }
 
 func (value DiscoveryConfig) MarshalJSON() ([]byte, error) {
@@ -121,12 +125,14 @@ func (value DiscoveryConfig) MarshalJSON() ([]byte, error) {
 		Include        *[]string `json:"include,omitempty"`
 		Exclude        *[]string `json:"exclude,omitempty"`
 		Mode           string    `json:"mode,omitempty"`
+		AutoRegister   *bool     `json:"autoRegister,omitempty"`
 	}
 	encoded := encodedDiscoveryConfig{
 		Enabled:        value.Enabled,
 		Format:         value.Format,
 		TimeoutSeconds: value.TimeoutSeconds,
 		Mode:           value.Mode,
+		AutoRegister:   cloneBoolPointer(value.AutoRegister),
 	}
 	if value.PathSet || value.Path != "" {
 		path := value.Path
@@ -152,6 +158,7 @@ func (value *DiscoveryConfig) UnmarshalJSON(raw []byte) error {
 		Include        *[]string       `json:"include,omitempty"`
 		Exclude        *[]string       `json:"exclude,omitempty"`
 		Mode           string          `json:"mode,omitempty"`
+		AutoRegister   *bool           `json:"autoRegister,omitempty"`
 	}
 	var encoded encodedDiscoveryConfig
 	if err := json.Unmarshal(raw, &encoded); err != nil {
@@ -162,6 +169,7 @@ func (value *DiscoveryConfig) UnmarshalJSON(raw []byte) error {
 		Format:         encoded.Format,
 		TimeoutSeconds: encoded.TimeoutSeconds,
 		Mode:           encoded.Mode,
+		AutoRegister:   cloneBoolPointer(encoded.AutoRegister),
 	}
 	if len(encoded.Path) != 0 {
 		if strings.TrimSpace(string(encoded.Path)) == "null" {
@@ -504,6 +512,7 @@ func cloneDiscoveryConfig(value *DiscoveryConfig) *DiscoveryConfig {
 	cloned.PathSet = value.PathSet || value.Path != ""
 	cloned.Include = cloneStringSlice(value.Include)
 	cloned.Exclude = cloneStringSlice(value.Exclude)
+	cloned.AutoRegister = cloneBoolPointer(value.AutoRegister)
 	return &cloned
 }
 

@@ -144,6 +144,9 @@ func mergePreset(id string, configured Provider) Provider {
 		if configured.Discovery.Mode != "" {
 			merged.Mode = configured.Discovery.Mode
 		}
+		if configured.Discovery.AutoRegister != nil {
+			merged.AutoRegister = cloneBoolPointer(configured.Discovery.AutoRegister)
+		}
 		base.Discovery = &merged
 	}
 	base.Preset = configured.Preset
