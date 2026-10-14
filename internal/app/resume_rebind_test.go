@@ -176,7 +176,7 @@ func TestTodoArchiveWritesProgressFile(t *testing.T) {
 		t.Fatalf("unexpected result: %s", out)
 	}
 
-	progress := filepath.Join(root, "memory", "progress.md")
+	progress := filepath.Join(store.Root(), "sessions", "session-a", "progress.md")
 	data, err := os.ReadFile(progress)
 	if err != nil {
 		t.Fatalf("read progress.md: %v", err)

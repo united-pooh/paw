@@ -24,7 +24,7 @@ func BindSessionTools(app *WorkspaceRuntime, todoBroker *todo.Broker, sessionID 
 	}
 	engine := app.SessionHost.Engine
 	restoreTodoBroker(app.Store, todoBroker, sessionID)
-	if err := app.Toolset.BindSession(app.Store, sessionID, filepath.Join(engine.WorkspaceRoot(), "memory", "progress.md")); err != nil {
+	if err := app.Toolset.BindSession(app.Store, sessionID, filepath.Join(app.Store.Root(), "sessions", sessionID, "progress.md")); err != nil {
 		fmt.Fprintf(os.Stderr, "bind session tools for %s: %v\n", sessionID, err)
 	}
 	engine.SetTodoBroker(todoBroker)
