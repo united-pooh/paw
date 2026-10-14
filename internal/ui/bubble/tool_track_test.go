@@ -96,8 +96,8 @@ func TestToolTrackUsesSemanticEntrySpacing(t *testing.T) {
 	}
 	lines := strings.Split(ansi.Strip(renderTranscript(entries, 72, true)), "\n")
 	before := lineContaining(t, lines, "before")
-	firstTool := lineContaining(t, lines, "    读取  one.go")
-	secondTool := lineContaining(t, lines, "●   读取  two.go  运行中")
+	firstTool := lineContaining(t, lines, "   读取  one.go")
+	secondTool := lineContaining(t, lines, "   读取  two.go  运行中")
 	afterLabel := lineContainingAfter(t, lines, glyphNarration+" after", secondTool+1)
 
 	if firstTool != before+1 {
@@ -154,7 +154,7 @@ func TestToolTrackLifecycleAndResultVisibility(t *testing.T) {
 	if !entry.toolFinishedAt.Equal(startedAt.Add(13*time.Second + 100*time.Millisecond)) {
 		t.Fatalf("finished at = %v, want %v", entry.toolFinishedAt, startedAt.Add(13*time.Second+100*time.Millisecond))
 	}
-	if rendered := ansi.Strip(renderTranscript(model.transcript, 80, true)); !strings.Contains(rendered, "    读取  README.md") {
+	if rendered := ansi.Strip(renderTranscript(model.transcript, 80, true)); !strings.Contains(rendered, "   读取  README.md") {
 		t.Fatalf("completed row = %q, want chip and target", rendered)
 	}
 	// 成功行只留 chip+目标：无 ✓ 图标、无「完成」状态词、无时长。
@@ -192,7 +192,7 @@ func TestToolTrackLifecycleAndResultVisibility(t *testing.T) {
 		t.Fatalf("error entry = %#v, want collapsed pending error", errorEntry)
 	}
 	rendered := ansi.Strip(renderTranscript(model.transcript, 80, true))
-	if !strings.Contains(rendered, "✗   Shell  go test ./...  失败") || strings.Contains(rendered, "exit status 1") {
+	if !strings.Contains(rendered, "   Shell  go test ./...  失败") || strings.Contains(rendered, "exit status 1") {
 		t.Fatalf("rendered error transaction:\n%s", rendered)
 	}
 	if !model.toggleToolExpansion(len(model.transcript)-1, false) {
@@ -469,7 +469,7 @@ func TestToolResultWithoutIDUpdatesRunningEntryByName(t *testing.T) {
 		t.Fatalf("updated entry = %#v, want completed running entry", entry)
 	}
 	rendered := ansi.Strip(renderTranscript(model.transcript, 80, true))
-	if strings.Contains(rendered, "运行中") || !strings.Contains(rendered, "    读取  README.md") {
+	if strings.Contains(rendered, "运行中") || !strings.Contains(rendered, "   读取  README.md") {
 		t.Fatalf("rendered transcript = %q, want only completed row", rendered)
 	}
 }
@@ -552,7 +552,7 @@ func TestToolInspectModePreservesInputAndNavigatesTransactions(t *testing.T) {
 	if !model.toolInspectActive || model.toolInspectIndex != 2 || model.input.Focused() || model.shouldAnchorTextInputCursor() {
 		t.Fatalf("inspect state = active:%v index:%d focused:%v anchor:%v", model.toolInspectActive, model.toolInspectIndex, model.input.Focused(), model.shouldAnchorTextInputCursor())
 	}
-	if rendered := ansi.Strip(renderTranscript(model.transcript, 80, true)); !strings.Contains(rendered, "› ✗   Shell  go test  失败") {
+	if rendered := ansi.Strip(renderTranscript(model.transcript, 80, true)); !strings.Contains(rendered, "›  Shell  go test  失败") {
 		t.Fatalf("inspect focus lacks non-color marker:\n%s", rendered)
 	}
 	if got := model.input.Value(); got != "draft stays" {
@@ -614,7 +614,7 @@ func TestToolTrackMouseClickTogglesButDragSelects(t *testing.T) {
 	if !model.transcript[0].toolExpanded {
 		t.Fatalf("summary click did not expand tool")
 	}
-	if got := ansi.Strip(model.renderTranscriptContent()); !strings.Contains(got, "    读取  README.md") {
+	if got := ansi.Strip(model.renderTranscriptContent()); !strings.Contains(got, "   读取  README.md") {
 		t.Fatalf("expanded card hid tool summary:\n%s", got)
 	}
 	if got := ansi.Strip(model.renderTranscriptContent()); !strings.Contains(got, "result") {
@@ -678,15 +678,6 @@ func mouseClickAt(model appModel, x, y int) appModel {
 	return model
 }
 
-func styleRenderPrefix(style lipgloss.Style) string {
-	rendered := style.Render("x")
-	index := strings.Index(rendered, "x")
-	if index < 0 {
-		return rendered
-	}
-	return rendered[:index]
-}
-
 // TestReadyStateCollapsedGroupClickExpands 回归：≥6 个连续只读成功卡折叠为
 // 组头（* N 个工具 · 文件清单 · 全部完成），点击组头整组展开，列出组内每个
 // 工具的摘要；段尾最近 2 个始终平铺，不收进组。
@@ -712,11 +703,11 @@ func TestReadyStateCollapsedGroupClickExpands(t *testing.T) {
 			t.Fatalf("collapsed fold group header missing %q:\n%s", want, rendered)
 		}
 	}
-	if strings.Contains(rendered, "    读取  a1.go") {
+	if strings.Contains(rendered, "   读取  a1.go") {
 		t.Fatalf("collapsed fold group leaked member row:\n%s", rendered)
 	}
 	// 段尾最近 2 个保持展开，不进组。
-	for _, want := range []string{"    读取  a5.go", "    读取  a6.go"} {
+	for _, want := range []string{"   读取  a5.go", "   读取  a6.go"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("kept-expanded tail entry missing %q:\n%s", want, rendered)
 		}
@@ -744,7 +735,7 @@ func TestReadyStateCollapsedGroupClickExpands(t *testing.T) {
 		t.Fatalf("click on collapsed header did not expand: %#v", model.transcript[2])
 	}
 	expanded := ansi.Strip(model.renderTranscriptContent())
-	for _, want := range []string{"    读取  a1.go", "    读取  a4.go"} {
+	for _, want := range []string{"   读取  a1.go", "   读取  a4.go"} {
 		if !strings.Contains(expanded, want) {
 			t.Fatalf("expanded group missing %q:\n%s", want, expanded)
 		}
@@ -795,7 +786,7 @@ func TestReadyStateSecondGroupClickExpands(t *testing.T) {
 		t.Fatalf("first group unexpectedly expanded: %#v", model.transcript[1])
 	}
 	expanded := ansi.Strip(model.renderTranscriptContent())
-	if !strings.Contains(expanded, "    读取  b.go") {
+	if !strings.Contains(expanded, "   读取  b.go") {
 		t.Fatalf("second expanded group missing summary:\n%s", expanded)
 	}
 }
@@ -859,7 +850,7 @@ func TestPendingToolsDoNotGroupBeforeAssistantOrThinking(t *testing.T) {
 	if strings.Contains(rendered, "个工具") {
 		t.Fatalf("sub-6 mixed cards folded:\n%s", rendered)
 	}
-	for _, want := range []string{"    读取  a.go", "    Shell  go test ./..."} {
+	for _, want := range []string{"   读取  a.go", "   Shell  go test ./..."} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("pending transcript missing %q:\n%s", want, rendered)
 		}
@@ -879,7 +870,7 @@ func TestPendingToolsDoNotGroupBeforeAssistantOrThinking(t *testing.T) {
 	if strings.Contains(rendered, "个工具") {
 		t.Fatalf("assistantDelta must not group tool cards:\n%s", rendered)
 	}
-	for _, want := range []string{"    读取  a.go", "    Shell  go test ./...", "answer"} {
+	for _, want := range []string{"   读取  a.go", "   Shell  go test ./...", "answer"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("post-speech transcript missing %q:\n%s", want, rendered)
 		}
@@ -912,7 +903,7 @@ func TestAssistantSpeechKeepsToolCardsIndividualWithRunningTool(t *testing.T) {
 	if strings.Contains(after, "个工具") {
 		t.Fatalf("assistantDelta must not group tool cards:\n%s", after)
 	}
-	for _, want := range []string{"    读取  a.go", "Shell  go test ./...", "partial answer"} {
+	for _, want := range []string{"   读取  a.go", "Shell  go test ./...", "partial answer"} {
 		if !strings.Contains(after, want) {
 			t.Fatalf("post-speech transcript missing %q:\n%s", want, after)
 		}
@@ -1021,10 +1012,9 @@ func TestPendingSingleToolMouseClickExpands(t *testing.T) {
 	}
 }
 
-// TestFoldGroupHeaderBorderlessAndMemberRowsBordered 验证折叠组展开时组头行
-// 不带外层边框（避免与工具条目自己的边框叠成两条竖线），组内工具行仍携带
-// 各自的结果色边框。
-func TestFoldGroupHeaderBorderlessAndMemberRowsBordered(t *testing.T) {
+// TestFoldGroupHeaderAndMemberRowsBorderless 验证 D 形态下折叠组整体无竖栏：
+// 组头行与组内工具行都不带 │/┃ 边框，chip 列跨行完全对齐。
+func TestFoldGroupHeaderAndMemberRowsBorderless(t *testing.T) {
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
@@ -1036,7 +1026,6 @@ func TestFoldGroupHeaderBorderlessAndMemberRowsBordered(t *testing.T) {
 	rendered := renderToolsGroup(entries, 90, time.Time{}, true, false)
 
 	lines := strings.Split(rendered, "\n")
-	resultPrefix := styleRenderPrefix(toolResultBorderStyle)
 	headerSeen := false
 	memberSeen := false
 	for _, line := range lines {
@@ -1044,13 +1033,13 @@ func TestFoldGroupHeaderBorderlessAndMemberRowsBordered(t *testing.T) {
 		switch {
 		case strings.Contains(plainLine, "4 个工具"):
 			headerSeen = true
-			if strings.Contains(line, "│") || strings.Contains(line, resultPrefix) {
+			if strings.Contains(plainLine, "│") || strings.Contains(plainLine, "┃") {
 				t.Fatalf("fold group header should be borderless, got %q", line)
 			}
-		case strings.Contains(plainLine, "    读取  a1.go"):
+		case strings.Contains(plainLine, "读取  a1.go"):
 			memberSeen = true
-			if !strings.Contains(line, resultPrefix) {
-				t.Fatalf("grouped tool row should carry result border styling, got %q", line)
+			if strings.Contains(plainLine, "│") || strings.Contains(plainLine, "┃") {
+				t.Fatalf("grouped tool row should be borderless, got %q", line)
 			}
 		}
 	}
@@ -1088,7 +1077,7 @@ func TestReadyGroupMouseHitAfterOpenDetailTargetsCorrectTool(t *testing.T) {
 	model.refreshViewport()
 
 	lines := strings.Split(ansi.Strip(model.renderTranscriptContent()), "\n")
-	summaryRow := lineContaining(t, lines, "    读取  a3.go")
+	summaryRow := lineContaining(t, lines, "   读取  a3.go")
 	y := 1 + model.currentLayout().headerHeight + summaryRow - model.viewport.YOffset
 	model = mouseClickAt(model, 5, y)
 
@@ -1121,7 +1110,7 @@ func TestTurnFinishedWithoutAssistantKeepsPendingToolsIndividual(t *testing.T) {
 	if strings.Contains(rendered, "Tools  1 calls") {
 		t.Fatalf("turn without assistant should keep pending tool itemized:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "    读取  a.go") {
+	if !strings.Contains(rendered, "   读取  a.go") {
 		t.Fatalf("pending tool summary missing:\n%s", rendered)
 	}
 }
@@ -1194,7 +1183,7 @@ func TestSessionRestoreFinalizesOrphanedRunningToolsAndExpands(t *testing.T) {
 	if strings.Contains(rendered, "个工具") {
 		t.Fatalf("restored error/shell cards must stay individual:\n%s", rendered)
 	}
-	for _, want := range []string{"✗   读取  stuck.go", "    Shell  go test"} {
+	for _, want := range []string{"   读取  stuck.go", "   Shell  go test"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("restored transcript missing %q:\n%s", want, rendered)
 		}
@@ -1251,7 +1240,7 @@ func TestToolTrackMouseHoverHighlightsAndClears(t *testing.T) {
 	if model.transcriptKeyScrollActive {
 		t.Fatalf("hover must not steal keyboard scroll focus")
 	}
-	if rendered := ansi.Strip(model.View()); !strings.Contains(rendered, "┃     读取  README.md") {
+	if rendered := ansi.Strip(model.View()); !strings.Contains(rendered, "   读取  README.md") {
 		t.Fatalf("hover marker missing:\n%s", rendered)
 	}
 
@@ -1313,7 +1302,7 @@ func TestToolTrackHoverDoesNotLeakANSISequences(t *testing.T) {
 	}
 	rendered := indentLines(renderToolTransactionEntryWithHover(entry, transcriptBodyWidth(80), time.Time{}, true), transcriptEntryGutter)
 	plain := ansi.Strip(rendered)
-	if !strings.Contains(plain, "┃     读取  README.md") {
+	if !strings.Contains(plain, "   读取  README.md") {
 		t.Fatalf("hovered tool = %q, want intact summary", plain)
 	}
 	for _, leaked := range []string{"[0m", "[1;", "[4m", "[38;"} {
@@ -1367,7 +1356,7 @@ func TestHistoricalFileMutationRestoresExpandedDiffFromToolInput(t *testing.T) {
 	model.refreshViewport()
 
 	collapsed := ansi.Strip(model.renderTranscriptContent())
-	if !strings.Contains(collapsed, "    编辑  a.go") {
+	if !strings.Contains(collapsed, "   编辑  a.go") {
 		t.Fatalf("historical mutation should start as a collapsed card:\n%s", collapsed)
 	}
 	if strings.Contains(collapsed, "return 1") {

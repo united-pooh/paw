@@ -6,8 +6,32 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 )
+
+// forceTrueColor 强制真彩色渲染：D 形态下 hover 的唯一信号是目标文本的下
+// 划线样式，Ascii profile（go test 默认）会把样式全部丢掉。
+func forceTrueColor(t *testing.T) {
+	t.Helper()
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
+}
+
+// assertHoverRestylesView 校验 D 形态下的 hover 信号：没有可 strip 的字形
+// 变化（┌/│/┃ 与状态图标均已退役），唯一信号是目标文本的下划线——原始视图
+// 必须变化，strip 后必须与基线完全一致（hover 是纯表现层）。
+func assertHoverRestylesView(t *testing.T, baseline, hovered string) {
+	t.Helper()
+	if hovered == baseline {
+		t.Fatalf("hover did not restyle the view")
+	}
+	if ansi.Strip(hovered) != ansi.Strip(baseline) {
+		t.Fatalf("hover changed stripped content:\nbefore: %s\nafter:  %s", ansi.Strip(baseline), ansi.Strip(hovered))
+	}
+}
 
 func TestIdleMouseMotionFilterDoesNotAllocateWithLongHistory(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
@@ -47,6 +71,7 @@ func TestIdleMouseMotionFilterDoesNotAllocateWithLongHistory(t *testing.T) {
 }
 
 func TestToolHoverIsPresentationOnlyAndLeavesCanonicalViewportUnchanged(t *testing.T) {
+	forceTrueColor(t)
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
 	model.width = 80
@@ -59,15 +84,14 @@ func TestToolHoverIsPresentationOnlyAndLeavesCanonicalViewportUnchanged(t *testi
 	model.relayout()
 	model.refreshViewport()
 	canonical := model.viewport.View()
+	baselineView := model.View()
 
 	model.setToolHover(0)
 
 	if got := model.viewport.View(); got != canonical {
 		t.Fatal("presentation-only hover mutated canonical viewport content")
 	}
-	if view := ansi.Strip(model.View()); !strings.Contains(view, "┃     读取  hover.txt") {
-		t.Fatalf("hover overlay missing from rendered view:\n%s", view)
-	}
+	assertHoverRestylesView(t, baselineView, model.View())
 }
 
 func TestInvalidToolHoverOverlayFallsBackAtomicallyToCanonicalViewport(t *testing.T) {
@@ -94,6 +118,7 @@ func TestInvalidToolHoverOverlayFallsBackAtomicallyToCanonicalViewport(t *testin
 }
 
 func TestToolHoverTransitionIsPresentationOnly(t *testing.T) {
+	forceTrueColor(t)
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
 	model.width = 80
@@ -125,6 +150,7 @@ func TestToolHoverTransitionIsPresentationOnly(t *testing.T) {
 	beforeInvalidation := model.transcriptInvalidation
 	beforeRefreshes := model.transcriptRefreshCount
 	model.transcriptRenderVisits = 0
+	baselineView := model.View()
 	y := model.transcriptScreenTop() + toolRow - model.viewport.YOffset
 	next, _ := model.Update(tea.MouseMsg{
 		X:      mainContentPadding + 1,
@@ -149,9 +175,7 @@ func TestToolHoverTransitionIsPresentationOnly(t *testing.T) {
 	if got := model.transcriptRenderVisits; got != 0 {
 		t.Fatalf("tool hover rendered %d transcript entries, want 0", got)
 	}
-	if view := ansi.Strip(model.View()); !strings.Contains(view, "┃") {
-		t.Fatalf("hover marker missing from view:\n%s", view)
-	}
+	assertHoverRestylesView(t, baselineView, model.View())
 
 	var current tea.Model = model
 	var message tea.Msg = tea.MouseMsg{X: mainContentPadding + 1, Y: y, Button: tea.MouseButtonNone, Action: tea.MouseActionMotion}
@@ -209,7 +233,7 @@ func TestToolHoverMoveChangesPresentationWithoutTranscriptWork(t *testing.T) {
 	if model.transcriptRenderVisits != 0 {
 		t.Fatalf("cross-tool hover render_visits=%d", model.transcriptRenderVisits)
 	}
-	if view := ansi.Strip(model.View()); !strings.Contains(view, "┃     读取  two.txt") {
+	if view := ansi.Strip(model.View()); !strings.Contains(view, "   读取  two.txt") {
 		t.Fatalf("new tool hover missing from rendered view:\n%s", view)
 	}
 }
@@ -250,12 +274,13 @@ func TestDirtySuffixAfterHoveredToolKeepsStableOverlay(t *testing.T) {
 	if got, ok := model.transcriptInteraction.toolAt(0); !ok || got != first {
 		t.Fatalf("stable prefix interaction changed: got=%#v ok=%v want=%#v", got, ok, first)
 	}
-	if view := ansi.Strip(model.View()); !strings.Contains(view, "┃     读取  one.txt") || !strings.Contains(view, "updated.txt") {
+	if view := ansi.Strip(model.View()); !strings.Contains(view, "   读取  one.txt") || !strings.Contains(view, "updated.txt") {
 		t.Fatalf("stable hover overlay or dirty suffix missing:\n%s", view)
 	}
 }
 
 func TestDirtyHoveredToolRebuildsInteractionRowsBeforeRenderingOverlay(t *testing.T) {
+	forceTrueColor(t)
 	model := newTestModel(&fakeRunner{})
 	model.ready = true
 	model.width = 80
@@ -293,9 +318,14 @@ func TestDirtyHoveredToolRebuildsInteractionRowsBeforeRenderingOverlay(t *testin
 	if !model.transcriptInteraction.valid || len(model.transcriptInteraction.rows) != len(model.transcriptLines) {
 		t.Fatalf("interaction index lost suffix alignment: valid=%v rows=%d transcript_lines=%d", model.transcriptInteraction.valid, len(model.transcriptInteraction.rows), len(model.transcriptLines))
 	}
-	if view := ansi.Strip(model.View()); !strings.Contains(view, "┃") {
-		t.Fatalf("hover marker missing after dirty suffix replacement:\n%s", view)
+	// 悬停行内容已更新（三行详情）；同一内容下开关 hover 只应改变样式
+	// （下划线），strip 后必须一致。
+	hovered := model.View()
+	if !strings.Contains(ansi.Strip(hovered), "third line") {
+		t.Fatalf("updated detail missing from view:\n%s", ansi.Strip(hovered))
 	}
+	model.toolHoverIndex = -1
+	assertHoverRestylesView(t, model.View(), hovered)
 }
 
 func TestCollapsedToolGroupHoverDoesNotRenderOverlay(t *testing.T) {
@@ -412,7 +442,7 @@ func TestMouseWheelReconcilesToolHoverAtSameScreenPoint(t *testing.T) {
 	if model.transcriptRenderVisits != 0 {
 		t.Fatalf("wheel hover reconciliation render_visits=%d", model.transcriptRenderVisits)
 	}
-	if view := ansi.Strip(model.View()); !strings.Contains(view, "┃     读取  two.txt") {
+	if view := ansi.Strip(model.View()); !strings.Contains(view, "   读取  two.txt") {
 		t.Fatalf("wheel hover overlay missing:\n%s", view)
 	}
 }
@@ -505,7 +535,7 @@ func TestExpandedToolGroupHoverMovesWithinOneOverlay(t *testing.T) {
 	if model.toolHoverIndex != 1 {
 		t.Fatalf("expanded group hover index = %d, want 1", model.toolHoverIndex)
 	}
-	if view := ansi.Strip(model.View()); !strings.Contains(view, "┃     读取  two.txt") {
+	if view := ansi.Strip(model.View()); !strings.Contains(view, "   读取  two.txt") {
 		t.Fatalf("second grouped tool hover missing:\n%s", view)
 	}
 }
@@ -650,7 +680,7 @@ func TestDirtySuffixAfterHoveredPrefixReusesPresentationPatch(t *testing.T) {
 	if renders != 1 {
 		t.Fatalf("stable prefix hover patch rerendered after dirty suffix: renders=%d", renders)
 	}
-	if view := ansi.Strip(model.View()); !strings.Contains(view, "┃     读取  stable.txt") || !strings.Contains(view, "updated tail") {
+	if view := ansi.Strip(model.View()); !strings.Contains(view, "   读取  stable.txt") || !strings.Contains(view, "updated tail") {
 		t.Fatalf("stable hover or updated suffix missing:\n%s", view)
 	}
 }

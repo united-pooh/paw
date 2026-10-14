@@ -15,6 +15,8 @@ var (
 	labelThinkingStyle           lipgloss.Style
 	labelToolStyle               lipgloss.Style
 	toolHeaderStyle              lipgloss.Style
+	toolResultHeaderStyle        lipgloss.Style
+	toolErrorHeaderStyle         lipgloss.Style
 	toolDetailStyle              lipgloss.Style
 	toolCitationStyle            lipgloss.Style
 	toolCitationKeyStyle         lipgloss.Style
@@ -80,9 +82,7 @@ var (
 	wizardTitleStyle             lipgloss.Style
 	wizardPanelStyle             lipgloss.Style
 	completionPanelStyle         lipgloss.Style
-	toolCallBorderStyle          lipgloss.Style
-	toolResultBorderStyle        lipgloss.Style
-	toolErrorBorderStyle         lipgloss.Style
+	toolBorderlessStyle          lipgloss.Style
 	toolFocusedStyle             lipgloss.Style
 	todoTitleStyle               lipgloss.Style
 	todoCountStyle               lipgloss.Style
@@ -123,6 +123,12 @@ func rebuildLegacyStyles() {
 		Bold(true)
 	toolHeaderStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorLabelTool)).
+		Bold(true)
+	toolResultHeaderStyle = lipgloss.NewStyle().
+		Foreground(colorManager.LipglossColor(colorLabelResult)).
+		Bold(true)
+	toolErrorHeaderStyle = lipgloss.NewStyle().
+		Foreground(colorManager.LipglossColor(colorLabelError)).
 		Bold(true)
 	toolDetailStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorBody)).
@@ -347,24 +353,9 @@ func rebuildLegacyStyles() {
 		BorderForeground(colorManager.LipglossColor(colorWizardBorder)).
 		Padding(0, 1)
 
-	// Blockquote styles for tool calls — coloured left border
-	toolCallBorderStyle = lipgloss.NewStyle().
-		BorderStyle(lipgloss.Border{Left: "│"}).
-		BorderLeft(true).
-		BorderLeftForeground(colorManager.LipglossColor(colorLabelTool)).
-		PaddingLeft(1)
-
-	toolResultBorderStyle = lipgloss.NewStyle().
-		BorderStyle(lipgloss.Border{Left: "│"}).
-		BorderLeft(true).
-		BorderLeftForeground(colorManager.LipglossColor(colorLabelResult)).
-		PaddingLeft(1)
-
-	toolErrorBorderStyle = lipgloss.NewStyle().
-		BorderStyle(lipgloss.Border{Left: "│"}).
-		BorderLeft(true).
-		BorderLeftForeground(colorManager.LipglossColor(colorLabelError)).
-		PaddingLeft(1)
+	// 工具行无竖栏：状态只由行尾彩色状态词与类别 chip 表达（D 形态）。
+	// 该空样式仅服务于宽度预算（frame size 0），成功/运行中/失败共用。
+	toolBorderlessStyle = lipgloss.NewStyle()
 	// 16 色及以下终端没有可靠的 RGB 背景近似：选区降级为反色渲染，
 	// 与终端原生选区观感一致，避免 lipgloss 把真彩色近似成奇怪颜色。
 	lowColorSelection := lipgloss.ColorProfile() == termenv.ANSI || lipgloss.ColorProfile() == termenv.Ascii

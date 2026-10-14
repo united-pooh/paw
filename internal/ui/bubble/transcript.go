@@ -2090,36 +2090,6 @@ func toolFoldGroupRange(entries []transcriptEntry, index int) (int, int, bool) {
 	return first, last, true
 }
 
-func toolGroupBorderStyle(entries []transcriptEntry) lipgloss.Style {
-	for _, entry := range entries {
-		if toolEntryStatus(entry) == "running" {
-			return toolCallBorderStyle
-		}
-	}
-	return toolResultBorderStyle
-}
-
-func groupedToolBorderStyle(entry transcriptEntry) lipgloss.Style {
-	return groupedToolBorderStyleWithHover(entry, false)
-}
-
-func groupedToolBorderStyleWithHover(entry transcriptEntry, hovered bool) lipgloss.Style {
-	status := toolEntryStatus(entry)
-	borderStyle := toolResultBorderStyle
-	switch status {
-	case "running":
-		borderStyle = toolCallBorderStyle
-	case "error":
-		borderStyle = toolErrorBorderStyle
-	}
-	if hovered && !entry.toolFocused {
-		borderStyle = borderStyle.
-			BorderStyle(lipgloss.Border{Left: "┃"}).
-			BorderLeft(true)
-	}
-	return borderStyle
-}
-
 func renderToolsGroup(entries []transcriptEntry, width int, at time.Time, expanded, fullResult bool) string {
 	rendered, _ := renderToolsGroupWithRows(entries, width, at, expanded, fullResult)
 	return rendered
@@ -2133,7 +2103,7 @@ func renderToolsGroupWithHoverRows(entries []transcriptEntry, width int, at time
 	if len(entries) == 0 {
 		return "", nil
 	}
-	style := toolGroupBorderStyle(entries)
+	style := toolBorderlessStyle
 	marker := glyphThinking
 	if expanded || anyToolGroupOpen(entries) {
 		marker = glyphExpanded
@@ -2144,11 +2114,8 @@ func renderToolsGroupWithHoverRows(entries []transcriptEntry, width int, at time
 	}
 	// Tool groups share the same two-cell external gutter as user and assistant
 	// entries, so the header sits at the same column as every other transcript
-	// row. The group itself carries no outer border: expanding the group and
-	// then a tool detail would otherwise stack the group rail outside the tool's
-	// own rail into two green lines. Only the individual tool entries keep their
-	// border rail, which indents them one frame + one padding cell past the
-	// header — the same nested shape as todo/assistant content under a header.
+	// row. Member rows are borderless chip lines at that same gutter — the
+	// group and its members draw no rail at all.
 	groupWidth := transcriptBodyWidth(width)
 	contentWidth := toolEntryContentWidth(groupWidth, style)
 	innerWidth := maxInt(1, contentWidth-style.GetHorizontalFrameSize())
@@ -2209,7 +2176,7 @@ func renderGroupedToolEntry(entry transcriptEntry, width int, at time.Time, full
 }
 
 func renderGroupedToolEntryWithHover(entry transcriptEntry, width int, at time.Time, fullResult, hovered bool) string {
-	borderStyle := groupedToolBorderStyleWithHover(entry, hovered)
+	borderStyle := toolBorderlessStyle
 	contentWidth := toolEntryContentWidth(width, borderStyle)
 	innerWidth := maxInt(1, contentWidth-borderStyle.GetHorizontalFrameSize())
 	summary := renderCompactToolSummaryWithHover(entry, innerWidth, at, hovered)
@@ -2703,9 +2670,9 @@ func renderEntryBodyAt(entry transcriptEntry, width int, at time.Time, showThink
 		isResult := toolEntryHasCompletedStatus(entry)
 		switch {
 		case isError:
-			return renderToolEntryBodyWithMarker(body, width, 1, toolErrorBorderStyle, "!")
+			return renderToolEntryBodyWithStyle(body, width, 1, toolErrorHeaderStyle)
 		case isResult:
-			return renderToolEntryBodyWithMarker(body, width, 1, toolResultBorderStyle, "✓")
+			return renderToolEntryBodyWithStyle(body, width, 1, toolResultHeaderStyle)
 		default:
 			return renderToolEntryBody(body, width, 1)
 		}
@@ -2804,18 +2771,9 @@ func renderToolTransactionEntry(entry transcriptEntry, width int, at time.Time) 
 
 func renderToolTransactionEntryWithHover(entry transcriptEntry, width int, at time.Time, hovered bool) string {
 	status := toolEntryStatus(entry)
-	borderStyle := toolResultBorderStyle
-	switch status {
-	case "running":
-		borderStyle = toolCallBorderStyle
-	case "error":
-		borderStyle = toolErrorBorderStyle
-	}
-	if hovered && !entry.toolFocused {
-		borderStyle = borderStyle.
-			BorderStyle(lipgloss.Border{Left: "┃"}).
-			BorderLeft(true)
-	}
+	// 工具卡无竖栏：状态只由行尾彩色状态词与 chip 表达；hover 高亮由
+	// summary 渲染器的下划线承担。
+	borderStyle := toolBorderlessStyle
 
 	contentWidth := toolEntryContentWidth(width, borderStyle)
 	innerWidth := maxInt(1, contentWidth-borderStyle.GetHorizontalFrameSize())
@@ -2856,32 +2814,18 @@ func renderCompactToolSummary(entry transcriptEntry, width int, at time.Time) st
 	return renderCompactToolSummaryWithHover(entry, width, at, false)
 }
 
-// renderCompactToolSummaryWithHover 渲染紧凑工具行。
-// 成功行只留 `{chip} {target}`：无 ✓ 图标、无「完成/时长」状态段，
-// 图标列保留同宽空白 gutter 让 chip 与运行中/失败行对齐（成功=无标记，
-// 异常行反而更醒目）。运行中/失败行仍是 `{icon} {chip} {target}  {状态文字}`。
+// renderCompactToolSummaryWithHover 渲染紧凑工具行：
+// `{chip} {target}  {状态文字}`——所有状态都没有行首图标，chip 列跨状态
+// 完全对齐。成功行只留 chip+目标（无状态段）；失败行尾是红字「失败+时长」，
+// 运行中行尾是琥珀色「运行中+计时」（每秒跳动本身即活着的信号）。
 // chip 是工具类别彩底小标签（读取/编辑/Shell/…，MCP 显示 server 名）；
-// 状态词是彩色文字（运行中/失败 + 时长），不再使用实底药丸；
-// 运行中图标为 ●，◌ 已退役。
+// 状态词是彩色文字，不再使用实底药丸；✓/✗/●/◌ 图标均已退役。
 func renderCompactToolSummaryWithHover(entry transcriptEntry, width int, at time.Time, hovered bool) string {
 	width = maxInt(1, width)
 	status := toolEntryStatus(entry)
 	successMinimal := status == "ok"
-	icon := glyphSuccess
-	iconStyle := toolCitationOKStyle
 	targetStyle := toolCitationStyle
-	switch status {
-	case "running":
-		icon = glyphActive
-		iconStyle = statusTextStyle(status)
-	case "error":
-		icon = glyphFailure
-		iconStyle = toolCitationErrorStyle
-	}
 	if hovered && !entry.toolFocused {
-		if !successMinimal {
-			iconStyle = iconStyle.Underline(true)
-		}
 		targetStyle = targetStyle.Underline(true)
 	}
 
@@ -2891,11 +2835,6 @@ func renderCompactToolSummaryWithHover(entry transcriptEntry, width int, at time
 	focusPrefix := ""
 	if entry.toolFocused {
 		focusPrefix = "› "
-	}
-	iconText := icon + " "
-	if successMinimal {
-		// 成功行没有图标：留与 "{glyph} " 同宽的空白 gutter，保持 chip 列对齐。
-		iconText = strings.Repeat(" ", terminalCellWidth(glyphSuccess)+1)
 	}
 	duration := ""
 	if status == "running" {
@@ -2921,35 +2860,25 @@ func renderCompactToolSummaryWithHover(entry transcriptEntry, width int, at time
 		statusSeparator = ""
 	}
 	fixedWithoutName := func() int {
-		return terminalCellWidth(focusPrefix) + terminalCellWidth(iconText) + terminalCellWidth(statusSeparator) + terminalCellWidth(statusRendered)
+		return terminalCellWidth(focusPrefix) + terminalCellWidth(statusSeparator) + terminalCellWidth(statusRendered)
 	}
-	// 宽度预算收紧顺序：时长 → 分隔符/图标 → chip 退化为纯文本标签 → 截断标签 → 截断目标。
-	// 状态词是最后才牺牲的要素：窄行宁可没有图标也不能把「运行中」截断。
-	if fixedWithoutName()+1+terminalCellWidth(renderToolChip(rawName)) > width && duration != "" {
+	// 宽度预算收紧顺序：时长 → 状态分隔符 → chip 退化为纯文本标签 → 截断标签 → 截断目标。
+	// 状态词是最后才牺牲的要素：窄行宁可截断目标也不能把「运行中」截断。
+	if fixedWithoutName()+terminalCellWidth(renderToolChip(rawName)) > width && duration != "" {
 		duration = ""
 		statusRendered = statusStyle.Render(statusLabel)
 	}
 	if fixedWithoutName() > width && statusSeparator != "" {
 		statusSeparator = " "
 	}
-	if fixedWithoutName() > width {
-		iconText = icon
-		if successMinimal {
-			// 成功行没有图标可退，收窄时直接牺牲 gutter。
-			iconText = ""
-		}
-	}
 	if fixedWithoutName() > width && statusSeparator != "" {
 		statusSeparator = ""
 	}
-	if fixedWithoutName() > width {
-		iconText = ""
-	}
-	nameText := " " + renderToolChip(rawName)
+	nameText := renderToolChip(rawName)
 	if fixedWithoutName()+terminalCellWidth(nameText) > width {
-		budget := width - fixedWithoutName() - 1
+		budget := width - fixedWithoutName()
 		if budget >= 1 {
-			nameText = " " + toolHeaderStyle.Render(truncateStyledCellLine(chipPlainLabel(rawName), budget))
+			nameText = toolHeaderStyle.Render(truncateStyledCellLine(chipPlainLabel(rawName), budget))
 		} else {
 			nameText = ""
 		}
@@ -2961,7 +2890,7 @@ func renderCompactToolSummaryWithHover(entry transcriptEntry, width int, at time
 		}
 	}
 
-	return truncateStyledCells(focusPrefix+iconStyle.Render(iconText)+nameText+targetText+statusSeparator+statusRendered, width, "")
+	return truncateStyledCells(focusPrefix+nameText+targetText+statusSeparator+statusRendered, width, "")
 }
 
 func formatRunningToolElapsed(startedAt, at time.Time) string {
@@ -3161,26 +3090,16 @@ func toolCitationStatusStyle(cite toolCitation) lipgloss.Style {
 	return toolCitationOKStyle
 }
 
-// renderToolEntryBodyWithStyle renders a tool entry in blockquote style using the given border style.
-func renderToolEntryBodyWithStyle(body string, width int, progress float64, borderStyle lipgloss.Style) string {
-	return renderToolEntryBodyWithMarker(body, width, progress, borderStyle, "▸")
-}
-
-func renderToolEntryBodyWithMarker(body string, width int, progress float64, borderStyle lipgloss.Style, marker string) string {
+// renderToolEntryBodyWithStyle 渲染遗留 body 型工具条目（无结构化字段的
+// 回退路径）：无竖栏、无 ✓/!/▸ 状态图标，首行摘要按状态着色，详情缩进两格。
+func renderToolEntryBodyWithStyle(body string, width int, progress float64, headerStyle lipgloss.Style) string {
 	body = strings.TrimRight(body, "\n")
 	summary, detail := splitToolSummary(body)
-	contentWidth := toolEntryContentWidth(width, borderStyle)
-	headerStyle := toolHeaderStyle
-	switch marker {
-	case "✓":
-		headerStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorLabelResult)).Bold(true)
-	case "!":
-		headerStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorLabelError)).Bold(true)
-	}
-	header := headerStyle.Render(marker + " " + summary)
+	contentWidth := toolEntryContentWidth(width, toolBorderlessStyle)
+	header := headerStyle.Render(summary)
 
 	if detail == "" || progress <= 0 {
-		return borderStyle.Width(contentWidth).Render(header)
+		return toolBorderlessStyle.Width(contentWidth).Render(header)
 	}
 
 	detailLines := limitRenderedDetailLines(strings.Split(detail, "\n"), maxRenderedToolDetailLines)
@@ -3188,9 +3107,9 @@ func renderToolEntryBodyWithMarker(body string, width int, progress float64, bor
 	if visibleLines > len(detailLines) {
 		visibleLines = len(detailLines)
 	}
-	detailWidth := maxInt(1, contentWidth-borderStyle.GetHorizontalFrameSize())
+	detailWidth := maxInt(1, contentWidth)
 	content := header + "\n" + renderToolDetailLines(detailLines[:visibleLines], detailWidth)
-	return borderStyle.Width(contentWidth).Render(content)
+	return toolBorderlessStyle.Width(contentWidth).Render(content)
 }
 
 func toolEntryContentWidth(width int, borderStyle lipgloss.Style) int {
@@ -3350,10 +3269,10 @@ func isDecimalNumber(value string) bool {
 	return true
 }
 
-// renderToolEntryBody renders a tool call entry with the default orange border.
-// Called from renderEntryBodyAt for the "tool" title.
+// renderToolEntryBody 渲染遗留 body 型工具条目的默认形态（无竖栏无图标，
+// 中性色表头）。Called from renderEntryBodyAt for the "tool" title.
 func renderToolEntryBody(body string, width int, progress float64) string {
-	return renderToolEntryBodyWithStyle(body, width, progress, toolCallBorderStyle)
+	return renderToolEntryBodyWithStyle(body, width, progress, toolHeaderStyle)
 }
 
 func splitToolSummary(body string) (string, string) {

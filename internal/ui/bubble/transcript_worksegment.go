@@ -399,7 +399,8 @@ func renderWorkSegmentEntry(entry transcriptEntry, width int, at time.Time, show
 
 // renderWorkSegmentChild 平铺渲染段内子条目：reasoning 直接渲染暗色正文
 // （不嵌套自身的 "Thought for N s" 折叠标题），工具条目渲染为单行 compact
-// 事务行（含状态标记）。live 滚动窗口与（未来的）段内平铺共用。
+// chip 事务行（与主渲染一致：无图标，状态在行尾）。live 滚动窗口与
+// （未来的）段内平铺共用。
 func renderWorkSegmentChild(child transcriptEntry, width, bodyWidth int, at time.Time, showThinking bool) string {
 	switch child.kind {
 	case entryReasoning, entryThinking:
@@ -410,22 +411,11 @@ func renderWorkSegmentChild(child transcriptEntry, width, bodyWidth int, at time
 		return indentLines(thinkingBodyStyle.Width(bodyWidth).Render(content), transcriptEntryGutter)
 	case entryTool:
 		line := firstToolEntryLine(child.body)
-		if line == "" {
-			line = strings.TrimSpace(child.toolName)
-		}
-		if line == "" {
+		if line == "" && strings.TrimSpace(child.toolName) == "" {
 			return ""
 		}
-		var body string
-		switch {
-		case child.isError || toolEntryStatus(child) == "error":
-			body = renderToolEntryBodyWithMarker(line, bodyWidth, 1, toolErrorBorderStyle, "!")
-		case toolEntryHasCompletedStatus(child):
-			body = renderToolEntryBodyWithMarker(line, bodyWidth, 1, toolResultBorderStyle, "✓")
-		default:
-			body = renderToolEntryBody(line, bodyWidth, 1)
-		}
-		return indentLines(body, transcriptEntryGutter)
+		summary := renderCompactToolSummary(child, toolEntryContentWidth(bodyWidth, toolBorderlessStyle), at)
+		return indentLines(summary, transcriptEntryGutter)
 	default:
 		return strings.TrimRight(renderEntryAt(child, width, at, showThinking), "\n")
 	}

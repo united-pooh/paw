@@ -1574,7 +1574,7 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 	next, _ = model.Update(toolCallMsg(ui.ToolCallEvent{Name: "Read", Input: []byte(`{"file_path":"go.mod"}`)}))
 	model = next.(appModel)
 	runningRendered := renderTranscript(model.transcript, 80, model.showThinking)
-	for _, want := range []string{"hello", "●   读取  go.mod  运行中"} {
+	for _, want := range []string{"hello", "   读取  go.mod  运行中"} {
 		if !strings.Contains(runningRendered, want) {
 			t.Fatalf("running transcript = %q, want %q", runningRendered, want)
 		}
@@ -1593,15 +1593,15 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{Name: "Read", Content: "module paw"}))
 	model = next.(appModel)
 	okRendered := renderTranscript(model.transcript, 80, model.showThinking)
-	for _, want := range []string{"hello", "    读取  go.mod"} {
+	for _, want := range []string{"hello", "   读取  go.mod"} {
 		if !strings.Contains(okRendered, want) {
 			t.Fatalf("ok transcript = %q, want %q", okRendered, want)
 		}
 	}
-	if strings.Contains(okRendered, "[Read]") || strings.Contains(okRendered, "●   读取  go.mod  运行中") || strings.Contains(okRendered, "file_path=") || strings.Contains(okRendered, "file_path  ") {
+	if strings.Contains(okRendered, "[Read]") || strings.Contains(okRendered, "   读取  go.mod  运行中") || strings.Contains(okRendered, "file_path=") || strings.Contains(okRendered, "file_path  ") {
 		t.Fatalf("ok transcript = %q, should replace running status", okRendered)
 	}
-	if !strings.Contains(okRendered, "    读取  go.mod") {
+	if !strings.Contains(okRendered, "   读取  go.mod") {
 		t.Fatalf("ok transcript = %q, want completed tool block", okRendered)
 	}
 	for _, hidden := range []string{"\n  tool\n", "\n  result\n"} {
@@ -1615,12 +1615,12 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 	model = next.(appModel)
 
 	rendered := renderTranscript(model.transcript, 80, model.showThinking)
-	for _, want := range []string{"loaded go.mod", "    读取  go.mod"} {
+	for _, want := range []string{"loaded go.mod", "   读取  go.mod"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered transcript = %q, want %q", rendered, want)
 		}
 	}
-	for _, hidden := range []string{"\n  tool\n", "\n  result\n", "[Read]", "file_path=", "file_path  ", "●   读取  go.mod  运行中", "module paw", "tool cites"} {
+	for _, hidden := range []string{"\n  tool\n", "\n  result\n", "[Read]", "file_path=", "file_path  ", "   读取  go.mod  运行中", "module paw", "tool cites"} {
 		if strings.Contains(rendered, hidden) {
 			t.Fatalf("rendered transcript = %q, should not contain old tool block marker/content %q", rendered, hidden)
 		}
@@ -1902,10 +1902,10 @@ func TestToolResultEntryMatchesByToolUseID(t *testing.T) {
 	model = next.(appModel)
 
 	rendered := renderTranscript(model.transcript, 80, model.showThinking)
-	if !strings.Contains(rendered, "    读取  first.go") {
+	if !strings.Contains(rendered, "   读取  first.go") {
 		t.Fatalf("rendered transcript = %q, want call_1 completed", rendered)
 	}
-	if !strings.Contains(rendered, "●   读取  second.go  运行中") {
+	if !strings.Contains(rendered, "   读取  second.go  运行中") {
 		t.Fatalf("rendered transcript = %q, want call_2 still running", rendered)
 	}
 }
@@ -2034,7 +2034,7 @@ func TestToolCallWithoutAssistantTextRendersRunningEntry(t *testing.T) {
 	next, _ := model.Update(toolCallMsg(ui.ToolCallEvent{Name: "LS", Input: []byte(`{"path":"."}`)}))
 	model = next.(appModel)
 	rendered := renderTranscript(model.transcript, 54, model.showThinking)
-	for _, want := range []string{"●   搜索  .  运行中"} {
+	for _, want := range []string{"   搜索  .  运行中"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("running-only tool entry = %q, want %q", rendered, want)
 		}
@@ -2046,12 +2046,12 @@ func TestToolCallWithoutAssistantTextRendersRunningEntry(t *testing.T) {
 	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{Name: "LS", Content: "README.md"}))
 	model = next.(appModel)
 	rendered = renderTranscript(model.transcript, 54, model.showThinking)
-	for _, want := range []string{"    搜索  ."} {
+	for _, want := range []string{"   搜索  ."} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("completed-only tool entry = %q, want %q", rendered, want)
 		}
 	}
-	if strings.Contains(rendered, "[LS]") || strings.Contains(rendered, "path=") || strings.Contains(rendered, "path  ") || strings.Contains(rendered, "●   搜索  .  运行中") || strings.Contains(rendered, "README.md") {
+	if strings.Contains(rendered, "[LS]") || strings.Contains(rendered, "path=") || strings.Contains(rendered, "path  ") || strings.Contains(rendered, "   搜索  .  运行中") || strings.Contains(rendered, "README.md") {
 		t.Fatalf("completed-only tool entry = %q, should hide duplicate citation/running state/long output", rendered)
 	}
 }
@@ -2241,8 +2241,8 @@ func TestUnifiedDiffLinesUseBackgroundColorsOnlyWithinHunk(t *testing.T) {
 
 func TestToolEntryContentWidthLeavesTranscriptNoWrapCell(t *testing.T) {
 	width := 80
-	want := width - toolResultBorderStyle.GetHorizontalFrameSize() - transcriptPanelHorizontalFrame - 1
-	if got := toolEntryContentWidth(width, toolResultBorderStyle); got != want {
+	want := width - toolBorderlessStyle.GetHorizontalFrameSize() - transcriptPanelHorizontalFrame - 1
+	if got := toolEntryContentWidth(width, toolBorderlessStyle); got != want {
 		t.Fatalf("tool content width = %d, want %d", got, want)
 	}
 }
@@ -2261,7 +2261,7 @@ func TestToolDiffRowsAlignLineNumberWithHeaderGutter(t *testing.T) {
 	lines := strings.Split(rendered, "\n")
 	var headerLine, diffLine string
 	for _, line := range lines {
-		if strings.Contains(line, "    写入  test.txt") {
+		if strings.Contains(line, "   写入  test.txt") {
 			headerLine = line
 		}
 		if strings.Contains(line, "1 + │") {
@@ -2274,9 +2274,10 @@ func TestToolDiffRowsAlignLineNumberWithHeaderGutter(t *testing.T) {
 	if headerLine == "" || diffLine == "" {
 		t.Fatalf("rendered tool entry missing header or diff line:\n%s", rendered)
 	}
-	// 成功行图标退役后保留同宽空白 gutter：diff 行号仍与 gutter 起点列对齐。
-	// gutter 起点 = chip 标签列 − (gutter 2 + nameText 空格 1 + chip 左 padding 1)。
-	if got, want := strings.Index(diffLine, "1"), strings.Index(headerLine, "写入")-4; got != want {
+	// D 形态无竖栏无图标：chip 标签列 = 条目 gutter 2 + chip 左 padding 1 = 3；
+	// diff 详情行带两格前缀（无条目 gutter），行号列 = chip 标签列 − 1，
+	// 即详情块与 chip 左缘对齐。
+	if got, want := strings.Index(diffLine, "1"), strings.Index(headerLine, "写入")-1; got != want {
 		t.Fatalf("line number column = %d, want header gutter column %d\nheader: %q\ndiff:   %q", got, want, headerLine, diffLine)
 	}
 	if got := lipgloss.Width(diffLine); got >= 80 {
@@ -6901,14 +6902,18 @@ func TestRelayout_TranscriptUsesFullFrameWidth(t *testing.T) {
 	}
 }
 
-func TestRenderToolEntryBody_BlockquoteContainsVerticalBar(t *testing.T) {
+func TestRenderToolEntryBody_BorderlessWithoutStatusIcon(t *testing.T) {
 	body := "Read README.md\nfile content here"
 	result := renderToolEntryBody(body, 60, 1.0)
-	if !strings.Contains(result, "│") {
-		t.Errorf("renderToolEntryBody = %q, want │ vertical bar (blockquote style)", result)
+	plain := ansi.Strip(result)
+	// D 形态：遗留 body 路径同样无竖栏、无 ✓/!/▸ 状态图标。
+	for _, unwanted := range []string{"│", "┃", "✓", "✗", "●", "▸"} {
+		if strings.Contains(plain, unwanted) {
+			t.Errorf("renderToolEntryBody = %q, want no %q (borderless, icon-free)", plain, unwanted)
+		}
 	}
-	if !strings.Contains(result, "Read README.md") {
-		t.Errorf("renderToolEntryBody = %q, want summary in output", result)
+	if !strings.Contains(plain, "Read README.md") {
+		t.Errorf("renderToolEntryBody = %q, want summary in output", plain)
 	}
 }
 

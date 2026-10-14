@@ -204,9 +204,10 @@ func (m *appModel) toolDetailEntryAtRow(row int, location transcriptEntryLocatio
 	if len(groupEntries) == 0 {
 		return location.transcriptIndex, true
 	}
-	style := toolGroupBorderStyle(groupEntries)
-	contentWidth := toolEntryContentWidth(maxInt(20, m.viewport.Width), style)
-	innerWidth := maxInt(1, contentWidth-style.GetHorizontalFrameSize())
+	// 工具组无竖栏（D 形态）：宽度预算用 frame size 0 的空样式，
+	// innerWidth 即 contentWidth。
+	contentWidth := toolEntryContentWidth(maxInt(20, m.viewport.Width), toolBorderlessStyle)
+	innerWidth := maxInt(1, contentWidth)
 	cursor := location.startRow + 1
 	for i, entry := range groupEntries {
 		entryHeight := maxInt(1, lipgloss.Height(renderGroupedToolEntry(entry, innerWidth, m.animationNow(), m.toolGroupFullResult)))
