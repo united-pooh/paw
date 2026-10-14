@@ -1593,7 +1593,7 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{Name: "Read", Content: "module paw"}))
 	model = next.(appModel)
 	okRendered := renderTranscript(model.transcript, 80, model.showThinking)
-	for _, want := range []string{"hello", "✓   读取  go.mod  完成"} {
+	for _, want := range []string{"hello", "    读取  go.mod"} {
 		if !strings.Contains(okRendered, want) {
 			t.Fatalf("ok transcript = %q, want %q", okRendered, want)
 		}
@@ -1601,7 +1601,7 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 	if strings.Contains(okRendered, "[Read]") || strings.Contains(okRendered, "●   读取  go.mod  运行中") || strings.Contains(okRendered, "file_path=") || strings.Contains(okRendered, "file_path  ") {
 		t.Fatalf("ok transcript = %q, should replace running status", okRendered)
 	}
-	if !strings.Contains(okRendered, "✓   读取  go.mod  完成") {
+	if !strings.Contains(okRendered, "    读取  go.mod") {
 		t.Fatalf("ok transcript = %q, want completed tool block", okRendered)
 	}
 	for _, hidden := range []string{"\n  tool\n", "\n  result\n"} {
@@ -1615,7 +1615,7 @@ func TestAssistantAndToolMessagesUpdateTranscript(t *testing.T) {
 	model = next.(appModel)
 
 	rendered := renderTranscript(model.transcript, 80, model.showThinking)
-	for _, want := range []string{"loaded go.mod", "✓   读取  go.mod  完成"} {
+	for _, want := range []string{"loaded go.mod", "    读取  go.mod"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered transcript = %q, want %q", rendered, want)
 		}
@@ -1902,7 +1902,7 @@ func TestToolResultEntryMatchesByToolUseID(t *testing.T) {
 	model = next.(appModel)
 
 	rendered := renderTranscript(model.transcript, 80, model.showThinking)
-	if !strings.Contains(rendered, "✓   读取  first.go  完成") {
+	if !strings.Contains(rendered, "    读取  first.go") {
 		t.Fatalf("rendered transcript = %q, want call_1 completed", rendered)
 	}
 	if !strings.Contains(rendered, "●   读取  second.go  运行中") {
@@ -2046,7 +2046,7 @@ func TestToolCallWithoutAssistantTextRendersRunningEntry(t *testing.T) {
 	next, _ = model.Update(toolResultMsg(ui.ToolResultEvent{Name: "LS", Content: "README.md"}))
 	model = next.(appModel)
 	rendered = renderTranscript(model.transcript, 54, model.showThinking)
-	for _, want := range []string{"✓   搜索  .  完成"} {
+	for _, want := range []string{"    搜索  ."} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("completed-only tool entry = %q, want %q", rendered, want)
 		}
@@ -2247,7 +2247,7 @@ func TestToolEntryContentWidthLeavesTranscriptNoWrapCell(t *testing.T) {
 	}
 }
 
-func TestToolDiffRowsAlignLineNumberWithStatusMarker(t *testing.T) {
+func TestToolDiffRowsAlignLineNumberWithHeaderGutter(t *testing.T) {
 	longLine := strings.Repeat("这是一个测试文件的内容。", 20)
 	rendered := ansi.Strip(renderEntry(transcriptEntry{
 		kind:         entryTool,
@@ -2261,7 +2261,7 @@ func TestToolDiffRowsAlignLineNumberWithStatusMarker(t *testing.T) {
 	lines := strings.Split(rendered, "\n")
 	var headerLine, diffLine string
 	for _, line := range lines {
-		if strings.Contains(line, "✓   写入  test.txt  完成") {
+		if strings.Contains(line, "    写入  test.txt") {
 			headerLine = line
 		}
 		if strings.Contains(line, "1 + │") {
@@ -2274,8 +2274,10 @@ func TestToolDiffRowsAlignLineNumberWithStatusMarker(t *testing.T) {
 	if headerLine == "" || diffLine == "" {
 		t.Fatalf("rendered tool entry missing header or diff line:\n%s", rendered)
 	}
-	if got, want := strings.Index(diffLine, "1"), strings.Index(headerLine, "✓"); got != want {
-		t.Fatalf("line number column = %d, want status marker column %d\nheader: %q\ndiff:   %q", got, want, headerLine, diffLine)
+	// 成功行图标退役后保留同宽空白 gutter：diff 行号仍与 gutter 起点列对齐。
+	// gutter 起点 = chip 标签列 − (gutter 2 + nameText 空格 1 + chip 左 padding 1)。
+	if got, want := strings.Index(diffLine, "1"), strings.Index(headerLine, "写入")-4; got != want {
+		t.Fatalf("line number column = %d, want header gutter column %d\nheader: %q\ndiff:   %q", got, want, headerLine, diffLine)
 	}
 	if got := lipgloss.Width(diffLine); got >= 80 {
 		t.Fatalf("diff line width = %d, want right margin to avoid terminal wrap: %q", got, diffLine)

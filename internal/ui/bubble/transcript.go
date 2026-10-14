@@ -2856,14 +2856,17 @@ func renderCompactToolSummary(entry transcriptEntry, width int, at time.Time) st
 	return renderCompactToolSummaryWithHover(entry, width, at, false)
 }
 
-// renderCompactToolSummaryWithHover 渲染紧凑工具行：
-// `{icon} {chip} {target}  {状态文字}`。
+// renderCompactToolSummaryWithHover 渲染紧凑工具行。
+// 成功行只留 `{chip} {target}`：无 ✓ 图标、无「完成/时长」状态段，
+// 图标列保留同宽空白 gutter 让 chip 与运行中/失败行对齐（成功=无标记，
+// 异常行反而更醒目）。运行中/失败行仍是 `{icon} {chip} {target}  {状态文字}`。
 // chip 是工具类别彩底小标签（读取/编辑/Shell/…，MCP 显示 server 名）；
-// 状态词是彩色文字（完成/运行中/失败 + 时长），不再使用实底药丸；
+// 状态词是彩色文字（运行中/失败 + 时长），不再使用实底药丸；
 // 运行中图标为 ●，◌ 已退役。
 func renderCompactToolSummaryWithHover(entry transcriptEntry, width int, at time.Time, hovered bool) string {
 	width = maxInt(1, width)
 	status := toolEntryStatus(entry)
+	successMinimal := status == "ok"
 	icon := glyphSuccess
 	iconStyle := toolCitationOKStyle
 	targetStyle := toolCitationStyle
@@ -2876,7 +2879,9 @@ func renderCompactToolSummaryWithHover(entry transcriptEntry, width int, at time
 		iconStyle = toolCitationErrorStyle
 	}
 	if hovered && !entry.toolFocused {
-		iconStyle = iconStyle.Underline(true)
+		if !successMinimal {
+			iconStyle = iconStyle.Underline(true)
+		}
 		targetStyle = targetStyle.Underline(true)
 	}
 
@@ -2888,10 +2893,14 @@ func renderCompactToolSummaryWithHover(entry transcriptEntry, width int, at time
 		focusPrefix = "› "
 	}
 	iconText := icon + " "
+	if successMinimal {
+		// 成功行没有图标：留与 "{glyph} " 同宽的空白 gutter，保持 chip 列对齐。
+		iconText = strings.Repeat(" ", terminalCellWidth(glyphSuccess)+1)
+	}
 	duration := ""
 	if status == "running" {
 		duration = formatRunningToolElapsed(entry.toolStartedAt, at)
-	} else if !entry.toolFinishedAt.IsZero() {
+	} else if !successMinimal && !entry.toolFinishedAt.IsZero() {
 		duration = formatToolDuration(entry.toolStartedAt, entry.toolFinishedAt)
 	}
 	statusStyle := statusTextStyle(status)
@@ -2906,6 +2915,11 @@ func renderCompactToolSummaryWithHover(entry transcriptEntry, width int, at time
 	statusRendered := statusStyle.Render(statusText)
 
 	statusSeparator := "  "
+	if successMinimal {
+		// 成功行不渲染「完成/时长」状态段。
+		statusRendered = ""
+		statusSeparator = ""
+	}
 	fixedWithoutName := func() int {
 		return terminalCellWidth(focusPrefix) + terminalCellWidth(iconText) + terminalCellWidth(statusSeparator) + terminalCellWidth(statusRendered)
 	}
@@ -2915,13 +2929,17 @@ func renderCompactToolSummaryWithHover(entry transcriptEntry, width int, at time
 		duration = ""
 		statusRendered = statusStyle.Render(statusLabel)
 	}
-	if fixedWithoutName() > width {
+	if fixedWithoutName() > width && statusSeparator != "" {
 		statusSeparator = " "
 	}
 	if fixedWithoutName() > width {
 		iconText = icon
+		if successMinimal {
+			// 成功行没有图标可退，收窄时直接牺牲 gutter。
+			iconText = ""
+		}
 	}
-	if fixedWithoutName() > width {
+	if fixedWithoutName() > width && statusSeparator != "" {
 		statusSeparator = ""
 	}
 	if fixedWithoutName() > width {
