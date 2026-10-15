@@ -10,8 +10,22 @@ import (
 // openAIMessage keeps text-only content as a JSON string while encoding rich
 // messages as the provider's ordered content-part array.
 type openAIMessage struct {
-	Role    string `json:"role"`
-	Content any    `json:"content"`
+	Role             string           `json:"role"`
+	Content          any              `json:"content"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	ToolCalls        []openAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string           `json:"tool_call_id,omitempty"`
+}
+
+type openAIToolCall struct {
+	ID       string                 `json:"id"`
+	Type     string                 `json:"type"`
+	Function openAIToolCallFunction `json:"function"`
+}
+
+type openAIToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 type openAIContentPart struct {
