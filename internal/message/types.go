@@ -61,6 +61,8 @@ type ToolCall struct {
 	Name       string          `json:"name"`
 	Input      json.RawMessage `json:"input"`
 	InputError string          `json:"input_error,omitempty"`
+	// ProviderArguments retains the wire representation when a model adapter decodes Input.
+	ProviderArguments string `json:"provider_arguments,omitempty"`
 }
 
 type ToolResult struct {
