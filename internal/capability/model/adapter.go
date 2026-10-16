@@ -43,7 +43,11 @@ func buildOpenAICompatibleChatCompletionsRequest(cfg Config, messages []message.
 	if err != nil {
 		return ChatCompletionsRequest{}, fmt.Errorf("构造 OpenAI 请求消息失败: %w", err)
 	}
-	req := ChatCompletionsRequest{Model: cfg.Model, Messages: apiMessages, Stream: stream}
+	return buildChatCompletionsRequest(cfg.Model, apiMessages, tools, stream), nil
+}
+
+func buildChatCompletionsRequest(model string, messages []openAIMessage, tools PreparedToolSet, stream bool) ChatCompletionsRequest {
+	req := ChatCompletionsRequest{Model: model, Messages: messages, Stream: stream}
 	if stream {
 		req.StreamOptions = &StreamOptions{IncludeUsage: true}
 	}
@@ -56,5 +60,5 @@ func buildOpenAICompatibleChatCompletionsRequest(cfg Config, messages []message.
 			Name: tool.Name, Description: tool.Description, Parameters: parameters, Strict: tool.Strict,
 		}})
 	}
-	return req, nil
+	return req
 }
