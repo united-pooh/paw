@@ -110,6 +110,9 @@ func (tools PreparedToolSet) adaptCalls(calls []message.ToolCall) []message.Tool
 			adapted[i].InputError = fmt.Sprintf("工具参数恢复或校验失败，可修正参数后重试: %v", err)
 			continue
 		}
+		if string(input) != string(call.Input) {
+			adapted[i].ProviderArguments = string(call.Input)
+		}
 		adapted[i].Input = input
 	}
 	return adapted
