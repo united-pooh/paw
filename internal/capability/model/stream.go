@@ -121,6 +121,10 @@ func (c *Client) StreamMessage(ctx context.Context, messages []message.Message, 
 	messages, _ = RepairToolCallPairs(messages)
 
 	cfg := c.CurrentModelConfig()
+	cfg, err = configWithOutputLimit(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
 	requestID := usageRequestID(ctx)
 	transport := "openai-compatible"
 	if shouldUseResponsesAPI(cfg) {
@@ -288,11 +292,11 @@ func (c *Client) nonStreamingOpenAIMessage(ctx context.Context, cfg Config, adap
 	if finishReason == FinishReasonToolCalls && len(choice.ToolCalls) == 0 {
 		return nil, errChatCompletionToolCallsWithoutCalls()
 	}
-	events := make(chan StreamEvent, 4)
+	events := make(chan StreamEvent, 5)
 	if parsed.Usage != nil {
 		events <- StreamEvent{Usage: parsed.Usage}
 	}
-	if reasoning := strings.TrimSpace(choice.ReasoningContent); reasoning != "" {
+	if reasoning := choice.ReasoningContent; reasoning != "" {
 		events <- StreamEvent{Thinking: reasoning}
 	}
 	if content := strings.TrimSpace(choice.Content); content != "" {
@@ -331,36 +335,62 @@ func (c *Client) streamOpenAIMessage(ctx context.Context, cfg Config, adapter Mo
 		return nil, fmt.Errorf("序列化请求体失败: %w", err)
 	}
 
-	// 将上层 context 透传到底层 HTTP 请求，支持超时/取消；请求建立失败时
-	// 按配置重试，响应一旦建立则交给 SSE 消费器继续读取。
-	resp, err := c.doRequestWithRetry(ctx, cfg, true, func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(
-			ctx,
-			http.MethodPost,
-			cfg.APIBaseURL+cfg.APIPath,
-			bytes.NewReader(bodyBytes),
-		)
-		if err != nil {
-			return nil, fmt.Errorf("创建 HTTP 请求失败: %w", err)
-		}
-		// 当前本地网关沿用标准 JSON 请求体和 Bearer 鉴权头。
-		c.setRequestHeadersForConfig(req, cfg)
-		return req, nil
-	})
+	attempts := responsesRequestAttempts{
+		client: c.httpClientForConfig(cfg, true), limit: max(1, cfg.RetryCount+1),
+		build: func() (*http.Request, error) {
+			req, err := http.NewRequestWithContext(
+				ctx,
+				http.MethodPost,
+				cfg.APIBaseURL+cfg.APIPath,
+				bytes.NewReader(bodyBytes),
+			)
+			if err != nil {
+				return nil, fmt.Errorf("创建 HTTP 请求失败: %w", err)
+			}
+			// 当前本地网关沿用标准 JSON 请求体和 Bearer 鉴权头。
+			c.setRequestHeadersForConfig(req, cfg)
+			return req, nil
+		},
+	}
+	resp, err := attempts.open(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("调用模型接口失败: %w", err)
 	}
 
-	// SSE 流建立失败（非 2xx）时，读取错误体后返回。
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, providerHTTPErrorFromResponse(resp, "模型接口")
-	}
-
-	// 这里开始转入异步消费：
-	// - 调用方立即拿到 channel，不阻塞当前 goroutine
-	// - 后台 goroutine 负责解析 SSE 并投递事件
 	events := make(chan StreamEvent)
-	go c.consumeStream(ctx, resp, events, streamIdleTimeout(cfg))
+	go func() {
+		defer close(events)
+		published := false
+		for {
+			attemptEvents := make(chan StreamEvent)
+			go c.consumeStream(ctx, resp, attemptEvents, streamIdleTimeout(cfg))
+			var streamErr error
+			for event := range attemptEvents {
+				if event.Err != nil {
+					streamErr = event.Err
+					continue
+				}
+				if !sendStreamEvent(ctx, events, event) {
+					return
+				}
+				published = published || event.Delta != "" || event.Thinking != "" || len(event.ToolCalls) > 0 ||
+					(event.Activity != nil && event.Activity.ToolArguments != "")
+			}
+			if streamErr == nil {
+				return
+			}
+			if ctx.Err() != nil || published || !attempts.available() || !IsStreamTransportInterruption(streamErr) {
+				_ = emitStreamEvent(ctx, events, StreamEvent{Err: chatFailureAfterOutput(streamErr, published)})
+				return
+			}
+			attempts.retryAfter = providerRetryAfter(resp.Header, time.Now())
+			resp, err = attempts.open(ctx)
+			if err != nil {
+				_ = emitStreamEvent(ctx, events, StreamEvent{Err: err})
+				return
+			}
+		}
+	}()
 	return events, nil
 }
 
@@ -615,10 +645,29 @@ func (w *streamIdleWatchdog) TimedOut() bool {
 // consumeStream 负责把 SSE 文本行转换为 StreamEvent，并累积原生 tool_calls。
 func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events chan<- StreamEvent, idleTimeout time.Duration) {
 	defer close(events)
-	body := newStreamIdleWatchdog(ctx, resp.Body, idleTimeout)
+	reader := resp.Body
+	diagnostics := newResponsesDiagnosticBody(ctx, resp)
+	if diagnostics != nil {
+		reader = diagnostics
+	}
+	body := newStreamIdleWatchdog(ctx, reader, idleTimeout)
+	var streamErr error
 	defer func() {
+		if ctx.Err() != nil {
+			streamErr = ctx.Err()
+		}
+		diagnostics.finish(ctx, streamErr, body.TimedOut())
 		_ = body.Close()
 	}()
+	emit := func(event StreamEvent) bool {
+		if event.Err != nil {
+			streamErr = event.Err
+		}
+		if event.Done || event.Err != nil {
+			diagnostics.finish(ctx, streamErr, body.TimedOut())
+		}
+		return emitStreamEvent(ctx, events, event)
+	}
 
 	scanner := newStreamScanner(body)
 	// 按 index 累积 tool_calls，支持单次响应中多个工具调用
@@ -627,6 +676,9 @@ func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events 
 	finishSeen := false
 
 	for scanner.Scan() {
+		if ctx.Err() != nil {
+			return
+		}
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || !strings.HasPrefix(line, "data:") {
 			continue
@@ -637,20 +689,20 @@ func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events 
 		}
 		if payload == "[DONE]" {
 			if !finishSeen {
-				_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("Chat Completions stream sent [DONE] before finish_reason")})
+				_ = emit(StreamEvent{Err: fmt.Errorf("Chat Completions stream sent [DONE] before finish_reason")})
 				return
 			}
-			_ = emitStreamEvent(ctx, events, StreamEvent{Done: true, FinishReason: finishReason})
+			_ = emit(StreamEvent{Done: true, FinishReason: finishReason})
 			return
 		}
 
 		chunk, err := decodeStreamChunk(payload)
 		if err != nil {
-			_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("解析流式数据失败: %w", err)})
+			_ = emit(StreamEvent{Err: fmt.Errorf("解析流式数据失败: %w", err)})
 			return
 		}
 		if chunk.Error != nil {
-			_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("模型接口返回错误: %s", chunk.Error.Message)})
+			_ = emit(StreamEvent{Err: fmt.Errorf("模型接口返回错误: %s", chunk.Error.Message)})
 			return
 		}
 		// 累积 delta.tool_calls
@@ -668,7 +720,7 @@ func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events 
 					call.name = tc.Function.Name
 				}
 				call.args.WriteString(tc.Function.Arguments)
-				if tc.Function.Arguments != "" && !emitStreamEvent(ctx, events, withStreamActivity(StreamEvent{}, "", "", tc.Function.Arguments)) {
+				if tc.Function.Arguments != "" && !emit(withStreamActivity(StreamEvent{}, "", "", tc.Function.Arguments)) {
 					return
 				}
 			}
@@ -676,7 +728,7 @@ func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events 
 
 		// Usage
 		if chunk.Usage != nil {
-			if !emitStreamEvent(ctx, events, StreamEvent{Usage: chunk.Usage}) {
+			if !emit(StreamEvent{Usage: chunk.Usage}) {
 				return
 			}
 		}
@@ -691,14 +743,14 @@ func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events 
 			reasoningText = chunk.Choices[0].Delta.Reasoning
 		}
 		if reasoningText != "" && !finishSeen {
-			if !emitStreamEvent(ctx, events, withStreamActivity(StreamEvent{Thinking: reasoningText}, "", reasoningText, "")) {
+			if !emit(withStreamActivity(StreamEvent{Thinking: reasoningText}, "", reasoningText, "")) {
 				return
 			}
 		}
 
 		// 文本内容 delta
 		if delta := chunk.Choices[0].Delta.Content; delta != "" && !finishSeen {
-			if !emitStreamEvent(ctx, events, withStreamActivity(StreamEvent{Delta: delta}, delta, "", "")) {
+			if !emit(withStreamActivity(StreamEvent{Delta: delta}, delta, "", "")) {
 				return
 			}
 		}
@@ -710,27 +762,27 @@ func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events 
 		if rawFinishReason != nil && *rawFinishReason != "" {
 			reason, err := chatCompletionFinishReason(rawFinishReason, false)
 			if err != nil {
-				_ = emitStreamEvent(ctx, events, StreamEvent{Err: err})
+				_ = emit(StreamEvent{Err: err})
 				return
 			}
 			if finishSeen {
 				if reason != finishReason {
-					_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("Chat Completions stream returned conflicting finish_reason %q after %q", reason, finishReason)})
+					_ = emit(StreamEvent{Err: fmt.Errorf("Chat Completions stream returned conflicting finish_reason %q after %q", reason, finishReason)})
 					return
 				}
 				continue
 			}
 			calls, err := openAIToolCallsFromAccumulated(accumulated)
 			if err != nil {
-				_ = emitStreamEvent(ctx, events, StreamEvent{Err: err})
+				_ = emit(StreamEvent{Err: err})
 				return
 			}
 			if reason == FinishReasonToolCalls && len(calls) == 0 {
-				_ = emitStreamEvent(ctx, events, StreamEvent{Err: errChatCompletionToolCallsWithoutCalls()})
+				_ = emit(StreamEvent{Err: errChatCompletionToolCallsWithoutCalls()})
 				return
 			}
 			if len(calls) > 0 {
-				if !emitStreamEvent(ctx, events, StreamEvent{ToolCalls: calls}) {
+				if !emit(StreamEvent{ToolCalls: calls}) {
 					return
 				}
 				accumulated = map[int]*activeOpenAIToolCall{}
@@ -741,20 +793,23 @@ func (c *Client) consumeStream(ctx context.Context, resp *http.Response, events 
 		}
 	}
 
+	if ctx.Err() != nil {
+		return
+	}
 	if body.TimedOut() {
-		_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("模型流 %s 无任何数据，连接已中断（可能是 provider 网络抖动），请重试", idleTimeout)})
+		_ = emit(StreamEvent{Err: chatStreamIdleFailure(idleTimeout, providerRequestID(resp.Header))})
 		return
 	}
 	if err := scanner.Err(); err != nil {
-		_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("读取流式响应失败: %w", err)})
+		_ = emit(StreamEvent{Err: chatStreamReadFailure(err, providerRequestID(resp.Header))})
 		return
 	}
 
 	if !finishSeen {
-		_ = emitStreamEvent(ctx, events, StreamEvent{Err: fmt.Errorf("Chat Completions stream ended before finish_reason")})
+		_ = emit(StreamEvent{Err: &chatStreamFailure{stage: "unexpected_eof", message: "Chat Completions stream ended before finish_reason", requestID: providerRequestID(resp.Header)}})
 		return
 	}
-	_ = emitStreamEvent(ctx, events, StreamEvent{Done: true, FinishReason: finishReason})
+	_ = emit(StreamEvent{Done: true, FinishReason: finishReason})
 }
 
 // emitStreamEvent 在 ctx 取消时主动放弃发送，避免 goroutine 卡在 channel send 上，
