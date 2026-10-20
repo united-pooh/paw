@@ -156,6 +156,7 @@ func responsesDiagnosticFailure(err error) (string, string) {
 	}
 	stage := "consumer_error"
 	var failure *responsesStreamFailure
+	var chatFailure *chatStreamFailure
 	if errors.As(err, &failure) {
 		switch failure.EventType {
 		case "decode", "stream_idle", "stream_read", "unexpected_eof", "frame_limit", "completion_mismatch", "response.failed", "response.incomplete", "error":
@@ -164,6 +165,8 @@ func responsesDiagnosticFailure(err error) (string, string) {
 			stage = "response_error"
 		}
 		err = failure.cause
+	} else if errors.As(err, &chatFailure) {
+		stage, err = chatFailure.stage, chatFailure.cause
 	} else if errors.Is(err, context.Canceled) {
 		stage = "canceled"
 	} else if errors.Is(err, context.DeadlineExceeded) {
