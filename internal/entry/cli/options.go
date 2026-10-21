@@ -27,7 +27,7 @@ func parseOptions() options {
 
 func parseOptionsFrom(flags *flag.FlagSet, args []string) options {
 	prompt := flags.String("p", "", "single-turn prompt; omit to start Bubble Tea UI")
-	sessionID := flags.String("s", "", "session ID; omit to resume/create by cwd")
+	sessionID := flags.String("s", "", "existing session ID to resume; omit to create a new session")
 	taskWorker := flags.Bool("task-worker", false, "run hidden task worker")
 	taskWorkerPool := flags.Bool("task-worker-pool", false, "run hidden long-lived task pool worker")
 	sandboxLimits := flags.String("sandbox-limits", "", "worker sandbox limits (csv: cpu=sec,file_mb=MiB,proc=n,nofile=n,wall=sec; unset fields fall back to defaults)")
