@@ -18,20 +18,14 @@ const (
 	maxContinuationOverlapRunes   = 512
 )
 
+type modelTurnStateContextKey struct{}
+
+func withModelTurnState(ctx context.Context, turn *TurnState) context.Context {
+	return context.WithValue(ctx, modelTurnStateContextKey{}, turn)
+}
+
 func (runner *Engine) runModelTurn(ctx context.Context, history []message.Message, turn *TurnState) (message.Message, error) {
-	var tools []model.ToolDefinition
-	if runner.registry != nil {
-		tools = runner.registry.Definitions()
-		if filter := runner.currentToolFilter(); filter != nil {
-			filtered := make([]model.ToolDefinition, 0, len(tools))
-			for _, definition := range tools {
-				if filter(definition.Name, nil) == nil {
-					filtered = append(filtered, definition)
-				}
-			}
-			tools = filtered
-		}
-	}
+	tools := runner.modelToolDefinitions()
 	baseModelMessages, err := runner.buildModelMessages(ctx, history, turn)
 	if err != nil {
 		return message.Message{}, err
@@ -103,6 +97,33 @@ func (runner *Engine) runModelTurn(ctx context.Context, history []message.Messag
 	}
 
 	return runner.failModelTurnWithPartial(&state, fmt.Errorf("模型响应连续 %d 次以 length 截断，已停止", maxLengthContinuationRequests))
+}
+
+func (runner *Engine) modelToolDefinitions() []model.ToolDefinition {
+	var tools []model.ToolDefinition
+	if runner.registry != nil {
+		tools = runner.registry.Definitions()
+		if filter := runner.currentToolFilter(); filter != nil {
+			filtered := make([]model.ToolDefinition, 0, len(tools))
+			for _, definition := range tools {
+				if filter(definition.Name, nil) == nil {
+					filtered = append(filtered, definition)
+				}
+			}
+			tools = filtered
+		}
+	}
+	return tools
+}
+
+func (runner *Engine) usesNativeToolCalling() bool {
+	if reader, ok := runner.model.(modelConfigReader); ok {
+		switch reader.CurrentModelConfig().Transport {
+		case "openai-compatible", "openai-responses", "anthropic-compatible":
+			return true
+		}
+	}
+	return false
 }
 
 func buildLengthContinuationMessages(base []message.Message, accumulated string) []message.Message {
@@ -197,10 +218,11 @@ func (runner *Engine) buildSystemPrompt() string {
 
 func (runner *Engine) buildSystemPromptForTurn(turn *TurnState) string {
 	descriptions := []string{}
+	nativeTools := runner.usesNativeToolCalling()
 	if runner.registry != nil {
 		compactToolPrompt := runner.compact.toolPrompt()
 		filter := runner.toolGate.currentTurnFilter()
-		if compactToolPrompt {
+		if compactToolPrompt || nativeTools {
 			descriptions = runner.registry.DescribeBrief()
 		} else {
 			descriptions = runner.registry.Describe()
@@ -228,7 +250,7 @@ func (runner *Engine) buildSystemPromptForTurn(turn *TurnState) string {
 	if runner.prompt == nil {
 		runner.prompt = NewPromptBuilder(NewInstructionManager(""))
 	}
-	prompt := runner.prompt.Build(descriptions)
+	prompt := runner.prompt.build(descriptions, nativeTools)
 	supplement := runner.promptCtx.currentSystemSupplement()
 	skillContext := runner.currentSkillContext()
 	if turn != nil {
@@ -253,6 +275,7 @@ func (runner *Engine) buildSystemPromptForTurn(turn *TurnState) string {
 }
 
 func renderMessageForModel(msg message.Message) message.Message {
+	var rendered message.Message
 	switch {
 	case len(toolCallsFromMessage(msg)) > 0:
 		calls := toolCallsFromMessage(msg)
@@ -260,10 +283,8 @@ func renderMessageForModel(msg message.Message) message.Message {
 		for _, call := range calls {
 			parts = append(parts, marshalJSON(toolUseEnvelope{Type: toolUseResponseType, ID: call.ID, Name: call.Name, Input: call.Input}))
 		}
-		rendered := buildAssistantToolCallMessage(calls)
+		rendered = buildAssistantToolCallMessage(calls)
 		rendered.Content = strings.Join(parts, "\n")
-		rendered.ProviderData = append(json.RawMessage(nil), msg.ProviderData...)
-		return rendered
 	case len(toolResultsFromMessage(msg)) > 0:
 		results := toolResultsFromMessage(msg)
 		parts := make([]string, 0, len(results))
@@ -274,18 +295,22 @@ func renderMessageForModel(msg message.Message) message.Message {
 		if len(results) > 1 {
 			label = "TOOL_RESULTS:\n"
 		}
-		rendered := buildToolResultsMessage(results)
+		rendered = buildToolResultsMessage(results)
 		rendered.Content = label + strings.Join(parts, "\n")
-		rendered.ProviderData = append(json.RawMessage(nil), msg.ProviderData...)
-		return rendered
 	default:
-		return message.Message{
-			Role:         msg.Role,
-			Content:      msg.Content,
-			Parts:        append([]message.ContentPart(nil), msg.Parts...),
-			ProviderData: append(json.RawMessage(nil), msg.ProviderData...),
+		rendered = message.Message{
+			Role:    msg.Role,
+			Content: msg.Content,
+			Parts:   append([]message.ContentPart(nil), msg.Parts...),
 		}
 	}
+	rendered.ProviderData = append(json.RawMessage(nil), msg.ProviderData...)
+	if msg.GeneratedBy != nil && msg.GeneratedBy.Transport == "openai-compatible" {
+		original := message.CloneMessage(msg)
+		rendered.GeneratedBy = original.GeneratedBy
+		rendered.AssistantParts = original.AssistantParts
+	}
+	return rendered
 }
 
 func marshalJSON(v any) string {
@@ -331,6 +356,9 @@ func (runner *Engine) handleEvent(state *turnState, ev model.StreamEvent, finali
 	if ev.Activity != nil && runner.display != nil {
 		_ = runner.display.Publish(DisplayEvent{Kind: DisplayModelStreamActivity, RequestID: state.requestUsage.RequestID, Activity: *ev.Activity})
 	}
+	if ev.Usage != nil {
+		runner.recordUsageEvent(state, *ev.Usage)
+	}
 	if ev.Err != nil {
 		if err := runner.flushContinuationOverlap(state); err != nil {
 			return runner.partialAssistantMessage(state), "", false, err
@@ -338,10 +366,6 @@ func (runner *Engine) handleEvent(state *turnState, ev model.StreamEvent, finali
 		msg, err := runner.failModelTurnWithPartial(state, ev.Err)
 		return msg, "", false, err
 	}
-	if ev.Usage != nil {
-		runner.recordUsageEvent(state, *ev.Usage)
-	}
-
 	// 捕获请求 origin
 	if ev.GeneratedBy != nil {
 		state.generatedBy = ev.GeneratedBy
@@ -502,7 +526,9 @@ func (runner *Engine) recordUsageEvent(state *turnState, usage model.Usage) {
 	currentTotals := usageTotalsFromUsage(state.usage, state.usageKnown).add(delta)
 	state.usage = usageFromTotals(currentTotals)
 	state.usageKnown = true
-	runner.setCurrentUsage(state.requestUsage)
+	if state.requestPurpose != "compaction" {
+		runner.setCurrentUsage(state.requestUsage)
+	}
 	runner.addSessionUsage(delta)
 	runner.emitModelUsage(state.requestUsage)
 	currentTrace := tokentracer.UsageFromModelUsage(state.usage)
