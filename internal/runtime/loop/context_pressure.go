@@ -10,6 +10,17 @@ import (
 
 const minimumEconomicFoldTokens = 400
 
+func (runner *Engine) contextPressureTokens(history []message.Message) int {
+	usage, known, estimated := runner.usage.contextUsage()
+	if known && !estimated && usage.Knowledge().Input {
+		input := usage.Breakdown()
+		// This is the last reported main-request input. New tool results have
+		// not been tokenized by the provider and are not part of this reading.
+		return input.Input + input.CacheRead + input.CacheCreation
+	}
+	return estimateMessageTokens(history)
+}
+
 type contextMaintenanceResult struct {
 	history              []message.Message
 	compaction           *ContextCompactionResult
@@ -21,12 +32,25 @@ type contextMaintenanceResult struct {
 }
 
 func (runner *Engine) maintainContextProjection(ctx context.Context, history []message.Message, allowSummary bool) (contextMaintenanceResult, error) {
+	if runner != nil && runner.contextModeState() {
+		return runner.maintainStateProjection(ctx, history)
+	}
+	return runner.maintainSummaryProjection(ctx, history, allowSummary)
+}
+
+func (runner *Engine) maintainToolRoundContext(ctx context.Context, history []message.Message, hasCompletedTools bool) (contextMaintenanceResult, error) {
+	if !hasCompletedTools {
+		return runner.maintainContextProjection(ctx, history, true)
+	}
+	// A cleaned turn reload can rewrite the active native tool exchange. Fold
+	// closed steps from the live projection instead, preserving the recent pair.
+	return runner.maintainSummaryProjection(ctx, history, true)
+}
+
+func (runner *Engine) maintainSummaryProjection(ctx context.Context, history []message.Message, allowSummary bool) (contextMaintenanceResult, error) {
 	result := contextMaintenanceResult{history: history}
 	if runner == nil || len(history) == 0 {
 		return result, nil
-	}
-	if runner.contextModeState() {
-		return runner.maintainStateProjection(ctx, history)
 	}
 
 	limit := runner.compact.limit()
@@ -81,10 +105,13 @@ func (runner *Engine) maintainContextProjection(ctx context.Context, history []m
 	compaction.ArchivePaths = appendUniqueStrings(compaction.ArchivePaths, result.archivePaths...)
 	result.compaction = compaction
 	result.summaryPerformed = true
-	result.estimatedTokensSaved += maxInt(0, postTokens-estimateMessageTokens(compacted))
+	afterTokens := estimateMessageTokens(compacted)
+	result.estimatedTokensSaved += maxInt(0, postTokens-afterTokens)
 	compaction.EstimatedTokensSaved = result.estimatedTokensSaved
-	if runner.recordAutomaticCompaction(true, false) {
-		runner.notifySystem("context-compaction", "automatic summary compaction paused after two consecutive folds; tool-result pruning remains active")
+	// New tool output can refill a successfully reduced context before the next
+	// step. Count only folds that fail to reduce pressure toward the stuck guard.
+	if runner.recordAutomaticCompaction(true, afterTokens < compact || afterTokens < postTokens) {
+		runner.notifySystem("context-compaction", "automatic summary compaction paused after two folds without reducing context; tool-result pruning remains active")
 	}
 	return result, nil
 }
@@ -125,14 +152,9 @@ func (runner *Engine) maintainToolResultsByPressure(ctx context.Context, history
 	runner.mu.RLock()
 	registry := runner.registry
 	runner.mu.RUnlock()
-	usage, usageKnown, _ := runner.usage.contextUsage()
 	archive := runner.compact.currentArchive()
 
-	estimated := estimateMessageTokens(history)
-	promptTokens := estimated
-	if usageKnown && usage.PromptTokenCount() > promptTokens {
-		promptTokens = usage.PromptTokenCount()
-	}
+	promptTokens := runner.contextPressureTokens(history)
 	outcome.promptTokens = promptTokens
 
 	soft := pressureThreshold(limit, cfg.softCompactRatio)
@@ -191,7 +213,11 @@ func (runner *Engine) maintainToolResultsByPressure(ctx context.Context, history
 	}
 	outcome.estimatedTokensSaved = estimatedTokenSavings(stats.savedChars)
 	outcome.archivePaths = stats.archives
-	outcome.postTokens = estimateMessageTokens(rewritten)
+	outcome.postTokens = promptTokens
+	if stats.results > 0 {
+		runner.syncContextUsageFromHistory(rewritten)
+		outcome.postTokens = estimateMessageTokens(rewritten)
+	}
 	return outcome, nil
 }
 
