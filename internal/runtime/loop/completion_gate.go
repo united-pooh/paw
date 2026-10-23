@@ -3,6 +3,7 @@ package loop
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"paw/internal/message"
 	"paw/internal/todo"
@@ -42,6 +43,7 @@ const (
 	PauseNoProgress         = "no-progress"
 	PauseBudgetExhausted    = "budget-exhausted"
 	PauseContextMaintenance = "context-maintenance"
+	PauseExternalBlocker    = "external-blocker"
 )
 
 type CompletionObservation struct {
@@ -110,6 +112,19 @@ func (g CompletionGate) Evaluate(observation CompletionObservation) CompletionDe
 		decision.Reason = "no unfinished todo items"
 		return decision
 	}
+	ready := false
+	for _, item := range observation.Todo.Items {
+		if item.Status != todo.StatusCompleted && item.BlockedReason == "" && len(observation.Todo.UnresolvedBlockers(item.ID)) == 0 {
+			ready = true
+			break
+		}
+	}
+	if !ready {
+		decision.Action = CompletionBlocked
+		decision.Reason = "all unfinished todo items are blocked"
+		decision.PauseKind = PauseExternalBlocker
+		return decision
+	}
 	if observation.NoProgressCount >= config.MaxNoProgress {
 		decision.Action = CompletionPause
 		decision.Reason = fmt.Sprintf("no verifiable progress for %d turns", observation.NoProgressCount)
@@ -144,10 +159,12 @@ func pendingTodoCount(snapshot todo.Snapshot) int {
 // Narrative changes alone are not verifiable progress toward unfinished todos.
 func progressFingerprint(snapshot todo.Snapshot) string {
 	var b strings.Builder
-	for _, item := range snapshot.Items {
+	items := append([]todo.Item(nil), snapshot.Items...)
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	for _, item := range items {
 		blockers := append([]string(nil), item.BlockedBy...)
 		sort.Strings(blockers)
-		fmt.Fprintf(&b, "%s\x00%s\x00%s\x00%q\x00", item.ID, item.Status, item.Content, blockers)
+		fmt.Fprintf(&b, "%s\x00%s\x00%q\x00%t\x00", item.ID, item.Status, blockers, item.BlockedReason != "")
 	}
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])
@@ -162,7 +179,7 @@ func todoFingerprint(snapshot todo.Snapshot) string {
 	for _, item := range snapshot.Items {
 		blockers := append([]string(nil), item.BlockedBy...)
 		sort.Strings(blockers)
-		fmt.Fprintf(&b, "%s\x00%s\x00%s\x00%q\x00", item.ID, item.Status, item.Content, blockers)
+		fmt.Fprintf(&b, "%s\x00%s\x00%s\x00%q\x00%s\x00", item.ID, item.Status, item.Content, blockers, item.BlockedReason)
 	}
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])
@@ -176,7 +193,9 @@ func buildContinuationPrompt(decision CompletionDecision, snapshot todo.Snapshot
 	var waiting strings.Builder
 	for _, item := range snapshot.Items {
 		if item.Status == todo.StatusPending || item.Status == todo.StatusInProgress {
-			if blockers := snapshot.UnresolvedBlockers(item.ID); len(blockers) > 0 {
+			if item.BlockedReason != "" {
+				fmt.Fprintf(&waiting, "- [blocked] #%s %s（外部阻塞：%s）\n", item.ID, item.Content, item.BlockedReason)
+			} else if blockers := snapshot.UnresolvedBlockers(item.ID); len(blockers) > 0 {
 				fmt.Fprintf(&waiting, "- [blocked] #%s %s（等待：#%s）\n", item.ID, item.Content, strings.Join(blockers, ", #"))
 			} else {
 				fmt.Fprintf(&b, "- [%s] #%s %s\n", item.Status, item.ID, item.Content)
@@ -226,6 +245,7 @@ type progressGate struct {
 	lastProgressHash string
 	lastTodoHash     string
 	staleTodoTurns   int
+	toolEvidence     map[[sha256.Size]byte]struct{}
 }
 
 func (g *progressGate) setConfig(config AutoContinueConfig) {
@@ -251,6 +271,54 @@ func (g *progressGate) resetProgress() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.lastProgressHash = ""
+	g.lastTodoHash = ""
+	g.staleTodoTurns = 0
+	g.toolEvidence = nil
+}
+
+func (g *progressGate) recordToolEvidence(history []message.Message) bool {
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role == message.RoleUser && len(toolResultsFromMessage(history[i])) == 0 {
+			history = history[i+1:]
+			break
+		}
+	}
+	calls := make(map[string]message.ToolCall)
+	var evidence [][sha256.Size]byte
+	for _, msg := range history {
+		for _, call := range toolCallsFromMessage(msg) {
+			calls[call.ID] = call
+		}
+		for _, result := range toolResultsFromMessage(msg) {
+			call, ok := calls[result.ToolUseID]
+			if !ok || result.IsError {
+				continue
+			}
+			switch call.Name {
+			case "update_todo", "update_memory", "update_ariadne":
+				continue
+			}
+			input := call.Input
+			var value any
+			if json.Unmarshal(input, &value) == nil {
+				input, _ = json.Marshal(value)
+			}
+			evidence = append(evidence, sha256.Sum256([]byte(call.Name+"\x00"+string(input)+"\x00"+result.Content)))
+		}
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.toolEvidence == nil {
+		g.toolEvidence = make(map[[sha256.Size]byte]struct{})
+	}
+	changed := false
+	for _, key := range evidence {
+		if _, seen := g.toolEvidence[key]; !seen {
+			g.toolEvidence[key] = struct{}{}
+			changed = true
+		}
+	}
+	return changed
 }
 
 // recordProgress 记录本轮进展/todo 指纹，返回上一轮进展指纹与陈旧 todo
@@ -281,7 +349,8 @@ func (runner *Engine) evaluateCompletion(assistant message.Message, hadToolCalls
 	hash := progressFingerprint(snapshot)
 	todoHash := todoFingerprint(snapshot)
 	previousHash, staleTodoTurns := runner.gate.recordProgress(hash, todoHash)
-	if used > 0 && hash == previousHash && !hadToolCalls {
+	newEvidence := runner.gate.recordToolEvidence(runner.currentHistory()) && hadToolCalls
+	if used > 0 && hash == previousHash && !newEvidence {
 		noProgress++
 	} else {
 		noProgress = 0
@@ -300,6 +369,8 @@ func (runner *Engine) notifyAutoContinuePaused(decision CompletionDecision) {
 		reason = fmt.Sprintf("连续 %d 轮没有可验证的进展", decision.NoProgress)
 	case PauseBudgetExhausted:
 		reason = fmt.Sprintf("续行次数已达上限（%d/%d）", decision.BudgetUsed, decision.BudgetLimit)
+	case PauseExternalBlocker:
+		reason = "剩余事项都在等待外部条件或其前置事项"
 	default:
 		reason = decision.Reason
 	}
@@ -313,6 +384,10 @@ func (runner *Engine) notifyAutoContinuePaused(decision CompletionDecision) {
 			}
 		}
 	}
-	b.WriteString("。回复「继续」即可接着执行。")
+	if decision.PauseKind == PauseExternalBlocker {
+		b.WriteString("。解除阻塞后回复「继续」即可接着执行。")
+	} else {
+		b.WriteString("。回复「继续」即可接着执行。")
+	}
 	runner.notifySystem("auto-continue", b.String())
 }
