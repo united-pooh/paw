@@ -21,6 +21,7 @@ const (
 	minimumCompactMessages    = 2
 	minimumRecentMessages     = 2
 	maximumPinnedUserTokens   = 1500
+	compactionMaxOutputTokens = 8192
 )
 
 const (
@@ -39,7 +40,10 @@ Create a terse, reliable briefing under these headings, omitting empty headings:
 ## Errors & fixes
 ## Pending & next step
 
-Preserve paths, identifiers, versions, numbers, user constraints, edits, command results, and unresolved work exactly. Use bullets and fragments. Do not invent facts.`
+The original user task and subsequent explicit user updates are authoritative. Preserve the latest requested goal, delivery paths, acceptance conditions, and constraints. Do not infer a different task from exploratory commands, failed attempts, or an earlier summary.
+Preserve exact executable and file paths, identifiers, versions, numbers, edits, verified command results, and unresolved work. Distinguish successful verification from failed or unavailable checks; do not turn an attempted command into a completed result. Retain the latest TODO statuses, dependencies, and external blockers without marking pending work completed.
+Consolidate earlier summaries with the new work, retaining their still-relevant facts and removing repetition. Use bullets and fragments. Do not invent facts.
+For this request, return only the briefing. Do not continue the task, answer the user, or call tools; tool schemas and prior tool exchanges are context only.`
 
 const compactionTimeout = 90 * time.Second
 
@@ -91,15 +95,11 @@ func (runner *Engine) maybeCompactHistory(ctx context.Context, history []message
 		return history, nil, nil
 	}
 	limit := runner.compact.limit()
-	usage, usageKnown, _ := runner.usage.contextUsage()
 	if limit <= 0 {
 		return history, nil, nil
 	}
 
-	promptTokens := estimateMessageTokens(history)
-	if usageKnown && usage.PromptTokenCount() > promptTokens {
-		promptTokens = usage.PromptTokenCount()
-	}
+	promptTokens := runner.contextPressureTokens(history)
 	if promptTokens < int(float64(limit)*defaultCompactRatio) {
 		return history, nil, nil
 	}
@@ -168,6 +168,11 @@ func (runner *Engine) compactHistoryWithProtectedTail(ctx context.Context, histo
 	if len(fold) == 0 {
 		return history, nil, nil
 	}
+	// Fixed system/tool overhead can keep pressure high after a successful fold.
+	// Rewriting the same small summary cannot make that overhead fit the window.
+	if strings.TrimSpace(focus) == "" && len(fold) == 1 && isCompactionSummary(fold[0]) && estimateMessageTokens(fold) < minimumEconomicFoldTokens {
+		return history, nil, nil
+	}
 
 	archiveRequests := foldArchiveRequests(fold, head)
 	archive := runner.compact.currentArchive()
@@ -183,11 +188,19 @@ func (runner *Engine) compactHistoryWithProtectedTail(ctx context.Context, histo
 		return history, nil, archiveErr
 	}
 
-	summary, _, err := runner.summarizeHistoryWithRetry(ctx, fold, focus)
+	if retained := compactionRetainedContext(history, tail); retained != "" {
+		focus = strings.TrimSpace(focus + "\n\n" + retained)
+	}
+	summary, _, err := runner.summarizeHistoryWithRetry(ctx, history[:tail], focus)
 	mechanical := false
 	if err != nil {
 		mechanical = true
 		summary = mechanicalFoldSummary(len(fold), archived.Paths)
+		for _, msg := range fold {
+			if isCompactionSummary(msg) {
+				kept = append(kept, msg)
+			}
+		}
 	}
 
 	compacted := make([]message.Message, 0, head+len(kept)+1+len(history)-tail)
@@ -200,6 +213,7 @@ func (runner *Engine) compactHistoryWithProtectedTail(ctx context.Context, histo
 			strings.TrimSpace(summary) + "\n" + compactionSummaryClose,
 	})
 	compacted = append(compacted, history[tail:]...)
+	runner.syncContextUsageFromHistory(compacted)
 	return compacted, &ContextCompactionResult{
 		BeforeMessages:       len(history),
 		AfterMessages:        len(compacted),
@@ -281,9 +295,6 @@ func pinnedHistoryPrefix(history []message.Message, limit int) int {
 			i++
 		}
 	}
-	for i < len(history) && isCompactionSummary(history[i]) {
-		i++
-	}
 	return i
 }
 
@@ -311,6 +322,13 @@ func estimateMessageTokens(messages []message.Message) int {
 	for _, msg := range messages {
 		total += 4
 		total += estimateMessageContentTokens(msg)
+		if msg.Role == message.RoleAssistant && msg.GeneratedBy != nil && msg.GeneratedBy.Transport == "openai-compatible" && msg.GeneratedBy.Adapter == "deepseek" {
+			for _, part := range msg.AssistantParts {
+				if part.Reasoning != nil && !part.Reasoning.Redacted {
+					total += estimateTextTokens(part.Reasoning.Text)
+				}
+			}
+		}
 		for _, call := range toolCallsFromMessage(msg) {
 			total += 8 + estimateTextTokens(call.ID) + estimateTextTokens(call.Name) + estimateTextTokens(string(call.Input))
 		}
@@ -349,22 +367,62 @@ func estimateMessageContentTokens(msg message.Message) int {
 }
 
 func estimateTextTokens(text string) int {
-	if text == "" {
-		return 0
+	ascii, nonASCII := 0, 0
+	for _, r := range text {
+		if r < utf8.RuneSelf {
+			ascii++
+		} else {
+			nonASCII++
+		}
 	}
-	byBytes := (len(text) + 3) / 4
-	if runes := utf8.RuneCountInString(text); runes > byBytes {
-		return runes
+	return (ascii+3)/4 + nonASCII
+}
+
+func compactionRetainedContext(history []message.Message, tail int) string {
+	var out strings.Builder
+	for _, msg := range history[tail:] {
+		if msg.Role == message.RoleUser && len(toolResultsFromMessage(msg)) == 0 && !isCompactionSummary(msg) {
+			fmt.Fprintf(&out, "\n[Later user instruction]\n%s\n", msg.Content)
+		}
 	}
-	return byBytes
+	toolNames := toolNamesByUseID(history)
+latestTodo:
+	for i := len(history) - 1; i >= tail; i-- {
+		for _, result := range toolResultsFromMessage(history[i]) {
+			if toolNames[result.ToolUseID] == "update_todo" && !result.IsError {
+				fmt.Fprintf(&out, "\n[Latest retained TODO result]\n%s\n", result.Content)
+				break latestTodo
+			}
+		}
+	}
+	if out.Len() == 0 {
+		return ""
+	}
+	return "The following later instructions and task state remain verbatim after the summarized prefix. Use them to identify the current goal; they are subsequent context, not events from the earlier prefix. Later explicit user instructions take precedence over earlier summaries.\n" + out.String()
 }
 
 func (runner *Engine) summarizeHistory(ctx context.Context, history []message.Message, focus string) (string, *model.Usage, error) {
 	ctx, cancel := context.WithTimeout(ctx, compactionTimeout)
 	defer cancel()
-	systemPrompt := compactionSummaryPrompt
+	ctx = model.WithMaxOutputTokens(ctx, compactionMaxOutputTokens)
+	instruction := compactionSummaryPrompt
 	if focus = strings.TrimSpace(focus); focus != "" {
-		systemPrompt += "\n\nAdditional focus for this compaction (prioritize retaining it):\n" + focus
+		instruction += "\n\nAdditional focus for this compaction (prioritize retaining it):\n" + focus
+	}
+	messages := []message.Message{
+		{Role: message.RoleSystem, Content: instruction},
+		{Role: message.RoleUser, Content: renderCompactionTranscript(history)},
+	}
+	var tools []model.ToolDefinition
+	if runner.usesNativeToolCalling() {
+		var err error
+		turn, _ := ctx.Value(modelTurnStateContextKey{}).(*TurnState)
+		messages, err = runner.buildModelMessages(ctx, history, turn)
+		if err != nil {
+			return "", nil, err
+		}
+		messages = append(messages, message.Message{Role: message.RoleUser, Content: instruction})
+		tools = runner.modelToolDefinitions()
 	}
 	state := turnState{requestPurpose: "compaction"}
 	state.traceStageID, state.traceAgentID = runner.currentTraceIDs()
@@ -372,26 +430,29 @@ func (runner *Engine) summarizeHistory(ctx context.Context, history []message.Me
 		state.traceStageID = "compaction"
 	}
 	runner.beginUsageRequest(&state)
-	events, err := runner.model.StreamMessage(runner.usageRequestContext(ctx, &state), []message.Message{
-		{Role: message.RoleSystem, Content: systemPrompt},
-		{Role: message.RoleUser, Content: renderCompactionTranscript(history)},
-	}, nil)
+	events, err := runner.model.StreamMessage(runner.usageRequestContext(ctx, &state), messages, tools)
 	if err != nil {
 		return "", nil, err
 	}
 	var text strings.Builder
 	var usage *model.Usage
+	complete := func() (string, *model.Usage, error) {
+		summary := strings.TrimSpace(text.String())
+		if summary == "" {
+			return "", usage, fmt.Errorf("compaction summarizer returned empty output")
+		}
+		if compactionSummaryIsToolResponse(summary) {
+			return "", usage, fmt.Errorf("compaction summarizer returned a tool call")
+		}
+		return summary, usage, nil
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return "", usage, ctx.Err()
 		case event, ok := <-events:
 			if !ok {
-				summary := strings.TrimSpace(text.String())
-				if summary == "" {
-					return "", usage, fmt.Errorf("compaction summarizer returned empty output")
-				}
-				return summary, usage, nil
+				return complete()
 			}
 			if event.Usage != nil {
 				runner.recordUsageEvent(&state, *event.Usage)
@@ -401,16 +462,44 @@ func (runner *Engine) summarizeHistory(ctx context.Context, history []message.Me
 			if event.Err != nil {
 				return "", usage, event.Err
 			}
-			text.WriteString(event.Delta)
-			if event.Done {
-				summary := strings.TrimSpace(text.String())
-				if summary == "" {
-					return "", usage, fmt.Errorf("compaction summarizer returned empty output")
+			if event.FinishReason == model.FinishReasonLength {
+				return "", usage, fmt.Errorf("compaction summarizer output was truncated")
+			}
+			if len(event.ToolCalls) > 0 || event.FinishReason == model.FinishReasonToolCalls || (event.AssistantPart != nil && event.AssistantPart.Type == "tool_call") {
+				return "", usage, fmt.Errorf("compaction summarizer returned a tool call")
+			}
+			if event.AssistantPart != nil {
+				if event.AssistantPart.Type == "text" && event.AssistantPart.Lifecycle == model.AssistantPartLifecycleDelta {
+					text.WriteString(event.AssistantPart.Delta)
 				}
-				return summary, usage, nil
+			} else {
+				text.WriteString(event.Delta)
+			}
+			if event.Done {
+				return complete()
 			}
 		}
 	}
+}
+
+func compactionSummaryIsToolResponse(summary string) bool {
+	payload := strings.TrimSpace(summary)
+	if strings.HasPrefix(payload, "```") {
+		body, end, ok := extractFenceBodyAt(payload, 0)
+		if !ok || strings.TrimSpace(payload[end:]) != "" {
+			return false
+		}
+		payload = strings.TrimSpace(body)
+	}
+	if _, ok := decodeToolUseEnvelopes(payload); ok {
+		return true
+	}
+	if toolUseProtocolStart.MatchString(payload) || dsmlProtocolStart.MatchString(payload) {
+		return true
+	}
+	lower := strings.ToLower(payload)
+	return strings.HasPrefix(lower, "<invoke") || strings.HasPrefix(lower, "<tool_call") ||
+		strings.HasPrefix(lower, "<tool ") || strings.HasPrefix(lower, "<tool>")
 }
 
 func (runner *Engine) summarizeHistoryWithRetry(ctx context.Context, history []message.Message, focus string) (string, *model.Usage, error) {
