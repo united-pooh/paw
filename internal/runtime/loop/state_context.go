@@ -236,6 +236,7 @@ func (runner *Engine) maintainStateProjection(ctx context.Context, history []mes
 	before := len(history)
 	runner.recordStateCompaction(ctx, before, len(compacted), ratio)
 	result.history = compacted
+	runner.syncContextUsageFromHistory(compacted)
 	result.estimatedTokensSaved += maxInt(0, estimateMessageTokens(history)-estimateMessageTokens(compacted))
 	return result, nil
 }
