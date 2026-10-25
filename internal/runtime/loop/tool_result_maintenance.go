@@ -45,24 +45,25 @@ func keepMessageIndexes(history []message.Message, policy keepPolicy) map[int]bo
 	// and tool-result maintenance cannot silently change the model's current
 	// task list before the next state refresh.
 	toolNames := toolNamesByUseID(history)
-	for resultIndex := len(history) - 1; resultIndex >= start; resultIndex-- {
+latestTodo:
+	for resultIndex := len(history) - 1; resultIndex >= 0; resultIndex-- {
 		for _, result := range toolResultsFromMessage(history[resultIndex]) {
 			if toolNames[strings.TrimSpace(result.ToolUseID)] != "update_todo" || result.IsError {
 				continue
 			}
 			keep[resultIndex] = true
-			if callIndex := assistantCallIndexForResults(history, start, resultIndex, []message.ToolResult{result}); callIndex >= start {
+			if callIndex := assistantCallIndexForResults(history, 0, resultIndex, []message.ToolResult{result}); callIndex >= 0 {
 				keep[callIndex] = true
 			}
-			return keep
+			break latestTodo
 		}
 	}
-	for i := start; i < len(history); i++ {
+	for i := range history {
 		msg := history[i]
 		if policy.userMarked && isUserMarkedMessage(msg) {
 			keep[i] = true
 		}
-		if !policy.errors {
+		if !policy.errors || i < start {
 			continue
 		}
 		results := toolResultsFromMessage(msg)
@@ -172,8 +173,8 @@ func partitionCompactionRegionWithPolicy(region []message.Message, limit int, po
 	}
 	protected := keepMessageIndexes(region, policy)
 	for i, msg := range region {
-		if protected[i] || isCompactionSummary(msg) ||
-			(msg.Role == message.RoleUser && len(toolResultsFromMessage(msg)) == 0 && estimateMessageTokens([]message.Message{msg}) <= userBudget) {
+		if protected[i] ||
+			(msg.Role == message.RoleUser && !isCompactionSummary(msg) && len(toolResultsFromMessage(msg)) == 0 && estimateMessageTokens([]message.Message{msg}) <= userBudget) {
 			kept = append(kept, msg)
 			continue
 		}
