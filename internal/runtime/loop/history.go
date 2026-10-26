@@ -366,6 +366,8 @@ func (runner *Engine) syncContextUsageFromHistory(history []message.Message) {
 		messages = append(messages, buildSystemMessage(runner.buildSystemPrompt()))
 		messages = append(messages, history...)
 		usage = usageFromTotals(tokenUsageTotals{used: estimateMessageTokens(messages)})
+		runner.usage.setContextEstimate(usage)
+		return
 	}
 	runner.usage.setContextKnown(usage, known)
 }

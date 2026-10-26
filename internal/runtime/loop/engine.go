@@ -148,6 +148,8 @@ type ContextStats struct {
 	InputKnown   bool
 	OutputKnown  bool
 	CacheKnown   bool
+	// Estimated 表示当前容量来自历史估算，而非供应商报告。
+	Estimated bool
 	// SessionUsedTokens is the cumulative token usage across the whole session
 	// (sum of every turn's delta), distinct from UsedTokens which reflects the
 	// current context window. Exposed for display; the UI must not reach into
@@ -803,7 +805,7 @@ func (runner *Engine) ContextStats(limitTokens int, _ string) ContextStats {
 	sessionID := runner.sessionID
 	runner.mu.RUnlock()
 
-	contextUsage, contextKnown := runner.usage.contextUsage()
+	contextUsage, contextKnown, contextEstimated := runner.usage.contextUsage()
 	current := usageTotalsFromUsage(contextUsage, contextKnown)
 	knowledge := contextUsage.Knowledge()
 	taskTokens := 0
@@ -821,6 +823,7 @@ func (runner *Engine) ContextStats(limitTokens int, _ string) ContextStats {
 		InputTokens:       maxInt(0, current.used-current.output),
 		OutputTokens:      current.output,
 		Known:             contextKnown,
+		Estimated:         contextEstimated,
 		TotalKnown:        contextKnown && knowledge.Total,
 		InputKnown:        contextKnown && knowledge.Input,
 		OutputKnown:       contextKnown && knowledge.Output,

@@ -125,7 +125,7 @@ func (runner *Engine) maintainToolResultsByPressure(ctx context.Context, history
 	runner.mu.RLock()
 	registry := runner.registry
 	runner.mu.RUnlock()
-	usage, usageKnown := runner.usage.contextUsage()
+	usage, usageKnown, _ := runner.usage.contextUsage()
 	archive := runner.compact.currentArchive()
 
 	estimated := estimateMessageTokens(history)

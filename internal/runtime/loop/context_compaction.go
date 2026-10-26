@@ -91,7 +91,7 @@ func (runner *Engine) maybeCompactHistory(ctx context.Context, history []message
 		return history, nil, nil
 	}
 	limit := runner.compact.limit()
-	usage, usageKnown := runner.usage.contextUsage()
+	usage, usageKnown, _ := runner.usage.contextUsage()
 	if limit <= 0 {
 		return history, nil, nil
 	}
@@ -310,20 +310,39 @@ func estimateMessageTokens(messages []message.Message) int {
 	total := 0
 	for _, msg := range messages {
 		total += 4
-		total += estimateTextTokens(msg.Content)
-		for _, part := range msg.Parts {
-			total += estimateTextTokens(part.Text)
-			if part.Image != nil {
-				// Images are provider-specific; reserve a modest fixed budget rather
-				// than treating their transient binary bytes as prompt text.
-				total += 256
-			}
-		}
+		total += estimateMessageContentTokens(msg)
 		for _, call := range toolCallsFromMessage(msg) {
 			total += 8 + estimateTextTokens(call.ID) + estimateTextTokens(call.Name) + estimateTextTokens(string(call.Input))
 		}
 		for _, result := range toolResultsFromMessage(msg) {
 			total += 8 + estimateTextTokens(result.ToolUseID) + estimateTextTokens(result.Content)
+		}
+	}
+	return total
+}
+
+// estimateMessageContentTokens 与模型适配器保持一致：图片消息采用 Parts，
+// 纯文本采用 Content，避免重复计算富消息的兼容文本。图片仍为本地粗估。
+func estimateMessageContentTokens(msg message.Message) int {
+	hasImage := false
+	for _, part := range msg.Parts {
+		if part.Type == message.ContentPartImage && part.Image != nil {
+			hasImage = true
+			break
+		}
+	}
+	if !hasImage {
+		return estimateTextTokens(msg.Content)
+	}
+	total := 0
+	for _, part := range msg.Parts {
+		switch part.Type {
+		case message.ContentPartText:
+			total += estimateTextTokens(part.Text)
+		case message.ContentPartImage:
+			if part.Image != nil {
+				total += 256
+			}
 		}
 	}
 	return total
