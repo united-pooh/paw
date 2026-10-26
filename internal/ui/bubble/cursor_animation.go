@@ -70,6 +70,9 @@ func (m appModel) needsUIAnimationFrames(now time.Time) bool {
 	if m.isWorkRunning() || m.isGenerating || m.transcriptRefreshPending || m.assistantStream.HasPendingCharacters() || m.thinkingStream.HasPendingCharacters() {
 		return true
 	}
+	if m.tokenRippleActive(now) {
+		return true
+	}
 	if m.activity.visible {
 		for _, task := range m.activity.tasks {
 			if string(task.Status) == "running" {

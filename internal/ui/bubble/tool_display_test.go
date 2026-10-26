@@ -21,6 +21,31 @@ func TestBuildToolDisplayUsesChineseMCPAction(t *testing.T) {
 	}
 }
 
+func TestDisplayToolTargetHumanizesSearchAndEncodedURLs(t *testing.T) {
+	rawScholarURL := "https://scholar.google.com/scholar?q=%22Query-Conditioned+Recoverable+Foveated+Patching%22"
+	scholarInput := json.RawMessage(`{"url":"` + rawScholarURL + `"}`)
+	scholar := buildToolDisplay("WebFetch", scholarInput, "")
+	wantScholar := `scholar.google.com · "Query-Conditioned Recoverable Foveated Patching"`
+	if scholar.target != wantScholar {
+		t.Fatalf("scholar.target = %q, want %q", scholar.target, wantScholar)
+	}
+	if gotURL := extractRawToolURL("WebFetch", scholarInput); gotURL != rawScholarURL {
+		t.Fatalf("extractRawToolURL = %q, want %q", gotURL, rawScholarURL)
+	}
+
+	arxiv := buildToolDisplay("WebFetch", json.RawMessage(`{"url":"https://arxiv.org/search/?searchtype=all&query=%22Query-Conditioned+Recoverable%22"}`), "")
+	wantArxiv := `arxiv.org · "Query-Conditioned Recoverable"`
+	if arxiv.target != wantArxiv {
+		t.Fatalf("arxiv.target = %q, want %q", arxiv.target, wantArxiv)
+	}
+
+	encodedPath := buildToolDisplay("WebFetch", json.RawMessage(`{"url":"https://en.wikipedia.org/wiki/Foveated_%28rendering%29"}`), "")
+	wantDecoded := "https://en.wikipedia.org/wiki/Foveated_(rendering)"
+	if encodedPath.target != wantDecoded {
+		t.Fatalf("encodedPath.target = %q, want %q", encodedPath.target, wantDecoded)
+	}
+}
+
 func TestBuildToolDisplayUsesWorkspaceRelativeNativePath(t *testing.T) {
 	root := t.TempDir()
 	display := buildToolDisplay("Edit", json.RawMessage(`{"file_path":"internal/ui/bubble/transcript.go"}`), root)

@@ -134,8 +134,27 @@ func TestTurnCompletionSchedulesFinalRepaint(t *testing.T) {
 	next, _ := model.Update(turnFinishedMsg{})
 	model = next.(appModel)
 
+	if model.tokenRippleExitAt.IsZero() {
+		t.Fatal("turn completion should record a ripple exit deadline")
+	}
 	if !model.uiAnimationFrameScheduled {
 		t.Fatal("turn completion should schedule a final repaint frame")
+	}
+}
+
+func TestRippleExitFrameStopsAfterDeadline(t *testing.T) {
+	model := newTestModel(&fakeRunner{})
+	model.uiAnimationFrameScheduled = true
+	model.width = 80
+	model.tokenRippleExitAt = time.Unix(500, 0)
+
+	deadline := model.tokenRippleExitAt.Add(time.Duration(80+tokenRippleTail) * tokenRippleSpeed)
+
+	next, _ := model.Update(cursorFrameMsg(deadline))
+	model = next.(appModel)
+
+	if model.uiAnimationFrameScheduled {
+		t.Fatal("completed ripple exit should clear scheduled marker")
 	}
 }
 

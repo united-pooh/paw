@@ -82,7 +82,7 @@ func init() {
 func terminalPalette() Palette {
 	return Palette{
 		LabelTool: "2", LabelResult: "2", LabelSystem: "", LabelError: "1",
-		MarkdownRule: "", MarkdownBullet: "6", MarkdownBold: "3", MarkdownHighlight: "3",
+		MarkdownRule: "", MarkdownBullet: "6", MarkdownBold: "4", MarkdownHighlight: "3",
 		MarkdownCodeBorder: "6", MarkdownLink: "6", MarkdownQuote: "", MarkdownQuoteBorder: "7", MarkdownQuoteText: "",
 		SyntaxKeyword: "5", SyntaxString: "2", SyntaxNumber: "3", SyntaxComment: "15",
 		SyntaxBrackets: [4]string{"6", "5", "3", "2"},

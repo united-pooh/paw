@@ -645,6 +645,7 @@ type appModel struct {
 	completion                          *completion
 	lastActivityPollAt                  time.Time // Activity 面板 ListTasks 刷新的节流时间戳
 	spinnerFrameIdx                     int       // Activity 中 running 条目的动画帧索引，由 cursorFrameMsg 驱动
+	tokenRippleExitAt                   time.Time // 任务结束后 Ripple 越界退场的起始时刻
 	worktreeCWD                         string
 	worktree                            worktreeSnapshot
 	worktreeReader                      worktreeStatusReader

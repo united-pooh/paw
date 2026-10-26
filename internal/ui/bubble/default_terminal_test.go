@@ -199,7 +199,7 @@ func TestDefaultGoldEmphasisAndStickyBackground(t *testing.T) {
 		lipgloss.SetColorProfile(profile)
 		m := newThemedTestModel(t, theme.Default)
 		if profile != termenv.Ascii {
-			assertEmphasisGlyphs(t, renderMarkdown("正文 **重点** 尾文", 40), "重点", "3", true)
+			assertEmphasisGlyphs(t, renderMarkdown("正文 **重点** 尾文", 40), "重点", "4", true)
 		}
 		m.ready, m.hasInteracted = true, true
 		m.transcript = []transcriptEntry{

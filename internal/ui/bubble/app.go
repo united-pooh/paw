@@ -387,6 +387,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.addEntry(transcriptEntry{kind: entrySystem, title: "goal", body: body})
 		if wasWorking && !m.isAgentWorking() {
+			m.startTokenRippleExit(m.animationNow())
 			if frameCmd := m.scheduleUIAnimationFrame(); frameCmd != nil {
 				cmds = append(cmds, frameCmd)
 			}
@@ -447,6 +448,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.toolGroupFullResult = false
 		m.syncRunningFlags()
 		if wasWorking && !m.isAgentWorking() {
+			m.startTokenRippleExit(m.animationNow())
 			if frameCmd := m.scheduleUIAnimationFrame(); frameCmd != nil {
 				cmds = append(cmds, frameCmd)
 			}
@@ -514,6 +516,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.turnStartedAt = time.Time{}
 		m.syncRunningFlags()
 		if wasWorking && !m.isAgentWorking() {
+			m.startTokenRippleExit(m.animationNow())
 			if frameCmd := m.scheduleUIAnimationFrame(); frameCmd != nil {
 				cmds = append(cmds, frameCmd)
 			}

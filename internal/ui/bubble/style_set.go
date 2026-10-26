@@ -80,6 +80,7 @@ func NewStyleSet(p theme.Palette) StyleSet {
 	}
 	if p.TerminalBackground == "" {
 		s.Frame = s.Frame.UnsetForeground()
+		s.LabelThinking = s.LabelThinking.Faint(true)
 		s.MarkdownCode = s.MarkdownCode.Bold(true)
 		s.SelectionSelected = s.SelectionNormal.Reverse(true).Bold(true)
 		s.SelectionFocusedSelected = s.SelectionSelected

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"paw/internal/platform/settings"
 	"paw/internal/ui"
 )
@@ -2886,7 +2887,15 @@ func renderCompactToolSummaryWithHover(entry transcriptEntry, width int, at time
 	targetText := ""
 	if target != "" {
 		if targetBudget := width - fixedWithoutName() - terminalCellWidth(nameText) - 1; targetBudget >= 1 {
-			targetText = " " + targetStyle.Render(truncateStyledCellLine(target, targetBudget))
+			renderedTarget := targetStyle.Render(truncateStyledCellLine(target, targetBudget))
+			rawURL := extractRawToolURL(rawName, entry.toolInput)
+			if rawURL == "" && isClickableTerminalURL(entry.toolTarget) {
+				rawURL = strings.TrimSpace(entry.toolTarget)
+			}
+			if rawURL != "" {
+				renderedTarget = ansi.SetHyperlink(rawURL) + renderedTarget + ansi.ResetHyperlink()
+			}
+			targetText = " " + renderedTarget
 		}
 	}
 

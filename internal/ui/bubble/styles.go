@@ -176,6 +176,10 @@ func rebuildLegacyStyles() {
 
 	thinkingBodyStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorMarkdownQuote))
+	if colorManager.palette.TerminalBackground == "" {
+		labelThinkingStyle = labelThinkingStyle.Faint(true)
+		thinkingBodyStyle = thinkingBodyStyle.Faint(true)
+	}
 	markdownBoldStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorMarkdownBold)).
 		Bold(true)
