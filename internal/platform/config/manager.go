@@ -84,6 +84,7 @@ type Manager struct {
 
 	mu          sync.RWMutex
 	updateMu    sync.Mutex
+	discoveryMu sync.Mutex
 	snapshot    Snapshot
 	subscribers map[chan Snapshot]struct{}
 	closed      bool
@@ -91,6 +92,9 @@ type Manager struct {
 	watcher *fsnotify.Watcher
 	cancel  context.CancelFunc
 	done    chan struct{}
+
+	discoveryCancel context.CancelFunc
+	discoveryDone   chan struct{}
 }
 
 func Open(ctx context.Context, options Options) (*Manager, error) {
@@ -179,7 +183,7 @@ func openManager(ctx context.Context, options Options, cacheWriter func(string, 
 	}
 	manager.loadModelDiscoveryCache()
 	document, activeID, err := manager.loadDiscoverySelection()
-	if err == nil {
+	if err == nil && !options.AsyncModelDiscovery {
 		manager.initializeModelDiscovery(ctx, document, activeID)
 	}
 
@@ -233,6 +237,9 @@ func openManager(ctx context.Context, options Options, cacheWriter func(string, 
 	}
 	candidate.Diagnostics = append(diagnostics, candidate.Diagnostics...)
 	manager.snapshot = candidate
+	if options.AsyncModelDiscovery && loadErr == nil && !manager.disableModelDiscovery {
+		manager.startModelDiscovery(ctx, candidate.Document, candidate.ActiveModelID)
+	}
 	if watchContext != nil {
 		go manager.watchLoop(watchContext)
 	}
@@ -499,6 +506,13 @@ func (m *Manager) loadModelDiscoveryCache() {
 }
 
 func (m *Manager) initializeModelDiscovery(ctx context.Context, document Document, activeID string) {
+	for _, providerID := range m.prepareModelDiscovery(document, activeID) {
+		models, detail := m.requestProviderModels(ctx, document, providerID)
+		m.stageProviderDiscovery(document, providerID, activeDiscoveryProvider(document, activeID), models, detail)
+	}
+}
+
+func (m *Manager) prepareModelDiscovery(document Document, activeID string) []string {
 	m.confirmedDiscoveries = nil
 	_, cacheProviders := matchingCachedDiscoveries(document, m.discoveryCache)
 	activeProviderID := activeDiscoveryProvider(document, activeID)
@@ -513,19 +527,17 @@ func (m *Manager) initializeModelDiscovery(ctx context.Context, document Documen
 	if m.disableModelDiscovery {
 		m.discoveryStatus.SkippedReason = "disabled"
 		m.applyActiveProviderCacheState(document, activeProviderID)
-		return
+		return nil
 	}
 	if len(targets) == 0 {
 		m.discoveryStatus.SkippedReason = "no-enabled-providers"
 		m.applyActiveProviderCacheState(document, activeProviderID)
-		return
+		return nil
 	}
 
 	m.discoveryStatus.Attempted = true
 	m.discoveryStatus.AttemptedAt = time.Now().UTC()
-	for _, providerID := range targets {
-		m.discoverProvider(ctx, document, providerID, activeProviderID)
-	}
+	return targets
 }
 
 // applyActiveProviderCacheState surfaces the active provider's cache state on
@@ -549,17 +561,37 @@ func (m *Manager) applyActiveProviderCacheState(document Document, activeProvide
 	m.discoveryStatus.CacheState = cacheStateForProvider(m.discoveryCache, m.discoveryCacheInvalid, activeProviderID, fingerprint, format)
 }
 
-func (m *Manager) discoverProvider(ctx context.Context, document Document, providerID, activeProviderID string) {
+func (m *Manager) requestProviderModels(ctx context.Context, document Document, providerID string) ([]DiscoveredModel, string) {
 	provider := mergePreset(providerID, document.Providers[providerID])
-	fingerprint := discoveryEndpointFingerprint(provider)
-	format := provider.Discovery.Format
 
-	// 应用该 provider 生效的代理（provider 覆盖 > 全局默认 > auto）。
-	// 启动 discovery 是串行执行的，SetProxy 在此无并发竞争。
+	// discoveryMu serializes requests and proxy changes after Open returns.
 	if applier, ok := m.discoverer.(proxyApplier); ok {
 		applier.SetProxy(effectiveProxy(document, provider))
 	}
 
+	credential := ""
+	var err error
+	if provider.Auth.Credential != "" || len(provider.Auth.Env) > 0 {
+		credential, _, err = resolveCredential(ctx, m.credentials, provider.Auth)
+		if err != nil {
+			return nil, "model discovery credential is unavailable"
+		}
+	}
+	if m.discoverer == nil {
+		return nil, "model discovery is unavailable"
+	}
+
+	models, err := m.discoverer.Discover(ctx, providerID, provider, credential)
+	if err != nil {
+		return nil, safeModelDiscoveryError(err)
+	}
+	return cloneDiscoveredModels(models), ""
+}
+
+func (m *Manager) stageProviderDiscovery(document Document, providerID, activeProviderID string, models []DiscoveredModel, detail string) {
+	provider := mergePreset(providerID, document.Providers[providerID])
+	fingerprint := discoveryEndpointFingerprint(provider)
+	format := provider.Discovery.Format
 	targetCache, targetCacheMatched := matchingCacheEntry(m.discoveryCache, providerID, fingerprint, format)
 	if providerID == activeProviderID {
 		m.discoveryTargetFingerprint = fingerprint
@@ -570,32 +602,7 @@ func (m *Manager) discoverProvider(ctx context.Context, document Document, provi
 			m.discoveryStatus.DiscoveredAt = targetCache.DiscoveredAt
 		}
 	}
-
-	credential := ""
-	var err error
-	if provider.Auth.Credential != "" || len(provider.Auth.Env) > 0 {
-		credential, _, err = resolveCredential(ctx, m.credentials, provider.Auth)
-		if err != nil {
-			detail := "model discovery credential is unavailable"
-			m.retainTargetDiscoveryDiagnostic(m.discoveryFailureDiagnostic(providerID, targetCacheMatched, detail), providerID, fingerprint, format)
-			if providerID == activeProviderID {
-				m.discoveryStatus.LastError = detail
-			}
-			return
-		}
-	}
-	if m.discoverer == nil {
-		detail := "model discovery is unavailable"
-		m.retainTargetDiscoveryDiagnostic(m.discoveryFailureDiagnostic(providerID, targetCacheMatched, detail), providerID, fingerprint, format)
-		if providerID == activeProviderID {
-			m.discoveryStatus.LastError = detail
-		}
-		return
-	}
-
-	models, err := m.discoverer.Discover(ctx, providerID, provider, credential)
-	if err != nil {
-		detail := safeModelDiscoveryError(err)
+	if detail != "" {
 		m.retainTargetDiscoveryDiagnostic(m.discoveryFailureDiagnostic(providerID, targetCacheMatched, detail), providerID, fingerprint, format)
 		if providerID == activeProviderID {
 			m.discoveryStatus.LastError = detail
@@ -1429,13 +1436,15 @@ func (m *Manager) prepareUpdate(ctx context.Context, expectedRevision uint64, op
 }
 
 // RefreshModelDiscovery reruns live discovery against every currently enabled
-// provider without rewriting config.jsonc. It is explicit by design: ordinary
+// provider, persisting models when auto-registration is enabled. Ordinary
 // model selection and file reloads continue to reuse retained/cache results,
 // while provider edits in /config call this method after the durable update.
 func (m *Manager) RefreshModelDiscovery(ctx context.Context) (Snapshot, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	m.discoveryMu.Lock()
+	defer m.discoveryMu.Unlock()
 	m.updateMu.Lock()
 	defer m.updateMu.Unlock()
 
@@ -1593,8 +1602,15 @@ func (m *Manager) Close() error {
 	if m.cancel != nil {
 		m.cancel()
 	}
+	if m.discoveryCancel != nil {
+		m.discoveryCancel()
+	}
 	watcher := m.watcher
+	discoveryDone := m.discoveryDone
 	m.mu.Unlock()
+	if discoveryDone != nil {
+		<-discoveryDone
+	}
 	if watcher != nil {
 		_ = watcher.Close()
 		<-m.done

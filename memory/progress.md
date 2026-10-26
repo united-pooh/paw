@@ -1,5 +1,15 @@
 # Progress
 
+## 异步模型发现（2026-10-26，已完成）
+
+- [x] 复现 TestManagerAsyncDiscoveryDoesNotBlockOpen 的 5 秒超时；确认 AsyncModelDiscovery 未被读取。
+- [x] 将发现请求与状态提交拆开，后台 I/O 不持有配置更新锁；提交前重读配置并校验旧结果适用性。
+- [x] 加入取消/等待生命周期，串行共享发现器，复用自动注册、缓存及订阅快照发布。
+- [x] 顶层启动启用异步发现，worker 保持禁用；单次命令仅在初始配置不可用时等待首次发现。
+- [x] 全仓 41 个有测试包全部通过，无测试跳过；config/app 完整 race、全仓 vet、构建、帮助命令、web-dist 门禁、diff 检查通过。
+- [x] 四个真实隔离 CLI 场景通过：阻塞发现时正常对话与取消退出、后台自动注册、拒绝旧端点结果、无活动模型时等待目录发现后报告配置不足。
+- 旧 AsyncModelDiscovery 挂起欠账本轮已解决；没有新增/修改测试文件，没有安装、提交或推送。证据 `.agent/verification/async-model-discovery/验证记录.md`，隔离二进制 `/private/tmp/paw-async-verify.UUM8zD/paw`。
+
 ## 模型发现自动注册（2026-10-13）
 
 - [x] 定位缺口：discovery 只进内存 catalog，`config.jsonc` 的 `models` 不自动更新；用户配置里残留上游已下架的 `gpt-5.6-luna`，选中即 400 unknown model。
@@ -101,7 +111,7 @@
 - [x] 保留已完成工具与等待期间新指令；临时恢复提示、partial、不完整工具不进入权威历史。思考流独立收尾，Bubble blockIndex 复用不拼接旧思考。
 - [x] 先红后绿、独立边界审核、model/loop/bubble 定向 race、全仓 vet、构建/help、六帧实际 View 验证通过。
 - [x] 最终串行全仓仅跳过 TestManagerAsyncDiscoveryDoesNotBlockOpen 后 41 包通过；原始 actor 超时及 exec 偶发空 PID 日志保留，独立复核未关联本次实现。
-- [ ] 原有 AsyncModelDiscovery 测试阻塞仍未解决，不能声称无条件全仓全绿。本任务未修改 config manager 两文件。
+- [x] 原有 AsyncModelDiscovery 测试阻塞在 2026-10-03 时未解决，后续 2026-10-26 已补齐异步发现并通过不跳过测试的全仓验证；详见顶部记录。
 - 交付 .agent/bin/stream-auto-recovery/paw，未安装、提交、推送；证据 .agent/verification/stream-auto-recovery-20261003/验证记录.md。
 
 ## 重复调查与 Responses 断流（2026-10-03）

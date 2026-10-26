@@ -22,7 +22,8 @@ const (
 	maxDiscoveryBodyBytes   = 2 << 20
 )
 
-// ModelDiscoverer retrieves the models exposed by one provider.
+// ModelDiscoverer retrieves the models exposed by one provider. Implementations
+// must honor cancellation so Manager.Close can join background discovery.
 type ModelDiscoverer interface {
 	Discover(context.Context, string, Provider, string) ([]DiscoveredModel, error)
 }
@@ -34,7 +35,7 @@ type HTTPModelDiscoverer struct {
 }
 
 // SetProxy 把生效代理注入发现器：direct 直连、custom 使用固定 URL、auto 走
-// 环境变量。nil 等价 auto。仅在调用方（Manager）启动 discovery 串行阶段调用。
+// 环境变量。nil 等价 auto。调用方（Manager）串行执行后台发现和显式刷新。
 func (d *HTTPModelDiscoverer) SetProxy(proxy *model.ProxyConfig) {
 	if d == nil || d.client == nil {
 		return

@@ -42,7 +42,9 @@
 
 应用启动链只通过 `internal/platform/config.Manager` 读取全局 `~/.paw/config.jsonc`，合并同一全局目录中的 `projects/<id>/config.jsonc` 项目级活动模型与安全模型参数覆盖，再把不可变运行时快照注入 `model.Client`。设置 `PAW_CONFIG_HOME` 时，两者统一使用该根目录；不再读取工作区 `.paw/config.jsonc`。旧 `~/.paw/config.json` 不再自动迁移、读取或回写。
 
-provider 的 `discovery.enabled` 为 `true` 时，顶层进程会在启动时执行模型发现；`/config` 中修改 provider 或切换“模型发现”后会显式刷新。普通模型切换和被动文件重载只复用已确认结果或匹配缓存。
+provider 的 `discovery.enabled` 为 `true` 时，顶层进程在后台执行启动发现，先使用手工模型和匹配缓存建立快照；发现完成后通过配置订阅发布新快照。后台请求不占用配置更新锁，写入缓存和自动注册前会重新读取全局与项目配置，丢弃端点、发现路径或格式已不匹配的结果。关闭配置管理器会取消并等待后台发现退出。单次命令在初始配置尚不可用时等待首次发现完成，再判断是否需要配置；worker 仍禁用模型发现。
+
+`/config` 中修改 provider 或切换“模型发现”后会显式刷新；显式刷新与后台发现串行使用发现器，避免代理配置互相覆盖。普通模型切换和被动文件重载只复用已确认结果或匹配缓存。直接调用 `config.Open` 时通过 `Options.AsyncModelDiscovery` 启用后台发现，默认保留同步行为；需要等待首次发现的调用者可使用 `WaitForModelDiscovery(ctx)`。
 
 provider 的 `discovery.autoRegister` 为 `true` 时，一次成功的发现会把上游模型列表持久化到 `config.jsonc`：新增上游模型、删除上游已消失的模型（含手写条目），并在当前模型被删除时把 `activeModel` 回退到该 provider 剩下的最小模型 ID。写回走与 `/config` 相同的 revision + 文件内容 CAS 与 JSONC 定向补丁路径；发现失败、校验失败或写盘失败都保留原配置并只产生 warning 诊断，`/config` 的“自动注册模型”开关可随时切换。
 

@@ -85,6 +85,11 @@ func BuildWorkspaceRuntime(ctx context.Context, opts WorkspaceRuntimeOptions, co
 	}
 	runtime.configManager = configManager
 	if !opts.AllowIncomplete {
+		if !configManager.Snapshot().Ready {
+			if err := configManager.WaitForModelDiscovery(ctx); err != nil {
+				return nil, err
+			}
+		}
 		if err := configManager.RequireReady(); err != nil {
 			return nil, err
 		}
@@ -348,7 +353,10 @@ func explicitWorkspaceRoot(root string) (string, error) {
 }
 
 func configOpenOptions(paths configv2.Paths, worker WorkerContext) configv2.Options {
-	return configv2.Options{Paths: paths, DisableWatch: worker.WorkerMode, DisableModelDiscovery: worker.WorkerMode}
+	return configv2.Options{
+		Paths: paths, DisableWatch: worker.WorkerMode,
+		DisableModelDiscovery: worker.WorkerMode, AsyncModelDiscovery: !worker.WorkerMode,
+	}
 }
 
 func effectiveYoloMode(commandLineEnabled bool, document configv2.Document) bool {
