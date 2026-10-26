@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"paw/internal/capability/model"
 	"paw/internal/message"
 )
 
@@ -86,9 +87,28 @@ func (runner *Engine) ContinueRecoveredTurn(ctx context.Context, recovered Recov
 	}
 
 	turnState := &TurnState{ToolRounds: 1}
+	ctx = withModelTurnState(ctx, turnState)
 	var protocolRecovery toolProtocolRecovery
+	streamRecoveries := 0
+	recoveringStream := false
 	for round := 1; round < maxToolRounds; {
-		assistant, modelErr := runner.runModelTurn(ctx, protocolRecovery.requestHistory(history), turnState)
+		if !recoveringStream && protocolRecovery.attempts == 0 {
+			maintenance, maintenanceErr := runner.maintainToolRoundContext(ctx, history, true)
+			if maintenanceErr != nil {
+				runner.notifySystem("context-compaction", "context cleanup skipped: "+maintenanceErr.Error())
+			} else {
+				history = maintenance.history
+				if maintenance.estimatedTokensSaved > 0 {
+					runner.syncContextUsageFromHistory(history)
+				}
+				runner.notifyContextMaintenance(maintenance)
+			}
+		}
+		requestHistory := history
+		if recoveringStream {
+			requestHistory = streamRecoveryHistory(history)
+		}
+		assistant, modelErr := runner.runModelTurn(ctx, protocolRecovery.requestHistory(requestHistory), turnState)
 		if modelErr != nil {
 			if persistErr := runner.persistPartialAssistant(context.WithoutCancel(ctx), journal, recovered.TurnID, assistant); persistErr != nil {
 				return execution, persistErr
@@ -98,9 +118,24 @@ func (runner *Engine) ContinueRecoveredTurn(ctx context.Context, recovered Recov
 			if retryProtocol {
 				continue
 			}
+			recoverable := model.IsRecoverableStreamInterruption(modelErr) || (recoveringStream && model.IsStreamTransportInterruption(modelErr))
+			if ctx.Err() == nil && recoverable {
+				if streamRecoveries >= maxStreamRecoveries {
+					return execution, fmt.Errorf("本次断流自动续接已达 %d 次上限: %w", maxStreamRecoveries, modelErr)
+				}
+				streamRecoveries++
+				runner.notifySystem("stream-recovery", fmt.Sprintf("模型连接中断，正在从已完成步骤自动继续（%d/%d）。已完成工具结果已保留。", streamRecoveries, maxStreamRecoveries))
+				if waitErr := runner.pauseStreamRecovery(ctx, streamRecoveries); waitErr != nil {
+					return execution, waitErr
+				}
+				recoveringStream = true
+				continue
+			}
 			return execution, modelErr
 		}
 		protocolRecovery.complete(ctx, runner)
+		streamRecoveries = 0
+		recoveringStream = false
 		round++
 		assistantSeq := int64(-1)
 		if sequenced, ok := journal.(sequencedTurnJournal); ok {
