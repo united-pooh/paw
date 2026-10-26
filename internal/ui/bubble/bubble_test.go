@@ -6930,22 +6930,22 @@ func TestRenderToolEntryBody_UsesQuietDetailLines(t *testing.T) {
 	}
 }
 
-// TestRenderDockStatusLine_ContainsModelTokenAndFree 验证输入上沿包含上下文
+// TestRenderDockStatusLine_ContainsModelTokenAndFree 验证输入下沿包含上下文
 // 进度和用量，模型名仍只在 header。
 func TestRenderDockStatusLine_ContainsModelTokenAndFree(t *testing.T) {
 	runner := &fakeRunner{stats: loop.ContextStats{Known: true, TotalKnown: true, UsedTokens: 5000, LimitTokens: 100000}}
 	model := newTestModel(runner)
 	model.width = 100
 	model.cursorFrameAt = time.Now()
-	dock := model.renderDockStatusLine(98)
-	if !strings.Contains(dock, "5k/100k") || !strings.Contains(dock, copyContextLabel+" 5%") {
+	dock := ansi.Strip(model.renderBottomDockLine(98))
+	if !strings.Contains(dock, "5k / 100k") || !strings.Contains(dock, copyContextLabel) || !strings.Contains(dock, "5%") {
 		t.Errorf("status dock = %q, want labeled context usage", dock)
 	}
 	if !strings.Contains(dock, tokenFreeGlyph) {
 		t.Errorf("status dock = %q, want context progress", dock)
 	}
-	// CTX 读数唯一化：底部边框不再重复 token 计数或上下文标签。
-	bottom := model.renderBottomDockLine(98)
+	// 上沿不再重复 token 计数或上下文标签。
+	bottom := model.renderDockStatusLine(98)
 	if strings.Contains(bottom, "5k") || strings.Contains(bottom, copyContextLabel) {
 		t.Errorf("bottom border = %q, context readout must live only in the context bar", bottom)
 	}
@@ -7066,7 +7066,7 @@ func TestFullLayout_StatusDockVisibleWithoutSidebar(t *testing.T) {
 	model.relayout()
 
 	view := model.View()
-	if !strings.Contains(view, copyContextLabel+" —") {
+	if !strings.Contains(ansi.Strip(view), copyModeChat+" · "+copyContextLabel) || !strings.Contains(ansi.Strip(view), "— / ") {
 		t.Errorf("View() = %q, want bottom token status", view)
 	}
 	if strings.Contains(view, "taskController") {

@@ -168,8 +168,7 @@ func TestNewModelStartsWithEmptyTranscript(t *testing.T) {
 }
 
 func TestBottomDockPlacesModeLeftAndWorktreeRight(t *testing.T) {
-	// CTX 读数唯一化到顶部上下文条后，底部边框只剩模式（左）与工作区（右），
-	// 中间留白（或复制反馈 toast）。
+	// 模式、上下文与工作区共用底部一行。
 	model := newTestModel(&fakeRunner{})
 	model.worktree = worktreeSnapshot{name: "paw", ref: "dev", state: worktreeDirty, isGit: true}
 	bottom := ansi.Strip(model.renderBottomDockLine(100))
@@ -178,8 +177,8 @@ func TestBottomDockPlacesModeLeftAndWorktreeRight(t *testing.T) {
 	if mode < 0 || worktree < 0 || mode >= worktree {
 		t.Fatalf("bottom border order = %q", bottom)
 	}
-	if strings.Contains(bottom, copyContextLabel) {
-		t.Fatalf("bottom border duplicated context readout = %q", bottom)
+	if strings.Count(bottom, copyContextLabel) != 1 {
+		t.Fatalf("bottom border needs one context label = %q", bottom)
 	}
 }
 

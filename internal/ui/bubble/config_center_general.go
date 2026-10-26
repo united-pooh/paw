@@ -486,7 +486,7 @@ var configGeneralPresentations = map[string]configGeneralPresentation{
 	},
 	"ui.context_meter_location": {
 		label:       "上下文用量显示位置",
-		description: "设置上下文用量指示器的显示位置",
+		description: "固定在输入框下方，与模式同一行",
 	},
 	"ui.transcript_output_mode": {
 		label:       "助手输出节奏",
@@ -574,7 +574,7 @@ func configGeneralDisplayValue(key, value string) string {
 	case "ui.transcript_output_mode\x00char":
 		return "逐字"
 	case "ui.context_meter_location\x00input-above":
-		return "输入框上方"
+		return "输入框下方状态行"
 	case "ui.context_meter_location\x00input-title":
 		return "输入框标题"
 	case "ui.context_meter_location\x00header":

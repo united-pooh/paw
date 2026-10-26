@@ -69,8 +69,8 @@ func TestContextOccupancyIsDistinctFromCacheProportion(t *testing.T) {
 	// 上下文占用与缓存占比共用一条上下文条：占用读数（百分比+计数）唯一，
 	// 缓存占比数字退役，仅以 ▒ 段呈现比例。
 	m := newTestModel(&fakeRunner{stats: loop.ContextStats{Known: true, TotalKnown: true, CacheKnown: true, UsedTokens: 68700, CacheTokens: 65265, LimitTokens: 256000}})
-	bar := ansi.Strip(m.renderDockStatusLine(100))
-	for _, want := range []string{copyContextLabel + " 27%", "68.7k/256k", tokenCacheGlyph, tokenUsedGlyph} {
+	bar := ansi.Strip(m.renderBottomDockLine(100))
+	for _, want := range []string{copyContextLabel, "27%", "68.7k / 256k", tokenCacheGlyph, tokenUsedGlyph} {
 		if !strings.Contains(bar, want) {
 			t.Fatalf("missing %q in %q", want, bar)
 		}
@@ -79,11 +79,11 @@ func TestContextOccupancyIsDistinctFromCacheProportion(t *testing.T) {
 		t.Fatalf("缓存占比数字已退役，上下文条不应再出现: %q", bar)
 	}
 	for _, width := range []int{1, 8, 16, 24, 40, 60, 100} {
-		assertRenderedLineWidthsAtMost(t, m.renderDockStatusLine(width), width)
+		assertRenderedLineWidthsAtMost(t, m.renderBottomDockLine(width), width)
 	}
-	// 窄宽度退化为纯进度条，不再显示可能误读的占用标签。
-	if got := ansi.Strip(m.renderDockStatusLine(14)); strings.Contains(got, "%") {
-		t.Fatalf("narrow context bar kept ambiguous label: %q", got)
+	// 窄屏保留百分比，优先省略完整计数。
+	if got := ansi.Strip(m.renderBottomDockLine(40)); !strings.Contains(got, "27%") || strings.Contains(got, "/") {
+		t.Fatalf("narrow context bar lost percentage or retained counts: %q", got)
 	}
 }
 
@@ -108,8 +108,8 @@ func TestInputPromptRemainsVisibleAfterInteraction(t *testing.T) {
 	if !strings.Contains(ansi.Strip(m.renderInputContentWithHints(60, 1)), "›") {
 		t.Fatal("empty input lost its visible entry point after a turn")
 	}
-	if got := ansi.Strip(m.renderDockStatusLine(60)); !strings.HasPrefix(got, copyContextLabel+" — ") || strings.Contains(got, "%") {
-		t.Fatalf("input separator should expose context progress: %q", got)
+	if got := ansi.Strip(m.renderBottomDockLine(60)); !strings.Contains(got, copyContextLabel) || !strings.Contains(got, "—") || strings.Contains(got, "%") {
+		t.Fatalf("input footer should expose unknown context: %q", got)
 	}
 }
 

@@ -1,17 +1,15 @@
 // 底部 dock 渲染层。
 //
-// 输入区上方显示上下文进度；下方显示模式、带标签的用量和项目/分支。
+// 输入区上方显示工作动画细线；下方同一行显示模式、上下文和项目/分支。
 // ready/working/generating 状态词只保留在 header。所有内容按 terminal cell
 // 预算截断，整体严格等于目标宽度，数据内容绝不破坏布局。
 package bubble
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"paw/internal/runtime/loop"
 )
 
 // statusSegmentSeparator separates compact metadata inside token usage.
@@ -65,11 +63,6 @@ const (
 	tokenRippleSpeed = 40 * time.Millisecond
 	tokenRippleTail  = 14
 
-	// compactContextGaugeWidth 是方案 A 下进度槽的最大宽度（12 格）：
-	// 即使上下文达到 100%，亮色进度段也只占左侧紧凑槽位，右侧用细分割线
-	// 延伸到行尾，绝不横跨全屏抢夺输入框视觉焦点；波纹动画则沿右侧细轨流动。
-	compactContextGaugeWidth = 12
-
 	// token frontier 三段细轨 glyph：free 细线、cache 虚线、used 粗实线，
 	// 替代刺眼的满高粗块 █/▒/░，波纹滑过时点亮为粗实线 ━。
 	tokenFreeGlyph   = "─"
@@ -79,113 +72,12 @@ const (
 )
 
 func (m appModel) renderDockStatusLine(width int) string {
-	width = maxInt(1, width)
-	stats := m.contextStats()
-	if !contextCapacityKnown(stats) {
-		return contextFreeStyle.Render(fitStyledCellLine(copyContextLabel+" — "+strings.Repeat("·", maxInt(0, width-6)), width))
-	}
-	limit := maxInt(1, stats.LimitTokens)
-	used := maxInt(0, stats.UsedTokens)
-	cache := maxInt(0, stats.CacheTokens)
-	if width <= 20 {
-		return m.renderTokenFrontierWith(width, used, cache, limit, m.currentModeHex())
-	}
-
-	percent := int(float64(used)*100/float64(limit) + 0.5)
-	label := fmt.Sprintf("%s %d%% ", copyContextLabel, percent)
-	usage := " " + formatCompactTokenCount(used) + "/" + formatCompactTokenCount(limit)
-	avail := width - terminalCellWidth(label)
-	if avail-terminalCellWidth(usage) < 12 {
-		barWidth := maxInt(1, avail)
-		return contextFreeStyle.Render(label) +
-			m.renderTokenFrontierWith(barWidth, used, cache, limit, m.currentModeHex())
-	}
-	gaugeWidth := minInt(compactContextGaugeWidth, avail-terminalCellWidth(usage))
-	ruleWidth := avail - gaugeWidth - terminalCellWidth(usage)
-	if ruleWidth <= 1 {
-		barWidth := avail - terminalCellWidth(usage)
-		return contextFreeStyle.Render(label) +
-			m.renderTokenFrontierWith(barWidth, used, cache, limit, m.currentModeHex()) +
-			contextFreeStyle.Render(usage)
-	}
-	gauge := m.renderTokenFrontierStatic(gaugeWidth, used, cache, limit, m.currentModeHex())
-	trail := m.renderTokenRuleTrail(ruleWidth-1, m.currentModeHex())
-	return contextFreeStyle.Render(label) +
-		gauge +
-		contextFreeStyle.Render(usage+" ") +
-		trail
+	return m.renderTokenRuleTrail(maxInt(1, width), m.currentModeHex())
 }
 
-func contextCapacityKnown(stats loop.ContextStats) bool {
-	return stats.Known && stats.LimitTokens > 0 && (stats.TotalKnown || stats.InputKnown && stats.OutputKnown)
-}
-
-// renderBottomDockLine 渲染最下方边框：模式靠左，项目/分支靠右；中间
-// 留给复制反馈（toast），无反馈时保持空白。线色随 agentmode 变化。
+// renderBottomDockLineWithRight 将上下文与模式放在同一行，读数居中留白。
 func (m appModel) renderBottomDockLineWithRight(width int, right string) string {
-	width = maxInt(1, width)
-	lineStyle := lipgloss.NewStyle()
-	if modeHex := m.currentModeHex(); modeHex != "" {
-		lineStyle = lineStyle.Foreground(lipgloss.Color(modeHex))
-	}
-	dash := func(n int) string {
-		if n <= 0 {
-			return ""
-		}
-		return lineStyle.Render(strings.Repeat(" ", n))
-	}
-
-	left := m.renderModeIndicator()
-	left = truncateStyledCellLine(left, maxInt(0, width-2))
-	leftWidth := terminalCellWidth(left)
-	leftAt := 0
-	if leftWidth > 0 && width-leftWidth >= 2 {
-		leftAt = 1
-	}
-	leftEnd := leftAt + leftWidth
-
-	// Keep at least one rule cell between the mode and worktree plus one at the
-	// outer right edge. On narrow terminals the worktree is omitted before it can
-	// overlap the mode or token usage.
-	right = truncateStyledCellLine(right, maxInt(0, width-leftEnd-2))
-	rightWidth := terminalCellWidth(right)
-	rightAt := width
-	if rightWidth > 0 {
-		rightAt = maxInt(leftEnd, width-rightWidth-1)
-	}
-
-	middleLeft := minInt(width, leftEnd+1)
-	middleRight := maxInt(middleLeft, width-1)
-	if rightWidth > 0 {
-		middleRight = maxInt(middleLeft, rightAt-1)
-	}
-	middle := ""
-	middleAt := -1
-	middleWidth := 0
-	if middleRight > middleLeft {
-		middle = m.renderBottomDockMiddle(middleRight - middleLeft)
-		if middle != "" {
-			middleWidth = terminalCellWidth(middle)
-			middleAt = middleLeft + maxInt(0, (middleRight-middleLeft-middleWidth)/2)
-		}
-	}
-
-	// 分段直接拼接：上游截断保证 left/middle/right 区间互不重叠且落在
-	// [0,width) 内，无需对整条 200-cell 基线做 cell 级切割合成
-	//（旧实现每帧 3 次全行 parse+cut 是 View 最大的分配源）。
-	var b strings.Builder
-	b.WriteString(dash(leftAt))
-	b.WriteString(left)
-	if middleAt >= 0 {
-		b.WriteString(dash(middleAt - leftEnd))
-		b.WriteString(middle)
-		b.WriteString(dash(rightAt - middleAt - middleWidth))
-	} else {
-		b.WriteString(dash(rightAt - leftEnd))
-	}
-	b.WriteString(right)
-	b.WriteString(dash(width - rightAt - rightWidth))
-	return fitStyledCellLine(b.String(), width)
+	return m.renderContextDock(maxInt(1, width), right)
 }
 
 func (m appModel) renderBottomDockLine(width int) string {
@@ -207,8 +99,7 @@ func (m appModel) renderBottomDockMiddle(width int) string {
 	if toast := m.renderStatusLeftSegment(); toast != "" {
 		return truncateStyledCellLine(toast, width)
 	}
-	// CTX 读数唯一化到底部上下文条（renderDockStatusLine），底栏不再重复；
-	// 缓存占比数字随 footer 一同退役（▒ 段仍保留缓存可视信息）。
+	// 无复制反馈时由上下文读数占据中间区域。
 	return ""
 }
 
@@ -257,7 +148,7 @@ func (m appModel) renderTokenFrontier(width, used, cache, limit int) string {
 	return m.renderTokenFrontierWith(width, used, cache, limit, "")
 }
 
-// renderTokenFrontierStatic 渲染紧凑进度槽（无波纹）：cache 段 + used 段 + free 段。
+// renderTokenFrontierStatic 渲染上下文进度轨（无波纹）：cache + used + free。
 func (m appModel) renderTokenFrontierStatic(width, used, cache, limit int, modeHex string) string {
 	width = maxInt(1, width)
 	limit = maxInt(1, limit)
@@ -301,9 +192,7 @@ func (m appModel) renderTokenFrontierStatic(width, used, cache, limit int, modeH
 	return front.String()
 }
 
-// renderTokenRuleTrail 渲染用量数字右侧的安静细分割线 `─`，并在 Agent 工作或
-// 退场期间承载 tokenRipple 波纹流光。这样即便上下文占用达到 100%，右侧也永远是
-// 干净的细线轨而非横跨全屏的亮青色块，且波纹在 100% 上下文时依然可见。
+// renderTokenRuleTrail 渲染输入框上沿的细线，在工作和退场期间承载波纹。
 func (m appModel) renderTokenRuleTrail(width int, modeHex string) string {
 	if width <= 0 {
 		return ""

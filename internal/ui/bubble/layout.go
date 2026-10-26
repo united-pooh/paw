@@ -212,7 +212,7 @@ func (m appModel) View() string {
 			layout.frameWidth,
 			m.queuePanelContent(layout.workspaceWidth),
 			m.currentModeHex(),
-			terminalCellWidth(m.renderModeIndicator())+2,
+			terminalCellWidth(m.renderModeIndicator())+terminalCellWidth(" · "+copyContextLabel)+2,
 			rightInset,
 		)
 	}

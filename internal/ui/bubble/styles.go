@@ -305,7 +305,8 @@ func rebuildLegacyStyles() {
 	modeShellStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorInputTerminal))
 	modeChatStyle = lipgloss.NewStyle().
-		Foreground(colorManager.LipglossColor(colorMarkdownRule))
+		Foreground(colorManager.LipglossColor(colorBody)).
+		Bold(true)
 	// agentmode（plan/goal）用背景高亮块 + 终端背景色字体；chat/shell/
 	// terminal 保持前景色文字，不与 agentmode 抢视觉权重。
 	modeGoalStyle = lipgloss.NewStyle().

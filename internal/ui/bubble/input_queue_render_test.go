@@ -21,7 +21,7 @@ func TestQueueSummaryKeepsBottomDockAnchors(t *testing.T) {
 
 	lines := strings.Split(ansi.Strip(model.View()), "\n")
 	bottom := lines[len(lines)-1]
-	for _, want := range []string{copyModeChat, "1 个任务排队中", "paw  dev"} {
+	for _, want := range []string{copyModeChat, copyContextLabel, "1 个任务排队中", "paw  dev"} {
 		if !strings.Contains(bottom, want) {
 			t.Fatalf("bottom border = %q, want %q", bottom, want)
 		}

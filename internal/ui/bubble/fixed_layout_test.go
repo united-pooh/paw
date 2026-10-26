@@ -297,10 +297,10 @@ func TestDockStatusLineFitsNarrowWidths(t *testing.T) {
 		}
 	}
 
-	// 输入区上方显示 context progress bar；模式位于下边框左侧。
+	// 输入区上方只保留动画线；模式和上下文共用底部一行。
 	top := ansi.Strip(model.renderDockStatusLine(80))
-	if strings.Contains(top, copyModeChat) || !strings.HasPrefix(top, copyContextLabel+" — ") || strings.Contains(top, "%") {
-		t.Fatalf("top context bar = %q, want context progress without mode", top)
+	if strings.Contains(top, copyModeChat) || strings.Contains(top, copyContextLabel) || strings.Contains(top, "%") {
+		t.Fatalf("input separator = %q, want a hairline without metadata", top)
 	}
 	bottom := ansi.Strip(model.renderBottomDockLine(80))
 	if !strings.Contains(bottom, copyModeChat) {

@@ -233,17 +233,8 @@ func tokenMonitorTurnLines(r tokenRateView, width int) []string {
 }
 
 func tokenMonitorContext(v tokenMonitorView, width, height int) []string {
-	limit := "—"
-	if v.Context.LimitTokens > 0 {
-		limit = formatCompactTokenCount(v.Context.LimitTokens)
-	}
-	amount := "— / " + limit
-	ratio := "—"
+	ratio, amount := contextReadout(v.Context, 1)
 	known := contextCapacityKnown(v.Context)
-	if known {
-		amount = formatCompactTokenCount(v.Context.UsedTokens) + " / " + formatCompactTokenCount(v.Context.LimitTokens)
-		ratio = fmt.Sprintf("%.1f%%", float64(v.Context.UsedTokens)*100/float64(v.Context.LimitTokens))
-	}
 	lines := []string{tokenMonitorPair(amount, ratio, width)}
 	if known {
 		filled := clampInt(int(math.Round(float64(width)*float64(v.Context.UsedTokens)/float64(v.Context.LimitTokens))), 0, width)
@@ -251,7 +242,11 @@ func tokenMonitorContext(v tokenMonitorView, width, height int) []string {
 	} else {
 		lines = append(lines, contextFreeStyle.Render(strings.Repeat("·", maxInt(0, width))))
 	}
-	lines = append(lines, activityHintStyle.Render("Latest input + output"))
+	caption := "Latest input + output"
+	if v.Context.Estimated {
+		caption = "Estimated from active history"
+	}
+	lines = append(lines, activityHintStyle.Render(caption))
 	if height >= 4 {
 		lines = append(lines, activityHintStyle.Render("Capacity, not task completion"))
 	}

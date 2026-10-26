@@ -19,6 +19,6 @@
                                                │Input —                 Output —
                                                │Cache hit                      —
                                                │Tools in —          main 0 calls
-上下文 — ······································│Σ session+tasks · tools ⊂ input
+───────────────────────────────────────────────│Σ session+tasks · tools ⊂ input
  › 输入你的问题 …         /help @文件 !shell   │Loading token ledger…
- 聊天                                          ┴────────  go-code  dev  ────────
+ 聊天 · 上下文  ···························  — ┴────────  go-code  dev  ────────

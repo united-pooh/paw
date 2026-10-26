@@ -13,16 +13,16 @@ func TestDockContextOverflowPreservesReportedCounts(t *testing.T) {
 		UsedTokens: 370796, InputTokens: 370619, OutputTokens: 177, CacheTokens: 369792, LimitTokens: 256000}
 	m := newTestModel(&fakeRunner{stats: stats})
 	for _, width := range []int{21, 32, 60, 80} {
-		top := ansi.Strip(m.renderDockStatusLine(width))
-		if terminalCellWidth(top) != width || !strings.HasPrefix(top, copyContextLabel+" 145% ") {
+		top := ansi.Strip(m.renderBottomDockLine(width))
+		if terminalCellWidth(top) != width || !strings.Contains(top, "145%") {
 			t.Errorf("width %d clipped overflow: %q", width, top)
 		}
-		if width >= 60 && !strings.Contains(top, "371k/256k") {
+		if width >= 60 && !strings.Contains(top, "371k / 256k") {
 			t.Errorf("width %d lost raw usage: %q", width, top)
 		}
 	}
-	// 溢出计数唯一保留在顶部上下文条；底部边框不再重复 CTX/缓存占比读数。
-	bottom := ansi.Strip(m.renderBottomDockLine(80))
+	// 上沿只保留工作动画，不重复底部读数。
+	bottom := ansi.Strip(m.renderDockStatusLine(80))
 	for _, unwanted := range []string{copyContextLabel, "缓存占比", "371k"} {
 		if strings.Contains(bottom, unwanted) {
 			t.Errorf("bottom dock duplicated context readout %q: %s", unwanted, bottom)
