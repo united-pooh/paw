@@ -18,7 +18,7 @@ func TestDockLayoutUsesContextProgressAndLabeledBottomMetadata(t *testing.T) {
 	if got := terminalCellWidth(top); got != 80 {
 		t.Fatalf("top context bar width = %d, want 80: %q", got, top)
 	}
-	if !strings.HasPrefix(top, copyContextLabel+" 9% ") || !strings.HasSuffix(top, " 12k/128k") || !strings.Contains(top, tokenUsedGlyph) || !strings.Contains(top, tokenFreeGlyph) {
+	if !strings.HasPrefix(top, copyContextLabel+" 9% ") || !strings.Contains(top, " 12k/128k ") || !strings.Contains(top, tokenUsedGlyph) || !strings.Contains(top, tokenFreeGlyph) {
 		t.Fatalf("top context bar = %q, want labeled context progress and usage", top)
 	}
 
@@ -96,7 +96,7 @@ func TestDockContextProgressPreservesSegmentsAndDropsMetadataOnNarrowWidths(t *t
 		t.Fatalf("compact labeled progress = %q, want percentage without token counts", compact)
 	}
 	wide := ansi.Strip(model.renderDockStatusLine(80))
-	if !strings.HasPrefix(wide, copyContextLabel+" 45% ") || !strings.HasSuffix(wide, " 45k/100k") {
+	if !strings.HasPrefix(wide, copyContextLabel+" 45% ") || !strings.Contains(wide, " 45k/100k ") {
 		t.Fatalf("wide context progress = %q, want percentage and token counts", wide)
 	}
 }
@@ -113,7 +113,7 @@ func TestDockContextProgressAnimatesWithoutMovingLabels(t *testing.T) {
 		t.Fatal("dock context progress does not animate while generating")
 	}
 	for _, line := range []string{first, second} {
-		if terminalCellWidth(line) != 100 || !strings.HasPrefix(line, copyContextLabel+" 40% ") || !strings.HasSuffix(line, " 40k/100k") {
+		if terminalCellWidth(line) != 100 || !strings.HasPrefix(line, copyContextLabel+" 40% ") || !strings.Contains(line, " 40k/100k ") {
 			t.Fatalf("context metadata moved: %q", line)
 		}
 	}

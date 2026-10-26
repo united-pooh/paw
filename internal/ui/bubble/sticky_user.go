@@ -67,9 +67,6 @@ func (m appModel) overlayStickyUser(content string) string {
 	line := cutStyledCellsExact(m.transcriptLines[loc.startRow], 0, maxInt(0, width-terminalCellWidth(hint))) + hint
 	line = truncateStyledCellLine(line, width)
 	row := renderUserTranscriptRow(line, width)
-	if colorManager.palette.TerminalBackground == "" && lipgloss.ColorProfile() != termenv.Ascii {
-		row = restoreBackgroundAfterANSIReset(row, "0", colorManager.Hex(colorLabelUser))
-	}
 	return row + "\n" + tail
 }
 

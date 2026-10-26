@@ -65,6 +65,11 @@ const (
 	tokenRippleSpeed = 40 * time.Millisecond
 	tokenRippleTail  = 14
 
+	// compactContextGaugeWidth 是方案 A 下进度槽的最大宽度（12 格）：
+	// 即使上下文达到 100%，亮色进度段也只占左侧紧凑槽位，右侧用细分割线
+	// 延伸到行尾，绝不横跨全屏抢夺输入框视觉焦点；波纹动画则沿右侧细轨流动。
+	compactContextGaugeWidth = 12
+
 	// token frontier 三段细轨 glyph：free 细线、cache 虚线、used 粗实线，
 	// 替代刺眼的满高粗块 █/▒/░，波纹滑过时点亮为粗实线 ━。
 	tokenFreeGlyph   = "─"
@@ -89,15 +94,26 @@ func (m appModel) renderDockStatusLine(width int) string {
 	percent := int(float64(used)*100/float64(limit) + 0.5)
 	label := fmt.Sprintf("%s %d%% ", copyContextLabel, percent)
 	usage := " " + formatCompactTokenCount(used) + "/" + formatCompactTokenCount(limit)
-	barWidth := width - terminalCellWidth(label)
-	if barWidth-terminalCellWidth(usage) >= 12 {
-		barWidth -= terminalCellWidth(usage)
-	} else {
-		usage = ""
+	avail := width - terminalCellWidth(label)
+	if avail-terminalCellWidth(usage) < 12 {
+		barWidth := maxInt(1, avail)
+		return contextFreeStyle.Render(label) +
+			m.renderTokenFrontierWith(barWidth, used, cache, limit, m.currentModeHex())
 	}
+	gaugeWidth := minInt(compactContextGaugeWidth, avail-terminalCellWidth(usage))
+	ruleWidth := avail - gaugeWidth - terminalCellWidth(usage)
+	if ruleWidth <= 1 {
+		barWidth := avail - terminalCellWidth(usage)
+		return contextFreeStyle.Render(label) +
+			m.renderTokenFrontierWith(barWidth, used, cache, limit, m.currentModeHex()) +
+			contextFreeStyle.Render(usage)
+	}
+	gauge := m.renderTokenFrontierStatic(gaugeWidth, used, cache, limit, m.currentModeHex())
+	trail := m.renderTokenRuleTrail(ruleWidth-1, m.currentModeHex())
 	return contextFreeStyle.Render(label) +
-		m.renderTokenFrontierWith(barWidth, used, cache, limit, m.currentModeHex()) +
-		contextFreeStyle.Render(usage)
+		gauge +
+		contextFreeStyle.Render(usage+" ") +
+		trail
 }
 
 func contextCapacityKnown(stats loop.ContextStats) bool {
@@ -239,6 +255,60 @@ func (m appModel) copyToastAt(now time.Time) string {
 
 func (m appModel) renderTokenFrontier(width, used, cache, limit int) string {
 	return m.renderTokenFrontierWith(width, used, cache, limit, "")
+}
+
+// renderTokenFrontierStatic 渲染紧凑进度槽（无波纹）：cache 段 + used 段 + free 段。
+func (m appModel) renderTokenFrontierStatic(width, used, cache, limit int, modeHex string) string {
+	width = maxInt(1, width)
+	limit = maxInt(1, limit)
+	used = clampInt(used, 0, limit)
+	cache = clampInt(cache, 0, used)
+	usedCells := clampInt(int(float64(width)*float64(used)/float64(limit)), 0, width)
+	if used > 0 && usedCells == 0 {
+		usedCells = 1
+	}
+	if cache > 0 && used > cache && usedCells < 2 && width >= 2 {
+		usedCells = 2
+	}
+	cacheCells := clampInt(int(float64(width)*float64(cache)/float64(limit)), 0, usedCells)
+	if cache > 0 && cacheCells == 0 && usedCells > 0 {
+		cacheCells = 1
+	}
+	if used > cache && cacheCells == usedCells && usedCells > 1 {
+		cacheCells = usedCells - 1
+	}
+
+	usedStyle := contextUsedStyle
+	cacheStyle := contextCacheStyle
+	freeStyle := contextFreeStyle
+	if modeHex != "" {
+		usedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(modeHex)).Bold(true)
+		if colorManager.palette.TerminalBackground != "" {
+			cacheStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(interpolateHexColor(colorManager.Hex(colorTerminalBackground), modeHex, 0.9))).Bold(true)
+			freeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(interpolateHexColor(colorManager.Hex(colorTerminalBackground), modeHex, 0.45)))
+		}
+	}
+	var front strings.Builder
+	if cacheCells > 0 {
+		front.WriteString(cacheStyle.Render(strings.Repeat(tokenCacheGlyph, cacheCells)))
+	}
+	if usedCells > cacheCells {
+		front.WriteString(usedStyle.Render(strings.Repeat(tokenUsedGlyph, usedCells-cacheCells)))
+	}
+	if freeCells := width - usedCells; freeCells > 0 {
+		front.WriteString(freeStyle.Render(strings.Repeat(tokenFreeGlyph, freeCells)))
+	}
+	return front.String()
+}
+
+// renderTokenRuleTrail 渲染用量数字右侧的安静细分割线 `─`，并在 Agent 工作或
+// 退场期间承载 tokenRipple 波纹流光。这样即便上下文占用达到 100%，右侧也永远是
+// 干净的细线轨而非横跨全屏的亮青色块，且波纹在 100% 上下文时依然可见。
+func (m appModel) renderTokenRuleTrail(width int, modeHex string) string {
+	if width <= 0 {
+		return ""
+	}
+	return m.renderTokenFrontierWith(width, 0, 0, 1, modeHex)
 }
 
 // renderTokenFrontierWith 渲染 token 进度条，三段：cache 段（最左，主题

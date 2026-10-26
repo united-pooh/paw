@@ -192,19 +192,19 @@ func TestDefaultTerminalReadableChrome(t *testing.T) {
 	}
 }
 
-func TestDefaultGoldEmphasisAndStickyBackground(t *testing.T) {
+func TestDefaultBoldEmphasisAndStickyRow(t *testing.T) {
 	previous := lipgloss.ColorProfile()
 	t.Cleanup(func() { lipgloss.SetColorProfile(previous) })
 	for _, profile := range []termenv.Profile{termenv.TrueColor, termenv.ANSI, termenv.Ascii} {
 		lipgloss.SetColorProfile(profile)
 		m := newThemedTestModel(t, theme.Default)
 		if profile != termenv.Ascii {
-			assertEmphasisGlyphs(t, renderMarkdown("正文 **重点** 尾文", 40), "重点", "4", true)
+			assertEmphasisGlyphs(t, renderMarkdown("正文 **重点** 尾文", 40), "重点", "", true)
 		}
 		m.ready, m.hasInteracted = true, true
 		m.transcript = []transcriptEntry{
 			{kind: entryUser, body: "检查 file.go\n保留源文件", inputTokens: []inputToken{{Kind: inputTokenFile, Start: len([]rune("检查 ")), End: len([]rune("检查 file.go")), Label: "file.go"}}},
-			{kind: entryAssistant, body: strings.Repeat("普通正文 **浅金重点**\n\n", 20)},
+			{kind: entryAssistant, body: strings.Repeat("普通正文 **加粗重点**\n\n", 20)},
 		}
 		for _, width := range []int{40, 70} {
 			m.width, m.height = width, 14
@@ -227,22 +227,8 @@ func TestDefaultGoldEmphasisAndStickyBackground(t *testing.T) {
 				}
 				continue
 			}
-			background := false
-			for _, atom := range parseStyledCellLine(row).atoms {
-				if atom.control {
-					if strings.HasPrefix(atom.text, "\x1b[") && strings.HasSuffix(atom.text, "m") {
-						for _, param := range strings.Split(atom.text[2:len(atom.text)-1], ";") {
-							switch param {
-							case "", "0", "49":
-								background = false
-							case "40":
-								background = true
-							}
-						}
-					}
-				} else if !background {
-					t.Fatalf("sticky cell %d %q has no terminal background", atom.cellStart, atom.text)
-				}
+			if strings.Contains(row, "\x1b[40m") {
+				t.Fatalf("default theme sticky row must not force ANSI black background: %q", row)
 			}
 			assertFixedFrame(t, m.View(), width, 14)
 			if dir := os.Getenv("PAW_TERMINAL_VISUAL_DIR"); dir != "" && profile == termenv.TrueColor && width == 70 {
