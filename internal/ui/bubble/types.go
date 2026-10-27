@@ -462,6 +462,8 @@ type activityState struct {
 	tasks              []task.TaskSnapshot
 	selectedIndex      int
 	selectedTaskID     string
+	todoExpanded       map[string]bool
+	todoScroll         int
 }
 
 type taskTranscriptPreview struct {
