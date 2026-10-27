@@ -77,6 +77,7 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 	runner.activateSkillContext(userInput.Content)
 	defer runner.clearActiveSkillContext()
 	turnState := &TurnState{SkillContext: runner.currentSkillContext()}
+	ctx = withModelTurnState(ctx, turnState)
 
 	if runner.historyIsNil() && runner.store != nil {
 		var messages []message.Message
@@ -254,8 +255,8 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 			injectedSupplements = append(injectedSupplements, injected...)
 		}
 
-		if round == 0 && !recoveringStream && protocolRecovery.attempts == 0 {
-			maintenance, maintenanceErr := runner.maintainContextProjection(ctx, history, true)
+		if !recoveringStream && protocolRecovery.attempts == 0 {
+			maintenance, maintenanceErr := runner.maintainToolRoundContext(ctx, history, round > 0)
 			if maintenanceErr != nil {
 				runner.notifySystem("context-compaction", "context cleanup skipped: "+maintenanceErr.Error())
 			} else {
@@ -317,7 +318,7 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 			if retryProtocol {
 				continue
 			}
-			recoverable := model.IsRecoverableResponsesInterruption(modelErr) || (recoveringStream && model.IsResponsesTransportInterruption(modelErr))
+			recoverable := model.IsRecoverableStreamInterruption(modelErr) || (recoveringStream && model.IsStreamTransportInterruption(modelErr))
 			if ctx.Err() == nil && recoverable {
 				if streamRecoveries >= maxStreamRecoveries {
 					return execution, fmt.Errorf("本次断流自动续接已达 %d 次上限: %w", maxStreamRecoveries, modelErr)
