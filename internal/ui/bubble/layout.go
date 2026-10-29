@@ -32,6 +32,7 @@ type tuiLayout struct {
 	transcriptHeight       int
 	statusHeight           int
 	workStatusHeight       int
+	todoHeight             int
 	worktreeHeight         int
 	inputHeight            int
 	queueHeight            int
@@ -88,7 +89,7 @@ func (m appModel) currentLayout() tuiLayout {
 		selectionWidth := base.workspaceWidth
 		inputHeight := m.selectionDock.preferredHeight(inputDockContentWidth(selectionWidth))
 		layout := computeTUILayoutWithInputLimit(m.width, m.height, inputHeight, selectionDockMaxVisibleLines)
-		return m.withWorkStatusLine(applyActivityGeometry(layout, m.activity.visible, m.activity.widthColumns))
+		return m.withTodoDock(m.withWorkStatusLine(applyActivityGeometry(layout, m.activity.visible, m.activity.widthColumns)))
 	}
 	queueHeight := m.queuePanelHeight()
 	textareaHeight := m.input.Height()
@@ -103,7 +104,7 @@ func (m appModel) currentLayout() tuiLayout {
 	layout := computeTUILayoutWithInputLimit(m.width, m.height, requestedInputHeight, inputLimit)
 	layout.queueHeight = minInt(queueHeight, maxInt(0, layout.inputHeight-1))
 	layout.queueInlineHeight = m.queueInlineSummaryHeight()
-	return m.withWorkStatusLine(applyActivityGeometry(layout, m.activity.visible, m.activity.widthColumns))
+	return m.withTodoDock(m.withWorkStatusLine(applyActivityGeometry(layout, m.activity.visible, m.activity.widthColumns)))
 }
 
 // withWorkStatusLine 在工作状态行可见时为其预留一行（从 transcript 让位）。
@@ -125,6 +126,9 @@ func (m appModel) renderWorkspaceBody(layout tuiLayout) string {
 	}
 	if workspaceLayout.workStatusHeight > 0 {
 		parts = append(parts, m.renderWorkStatusRegion(workspaceLayout.contentWidth))
+	}
+	if workspaceLayout.todoHeight > 0 {
+		parts = append(parts, m.renderActivityTodo(workspaceLayout.contentWidth, workspaceLayout.todoHeight))
 	}
 	if workspaceLayout.statusHeight > 0 {
 		parts = append(parts, m.renderDockStatusLine(workspaceLayout.contentWidth))
@@ -204,6 +208,9 @@ func (m appModel) View() string {
 	}
 	if layout.queueInlineHeight > 0 {
 		rightInset := terminalCellWidth(m.renderBottomDockWorktree(layout.frameWidth)) + 2
+		if summary := m.bottomDockSubagentRight(layout.frameWidth); summary != "" {
+			rightInset = terminalCellWidth(summary) + 2
+		}
 		if layout.activityMode == activityLayoutDocked {
 			rightInset = layout.activitySeparatorWidth + layout.activityWidth
 		}
@@ -906,7 +913,11 @@ func (m *appModel) relayout() {
 	if m.selectionDock == nil {
 		requestedInputHeight += queueHeight
 	}
-	layout := applyActivityGeometry(computeTUILayout(m.width, m.height, requestedInputHeight), m.activity.visible, m.activity.widthColumns)
+	inputLimit := inputMaxVisibleLines
+	if queueHeight > 0 && m.selectionDock == nil {
+		inputLimit += queuePanelMaxHeight
+	}
+	layout := applyActivityGeometry(computeTUILayoutWithInputLimit(m.width, m.height, requestedInputHeight, inputLimit), m.activity.visible, m.activity.widthColumns)
 	if m.selectionDock != nil {
 		layout = applyActivityGeometry(computeTUILayoutWithInputLimit(m.width, m.height, requestedInputHeight, selectionDockMaxVisibleLines), m.activity.visible, m.activity.widthColumns)
 	}
@@ -917,6 +928,7 @@ func (m *appModel) relayout() {
 		m.input.SetHeight(clampInt(m.tokenAwareInputVisibleLineCount(), 1, inputMaxVisibleLines))
 	}
 	m.viewport.Width = transcriptWidth
+	layout = m.withTodoDock(m.withWorkStatusLine(layout))
 	m.viewport.Height = maxInt(1, layout.transcriptHeight)
 }
 
