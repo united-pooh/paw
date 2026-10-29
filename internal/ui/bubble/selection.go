@@ -476,7 +476,7 @@ func (m appModel) isInputDockMouse(msg tea.MouseMsg) bool {
 	if msg.X < 0 || msg.X >= layout.workspaceWidth {
 		return false
 	}
-	top := 1 + layout.headerHeight + layout.transcriptHeight + layout.statusHeight
+	top := 1 + layout.headerHeight + layout.transcriptHeight + layout.workStatusHeight + layout.todoHeight + layout.statusHeight
 	return msg.Y >= top && msg.Y < 1+layout.contentHeight
 }
 
