@@ -93,8 +93,11 @@ func (m appModel) handleActivityGlobalKey(msg tea.KeyMsg) (appModel, bool, tea.C
 }
 
 func (m *appModel) refreshActivityTasks() {
-	if m == nil || !m.activity.visible {
+	if m == nil {
 		return
+	}
+	if m.activity.summarySessionID != "" && m.activity.summarySessionID != m.sessionID {
+		m.resetActivitySummary()
 	}
 	oldIndex := m.activity.selectedIndex
 	selectedID := strings.TrimSpace(m.activity.selectedTaskID)
@@ -119,22 +122,21 @@ func (m *appModel) refreshActivityTasks() {
 	m.activity.selectedTaskID = strings.TrimSpace(m.activity.tasks[m.activity.selectedIndex].ID)
 }
 
-// activityPollInterval 是 Activity 面板中 ListTasks 刷新的节流间隔。
-// 仅当面板可见且存在 running 任务时才需要高频刷新；其他场景低频轮询即可。
+// activityPollInterval 让侧栏与收起后的子代理摘要共用节流快照。
 const activityPollInterval = 500 * time.Millisecond
 
 // refreshActivityFromTasks 由 cursorFrameMsg 每帧驱动，按频率分级调用
 // ListTasks 相关刷新：高频（running 任务存在）时使用 500ms 节流，
 // 否则使用更保守的 2s 节流，避免每帧都跨进程读 task registry。
 func (m *appModel) refreshActivityFromTasks(now time.Time) bool {
-	if m == nil || !m.activity.visible {
+	if m == nil {
 		return false
 	}
 	interval := activityPollInterval
 	if !m.activityHasRunningTask() {
 		interval = 2 * time.Second
 	}
-	if m.lastActivityPollAt.IsZero() || now.Sub(m.lastActivityPollAt) >= interval {
+	if !m.activity.summaryTasksSeeded || m.activity.summarySessionID != m.sessionID || m.lastActivityPollAt.IsZero() || now.Sub(m.lastActivityPollAt) >= interval {
 		m.lastActivityPollAt = now
 		m.refreshActivityTasks()
 		previewChanged := m.refreshTaskPreviewFromTasks()
@@ -149,7 +151,7 @@ func (m *appModel) refreshActivityFromTasks(now time.Time) bool {
 
 // activityHasRunningTask 报告当前 Activity 面板任务列表中是否有 running 任务。
 func (m *appModel) activityHasRunningTask() bool {
-	if m == nil || !m.activity.visible {
+	if m == nil || m.activity.summarySessionID != m.sessionID {
 		return false
 	}
 	for _, task := range m.activity.tasks {
