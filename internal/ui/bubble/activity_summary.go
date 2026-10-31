@@ -16,6 +16,8 @@ func (m *appModel) resetActivitySummary() {
 	m.activity.tasks = nil
 	m.activity.selectedIndex = 0
 	m.activity.selectedTaskID = ""
+	m.activity.todoExpanded = nil
+	m.activity.todoScroll = 0
 	if m.hasCurrentTodo && !m.currentTodo.Cleared() {
 		m.activity.todoUpdatedAt = m.currentTodo.UpdatedAt
 	}
@@ -109,7 +111,7 @@ func activityTodoEqual(a, b todo.Snapshot) bool {
 	}
 	for i, item := range a.Items {
 		other := b.Items[i]
-		if item.ID != other.ID || item.Content != other.Content || item.Status != other.Status || len(item.BlockedBy) != len(other.BlockedBy) {
+		if item.ID != other.ID || item.Content != other.Content || item.Group != other.Group || item.Status != other.Status || item.BlockedReason != other.BlockedReason || len(item.BlockedBy) != len(other.BlockedBy) {
 			return false
 		}
 		for _, dependency := range item.BlockedBy {
