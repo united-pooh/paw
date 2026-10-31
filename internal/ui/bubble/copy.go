@@ -41,7 +41,7 @@ const (
 
 	// 面板
 	copyActivityTitle = "活动"
-	copyTasksTitle    = "任务"
+	copyTasksTitle    = "子代理"
 	copyTokenHistory  = "令牌历史"
 	copyMainTurn      = "主回合"
 	copyWorkspace     = "工作区"

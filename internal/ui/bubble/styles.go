@@ -380,7 +380,7 @@ func rebuildLegacyStyles() {
 			Foreground(colorManager.LipglossColor(colorSelectionForeground))
 	}
 	todoTitleStyle = lipgloss.NewStyle().
-		Foreground(colorManager.LipglossColor(colorLabelAssistant)).
+		Foreground(colorManager.LipglossColor(colorContextUsed)).
 		Bold(true)
 	todoCountStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorContextFree))

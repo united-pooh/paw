@@ -127,11 +127,11 @@ func (m appModel) renderActivityTasks(width, height int) string {
 		return ""
 	}
 	if m.taskController == nil {
-		return fitStyledRect(labelErrorStyle.Render("Task controller is unavailable."), width, height)
+		return fitStyledRect(unselectedProviderStyle.Render("暂无子代理"), width, height)
 	}
 	tasks := m.activity.tasks
 	if len(tasks) == 0 {
-		return fitStyledRect(unselectedProviderStyle.Render("No tasks yet."), width, height)
+		return fitStyledRect(unselectedProviderStyle.Render("暂无子代理"), width, height)
 	}
 
 	selected := clampInt(m.activity.selectedIndex, 0, len(tasks)-1)
@@ -186,15 +186,17 @@ func (m appModel) activityTaskStatus(snapshot task.TaskSnapshot) (string, string
 	switch snapshot.Status {
 	case task.TaskRunning:
 		elapsed := formatElapsedTime(time.Since(snapshot.StartedAt))
-		return activityTaskSpinnerFrames[m.spinnerFrameIdx%len(activityTaskSpinnerFrames)], "running · " + elapsed, m.styles.StatusRunning, m.styles.StatusRunning
+		return activityTaskSpinnerFrames[m.spinnerFrameIdx%len(activityTaskSpinnerFrames)], "工作中 · " + elapsed, m.styles.StatusRunning, m.styles.StatusRunning
 	case task.TaskFailed:
-		return "✗", "failed", m.styles.StatusError, m.styles.StatusError
+		return "✗", "失败", m.styles.StatusError, m.styles.StatusError
 	case task.TaskStopped:
-		return "■", "stopped", m.styles.StatusMuted, m.styles.StatusMuted
+		return "■", "已停止", m.styles.StatusMuted, m.styles.StatusMuted
 	case task.TaskInterrupted:
-		return "!", "interrupted", m.styles.StatusWarning, m.styles.StatusWarning
+		return "!", "已中断", m.styles.StatusWarning, m.styles.StatusWarning
+	case task.TaskCompleted:
+		return "✓", "已完成", m.styles.StatusSuccess, m.styles.StatusSuccess
 	default:
-		return "✓", "completed", m.styles.StatusSuccess, m.styles.StatusSuccess
+		return "?", "未知", m.styles.StatusMuted, m.styles.StatusMuted
 	}
 }
 
