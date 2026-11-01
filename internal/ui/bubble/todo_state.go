@@ -35,11 +35,14 @@ func (m *appModel) applyTodoSnapshot(snapshot todo.Snapshot, live bool) bool {
 		return false
 	}
 	copy := normalized.Clone()
+	wasAtBottom := m.viewport.AtBottom()
+	changed := !m.hasCurrentTodo || !activityTodoEqual(m.currentTodo, copy)
 	if m.activity.summarySessionID != m.sessionID {
 		m.resetActivitySummary()
 	}
 	if copy.Cleared() {
 		m.activity.todoUpdatedAt = time.Time{}
+		m.activity.todoExpanded = nil
 		m.currentTodo = todo.Snapshot{}
 		m.hasCurrentTodo = false
 		m.todoWasCleared = true
@@ -55,6 +58,11 @@ func (m *appModel) applyTodoSnapshot(snapshot todo.Snapshot, live bool) bool {
 		m.todoWasCleared = false
 	}
 	m.activity.tab = m.activitySummaryTab()
+	if changed {
+		m.activity.todoScroll = 0
+		m.relayout()
+		m.refreshViewportWithBottomState(wasAtBottom)
+	}
 	return true
 }
 
