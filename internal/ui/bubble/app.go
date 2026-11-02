@@ -251,9 +251,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case clockTickMsg:
 		m.clockTickScheduled = false
 		now := time.Time(msg)
-		// 工作/动画帧链已接管屏幕：时钟链退出，不再续命。
+		// 任务可能在空闲期间出现；确保动画链已接管后再退出时钟链。
 		if m.needsUIAnimationFrames(now) {
-			return m, nil
+			return m, m.scheduleUIAnimationFrame()
 		}
 		// 用户刚有过键盘输入（含 IME 合成期）：跳过本次重绘，避免扰动
 		// Ghostty 预编辑光标；稍后重试。
@@ -262,6 +262,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// 空闲且无近期输入：推进帧时间并重绘（Bubble Tea 自动重绘整帧），
 		// header 时钟 / 状态栏时间随之刷新；继续时钟链。
+		m.refreshActivityFromTasks(now)
 		m.cursorFrameAt = now
 		return m, m.scheduleClockTick()
 	case assistantDeltaMsg:
@@ -917,6 +918,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if isHorizontalMouseWheel(msg) {
 			return m, nil
+		}
+		if next, handled := m.handleTodoTreeMouse(msg); handled {
+			return next, nil
 		}
 		if next, handled, cmd := m.handleNewMessageNoticeMouse(msg); handled {
 			return next, cmd
