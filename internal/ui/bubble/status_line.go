@@ -63,12 +63,12 @@ const (
 	tokenRippleSpeed = 40 * time.Millisecond
 	tokenRippleTail  = 14
 
-	// token frontier 三段细轨 glyph：free 细线、cache 虚线、used 粗实线，
-	// 替代刺眼的满高粗块 █/▒/░，波纹滑过时点亮为粗实线 ━。
-	tokenFreeGlyph   = "─"
-	tokenCacheGlyph  = "╍"
-	tokenUsedGlyph   = "━"
-	tokenRippleGlyph = "━"
+	// 上下文轨用细线表示空余、点阵纹理表示缓存、粗线表示已用。
+	tokenTrackTexture = "░"
+	tokenFreeGlyph    = "─"
+	tokenCacheGlyph   = "▒"
+	tokenUsedGlyph    = "━"
+	tokenRippleGlyph  = "━"
 )
 
 func (m appModel) renderDockStatusLine(width int) string {
@@ -81,6 +81,10 @@ func (m appModel) renderBottomDockLineWithRight(width int, right string) string 
 }
 
 func (m appModel) renderBottomDockLine(width int) string {
+	width = maxInt(1, width)
+	if right := m.bottomDockSubagentRight(width); right != "" {
+		return m.renderContextDockWithSubagents(width, right)
+	}
 	return m.renderBottomDockLineWithRight(width, m.renderBottomDockWorktree(width))
 }
 
@@ -173,7 +177,8 @@ func (m appModel) renderTokenFrontierStatic(width, used, cache, limit int, modeH
 	cacheStyle := contextCacheStyle
 	freeStyle := contextFreeStyle
 	if modeHex != "" {
-		usedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(modeHex)).Bold(true)
+		freeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(modeHex))
+		usedStyle = freeStyle.Bold(true)
 		if colorManager.palette.TerminalBackground != "" {
 			cacheStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(interpolateHexColor(colorManager.Hex(colorTerminalBackground), modeHex, 0.9))).Bold(true)
 			freeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(interpolateHexColor(colorManager.Hex(colorTerminalBackground), modeHex, 0.45)))

@@ -11,15 +11,12 @@ import (
 func (m appModel) renderContextDock(width int, right string) string {
 	stats := m.contextStats()
 	percent, amount := contextReadout(stats, 0)
-	percentStyle := contextFreeStyle.Bold(true)
-	if hex := m.contextDockHex(stats); hex != "" {
-		percentStyle = percentStyle.Foreground(lipgloss.Color(hex))
-	}
-	reading := percentStyle.Render(percent)
+	readoutStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.contextDockHex(stats)))
+	reading := readoutStyle.Bold(true).Render(percent)
 	left := m.renderModeIndicator() + contextFreeStyle.Render(" · "+copyContextLabel)
 	toast := m.renderBottomDockMiddle(width / 3)
 	if width >= 60 {
-		middle := reading + contextFreeStyle.Render(" · "+amount)
+		middle := reading + readoutStyle.Render(" · "+amount)
 		if toast != "" {
 			middle = toast
 		}
@@ -44,6 +41,11 @@ func (m appModel) renderContextDock(width int, right string) string {
 	left = truncateStyledCellLine(left, leftBudget)
 	trackWidth := inner - terminalCellWidth(left) - terminalCellWidth(reading) - 4
 	return fitStyledCellLine(" "+left+"  "+m.renderContextDockTrack(trackWidth, stats)+"  "+reading+" ", width)
+}
+
+func (m appModel) renderContextDockWithSubagents(width int, right string) string {
+	contextWidth := width - terminalCellWidth(right) - 2
+	return fitStyledCellLine(m.renderContextDock(contextWidth, "")+" "+right+" ", width)
 }
 
 // renderCenteredContextDock 把读数对齐整行中心，两侧留两格不画线。
@@ -82,14 +84,15 @@ func (m appModel) renderContextDockTrack(width int, stats loop.ContextStats) str
 	if width <= 0 {
 		return ""
 	}
+	accent := m.contextDockHex(stats)
 	if !contextCapacityKnown(stats) {
-		return contextFreeStyle.Render(strings.Repeat("·", width))
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(accent)).Render(strings.Repeat(tokenTrackTexture, width))
 	}
 	cache := 0
 	if stats.CacheKnown {
 		cache = stats.CacheTokens
 	}
-	return m.renderTokenFrontierStatic(width, stats.UsedTokens, cache, stats.LimitTokens, m.contextDockHex(stats))
+	return m.renderTokenFrontierStatic(width, stats.UsedTokens, cache, stats.LimitTokens, accent)
 }
 
 func (m appModel) contextDockHex(stats loop.ContextStats) string {
@@ -101,5 +104,8 @@ func (m appModel) contextDockHex(stats loop.ContextStats) string {
 			return colorManager.Hex(colorStatusWarning)
 		}
 	}
-	return m.currentModeHex()
+	if modeHex := m.currentModeHex(); modeHex != "" {
+		return modeHex
+	}
+	return colorManager.Hex(colorContextUsed)
 }
