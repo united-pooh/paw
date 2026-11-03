@@ -3,6 +3,7 @@ package bubble
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -43,86 +44,159 @@ func renderTokenHistory(v tokenMonitorView, width, height int) string {
 	if width <= 0 || height <= 0 {
 		return ""
 	}
-	title := wizardTitleStyle.Render(copyTokenHistory + " · " + copyMainTurn)
-	if tokenHistoryEmpty(v) {
-		// 空态单行：无任何数据时不渲染 8 行 — 骨架与「暂无流片段」，
-		// 打开面板也能一眼看出还没有可统计的流。
-		return fitStyledRect(title+"\n"+activityHintStyle.Render(copyEmptyData), width, height)
+	hasSamples := tokenMonitorHasSamples(v.Rates.Samples)
+	empty := tokenHistoryEmpty(v, hasSamples)
+	caption := "近60秒"
+	if !empty && !hasSamples {
+		caption = "暂无流片段"
 	}
-	current := "—"
-	if v.Rates.RequestID != "" && v.Rates.Observed {
-		current = fmt.Sprintf("≈%.1f", tokenMonitorRate(v.Rates.Current))
-	}
-	lines := append([]string{title}, tokenMonitorTurnLines(v.Rates, width)...)
-	summary := []string{activityHintStyle.Render(tokenMonitorPair("60s chart · recent", current+" tok/s", width))}
-	s := v.Snapshot.Summary
-	input := tokenMonitorKnown(s.Input, s.InputKnown, s.Attempts)
-	output := tokenMonitorKnown(s.Output, s.OutputKnown, s.Attempts)
-	if terminalCellWidth("Input "+input+" Output "+output) > width {
-		summary = append(summary, tokenMonitorPair("Input", input, width), tokenMonitorPair("Output", output, width))
+	title := tokenMonitorPair(wizardTitleStyle.Render(copyTokenHistory), contextFreeStyle.Render(caption), width)
+	lines := []string{title}
+	var summary []string
+	if empty {
+		if height > 2 {
+			lines = append(lines, contextFreeStyle.Render(copyEmptyData))
+		}
 	} else {
-		summary = append(summary, tokenMonitorPair("Input "+input, "Output "+output, width))
+		lines = append(lines, tokenHistoryRates(v.Rates, width)...)
+		summary = tokenHistorySummary(v, width)
 	}
-	cacheHit := "—"
-	if s.Attempts > 0 && s.InputKnown == s.Attempts && s.CacheKnown == s.Attempts && s.Input > 0 {
-		cacheHit = fmt.Sprintf("%.1f%%", float64(s.CacheRead)*100/float64(s.Input))
-	} else if s.CacheKnown > 0 && s.CacheKnown < s.Attempts || s.InputKnown > 0 && s.InputKnown < s.Attempts {
-		cacheHit = "— partial"
-	}
-	cache := tokenMonitorKnown(s.CacheRead, s.CacheKnown, s.Attempts)
-	if s.CacheKnown > 0 && s.CacheKnown == s.Attempts {
-		cache += " · " + cacheHit
-	}
-	summary = append(summary, tokenMonitorPair("Cache hit", cache, width))
-	tool := v.Snapshot.ToolTotal
-	amount := tokenMonitorToolAggregate(tool.Definitions+tool.Arguments+tool.Results, v.Snapshot)
-	calls := fmt.Sprintf("main %d calls", v.Rates.ToolCalls)
-	if v.Rates.ToolCallsPartial {
-		calls = fmt.Sprintf("main ≥%d calls", v.Rates.ToolCalls)
-	}
-	if terminalCellWidth("Tools in "+amount+" "+calls) > width {
-		summary = append(summary, tokenMonitorPair("Tools in", amount, width))
-	} else {
-		summary = append(summary, tokenMonitorPair("Tools in "+amount, calls, width))
-	}
-	summary = append(summary, activityHintStyle.Render("Σ session+tasks · tools ⊂ input"))
-	source := ""
-	switch {
-	case v.Err != "":
-		source = "Source error · " + tokenMonitorText(v.Err)
-	case v.Loading:
-		source = "Loading token ledger…"
-	case len(v.Snapshot.Issues) > 0:
-		source = fmt.Sprintf("%s %d: %s", copyWorkspace, len(v.Snapshot.Issues), tokenMonitorIssue(v.Snapshot.Issues[0].Kind))
-	}
-	if source != "" {
-		summary = append(summary, activityHintStyle.Render(source))
-	}
+	lines = lines[:minInt(len(lines), height-1)]
 	chartHeight := maxInt(1, height-len(lines)-len(summary))
-	lines = append(lines, tokenMonitorReceivedGraph(v.Rates.Samples, width, chartHeight)...)
+	lines = append(lines, tokenMonitorGraph(v.Rates.Samples, width, chartHeight)...)
 	lines = append(lines, summary...)
 	return fitStyledRect(strings.Join(lines, "\n"), width, height)
 }
 
-// tokenHistoryEmpty 报告令牌历史完全无数据（无在途流、无统计、无加载/错误
-// 信号）。此时空态只渲染单行「暂无数据」，不再铺开 — 骨架。Samples 是 60 槽
-// 环形缓冲，空闲时非空但全零，须按值判断而非长度。
-func tokenHistoryEmpty(v tokenMonitorView) bool {
-	if v.Err != "" ||
-		v.Loading ||
-		v.Snapshot.Summary.Attempts > 0 ||
-		v.Snapshot.ToolTotal != (tokentracer.LedgerTool{}) ||
-		v.Rates.RequestID != "" ||
-		v.Rates.ToolCalls > 0 ||
-		len(v.Snapshot.Issues) > 0 {
-		return false
+func tokenHistoryEmpty(v tokenMonitorView, hasSamples bool) bool {
+	return !hasSamples &&
+		v.Err == "" &&
+		!v.Loading &&
+		v.Snapshot.Summary.Attempts == 0 &&
+		v.Snapshot.ToolTotal == (tokentracer.LedgerTool{}) &&
+		v.Rates.RequestID == "" &&
+		v.Rates.ToolCalls == 0 &&
+		len(v.Snapshot.Issues) == 0
+}
+
+func tokenHistoryRates(r tokenRateView, width int) []string {
+	average, output, elapsed, current := "—", "—", "—", "—"
+	if r.TurnObserved {
+		prefix := ""
+		if r.TurnEstimated {
+			prefix = "约"
+		}
+		average = prefix + fmt.Sprintf("%.1f/秒", tokenMonitorRate(r.TurnAverage))
+		output = prefix + tokenHistoryCount(int(tokenMonitorRate(r.TurnTokens)))
 	}
-	for _, sample := range v.Rates.Samples {
-		if tokenMonitorRate(sample) > 0 {
-			return false
+	if r.TurnActive || r.TurnObserved {
+		elapsed = tokenMonitorDuration(r.TurnElapsed)
+		if number, ok := strings.CutSuffix(elapsed, "ms"); ok {
+			elapsed = number + "毫秒"
+		} else if number, ok := strings.CutSuffix(elapsed, "s"); ok {
+			elapsed = number + "秒"
 		}
 	}
-	return true
+	if r.RequestID != "" && r.Observed {
+		current = fmt.Sprintf("约%.1f/秒", tokenMonitorRate(r.Current))
+	}
+	left, right := "均速 "+average, "实时 "+current
+	if terminalCellWidth(left+" "+right) > width {
+		left = strings.TrimSuffix(left, "/秒")
+	}
+	return []string{
+		tokenMonitorPair(contextUsedStyle.Render(left), contextFreeStyle.Render(right), width),
+		bodyStyle.Render(tokenMonitorPair(copyMainTurn+"输出 "+output, "耗时 "+elapsed, width)),
+	}
+}
+
+func tokenHistorySummary(v tokenMonitorView, width int) []string {
+	s := v.Snapshot.Summary
+	input := tokenHistoryKnown(s.Input, s.InputKnown, s.Attempts)
+	cache := tokenHistoryKnown(s.CacheRead, s.CacheKnown, s.Attempts)
+	track := contextFreeStyle.Render(strings.Repeat(tokenTrackTexture, width))
+	if s.Attempts > 0 && s.InputKnown == s.Attempts && s.CacheKnown == s.Attempts && s.Input > 0 && s.CacheRead >= 0 && s.CacheRead <= s.Input {
+		ratio := float64(s.CacheRead) / float64(s.Input)
+		cache += fmt.Sprintf(" %.1f%%", ratio*100)
+		filled := int(math.Round(ratio * float64(width)))
+		if width > 1 && s.CacheRead > 0 && s.CacheRead < s.Input {
+			filled = clampInt(filled, 1, width-1)
+		}
+		track = contextCacheStyle.Render(strings.Repeat("█", filled)) +
+			contextUsedStyle.Render(strings.Repeat(tokenTrackTexture, width-filled))
+	}
+	output := tokenHistoryKnown(s.Output, s.OutputKnown, s.Attempts)
+	tools := "—"
+	tool := v.Snapshot.ToolTotal
+	if tokenMonitorToolTotalKnown(v.Snapshot) {
+		tools = "约" + tokenHistoryCount(tool.Definitions+tool.Arguments+tool.Results)
+		if v.Snapshot.ToolsKnown < s.Attempts {
+			tools += fmt.Sprintf(" 部分 %d/%d", v.Snapshot.ToolsKnown, s.Attempts)
+		} else if tool.Unknown > 0 {
+			tools += " 部分"
+		}
+	}
+	calls := fmt.Sprintf("本轮 %d 次", v.Rates.ToolCalls)
+	if v.Rates.ToolCallsPartial {
+		calls = fmt.Sprintf("本轮至少 %d 次", v.Rates.ToolCalls)
+	}
+	toolLine := "其中工具 " + tools
+	if terminalCellWidth(toolLine+" "+calls) <= width {
+		toolLine = tokenMonitorPair(toolLine, contextFreeStyle.Render(calls), width)
+	}
+	inputLabel := "累计输入（含子任务）"
+	if terminalCellWidth(inputLabel+" "+input) > width {
+		inputLabel = "累计输入"
+	}
+	summary := []string{
+		bodyStyle.Render(tokenMonitorPair(inputLabel, input, width)),
+		track,
+		bodyStyle.Render(tokenMonitorPair("缓存命中", cache, width)),
+		bodyStyle.Render(toolLine),
+		bodyStyle.Render(tokenMonitorPair("累计输出", output, width)),
+	}
+	source := ""
+	switch {
+	case v.Err != "":
+		source = "账本读取失败"
+	case v.Loading:
+		source = "正在读取账本…"
+	case len(v.Snapshot.Issues) > 0:
+		issue := "账本记录不完整"
+		switch v.Snapshot.Issues[0].Kind {
+		case "atom_retention_limit":
+			issue = "工具明细受限"
+		case "usage_inconsistent":
+			issue = "账本用量不一致"
+		}
+		source = fmt.Sprintf("%s %d · %s", copyWorkspace, len(v.Snapshot.Issues), issue)
+	}
+	if source != "" {
+		summary = append(summary, contextFreeStyle.Render(source))
+	}
+	return summary
+}
+
+func tokenHistoryKnown(value, known, total int) string {
+	if known <= 0 {
+		return "—"
+	}
+	text := tokenHistoryCount(value)
+	if known < total {
+		text += fmt.Sprintf(" 部分 %d/%d", known, total)
+	}
+	return text
+}
+
+func tokenHistoryCount(value int) string {
+	switch {
+	case value >= 100_000_000:
+		return formatThreeDigitNumber(float64(value)/100_000_000) + "亿"
+	case value >= 10_000:
+		return formatThreeDigitNumber(float64(value)/10_000) + "万"
+	default:
+		return fmt.Sprint(maxInt(0, value))
+	}
 }
 
 func renderTokenMonitor(v tokenMonitorView, width, height int) string {
@@ -198,7 +272,7 @@ func tokenMonitorFlow(v tokenMonitorView, width, height int) []string {
 	}
 	lines := tokenMonitorTurnLines(v.Rates, width)
 	chartHeight := maxInt(1, height-4)
-	lines = append(lines, tokenMonitorReceivedGraph(v.Rates.Samples, width, chartHeight)...)
+	lines = append(lines, tokenMonitorGraph(v.Rates.Samples, width, chartHeight)...)
 	firstText := "—"
 	if v.Rates.FirstTextKnown {
 		firstText = tokenMonitorDuration(v.Rates.FirstText)
@@ -240,7 +314,7 @@ func tokenMonitorContext(v tokenMonitorView, width, height int) []string {
 		filled := clampInt(int(math.Round(float64(width)*float64(v.Context.UsedTokens)/float64(v.Context.LimitTokens))), 0, width)
 		lines = append(lines, contextUsedStyle.Render(strings.Repeat("▰", filled))+contextFreeStyle.Render(strings.Repeat("▱", maxInt(0, width-filled))))
 	} else {
-		lines = append(lines, contextFreeStyle.Render(strings.Repeat("·", maxInt(0, width))))
+		lines = append(lines, contextFreeStyle.Render(strings.Repeat(tokenTrackTexture, maxInt(0, width))))
 	}
 	caption := "Latest input + output"
 	if v.Context.Estimated {
@@ -336,7 +410,7 @@ func tokenMonitorTools(v tokenMonitorView, width, height int) []string {
 
 func tokenMonitorToolAggregate(value int, snapshot tokentracer.MonitorSnapshot) string {
 	tool := snapshot.ToolTotal
-	if snapshot.ToolsKnown == 0 && tool.Occurrences == 0 || tool.Occurrences > 0 && tool.Unknown == tool.Occurrences {
+	if !tokenMonitorToolTotalKnown(snapshot) {
 		return "—"
 	}
 	text := "≈" + formatCompactTokenCount(value)
@@ -347,6 +421,11 @@ func tokenMonitorToolAggregate(value int, snapshot tokentracer.MonitorSnapshot) 
 		text += " partial"
 	}
 	return text
+}
+
+func tokenMonitorToolTotalKnown(snapshot tokentracer.MonitorSnapshot) bool {
+	tool := snapshot.ToolTotal
+	return (snapshot.ToolsKnown > 0 || tool.Occurrences > 0) && (tool.Occurrences == 0 || tool.Unknown != tool.Occurrences)
 }
 
 func tokenMonitorIssue(kind string) string {
@@ -495,46 +574,64 @@ func tokenMonitorJoin(left, right string) string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 }
 
-func tokenMonitorReceivedGraph(samples []float64, width, height int) []string {
-	lines := tokenMonitorGraph(samples, width, height)
-	for _, sample := range samples {
-		if tokenMonitorRate(sample) > 0 {
-			return lines
-		}
-	}
-	if len(lines) > 0 {
-		lines[len(lines)/2] = activityHintStyle.Render(fitStyledCellLine("暂无流片段", width))
-	}
-	return lines
+func tokenMonitorHasSamples(samples []float64) bool {
+	return slices.ContainsFunc(samples[maxInt(0, len(samples)-60):], func(sample float64) bool {
+		return tokenMonitorRate(sample) > 0
+	})
 }
 
 func tokenMonitorGraph(samples []float64, width, height int) []string {
 	if width <= 0 || height <= 0 {
 		return nil
 	}
-	cells := make([]float64, width*2)
-	peak := 1.0
-	count := minInt(60, len(samples))
-	for _, sample := range samples[len(samples)-count:] {
-		peak = math.Max(peak, tokenMonitorRate(sample))
+	// A single terminal row contains the axis, including the continuous zero line.
+	graphHeight := height
+	if graphHeight%2 == 0 {
+		graphHeight--
 	}
-	for x := range cells {
-		// Each column keeps its position in the same sixty-second window.
-		index := int(float64(x)*60/float64(len(cells))) - (60 - count)
-		if index >= 0 && index < count {
-			cells[x] = tokenMonitorRate(samples[len(samples)-count+index])
+	center := graphHeight / 2
+	lines := make([]string, height)
+	var window [60]float64
+	samples = samples[maxInt(0, len(samples)-len(window)):]
+	peak := 0.0
+	for i, sample := range samples {
+		rate := tokenMonitorRate(sample)
+		window[len(window)-len(samples)+i] = rate
+		peak = math.Max(peak, rate)
+	}
+	if peak == 0 {
+		lines[center] = contextFreeStyle.Render(strings.Repeat("─", width))
+		return lines
+	}
+	peak = math.Max(1, peak)
+	halfDots := graphHeight * 2
+	levels := make([]int, width*2)
+	for x := range levels {
+		start := x * len(window) / len(levels)
+		end := maxInt(start+1, (x+1)*len(window)/len(levels))
+		// Keep short bursts visible when several seconds share one dot column.
+		if rate := slices.Max(window[start:end]); rate > 0 {
+			levels[x] = maxInt(1, int(math.Round(rate/peak*float64(halfDots))))
 		}
 	}
-	lines := make([]string, height)
 	dots := [4][2]rune{{0x1, 0x8}, {0x2, 0x10}, {0x4, 0x20}, {0x40, 0x80}}
-	for y := 0; y < height; y++ {
+	for y := 0; y < graphHeight; y++ {
+		var distances [4]int
+		for subY := range distances {
+			dot := y*4 + subY
+			distances[subY] = maxInt(dot-halfDots, halfDots-1-dot)
+		}
 		var row strings.Builder
 		for x := 0; x < width; x++ {
+			left, right := levels[x*2], levels[x*2+1]
+			if y == center && left == 0 && right == 0 {
+				row.WriteRune('─')
+				continue
+			}
 			mask := rune(0)
-			for subX := 0; subX < 2; subX++ {
-				level := int(math.Round(cells[x*2+subX] / peak * float64(height*4)))
-				for subY := 0; subY < 4; subY++ {
-					if level >= (height-y)*4-subY {
+			for subX, level := range [...]int{maxInt(1, left), maxInt(1, right)} {
+				for subY, distance := range distances {
+					if distance < level {
 						mask |= dots[subY][subX]
 					}
 				}
@@ -545,7 +642,23 @@ func tokenMonitorGraph(samples []float64, width, height int) []string {
 				row.WriteRune(0x2800 + mask)
 			}
 		}
-		lines[y] = contextUsedStyle.Render(row.String())
+		distance := maxInt(y-center, center-y)
+		lines[y] = tokenMonitorWaveStyle(float64(distance) / float64(maxInt(1, center))).Render(row.String())
 	}
 	return lines
+}
+
+func tokenMonitorWaveStyle(distance float64) lipgloss.Style {
+	cool := colorManager.Hex(colorContextUsed)
+	hot := colorManager.Hex(colorStatusError)
+	color := cool
+	switch {
+	case strings.HasPrefix(cool, "#") && strings.HasPrefix(hot, "#"):
+		color = interpolateHexColor(cool, hot, distance)
+	case distance >= 0.75:
+		color = hot
+	case distance >= 0.35:
+		color = colorManager.Hex(colorStatusWarning)
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(color))
 }
