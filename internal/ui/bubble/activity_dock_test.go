@@ -9,7 +9,7 @@ import (
 	"paw/internal/runtime/task"
 )
 
-func TestActivityDockDefaultsClosedAndEmptyTokenHistoryIsSingleLine(t *testing.T) {
+func TestActivityDockDefaultsClosedAndEmptyTokenHistoryOmitsSummary(t *testing.T) {
 	model := newTestModel(&fakeRunner{})
 	if model.activity.visible {
 		t.Fatal("activity dock should default to closed（侧栏默认关，不持久化）")
@@ -22,12 +22,11 @@ func TestActivityDockDefaultsClosedAndEmptyTokenHistoryIsSingleLine(t *testing.T
 		t.Fatalf("default view should not render the token history dock:\n%s", view)
 	}
 
-	// 打开但无数据：令牌历史为空态单行「暂无数据」，不渲染 — 骨架与「暂无流片段」。
 	empty := ansi.Strip(renderTokenHistory(model.tokenMonitorView(), 40, 12))
 	if !strings.Contains(empty, copyEmptyData) || strings.Contains(empty, "暂无流片段") {
-		t.Fatalf("empty token history = %q, want single-line 暂无数据", empty)
+		t.Fatalf("empty token history = %q, want 暂无数据", empty)
 	}
-	for _, skeleton := range []string{"Input", "Output", "Cache hit", "Tools in"} {
+	for _, skeleton := range []string{"累计输入", "累计输出", "缓存命中", "其中工具"} {
 		if strings.Contains(empty, skeleton) {
 			t.Fatalf("empty token history kept skeleton row %q: %q", skeleton, empty)
 		}
@@ -62,7 +61,7 @@ func TestRenderActivityPaneHasExactSizeAndNoNestedBorder(t *testing.T) {
 		}
 	}
 	plain := ansi.Strip(rendered)
-	for _, want := range []string{copyTasksTitle + " 1", copyTokenHistory, "layout-research", "running", "8.2k"} {
+	for _, want := range []string{copyTasksTitle + " 1", copyTokenHistory, "layout-research", "工作中", "8.2k"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("pane missing %q:\n%s", want, plain)
 		}

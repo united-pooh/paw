@@ -40,7 +40,7 @@ func TestActivityPaneAlwaysSplitsLatestActivityAndTokenHistory(t *testing.T) {
 					}
 				}
 				lower := strings.Join(lines[height/2:], "\n")
-				for _, want := range []string{copyTokenHistory, "Input", "Output", "Cache hit", "Tools in"} {
+				for _, want := range []string{copyTokenHistory, "累计输入", "累计输出", "缓存命中", "其中工具"} {
 					if !strings.Contains(ansi.Strip(lower), want) {
 						t.Errorf("%dx%d lower missing %q\n%s", width, height, want, ansi.Strip(lower))
 					}
@@ -67,7 +67,7 @@ func TestTokenHistoryLabelsReceivedStreamAndKeepsCumulativeScopeWithIssues(t *te
 	v.Rates.FirstTextKnown = false
 	v.Snapshot.Issues = []tokentracer.LedgerIssue{{Kind: "atom_retention_limit"}}
 	got := ansi.Strip(renderTokenHistory(v, 32, 20))
-	for _, want := range []string{"Turn avg", "recent", "Σ session+tasks", "tool detail limit"} {
+	for _, want := range []string{"均速", "近60秒", "累计输入（含子任务）", "工具明细受限"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in\n%s", want, got)
 		}
@@ -92,18 +92,18 @@ func TestTokenHistoryNoChunksAndIncompleteToolCoverage(t *testing.T) {
 	v.Snapshot.ToolTotal = tokentracer.LedgerTool{}
 	v.Snapshot.ToolsKnown = 0
 	got = ansi.Strip(renderTokenHistory(v, 32, 18))
-	if !strings.Contains(got, "Tools in —") {
+	if !strings.Contains(got, "其中工具 —") {
 		t.Fatalf("missing tool source presented as zero:\n%s", got)
 	}
 	v.Snapshot.ToolsKnown = v.Snapshot.Summary.Attempts
 	got = ansi.Strip(renderTokenHistory(v, 32, 18))
-	if !strings.Contains(got, "Tools in ≈0") {
+	if !strings.Contains(got, "其中工具 约0") {
 		t.Fatalf("known empty tool source presented as unknown:\n%s", got)
 	}
 	v.Snapshot.ToolTotal = tokentracer.LedgerTool{Results: 1000, Occurrences: 1}
 	v.Snapshot.ToolsKnown = 2
 	got = ansi.Strip(renderTokenHistory(v, 32, 18))
-	if !strings.Contains(got, "≈1k partial 2/5") {
+	if !strings.Contains(got, "其中工具 约1000 部分 2/5") {
 		t.Fatalf("incomplete tool attribution silently complete:\n%s", got)
 	}
 }
@@ -113,7 +113,7 @@ func TestTokenHistoryPriorRequestSamplesDoNotMakeCurrentRateKnown(t *testing.T) 
 	v.Rates.Observed = false
 	v.Rates.TurnObserved = false
 	got := ansi.Strip(renderTokenHistory(v, 32, 18))
-	if !strings.Contains(got, "Turn avg — tok/s") || strings.Contains(got, "暂无流片段") {
+	if !strings.Contains(got, "均速 —") || strings.Contains(got, "暂无流片段") {
 		t.Fatalf("historical samples changed current-request rate knowledge or were hidden:\n%s", got)
 	}
 }
@@ -128,7 +128,7 @@ func TestActivityTodoPassiveTruncationHasNoScrollInstruction(t *testing.T) {
 	if strings.Contains(got, "scroll") || strings.Contains(got, "↑") {
 		t.Fatalf("passive Todo retained navigation: %s", got)
 	}
-	if !strings.Contains(got, "more") {
+	if !strings.Contains(got, "另8行") {
 		t.Fatalf("missing static overflow count: %s", got)
 	}
 }
@@ -140,7 +140,7 @@ func TestTokenHistoryRetainsPartialCoverageOnNarrowPane(t *testing.T) {
 	v.Snapshot.Summary.CacheKnown = 1
 	v.Snapshot.ToolTotal.Unknown = 1
 	got := ansi.Strip(renderTokenHistory(v, 32, 18))
-	for _, want := range []string{"partial 3/5", "partial 2/5", "Cache hit", "Tools in", "partial"} {
+	for _, want := range []string{"12.5万 部分 3/5", "6430 部分 2/5", "缓存命中", "其中工具 约3.81万 部分"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("partial coverage lost %q in\n%s", want, got)
 		}
@@ -148,7 +148,7 @@ func TestTokenHistoryRetainsPartialCoverageOnNarrowPane(t *testing.T) {
 	if strings.Contains(got, "75.0%") {
 		t.Fatal("partial usage produced a cache hit rate")
 	}
-	if !strings.Contains(got, "93.6k partial 1/5") {
+	if !strings.Contains(got, "9.36万 部分 1/5") {
 		t.Fatal("partial cached-token amount lost its coverage")
 	}
 }
@@ -156,7 +156,7 @@ func TestTokenHistoryRetainsPartialCoverageOnNarrowPane(t *testing.T) {
 func TestTokenHistoryRetainsAbsoluteCacheReadAndRatio(t *testing.T) {
 	v := tokenMonitorFixture()
 	got := ansi.Strip(renderTokenHistory(v, 32, 18))
-	if !strings.Contains(got, "93.6k · 75.0%") {
+	if !strings.Contains(got, "9.36万 75.0%") {
 		t.Fatalf("cache quantity or hit rate missing:\n%s", got)
 	}
 }
