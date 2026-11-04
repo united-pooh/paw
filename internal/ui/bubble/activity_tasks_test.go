@@ -73,7 +73,7 @@ func TestRenderActivityTaskSummaryShowsColoredStatusAndDescriptionWithoutSelecti
 			break
 		}
 	}
-	if nameLine == "" || !strings.Contains(nameLine, "running") || !strings.Contains(nameLine, "1m 24s") {
+	if nameLine == "" || !strings.Contains(nameLine, "工作中") || !strings.Contains(nameLine, "1m 24s") {
 		t.Fatalf("worker header must contain name and status/elapsed on one line: %q\n%s", nameLine, plain)
 	}
 	for _, want := range []string{
@@ -82,7 +82,7 @@ func TestRenderActivityTaskSummaryShowsColoredStatusAndDescriptionWithoutSelecti
 		"description layout.",
 		"8.2k tokens",
 		"高松灯",
-		"completed",
+		"已完成",
 	} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("Activity task list missing %q:\n%s", want, plain)

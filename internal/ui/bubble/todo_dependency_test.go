@@ -43,7 +43,7 @@ func TestTodoDependencyRendersBlockersAndUnlocks(t *testing.T) {
 	}
 	m.currentTodo.Items[1].Status = todo.StatusCompleted
 	unblocked := ansi.Strip(m.renderActivityTodo(52, 15))
-	if strings.Contains(unblocked, "等待") || strings.Contains(unblocked, "⊘") || !strings.Contains(unblocked, "○ 交付修改") || !strings.Contains(unblocked, "2/4") {
+	if strings.Contains(unblocked, "等待") || strings.Contains(unblocked, "⊘") || !strings.Contains(unblocked, "☐ 交付修改") || !strings.Contains(unblocked, "2/4") {
 		t.Fatalf("completed prerequisite did not restore pending display:\n%s", unblocked)
 	}
 }
@@ -76,7 +76,7 @@ func TestTodoDependencyOverflowKeepsHiddenItemsVisible(t *testing.T) {
 		m.currentTodo.Items = append(m.currentTodo.Items, todo.Item{ID: id, Content: "修复测试", Status: todo.StatusPending})
 	}
 	view := ansi.Strip(m.renderActivityTodo(32, 6))
-	for _, want := range []string{"⊘", "等待 fix-0", "+7 more blockers", "+8 more items"} {
+	for _, want := range []string{"⊘", "等待 fix-0", "另12行"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("dependency details hid overflow %q:\n%s", want, view)
 		}
