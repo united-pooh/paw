@@ -19,7 +19,7 @@ func TestTokenMonitorCompactActualViewKeepsTools(t *testing.T) {
 		model.relayout()
 		model.refreshViewport()
 		got := ansi.Strip(model.View())
-		for _, want := range []string{copyTokenHistory, "Input", "Output", "Tools in"} {
+		for _, want := range []string{copyTokenHistory, "累计输入", "累计输出", "其中工具"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("width %d missing %q in actual View\n%s", width, want, got)
 			}
