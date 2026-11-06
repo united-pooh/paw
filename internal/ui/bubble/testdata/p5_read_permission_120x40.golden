@@ -1,6 +1,6 @@
 ────────────────────────────── model-a  12:00 ──────────────────────────────┬────────────────── 活动 ───────────────────
-   读取工作区外的共享设计说明，并继续当前实现。                             │任务 0
-                                                                            │Task controller is unavailable.
+   读取工作区外的共享设计说明，并继续当前实现。                             │子代理 0
+                                                                            │暂无子代理
                                                                             │
                                                                             │
                                                                             │
@@ -18,7 +18,7 @@
                                                                             │
                                                                             │
                                                                             │
-                                                                            │令牌历史 · 主回合
+                                                                            │令牌历史                             近60秒
                                                                             │暂无数据
                                                                             │
                                                                             │
@@ -28,7 +28,7 @@
 ────────────────────────────────────────────────────────────────────────────│
  QUESTION  SINGLE                                      selected 0 / max 1   │
  Read requests access outside the workspace:                                │
- /Users/example/shared/architecture.md                                      │
+ /Users/example/shared/architecture.md                                      │───────────────────────────────────────────
  2 answers  showing 1-2  choose 1                                           │
  › [ ] Allow once                                                           │
        Allow only this exact Read path for this tool call.                  │
@@ -37,4 +37,4 @@
  ↑ 0 answers above                                      ↓ 0 answers below   │
  ────────────────────────────────────────────────────────────────────────   │
  ↑↓ select  enter submit  esc cancel                                        │
- 聊天 · 上下文 ···············  — · — / 131k  ····························· ┴─────────────  go-code  dev  ──────────────
+ 聊天 · 上下文 ░░░░░░░░░░░░░░░  — · — / 131k  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ┴─────────────  go-code  dev  ──────────────

@@ -1,6 +1,6 @@
 ─────────────── model-a  12:00 ────────────────┬───────────── 活动 ─────────────
-   resume                                      │任务 0
-   Goal goal-p5 已恢复为 paused；使用 /goal    │Task controller is unavailable.
+   resume                                      │子代理 0
+   Goal goal-p5 已恢复为 paused；使用 /goal    │暂无子代理
    resume 继续。                               │
    Plan plan-p5 已恢复为 paused；使用 /plan    │
    resume 继续。                               │
@@ -10,15 +10,15 @@
                                                │
                                                │
                                                │
-                                               │令牌历史 · 主回合
-                                               │Turn avg — tok/s
-                                               │Σout —              — incl tools
+                                               │令牌历史              暂无流片段
+                                               │均速 —                    实时 —
+                                               │主回合输出 —              耗时 —
+                                               │────────────────────────────────
                                                │
-                                               │暂无流片段
-                                               │60s chart · recent       — tok/s
-                                               │Input —                 Output —
-                                               │Cache hit                      —
-                                               │Tools in —          main 0 calls
-───────────────────────────────────────────────│Σ session+tasks · tools ⊂ input
- › 输入你的问题 …         /help @文件 !shell   │Loading token ledger…
- 聊天 · 上下文  ···························  — ┴────────  go-code  dev  ────────
+                                               │累计输入（含子任务）           —
+                                               │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+                                               │缓存命中                       —
+                                               │其中工具 —             本轮 0 次
+───────────────────────────────────────────────│累计输出                       —
+ › 输入你的问题 …         /help @文件 !shell   │正在读取账本…
+ 聊天 · 上下文  ░░░░░░░░░░░░░░░░░░░░░░░░░░░  — ┴────────  go-code  dev  ────────
