@@ -124,7 +124,7 @@ func TestCaptureTokenMonitorVisualFixtures(t *testing.T) {
 		model.relayout()
 		model.refreshViewport()
 		view := model.View()
-		if !strings.Contains(ansi.Strip(view), "TOKEN HISTORY") {
+		if !strings.Contains(ansi.Strip(view), copyTokenHistory) {
 			t.Fatalf("%s did not render the fixed token history", fixture.name)
 		}
 		tokenMonitorWriteVisual(t, dir, fixture.name, fmt.Sprintf("Paw appModel.View · %d × %d cells", fixture.width, fixture.height), view)

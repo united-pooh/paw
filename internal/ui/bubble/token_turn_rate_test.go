@@ -95,13 +95,14 @@ func TestTokenHistoryLeadsWithWholeTurnAverage(t *testing.T) {
 	v.Rates.TurnAverage, v.Rates.TurnTokens = 12.5, 1000
 	v.Rates.TurnElapsed, v.Rates.TurnObserved = 80*time.Second, true
 	got := ansi.Strip(renderTokenHistory(v, 40, 18))
-	for _, want := range []string{"Turn avg 12.5 tok/s", "80.0s", "incl tools"} {
+	for _, want := range []string{"主回合输出 1000", "耗时 80.0秒"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "req avg") {
-		t.Fatal("still presenting last-request average as the primary metric")
+	_, readouts, _ := strings.Cut(got, "\n")
+	if !strings.HasPrefix(readouts, "均速 12.5/秒") {
+		t.Fatalf("whole-turn average is not the primary readout:\n%s", got)
 	}
 }
 
