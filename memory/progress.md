@@ -1,5 +1,99 @@
 # Progress
 
+## 待办与子代理正式接入（2026-11-07，已完成）
+
+- [x] 用户「落地」授权后实现可选 group/旧快照兼容、青色树形待办、完成删除线、阶段点击与受限区域滚动。
+- [x] Ctrl+G 双态停靠、窄屏回退、输入/viewport/鼠标坐标、清空快照释放空间、当前会话子代理底栏与隐藏刷新完成。
+- [x] 最终全仓41测试包、vet/build/diff通过；最终binary SHA256 b855b368e67cf23a60aae6e5fe148b06e9159e50cc6865e6755767a4697a3b7b。
+- [x] 原生PTY 48项/11帧通过，零模型请求、exit0；收起/展开/滚动/64列/80×16与草稿经独立复核。证据 .agent/visual/todo-dock/README.md；混合分组边界仅独立代码复核，未单独PTY补测。
+- [x] 预览程序 .agent/bin/paw-todo-dock 已构建；未替换日常安装、提交或推送，既有未提交改动保留。
+
+## TODO / subagent 视觉伴侣（2026-11-07，设计已对齐）
+
+- [x] 读取当前 dev 和已有 TUI，制作独立视觉伴侣 v2 并在 Codex 右侧打开；未改生产 Go 界面。
+- [x] 两态停靠、摘要左右、阶段展开、单层树、删除线、窄屏回退及输入区固定验证；16 项浏览器检查与独立复核通过。
+- [x] 修复原型长 TODO 挤掉侧栏页脚，保存六张 v2 截图与 `.agent/visual/todo-layout-demo/README.md`。
+- [x] 用户要求「subagents 改成子代理，TODO 改成待办」，并表示内容齐全；v3 已统一静态/动态/辅助标签，布局未变。收起、展开、窄屏可见文本与摘要显示规则通过，已保存两张 v3 图。
+- [x] 用户随后要求落地，正式接入已完成，见上方归档。原型会话 `.superpowers/brainstorm/65879-1794062138/` 与 `content/paw-todo-layout-v3.html` 保留；正式分组字段为可选 `group`。
+
+## 原失败题补跑并汇总总分（2026-11-07，已完成）
+
+- [x] 原30题summary确认22成功/8失败；largest本次fast有效失败复用。
+- [x] 7题driver已独立审核并冻结；Harbor先最多2并发，Pier随后串行。全仓41包Go通过；25源码/2binary及5helper指纹一致。缺失Pier镜像可延后准备，但每题模型前必须匹配原ID；后台拉取影响wall比较须注明。
+- [x] 执行7题：2026-11-07 22:09北京时间启动，host session37113/controller paw-failed-fast-20261107；code-from-image与gcode-to-text先跑。原镜像预拉host session72896已exit0，4/4原ID匹配，总准备1462.067秒、部分与Harbor重叠；绝不重复已存在attempt。每题保留状态与真实usage，持续跟进至终止。
+- [x] 首个新结果gcode-to-text：failure/reward0，Paw因上游显式SSE错误“Upstream stream ended before terminal chunk”退出1（consumer_error/other），未触发typed断流恢复；/app/out.txt缺失，pytest两失败。40请求/39完整usage观测2361913；agent674.623秒、verifier439.497秒、harness1140.574秒。kv-store-grpc随后自动启动。证据新run/gcode-error-evidence.json；此恢复缺口留待本批完成后处理，不在运行中改冻结版本。
+- [x] code-from-image有效失败：AgentTimeoutError/reward0，agent1201.497秒、verifier435.868秒、harness1663.502秒，目标output.txt缺失/pytest两失败。85请求84完整usage，观测5376803；1次摘要13.576秒/99273Token已含总量，主输入112042→26609但未交付。kv已自然结束进入verifier：35/35usage1188891，依赖TODO带blocked_reason，无重复自动续行，最终评分待出。
+- [x] Harbor三题均有效失败、无新增分。kv-store-grpc：reward0，无harness exception，pytest4通过3失败（缺grpc包）；35/35usage完整1188891，agent409.962秒/verifier309.409秒/harness744.988秒，后备RPC实现已保全但安装要求未满足。控制器自动进入Pier四题串行；当前carry-forward仍22/30、不能报最终复测总分。
+- [x] Pier首题expr环境启动约12分40秒（自带egress sidecar首次APT构建），2026-11-07 22:53:37北京时间开始模型请求；原task镜像匹配，之后才计5400秒agent预算。原生环境start为1800秒/最多2次尝试；未热改构建或helper。后续fastapi/httpx/meriyah仍排队。
+- [x] expr agent已于约2026-11-07 23:30北京时间结束并进入独立verifier：302/302请求usage完整22606144、2摘要、0API错误，commit e7eea8f/14文件/model.patch62839B（SHA9818aaaed157ecc718b4e0c12fd04858388cb339d04e76b7b1eb0db7087b5634）。全程1turn/1user_message，8TODO最终completed，无宿主自动续行；耗时主要为模型持续实现与扩展检查。判分待出，后三题未开始。
+- [x] expr正式success/reward1：独立f2p79/79、p2p66265/66265全过，302/302完整usage22606144；新增1分，carry-forward暂23/30（76.67%），最终分数仍待另外3题。2026-11-07 23:34:42北京时间fastapi开始模型，原镜像匹配、setup快速完成。
+- [x] FastAPI正式success/reward1：独立f2p137/137、p2p3134/3134；128/128完整usage9578449（input9495441/output83008），环境4.371896秒、agent989.721244秒、verifier73.515501秒、harness1089.475728秒。model.patch90437B/9文件/commit abd97a05；APT/COPY/chmod实际CACHED。累计24/30（80%）；HTTPX已自动开始，Meriyah待跑。HTTPX首请求出现一次协议恢复后继续，最终结果尚未知。
+- [x] HTTPX正式success/reward1：独立f2p122/122、p2p1272/1272；64逻辑请求/65HTTP attempts，64reported/63complete，observed4669779 tokens。原生参数协议错误和HTTP503各一次均自动恢复，partial/缺失usage不补零。环境4.260秒、agent719.488秒、verifier34.972秒、harness780.571秒；累计25/30（83.33%），Meriyah最后一题已自动开始。
+- [x] 最后Meriyah运行轨迹：首次实际编辑在首模型后731.412秒，此前122请求观测8635525 tokens；同一turn，无host续行/API重试。Vitest单次196.804秒自然返回94470 passed/1 failed（显式300秒上限），非超时。首摘要15.752秒/89940 tokens，主输入107424→29309；新增using测试已42全过，尚未正式判题。证据meriyah-investigation-audit.json及meriyah-vitest-wait-evidence.json。
+- [x] 7题批次2026-11-08 00:42:54北京时间exit0结束，wall9208.001608秒，无额外正式重试。Meriyah独立reward0：f2p46/49、p2p51469/51469；AST.kind及两项非空数组解构行为/诊断失败，自写快照未捕捉。241/241完整usage17792918，agent1939.571714秒、verifier256.990094秒、harness2229.417178秒。最终原22+新增Expr/FastAPI/HTTPX3题=25/30（83.33%），TB17/21、DeepSWE8/9。
+- [x] 独立raw reward/usage核对8/8匹配；新7观测>=63574897 tokens、892/896完整；含复用largest八项>=65884610、933/938完整，均值>=8235576.25 tokens/题。八项平均agent1129.110210秒、harness1484.028443秒。中文报告已写结果与总分.md；收尾diff检查通过。
+- [x] 独立汇总、中文报告及资源收尾通过：本轮无残留容器/helper/caffeinate，Jellyfin同ID/StartedAt healthy；冻结binary/helper/原证据均一致，当前源文件5处并行UI变化单列，不回退。最终报告已独立核对总分、usage、均值和计时口径。
+
+## newapi / deepseek/deepseek-v4.1-flash-fast 复跑（2026-11-07）
+
+- [x] 定位provider命名空间混淆：Paw providerID=newapi指向cpa网关，仅列deepseek-flash；当前active完整fast实际绑定unitedpooh→newapi.unitedpooh.top，无workspace/进程配置覆盖。已向用户说明并按其当前精确模型绑定继续。
+- [x] cpa上精确fast的Responses/Chat限输出诊断都400，usage未知，独立记录；正确绑定GET/models列出精确fast，Chat max/thinking限256输出探针HTTP200/stop/DONE/OK，真实usage34+13=47，2.879779秒（推理11已含output），不计正式题。
+- [x] configured-fast正式run结束：dsh-20261107-configured-fast-largest（host session45496退出0表示有效trial），provider unitedpooh、wire deepseek/deepseek-v4.1-flash-fast、Chat/nativeDeepSeek/max；结果failure/reward0/AgentTimeoutError。900秒预算耗尽，目标eigen.py与原文件逐字节相同；24passed/3speedup失败均来自未改原文件，不算模型成果。
+- [x] 独立统计完成：42请求/attempt，41完整usage，input2191194（含cache1927936）+output118519（含reasoning96140）=2309713已观测下界，末次未知。agent901.551秒、verifier80.685秒、harness1008.479秒；闭合模型809.998秒、44工具57.933秒。1次摘要14.929秒/106863Token已含总量，真实主输入115094→29301。没有模型重试；本轮容器清理完成，冻结源码/binary/helper指纹匹配。报告新run根结果与原因.md、independent-metrics.json。
+
+## newapi / deepseek/deepseek-v4.1-flash 未完成题复跑（2026-11-07）
+
+- [x] 用户澄清为Paw newapi，并在启动前更正精确模型为deepseek/deepseek-v4.1-flash；配置为Responses，凭据可解析。此前/models针对不带前缀名称的结论不适用于此名称。
+- [x] 四个Responses helper已冻结，host dry-run、AST、SSE/gzip错误原字节透传探针与独立审核通过；固定binary/镜像不变。
+- [x] 单次run dsh-20261107-newapi-responses-largest已结束（host session32614退出1）：newapi的Responses首请求HTTP400，code=model_not_found、param=model、message=unknown provider for model deepseek/deepseek-v4.1-flash。请求名称准确，未换名/重试。
+- [x] 1逻辑请求/1HTTP attempt，0usage/0工具；Token未知而非0。trial=infra_invalid/provider_usage_unavailable，网关路由拒绝不作为解题能力评分。环境3.920秒、agent1.435秒、verifier73.693秒、harness100.295秒（launcher102.991秒）；25源码/2binary及4helper哈希均匹配。容器已清理，仅保留用户Jellyfin运行。证据新run根run-outcome.json。
+- 用户随后补充正确名称带-fast后缀；此无-fast轮作为历史路由失败保留，新授权重跑见上方。
+
+## unitedpooh/deepseek-flash 未完成题复跑（2026-11-07）
+
+- [x] 确认最近未完成项largest-eigenval，上次在环境准备超时，Paw未启动；确认本地provider/model配置及凭据可解析。
+- [x] 独立新run驱动干跑通过；25源码/2binary指纹一致。复用已验证同源sidecar固定镜像0d2c7b…，取消45.194秒冗余APT构建并单独留证，正式overlay禁build。隔离配置显式DeepSeek adapter，日常配置不改。
+- [x] 正式run dsh-20261107-unitedpooh-deepseek-flash-largest启动后，用户改指定newapi/Command Code的deepseek-v4.1-flash。已按用户切换中止：先停Paw再停本轮容器，host session91838退出；operator-abort.json标user_requested_provider_switch并排除评分，旧证据保留。
+- [x] 停止前29请求/28完成，已实报784210 Token（input706654/output77556），在途末次未知，不能当完成题均值。当前无本轮活动容器，Jellyfin/旧取证容器未改。
+- [x] 用户确认新入口为Paw newapi，模型deepseek-v4.1-flash；不使用Command Code自身fast别名，新轮见上方。
+
+## DSH Standard 对齐与评测效率修复（2026-11-07）
+
+- [x] 复核当前 dev 与评测工作树差异；确认 3 道 Chat 断流退出、kv-store-grpc 4 次阻塞续行、轮内上下文维护缺口和 TODO 仓库副作用。
+- [x] 核对官方 Standard 固定版本源码与可移植策略（dsh-v0.1.0-rc.8）。
+- [x] 集成 DeepSeek 原生工具/历史适配和 Chat 有界断流恢复；本地 HTTP/Engine/JSONL 与真实隔离 CLI 探针通过。
+- [x] 修复轮内压力维护、历史增长和工具提示协议；合并旧摘要、保留最新 TODO/显式约束，摘要上限 8192 且拒收截断输出。
+- [x] 修复无进展/外部阻塞续行与 TODO 归档位置；保留 `-p` 未完成 TODO 自动续行。
+- [x] 核验中断后同会话继续与 Goal 未达标暂停状态；修复成功压缩两次即永停、连续压缩丢最新 TODO 与旧摘要累积。两组 28 步 CLI 探针通过。
+- [x] 全仓 41 个测试包通过；末次 7 个相关包 race、全仓 vet、Linux 构建和独立探针通过。既有归档路径断言随新位置更新，未新增仓库 Go 测试用例；另有本地隔离验证脚本。
+- [x] 同 deepseek-v4.1-flash/max 的有界两题尝试已结束：一个有效配对、一个新候选环境无效。旧 candidate 人工终止并排除评分；摘要修复后使用新 run ID 复验。原评测只读，旧证据 `.agent/verification/dsh-standard/real-comparison/dsh-20261107-comparison/`。
+  - baseline regex-log 已通过：agent 356.840s、verifier 513.520s、总墙钟 897.515s；20 请求，575954 Token，全覆盖。largest-eigenval 达 900s 任务上限，数值测试通过、4 项性能门槛未过；49 请求中 48 有完整用量，已观测 3748220 Token。汇总为运行目录内 `comparison-metrics.json`。
+  - candidate 两项真实模型 smoke 通过后，Pier 的 `down --rmi all` 删掉共享 Ubuntu 镜像，timeout smoke 在 agent 启动前拉取失败。已恢复完全相同 image ID，仅补超时清理 smoke（通过），候选 regex 随后因摘要把“最后日期”改成“唯一日期”且写错已验证路径而人工终止；旧证据保留，largest 未启动。已观测 1800891 Token（65/67 usage），不可记作完成题均值。
+  - [x] 摘要改为完整原生前缀和当前 TurnState，保留任务、tail修订和TODO；3个真实CLI本地场景+tail race+readyTODO复验通过。修复小旧摘要重复压缩导致额外请求；全仓41包、loop/task race、vet通过。
+  - [x] 按用户最新要求改为真实usage优先：不再取字符估算较大值，区分缺失usage回退、摘要成本及主对话上下文、裁剪后旧usage失效。ASCII估算修正仅用于无真实usage回退；容量和max设置不变。14项独立race、3个摘要CLI、tail保留、readyTODO通过；最终全仓41包、vet、loop/task race全过。
+  - [x] 收紧无关环境/外网探索，保留必要依赖诊断；源码/二进制已冻结。
+  - [x] 新candidate真实对照结束：run ID dsh-20261107-objective-prefix，Linux SHA996f08ec61270f3af2e6ab8dfcfe6afe31cc1a5d2bef06d6336df56263d3c3ab；smoke全通过，regex正式success/reward1：14请求/292631真实Token/0摘要，agent213.998s、verifier782.733s（Python测试0.05s）、总1022.647s。唯一有效配对的agent时间下降40.03%、Token下降49.19%，整题墙钟因下载增加13.94%；不外推全量均值。largest为环境启动600.112秒超时，infra_invalid、0模型请求、无评分，不纳入Token均值。构建已终止，无本轮活动容器；没有重跑。baseline复用，旧candidate排除；不安装/提交/推送。
+
+- 待后续独立计费审计：部分 Responses failed/incomplete usage 已保存在 attempt telemetry，但未传给 loop session ledger。不能把缺失值当0；若修复，需要同时处理 transport 内部重试按 attempt 累计而非单 request max 的契约，本轮不改该重试语义。
+- 后续基础设施独立改进：预构建固定digest的Squid sidecar，两变体共享同一镜像，避免环境启动依赖APT下载。本轮未改原评测条件，缓存失效原因尚未证实。
+
+## 令牌侧栏图形读数（2026-11-06，已验证）
+
+- [x] 确认图形优先与中文布局，核对账本统计口径。
+- [x] 接入中文累计读数、缓存分段条及部分覆盖标记，更新既有文案和快照预期。
+- [x] 原生 PTY 验证完整账本和 65×24 窄屏，已有 fixture 验证部分账本和中性轨道。全仓 Go 测试、vet、diff 检查通过。
+- [x] 深浅主题及窄屏截图见 `.agent/visual/token-history-zh.md`。
+- [x] 按反馈将未知占比的单点轨道换成细虚线，刷新既有恢复界面快照。Bubble 套件和渲染 fixture 通过。
+- [x] 按补充反馈统一上下文与累计输入轨道，未知用量用空心格，已知用量用实心形状，输出波形沿用点阵。Bubble 套件、vet 与渲染 fixture 通过。
+- [x] 按用户截图恢复每格多个点的浅纹 `░`，用于接收中两处用量轨与累计输入的非缓存段。底栏缓存用更密的 `▒` 区分。Bubble 套件、vet 与渲染 fixture 通过。
+
+## 令牌历史波形（2026-11-06，已验证）
+
+- [x] 定位活动侧栏绘图与空态分支，原有 Bubble 测试基线通过。
+- [x] 实现 60 秒峰值投影、居中横线、镜像点阵和随离轴距离渐红的主题色。
+- [x] 刷新两张既有终端快照。全仓 Go 测试、vet 和 diff 检查通过。
+- [x] 用原生 PTY 采集并复核两套主题的空闲与接收中帧，证据在 `.agent/visual/token-history-wave.md`。
+
 ## 异步模型发现（2026-10-26，已完成）
 
 - [x] 复现 TestManagerAsyncDiscoveryDoesNotBlockOpen 的 5 秒超时；确认 AsyncModelDiscovery 未被读取。
@@ -551,3 +645,9 @@
 - [x] /config 服务商面板增加“自动注册模型”开关 <!-- todo:ui -->
 - [x] 更新 schema、docs（usage/model）、CHANGELOG <!-- todo:docs -->
 - [x] 阅读论文正文与附录，提取评测协议、模型和运行环境 <!-- todo:paper -->
+
+## 输入框底边配色（2026-11-06，已验证）
+
+- [x] 在 Default 主题原生 PTY 复现底边左右轨道与居中用量取色分离。
+- [x] 统一底部容量轨与完整读数的强调色，涵盖空余容量和未知用量。
+- [x] 三模式 PTY 对照及独立核验、既有深浅色 View fixture、全仓 Go 测试和 vet 通过。视觉证据见 `.agent/visual/input-bottom-border.md`。
