@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -230,6 +231,27 @@ func (runner *Engine) SetTodoBroker(broker *todo.Broker) {
 		return
 	}
 	runner.gate.setBroker(broker)
+}
+
+func (runner *Engine) clearCompletedTodo(ctx context.Context, broker *todo.Broker) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	snapshot, ok := broker.Latest()
+	if !ok || !snapshot.AllCompleted() {
+		return nil
+	}
+	cleared := todo.Snapshot{Items: []todo.Item{}, UpdatedAt: runner.now().UTC()}
+	if store, ok := runner.store.(interface {
+		AppendTodoSnapshot(context.Context, string, todo.Snapshot) (int64, error)
+	}); ok {
+		// Persist the clear before publishing so resume cannot restore the old list.
+		if _, err := store.AppendTodoSnapshot(ctx, runner.sessionID, cleared); err != nil {
+			return fmt.Errorf("clear completed todo: %w", err)
+		}
+	}
+	broker.Publish(cleared)
+	return nil
 }
 
 func (runner *Engine) autoContinueState() (AutoContinueConfig, *todo.Broker) {

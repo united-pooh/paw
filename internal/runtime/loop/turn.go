@@ -33,13 +33,16 @@ func (runner *Engine) runTurn(ctx context.Context, userInput message.Message) (T
 }
 
 func (runner *Engine) runTurnWithTiming(ctx context.Context, userInput message.Message, timing *TurnTiming) (TurnExecution, error) {
-	if runner == nil {
-		return TurnExecution{}, fmt.Errorf("runner 未初始化")
+	if err := runner.validate(); err != nil {
+		return TurnExecution{}, err
 	}
 	turnCtx, finishTurn := runner.beginActiveTurn(ctx)
 	defer finishTurn()
 	ctx = turnCtx
 	config, broker := runner.gate.state()
+	if err := runner.clearCompletedTodo(ctx, broker); err != nil {
+		return TurnExecution{}, err
+	}
 
 	var execution TurnExecution
 	var err error
