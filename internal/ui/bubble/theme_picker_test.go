@@ -42,8 +42,8 @@ func TestThemePickerNavigationPreviewsWithoutSaving(t *testing.T) {
 	model.openThemePicker()
 	next, _ := model.handleThemePickerKey(tea.KeyMsg{Type: tea.KeyDown})
 	got := next.(appModel)
-	if got.theme.ID != theme.TokyoNight {
-		t.Fatalf("preview theme = %q, want %q", got.theme.ID, theme.TokyoNight)
+	if got.theme.ID != theme.DefaultDark {
+		t.Fatalf("preview theme = %q, want %q", got.theme.ID, theme.DefaultDark)
 	}
 	if len(controller.saved) != 0 {
 		t.Fatalf("preview saved %d configs", len(controller.saved))
@@ -58,7 +58,7 @@ func TestThemePickerEscapeRestoresOriginal(t *testing.T) {
 	model = next.(appModel)
 	next, _ = model.handleThemePickerKey(tea.KeyMsg{Type: tea.KeyEsc})
 	model = next.(appModel)
-	if model.theme.ID != theme.Default || model.themePicker != nil {
+	if model.theme.ID != theme.DefaultAuto || model.themePicker != nil {
 		t.Fatalf("theme/picker = %q/%#v", model.theme.ID, model.themePicker)
 	}
 	if len(controller.saved) != 0 {
@@ -77,7 +77,7 @@ func TestThemePickerEnterSavesAndCloses(t *testing.T) {
 	if model.themePicker != nil || len(controller.saved) != 1 {
 		t.Fatalf("picker/saved = %#v/%#v", model.themePicker, controller.saved)
 	}
-	if controller.saved[0].UI.Theme != theme.TokyoNight {
+	if controller.saved[0].UI.Theme != theme.DefaultDark {
 		t.Fatalf("saved theme = %q", controller.saved[0].UI.Theme)
 	}
 }
@@ -90,12 +90,12 @@ func TestThemePickerSaveFailureKeepsPreviewOpen(t *testing.T) {
 	model = next.(appModel)
 	next, _ = model.handleThemePickerKey(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(appModel)
-	if model.themePicker == nil || model.theme.ID != theme.TokyoNight || model.themePicker.saveError == "" {
+	if model.themePicker == nil || model.theme.ID != theme.DefaultDark || model.themePicker.saveError == "" {
 		t.Fatalf("failed save state = theme:%q picker:%#v", model.theme.ID, model.themePicker)
 	}
 	next, _ = model.handleThemePickerKey(tea.KeyMsg{Type: tea.KeyEsc})
 	model = next.(appModel)
-	if model.theme.ID != theme.Default || model.themePicker != nil {
+	if model.theme.ID != theme.DefaultAuto || model.themePicker != nil {
 		t.Fatalf("escape after failure = theme:%q picker:%#v", model.theme.ID, model.themePicker)
 	}
 }
@@ -111,7 +111,7 @@ func TestThemePickerHomeAndEnd(t *testing.T) {
 	}
 	next, _ = model.handleThemePickerKey(tea.KeyMsg{Type: tea.KeyHome})
 	model = next.(appModel)
-	if model.theme.ID != theme.Default {
+	if model.theme.ID != theme.DefaultAuto {
 		t.Fatalf("home theme = %q", model.theme.ID)
 	}
 }

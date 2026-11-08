@@ -36,7 +36,9 @@ func palette(bg, surface, fg, muted, primary, secondary, cyan, green, yellow, re
 }
 
 var builtIns = []Theme{
-	{ID: Default, Name: "Default", Mode: ModeTerminal, Colors: terminalPalette()},
+	{ID: DefaultDark, Name: "Default Dark", Mode: ModeDark, Colors: palette("#20242b", "#292f38", "#e4e8ef", "#8b95a5", "#8ab4f8", "#c4a7e7", "#78c6d5", "#96c78c", "#e5bf78", "#ed8796", "#253b2d", "#402b33")},
+	{ID: DefaultLight, Name: "Default Light", Mode: ModeLight, Colors: palette("#f6f7f9", "#e8ebf0", "#263142", "#5c687a", "#285fa8", "#7049a8", "#086b80", "#346a32", "#855900", "#ac3445", "#e3efdf", "#f9e2e6")},
+	{ID: Default, Name: "Terminal", Mode: ModeTerminal, Colors: terminalPalette()},
 	{ID: TokyoNight, Name: "Tokyo Night", Mode: ModeDark, Colors: palette("#1a1b26", "#24283b", "#c0caf5", "#565f89", "#7aa2f7", "#bb9af7", "#7dcfff", "#9ece6a", "#e0af68", "#f7768e", "#14302a", "#2e1420")},
 	{ID: TokyoNightStorm, Name: "Tokyo Night Storm", Mode: ModeDark, Colors: palette("#24283b", "#1f2335", "#c0caf5", "#737aa2", "#7aa2f7", "#bb9af7", "#7dcfff", "#9ece6a", "#e0af68", "#f7768e", "#14302a", "#2e1420")},
 	{ID: TokyoNightLight, Name: "Tokyo Night Light", Mode: ModeLight, Colors: palette("#d5d6db", "#cbccd1", "#343b58", "#6172b0", "#34548a", "#5a4a78", "#0f4b6e", "#485e30", "#8f5e15", "#8c4351", "#d8e8d0", "#f0d8d8")},
@@ -55,6 +57,11 @@ func init() {
 			}
 		}
 	}
+	override(DefaultLight, func(p *Palette) {
+		secondaryText := blendHex(p.TerminalBackground, p.Body, 0.72)
+		p.LabelSystem, p.MarkdownQuote, p.ContextFree = secondaryText, secondaryText, secondaryText
+		p.ContextCache = "#4964a6"
+	})
 	override(TokyoNight, func(p *Palette) { p.SyntaxNumber = "#ff9e64" })
 	override(TokyoNightStorm, func(p *Palette) {
 		p.SyntaxNumber = "#ff9e64"
@@ -76,6 +83,8 @@ func init() {
 		p.SyntaxKeyword = "#fb4934"
 		p.SyntaxNumber = "#d3869b"
 	})
+	dark, _ := ByID(DefaultDark)
+	builtIns = append([]Theme{{ID: DefaultAuto, Name: "Default (Auto)", Mode: ModeAuto, Colors: dark.Colors}}, builtIns...)
 }
 
 // Empty roles inherit the terminal defaults; indexed colors use its ANSI palette.

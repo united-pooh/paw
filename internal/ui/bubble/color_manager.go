@@ -94,7 +94,7 @@ type ColorManager struct{ palette theme.Palette }
 func NewColorManager(palette theme.Palette) ColorManager { return ColorManager{palette: palette} }
 
 func defaultColorManager() ColorManager {
-	item, _ := theme.ByID(theme.Default)
+	item, _ := theme.ByID(theme.DefaultAuto)
 	return NewColorManager(item.Colors)
 }
 

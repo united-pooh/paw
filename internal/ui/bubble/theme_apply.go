@@ -26,7 +26,7 @@ func (m *appModel) activateThemeStyles() {
 }
 
 func (m *appModel) applyTheme(id theme.ThemeID) error {
-	next, ok := theme.ByID(id)
+	next, ok := resolveTheme(id, m.systemThemeMode)
 	if !ok {
 		return fmt.Errorf("theme %q is not registered", id)
 	}
@@ -48,7 +48,7 @@ func (m *appModel) applyTextareaTheme() {
 	bg := m.styles.Colors.LipglossColor(colorTerminalBackground)
 	base := lipgloss.NewStyle().Background(bg)
 	text := m.styles.Body
-	placeholder := lipgloss.NewStyle().Foreground(m.styles.Colors.LipglossColor(colorMarkdownRule)).Background(bg)
+	placeholder := lipgloss.NewStyle().Foreground(m.styles.Colors.LipglossColor(colorContextFree)).Background(bg)
 	applyTextareaStyles(&m.input, base, text, placeholder)
 }
 

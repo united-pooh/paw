@@ -99,7 +99,7 @@ const (
 func DefaultConfig() Config {
 	return Config{
 		Task:               TaskConfig{DefaultContextMode: ContextModeEmpty, DefaultRunMode: RunModeBackground, WaitTimeoutMs: DefaultTaskWaitTimeoutMs},
-		UI:                 UIConfig{Theme: theme.Default, ContextLimitTokens: DefaultContextLimitTokens, ContextMeterLocation: MeterLocationInputAbove, TranscriptOutputMode: TranscriptOutputModeLine},
+		UI:                 UIConfig{Theme: theme.DefaultAuto, ContextLimitTokens: DefaultContextLimitTokens, ContextMeterLocation: MeterLocationInputAbove, TranscriptOutputMode: TranscriptOutputModeLine},
 		ContextMaintenance: DefaultContextMaintenanceConfig(),
 		ContextCompression: DefaultContextCompressionConfig(),
 	}

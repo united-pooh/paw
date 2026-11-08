@@ -14,7 +14,7 @@ func TestListReturnsStableBuiltInOrder(t *testing.T) {
 	for _, item := range gotThemes {
 		got = append(got, item.ID)
 	}
-	want := []ThemeID{Default, TokyoNight, TokyoNightStorm, TokyoNightLight, CatppuccinMocha, Dracula, GruvboxDark}
+	want := []ThemeID{DefaultAuto, DefaultDark, DefaultLight, Default, TokyoNight, TokyoNightStorm, TokyoNightLight, CatppuccinMocha, Dracula, GruvboxDark}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("theme order = %#v, want %#v", got, want)
 	}
@@ -47,8 +47,8 @@ func TestBuiltInThemesHaveCompleteTrueColorPalettes(t *testing.T) {
 			}
 		}
 	}
-	if len(seen) != 7 {
-		t.Fatalf("theme count = %d, want 7", len(seen))
+	if len(seen) != 10 {
+		t.Fatalf("theme count = %d, want 10", len(seen))
 	}
 }
 
@@ -75,7 +75,7 @@ func TestSyntaxRolesAreDistinctWithinTheme(t *testing.T) {
 }
 
 func TestNormalizeID(t *testing.T) {
-	tests := map[string]ThemeID{" TOKYO-NIGHT ": TokyoNight, "DrAcUlA": Dracula, "": Default, "unknown": Default}
+	tests := map[string]ThemeID{" TOKYO-NIGHT ": TokyoNight, "DrAcUlA": Dracula, "": DefaultAuto, "unknown": DefaultAuto}
 	for input, want := range tests {
 		if got := NormalizeID(input); got != want {
 			t.Fatalf("NormalizeID(%q) = %q, want %q", input, got, want)
@@ -83,13 +83,16 @@ func TestNormalizeID(t *testing.T) {
 	}
 }
 
-func TestTokyoNightLightIsOnlyLightTheme(t *testing.T) {
+func TestBuiltInThemeModes(t *testing.T) {
 	for _, item := range List() {
 		want := ModeDark
+		if item.ID == DefaultAuto {
+			want = ModeAuto
+		}
 		if item.ID == Default {
 			want = ModeTerminal
 		}
-		if item.ID == TokyoNightLight {
+		if item.ID == TokyoNightLight || item.ID == DefaultLight {
 			want = ModeLight
 		}
 		if item.Mode != want {

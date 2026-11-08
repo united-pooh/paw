@@ -52,9 +52,9 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 		}
 		setter.SetContextLimitTokens(model.ResolveContextLimitTokens(modelCfg, cfg.UI.ContextLimitTokens))
 	}
-	selectedTheme, ok := theme.ByID(cfg.UI.Theme)
+	selectedTheme, ok := resolveTheme(cfg.UI.Theme, theme.ModeDark)
 	if !ok {
-		selectedTheme, _ = theme.ByID(theme.Default)
+		selectedTheme, _ = resolveTheme(theme.DefaultAuto, theme.ModeDark)
 	}
 	styles := NewStyleSet(selectedTheme.Colors)
 
@@ -71,15 +71,16 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 	}
 	skillRoot, _ := os.Getwd()
 	model := appModel{
-		theme:          selectedTheme,
-		styles:         styles,
-		ctx:            ctx,
-		runner:         runner,
-		sessionID:      sessionID,
-		modelConfig:    controller,
-		settingsConfig: settingsController,
-		taskController: taskController,
-		sessionStore:   sessionStore,
+		theme:           selectedTheme,
+		systemThemeMode: theme.ModeDark,
+		styles:          styles,
+		ctx:             ctx,
+		runner:          runner,
+		sessionID:       sessionID,
+		modelConfig:     controller,
+		settingsConfig:  settingsController,
+		taskController:  taskController,
+		sessionStore:    sessionStore,
 		activity: activityState{
 			// 侧栏默认关闭（约 36% 宽的黄金位置还给 transcript）；
 			// ctrl+G 唤出不变，开关状态不持久化。
@@ -122,6 +123,11 @@ func newModel(ctx context.Context, runner Runner, sessionID string, controller M
 // Init 返回 Bubble Tea 启动时需要执行的初始命令。
 func (m appModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.input.Focus(), cursorFrameTick()}
+	if m.theme.ID == theme.DefaultAuto {
+		cmds = append(cmds, detectSystemThemeCmd(m.ctx))
+	} else {
+		cmds = append(cmds, systemThemeTickCmd(m.ctx))
+	}
 	if m.selectionBroker != nil {
 		cmds = append(cmds, waitSelectionBrokerEventCmd(m.ctx, m.selectionBroker))
 	}
@@ -143,6 +149,14 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.syncTokenMonitorSession()
 
 	switch msg := msg.(type) {
+	case systemThemeTickMsg:
+		if m.theme.ID == theme.DefaultAuto {
+			return m, detectSystemThemeCmd(m.ctx)
+		}
+		return m, systemThemeTickCmd(m.ctx)
+	case systemThemeResultMsg:
+		m.applySystemThemeResult(msg)
+		return m, systemThemeTickCmd(m.ctx)
 	case tokenMonitorStartMsg:
 		m.tokenMonitor.live.start(msg.id, msg.at)
 		cmd := m.tokenMonitorCommand()

@@ -35,11 +35,15 @@ type ThemeID string
 type ThemeMode string
 
 const (
-	ModeTerminal ThemeMode = "auto"
+	ModeTerminal ThemeMode = "term"
+	ModeAuto     ThemeMode = "auto"
 	ModeDark     ThemeMode = "dark"
 	ModeLight    ThemeMode = "light"
 
 	Default         ThemeID = "default"
+	DefaultAuto     ThemeID = "default-auto"
+	DefaultDark     ThemeID = "default-dark"
+	DefaultLight    ThemeID = "default-light"
 	TokyoNight      ThemeID = "tokyo-night"
 	TokyoNightStorm ThemeID = "tokyo-night-storm"
 	TokyoNightLight ThemeID = "tokyo-night-light"
@@ -114,7 +118,7 @@ func NormalizeID(value string) ThemeID {
 	if _, ok := ByID(id); ok {
 		return id
 	}
-	return Default
+	return DefaultAuto
 }
 
 func ByID(id ThemeID) (Theme, bool) {

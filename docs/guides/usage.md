@@ -182,7 +182,10 @@ enabled = true
 - `/export` 默认导出到 `~/.paw/projects/<id>/exports/conversation-YYYY-MM-DD-HHMMSS.txt`（`PAW_CONFIG_HOME` 可替换 `~/.paw`）；优先按 runner 的显式工作区定位项目，未提供时使用当前目录。也支持工作区内显式路径，保持 `.txt` 导出；导出文件权限为 `0600`
 - `/setting` 无参数时与 `/config` 打开统一配置中心；`/setting translate on|off` 是只改内存、立即生效且不写盘的会话级动态开关；`/config reload|status|path` 用于热重载、诊断和路径查询
 - `/theme` 打开内置主题选择器；↑/↓、j/k、Home/End 会实时预览，Enter 保存到统一全局配置目录的 `settings.json`，Esc 恢复打开前的主题且不写盘
-- `default` 跟随终端：使用终端默认前景/背景与 ANSI 调色板，选区反色；Ghostty 的透明度由 Ghostty 自身设置控制。其他内置主题继续使用固定配色。切回 `default` 会恢复终端光标颜色。
+- `default-auto`（Default (Auto)）是新配置的默认主题：根据运行 Paw 的系统外观，在完整深色/浅色配色间切换；运行中约每 2 秒同步一次，不按固定时刻判断白天或夜晚。
+- `default-dark`（Default Dark）与 `default-light`（Default Light）可固定深色/浅色配色，包括用户消息整行背景、吸顶消息、代码、工具详情和选区，不受系统外观切换影响。
+- 自动模式读取 macOS 系统外观、Windows 应用模式或 Linux GNOME 的 `color-scheme`；首次读取前暂用深色，读取失败保留最近颜色，并在主题选择器显示提示。不支持的桌面环境可手动选择深浅色；SSH 中读取的是 Paw 所在主机的系统外观。
+- `default` 在选择器中显示为 Terminal，继续跟随终端默认前景/背景与 ANSI 调色板，选区反色；已有配置无需迁移。Ghostty 的透明度由 Ghostty 自身设置控制，切回 Terminal 会恢复终端光标颜色。
 - `/sessions` 列出所有历史会话（ID 前缀、日期、文件大小、首条消息），选中条目后直接恢复该会话
 - `/subagent` 支持 `empty` 与 `fork` 两种上下文模式，以及 `sync` 与 `background` 两种运行模式；后台任务完成后会发 UI 系统通知，并把截断后的结果作为补充上下文注入后续模型轮次（完整结果仍在任务 output/transcript 路径中）
 - `/streamma <prompt>` 显式把当前任务交给 StreamMA runtime；runtime 会按任务选择一个小型 DAG，并把每个 StreamMA worker 映射为真实 subagent。一次 run 内同一个 logical agent 复用同一个 subagent session 作为真实 `ctx_a`；首次调用写入 agent base context + problem，后续调用只追加新 inbound step。只有同步到精确 `END_STEP` step 后才继续在 DAG 中传播；缺失 `END_STEP` 会失败而不是在 agent `Done` 时兜底传播，最终由 finalizer 的最后一步作为 assistant 回复写回会话历史。可选参数包括 `--profile`、`--topology`、`--agents`/`--a`、`--steps`/`--s`、`--protocol`；默认 `adaptive` profile 会保留任务模板图，显式 `--topology` 或 `paper` profile 可按指定拓扑生成 chain/tree/graph 形状
@@ -307,7 +310,7 @@ selection-foreground = #c0caf5
     "default_run_mode": "sync"
   },
   "ui": {
-    "theme": "default",
+    "theme": "default-auto",
     "context_limit_tokens": 0,
     "context_meter_location": "input-above"
   },
@@ -332,7 +335,7 @@ selection-foreground = #c0caf5
 
 上下文维护按 50%/60%/80%/90% 压力阈值依次提示、裁剪旧大型 Tool Result、执行摘要压缩并在高压时强制压缩。被重写的原始消息会先归档到 `~/.paw/projects/<id>/sessions/<session-id>/compactions/`（`PAW_CONFIG_HOME` 可替换 `~/.paw`）；session journal（`transcript.jsonl`）仍保留完整 Tool Result，归档只服务于压缩投影、去重和恢复。
 
-内置 True Color 主题 ID：`default`、`tokyo-night`、`tokyo-night-storm`、`tokyo-night-light`、`catppuccin-mocha`、`dracula`、`gruvbox-dark`。首版不支持自定义主题文件、256 色降级或 `NO_COLOR`。
+内置固定配色主题 ID：`default-dark`、`default-light`、`tokyo-night`、`tokyo-night-storm`、`tokyo-night-light`、`catppuccin-mocha`、`dracula`、`gruvbox-dark`；跟随系统外观为 `default-auto`，终端原生模式为 `default`。尚不支持自定义主题文件。
 
 ## 启动要求
 

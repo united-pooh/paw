@@ -100,10 +100,16 @@ func (m appModel) renderThemePickerBox() string {
 	items := theme.List()
 	lines := []string{m.styles.ModalTitle.Render("Theme")}
 	available := maxInt(1, m.currentLayout().transcriptHeight-7)
+	if m.theme.ID == theme.DefaultAuto {
+		available = maxInt(1, available-1)
+	}
 	start := maxInt(0, m.themePicker.selectedIdx-available+1)
 	end := minInt(len(items), start+available)
 	for i := start; i < end; i++ {
 		item := items[i]
+		if item.ID == theme.DefaultAuto {
+			item, _ = resolveTheme(item.ID, m.systemThemeMode)
+		}
 		mark := "  "
 		if i == m.themePicker.selectedIdx {
 			mark = "› "
@@ -122,6 +128,9 @@ func (m appModel) renderThemePickerBox() string {
 	}
 	if m.themePicker.saveError != "" {
 		lines = append(lines, m.styles.LabelError.Render(m.themePicker.saveError))
+	}
+	if m.theme.ID == theme.DefaultAuto {
+		lines = append(lines, m.styles.StatusMuted.Render(m.systemThemeStatus()))
 	}
 	lines = append(lines, m.styles.StatusMuted.Render("↑/↓ preview  enter save  esc cancel"))
 	return m.renderModalPanel(strings.Join(lines, "\n"))

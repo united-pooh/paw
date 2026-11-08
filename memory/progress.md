@@ -1,5 +1,30 @@
 # Progress
 
+## 默认主题深浅配色与系统外观（2026-11-08，已完成）
+
+- [x] 用户确认完整 Default Dark / Default Light 并保留 Terminal，随后要求跟随系统外观；新增 `default-auto` 为默认项，旧显式 `default` 保留终端语义。
+- [x] 完整主题覆盖普通/吸顶用户输入、代码、工具、选区；修复 placeholder 使用边框颜色导致过淡，浅色辅助文字加强对比度。
+- [x] Auto 保持配置 ID，通过后台单链2秒检查更新配色，不改写设置；检测失败保留最近配色并提示，固定主题不受影响。macOS原生/无cgo、GNOME、Windows检测路径完成。
+- [x] 最终全仓41测试包、vet、构建、help、格式/diff通过；只更新既有测试期望，无新测试。独立对比度/状态机审查通过；原生与JXA本机只读检测均light，Linux/Windows检测包交叉编译通过。
+- [x] 固定主题64项/16图、Auto动态20项/12图通过；最终正式binary真实macOS浅色启动4图通过。动态系统源仅通过Go overlay模拟，未切换真实系统外观；草稿/滚动/错误/取消/手动固定/Auto保存已验证，模型请求0、进程全退出。
+- [x] 预览 `.agent/bin/paw-theme-preview` SHA256 `ef6147ca9a0ad2b0d7e47e0901854409f16603df9b77a4c77981239eb31abbeb`；证据 `.agent/visual/default-theme/README.md`。未安装、改用户配置、提交或推送；此前无关改动保留。
+
+## DeepSeek 推理回传与旧会话兼容（2026-11-08，已完成）
+
+- [x] 用户明确授权直接修复；保持显式 generic 工具 schema，DeepSeek Chat 复用原生历史编码，支持网关模型名前缀。
+- [x] 旧 generic/空 adapter 与 deepseek 的推理兼容仅放宽 adapter，provider/profile/transport/完整模型仍匹配；原始工具参数保留严格来源约束，无需迁移会话。同步缺失 usage 时的估算，真实 usage 优先未变。
+- [x] 全仓41包、vet/build、model/loop/session定向race通过；独立代码及恢复路径复核通过。最终本地HTTP旧版9项预期失败、新版35/35，另9项客户端检查通过；逐call_id配对和工具schema前后相同已核对，未新增测试文件。
+- [x] 对用户授权旧会话只读离线检查：206条assistant、192段推理、1,021,697 UTF-8字节，两种adapter逐项完整相等。没有向上游发送真实历史或改写原会话。
+- [x] 已原子更新 `/Users/united_pooh/go/bin/paw`，SHA256 `65f4a9d5188a2e640e2bd613ba60c2dc8f2861215f287b142b03226135210281`，包含前阶段TODO修复；原安装备份为 `.agent/verification/reasoning-replay/installed-before/paw`。帮助入口通过，未修改配置、终止旧进程、提交或推送；正在运行的会话需重启恢复后生效。证据 `.agent/verification/reasoning-replay/README.md` 与 `installation.json`。
+
+## 完成待办跨用户轮清理（2026-11-08）
+
+- [x] grill-me 对齐：普通聊天全部完成的列表保留至下一条消息实际执行；未完成/阻塞保留，队列按执行边界处理，steer不清，历史归档保留。
+- [x] 两处运行时修改：先持久化空快照再发布；复用现有 UI 清空布局，避免恢复复活。文档同步，独立审查无阻塞项。
+- [x] 全仓既有 Go 检查41包、vet、隔离构建通过；独立4包 Todo/Archive/ResumeRebind/AutoContinue/Steer 定向 race 通过，未新增测试。
+- [x] 原生 PTY 同场景旧版6项清理断言失败、新版39/39通过；10帧、9次localhost合成请求、退出0。普通/侧栏/恢复/blocked/队列均经独立看图和持久化核对，证据 `.agent/visual/todo-turn-lifecycle/README.md`。未替换日常安装、提交或推送。
+- [x] 后续用户已授权修复 DeepSeek 推理回传与旧会话兼容，实际出站与旧历史已核查；详见上方完成记录。
+
 ## 待办与子代理正式接入（2026-11-07，已完成）
 
 - [x] 用户「落地」授权后实现可选 group/旧快照兼容、青色树形待办、完成删除线、阶段点击与受限区域滚动。

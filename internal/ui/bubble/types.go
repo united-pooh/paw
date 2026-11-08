@@ -481,6 +481,8 @@ type appModel struct {
 	tokenMonitor              tokenMonitorState
 	ctx                       context.Context
 	theme                     theme.Theme
+	systemThemeMode           theme.ThemeMode
+	systemThemeError          error
 	styles                    StyleSet
 	themePicker               *themePickerState
 	runner                    Runner

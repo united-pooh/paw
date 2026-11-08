@@ -271,7 +271,7 @@ func TestNormalizeTheme(t *testing.T) {
 		t.Fatalf("theme = %q", got)
 	}
 	cfg.UI.Theme = "not-installed"
-	if got := Normalize(cfg).UI.Theme; got != theme.Default {
+	if got := Normalize(cfg).UI.Theme; got != theme.DefaultAuto {
 		t.Fatalf("theme = %q", got)
 	}
 }
@@ -290,7 +290,7 @@ func TestNewDefaultControllerIgnoresProjectSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := controller.CurrentSettings().UI.Theme; got != theme.Default {
+	if got := controller.CurrentSettings().UI.Theme; got != theme.DefaultAuto {
 		t.Fatalf("theme = %q", got)
 	}
 }
@@ -304,7 +304,7 @@ func TestLoadLegacyGlobalJSONDefaultsTheme(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.UI.Theme != theme.Default {
+	if cfg.UI.Theme != theme.DefaultAuto {
 		t.Fatalf("theme = %q", cfg.UI.Theme)
 	}
 }
