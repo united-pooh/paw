@@ -11,6 +11,9 @@ func (OpenAICompatibleAdapter) PrepareTools(tools []ToolDefinition) (PreparedToo
 }
 
 func (OpenAICompatibleAdapter) BuildChatCompletionsRequest(cfg Config, messages []message.Message, tools PreparedToolSet, stream bool) (ChatCompletionsRequest, error) {
+	if UsesDeepSeekChatHistory(cfg) {
+		return (DeepSeekAdapter{}).BuildChatCompletionsRequest(cfg, messages, tools, stream)
+	}
 	return buildOpenAICompatibleChatCompletionsRequest(cfg, messages, tools, stream)
 }
 

@@ -322,7 +322,9 @@ func estimateMessageTokens(messages []message.Message) int {
 	for _, msg := range messages {
 		total += 4
 		total += estimateMessageContentTokens(msg)
-		if msg.Role == message.RoleAssistant && msg.GeneratedBy != nil && msg.GeneratedBy.Transport == "openai-compatible" && msg.GeneratedBy.Adapter == "deepseek" {
+		if origin := msg.GeneratedBy; msg.Role == message.RoleAssistant && origin != nil && origin.Transport == "openai-compatible" && model.UsesDeepSeekChatHistory(model.Config{
+			Provider: origin.Provider, Model: origin.Model, Adapter: origin.Adapter, Transport: origin.Transport,
+		}) {
 			for _, part := range msg.AssistantParts {
 				if part.Reasoning != nil && !part.Reasoning.Redacted {
 					total += estimateTextTokens(part.Reasoning.Text)

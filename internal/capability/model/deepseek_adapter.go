@@ -42,7 +42,8 @@ func (DeepSeekAdapter) BuildChatCompletionsRequest(cfg Config, messages []messag
 		item := openAIMessage{Role: string(msg.Role), Content: content}
 		if msg.Role == message.RoleAssistant {
 			sameOrigin := msg.GeneratedBy != nil && *msg.GeneratedBy == *origin
-			if err := applyDeepSeekAssistantHistory(&item, msg, sameOrigin, len(tools) > 0); err != nil {
+			replayReasoning := len(tools) > 0 && deepSeekReasoningReplayCompatible(msg.GeneratedBy, origin)
+			if err := applyDeepSeekAssistantHistory(&item, msg, sameOrigin, replayReasoning); err != nil {
 				return ChatCompletionsRequest{}, err
 			}
 		}
@@ -51,11 +52,33 @@ func (DeepSeekAdapter) BuildChatCompletionsRequest(cfg Config, messages []messag
 	return buildChatCompletionsRequest(cfg.Model, wire, tools, stream), nil
 }
 
-func applyDeepSeekAssistantHistory(item *openAIMessage, msg message.Message, sameOrigin, hasTools bool) error {
+func deepSeekReasoningReplayCompatible(previous, current *message.MessageOrigin) bool {
+	if previous == nil || current == nil || previous.Transport != "openai-compatible" || current.Transport != "openai-compatible" {
+		return false
+	}
+	if *previous == *current {
+		return true
+	}
+	legacy := *previous
+	legacy.Adapter = current.Adapter
+	if legacy != *current {
+		return false
+	}
+	for _, origin := range []*message.MessageOrigin{previous, current} {
+		switch strings.ToLower(strings.TrimSpace(origin.Adapter)) {
+		case "", "openai-compatible", "deepseek":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func applyDeepSeekAssistantHistory(item *openAIMessage, msg message.Message, sameOrigin, replayReasoning bool) error {
 	calls := messageToolCalls(msg)
 	var reasoning, text strings.Builder
 	for _, part := range msg.AssistantParts {
-		if sameOrigin && hasTools && part.Reasoning != nil && !part.Reasoning.Redacted {
+		if replayReasoning && part.Reasoning != nil && !part.Reasoning.Redacted {
 			reasoning.WriteString(part.Reasoning.Text)
 		}
 		if len(calls) != 0 && part.Text != nil {

@@ -99,6 +99,14 @@ Provider/Model、YOLO、安全沙箱与连接配置只以全局 `config.jsonc` �
 - 发现需要合法同源 HTTP(S) URL、受支持格式，以及可从 `auth.env` 解析的凭据；失败只产生安全化 warning，并回退到匹配缓存或手工模型。
 - JSONC 定向更新保留注释、尾随逗号和未知字段，并通过 revision + 文件内容 CAS 防止并发覆盖。
 
+#### DeepSeek 推理与旧会话
+
+Chat Completions 使用 DeepSeek 时，携带工具定义的请求会回传历史 `reasoning_content`，并保留原生工具调用与结果。模型名支持 `deepseek-…` 及网关前缀（如 `deepseek/deepseek-v4.1-flash-fast`）；显式 `openai-compatible` 仍保留通用工具 schema，只采用 DeepSeek 的历史编码，不必修改已有配置。无工具请求不回传历史推理。
+
+恢复旧会话时，会直接读取已保存的推理，无需改写会话文件。同一提供方、配置身份、传输协议和完整模型名下，旧通用适配器与 DeepSeek 适配器的推理可以互通；原始工具参数仍须严格匹配适配器来源，否则使用已解析的标准参数。缺少来源信息、跨模型或提供方、其他协议以及已隐去的推理不会混入请求。已经被压缩移出当前上下文的消息不会从归档自动补回。
+
+上下文用量继续以服务端返回的 usage 为准；缺失 usage 时，本地估算也包含上述 DeepSeek 历史推理。升级后需重启 Paw 并恢复原会话，正在运行的旧进程不会自动换用新程序。
+
 #### `app.RegisterBuiltinTools`
 
 职责:
