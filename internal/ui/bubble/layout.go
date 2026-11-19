@@ -828,7 +828,7 @@ func (m appModel) renderInputContentWithHints(width, height int) string {
 		return ""
 	}
 	if strings.TrimSpace(m.input.Value()) == "" && !m.isGoalInputActive() && !m.isTerminalInputActive() && !m.runningTerminal {
-		left := inputPromptStyle.Render("›") + " " + inputHintStyle.Render(copyInputPlaceholder)
+		left := inputPromptStyle.Render(glyphPrompt) + " " + inputHintStyle.Render(copyInputPlaceholder)
 		hint := inputHintStyle.Render(copyInputHint)
 		line := left
 		if terminalCellWidth(left)+terminalCellWidth(hint)+1 <= width {

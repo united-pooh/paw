@@ -152,12 +152,12 @@ func TestNewModelStartsWithEmptyTranscript(t *testing.T) {
 	model.height = 20
 	model.relayout()
 	view := ansi.Strip(model.View())
-	for _, want := range []string{"アトリ高性能ですから!", "› " + copyInputPlaceholder} {
+	for _, want := range []string{"アトリ高性能ですから!", glyphPrompt + " " + copyInputPlaceholder} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("empty view = %q, missing %q", view, want)
 		}
 	}
-	for _, unwanted := range []string{"SIGNAL / READY", "│ ›"} {
+	for _, unwanted := range []string{"SIGNAL / READY", "│ " + glyphPrompt} {
 		if strings.Contains(view, unwanted) {
 			t.Fatalf("empty view = %q, should not contain %q", view, unwanted)
 		}

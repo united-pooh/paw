@@ -105,7 +105,7 @@ func TestQuietTableRetainsValuesAndDeclaredAlignment(t *testing.T) {
 func TestInputPromptRemainsVisibleAfterInteraction(t *testing.T) {
 	m := newTestModel(&fakeRunner{})
 	m.hasInteracted = true
-	if !strings.Contains(ansi.Strip(m.renderInputContentWithHints(60, 1)), "›") {
+	if !strings.Contains(ansi.Strip(m.renderInputContentWithHints(60, 1)), glyphPrompt) {
 		t.Fatal("empty input lost its visible entry point after a turn")
 	}
 	if got := ansi.Strip(m.renderBottomDockLine(60)); !strings.Contains(got, copyContextLabel) || !strings.Contains(got, "—") || strings.Contains(got, "%") {

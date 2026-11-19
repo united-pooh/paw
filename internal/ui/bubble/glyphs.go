@@ -12,7 +12,7 @@ const (
 	glyphFolded    = "▸"  // 折叠（可展开）
 	glyphExpanded  = "▾"  // 已展开（可收起）
 	glyphStatus    = "⚒"  // 底部状态行图标
-	glyphPrompt    = "›"  // 输入提示符
+	glyphPrompt    = "❯"  // 输入提示符
 	glyphNarration = "::" // 助手叙述行前缀
 	glyphThinking  = "*"  // 思考折叠行前缀
 	glyphChevronR  = "»"  // 权限/模式提示前缀

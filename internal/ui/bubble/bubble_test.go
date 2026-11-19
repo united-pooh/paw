@@ -2623,7 +2623,7 @@ func TestViewFramesTranscriptHistoryPanel(t *testing.T) {
 	model.relayout()
 
 	rendered := model.View()
-	for _, want := range []string{"─", "アトリ高性能ですから!", "› " + copyInputPlaceholder} {
+	for _, want := range []string{"─", "アトリ高性能ですから!", glyphPrompt + " " + copyInputPlaceholder} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("view = %q, want %q", rendered, want)
 		}
