@@ -399,7 +399,7 @@ func renderWorkSegmentEntry(entry transcriptEntry, width int, at time.Time, show
 
 // renderWorkSegmentChild 平铺渲染段内子条目：reasoning 直接渲染暗色正文
 // （不嵌套自身的 "Thought for N s" 折叠标题），工具条目渲染为单行 compact
-// chip 事务行（与主渲染一致：无图标，状态在行尾）。live 滚动窗口与
+// chip 事务行（与主渲染一致：行首状态符，状态段右对齐）。live 滚动窗口与
 // （未来的）段内平铺共用。
 func renderWorkSegmentChild(child transcriptEntry, width, bodyWidth int, at time.Time, showThinking bool) string {
 	switch child.kind {

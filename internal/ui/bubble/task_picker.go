@@ -676,7 +676,7 @@ func finalizeRestoredRunningToolEntries(entries []transcriptEntry, now time.Time
 		entry.body = completeRunningToolCallBody(entry.body, "error")
 		entry.toolStatus = "error"
 		entry.isError = true
-		entry.toolResult = "interrupted: previous turn ended before completion"
+		entry.toolResult = "已中断：上一轮未完成就结束了"
 		entry.toolExpanded = false
 		entry.toolGroupPending = false
 		entry.toolGroupOpen = false

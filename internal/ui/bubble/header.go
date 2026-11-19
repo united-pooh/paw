@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 // headerSnapshot 是 header 渲染所需的全部数据。字段已 sanitize，渲染层不再
@@ -119,6 +121,50 @@ func (m appModel) renderHeaderEmbedded(width int) string {
 		now = time.Now()
 	}
 	return contextFreeStyle.Render(renderHeaderCompact(m.collectHeaderData(now), width))
+}
+
+// renderTopLine 渲染框架首行。有 surface 层的主题画成状态条：左侧模型标记，
+// 右侧活动提示与挂钟；Terminal 主题没有可铺的底色，保留嵌入式细线。
+func (m appModel) renderTopLine(layout tuiLayout) string {
+	surface := colorManager.Hex(colorSurfaceBackground)
+	docked := layout.activityMode == activityLayoutDocked
+	if surface == "" {
+		separatorColor := colorManager.Hex(colorMarkdownQuoteBorder)
+		if docked {
+			return renderSplitHairline(m.renderHeaderEmbedded(layout.workspaceWidth), m.renderActivityHeader(layout.activityWidth),
+				layout.workspaceWidth, layout.activityWidth, "┬", separatorColor)
+		}
+		return renderHairlineWithRightHint(m.renderHeaderEmbedded(layout.contentWidth), m.renderHeaderActivityHint(), layout.frameWidth, "")
+	}
+	now := m.cursorFrameAt
+	if now.IsZero() {
+		now = time.Now()
+	}
+	snapshot := m.collectHeaderData(now)
+	model := headerModelStyle.Render(glyphModel + " " + truncateStyledCellLine(snapshot.modelLabel, clampInt(layout.frameWidth/3, 6, 28)))
+	clock := contextFreeStyle.Render(snapshot.now.Format("15:04"))
+	if docked {
+		separator := lipgloss.NewStyle().Foreground(lipgloss.Color(colorManager.Hex(colorMarkdownQuoteBorder))).Render("│")
+		return renderHeaderBar(model, clock, layout.workspaceWidth, surface) + separator +
+			renderHeaderBar(m.renderActivityHeader(maxInt(1, layout.activityWidth-2)), "", layout.activityWidth, surface)
+	}
+	return renderHeaderBar(model, m.renderHeaderActivityHint()+"  "+clock, layout.frameWidth, surface)
+}
+
+// renderHeaderBar 把左右两段放进严格 width cell 的 surface 底色行，右段优先保留。
+func renderHeaderBar(left, right string, width int, surface string) string {
+	width = maxInt(1, width)
+	inner := maxInt(0, width-2)
+	right = truncateStyledCellLine(right, inner)
+	if terminalCellWidth(right) > 0 && terminalCellWidth(right)+1 < inner {
+		left = truncateStyledCellLine(left, inner-terminalCellWidth(right)-1)
+	} else {
+		left = truncateStyledCellLine(left, inner)
+		right = ""
+	}
+	gap := maxInt(0, inner-terminalCellWidth(left)-terminalCellWidth(right))
+	line := fitStyledCellLine(" "+left+strings.Repeat(" ", gap)+right+" ", width)
+	return restoreBackgroundAfterANSIReset(line, surface, colorManager.Hex(colorHeaderForeground))
 }
 
 func (m appModel) renderActivityHeader(width int) string {

@@ -16,6 +16,9 @@ const (
 	glyphNarration = "::" // 助手叙述行前缀
 	glyphThinking  = "*"  // 思考折叠行前缀
 	glyphChevronR  = "»"  // 权限/模式提示前缀
+	glyphUserBar   = "▎"  // 用户消息块左侧强调竖条
+	glyphModel     = "◆"  // 头部状态条模型标记
+	glyphNotice    = "◇"  // 系统弱化提示（上下文整理等）
 )
 
 // allGlyphs 供唯一性测试遍历；新增字形必须登记到这里。
@@ -35,4 +38,7 @@ var allGlyphs = []struct {
 	{"叙述", glyphNarration},
 	{"思考行", glyphThinking},
 	{"模式提示", glyphChevronR},
+	{"用户竖条", glyphUserBar},
+	{"模型标记", glyphModel},
+	{"系统提示", glyphNotice},
 }

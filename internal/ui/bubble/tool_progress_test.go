@@ -41,10 +41,10 @@ func TestRunningToolElapsedAdvancesAcrossFrames(t *testing.T) {
 		t.Fatalf("second frame elapsed = %q, want 运行中 8s (cache must not freeze progress)", second)
 	}
 
-	// 同一秒内重复帧：不应额外 touch（版本稳定，无抖动刷新）
+	// 同一 spinner 帧内重复帧：不应额外 touch（版本稳定，无抖动刷新）
 	versionBefore := m.transcript[0].version
-	m.cursorFrameAt = base.Add(3*time.Second + 500*time.Millisecond)
-	m.refreshRunningToolProgress(base.Add(3*time.Second + 500*time.Millisecond))
+	m.cursorFrameAt = base.Add(3*time.Second + 50*time.Millisecond)
+	m.refreshRunningToolProgress(base.Add(3*time.Second + 50*time.Millisecond))
 	if m.transcript[0].version != versionBefore {
 		t.Fatalf("same-second frame touched entry: version %d -> %d", versionBefore, m.transcript[0].version)
 	}
@@ -182,7 +182,7 @@ func TestFirstRunningToolDoesNotRebuildHistoricalRuntimeIndex(t *testing.T) {
 	}
 }
 
-func TestRunningToolProgressDoesNotRefreshBeforeDisplayedSecondChanges(t *testing.T) {
+func TestRunningToolProgressDoesNotRefreshBeforeSpinnerFrameChanges(t *testing.T) {
 	m := newTestModel(&fakeRunner{})
 	started := time.Now()
 	m.cursorFrameAt = started
@@ -190,13 +190,13 @@ func TestRunningToolProgressDoesNotRefreshBeforeDisplayedSecondChanges(t *testin
 	version := m.transcript[len(m.transcript)-1].version
 	refreshes := m.transcriptRefreshCount
 
-	m.refreshRunningToolProgress(started.Add(500 * time.Millisecond))
+	m.refreshRunningToolProgress(started.Add(toolSpinnerInterval / 2))
 
 	if got := m.transcript[len(m.transcript)-1].version; got != version {
-		t.Fatalf("sub-second progress touched tool version %d -> %d", version, got)
+		t.Fatalf("sub-frame progress touched tool version %d -> %d", version, got)
 	}
 	if got := m.transcriptRefreshCount - refreshes; got != 0 {
-		t.Fatalf("sub-second progress viewport refreshes = %d, want 0", got)
+		t.Fatalf("sub-frame progress viewport refreshes = %d, want 0", got)
 	}
 }
 

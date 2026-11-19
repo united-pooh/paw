@@ -15,7 +15,9 @@ const (
 	copyModeTerminal = "终端"
 
 	// 上下文条
-	copyContextLabel = "上下文"
+	copyContextLabel      = "上下文"
+	copyContextCacheLabel = "缓存"
+	copyErrorRawResponse  = "原始响应"
 
 	// 状态行
 	copyStatusThinking    = "思考中"

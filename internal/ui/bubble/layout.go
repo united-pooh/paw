@@ -178,14 +178,7 @@ func (m appModel) View() string {
 			layout.contentHeight,
 			separatorStyle.Render("│"),
 		)
-		top := renderSplitHairline(
-			m.renderHeaderEmbedded(layout.workspaceWidth),
-			m.renderActivityHeader(layout.activityWidth),
-			layout.workspaceWidth,
-			layout.activityWidth,
-			"┬",
-			separatorColor,
-		)
+		top := m.renderTopLine(layout)
 		bottom := renderSplitHairline(
 			m.renderBottomWorkspaceLine(layout.workspaceWidth),
 			m.renderActivityBottomLine(layout.activityWidth),
@@ -197,12 +190,7 @@ func (m appModel) View() string {
 		view = top + "\n" + inner + "\n" + bottom
 	default:
 		inner := m.renderWorkspaceBody(layout)
-		top := renderHairlineWithRightHint(
-			m.renderHeaderEmbedded(layout.contentWidth),
-			m.renderHeaderActivityHint(),
-			layout.frameWidth,
-			"",
-		)
+		top := m.renderTopLine(layout)
 		bottom := m.renderBottomDockLine(layout.contentWidth)
 		view = top + "\n" + inner + "\n" + bottom
 	}

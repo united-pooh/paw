@@ -402,8 +402,9 @@ func assertFixedFrame(t *testing.T, view string, width, height int) {
 			t.Fatalf("line %d width=%d, want %d: %q", i, got, width, line)
 		}
 	}
-	if strings.TrimSpace(lines[0]) == "" || !strings.Contains(strings.TrimSpace(lines[0]), "─") {
-		t.Fatalf("top border=%q, want a hairline rule", lines[0])
+	// 有 surface 层的主题首行是状态条（模型标记打头），Terminal 主题仍是细线。
+	if top := strings.TrimSpace(lines[0]); top == "" || (!strings.Contains(top, "─") && !strings.HasPrefix(top, glyphModel+" ")) {
+		t.Fatalf("top border=%q, want a hairline rule or header bar", lines[0])
 	}
 	if strings.TrimSpace(lines[len(lines)-1]) == "" {
 		t.Fatalf("bottom metadata row is empty: %q", lines[len(lines)-1])

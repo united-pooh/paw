@@ -1,6 +1,7 @@
 package bubble
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -17,11 +18,18 @@ func (m appModel) renderContextDock(width int, right string) string {
 	toast := m.renderBottomDockMiddle(width / 3)
 	if width >= 60 {
 		middle := reading + readoutStyle.Render(" · "+amount)
-		if toast != "" {
-			middle = toast
+		candidates := []string{middle}
+		if rate, ok := contextCacheHitRate(stats); ok {
+			// 缓存命中率放不下时先退出，保留 token 计数。
+			candidates = []string{middle + readoutStyle.Render(" · ") + contextCacheStyle.Render(rate), middle}
 		}
-		if line, ok := m.renderCenteredContextDock(width, left, middle, right, stats); ok {
-			return line
+		if toast != "" {
+			candidates = []string{toast}
+		}
+		for _, candidate := range candidates {
+			if line, ok := m.renderCenteredContextDock(width, left, candidate, right, stats); ok {
+				return line
+			}
 		}
 	}
 	// 窄屏先让工作区和完整计数退出，保留模式、上下文与右侧百分比。
@@ -41,6 +49,14 @@ func (m appModel) renderContextDock(width int, right string) string {
 	left = truncateStyledCellLine(left, leftBudget)
 	trackWidth := inner - terminalCellWidth(left) - terminalCellWidth(reading) - 4
 	return fitStyledCellLine(" "+left+"  "+m.renderContextDockTrack(trackWidth, stats)+"  "+reading+" ", width)
+}
+
+// contextCacheHitRate 返回本次请求输入中缓存命中的占比，如「缓存 75%」。
+func contextCacheHitRate(stats loop.ContextStats) (string, bool) {
+	if !stats.CacheKnown || !stats.InputKnown || stats.InputTokens <= 0 || stats.CacheTokens <= 0 {
+		return "", false
+	}
+	return fmt.Sprintf("%s %d%%", copyContextCacheLabel, minInt(100, stats.CacheTokens*100/stats.InputTokens)), true
 }
 
 func (m appModel) renderContextDockWithSubagents(width int, right string) string {

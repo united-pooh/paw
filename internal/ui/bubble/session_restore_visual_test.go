@@ -35,7 +35,7 @@ func TestSessionRestoreDismissesPickerAndRebuildsFrame(t *testing.T) {
 			entries := []transcriptEntry{
 				{kind: entryUser, body: "查看项目表格"},
 				{kind: entryAssistant, body: markdownTableProjectFixture},
-				{kind: entryError, title: "recovery", body: "previous turn failed: context canceled"},
+				{kind: entryError, title: "recovery", body: "上一轮失败：context canceled"},
 			}
 			for _, restored := range [][]transcriptEntry{entries, nil, entries} {
 				next, _ := m.Update(sessionRestoredMsg{sessionID: "restored", entries: restored})
@@ -69,7 +69,7 @@ func TestSessionRestoreDismissesPickerAndRebuildsFrame(t *testing.T) {
 						workspaceLines = append(workspaceLines, ansi.Strip(cutStyledCellsExact(line, 0, m.currentLayout().workspaceWidth)))
 					}
 					workspace := strings.Join(strings.Fields(strings.Join(workspaceLines, " ")), " ")
-					for _, want := range []string{"查看项目表格", "previous turn failed: context canceled"} {
+					for _, want := range []string{"查看项目表格", "上一轮失败：context canceled"} {
 						if !strings.Contains(workspace, want) {
 							t.Fatalf("restored frame missing %q:\n%s", want, view)
 						}

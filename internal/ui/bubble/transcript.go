@@ -116,7 +116,7 @@ type transcriptRenderCacheKey struct {
 	createdAtIsZero      bool
 	toolStartedAtUnixNS  int64
 	toolFinishedAtUnixNS int64
-	toolElapsedSecond    int64
+	toolProgressTick     int64
 	showThinking         bool
 	segmentSnapshot      string
 }
@@ -655,7 +655,7 @@ func (m *appModel) trackRunningToolAt(index int) {
 	if m.toolRuntime.running == nil {
 		m.toolRuntime.running = make(map[int]int64)
 	}
-	m.toolRuntime.running[index] = toolElapsedSeconds(m.transcript[index], m.animationNow())
+	m.toolRuntime.running[index] = toolProgressTick(m.transcript[index], m.animationNow())
 	if toolUseID := strings.TrimSpace(m.transcript[index].toolUseID); toolUseID != "" {
 		if m.toolRuntime.byID == nil {
 			m.toolRuntime.byID = make(map[string]int)
@@ -1708,7 +1708,7 @@ func (m *appModel) refreshRunningToolProgress(now time.Time) {
 	m.toolProgressVisits = 0
 	m.ensureToolRuntimeIndex()
 	changed := false
-	for index, lastElapsed := range m.toolRuntime.running {
+	for index, lastTick := range m.toolRuntime.running {
 		m.toolProgressVisits++
 		if index < 0 || index >= len(m.transcript) {
 			delete(m.toolRuntime.running, index)
@@ -1719,13 +1719,13 @@ func (m *appModel) refreshRunningToolProgress(now time.Time) {
 			m.untrackRunningToolAt(index)
 			continue
 		}
-		elapsed := toolElapsedSeconds(*entry, now)
-		if elapsed == lastElapsed {
+		tick := toolProgressTick(*entry, now)
+		if tick == lastTick {
 			continue
 		}
-		m.toolRuntime.running[index] = elapsed
+		m.toolRuntime.running[index] = tick
 		if entry.taskWaitRunning {
-			body := taskWaitRunningBody(entry.taskWaitNames, elapsed)
+			body := taskWaitRunningBody(entry.taskWaitNames, toolElapsedSeconds(*entry, now))
 			if entry.body != body {
 				entry.body = body
 			}
@@ -1827,7 +1827,7 @@ func transcriptRenderKey(entry transcriptEntry, width int, at time.Time, showThi
 		showThinking:         showThinking,
 	}
 	if toolEntryStatus(entry) == "running" {
-		key.toolElapsedSecond = toolElapsedSeconds(entry, at)
+		key.toolProgressTick = toolProgressTick(entry, at)
 	}
 	if entry.kind == entryWorkSegment {
 		key.segmentSnapshot = workSegmentKeySnapshot(entry.segment, at)
@@ -1849,6 +1849,21 @@ func transcriptTodoSnapshot(snapshot any) string {
 		return ""
 	}
 	return string(data)
+}
+
+// toolSpinnerInterval 是运行中工具行 spinner 的帧间隔。
+const toolSpinnerInterval = 100 * time.Millisecond
+
+// toolProgressTick 是运行中条目需要重绘的刻度：工具行按 spinner 帧推进，
+// TaskWait 状态行只显示整秒计时，按秒推进。
+func toolProgressTick(entry transcriptEntry, at time.Time) int64 {
+	if entry.taskWaitRunning {
+		return toolElapsedSeconds(entry, at)
+	}
+	if entry.toolStartedAt.IsZero() || at.Before(entry.toolStartedAt) {
+		return 0
+	}
+	return int64(at.Sub(entry.toolStartedAt) / toolSpinnerInterval)
 }
 
 func toolElapsedSeconds(entry transcriptEntry, at time.Time) int64 {
@@ -2208,7 +2223,7 @@ func renderGroupedToolEntryWithHover(entry transcriptEntry, width int, at time.T
 	if !(fullResult && entry.toolFocused) {
 		resultLines = limitRenderedDetailLines(resultLines, maxRenderedToolDetailLines)
 	}
-	detail := renderToolDetailLinesWithHint(resultLines, maxInt(1, innerWidth-2), entry.toolTarget)
+	detail := renderToolDetailUnderChip(resultLines, innerWidth, entry.toolTarget)
 	return borderStyle.Width(contentWidth).Render(summary + "\n" + detail)
 }
 
@@ -2378,6 +2393,12 @@ func renderEntryAt(entry transcriptEntry, width int, at time.Time, showThinking 
 		}
 		return indentLines(card, transcriptEntryGutter)
 	}
+	if entry.kind == entryError {
+		return indentLines(renderErrorEntry(entry, bodyWidth), transcriptEntryGutter)
+	}
+	if entry.kind == entrySystem && entry.title == contextCompactionTitle {
+		return indentLines(renderCompactionNotice(entry.body, bodyWidth), transcriptEntryGutter)
+	}
 	body := renderEntryBodyAt(entry, bodyWidth, at, showThinking)
 	if entry.kind == entryTool {
 		if body == "" {
@@ -2391,7 +2412,7 @@ func renderEntryAt(entry transcriptEntry, width int, at time.Time, showThinking 
 	if entry.kind == entryUser {
 		// 用户消息保留两列空 gutter；assistant 首行显示 :: 叙述前缀（三列），
 		// 两类消息正文列相差一列是 commandcode 式叙述缩进，刻意保留。
-		return renderUserTranscriptRow(indentLines(body, transcriptEntryGutter), width)
+		return renderUserTranscriptRow(indentLines(body, userBarStyle.Render(glyphUserBar)+" "), width)
 	}
 	if entry.kind == entryAssistant {
 		// :: 位于 transcript 左侧外部 gutter。首行用 marker 占据 gutter，
@@ -2806,8 +2827,7 @@ func renderToolTransactionEntryWithHover(entry transcriptEntry, width int, at ti
 		result = "(empty result)"
 	}
 	detailLines := strings.Split(result, "\n")
-	detailWidth := maxInt(1, innerWidth-2)
-	detail := renderToolDetailLinesWithHint(detailLines, detailWidth, entry.toolTarget)
+	detail := renderToolDetailUnderChip(detailLines, innerWidth, entry.toolTarget)
 	return borderStyle.Width(contentWidth).Render(summary + "\n" + detail)
 }
 
@@ -2816,15 +2836,13 @@ func renderCompactToolSummary(entry transcriptEntry, width int, at time.Time) st
 }
 
 // renderCompactToolSummaryWithHover 渲染紧凑工具行：
-// `{chip} {target}  {状态文字}`——所有状态都没有行首图标，chip 列跨状态
-// 完全对齐。成功行只留 chip+目标（无状态段）；失败行尾是红字「失败+时长」，
-// 运行中行尾是琥珀色「运行中+计时」（每秒跳动本身即活着的信号）。
-// chip 是工具类别彩底小标签（读取/编辑/Shell/…，MCP 显示 server 名）；
-// 状态词是彩色文字，不再使用实底药丸；✓/✗/●/◌ 图标均已退役。
+// `{状态符} {chip} {target} ……… {状态段}`。行首状态符固定一列：运行中为
+// braille 转圈（每 100ms 一帧），成功 ✓、失败 ✗；状态段右对齐到行尾——
+// 运行中「运行中 3s」、失败「失败 0.2s」用状态色，成功只留弱化色时长。
+// chip 是工具类别彩底小标签（读取/编辑/Shell/…，MCP 显示 server 名）。
 func renderCompactToolSummaryWithHover(entry transcriptEntry, width int, at time.Time, hovered bool) string {
 	width = maxInt(1, width)
 	status := toolEntryStatus(entry)
-	successMinimal := status == "ok"
 	targetStyle := toolCitationStyle
 	if hovered && !entry.toolFocused {
 		targetStyle = targetStyle.Underline(true)
@@ -2837,43 +2855,40 @@ func renderCompactToolSummaryWithHover(entry transcriptEntry, width int, at time
 	if entry.toolFocused {
 		focusPrefix = "› "
 	}
-	duration := ""
-	if status == "running" {
-		duration = formatRunningToolElapsed(entry.toolStartedAt, at)
-	} else if !successMinimal && !entry.toolFinishedAt.IsZero() {
-		duration = formatToolDuration(entry.toolStartedAt, entry.toolFinishedAt)
-	}
 	statusStyle := statusTextStyle(status)
 	if hovered && !entry.toolFocused {
 		statusStyle = statusStyle.Underline(true)
 	}
-	statusLabel := statusTextLabel(status)
-	statusText := statusLabel
-	if duration != "" {
-		statusText += " " + duration
-	}
-	statusRendered := statusStyle.Render(statusText)
+	lead := statusStyle.Render(toolStatusGlyph(entry, at)) + " "
 
-	statusSeparator := "  "
-	if successMinimal {
-		// 成功行不渲染「完成/时长」状态段。
-		statusRendered = ""
-		statusSeparator = ""
+	duration := ""
+	if status == "running" {
+		duration = formatRunningToolElapsed(entry.toolStartedAt, at)
+	} else if !entry.toolFinishedAt.IsZero() {
+		duration = formatToolDuration(entry.toolStartedAt, entry.toolFinishedAt)
 	}
+	statusLabel, labelStyle := statusTextLabel(status), statusStyle
+	if status == "ok" {
+		statusLabel, labelStyle = "", lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorTextMuted))
+	}
+	statusText := strings.TrimSpace(statusLabel + " " + duration)
+
+	const statusGap = 2
 	fixedWithoutName := func() int {
-		return terminalCellWidth(focusPrefix) + terminalCellWidth(statusSeparator) + terminalCellWidth(statusRendered)
+		fixed := terminalCellWidth(focusPrefix) + terminalCellWidth(lead)
+		if statusText != "" {
+			fixed += statusGap + terminalCellWidth(statusText)
+		}
+		return fixed
 	}
-	// 宽度预算收紧顺序：时长 → 状态分隔符 → chip 退化为纯文本标签 → 截断标签 → 截断目标。
+	// 宽度预算收紧顺序：时长 → 成功行整个状态段 → chip 退化为纯文本标签 → 截断标签 → 截断目标。
 	// 状态词是最后才牺牲的要素：窄行宁可截断目标也不能把「运行中」截断。
 	if fixedWithoutName()+terminalCellWidth(renderToolChip(rawName)) > width && duration != "" {
 		duration = ""
-		statusRendered = statusStyle.Render(statusLabel)
+		statusText = statusLabel
 	}
-	if fixedWithoutName() > width && statusSeparator != "" {
-		statusSeparator = " "
-	}
-	if fixedWithoutName() > width && statusSeparator != "" {
-		statusSeparator = ""
+	if fixedWithoutName() > width {
+		lead = ""
 	}
 	nameText := renderToolChip(rawName)
 	if fixedWithoutName()+terminalCellWidth(nameText) > width {
@@ -2884,9 +2899,17 @@ func renderCompactToolSummaryWithHover(entry transcriptEntry, width int, at time
 			nameText = ""
 		}
 	}
+	// 编辑类工具在目标后附 +N −M；宽度不足时先让位给目标。
+	diffText := ""
+	if totals, ok := toolEntryDiffTotals(entry); ok {
+		diffText = " " + renderDiffTotals(totals)
+		if width-fixedWithoutName()-terminalCellWidth(nameText)-1-terminalCellWidth(diffText) < minInt(8, maxInt(1, terminalCellWidth(target))) {
+			diffText = ""
+		}
+	}
 	targetText := ""
 	if target != "" {
-		if targetBudget := width - fixedWithoutName() - terminalCellWidth(nameText) - 1; targetBudget >= 1 {
+		if targetBudget := width - fixedWithoutName() - terminalCellWidth(nameText) - 1 - terminalCellWidth(diffText); targetBudget >= 1 {
 			renderedTarget := targetStyle.Render(truncateStyledCellLine(target, targetBudget))
 			rawURL := extractRawToolURL(rawName, entry.toolInput)
 			if rawURL == "" && isClickableTerminalURL(entry.toolTarget) {
@@ -2899,7 +2922,42 @@ func renderCompactToolSummaryWithHover(entry transcriptEntry, width int, at time
 		}
 	}
 
-	return truncateStyledCells(focusPrefix+nameText+targetText+statusSeparator+statusRendered, width, "")
+	left := focusPrefix + lead + nameText + targetText + diffText
+	if statusText == "" {
+		return truncateStyledCells(left, width, "")
+	}
+	gap := maxInt(1, width-terminalCellWidth(left)-terminalCellWidth(statusText))
+	return truncateStyledCells(left+strings.Repeat(" ", gap)+labelStyle.Render(statusText), width, "")
+}
+
+// toolEntryDiffTotals 从工具摘要行（如 "Edit  ok  +12 -3"）读出改动行数。
+func toolEntryDiffTotals(entry transcriptEntry) (diffTotals, bool) {
+	for _, part := range splitToolSummaryParts(firstToolEntryLine(entry.body)) {
+		var totals diffTotals
+		if n, err := fmt.Sscanf(part, "+%d -%d", &totals.added, &totals.removed); err == nil && n == 2 && fmt.Sprintf("+%d -%d", totals.added, totals.removed) == part {
+			return totals, true
+		}
+	}
+	return diffTotals{}, false
+}
+
+func renderDiffTotals(totals diffTotals) string {
+	added := lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorDiffAddedForeground)).Render("+" + strconv.Itoa(totals.added))
+	removed := lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorDiffDeletedForeground)).Render("−" + strconv.Itoa(totals.removed))
+	return added + " " + removed
+}
+
+// toolStatusGlyph 返回工具行首状态符；运行中按工具自身计时取 spinner 帧，
+// 与渲染缓存键使用同一 100ms 刻度。
+func toolStatusGlyph(entry transcriptEntry, at time.Time) string {
+	switch toolEntryStatus(entry) {
+	case "running":
+		return spinnerFrames[toolProgressTick(entry, at)%int64(len(spinnerFrames))]
+	case "error":
+		return glyphFailure
+	default:
+		return glyphSuccess
+	}
 }
 
 func formatRunningToolElapsed(startedAt, at time.Time) string {
@@ -3154,6 +3212,14 @@ func omitLeadingToolTargetLine(lines []string, hint string) []string {
 		return lines
 	}
 	return lines[1:]
+}
+
+// toolStatusLead 是工具行首状态符加空格占据的列；详情块让出这一列，左缘与 chip 对齐。
+const toolStatusLead = "  "
+
+func renderToolDetailUnderChip(lines []string, innerWidth int, hint string) string {
+	width := maxInt(1, innerWidth-2-terminalCellWidth(toolStatusLead))
+	return indentLines(renderToolDetailLinesWithHint(lines, width, hint), toolStatusLead)
 }
 
 func renderToolDetailLinesWithHint(lines []string, width int, hint string) string {

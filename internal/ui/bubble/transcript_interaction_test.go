@@ -233,7 +233,7 @@ func TestToolHoverMoveChangesPresentationWithoutTranscriptWork(t *testing.T) {
 	if model.transcriptRenderVisits != 0 {
 		t.Fatalf("cross-tool hover render_visits=%d", model.transcriptRenderVisits)
 	}
-	if view := ansi.Strip(model.View()); !strings.Contains(view, "   读取  two.txt") {
+	if view := ansi.Strip(model.View()); !strings.Contains(view, " 读取  two.txt") {
 		t.Fatalf("new tool hover missing from rendered view:\n%s", view)
 	}
 }
@@ -274,7 +274,7 @@ func TestDirtySuffixAfterHoveredToolKeepsStableOverlay(t *testing.T) {
 	if got, ok := model.transcriptInteraction.toolAt(0); !ok || got != first {
 		t.Fatalf("stable prefix interaction changed: got=%#v ok=%v want=%#v", got, ok, first)
 	}
-	if view := ansi.Strip(model.View()); !strings.Contains(view, "   读取  one.txt") || !strings.Contains(view, "updated.txt") {
+	if view := ansi.Strip(model.View()); !strings.Contains(view, " 读取  one.txt") || !strings.Contains(view, "updated.txt") {
 		t.Fatalf("stable hover overlay or dirty suffix missing:\n%s", view)
 	}
 }
@@ -442,7 +442,7 @@ func TestMouseWheelReconcilesToolHoverAtSameScreenPoint(t *testing.T) {
 	if model.transcriptRenderVisits != 0 {
 		t.Fatalf("wheel hover reconciliation render_visits=%d", model.transcriptRenderVisits)
 	}
-	if view := ansi.Strip(model.View()); !strings.Contains(view, "   读取  two.txt") {
+	if view := ansi.Strip(model.View()); !strings.Contains(view, " 读取  two.txt") {
 		t.Fatalf("wheel hover overlay missing:\n%s", view)
 	}
 }
@@ -535,7 +535,7 @@ func TestExpandedToolGroupHoverMovesWithinOneOverlay(t *testing.T) {
 	if model.toolHoverIndex != 1 {
 		t.Fatalf("expanded group hover index = %d, want 1", model.toolHoverIndex)
 	}
-	if view := ansi.Strip(model.View()); !strings.Contains(view, "   读取  two.txt") {
+	if view := ansi.Strip(model.View()); !strings.Contains(view, " 读取  two.txt") {
 		t.Fatalf("second grouped tool hover missing:\n%s", view)
 	}
 }
@@ -680,7 +680,7 @@ func TestDirtySuffixAfterHoveredPrefixReusesPresentationPatch(t *testing.T) {
 	if renders != 1 {
 		t.Fatalf("stable prefix hover patch rerendered after dirty suffix: renders=%d", renders)
 	}
-	if view := ansi.Strip(model.View()); !strings.Contains(view, "   读取  stable.txt") || !strings.Contains(view, "updated tail") {
+	if view := ansi.Strip(model.View()); !strings.Contains(view, " 读取  stable.txt") || !strings.Contains(view, "updated tail") {
 		t.Fatalf("stable hover or updated suffix missing:\n%s", view)
 	}
 }

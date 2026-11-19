@@ -84,7 +84,25 @@ type transcriptLineSnapshot struct {
 	plain           string
 	width           int
 	assistantMarker bool
+	continuation    continuationKind
 }
+
+// continuationKind 描述一行相对于上一行的衔接方式。wrapCompactAnnotated
+// 为自动折行（软换行）插入的零宽标记会被还原成这个字段：复制多行选区时，
+// 软换行续行不应插入 \n，而是按原文语义合并回上一行。
+type continuationKind uint8
+
+const (
+	// continuationNone 表示这一行与上一行之间是真正的换行（原文硬换行、
+	// 段落/列表项边界、entry 边界等），复制时应插入 \n。
+	continuationNone continuationKind = iota
+	// continuationSpace 表示这一行是软换行续行，且软换行发生在词边界
+	// （整词被挪到下一行，原位置的空格被丢弃），复制时应还原为一个空格。
+	continuationSpace
+	// continuationGlue 表示这一行是软换行续行，且软换行发生在单个宽字符
+	// 词内部（如中文长句被迫拆开），复制时不应插入任何分隔符。
+	continuationGlue
+)
 
 // handleTranscriptMouse 处理 transcript 面板中的鼠标拖拽选择事件。
 // 交互模型：
@@ -246,6 +264,9 @@ func (m appModel) performTranscriptClick(point selectionPoint) (appModel, bool, 
 		return m, true, openTerminalURLCmd(target)
 	}
 	if m.toggleModelNoticeAtRow(point.row) {
+		return m, true, nil
+	}
+	if m.toggleErrorDetailsAtRow(point.row) {
 		return m, true, nil
 	}
 	if index, ok := m.reasoningHitAtTranscriptRow(point.row); ok {
@@ -754,14 +775,43 @@ func buildTranscriptLineSnapshotsFromLines(rawLines []string) []transcriptLineSn
 		if assistantMarker {
 			plain = transcriptEntryGutter + " " + strings.TrimPrefix(plain, glyphNarration+" ")
 		}
+		if strings.HasPrefix(plain, glyphUserBar+" ") {
+			// 用户块竖条与 :: 同为 gutter 装饰，按等宽空格计入 plain，不进入复制内容。
+			plain = transcriptEntryGutter + strings.TrimPrefix(plain, glyphUserBar+" ")
+		}
+		continuation, plain, styled := stripSoftWrapMarker(plain, line)
 		lines = append(lines, transcriptLineSnapshot{
-			styled:          line,
+			styled:          styled,
 			plain:           plain,
 			width:           terminalCellWidth(plain),
 			assistantMarker: assistantMarker,
+			continuation:    continuation,
 		})
 	}
 	return lines
+}
+
+// stripSoftWrapMarker 检测 plain 是否以（若干缩进空格之后紧跟）
+// wrapCompactAnnotated 插入的零宽软换行标记开头；若是，剥离该标记字符
+// （从 plain 和 styled 中各去掉一次），并返回对应的 continuationKind。
+// 标记只会紧跟在纯空格缩进之后（assistant gutter 或段落缩进），不会出现
+// 在真实可见内容中间，因此"去掉行首空格后是否以标记开头"足以可靠判定。
+func stripSoftWrapMarker(plain, styled string) (continuationKind, string, string) {
+	trimmed := strings.TrimLeft(plain, " ")
+	gutter := plain[:len(plain)-len(trimmed)]
+	var kind continuationKind
+	var marker string
+	switch {
+	case strings.HasPrefix(trimmed, string(softBreakSpace)):
+		kind, marker = continuationSpace, string(softBreakSpace)
+	case strings.HasPrefix(trimmed, string(softBreakGlue)):
+		kind, marker = continuationGlue, string(softBreakGlue)
+	default:
+		return continuationNone, plain, styled
+	}
+	plain = gutter + strings.TrimPrefix(trimmed, marker)
+	styled = strings.Replace(styled, marker, "", 1)
+	return kind, plain, styled
 }
 
 // selectedTranscriptText 返回当前选择范围中的纯文本内容。
@@ -772,10 +822,12 @@ func (m appModel) selectedTranscriptText() string {
 		return ""
 	}
 	selected := make([]string, 0, end.row-start.row+1)
+	continuations := make([]continuationKind, 0, end.row-start.row+1)
 	for row := start.row; row <= end.row; row++ {
 		left, right, ok := selectionCellsForLine(lines[row], row, start, end)
 		if !ok {
 			selected = append(selected, "")
+			continuations = append(continuations, continuationNone)
 			continue
 		}
 		text := slicePlainCells(lines[row].plain, left, right)
@@ -785,9 +837,40 @@ func (m appModel) selectedTranscriptText() string {
 			// 首行与剪贴板内容不一致。
 			text = glyphNarration + " " + strings.TrimPrefix(text, transcriptEntryGutter+" ")
 		}
+		if row != start.row && lines[row].continuation != continuationNone {
+			// 软换行续行会被直接粘接到上一行末尾（见 joinSelectedTranscriptLines），
+			// 续行自身的 assistant gutter 缩进只是渲染排版，不属于正文，否则会
+			// 变成句子中间的多余空格。
+			text = strings.TrimPrefix(text, assistantNarrationGutter)
+		}
+		// lipgloss 的 Width().Render() 会用真实空格把每行补齐到固定列宽，
+		// 这部分填充空格与正文内容无法区分，复制时一律裁掉。
+		text = strings.TrimRight(text, " ")
 		selected = append(selected, text)
+		continuations = append(continuations, lines[row].continuation)
 	}
-	return strings.TrimRight(strings.Join(selected, "\n"), "\n")
+	return joinSelectedTranscriptLines(selected, continuations)
+}
+
+// joinSelectedTranscriptLines 按每行相对上一行的 continuationKind 选择分隔
+// 符拼接选中文本：continuationGlue（软换行发生在宽字符词内部）不插入分隔
+// 符；continuationSpace（软换行丢弃了词间空格）插入一个空格；其余情况
+// （段落/entry 边界、原文真实换行）插入 \n，与此前行为一致。
+func joinSelectedTranscriptLines(selected []string, continuations []continuationKind) string {
+	var b strings.Builder
+	for i, text := range selected {
+		if i > 0 {
+			switch continuations[i] {
+			case continuationGlue:
+			case continuationSpace:
+				b.WriteByte(' ')
+			default:
+				b.WriteByte('\n')
+			}
+		}
+		b.WriteString(text)
+	}
+	return strings.TrimRight(b.String(), " \n")
 }
 
 // selectionRenderSignature 折叠当前选区状态（激活标志、吸附模式、起止点）

@@ -10,6 +10,7 @@ import (
 // 这些 lipgloss 样式描述 TUI 各区域和 Markdown 元素的视觉呈现。
 var (
 	headerStyle                  lipgloss.Style
+	headerModelStyle             lipgloss.Style
 	labelUserStyle               lipgloss.Style
 	labelAssistantStyle          lipgloss.Style
 	labelThinkingStyle           lipgloss.Style
@@ -30,6 +31,7 @@ var (
 	taskWaitStyle                lipgloss.Style
 	assistantMarkerStyle         lipgloss.Style
 	userTranscriptRowStyle       lipgloss.Style
+	userBarStyle                 lipgloss.Style
 	thinkingBodyStyle            lipgloss.Style
 	markdownBoldStyle            lipgloss.Style
 	markdownItalicStyle          lipgloss.Style
@@ -106,6 +108,7 @@ var (
 
 func rebuildLegacyStyles() {
 
+	headerModelStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorSignal)).Bold(true)
 	headerStyle = lipgloss.NewStyle().
 		Background(colorManager.LipglossColor(colorHeaderBackground)).
 		Foreground(colorManager.LipglossColor(colorHeaderForeground)).
@@ -167,9 +170,11 @@ func rebuildLegacyStyles() {
 	// 对齐 commandcode 的叙述行观感；✦ 已退役。
 	assistantMarkerStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorNarration))
+	// 用户消息块铺 surface 层，左侧竖条用强调色标出发言边界。
 	userTranscriptRowStyle = lipgloss.NewStyle().
 		Foreground(colorManager.LipglossColor(colorLabelUser)).
-		Background(lipgloss.Color(interpolateHexColor(colorManager.Hex(colorTerminalBackground), colorManager.Hex(colorSignal), 0.16)))
+		Background(colorManager.LipglossColor(colorSurfaceBackground))
+	userBarStyle = lipgloss.NewStyle().Foreground(colorManager.LipglossColor(colorSignal))
 	if colorManager.palette.TerminalBackground == "" {
 		userTranscriptRowStyle = userTranscriptRowStyle.UnsetBackground().Bold(true)
 	}

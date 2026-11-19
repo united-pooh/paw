@@ -192,12 +192,19 @@ func recoveryDisplayText(recovery *session.RecoveryState) string {
 	}
 	text := strings.TrimSpace(recovery.Error)
 	if text == "" {
-		text = "previous turn ended before completion"
+		text = "未完成就结束了"
+	}
+	// 旧会话里持久化的英文原因按同义中文展示。
+	switch text {
+	case "previous turn ended before completion", "turn ended before completion":
+		text = "未完成就结束了"
+	case "recovered turn ended before completion":
+		text = "恢复执行后仍未完成就结束了"
 	}
 	if recovery.Interrupted {
-		return "previous turn interrupted: " + text
+		return "上一轮中断：" + text
 	}
-	return "previous turn failed: " + text
+	return "上一轮失败：" + text
 }
 
 // handleSessionPickerKey 处理会话选择器中的方向键、确认键和取消键。

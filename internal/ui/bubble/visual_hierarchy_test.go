@@ -121,7 +121,10 @@ func TestProseReadingWidthPreservesTextAndWideCode(t *testing.T) {
 			t.Fatalf("prose exceeds reading width: %d", ansi.StringWidth(line))
 		}
 	}
-	if strings.ReplaceAll(strings.Join(strings.Fields(ansi.Strip(rendered)), ""), "\n", "") != text {
+	plainRendered := ansi.Strip(rendered)
+	plainRendered = strings.ReplaceAll(plainRendered, string(softBreakSpace), "")
+	plainRendered = strings.ReplaceAll(plainRendered, string(softBreakGlue), "")
+	if strings.ReplaceAll(strings.Join(strings.Fields(plainRendered), ""), "\n", "") != text {
 		t.Fatal("wrapping lost prose")
 	}
 	code := renderMarkdown("```text\n"+strings.Repeat("x", 115)+"\n```", 140)

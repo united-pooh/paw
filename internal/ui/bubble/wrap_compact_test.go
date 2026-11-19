@@ -84,6 +84,79 @@ func TestWrapCompactEveryLineFitsLimit(t *testing.T) {
 	}
 }
 
+// TestWrapCompactAnnotatedMarksAsciiWordWrapAsSpace 验证英文单词整体换行
+// （原位置空格被丢弃）标记为 SPACE（U+200B），复制时应还原为一个空格。
+func TestWrapCompactAnnotatedMarksAsciiWordWrapAsSpace(t *testing.T) {
+	got := wrapCompactAnnotated("ab viewport", 8)
+	lines := strings.Split(got, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want 2 lines, got %q", got)
+	}
+	if lines[0] != "ab" {
+		t.Fatalf("first line = %q, want %q", lines[0], "ab")
+	}
+	if !strings.HasPrefix(lines[1], string(softBreakSpace)) {
+		t.Fatalf("second line = %q, want prefix %U", lines[1], softBreakSpace)
+	}
+	if rest := strings.TrimPrefix(lines[1], string(softBreakSpace)); rest != "viewport" {
+		t.Fatalf("second line content = %q, want %q", rest, "viewport")
+	}
+}
+
+// TestWrapCompactAnnotatedMarksWideWordSplitAsGlue 验证中文长词被迫从中间
+// 拆开（splitWord 真正执行拆词）标记为 GLUE（U+200C），复制时不应插入分隔符。
+func TestWrapCompactAnnotatedMarksWideWordSplitAsGlue(t *testing.T) {
+	got := wrapCompactAnnotated("abc 宽度", 5)
+	lines := strings.Split(got, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want 2 lines, got %q", got)
+	}
+	if lines[0] != "abc宽" {
+		t.Fatalf("first line = %q, want %q", lines[0], "abc宽")
+	}
+	if !strings.HasPrefix(lines[1], string(softBreakGlue)) {
+		t.Fatalf("second line = %q, want prefix %U", lines[1], softBreakGlue)
+	}
+	if rest := strings.TrimPrefix(lines[1], string(softBreakGlue)); rest != "度" {
+		t.Fatalf("second line content = %q, want %q", rest, "度")
+	}
+}
+
+// TestWrapCompactAnnotatedKeepsHardNewlineUnmarked 验证原文真实换行不加任何标记。
+func TestWrapCompactAnnotatedKeepsHardNewlineUnmarked(t *testing.T) {
+	got := wrapCompactAnnotated("hello\nworld", 20)
+	lines := strings.Split(got, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want 2 lines, got %q", got)
+	}
+	if lines[0] != "hello" || lines[1] != "world" {
+		t.Fatalf("lines = %q, want [hello world]", lines)
+	}
+}
+
+// TestWrapCompactAnnotatedMatchesPlainOutputOnceStripped 验证去掉标记字符后
+// annotated 输出与未加标记的 wrapCompact 输出完全一致（标记只是附加信息，
+// 不改变实际换行位置/内容）。
+func TestWrapCompactAnnotatedMatchesPlainOutputOnceStripped(t *testing.T) {
+	texts := []string{
+		"ab viewport",
+		"abc 宽度",
+		"这只是布局设计上的留白，不是 bug——之前的调查确认所有消息行都恰好填满 viewport 宽度",
+		"混合 text 中文 english 混排 viewport 宽度 word 测试",
+	}
+	for _, limit := range []int{5, 8, 20, 40} {
+		for _, text := range texts {
+			plain := wrapCompact(text, limit)
+			annotated := wrapCompactAnnotated(text, limit)
+			stripped := strings.ReplaceAll(annotated, string(softBreakSpace), "")
+			stripped = strings.ReplaceAll(stripped, string(softBreakGlue), "")
+			if stripped != plain {
+				t.Fatalf("limit=%d text=%q: stripped annotated = %q, want %q", limit, text, stripped, plain)
+			}
+		}
+	}
+}
+
 func TestWrapCompactFillsUserScenario(t *testing.T) {
 	// 复现用户场景：窗口 84 列 → 正文 wrap 宽度 80。
 	// 修复前第一行 "……viewport  "（77 列正文）后 "宽度" 换行；

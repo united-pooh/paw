@@ -53,6 +53,7 @@ type transcriptEntry struct {
 	body                  string
 	newMessageNoticeCycle uint64       // UI-only marker; 不参与 transcript 文本渲染。
 	modelDetailsExpanded  *bool        // UI-only override of the global detail view.
+	errorDetailsExpanded  bool         // UI-only: 错误条目是否展开原始响应。
 	inputTokens           []inputToken // visual-only metadata; body remains the raw submitted/session text
 	color                 string       // 可选：标题颜色（lipgloss 颜色字符串），与 taskController 面板保持一致
 	isError               bool         // true for tool results with IsError=true

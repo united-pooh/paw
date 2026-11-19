@@ -105,12 +105,13 @@ func renderMarkdown(markdown string, width int) string {
 		}
 		if marker, text, ok := markdownListItem(trimmed); ok {
 			body := restoreForegroundAfterANSIReset(renderInlineMarkdown(text), colorManager.Hex(colorBody))
-			parts = append(parts, leading+markdownBulletStyle.Render(marker)+" "+bodyStyle.Width(maxInt(1, proseWidth-terminalCellWidth(leading)-terminalCellWidth(marker)-1)).Render(body))
+			itemWidth := maxInt(1, proseWidth-terminalCellWidth(leading)-terminalCellWidth(marker)-1)
+			parts = append(parts, leading+markdownBulletStyle.Render(marker)+" "+bodyStyle.Width(itemWidth).Render(wrapCompactAnnotated(body, itemWidth)))
 			continue
 		}
 
 		body := restoreForegroundAfterANSIReset(renderInlineMarkdown(strings.TrimRight(line, " \t")), colorManager.Hex(colorBody))
-		parts = append(parts, bodyStyle.Width(proseWidth).Render(wrapCompact(leading+body, proseWidth)))
+		parts = append(parts, bodyStyle.Width(proseWidth).Render(wrapCompactAnnotated(leading+body, proseWidth)))
 	}
 
 	return strings.TrimRight(strings.Join(parts, "\n"), "\n")

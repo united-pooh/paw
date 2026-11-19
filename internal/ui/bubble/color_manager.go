@@ -87,6 +87,8 @@ const (
 	colorChipSearch                  colorRole = "chip.search"
 	colorChipTask                    colorRole = "chip.task"
 	colorChipPlugin                  colorRole = "chip.plugin"
+	colorSurfaceBackground           colorRole = "surface.background"
+	colorTextMuted                   colorRole = "text.muted"
 )
 
 type ColorManager struct{ palette theme.Palette }
@@ -250,6 +252,10 @@ func (c ColorManager) Hex(role colorRole) string {
 		value = p.ChipTask
 	case colorChipPlugin:
 		value = p.ChipPlugin
+	case colorSurfaceBackground:
+		value = p.Surface
+	case colorTextMuted:
+		value = p.TextMuted
 	default:
 		value = p.Body
 	}
