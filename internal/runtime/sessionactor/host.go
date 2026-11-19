@@ -546,7 +546,7 @@ func (h *Host) recoverUnknownToolStarts(ctx context.Context, sessionID string) e
 	for _, started := range state.StartedTools {
 		result := message.ToolResult{
 			ToolUseID: started.ToolCallID,
-			Content:   "interrupted: tool started before restart; side effects are unknown and the call will not be retried",
+			Content:   "已中断：工具在重启前已开始执行，副作用未知，不会自动重试",
 			IsError:   true,
 		}
 		if err := h.store.AppendToolResult(context.WithoutCancel(ctx), sessionID, started.TurnID, started.CallIndex, result); err != nil {

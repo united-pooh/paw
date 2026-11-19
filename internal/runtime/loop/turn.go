@@ -128,7 +128,7 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 			if !runner.contextModeState() {
 				maintenance, maintenanceErr := runner.maintainContextProjection(ctx, messages, true)
 				if maintenanceErr != nil {
-					runner.notifySystem("context-compaction", "cold-resume context cleanup skipped: "+maintenanceErr.Error())
+					runner.notifySystem("context-compaction", "冷恢复时跳过上下文清理："+maintenanceErr.Error())
 				} else {
 					messages = maintenance.history
 					runner.notifyContextMaintenance(maintenance)
@@ -184,7 +184,7 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 		if !settled && errors.Is(context.Cause(ctx), ErrTurnCanceledByUser) {
 			if cleaner := runner.taskEnv.cleaner(); cleaner != nil {
 				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-				cleaner.StopOwnedTasks(cleanupCtx, runner.sessionID, turnID, "interrupted: "+ErrTurnCanceledByUser.Error())
+				cleaner.StopOwnedTasks(cleanupCtx, runner.sessionID, turnID, "已中断："+ErrTurnCanceledByUser.Error())
 				cancel()
 			}
 		}
@@ -199,7 +199,7 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 		}
 		failure := err
 		if failure == nil {
-			failure = fmt.Errorf("turn ended before completion")
+			failure = errors.New("未完成就结束了")
 		}
 		failureCtx := context.WithoutCancel(ctx)
 		var failErr error
@@ -261,7 +261,7 @@ func (runner *Engine) runSingleTurnWithTiming(ctx context.Context, userInput mes
 		if !recoveringStream && protocolRecovery.attempts == 0 {
 			maintenance, maintenanceErr := runner.maintainToolRoundContext(ctx, history, round > 0)
 			if maintenanceErr != nil {
-				runner.notifySystem("context-compaction", "context cleanup skipped: "+maintenanceErr.Error())
+				runner.notifySystem("context-compaction", "跳过上下文清理："+maintenanceErr.Error())
 			} else {
 				history = maintenance.history
 				if maintenance.estimatedTokensSaved > 0 {

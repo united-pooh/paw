@@ -852,7 +852,7 @@ func (s *JSONLStore) LoadSnapshot(ctx context.Context, sessionID string) (Sessio
 		Interrupted: status != JournalTurnFailed,
 	}
 	if strings.TrimSpace(recovery.Error) == "" {
-		recovery.Error = "previous turn ended before completion"
+		recovery.Error = "未完成就结束了"
 	}
 	entries := entriesForTurn(ownRecords, turnID)
 	safeOwn := safeTurnHistory(entries, recovery)

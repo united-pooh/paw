@@ -477,7 +477,7 @@ func (h *taskActorHost) close() {
 	}
 	h.closeOnce.Do(func() {
 		for _, id := range h.processes.activeIDs() {
-			_, _, _ = h.stop(context.Background(), id, TaskInterrupted, "interrupted: task manager closed")
+			_, _, _ = h.stop(context.Background(), id, TaskInterrupted, "已中断：任务管理器已关闭")
 		}
 		for _, process := range h.processes.stopAll() {
 			_ = process.Stop()

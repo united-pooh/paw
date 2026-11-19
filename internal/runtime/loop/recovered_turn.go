@@ -38,7 +38,7 @@ func (runner *Engine) ContinueRecoveredTurn(ctx context.Context, recovered Recov
 		}
 		failure := err
 		if failure == nil {
-			failure = fmt.Errorf("recovered turn ended before completion")
+			failure = fmt.Errorf("恢复执行后仍未完成就结束了")
 		}
 		_ = journal.FailTurn(context.WithoutCancel(ctx), runner.sessionID, recovered.TurnID, failure)
 	}()
@@ -95,7 +95,7 @@ func (runner *Engine) ContinueRecoveredTurn(ctx context.Context, recovered Recov
 		if !recoveringStream && protocolRecovery.attempts == 0 {
 			maintenance, maintenanceErr := runner.maintainToolRoundContext(ctx, history, true)
 			if maintenanceErr != nil {
-				runner.notifySystem("context-compaction", "context cleanup skipped: "+maintenanceErr.Error())
+				runner.notifySystem("context-compaction", "跳过上下文清理："+maintenanceErr.Error())
 			} else {
 				history = maintenance.history
 				if maintenance.estimatedTokensSaved > 0 {

@@ -323,7 +323,7 @@ func (m *Manager) reconcileOrphanedTasks(ctx context.Context, targetIDs ...strin
 		if task.PID > 0 && processAlive(task.PID) {
 			continue
 		}
-		_, _, _ = m.actors.stop(ctx, task.ID, TaskInterrupted, "interrupted: worker process exited unexpectedly")
+		_, _, _ = m.actors.stop(ctx, task.ID, TaskInterrupted, "已中断：子代理进程意外退出")
 	}
 }
 
@@ -511,7 +511,7 @@ func (m *Manager) StopOwnedTasks(ctx context.Context, parentSessionID, parentTur
 	}
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
-		reason = "interrupted: parent turn ended unexpectedly"
+		reason = "已中断：所属轮次意外结束"
 	}
 
 	owned, err := m.actors.owned(ctx, parentSessionID, parentTurnID)

@@ -676,3 +676,15 @@
 - [x] 在 Default 主题原生 PTY 复现底边左右轨道与居中用量取色分离。
 - [x] 统一底部容量轨与完整读数的强调色，涵盖空余容量和未知用量。
 - [x] 三模式 PTY 对照及独立核验、既有深浅色 View fixture、全仓 Go 测试和 vet 通过。视觉证据见 `.agent/visual/input-bottom-border.md`。
+
+## TUI 美化 · 第 1 片 主题分层（2026-11-18）
+- [x] 原型 docs/demos/theme-layering.html 已获认可（主题分层 + 对话布局）
+- [x] Palette 新增 Surface/Raised/Overlay、BorderSubtle/Strong、TextSecondary/Muted/Disabled（bg→fg 5/9/13、14/28、78/58/40%）；Header/ToolDetail/MarkdownCode 背景与 PanelBorder/MarkdownRule 改取分层；palette() 去掉手填 surface 参数；Tokyo Night Light 次要/弱化文字单独加深
+- [x] 新增分层递进与文字对比度测试（先红后绿）；selection_markdown 测试改按 termenv 截断换算期望底色
+- [x] go test ./...、go vet ./internal/ui/... 通过
+- [ ] 原生 PTY 截图未做：本机无 Playwright 浏览器
+- [x] 第 2a 片：工具行行首状态符（运行中 braille 每 100ms 一帧 / ✓ / ✗）、状态段右对齐（成功仅弱化色时长）、详情块对齐 chip；用户块 ▎ 竖条 + surface 底色，复制时竖条按 gutter 剔除；进度刷新刻度改为 100ms（TaskWait 仍按秒）。推翻旧“图标退役 / 成功行无时长 / 秒级刷新”设计并更新对应测试；P5 golden 重生成；go test ./...、vet、定向 race 通过
+- [ ] live 工作段内运行中工具的 100ms spinner 未单独测试
+- [x] 第 2b 片：头部改 surface 状态条（◆ 模型 + 活动提示 + 挂钟，侧栏模式竖线分隔；Terminal 主题保留细线）；编辑行目标后 +N −M（窄行先让位）；上下文读数加「缓存 N%」（放不下先退出）。context 条本已是三段，未改。框架断言接受状态条；P5 golden 重生成；go test ./...、vet 通过
+- [x] 轮次统计页脚：2026-11-18 主人确认保持退役，不恢复（耗时继续由底部状态行「刚完成」窗口呈现）
+- [x] 系统提示与报错展示（2026-11-18）：上下文整理提示改为「◇」单行弱化色，运行时 7 条英文提示改中文；错误条目改为红色 ✗ 标题，模型接口 JSON 响应只在标题显示状态码与原因（类型、request_id 留在原始响应），原始响应默认折叠，点击条目展开（缩进 JSON）。非接口错误保留原文、标题作前缀。go test ./...、vet 通过，已 make build

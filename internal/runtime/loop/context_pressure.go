@@ -111,7 +111,7 @@ func (runner *Engine) maintainSummaryProjection(ctx context.Context, history []m
 	// New tool output can refill a successfully reduced context before the next
 	// step. Count only folds that fail to reduce pressure toward the stuck guard.
 	if runner.recordAutomaticCompaction(true, afterTokens < compact || afterTokens < postTokens) {
-		runner.notifySystem("context-compaction", "automatic summary compaction paused after two folds without reducing context; tool-result pruning remains active")
+		runner.notifySystem("context-compaction", "连续两次摘要压缩未能缩小上下文，已暂停自动摘要；旧工具结果裁剪继续生效")
 	}
 	return result, nil
 }
@@ -172,7 +172,7 @@ func (runner *Engine) maintainToolResultsByPressure(ctx context.Context, history
 	}
 	if promptTokens < snip {
 		if runner.markSoftContextPressure() {
-			runner.notifySystem("context-compaction", fmt.Sprintf("context pressure reached %.0f%%; preserving the cache-stable prefix until cleanup is needed", cfg.softCompactRatio*100))
+			runner.notifySystem("context-compaction", fmt.Sprintf("上下文已用 %.0f%%，保留可缓存前缀，需要时再清理", cfg.softCompactRatio*100))
 		}
 		return outcome, nil
 	}
@@ -223,13 +223,13 @@ func (runner *Engine) maintainToolResultsByPressure(ctx context.Context, history
 
 func (runner *Engine) notifyContextMaintenance(result contextMaintenanceResult) {
 	if result.snippedResults > 0 {
-		runner.notifySystem("context-compaction", fmt.Sprintf("snipped %d stale tool result(s); estimated %d tokens saved", result.snippedResults, result.estimatedTokensSaved))
+		runner.notifySystem("context-compaction", fmt.Sprintf("截短 %d 个旧工具结果，约节省 %d tokens", result.snippedResults, result.estimatedTokensSaved))
 	}
 	if result.prunedResults > 0 {
-		runner.notifySystem("context-compaction", fmt.Sprintf("pruned %d stale tool result(s); estimated %d tokens saved", result.prunedResults, result.estimatedTokensSaved))
+		runner.notifySystem("context-compaction", fmt.Sprintf("移除 %d 个旧工具结果，约节省 %d tokens", result.prunedResults, result.estimatedTokensSaved))
 	}
 	if result.compaction != nil {
-		runner.notifySystem("context-compaction", fmt.Sprintf("compacted %d messages: %d → %d; recent messages and user constraints were kept verbatim", result.compaction.FoldedMessages, result.compaction.BeforeMessages, result.compaction.AfterMessages))
+		runner.notifySystem("context-compaction", fmt.Sprintf("已压缩 %d 条消息：%d → %d，最近消息和用户约束原样保留", result.compaction.FoldedMessages, result.compaction.BeforeMessages, result.compaction.AfterMessages))
 	}
 }
 
