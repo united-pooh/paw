@@ -1,0 +1,349 @@
+<title>Paw 主题分层</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* 布局：页面外壳克制留白，中心是一块按真实字符格渲染的终端；下方是当前主题的分层令牌表 */
+:root {
+  --page: #f3f4f6; --panel: #ffffff; --ink: #1d2330; --ink-2: #4c5566; --ink-3: #7a8394;
+  --line: #dde1e8; --focus: #2f5fb3; --pass: #2c7a3f; --warn: #94650b; --fail: #b23a48;
+  --sans: "IBM Plex Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  --mono: "JetBrains Mono", "Sarasa Mono SC", "PingFang SC", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --page: #14171c; --panel: #1b1f26; --ink: #e3e7ee; --ink-2: #aab2bf; --ink-3: #7d8696;
+  --line: #2c323c; --focus: #8ab4f8; --pass: #7cc48b; --warn: #e2b866; --fail: #ec8a97; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --page: #14171c; --panel: #1b1f26; --ink: #e3e7ee; --ink-2: #aab2bf; --ink-3: #7d8696;
+  --line: #2c323c; --focus: #8ab4f8; --pass: #7cc48b; --warn: #e2b866; --fail: #ec8a97; color-scheme: dark }
+
+body { background: var(--page); color: var(--ink); font-family: var(--sans); font-size: 14px; line-height: 1.55; }
+.wrap { max-width: 1180px; margin: 0 auto; padding-block: 28px 56px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 22px; }
+h1 { font-size: 22px; font-weight: 600; margin: 0; text-wrap: balance; }
+h2 { font-size: 15px; font-weight: 600; margin: 0; }
+.lede { color: var(--ink-2); margin: 4px 0 0; max-width: 68ch; }
+
+.controls { display: flex; flex-wrap: wrap; gap: 14px 26px; align-items: center; }
+.group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.group > .lbl { font-size: 12px; color: var(--ink-3); letter-spacing: .06em; margin-right: 4px; }
+.seg { font: inherit; font-size: 13px; color: var(--ink-2); background: var(--panel); border: 1px solid var(--line);
+  padding: 4px 11px; border-radius: 999px; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+.seg:hover { color: var(--ink); }
+.seg[aria-pressed="true"] { color: var(--ink); border-color: var(--focus); box-shadow: inset 0 0 0 1px var(--focus); }
+.seg:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; border: 1px solid var(--line); }
+
+.stage { overflow-x: auto; border-radius: 10px; border: 1px solid var(--line); }
+.caption { font-size: 12px; color: var(--ink-3); }
+
+/* ── 终端 ── */
+.term { --cw: 1ch; font-family: var(--mono); font-size: 13px; line-height: 1.55; width: calc(var(--cols) * 1ch);
+  background: var(--t-bg); color: var(--t-fg); padding-block: 0; font-variant-ligatures: none; }
+.term * { box-sizing: border-box; }
+.r { display: flex; gap: 1ch; padding: 0 1ch; white-space: pre-wrap; min-height: 1.55em; align-items: baseline; }
+.r > .grow { flex: 1; min-width: 0; }
+.r > .end { margin-left: auto; white-space: pre; }
+.blank { height: 1.55em; }
+.rule { display: flex; align-items: center; gap: 1ch; padding: 0 1ch; height: 1.55em; }
+.rule > .ln { flex: 1; height: 1px; background: var(--rule-c, var(--t-border)); }
+.b { font-weight: 700; }
+
+/* 现状（近似 P5 golden 快照的观感） */
+.old .rule { --rule-c: var(--o-border); }
+.old .user { padding-left: 3ch; font-weight: 700; }
+
+/* 新方案：表面层级 */
+.hdr { background: var(--t-surface); }
+.chip-model { color: var(--t-primary); font-weight: 700; }
+.pill { background: var(--t-raised); color: var(--t-secondary-c); padding: 0 1ch; }
+.ublock { background: var(--t-surface); padding-left: 0; }
+.ublock .bar { color: var(--t-primary); width: 1ch; flex: none; }
+.think { color: var(--t-muted); }
+.tool .glyph { width: 1ch; flex: none; }
+.tool .path { color: var(--t-text2); }
+.detail { margin: 0 1ch 0 5ch; background: var(--t-raised); padding-block: 2px; }
+.detail .r { padding: 0 1ch; }
+.ln-no { color: var(--t-disabled); width: 3ch; text-align: right; flex: none; }
+.add { background: var(--t-addbg); }
+.del { background: var(--t-delbg); }
+.code { margin: 0 1ch 0 3ch; background: var(--t-raised); border: 1px solid var(--t-bsubtle); padding-block: 2px; }
+.ic { background: var(--t-raised); padding: 0 .5ch; }
+.h { color: var(--t-fg); font-weight: 700; }
+.foot { color: var(--t-disabled); }
+.foot .ln { --rule-c: var(--t-bsubtle); }
+.inputbox { margin: 0 1ch; border: 1px solid var(--t-focus); border-radius: 6px; }
+.popup { margin: 0 1ch 0 3ch; width: 46ch; background: var(--t-overlay); border: 1px solid var(--t-bstrong); }
+.popup .sel { background: var(--t-select); }
+.cursor { background: var(--t-fg); color: var(--t-bg); animation: blink 1.1s steps(1) infinite; }
+@keyframes blink { 50% { background: transparent; color: inherit; } }
+@media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
+
+/* 层级高亮：悬停令牌表时描出使用该层级的区域 */
+.term.hl [data-tier] { outline: none; }
+.term[data-hl="surface"] [data-tier~="surface"],
+.term[data-hl="raised"] [data-tier~="raised"],
+.term[data-hl="overlay"] [data-tier~="overlay"],
+.term[data-hl="bsubtle"] [data-tier~="bsubtle"],
+.term[data-hl="bstrong"] [data-tier~="bstrong"],
+.term[data-hl="text2"] [data-tier~="text2"],
+.term[data-hl="muted"] [data-tier~="muted"],
+.term[data-hl="disabled"] [data-tier~="disabled"] { outline: 2px dashed var(--t-yellow); outline-offset: -1px; }
+
+/* ── 令牌表 ── */
+.tokens { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; min-width: 680px; font-size: 13px; }
+th, td { text-align: left; padding: 7px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+th { font-size: 11px; font-weight: 500; letter-spacing: .07em; color: var(--ink-3); }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr[data-tier] { cursor: default; }
+tbody tr[data-tier]:hover { background: color-mix(in srgb, var(--focus) 8%, transparent); }
+tr.sec td { font-size: 11px; letter-spacing: .07em; color: var(--ink-3); background: color-mix(in srgb, var(--line) 35%, transparent); padding-block: 4px; }
+.sw { display: inline-block; width: 30px; height: 18px; border-radius: 4px; border: 1px solid var(--line); vertical-align: middle; }
+.swt { display: inline-grid; place-items: center; width: 30px; height: 18px; border-radius: 4px; border: 1px solid var(--line); font-family: var(--mono); font-size: 12px; font-weight: 700; }
+.mono { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; }
+.badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+.pass { color: var(--pass); } .warn { color: var(--warn); } .fail { color: var(--fail); }
+.notes { display: grid; gap: 6px; color: var(--ink-2); max-width: 78ch; margin: 0; padding-left: 18px; }
+.notes code { font-family: var(--mono); font-size: 12px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Paw 主题分层 · 对话布局原型</h1>
+    <p class="lede">终端按字符格渲染，颜色全部由所选主题的 12 个基色按 <code>blendHex</code> 推导，与 <code>internal/ui/theme/themes.go</code> 同一算法。悬停下方令牌表的一行，终端里会用虚线描出该层级出现的位置。</p>
+  </header>
+
+  <div class="controls">
+    <div class="group" id="g-theme"><span class="lbl">主题</span></div>
+    <div class="group" id="g-view"><span class="lbl">版本</span>
+      <button class="seg" data-v="new" aria-pressed="true">新方案</button>
+      <button class="seg" data-v="old" aria-pressed="false">现状</button>
+    </div>
+    <div class="group" id="g-cols"><span class="lbl">宽度</span>
+      <button class="seg" data-c="120" aria-pressed="true">120 列</button>
+      <button class="seg" data-c="80" aria-pressed="false">80 列</button>
+    </div>
+  </div>
+
+  <div>
+    <div class="stage"><div class="term" id="term"></div></div>
+    <p class="caption" id="cap"></p>
+  </div>
+
+  <section class="tokens" aria-labelledby="tk-h">
+    <table>
+      <thead><tr><th>层级</th><th>用途</th><th>推导</th><th>颜色</th><th>HEX</th><th>对比度</th></tr></thead>
+      <tbody id="tk"></tbody>
+    </table>
+  </section>
+
+  <section style="display:grid;gap:8px">
+    <h2>与现有 Palette 的对应</h2>
+    <ul class="notes">
+      <li><code>HeaderBackground</code> 现在取主题手填的 surface，新方案统一为推导的 <b>surface</b>，用户消息块与它同层。</li>
+      <li><code>ToolDetailBackground</code>、<code>MarkdownCodeBackground</code>（现为 0.07 混合）合并为 <b>raised</b>。</li>
+      <li>补全弹窗、选择器、确认卡片改用 <b>overlay</b> + <b>border-strong</b>，与正文明显分开。</li>
+      <li><code>PanelBorder</code>（0.20）拆为两档：分隔线用 subtle，聚焦/弹窗用 strong。整屏横线大幅减少。</li>
+      <li>文字从「fg + secondaryText(0.65) + muted」改为四档；轮次元信息、行号用 disabled，不再和说明文字同色。</li>
+    </ul>
+  </section>
+</div>
+
+<script>
+const THEMES = [
+  ["default-dark","Default Dark","dark","#20242b","#292f38","#e4e8ef","#8b95a5","#8ab4f8","#c4a7e7","#78c6d5","#96c78c","#e5bf78","#ed8796","#253b2d","#402b33"],
+  ["default-light","Default Light","light","#f6f7f9","#e8ebf0","#263142","#5c687a","#285fa8","#7049a8","#086b80","#346a32","#855900","#ac3445","#e3efdf","#f9e2e6"],
+  ["tokyo-night","Tokyo Night","dark","#1a1b26","#24283b","#c0caf5","#565f89","#7aa2f7","#bb9af7","#7dcfff","#9ece6a","#e0af68","#f7768e","#14302a","#2e1420"],
+  ["tokyo-night-light","Tokyo Night Light","light","#d5d6db","#cbccd1","#343b58","#6172b0","#34548a","#5a4a78","#0f4b6e","#485e30","#8f5e15","#8c4351","#d8e8d0","#f0d8d8"],
+  ["catppuccin-mocha","Catppuccin Mocha","dark","#1e1e2e","#313244","#cdd6f4","#6c7086","#89b4fa","#cba6f7","#89dceb","#a6e3a1","#f9e2af","#f38ba8","#1e3a2c","#3a1e28"],
+  ["gruvbox-dark","Gruvbox Dark","dark","#282828","#3c3836","#ebdbb2","#928374","#83a598","#d3869b","#8ec07c","#b8bb26","#fabd2f","#fb4934","#2b3a1e","#3a1e1e"],
+].map(a => ({id:a[0],name:a[1],mode:a[2],bg:a[3],surface:a[4],fg:a[5],muted:a[6],primary:a[7],secondary:a[8],cyan:a[9],green:a[10],yellow:a[11],red:a[12],addBg:a[13],delBg:a[14]}));
+
+const hex2 = h => [1,3,5].map(i => parseInt(h.slice(i,i+2),16));
+const blend = (a,b,t) => { const x=hex2(a), y=hex2(b); return "#"+x.map((v,i)=>Math.round(v+(y[i]-v)*t).toString(16).padStart(2,"0")).join(""); };
+const lum = h => { const c = hex2(h).map(v => { v/=255; return v<=0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055,2.4); }); return 0.2126*c[0]+0.7152*c[1]+0.0722*c[2]; };
+const contrast = (a,b) => { const x=lum(a), y=lum(b); return (Math.max(x,y)+0.05)/(Math.min(x,y)+0.05); };
+
+// 新方案的分层规则：全部从 bg→fg 线性混合得到，新增主题自动成立
+const TIERS = [
+  {sec:"表面"},
+  {k:"bg",       name:"bg",            use:"正文、助手回复",                     how:"主题给定",      f:t=>t.bg},
+  {k:"surface",  name:"surface",       use:"头部状态条、用户消息块",             how:"bg→fg 5%",      f:t=>blend(t.bg,t.fg,.05)},
+  {k:"raised",   name:"raised",        use:"工具详情、代码块、模式标签",         how:"bg→fg 9%",      f:t=>blend(t.bg,t.fg,.09)},
+  {k:"overlay",  name:"overlay",       use:"补全弹窗、选择器、确认卡片",         how:"bg→fg 13%",     f:t=>blend(t.bg,t.fg,.13)},
+  {sec:"边框"},
+  {k:"bsubtle",  name:"border-subtle", use:"代码块描边、轮次结束线",             how:"bg→fg 14%",     f:t=>blend(t.bg,t.fg,.14)},
+  {k:"bstrong",  name:"border-strong", use:"弹窗描边",                           how:"bg→fg 28%",     f:t=>blend(t.bg,t.fg,.28)},
+  {sec:"文字"},
+  {k:"fg",       name:"text-primary",  use:"正文",                               how:"主题给定",      f:t=>t.fg, text:true, need:4.5},
+  {k:"text2",    name:"text-secondary",use:"路径、补全说明",                     how:"bg→fg 78%",     f:t=>blend(t.bg,t.fg,.78), text:true, need:4.5},
+  {k:"muted",    name:"text-muted",    use:"思考折叠、占位符、右侧元信息",       how:"bg→fg 58%",     f:t=>blend(t.bg,t.fg,.58), text:true, need:3},
+  {k:"disabled", name:"text-disabled", use:"行号、轮次统计",                     how:"bg→fg 40%",     f:t=>blend(t.bg,t.fg,.40), text:true, need:0},
+];
+
+const state = { theme: "default-dark", view: "new", cols: 120 };
+try { Object.assign(state, JSON.parse(localStorage.getItem("paw-theme-proto") || "{}")); } catch (e) {}
+const save = () => { try { localStorage.setItem("paw-theme-proto", JSON.stringify(state)); } catch (e) {} };
+
+const term = document.getElementById("term");
+const esc = s => s.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const S = (color, text, extra="") => `<span style="color:var(${color})"${extra}>${esc(text)}</span>`;
+
+function applyTokens(t) {
+  const v = {
+    "--t-bg":t.bg, "--t-fg":t.fg, "--t-primary":t.primary, "--t-secondary-c":t.secondary, "--t-cyan":t.cyan,
+    "--t-green":t.green, "--t-yellow":t.yellow, "--t-red":t.red, "--t-addbg":t.addBg, "--t-delbg":t.delBg,
+    "--t-focus":t.cyan, "--t-select":blend(t.bg,t.fg,.30), "--o-border":blend(t.bg,t.fg,.20),
+    "--o-text2":blend(t.bg,t.fg,.65), "--t-border":blend(t.bg,t.fg,.20),
+  };
+  TIERS.forEach(x => { if (x.k) v["--t-"+x.k] = x.f(t); });
+  v["--t-surface"] = TIERS[2].f(t);
+  term.style.cssText = Object.entries(v).map(([a,b]) => `${a}:${b}`).join(";") + `;--cols:${state.cols}`;
+}
+
+function renderNew() {
+  return `
+<div class="r hdr" data-tier="surface"><span class="chip-model">◆ opus-5.5</span><span class="pill" data-tier="raised">计划</span>${S("--t-muted","⎇ dev",' data-tier="muted"')}${S("--t-yellow","±3")}<span class="end">${S("--t-muted","go-code   #07   00:42",' data-tier="muted"')}</span></div>
+<div class="blank"></div>
+<div class="r ublock" data-tier="surface"><span class="bar">▎</span><span class="grow">把主题拆成表面层级，再给对话加上分块，别再满屏横线了。</span><span class="end">${S("--t-muted","#06 · 23:31",' data-tier="muted"')}</span></div>
+<div class="blank"></div>
+<div class="r think" data-tier="muted">▸ 思考 4.2s</div>
+<div class="r">${S("--t-primary","::")}<span class="grow">先看现有 palette 的派生方式，再决定从哪几档切开。</span></div>
+<div class="r tool"><span class="glyph">${S("--t-green","✓")}</span>${S("--t-primary","读取")}<span class="grow path" data-tier="text2">internal/ui/theme/themes.go</span><span class="end">${S("--t-muted","0.2s")}</span></div>
+<div class="r tool"><span class="glyph">${S("--t-cyan","✓")}</span>${S("--t-green","搜索")}<span class="grow path" data-tier="text2">blendHex  · 14 处</span><span class="end">${S("--t-muted","0.1s")}</span></div>
+<div class="r tool"><span class="glyph">${S("--t-green","✓")}</span>${S("--t-green","编辑")}<span class="grow path" data-tier="text2">internal/ui/theme/themes.go  ${S("--t-green","+12")} ${S("--t-red","−3")}</span><span class="end">${S("--t-muted","▾ 0.4s")}</span></div>
+<div class="detail" data-tier="raised">
+  <div class="r"><span class="ln-no" data-tier="disabled">4</span><span class="grow">	secondaryText := blendHex(bg, fg, 0.65)</span></div>
+  <div class="r del"><span class="ln-no" data-tier="disabled">5</span>${S("--t-red","-")}<span class="grow">	border := blendHex(bg, fg, 0.20)</span></div>
+  <div class="r add"><span class="ln-no" data-tier="disabled">5</span>${S("--t-green","+")}<span class="grow">	surface := blendHex(bg, fg, 0.05)</span></div>
+  <div class="r add"><span class="ln-no" data-tier="disabled">6</span>${S("--t-green","+")}<span class="grow">	raised := blendHex(bg, fg, 0.09)</span></div>
+  <div class="r add"><span class="ln-no" data-tier="disabled">7</span>${S("--t-green","+")}<span class="grow">	overlay := blendHex(bg, fg, 0.13)</span></div>
+</div>
+<div class="r tool"><span class="glyph"><span class="spin" style="color:var(--t-cyan)">⠋</span></span>${S("--t-secondary-c","Shell")}<span class="grow path" data-tier="text2">go test ./internal/ui/theme</span><span class="end">${S("--t-cyan","运行中 3.1s")}</span></div>
+<div class="r tool"><span class="glyph">${S("--t-red","✗")}</span>${S("--t-green","搜索")}<span class="grow path" data-tier="text2">SurfaceRaised  ${S("--t-red","无匹配")}</span><span class="end">${S("--t-muted","0.1s")}</span></div>
+<div class="blank"></div>
+<div class="r">${S("--t-primary","::")}<span class="grow">已拆出四档表面，所有颜色仍然只从 12 个基色推导：</span></div>
+<div class="blank"></div>
+<div class="r"><span class="h">  表面层级</span></div>
+<div class="r"><span class="grow">  ${S("--t-cyan","•")} <span class="ic" data-tier="raised">surface</span> 用于头部状态条和用户消息块</span></div>
+<div class="r"><span class="grow">  ${S("--t-cyan","•")} <span class="ic" data-tier="raised">raised</span> 用于工具详情和代码块</span></div>
+<div class="r"><span class="grow">  ${S("--t-cyan","•")} <span class="ic" data-tier="raised">overlay</span> 只给浮在正文之上的东西</span></div>
+<div class="blank"></div>
+<div class="code" data-tier="raised bsubtle">
+  <div class="r"><span class="grow">${S("--t-secondary-c","func")} ${S("--t-fg","Surfaces")}(bg, fg ${S("--t-secondary-c","string")}) [${S("--t-yellow","3")}]${S("--t-secondary-c","string")} {</span><span class="end">${S("--t-muted","go",' data-tier="muted"')}</span></div>
+  <div class="r"><span class="grow">	${S("--t-secondary-c","return")} [${S("--t-yellow","3")}]${S("--t-secondary-c","string")}{blendHex(bg, fg, ${S("--t-yellow",".05")}), blendHex(bg, fg, ${S("--t-yellow",".09")}), blendHex(bg, fg, ${S("--t-yellow",".13")})}</span></div>
+  <div class="r"><span class="grow">}</span></div>
+</div>
+<div class="blank"></div>
+<div class="rule foot" data-tier="bsubtle disabled"><span>完成 · 5 次工具 · 18.2k tok · 缓存 71% · 6.1s</span><span class="ln"></span></div>
+<div class="blank"></div>
+<div class="r ublock" data-tier="surface"><span class="bar">▎</span><span class="grow">浅色主题的 accent 也调一下。</span><span class="end">${S("--t-muted","#07 · 23:36",' data-tier="muted"')}</span></div>
+<div class="blank"></div>
+<div class="r">${S("--t-primary","::")}<span class="grow">正在对比 Default Light 下各角色对 surface 的对比度<span class="cursor"> </span></span></div>
+<div class="blank"></div>
+<div class="popup" data-tier="overlay bstrong">
+  <div class="r sel"><span>${S("--t-primary","/theme")}</span><span class="grow" data-tier="text2" style="color:var(--t-text2)">切换主题</span></div>
+  <div class="r"><span>${S("--t-fg","/thinking")}</span><span class="grow" style="color:var(--t-text2)" data-tier="text2">思考强度</span></div>
+  <div class="r"><span>${S("--t-fg","/stats")}</span><span class="grow" style="color:var(--t-text2)" data-tier="text2">会话统计</span></div>
+</div>
+<div class="inputbox"><div class="r"><span>${S("--t-primary","❯")}</span><span class="grow">/th<span class="cursor"> </span></span><span class="end">${S("--t-muted","/help  @文件  !shell",' data-tier="muted"')}</span></div></div>
+<div class="r">${S("--t-muted","聊天",' data-tier="muted"')}<span class="grow">${ctxBar()}  ${S("--t-fg","3.7k")}${S("--t-muted"," / 256k · ")}${S("--t-primary","缓存 62%")}</span><span class="end">${S("--t-muted","Ctrl+G 活动",' data-tier="muted"')}</span></div>`;
+}
+
+function ctxBar() {
+  const n = state.cols === 120 ? 40 : 18, cache = Math.round(n*.09), used = Math.round(n*.06);
+  return S("--t-primary","█".repeat(cache)) + S("--t-cyan","█".repeat(used)) + S("--t-bsubtle","─".repeat(n-cache-used));
+}
+
+function renderOld() {
+  const o2 = "--o-text2";
+  return `<div class="old">
+<div class="rule"><span class="ln"></span><span>model-a  23:36</span><span class="ln"></span></div>
+<div class="r user"><span class="grow">把主题拆成表面层级，再给对话加上分块，别再满屏横线了。</span></div>
+<div class="blank"></div>
+<div class="r">${S("--t-primary","::")}<span class="grow">先看现有 palette 的派生方式，再决定从哪几档切开。</span></div>
+<div class="r">${S("--t-primary"," 读取 ")}<span class="grow">internal/ui/theme/themes.go</span>${S("--t-green","完成")}</div>
+<div class="r">${S("--t-cyan"," 搜索 ")}<span class="grow">blendHex</span>${S("--t-green","完成")}</div>
+<div class="r">${S("--t-green"," 编辑 ")}<span class="grow">internal/ui/theme/themes.go</span>${S("--t-green","完成")}</div>
+<div class="r del" style="margin-left:3ch"><span class="grow">-	border := blendHex(bg, fg, 0.20)</span></div>
+<div class="r add" style="margin-left:3ch"><span class="grow">+	surface := blendHex(bg, fg, 0.05)</span></div>
+<div class="r add" style="margin-left:3ch"><span class="grow">+	raised := blendHex(bg, fg, 0.09)</span></div>
+<div class="r add" style="margin-left:3ch"><span class="grow">+	overlay := blendHex(bg, fg, 0.13)</span></div>
+<div class="r">${S("--t-secondary-c"," Shell ")}<span class="grow">go test ./internal/ui/theme</span>${S("--t-cyan","运行中")}</div>
+<div class="r">${S("--t-cyan"," 搜索 ")}<span class="grow">SurfaceRaised</span>${S("--t-red","失败")}</div>
+<div class="blank"></div>
+<div class="r">${S("--t-primary","::")}<span class="grow">已拆出四档表面，所有颜色仍然只从 12 个基色推导：</span></div>
+<div class="r"><span class="grow b">   表面层级</span></div>
+<div class="r"><span class="grow">   ${S("--t-cyan","-")} ${S("--t-fg","surface")} 用于头部状态条和用户消息块</span></div>
+<div class="r"><span class="grow">   ${S("--t-cyan","-")} ${S("--t-fg","raised")} 用于工具详情和代码块</span></div>
+<div class="r"><span class="grow">   ${S("--t-cyan","-")} ${S("--t-fg","overlay")} 只给浮在正文之上的东西</span></div>
+<div class="r" style="margin-left:3ch;background:${"var(--t-raised)"}"><span class="grow">func Surfaces(bg, fg string) [3]string { … }</span></div>
+<div class="blank"></div>
+<div class="r user"><span class="grow">浅色主题的 accent 也调一下。</span></div>
+<div class="blank"></div>
+<div class="r">${S("--t-primary","::")}<span class="grow">正在对比 Default Light 下各角色对 surface 的对比度<span class="cursor"> </span></span></div>
+<div class="blank"></div>
+<div class="rule"><span class="ln"></span></div>
+<div class="r">${S("--t-fg"," ›")}<span class="grow">/th<span class="cursor"> </span></span>${S(o2,"/help @文件 !shell")}</div>
+<div class="r">${S(o2,"聊天 · 上下文")}<span class="grow">${S("--t-cyan","━".repeat(state.cols===120?30:12))}  ${S("--t-cyan","≈1% · 3.72k / 256k")}  ${S("--t-cyan","━".repeat(state.cols===120?30:8))}</span>${S(o2,"go-code  dev")}</div>
+</div>`;
+}
+
+function renderTable(t) {
+  const surface = TIERS[2].f(t);
+  document.getElementById("tk").innerHTML = TIERS.map(x => {
+    if (x.sec) return `<tr class="sec"><td colspan="6">${x.sec}</td></tr>`;
+    const c = x.f(t);
+    let ratio = "";
+    if (x.text) {
+      const a = contrast(c, t.bg), b = contrast(c, surface), m = Math.min(a, b);
+      const cls = x.need === 0 ? "warn" : m >= x.need ? "pass" : "fail";
+      const label = x.need === 0 ? "装饰用" : m >= x.need ? (x.need >= 4.5 ? "AA" : "≥3") : "不足";
+      ratio = `<span class="mono">${a.toFixed(1)} / ${b.toFixed(1)}</span> <span class="badge ${cls}">${label}</span>`;
+    } else if (x.k !== "bg") {
+      ratio = `<span class="mono">${contrast(c, t.bg).toFixed(2)}</span>`;
+    }
+    const swatch = x.text
+      ? `<span class="swt" style="background:${t.bg};color:${c}">Aa</span>`
+      : `<span class="sw" style="background:${c}"></span>`;
+    return `<tr data-tier="${x.k}"><td><b>${x.name}</b></td><td>${x.use}</td><td class="mono">${x.how}</td><td>${swatch}</td><td class="mono">${c}</td><td>${ratio}</td></tr>`;
+  }).join("");
+}
+
+let spinTimer = null;
+function render() {
+  const t = THEMES.find(x => x.id === state.theme) || THEMES[0];
+  applyTokens(t);
+  term.innerHTML = state.view === "new" ? renderNew() : renderOld();
+  renderTable(t);
+  document.getElementById("cap").textContent =
+    (state.view === "new" ? "新方案" : "现状（按 P5 golden 快照近似重绘）") + ` · ${t.name} · ${state.cols} 列 · 示例对话，非真实会话`;
+  document.querySelectorAll("#g-theme .seg").forEach(b => b.setAttribute("aria-pressed", b.dataset.t === state.theme));
+  document.querySelectorAll("#g-view .seg").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === state.view));
+  document.querySelectorAll("#g-cols .seg").forEach(b => b.setAttribute("aria-pressed", String(+b.dataset.c === state.cols)));
+}
+
+const gt = document.getElementById("g-theme");
+THEMES.forEach(t => {
+  const b = document.createElement("button");
+  b.className = "seg"; b.dataset.t = t.id;
+  b.innerHTML = `<span class="dot" style="background:${t.bg};box-shadow:inset -5px 0 0 ${t.primary}"></span>${t.name}`;
+  b.onclick = () => { state.theme = t.id; save(); render(); };
+  gt.appendChild(b);
+});
+document.querySelectorAll("#g-view .seg").forEach(b => b.onclick = () => { state.view = b.dataset.v; save(); render(); });
+document.querySelectorAll("#g-cols .seg").forEach(b => b.onclick = () => { state.cols = +b.dataset.c; save(); render(); });
+
+document.getElementById("tk").addEventListener("mouseover", e => {
+  const tr = e.target.closest("tr[data-tier]"); term.dataset.hl = tr ? tr.dataset.tier : "";
+});
+document.getElementById("tk").addEventListener("mouseleave", () => { term.dataset.hl = ""; });
+
+const FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  let i = 0;
+  setInterval(() => { document.querySelectorAll(".spin").forEach(s => s.textContent = FRAMES[i % FRAMES.length]); i++; }, 90);
+}
+render();
+</script>

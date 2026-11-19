@@ -55,7 +55,9 @@ func TestSelectionBackgroundSurvivesMarkdownResets(t *testing.T) {
 	}
 
 	// 行内代码的自带背景必须被选区背景覆盖（bgSGR 紧随 48;... 之后）。
-	if !strings.Contains(got, backgroundSGR(colorManager.Hex(colorMarkdownCodeBackground))+bgSGR) {
+	// 行内代码底色由 lipgloss 输出，按 termenv 的截断取整换算，可能与 hex 差 1。
+	codeBgSGR := "\x1b[" + termenv.TrueColor.Color(colorManager.Hex(colorMarkdownCodeBackground)).Sequence(true) + "m"
+	if !strings.Contains(got, codeBgSGR+bgSGR) {
 		t.Fatalf("markdown code background not overridden by selection background:\n%q\nbgSGR=%q", got, bgSGR)
 	}
 }

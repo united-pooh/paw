@@ -1,21 +1,25 @@
 package theme
 
-func palette(bg, surface, fg, muted, primary, secondary, cyan, green, yellow, red, diffAddedBackground, diffDeletedBackground string) Palette {
+func palette(bg, fg, muted, primary, secondary, cyan, green, yellow, red, diffAddedBackground, diffDeletedBackground string) Palette {
 	secondaryText := blendHex(bg, fg, 0.65)
-	border := blendHex(bg, fg, 0.20)
+	surface, raised, overlay := blendHex(bg, fg, 0.05), blendHex(bg, fg, 0.09), blendHex(bg, fg, 0.13)
+	borderSubtle := blendHex(bg, fg, 0.14)
 	return Palette{
+		Surface: surface, Raised: raised, Overlay: overlay,
+		BorderSubtle: borderSubtle, BorderStrong: blendHex(bg, fg, 0.28),
+		TextSecondary: blendHex(bg, fg, 0.78), TextMuted: blendHex(bg, fg, 0.58), TextDisabled: blendHex(bg, fg, 0.40),
 		TerminalBackground: bg, HeaderBackground: surface, HeaderForeground: fg,
 		LabelUser: fg, LabelAssistant: fg, LabelTool: green, LabelResult: green, LabelSystem: secondaryText, LabelError: red,
-		Body: fg, ToolDetailBackground: surface,
-		MarkdownHeading: fg, MarkdownRule: border, MarkdownBullet: cyan,
+		Body: fg, ToolDetailBackground: raised,
+		MarkdownHeading: fg, MarkdownRule: borderSubtle, MarkdownBullet: cyan,
 		MarkdownBold: primary, MarkdownItalic: fg, MarkdownHighlight: yellow, MarkdownHighlightForeground: bg,
-		MarkdownCodeForeground: fg, MarkdownCodeBackground: blendHex(bg, fg, 0.07), MarkdownCodeBorder: primary,
+		MarkdownCodeForeground: fg, MarkdownCodeBackground: raised, MarkdownCodeBorder: primary,
 		MarkdownLink: cyan, MarkdownQuote: secondaryText, MarkdownQuoteBorder: muted, MarkdownQuoteText: blendHex(bg, fg, 0.70),
 		// 语法高亮默认映射（keyword 紫 / string 绿 / number 黄 / comment 灰），
 		// 与各主题官方语法色系一致；个别主题在 init() 中按官方值覆盖。
 		SyntaxKeyword: secondary, SyntaxString: green, SyntaxNumber: yellow, SyntaxComment: muted,
 		SyntaxBrackets: [4]string{cyan, secondary, yellow, green},
-		PanelBorder:    border, InputFocusedBorder: cyan, InputWaitingBorder: muted, InputMultilineBorder: yellow,
+		PanelBorder:    borderSubtle, InputFocusedBorder: cyan, InputWaitingBorder: muted, InputMultilineBorder: yellow,
 		InputTerminal: secondary, InputTokenCommand: secondary, InputTokenFile: green,
 		UnselectedProvider: muted,
 		WizardTitle:        primary, WizardBorder: primary,
@@ -36,15 +40,15 @@ func palette(bg, surface, fg, muted, primary, secondary, cyan, green, yellow, re
 }
 
 var builtIns = []Theme{
-	{ID: DefaultDark, Name: "Default Dark", Mode: ModeDark, Colors: palette("#20242b", "#292f38", "#e4e8ef", "#8b95a5", "#8ab4f8", "#c4a7e7", "#78c6d5", "#96c78c", "#e5bf78", "#ed8796", "#253b2d", "#402b33")},
-	{ID: DefaultLight, Name: "Default Light", Mode: ModeLight, Colors: palette("#f6f7f9", "#e8ebf0", "#263142", "#5c687a", "#285fa8", "#7049a8", "#086b80", "#346a32", "#855900", "#ac3445", "#e3efdf", "#f9e2e6")},
+	{ID: DefaultDark, Name: "Default Dark", Mode: ModeDark, Colors: palette("#20242b", "#e4e8ef", "#8b95a5", "#8ab4f8", "#c4a7e7", "#78c6d5", "#96c78c", "#e5bf78", "#ed8796", "#253b2d", "#402b33")},
+	{ID: DefaultLight, Name: "Default Light", Mode: ModeLight, Colors: palette("#f6f7f9", "#263142", "#5c687a", "#285fa8", "#7049a8", "#086b80", "#346a32", "#855900", "#ac3445", "#e3efdf", "#f9e2e6")},
 	{ID: Default, Name: "Terminal", Mode: ModeTerminal, Colors: terminalPalette()},
-	{ID: TokyoNight, Name: "Tokyo Night", Mode: ModeDark, Colors: palette("#1a1b26", "#24283b", "#c0caf5", "#565f89", "#7aa2f7", "#bb9af7", "#7dcfff", "#9ece6a", "#e0af68", "#f7768e", "#14302a", "#2e1420")},
-	{ID: TokyoNightStorm, Name: "Tokyo Night Storm", Mode: ModeDark, Colors: palette("#24283b", "#1f2335", "#c0caf5", "#737aa2", "#7aa2f7", "#bb9af7", "#7dcfff", "#9ece6a", "#e0af68", "#f7768e", "#14302a", "#2e1420")},
-	{ID: TokyoNightLight, Name: "Tokyo Night Light", Mode: ModeLight, Colors: palette("#d5d6db", "#cbccd1", "#343b58", "#6172b0", "#34548a", "#5a4a78", "#0f4b6e", "#485e30", "#8f5e15", "#8c4351", "#d8e8d0", "#f0d8d8")},
-	{ID: CatppuccinMocha, Name: "Catppuccin Mocha", Mode: ModeDark, Colors: palette("#1e1e2e", "#313244", "#cdd6f4", "#6c7086", "#89b4fa", "#cba6f7", "#89dceb", "#a6e3a1", "#f9e2af", "#f38ba8", "#1e3a2c", "#3a1e28")},
-	{ID: Dracula, Name: "Dracula", Mode: ModeDark, Colors: palette("#282a36", "#44475a", "#f8f8f2", "#6272a4", "#8be9fd", "#bd93f9", "#8be9fd", "#50fa7b", "#f1fa8c", "#ff5555", "#12381f", "#38121a")},
-	{ID: GruvboxDark, Name: "Gruvbox Dark", Mode: ModeDark, Colors: palette("#282828", "#3c3836", "#ebdbb2", "#928374", "#83a598", "#d3869b", "#8ec07c", "#b8bb26", "#fabd2f", "#fb4934", "#2b3a1e", "#3a1e1e")},
+	{ID: TokyoNight, Name: "Tokyo Night", Mode: ModeDark, Colors: palette("#1a1b26", "#c0caf5", "#565f89", "#7aa2f7", "#bb9af7", "#7dcfff", "#9ece6a", "#e0af68", "#f7768e", "#14302a", "#2e1420")},
+	{ID: TokyoNightStorm, Name: "Tokyo Night Storm", Mode: ModeDark, Colors: palette("#24283b", "#c0caf5", "#737aa2", "#7aa2f7", "#bb9af7", "#7dcfff", "#9ece6a", "#e0af68", "#f7768e", "#14302a", "#2e1420")},
+	{ID: TokyoNightLight, Name: "Tokyo Night Light", Mode: ModeLight, Colors: palette("#d5d6db", "#343b58", "#6172b0", "#34548a", "#5a4a78", "#0f4b6e", "#485e30", "#8f5e15", "#8c4351", "#d8e8d0", "#f0d8d8")},
+	{ID: CatppuccinMocha, Name: "Catppuccin Mocha", Mode: ModeDark, Colors: palette("#1e1e2e", "#cdd6f4", "#6c7086", "#89b4fa", "#cba6f7", "#89dceb", "#a6e3a1", "#f9e2af", "#f38ba8", "#1e3a2c", "#3a1e28")},
+	{ID: Dracula, Name: "Dracula", Mode: ModeDark, Colors: palette("#282a36", "#f8f8f2", "#6272a4", "#8be9fd", "#bd93f9", "#8be9fd", "#50fa7b", "#f1fa8c", "#ff5555", "#12381f", "#38121a")},
+	{ID: GruvboxDark, Name: "Gruvbox Dark", Mode: ModeDark, Colors: palette("#282828", "#ebdbb2", "#928374", "#83a598", "#d3869b", "#8ec07c", "#b8bb26", "#fabd2f", "#fb4934", "#2b3a1e", "#3a1e1e")},
 }
 
 func init() {
@@ -72,6 +76,9 @@ func init() {
 	override(TokyoNightLight, func(p *Palette) {
 		p.SyntaxNumber = "#965027"
 		p.MarkdownQuoteText = blendHex(p.TerminalBackground, p.Body, 0.85)
+		// 底色与正文对比偏低，通用比例下的次要/弱化文字在 surface 上不达标。
+		p.TextSecondary = blendHex(p.TerminalBackground, p.Body, 0.88)
+		p.TextMuted = blendHex(p.TerminalBackground, p.Body, 0.68)
 	})
 	override(CatppuccinMocha, func(p *Palette) { p.SyntaxNumber = "#fab387" })
 	override(Dracula, func(p *Palette) {
@@ -95,7 +102,8 @@ func terminalPalette() Palette {
 		MarkdownCodeBorder: "6", MarkdownLink: "6", MarkdownQuote: "", MarkdownQuoteBorder: "7", MarkdownQuoteText: "",
 		SyntaxKeyword: "5", SyntaxString: "2", SyntaxNumber: "3", SyntaxComment: "15",
 		SyntaxBrackets: [4]string{"6", "5", "3", "2"},
-		PanelBorder:    "7", InputFocusedBorder: "6", InputWaitingBorder: "7", InputMultilineBorder: "3",
+		BorderSubtle:   "7", BorderStrong: "7",
+		PanelBorder: "7", InputFocusedBorder: "6", InputWaitingBorder: "7", InputMultilineBorder: "3",
 		InputTerminal: "5", InputTokenCommand: "5", InputTokenFile: "2", UnselectedProvider: "",
 		WizardTitle: "6", WizardBorder: "6",
 		ContextCache: "4", ContextUsed: "6", ContextFree: "", Signal: "6",

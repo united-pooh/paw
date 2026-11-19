@@ -81,6 +81,10 @@ type Palette struct {
 	// Chip* 是工具类别 chip 的背景色（读取/编辑/Shell/搜索/任务/插件），
 	// 写入与编辑同色、网页与搜索同色——同类同色，压到 5 个色相。
 	ChipRead, ChipEdit, ChipShell, ChipSearch, ChipTask, ChipPlugin string
+	// 表面层级：surface < raised < overlay 逐级远离正文背景；边框与文字各分档。
+	// hex 主题全部由 bg→fg 混合推导，旧的背景/边框角色从这里取值。
+	Surface, Raised, Overlay, BorderSubtle, BorderStrong string
+	TextSecondary, TextMuted, TextDisabled               string
 }
 
 type Theme struct {
@@ -110,6 +114,9 @@ func (p Palette) Values() map[string]string {
 		"status.success": p.StatusSuccess, "status.running": p.StatusRunning, "status.warning": p.StatusWarning, "status.error": p.StatusError,
 		"accent": p.Accent, "narration": p.Narration,
 		"chip.read": p.ChipRead, "chip.edit": p.ChipEdit, "chip.shell": p.ChipShell, "chip.search": p.ChipSearch, "chip.task": p.ChipTask, "chip.plugin": p.ChipPlugin,
+		"surface.background": p.Surface, "raised.background": p.Raised, "overlay.background": p.Overlay,
+		"border.subtle": p.BorderSubtle, "border.strong": p.BorderStrong,
+		"text.secondary": p.TextSecondary, "text.muted": p.TextMuted, "text.disabled": p.TextDisabled,
 	}
 }
 
